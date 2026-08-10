@@ -50,6 +50,11 @@ jobs:
   build-windows:
     needs: test
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write  # OIDC for azure/login (signing)
+    # Federated credential matches subject repo:...:environment:release
+    environment: release
     steps:
       - name: Checkout al-call-hierarchy
         uses: actions/checkout@v4
@@ -67,6 +72,33 @@ jobs:
         env:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --release
+
+      # Authenticode-sign via Azure Artifact Signing (Trusted Signing).
+      # Steps SKIP cleanly until configured: repo vars AZURE_SIGNING_ENDPOINT /
+      # AZURE_SIGNING_ACCOUNT / AZURE_SIGNING_PROFILE, secrets AZURE_TENANT_ID /
+      # AZURE_CLIENT_ID / AZURE_SUBSCRIPTION_ID (OIDC federated credential).
+      # Signing upstream here means every downstream consumer (al-lsp-for-agents
+      # release zips, .vsix bundles, committed plugin binaries via
+      # build-and-deploy.yml) ships a signed al-call-hierarchy.exe.
+      - name: Azure login
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows binary
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: target/release/al-call-hierarchy.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

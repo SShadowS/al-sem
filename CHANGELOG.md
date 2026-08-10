@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Authenticode signing of the Windows LSP binary in both release workflows
+
+`release.yml` and `build-and-deploy.yml` now sign `target/release/al-call-hierarchy.exe`
+via Azure Trusted Signing (`azure/artifact-signing-action@v2`, OIDC login through a
+`release` environment federated credential) before uploading it. Signing upstream covers
+every downstream consumer at once: al-lsp-for-agents release zips, `.vsix` bundles, and
+the plugin binaries `build-and-deploy.yml` commits straight into the Claude Code
+marketplace repos. Both signing steps are gated on `vars.AZURE_SIGNING_ACCOUNT` being
+set, so the workflows keep passing (steps skip) until the Azure side is configured —
+config lives in repo vars `AZURE_SIGNING_ENDPOINT` / `AZURE_SIGNING_ACCOUNT` /
+`AZURE_SIGNING_PROFILE` and secrets `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` /
+`AZURE_SUBSCRIPTION_ID`.
+
 ### Fixed - `cargo test --all-targets` in two workflows ran the pack gate bench, failing every push and every release
 
 `benches/dep_pack_roundtrip` is a plain `fn main` that exits 2 when `PACK_BENCH_WS` is
