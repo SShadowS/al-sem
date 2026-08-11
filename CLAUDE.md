@@ -72,7 +72,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al **v3.2.0** grammar (included as a git submodule at `tree-sitter-al/`,
+- tree-sitter-al **v4.0.0** grammar (included as a git submodule at `tree-sitter-al/`,
   pinned in the superproject's index; CI instead checks out the grammar repo's `main`
   branch unpinned — see the Grammar section below)
   - Clone with `git clone --recurse-submodules`, or run `git submodule update --init` after clone
@@ -296,10 +296,11 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v3.2.0)
+## Grammar (tree-sitter-al v4.0.0)
 
-**Current reality:** the grammar is **v3.2.0** (`tree-sitter-al/package.json`, tag
-`v3.2.0`). The submodule pointer in this repo's git index is pinned to a specific
+**Current reality:** the grammar is **v4.0.0** (`tree-sitter-al/package.json`, tag
+`v4.0.0`; the pin sits a few commits past the tag on the grammar repo's `main`, matching
+what unpinned CI checks out). The submodule pointer in this repo's git index is pinned to a specific
 commit (reproducible local/dev builds); CI instead checks out `SShadowS/tree-sitter-al`
 `main` **unpinned** (`.github/workflows/ci.yml`) so a breaking grammar change surfaces
 on the next PR rather than silently drifting. `crates/al-syntax` is the **only** crate
@@ -338,6 +339,27 @@ the one place that still reads raw grammar shapes):
   verify a grammar-shape claim against real `tree-sitter parse` output, not just a read
   of `grammar.js` (two owned-grammar field-pollution bugs upstream of the lowerer were
   found exactly this way; see CHANGELOG history).
+- **v4.0.0 shapes (2026-08-12 upgrade — what moved and what to rely on):**
+  - The statement terminator `;` lives OUTSIDE `code_block`, `if_statement` and the
+    branch rules — statement/block spans end at their last real token (1 byte earlier
+    than v3 when a `;` followed). Body/branch fields (`body`, `then_branch`,
+    `else_branch`, …) hold exactly ONE named node, never `[stmt, ';']`.
+  - A dangling `else` binds to the INNER `if` (was: outer construct) — the one v4
+    change that alters what a program means. `case … else` bodies are one
+    `statement_block`.
+  - Operator precedence is Pascal-correct: `and`/`or`/`xor` bind TIGHTER than
+    comparison, unary minus tighter than `*` (`-a * b` = `(-a) * b`), and `..` is no
+    longer an expression operator. Binary IR shapes reflect this.
+  - ~70 more keywords became NAMED nodes (`record_keyword`, `field_keyword`, …), plus
+    `assignment_operator` and `filter_operator`. They appear as named children
+    everywhere — `schema/kind_policy.rs` classifies them `Trivia` and the shared
+    `structural_children` filter drops them, so positional reads stay clean. A new
+    RawKind variant fails `kind_policy.rs`'s exhaustive match (the loudness gate):
+    triage it there, never wildcard it.
+  - Keyword nodes have a UNIFORM shape (one anonymous child, canonical lowercase
+    spelling) — read a keyword's text from the node itself, never a child. Queries
+    naming non-lowercase anonymous spellings (`"IF"`, `"Then"`) no longer compile.
+  - Dotted-reference fields no longer include the `.` separator tokens.
 
 **History (V1 → V2 → V3, kept for archaeology — not actionable for engine code today):**
 V2 removed V1's wrapper nodes (`procedure name:`/`trigger_declaration name:` held

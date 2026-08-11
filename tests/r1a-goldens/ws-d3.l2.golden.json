@@ -212,7 +212,7 @@
               "startLine": 17,
               "startColumn": 8,
               "endLine": 18,
-              "endColumn": 43,
+              "endColumn": 42,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -774,7 +774,7 @@
               "startLine": 64,
               "startColumn": 8,
               "endLine": 65,
-              "endColumn": 43,
+              "endColumn": 42,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1055,7 +1055,7 @@
               "startLine": 27,
               "startColumn": 8,
               "endLine": 28,
-              "endColumn": 49,
+              "endColumn": 48,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1371,7 +1371,7 @@
               "startLine": 38,
               "startColumn": 8,
               "endLine": 39,
-              "endColumn": 43,
+              "endColumn": 42,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1562,7 +1562,7 @@
               "startLine": 53,
               "startColumn": 8,
               "endLine": 54,
-              "endColumn": 29,
+              "endColumn": 28,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1902,7 +1902,7 @@
               "startLine": 76,
               "startColumn": 8,
               "endLine": 77,
-              "endColumn": 49,
+              "endColumn": 48,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -2137,7 +2137,7 @@
               "startLine": 7,
               "startColumn": 8,
               "endLine": 8,
-              "endColumn": 43,
+              "endColumn": 42,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

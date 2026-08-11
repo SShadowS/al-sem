@@ -452,7 +452,7 @@
               "startLine": 23,
               "startColumn": 8,
               "endLine": 26,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }
@@ -629,7 +629,7 @@
               "startLine": 41,
               "startColumn": 8,
               "endLine": 43,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }

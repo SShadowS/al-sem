@@ -67,7 +67,7 @@
                     "startLine": 25,
                     "startColumn": 8,
                     "endLine": 26,
-                    "endColumn": 31
+                    "endColumn": 30
                   },
                   "enclosingRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
                   "syntaxKind": "for_statement"
@@ -127,7 +127,7 @@
           "startLine": 25,
           "startColumn": 8,
           "endLine": 26,
-          "endColumn": 31
+          "endColumn": 30
         },
         "enclosingRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
         "syntaxKind": "for_statement"
@@ -144,7 +144,7 @@
           "startLine": 33,
           "startColumn": 8,
           "endLine": 34,
-          "endColumn": 31
+          "endColumn": 30
         },
         "enclosingRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
         "syntaxKind": "for_statement"
@@ -161,7 +161,7 @@
           "startLine": 41,
           "startColumn": 8,
           "endLine": 42,
-          "endColumn": 31
+          "endColumn": 30
         },
         "enclosingRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
         "syntaxKind": "for_statement"

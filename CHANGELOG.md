@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - tree-sitter-al upgraded v3.2.0 → v4.0.0 (breaking grammar release)
+
+The submodule pin moved to the grammar repo's `main` tip (a few commits past the
+`v4.0.0` tag — the same thing unpinned CI checks out). v4.0.0 is a breaking parse-tree
+release; see the grammar repo's CHANGELOG for the full story. What it took on the
+engine side, in order of interest:
+
+- **Zero lowerer code changes.** The v4 shape changes (statement `;` re-parented out of
+  `code_block`/`if_statement`/branch rules, single-node body fields, dotted-reference
+  fields without separators, `case … else` bodies as one `statement_block`) all landed
+  inside shapes the lowerer already reads defensively — field-based descent plus the
+  shared `structural_children` trivia filter absorbed everything.
+- **`schema/kind_policy.rs` triaged 77 new `RawKind` variants** (the loudness gate
+  working as designed): ~70 newly-named keyword nodes + `assignment_operator` →
+  `Trivia` (never lowered; keeps them out of every positional `named_children` read),
+  `filter_operator` + 4 new `preproc_*` nodes → `Structural`. Raw vocabulary
+  regenerated via `cargo run -p xtask -- gen-syntax` (467 named kinds, 73 fields;
+  field `access_value` removed — zero consumers, `attribute_type` added).
+- **Golden movement fully triaged (golden-diff-triager, verdict CLEAN, zero
+  unexplained lines).** Two licensed classes only: (a) 1-byte `endColumn`/span-end
+  shrinks on for/if/while/foreach/with statement and block anchors — the documented
+  `;` re-span — across `l2_features.snapshot` (960 of 974 rows, every old digest
+  re-derived byte-exactly from the inverse transform), 37 `r1a-goldens`, all 6 moved
+  `r4-goldens`, the `al2dump-smoke` golden and 7 hand-patched `r1a-vectors` sites;
+  (b) 4 case-`else` sites where v4's single else-`statement_block` regroups the old
+  flat run (`ws-d60`/`ws-d62`/`ws-statement-tree`). No identifier/call/anchor of any
+  other kind moved, no row appeared or vanished, and every family the change could
+  NOT touch (semantic-edges, gate, cli-a/b/query, r2*/r3*, l4-baseline) is
+  byte-identical. Two coverage observations from the triage, recorded as follow-ups:
+  the v4 dangling-`else` rebinding and operator-precedence fixes have NO fixture
+  witness in `tests/r0-corpus/` (nothing pins them), and `case`/`repeat` spans never
+  moved because v3 spans already excluded the `;` (changelog claim without a corpus
+  witness, not a regen failure).
+- **`build.rs` now compiles the grammar with C11** (`cc.std("c11")`): v4's `scanner.c`
+  has a file-scope `_Static_assert` whose MSVC arm assumes `_MSC_VER >= 1928` implies
+  support, but MSVC only accepts `_Static_assert` in C mode under `/std:c11` — without
+  the flag every Windows build broke. (Upstream guard defect, worth fixing there too:
+  the `__STDC_VERSION__` arm alone is the correct condition.)
+- **`CACHE_VERSION_GRAMMAR` bumped** to `tree-sitter-al-v4.0.0-native` (the
+  `cache_version_grammar_tracks_the_linked_grammar` gate caught it — its designed
+  purpose), and the two `cli-c-goldens/cache/fixture-cache/` artifacts that embed the
+  current version tuple were re-minted (`cafecafe…` re-hashed to stay `Kept`;
+  `1234…`'s stored hash left stale on purpose — it pins content-hash-mismatch).
+
+CDO re-measure (`scripts/cdo-gate`) still pending — sandbox has no `CDO_WS`; run it
+before trusting the zero-unknown ratchets against v4.
+
 ### Added - Authenticode signing of the Windows LSP binary in both release workflows
 
 `release.yml` and `build-and-deploy.yml` now sign `target/release/al-call-hierarchy.exe`

@@ -30,7 +30,7 @@
               "startLine": 12,
               "startColumn": 8,
               "endLine": 13,
-              "endColumn": 31,
+              "endColumn": 30,
               "syntaxKind": "for_statement"
             }
           }

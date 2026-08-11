@@ -229,7 +229,7 @@
               "startLine": 54,
               "startColumn": 8,
               "endLine": 55,
-              "endColumn": 26,
+              "endColumn": 25,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1007,7 +1007,7 @@
               "startLine": 63,
               "startColumn": 8,
               "endLine": 64,
-              "endColumn": 17,
+              "endColumn": 16,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1627,7 +1627,7 @@
               "startLine": 43,
               "startColumn": 8,
               "endLine": 46,
-              "endColumn": 26,
+              "endColumn": 25,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

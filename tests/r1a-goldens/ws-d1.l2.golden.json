@@ -30,7 +30,7 @@
               "startLine": 22,
               "startColumn": 8,
               "endLine": 23,
-              "endColumn": 34,
+              "endColumn": 33,
               "syntaxKind": "for_statement"
             }
           }
@@ -218,7 +218,7 @@
               "startLine": 6,
               "startColumn": 8,
               "endLine": 7,
-              "endColumn": 25,
+              "endColumn": 24,
               "syntaxKind": "for_statement"
             }
           }
@@ -338,7 +338,7 @@
               "startLine": 51,
               "startColumn": 8,
               "endLine": 53,
-              "endColumn": 35,
+              "endColumn": 34,
               "syntaxKind": "for_statement"
             }
           },
@@ -350,7 +350,7 @@
               "startLine": 52,
               "startColumn": 12,
               "endLine": 53,
-              "endColumn": 35,
+              "endColumn": 34,
               "syntaxKind": "for_statement"
             }
           }
@@ -562,7 +562,7 @@
               "startLine": 31,
               "startColumn": 8,
               "endLine": 32,
-              "endColumn": 46,
+              "endColumn": 45,
               "syntaxKind": "for_statement"
             }
           }
@@ -738,7 +738,7 @@
               "startLine": 39,
               "startColumn": 8,
               "endLine": 42,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }

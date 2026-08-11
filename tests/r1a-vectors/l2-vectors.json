@@ -2656,7 +2656,7 @@
               "startLine": 4,
               "startColumn": 8,
               "endLine": 7,
-              "endColumn": 34,
+              "endColumn": 33,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -2746,7 +2746,7 @@
               "startLine": 7,
               "startColumn": 8,
               "endLine": 9,
-              "endColumn": 30,
+              "endColumn": 29,
               "syntaxKind": "for_statement"
             }
           },
@@ -2758,7 +2758,7 @@
               "startLine": 8,
               "startColumn": 12,
               "endLine": 9,
-              "endColumn": 30,
+              "endColumn": 29,
               "syntaxKind": "for_statement"
             }
           }
@@ -2926,7 +2926,7 @@
               "startLine": 16,
               "startColumn": 8,
               "endLine": 17,
-              "endColumn": 23,
+              "endColumn": 22,
               "syntaxKind": "while_statement"
             }
           },
@@ -2938,7 +2938,7 @@
               "startLine": 18,
               "startColumn": 8,
               "endLine": 19,
-              "endColumn": 29,
+              "endColumn": 28,
               "syntaxKind": "for_statement"
             }
           },
@@ -3271,7 +3271,7 @@
               "startLine": 6,
               "startColumn": 8,
               "endLine": 9,
-              "endColumn": 26,
+              "endColumn": 25,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -3311,7 +3311,7 @@
               "startLine": 16,
               "startColumn": 8,
               "endLine": 17,
-              "endColumn": 23,
+              "endColumn": 22,
               "syntaxKind": "while_statement"
             },
             "referenceAnchor": {

@@ -39,6 +39,11 @@ fn main() {
     build
         .include(&src_dir)
         .file(src_dir.join("parser.c"))
+        // C11 is required: scanner.c (v4.0.0) has a file-scope _Static_assert whose
+        // MSVC arm fires on _MSC_VER >= 1928 — but MSVC only accepts _Static_assert
+        // in C mode under /std:c11, which cl does not default to. cc maps this to
+        // /std:c11 (MSVC) / -std=c11 (GNU-likes).
+        .std("c11")
         .warnings(false);
 
     let scanner_c = src_dir.join("scanner.c");

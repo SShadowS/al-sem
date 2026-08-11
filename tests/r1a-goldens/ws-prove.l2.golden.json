@@ -230,7 +230,7 @@
               "startLine": 4,
               "startColumn": 2,
               "endLine": 5,
-              "endColumn": 8,
+              "endColumn": 7,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -368,7 +368,7 @@
               "startLine": 4,
               "startColumn": 2,
               "endLine": 5,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1275,7 +1275,7 @@
               "startLine": 6,
               "startColumn": 2,
               "endLine": 10,
-              "endColumn": 14,
+              "endColumn": 13,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1961,7 +1961,7 @@
               "startLine": 48,
               "startColumn": 2,
               "endLine": 49,
-              "endColumn": 30,
+              "endColumn": 29,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

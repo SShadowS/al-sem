@@ -113,6 +113,95 @@ impl<'t> DowntoKeywordOrToKeyword<'t> {
     }
 }
 
+/// One of: fieldattribute_keyword, textattribute_keyword.
+#[derive(Copy, Clone)]
+pub enum FieldattributeKeywordOrTextattributeKeyword<'t> {
+    FieldattributeKeyword(RawFieldattributeKeyword<'t>),
+    TextattributeKeyword(RawTextattributeKeyword<'t>),
+}
+impl<'t> FieldattributeKeywordOrTextattributeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::FieldattributeKeyword => {
+                Some(Self::FieldattributeKeyword(RawFieldattributeKeyword(n)))
+            }
+            RawKind::TextattributeKeyword => {
+                Some(Self::TextattributeKeyword(RawTextattributeKeyword(n)))
+            }
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::FieldattributeKeyword(x) => x.node(),
+            Self::TextattributeKeyword(x) => x.node(),
+        }
+    }
+}
+
+/// One of: fieldelement_keyword, tableelement_keyword, textelement_keyword.
+#[derive(Copy, Clone)]
+pub enum FieldelementKeywordOrTableelementKeywordOrTextelementKeyword<'t> {
+    FieldelementKeyword(RawFieldelementKeyword<'t>),
+    TableelementKeyword(RawTableelementKeyword<'t>),
+    TextelementKeyword(RawTextelementKeyword<'t>),
+}
+impl<'t> FieldelementKeywordOrTableelementKeywordOrTextelementKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::FieldelementKeyword => {
+                Some(Self::FieldelementKeyword(RawFieldelementKeyword(n)))
+            }
+            RawKind::TableelementKeyword => {
+                Some(Self::TableelementKeyword(RawTableelementKeyword(n)))
+            }
+            RawKind::TextelementKeyword => Some(Self::TextelementKeyword(RawTextelementKeyword(n))),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::FieldelementKeyword(x) => x.node(),
+            Self::TableelementKeyword(x) => x.node(),
+            Self::TextelementKeyword(x) => x.node(),
+        }
+    }
+}
+
+/// One of: identifier, integer, member_expression, quoted_identifier.
+#[derive(Copy, Clone)]
+pub enum IdentifierOrIntegerOrMemberExpressionOrQuotedIdentifier<'t> {
+    Identifier(RawIdentifier<'t>),
+    Integer(RawInteger<'t>),
+    MemberExpression(RawMemberExpression<'t>),
+    QuotedIdentifier(RawQuotedIdentifier<'t>),
+}
+impl<'t> IdentifierOrIntegerOrMemberExpressionOrQuotedIdentifier<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
+            RawKind::Integer => Some(Self::Integer(RawInteger(n))),
+            RawKind::MemberExpression => Some(Self::MemberExpression(RawMemberExpression(n))),
+            RawKind::QuotedIdentifier => Some(Self::QuotedIdentifier(RawQuotedIdentifier(n))),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::Identifier(x) => x.node(),
+            Self::Integer(x) => x.node(),
+            Self::MemberExpression(x) => x.node(),
+            Self::QuotedIdentifier(x) => x.node(),
+        }
+    }
+}
+
 /// One of: identifier, integer, quoted_identifier.
 #[derive(Copy, Clone)]
 pub enum IdentifierOrIntegerOrQuotedIdentifier<'t> {
@@ -140,18 +229,22 @@ impl<'t> IdentifierOrIntegerOrQuotedIdentifier<'t> {
     }
 }
 
-/// One of: identifier, internal_keyword.
+/// One of: identifier, integer, quoted_identifier, string_literal.
 #[derive(Copy, Clone)]
-pub enum IdentifierOrInternalKeyword<'t> {
+pub enum IdentifierOrIntegerOrQuotedIdentifierOrStringLiteral<'t> {
     Identifier(RawIdentifier<'t>),
-    InternalKeyword(RawInternalKeyword<'t>),
+    Integer(RawInteger<'t>),
+    QuotedIdentifier(RawQuotedIdentifier<'t>),
+    StringLiteral(RawStringLiteral<'t>),
 }
-impl<'t> IdentifierOrInternalKeyword<'t> {
+impl<'t> IdentifierOrIntegerOrQuotedIdentifierOrStringLiteral<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         match n.kind() {
             RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
-            RawKind::InternalKeyword => Some(Self::InternalKeyword(RawInternalKeyword(n))),
+            RawKind::Integer => Some(Self::Integer(RawInteger(n))),
+            RawKind::QuotedIdentifier => Some(Self::QuotedIdentifier(RawQuotedIdentifier(n))),
+            RawKind::StringLiteral => Some(Self::StringLiteral(RawStringLiteral(n))),
             _ => None,
         }
     }
@@ -159,46 +252,9 @@ impl<'t> IdentifierOrInternalKeyword<'t> {
     pub fn node(self) -> RawNode<'t> {
         match self {
             Self::Identifier(x) => x.node(),
-            Self::InternalKeyword(x) => x.node(),
-        }
-    }
-}
-
-/// One of: identifier, keyword_identifier, member_expression, qualified_enum_value, subscript_expression.
-#[derive(Copy, Clone)]
-pub enum IdentifierOrKeywordIdentifierOrMemberExpressionOrQualifiedEnumValueOrSubscriptExpression<
-    't,
-> {
-    Identifier(RawIdentifier<'t>),
-    KeywordIdentifier(RawKeywordIdentifier<'t>),
-    MemberExpression(RawMemberExpression<'t>),
-    QualifiedEnumValue(RawQualifiedEnumValue<'t>),
-    SubscriptExpression(RawSubscriptExpression<'t>),
-}
-impl<'t>
-    IdentifierOrKeywordIdentifierOrMemberExpressionOrQualifiedEnumValueOrSubscriptExpression<'t>
-{
-    #[inline]
-    pub fn cast(n: RawNode<'t>) -> Option<Self> {
-        match n.kind() {
-            RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
-            RawKind::KeywordIdentifier => Some(Self::KeywordIdentifier(RawKeywordIdentifier(n))),
-            RawKind::MemberExpression => Some(Self::MemberExpression(RawMemberExpression(n))),
-            RawKind::QualifiedEnumValue => Some(Self::QualifiedEnumValue(RawQualifiedEnumValue(n))),
-            RawKind::SubscriptExpression => {
-                Some(Self::SubscriptExpression(RawSubscriptExpression(n)))
-            }
-            _ => None,
-        }
-    }
-    #[inline]
-    pub fn node(self) -> RawNode<'t> {
-        match self {
-            Self::Identifier(x) => x.node(),
-            Self::KeywordIdentifier(x) => x.node(),
-            Self::MemberExpression(x) => x.node(),
-            Self::QualifiedEnumValue(x) => x.node(),
-            Self::SubscriptExpression(x) => x.node(),
+            Self::Integer(x) => x.node(),
+            Self::QuotedIdentifier(x) => x.node(),
+            Self::StringLiteral(x) => x.node(),
         }
     }
 }
@@ -257,28 +313,26 @@ impl<'t> IdentifierOrMemberTriggerNameOrQuotedIdentifier<'t> {
     }
 }
 
-/// One of: identifier, preproc_and_expression, preproc_not_expression, preproc_or_expression.
+/// One of: identifier, preproc_and_expression, preproc_not_expression, preproc_or_expression, preproc_parenthesized_expression.
 #[derive(Copy, Clone)]
-pub enum IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression<'t> {
+pub enum IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression<
+    't,
+> {
     Identifier(RawIdentifier<'t>),
     PreprocAndExpression(RawPreprocAndExpression<'t>),
     PreprocNotExpression(RawPreprocNotExpression<'t>),
     PreprocOrExpression(RawPreprocOrExpression<'t>),
+    PreprocParenthesizedExpression(RawPreprocParenthesizedExpression<'t>),
 }
-impl<'t> IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression<'t> {
+impl<'t> IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         match n.kind() {
             RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
-            RawKind::PreprocAndExpression => {
-                Some(Self::PreprocAndExpression(RawPreprocAndExpression(n)))
-            }
-            RawKind::PreprocNotExpression => {
-                Some(Self::PreprocNotExpression(RawPreprocNotExpression(n)))
-            }
-            RawKind::PreprocOrExpression => {
-                Some(Self::PreprocOrExpression(RawPreprocOrExpression(n)))
-            }
+            RawKind::PreprocAndExpression => Some(Self::PreprocAndExpression(RawPreprocAndExpression(n))),
+            RawKind::PreprocNotExpression => Some(Self::PreprocNotExpression(RawPreprocNotExpression(n))),
+            RawKind::PreprocOrExpression => Some(Self::PreprocOrExpression(RawPreprocOrExpression(n))),
+            RawKind::PreprocParenthesizedExpression => Some(Self::PreprocParenthesizedExpression(RawPreprocParenthesizedExpression(n))),
             _ => None,
         }
     }
@@ -289,6 +343,7 @@ impl<'t> IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpres
             Self::PreprocAndExpression(x) => x.node(),
             Self::PreprocNotExpression(x) => x.node(),
             Self::PreprocOrExpression(x) => x.node(),
+            Self::PreprocParenthesizedExpression(x) => x.node(),
         }
     }
 }
@@ -386,8 +441,8 @@ impl<'t> RawActionAreaSection<'t> {
     pub fn body(self) -> Option<RawActionBody<'t>> {
         self.0.field(FieldName::Body).and_then(RawActionBody::cast)
     }
-    pub fn r#type(self) -> Option<RawIdentifier<'t>> {
-        self.0.field(FieldName::Type).and_then(RawIdentifier::cast)
+    pub fn r#type(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Type)
     }
 }
 
@@ -480,6 +535,23 @@ impl<'t> RawActionGroupSection<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawActionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawActionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ActionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawActionrefDeclaration<'t>(pub(super) RawNode<'t>);
 impl<'t> RawActionrefDeclaration<'t> {
     #[inline]
@@ -508,6 +580,23 @@ impl<'t> RawActionrefDeclaration<'t> {
         self.0
             .field(FieldName::PromotedName)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawActionrefKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawActionrefKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ActionrefKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -576,6 +665,23 @@ impl<'t> RawAddDatasetModification<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawAddKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAddKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AddKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawAddafterActionModification<'t>(pub(super) RawNode<'t>);
 impl<'t> RawAddafterActionModification<'t> {
     #[inline]
@@ -624,6 +730,23 @@ impl<'t> RawAddafterDatasetModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAddafterKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAddafterKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AddafterKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -728,6 +851,23 @@ impl<'t> RawAddbeforeDatasetModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAddbeforeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAddbeforeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AddbeforeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -857,6 +997,23 @@ impl<'t> RawAddfirstFieldgroupModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAddfirstKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAddfirstKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AddfirstKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1007,6 +1164,23 @@ impl<'t> RawAddlastFieldgroupModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAddlastKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAddlastKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AddlastKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1236,8 +1410,8 @@ impl<'t> RawAreaSection<'t> {
     pub fn body(self) -> Option<RawLayoutBody<'t>> {
         self.0.field(FieldName::Body).and_then(RawLayoutBody::cast)
     }
-    pub fn r#type(self) -> Option<RawIdentifier<'t>> {
-        self.0.field(FieldName::Type).and_then(RawIdentifier::cast)
+    pub fn r#type(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Type)
     }
 }
 
@@ -1247,6 +1421,23 @@ impl<'t> RawArgumentList<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::ArgumentList {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawArrayKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawArrayKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ArrayKeyword {
             Some(Self(n))
         } else {
             None
@@ -1278,8 +1469,12 @@ impl<'t> RawArrayType<'t> {
             .field(FieldName::ElementType)
             .and_then(RawTypeSpecification::cast)
     }
-    pub fn sizes(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Sizes)
+    pub fn sizes(self) -> Vec<RawInteger<'t>> {
+        self.0
+            .children_by_field(FieldName::Sizes)
+            .into_iter()
+            .filter_map(RawInteger::cast)
+            .collect()
     }
 }
 
@@ -1301,10 +1496,49 @@ impl<'t> RawAsExpression<'t> {
     pub fn left(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Left)
     }
+    pub fn operator(self) -> Option<RawAsKeyword<'t>> {
+        self.0
+            .field(FieldName::Operator)
+            .and_then(RawAsKeyword::cast)
+    }
     pub fn right(self) -> Option<RawTypeSpecification<'t>> {
         self.0
             .field(FieldName::Right)
             .and_then(RawTypeSpecification::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAsKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAsKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AsKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAscendingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAscendingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AscendingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1349,6 +1583,23 @@ impl<'t> RawAssemblyDeclaration<'t> {
         self.0
             .field(FieldName::Name)
             .and_then(DotnetAssemblyNameOrQuotedIdentifierOrStringLiteral::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAssemblyKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAssemblyKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AssemblyKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1407,8 +1658,30 @@ impl<'t> RawAssignmentExpression<'t> {
     pub fn left(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Left)
     }
+    pub fn operator(self) -> Option<RawAssignmentOperator<'t>> {
+        self.0
+            .field(FieldName::Operator)
+            .and_then(RawAssignmentOperator::cast)
+    }
     pub fn right(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Right)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawAssignmentOperator<'t>(pub(super) RawNode<'t>);
+impl<'t> RawAssignmentOperator<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::AssignmentOperator {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1429,6 +1702,11 @@ impl<'t> RawAssignmentStatement<'t> {
     }
     pub fn left(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Left)
+    }
+    pub fn operator(self) -> Option<RawAssignmentOperator<'t>> {
+        self.0
+            .field(FieldName::Operator)
+            .and_then(RawAssignmentOperator::cast)
     }
     pub fn right(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Right)
@@ -1655,14 +1933,8 @@ impl<'t> RawCallExpression<'t> {
             .field(FieldName::Arguments)
             .and_then(RawArgumentList::cast)
     }
-    pub fn function(
-        self,
-    ) -> Option<
-        IdentifierOrKeywordIdentifierOrMemberExpressionOrQualifiedEnumValueOrSubscriptExpression<
-            't,
-        >,
-    > {
-        self.0.field(FieldName::Function).and_then(IdentifierOrKeywordIdentifierOrMemberExpressionOrQualifiedEnumValueOrSubscriptExpression::cast)
+    pub fn function(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Function)
     }
 }
 
@@ -1737,8 +2009,8 @@ impl<'t> RawCaseBranch<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn pattern(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Pattern)
@@ -1760,8 +2032,10 @@ impl<'t> RawCaseElseBranch<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawStatementBlock<'t>> {
+        self.0
+            .field(FieldName::Body)
+            .and_then(RawStatementBlock::cast)
     }
 }
 
@@ -1824,6 +2098,23 @@ impl<'t> RawCodeBlock<'t> {
         self.0
             .field(FieldName::Body)
             .and_then(RawStatementBlock::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawCodeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawCodeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::CodeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -1929,6 +2220,23 @@ impl<'t> RawComment<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawCommentKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawCommentKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::CommentKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawComparisonExpression<'t>(pub(super) RawNode<'t>);
 impl<'t> RawComparisonExpression<'t> {
     #[inline]
@@ -1962,6 +2270,40 @@ impl<'t> RawComparisonOperator<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::ComparisonOperator {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawConstKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawConstKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ConstKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawContentKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawContentKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ContentKeyword {
             Some(Self(n))
         } else {
             None
@@ -2069,6 +2411,23 @@ impl<'t> RawControladdinKeyword<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawCreationKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawCreationKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::CreationKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawCuegroupKeyword<'t>(pub(super) RawNode<'t>);
 impl<'t> RawCuegroupKeyword<'t> {
     #[inline]
@@ -2140,11 +2499,45 @@ impl<'t> RawCustomactionDeclaration<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawCustomactionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawCustomactionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::CustomactionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawCustomizesKeyword<'t>(pub(super) RawNode<'t>);
 impl<'t> RawCustomizesKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::CustomizesKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawDatabaseKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawDatabaseKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::DatabaseKeyword {
             Some(Self(n))
         } else {
             None
@@ -2363,6 +2756,57 @@ impl<'t> RawDeclarationBody<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawDescendingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawDescendingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::DescendingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawDialogKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawDialogKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::DialogKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawDictionaryKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawDictionaryKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::DictionaryKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawDictionaryType<'t>(pub(super) RawNode<'t>);
 impl<'t> RawDictionaryType<'t> {
     #[inline]
@@ -2492,8 +2936,12 @@ impl<'t> RawDotnetType<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn reference(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Reference)
+    pub fn reference(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifierOrStringLiteral<'t>> {
+        self.0
+            .children_by_field(FieldName::Reference)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifierOrStringLiteral::cast)
+            .collect()
     }
 }
 
@@ -2606,6 +3054,23 @@ impl<'t> RawElseTableRelationFragment<'t> {
         self.0
             .field(FieldName::ElseRelation)
             .and_then(RawTableRelationExpression::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawEmbeddingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawEmbeddingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::EmbeddingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -2915,6 +3380,23 @@ impl<'t> RawExtendsKeyword<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawFactboxesKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFactboxesKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FactboxesKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawFieldDeclaration<'t>(pub(super) RawNode<'t>);
 impl<'t> RawFieldDeclaration<'t> {
     #[inline]
@@ -2950,11 +3432,62 @@ impl<'t> RawFieldDeclaration<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawFieldKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFieldKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FieldKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawFieldList<'t>(pub(super) RawNode<'t>);
 impl<'t> RawFieldList<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::FieldList {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawFieldattributeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFieldattributeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FieldattributeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawFieldelementKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFieldelementKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FieldelementKeyword {
             Some(Self(n))
         } else {
             None
@@ -3124,6 +3657,23 @@ impl<'t> RawFieldsSection<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawFileKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFileKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FileKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawFileuploadactionDeclaration<'t>(pub(super) RawNode<'t>);
 impl<'t> RawFileuploadactionDeclaration<'t> {
     #[inline]
@@ -3151,11 +3701,45 @@ impl<'t> RawFileuploadactionDeclaration<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawFileuploadactionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFileuploadactionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FileuploadactionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawFilterKeyword<'t>(pub(super) RawNode<'t>);
 impl<'t> RawFilterKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::FilterKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawFilterOperator<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFilterOperator<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FilterOperator {
             Some(Self(n))
         } else {
             None
@@ -3260,8 +3844,8 @@ impl<'t> RawForStatement<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn direction(self) -> Option<DowntoKeywordOrToKeyword<'t>> {
         self.0
@@ -3313,8 +3897,8 @@ impl<'t> RawForeachStatement<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn iterable(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Iterable)
@@ -3466,11 +4050,11 @@ impl<'t> RawIfStatement<'t> {
     pub fn condition(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Condition)
     }
-    pub fn else_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ElseBranch)
+    pub fn else_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ElseBranch)
     }
-    pub fn then_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ThenBranch)
+    pub fn then_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ThenBranch)
     }
 }
 
@@ -3682,11 +4266,6 @@ impl<'t> RawInterfaceDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn access_value(self) -> Option<IdentifierOrInternalKeyword<'t>> {
-        self.0
-            .field(FieldName::AccessValue)
-            .and_then(IdentifierOrInternalKeyword::cast)
-    }
     pub fn body(self) -> Option<RawInterfaceBody<'t>> {
         self.0
             .field(FieldName::Body)
@@ -3810,10 +4389,32 @@ impl<'t> RawIsExpression<'t> {
     pub fn left(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Left)
     }
+    pub fn operator(self) -> Option<RawIsKeyword<'t>> {
+        self.0
+            .field(FieldName::Operator)
+            .and_then(RawIsKeyword::cast)
+    }
     pub fn right(self) -> Option<RawTypeSpecification<'t>> {
         self.0
             .field(FieldName::Right)
             .and_then(RawTypeSpecification::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawIsKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawIsKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::IsKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -4003,6 +4604,23 @@ impl<'t> RawLabelDeclaration<'t> {
         self.0
             .field(FieldName::Value)
             .and_then(StringLiteralOrVerbatimString::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawLabelKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawLabelKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::LabelKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -4201,6 +4819,23 @@ impl<'t> RawLinkValueList<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawListKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawListKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ListKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawListLiteral<'t>(pub(super) RawNode<'t>);
 impl<'t> RawListLiteral<'t> {
     #[inline]
@@ -4257,6 +4892,23 @@ impl<'t> RawLocalKeyword<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawLockedKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawLockedKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::LockedKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawLogicalExpression<'t>(pub(super) RawNode<'t>);
 impl<'t> RawLogicalExpression<'t> {
     #[inline]
@@ -4301,6 +4953,40 @@ impl<'t> RawLookupFormula<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(RawCalcFieldReference::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawLookupKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawLookupKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::LookupKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawMaxlengthKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawMaxlengthKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::MaxlengthKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -4428,6 +5114,23 @@ impl<'t> RawModifyActionModification<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawModifyKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawModifyKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ModifyKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawModifyModification<'t>(pub(super) RawNode<'t>);
 impl<'t> RawModifyModification<'t> {
     #[inline]
@@ -4451,6 +5154,23 @@ impl<'t> RawModifyModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawMoveafterKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawMoveafterKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::MoveafterKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -4482,6 +5202,23 @@ impl<'t> RawMoveafterModification<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawMovebeforeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawMovebeforeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::MovebeforeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawMovebeforeModification<'t>(pub(super) RawNode<'t>);
 impl<'t> RawMovebeforeModification<'t> {
     #[inline]
@@ -4509,6 +5246,23 @@ impl<'t> RawMovebeforeModification<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawMovefirstKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawMovefirstKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::MovefirstKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawMovefirstModification<'t>(pub(super) RawNode<'t>);
 impl<'t> RawMovefirstModification<'t> {
     #[inline]
@@ -4532,6 +5286,23 @@ impl<'t> RawMovefirstModification<'t> {
         self.0
             .field(FieldName::Target)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawMovelastKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawMovelastKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::MovelastKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -4662,6 +5433,23 @@ impl<'t> RawNamespaceName<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawNavigationKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawNavigationKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::NavigationKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawObjectReferenceType<'t>(pub(super) RawNode<'t>);
 impl<'t> RawObjectReferenceType<'t> {
     #[inline]
@@ -4679,8 +5467,12 @@ impl<'t> RawObjectReferenceType<'t> {
     pub fn object_type(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::ObjectType)
     }
-    pub fn reference(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Reference)
+    pub fn reference(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Reference)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -4724,6 +5516,23 @@ impl<'t> RawOfKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::OfKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawOptionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawOptionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::OptionKeyword {
             Some(Self(n))
         } else {
             None
@@ -4809,6 +5618,23 @@ impl<'t> RawOrderByList<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::OrderByList {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawOrderKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawOrderKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::OrderKeyword {
             Some(Self(n))
         } else {
             None
@@ -5386,6 +6212,29 @@ impl<'t> RawPreprocConditionalDataset<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalExpressionTail<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalExpressionTail<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalExpressionTail {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn operand(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operand)
+    }
+    pub fn operator(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operator)
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalFieldgroups<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalFieldgroups<'t> {
     #[inline]
@@ -5510,6 +6359,23 @@ impl<'t> RawPreprocConditionalLinkValues<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::PreprocConditionalLinkValues {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalListElements<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalListElements<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalListElements {
             Some(Self(n))
         } else {
             None
@@ -5757,13 +6623,8 @@ impl<'t> RawPreprocElif<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn condition(
-        self,
-    ) -> Option<IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression<'t>>
-    {
-        self.0.field(FieldName::Condition).and_then(
-            IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression::cast,
-        )
+    pub fn condition(self) -> Option<IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression<'t>>{
+        self.0.field(FieldName::Condition).and_then(IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression::cast)
     }
 }
 
@@ -5853,8 +6714,8 @@ impl<'t> RawPreprocGuardedStatement<'t> {
     pub fn condition(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Condition)
     }
-    pub fn then_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ThenBranch)
+    pub fn then_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ThenBranch)
     }
 }
 
@@ -5873,13 +6734,8 @@ impl<'t> RawPreprocIf<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn condition(
-        self,
-    ) -> Option<IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression<'t>>
-    {
-        self.0.field(FieldName::Condition).and_then(
-            IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpression::cast,
-        )
+    pub fn condition(self) -> Option<IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression<'t>>{
+        self.0.field(FieldName::Condition).and_then(IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpressionOrPreprocParenthesizedExpression::cast)
     }
 }
 
@@ -5923,6 +6779,23 @@ impl<'t> RawPreprocOrExpression<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::PreprocOrExpression {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocParenthesizedExpression<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocParenthesizedExpression<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocParenthesizedExpression {
             Some(Self(n))
         } else {
             None
@@ -6051,8 +6924,8 @@ impl<'t> RawPreprocSplitCaseBranch<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn pattern(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Pattern)
@@ -6074,8 +6947,8 @@ impl<'t> RawPreprocSplitCaseExtended<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn pattern(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Pattern)
@@ -6088,6 +6961,23 @@ impl<'t> RawPreprocSplitCodeBlockEnd<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::PreprocSplitCodeBlockEnd {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitCodeBlockOverEndif<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitCodeBlockOverEndif<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitCodeBlockOverEndif {
             Some(Self(n))
         } else {
             None
@@ -6163,6 +7053,23 @@ impl<'t> RawPreprocSplitDeclaration<'t> {
             .into_iter()
             .filter_map(IdentifierOrQuotedIdentifier::cast)
             .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitElseBeginOverEndif<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitElseBeginOverEndif<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitElseBeginOverEndif {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -6273,8 +7180,8 @@ impl<'t> RawPreprocSplitIfElseStatement<'t> {
     pub fn condition(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Condition)
     }
-    pub fn else_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ElseBranch)
+    pub fn else_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ElseBranch)
     }
     pub fn then_branch(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::ThenBranch)
@@ -6299,11 +7206,11 @@ impl<'t> RawPreprocSplitIfStatement<'t> {
     pub fn condition(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Condition)
     }
-    pub fn else_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ElseBranch)
+    pub fn else_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ElseBranch)
     }
-    pub fn then_branch(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::ThenBranch)
+    pub fn then_branch(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::ThenBranch)
     }
 }
 
@@ -6621,6 +7528,23 @@ impl<'t> RawProcedureModifier<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawProcessingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawProcessingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ProcessingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawProfileDeclaration<'t>(pub(super) RawNode<'t>);
 impl<'t> RawProfileDeclaration<'t> {
     #[inline]
@@ -6714,6 +7638,91 @@ impl<'t> RawProfileextensionKeyword<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPromotedKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPromotedKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PromotedKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPromptKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPromptKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PromptKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPromptguideKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPromptguideKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PromptguideKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPromptingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPromptingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PromptingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPromptoptionsKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPromptoptionsKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PromptoptionsKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawProperty<'t>(pub(super) RawNode<'t>);
 impl<'t> RawProperty<'t> {
     #[inline]
@@ -6778,6 +7787,23 @@ impl<'t> RawProtectedKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::ProtectedKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPublicKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPublicKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PublicKeyword {
             Some(Self(n))
         } else {
             None
@@ -6886,8 +7912,12 @@ impl<'t> RawQueryDataitem<'t> {
             .field(FieldName::Name)
             .and_then(IdentifierOrQuotedIdentifier::cast)
     }
-    pub fn table_name(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::TableName)
+    pub fn table_name(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::TableName)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -7011,6 +8041,23 @@ impl<'t> RawRangeExpression<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawRecordKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawRecordKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::RecordKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawRecordType<'t>(pub(super) RawNode<'t>);
 impl<'t> RawRecordType<'t> {
     #[inline]
@@ -7025,8 +8072,12 @@ impl<'t> RawRecordType<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn reference(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Reference)
+    pub fn reference(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Reference)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -7269,8 +8320,12 @@ impl<'t> RawReportDataitem<'t> {
             .field(FieldName::Name)
             .and_then(IdentifierOrQuotedIdentifier::cast)
     }
-    pub fn table_name(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::TableName)
+    pub fn table_name(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::TableName)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -7374,6 +8429,23 @@ impl<'t> RawReportextensionKeyword<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawReportingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawReportingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ReportingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawRequestpageKeyword<'t>(pub(super) RawNode<'t>);
 impl<'t> RawRequestpageKeyword<'t> {
     #[inline]
@@ -7409,6 +8481,23 @@ impl<'t> RawRequestpageSection<'t> {
         self.0
             .field(FieldName::Body)
             .and_then(RawDeclarationBody::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawRolecenterKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawRolecenterKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::RolecenterKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -7467,6 +8556,23 @@ impl<'t> RawSchemaSection<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawSectionsKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSectionsKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SectionsKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawSeparatorAction<'t>(pub(super) RawNode<'t>);
 impl<'t> RawSeparatorAction<'t> {
     #[inline]
@@ -7490,6 +8596,40 @@ impl<'t> RawSeparatorAction<'t> {
         self.0
             .field(FieldName::Name)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawSeparatorKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSeparatorKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SeparatorKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawSessionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSessionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SessionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -7525,8 +8665,29 @@ impl<'t> RawSimpleTableRelation<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn table(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Table)
+    pub fn table(self) -> Vec<IdentifierOrIntegerOrMemberExpressionOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Table)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrMemberExpressionOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawSortingKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSortingKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SortingKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -7622,6 +8783,23 @@ impl<'t> RawSubscriptExpression<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawSystemKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSystemKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SystemKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawSystemactionDeclaration<'t>(pub(super) RawNode<'t>);
 impl<'t> RawSystemactionDeclaration<'t> {
     #[inline]
@@ -7645,6 +8823,40 @@ impl<'t> RawSystemactionDeclaration<'t> {
         self.0
             .field(FieldName::Name)
             .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawSystemactionKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSystemactionKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SystemactionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawSystemactionsKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawSystemactionsKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::SystemactionsKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -7779,6 +8991,23 @@ impl<'t> RawTableRelationValue<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawTabledataKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTabledataKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TabledataKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawTabledataPermission<'t>(pub(super) RawNode<'t>);
 impl<'t> RawTabledataPermission<'t> {
     #[inline]
@@ -7809,6 +9038,23 @@ impl<'t> RawTabledataPermissionList<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::TabledataPermissionList {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawTableelementKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTableelementKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TableelementKeyword {
             Some(Self(n))
         } else {
             None
@@ -7916,6 +9162,57 @@ impl<'t> RawTernaryExpression<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawTestpageKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTestpageKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TestpageKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawTestrequestpageKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTestrequestpageKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TestrequestpageKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawTextKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTextKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TextKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawTextType<'t>(pub(super) RawNode<'t>);
 impl<'t> RawTextType<'t> {
     #[inline]
@@ -7932,6 +9229,40 @@ impl<'t> RawTextType<'t> {
     }
     pub fn length(self) -> Option<RawInteger<'t>> {
         self.0.field(FieldName::Length).and_then(RawInteger::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawTextattributeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTextattributeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TextattributeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawTextelementKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTextelementKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TextelementKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -8076,6 +9407,23 @@ impl<'t> RawTypeDeclaration<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawTypeKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawTypeKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::TypeKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawTypeSpecification<'t>(pub(super) RawNode<'t>);
 impl<'t> RawTypeSpecification<'t> {
     #[inline]
@@ -8121,6 +9469,23 @@ impl<'t> RawUntilKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::UntilKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawUpperlimitKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawUpperlimitKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::UpperlimitKeyword {
             Some(Self(n))
         } else {
             None
@@ -8217,6 +9582,23 @@ impl<'t> RawUsingStatement<'t> {
         self.0
             .field(FieldName::Namespace)
             .and_then(RawNamespaceName::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawValueKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawValueKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ValueKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -8539,6 +9921,23 @@ impl<'t> RawWhereConditions<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawWhereKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawWhereKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::WhereKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawWhileKeyword<'t>(pub(super) RawNode<'t>);
 impl<'t> RawWhileKeyword<'t> {
     #[inline]
@@ -8570,8 +9969,8 @@ impl<'t> RawWhileStatement<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn condition(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Condition)
@@ -8610,8 +10009,8 @@ impl<'t> RawWithStatement<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn body(self) -> Vec<RawNode<'t>> {
-        self.0.children_by_field(FieldName::Body)
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
     }
     pub fn record(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Record)
@@ -8632,6 +10031,11 @@ impl<'t> RawXmlportAttribute<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+    pub fn attribute_type(self) -> Option<FieldattributeKeywordOrTextattributeKeyword<'t>> {
+        self.0
+            .field(FieldName::AttributeType)
+            .and_then(FieldattributeKeywordOrTextattributeKeyword::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -8712,6 +10116,13 @@ impl<'t> RawXmlportElement<'t> {
     }
     pub fn body(self) -> Option<RawXmlportBody<'t>> {
         self.0.field(FieldName::Body).and_then(RawXmlportBody::cast)
+    }
+    pub fn element_type(
+        self,
+    ) -> Option<FieldelementKeywordOrTableelementKeywordOrTextelementKeyword<'t>> {
+        self.0
+            .field(FieldName::ElementType)
+            .and_then(FieldelementKeywordOrTableelementKeywordOrTextelementKeyword::cast)
     }
     pub fn name(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
         self.0

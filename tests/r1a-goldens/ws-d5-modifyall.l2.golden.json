@@ -302,7 +302,7 @@
               "startLine": 16,
               "startColumn": 2,
               "endLine": 20,
-              "endColumn": 29,
+              "endColumn": 28,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -749,7 +749,7 @@
               "startLine": 6,
               "startColumn": 2,
               "endLine": 10,
-              "endColumn": 29,
+              "endColumn": 28,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

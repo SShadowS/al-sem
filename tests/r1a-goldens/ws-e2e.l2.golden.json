@@ -883,7 +883,7 @@
               "startLine": 31,
               "startColumn": 8,
               "endLine": 32,
-              "endColumn": 46,
+              "endColumn": 45,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1141,7 +1141,7 @@
               "startLine": 12,
               "startColumn": 8,
               "endLine": 15,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }

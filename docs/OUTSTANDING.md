@@ -26,6 +26,25 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **Fixture witnesses for the grammar-v4 semantic fixes** (from the 2026-08-12
+  v4.0.0 upgrade's golden triage): the two semantically riskiest v4 changes have NO
+  witness in `tests/r0-corpus/` — (a) a dangling `else` now binds to the inner `if`
+  (the one v4 change that alters program meaning), and (b) the operator-precedence
+  repairs (`and`/`or`/`xor` tighter than comparison; `-a * b` = `(-a) * b`; `..` no
+  longer an expression operator). Nothing in the corpus pins the engine's IR shape
+  for these, so a future grammar regression would be invisible to every golden.
+  Add one small fixture per shape (remember: a NEW r0-corpus fixture moves THREE
+  golden families and r4 needs a committed seed file — see CLAUDE.md), with
+  discrimination proofs.
+
+- [ ] **Report the scanner.c MSVC `_Static_assert` guard defect upstream**
+  (tree-sitter-al): the `(defined(_MSC_VER) && _MSC_VER >= 1928)` arm is wrong —
+  MSVC accepts `_Static_assert` in C mode only under `/std:c11` (i.e. when
+  `__STDC_VERSION__` is defined), so the `__STDC_VERSION__` arm alone is the correct
+  guard. Without it every default-flags MSVC build of scanner.c fails (C2143 at the
+  assert). This engine works around it via `cc.std("c11")` in
+  `crates/al-syntax/build.rs`; plain-default consumers still break.
+
 - [x] **Golden-gate coverage repair** — DONE 2026-07-25 (task-3 fix wave, review
   I-3). Every "goldens clean" claim in the l3-substrate/C1 arcs rested on a gate
   with real holes; task 3 walked straight through one (it moved

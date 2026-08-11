@@ -30,7 +30,7 @@
               "startLine": 45,
               "startColumn": 8,
               "endLine": 45,
-              "endColumn": 55,
+              "endColumn": 54,
               "syntaxKind": "for_statement"
             }
           }
@@ -549,7 +549,7 @@
               "startLine": 9,
               "startColumn": 8,
               "endLine": 12,
-              "endColumn": 38,
+              "endColumn": 37,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -792,7 +792,7 @@
               "startLine": 32,
               "startColumn": 8,
               "endLine": 32,
-              "endColumn": 43,
+              "endColumn": 42,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -812,7 +812,7 @@
               "startLine": 33,
               "startColumn": 8,
               "endLine": 33,
-              "endColumn": 45,
+              "endColumn": 44,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

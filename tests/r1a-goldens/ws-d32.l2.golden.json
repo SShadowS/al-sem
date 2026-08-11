@@ -302,7 +302,7 @@
               "startLine": 25,
               "startColumn": 8,
               "endLine": 28,
-              "endColumn": 27,
+              "endColumn": 26,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -912,7 +912,7 @@
               "startLine": 39,
               "startColumn": 8,
               "endLine": 39,
-              "endColumn": 34,
+              "endColumn": 33,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -1223,7 +1223,7 @@
               "startLine": 12,
               "startColumn": 8,
               "endLine": 13,
-              "endColumn": 26,
+              "endColumn": 25,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

@@ -159,7 +159,7 @@
               "startLine": 7,
               "startColumn": 8,
               "endLine": 8,
-              "endColumn": 21,
+              "endColumn": 20,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -179,7 +179,7 @@
               "startLine": 7,
               "startColumn": 8,
               "endLine": 8,
-              "endColumn": 21,
+              "endColumn": 20,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

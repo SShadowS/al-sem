@@ -213,7 +213,7 @@
               "startLine": 31,
               "startColumn": 8,
               "endLine": 34,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

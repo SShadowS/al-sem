@@ -9,11 +9,11 @@
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 #[allow(non_camel_case_types)]
 pub enum FieldName {
-    AccessValue,
     ActionName,
     AlName,
     Arguments,
     Attribute,
+    AttributeType,
     BaseObject,
     Body,
     Comment,
@@ -88,11 +88,11 @@ impl FieldName {
     /// The grammar field-name string (for `child_by_field_name`).
     pub fn as_raw(self) -> &'static str {
         match self {
-            FieldName::AccessValue => "access_value",
             FieldName::ActionName => "action_name",
             FieldName::AlName => "al_name",
             FieldName::Arguments => "arguments",
             FieldName::Attribute => "attribute",
+            FieldName::AttributeType => "attribute_type",
             FieldName::BaseObject => "base_object",
             FieldName::Body => "body",
             FieldName::Comment => "comment",

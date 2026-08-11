@@ -18,7 +18,82 @@ pub enum Class {
 pub fn class_of(k: RawKind) -> Class {
     match k {
         // ---- Trivia: keyword tokens + comments ----
-        RawKind::ActionsKeyword
+        // (v4.0.0 made ~70 more keywords named nodes — previously hidden pattern
+        // tokens whose bytes reached no node. They carry no structure the lowerer
+        // routes; field-based descent never sees them. AssignmentOperator is the
+        // `:=` token itself: Assignment lowers via Left/Right fields only.)
+        RawKind::ActionKeyword
+        | RawKind::ActionrefKeyword
+        | RawKind::AddKeyword
+        | RawKind::AddafterKeyword
+        | RawKind::AddbeforeKeyword
+        | RawKind::AddfirstKeyword
+        | RawKind::AddlastKeyword
+        | RawKind::ArrayKeyword
+        | RawKind::AsKeyword
+        | RawKind::AscendingKeyword
+        | RawKind::AssemblyKeyword
+        | RawKind::AssignmentOperator
+        | RawKind::CodeKeyword
+        | RawKind::CommentKeyword
+        | RawKind::ConstKeyword
+        | RawKind::ContentKeyword
+        | RawKind::CreationKeyword
+        | RawKind::CustomactionKeyword
+        | RawKind::DatabaseKeyword
+        | RawKind::DescendingKeyword
+        | RawKind::DialogKeyword
+        | RawKind::DictionaryKeyword
+        | RawKind::EmbeddingKeyword
+        | RawKind::FactboxesKeyword
+        | RawKind::FieldKeyword
+        | RawKind::FieldattributeKeyword
+        | RawKind::FieldelementKeyword
+        | RawKind::FileKeyword
+        | RawKind::FileuploadactionKeyword
+        | RawKind::IsKeyword
+        | RawKind::LabelKeyword
+        | RawKind::ListKeyword
+        | RawKind::LockedKeyword
+        | RawKind::LookupKeyword
+        | RawKind::MaxlengthKeyword
+        | RawKind::ModifyKeyword
+        | RawKind::MoveafterKeyword
+        | RawKind::MovebeforeKeyword
+        | RawKind::MovefirstKeyword
+        | RawKind::MovelastKeyword
+        | RawKind::NavigationKeyword
+        | RawKind::OptionKeyword
+        | RawKind::OrderKeyword
+        | RawKind::ProcessingKeyword
+        | RawKind::PromotedKeyword
+        | RawKind::PromptKeyword
+        | RawKind::PromptguideKeyword
+        | RawKind::PromptingKeyword
+        | RawKind::PromptoptionsKeyword
+        | RawKind::PublicKeyword
+        | RawKind::RecordKeyword
+        | RawKind::ReportingKeyword
+        | RawKind::RolecenterKeyword
+        | RawKind::SectionsKeyword
+        | RawKind::SeparatorKeyword
+        | RawKind::SessionKeyword
+        | RawKind::SortingKeyword
+        | RawKind::SystemKeyword
+        | RawKind::SystemactionKeyword
+        | RawKind::SystemactionsKeyword
+        | RawKind::TabledataKeyword
+        | RawKind::TableelementKeyword
+        | RawKind::TestpageKeyword
+        | RawKind::TestrequestpageKeyword
+        | RawKind::TextKeyword
+        | RawKind::TextattributeKeyword
+        | RawKind::TextelementKeyword
+        | RawKind::TypeKeyword
+        | RawKind::UpperlimitKeyword
+        | RawKind::ValueKeyword
+        | RawKind::WhereKeyword
+        | RawKind::ActionsKeyword
         | RawKind::AnalysisviewKeyword
         | RawKind::AnalysisviewsKeyword
         | RawKind::AreaKeyword
@@ -113,6 +188,15 @@ pub fn class_of(k: RawKind) -> Class {
         RawKind::InExpression
         | RawKind::IsExpression
         | RawKind::AsExpression
+        // v4.0.0 additions: filter operators became nodes (they carry semantic
+        // text, like ComparisonOperator); the new preproc nodes are structural
+        // like every other Preproc* (the lowerer owns descent).
+        | RawKind::FilterOperator
+        | RawKind::PreprocConditionalExpressionTail
+        | RawKind::PreprocConditionalListElements
+        | RawKind::PreprocParenthesizedExpression
+        | RawKind::PreprocSplitCodeBlockOverEndif
+        | RawKind::PreprocSplitElseBeginOverEndif
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration

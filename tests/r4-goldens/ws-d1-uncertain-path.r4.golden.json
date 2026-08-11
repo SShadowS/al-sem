@@ -97,7 +97,7 @@
                     "startLine": 58,
                     "startColumn": 8,
                     "endLine": 59,
-                    "endColumn": 24
+                    "endColumn": 23
                   },
                   "enclosingRoutineId": "11111111-d100-0000-0000-000000000002:Codeunit:63201#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6",
                   "syntaxKind": "for_statement"
@@ -190,7 +190,7 @@
           "startLine": 58,
           "startColumn": 8,
           "endLine": 59,
-          "endColumn": 24
+          "endColumn": 23
         },
         "enclosingRoutineId": "11111111-d100-0000-0000-000000000002:Codeunit:63201#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6",
         "syntaxKind": "for_statement"

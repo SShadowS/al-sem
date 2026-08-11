@@ -35,7 +35,7 @@
               "startLine": 6,
               "startColumn": 8,
               "endLine": 7,
-              "endColumn": 28,
+              "endColumn": 27,
               "syntaxKind": "for_statement"
             }
           }
@@ -155,7 +155,7 @@
               "startLine": 14,
               "startColumn": 8,
               "endLine": 15,
-              "endColumn": 27,
+              "endColumn": 26,
               "syntaxKind": "for_statement"
             }
           }
@@ -333,7 +333,7 @@
               "startLine": 22,
               "startColumn": 8,
               "endLine": 25,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }

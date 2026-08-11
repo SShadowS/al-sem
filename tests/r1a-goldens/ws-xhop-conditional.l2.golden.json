@@ -290,7 +290,7 @@
               "startLine": 9,
               "startColumn": 8,
               "endLine": 10,
-              "endColumn": 30,
+              "endColumn": 29,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

@@ -244,7 +244,7 @@
               "startLine": 7,
               "startColumn": 8,
               "endLine": 10,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

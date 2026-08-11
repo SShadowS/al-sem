@@ -292,7 +292,7 @@
               "startLine": 30,
               "startColumn": 8,
               "endLine": 33,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {
@@ -588,7 +588,7 @@
               "startLine": 13,
               "startColumn": 8,
               "endLine": 16,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "if_statement"
             },
             "referenceAnchor": {

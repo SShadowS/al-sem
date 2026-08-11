@@ -30,7 +30,7 @@
               "startLine": 45,
               "startColumn": 8,
               "endLine": 46,
-              "endColumn": 33,
+              "endColumn": 32,
               "syntaxKind": "for_statement"
             }
           }
@@ -272,7 +272,7 @@
               "startLine": 32,
               "startColumn": 8,
               "endLine": 35,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }
@@ -572,7 +572,7 @@
               "startLine": 8,
               "startColumn": 8,
               "endLine": 11,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }
@@ -818,7 +818,7 @@
               "startLine": 20,
               "startColumn": 8,
               "endLine": 23,
-              "endColumn": 12,
+              "endColumn": 11,
               "syntaxKind": "for_statement"
             }
           }
