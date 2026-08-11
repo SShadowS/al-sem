@@ -306,6 +306,7 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocConditionalVarBlock
         | RawKind::PreprocConditionalWhere
         | RawKind::PreprocConditionalXmlport
+        | RawKind::PreprocDefine
         | RawKind::PreprocElif
         | RawKind::PreprocElse
         | RawKind::PreprocEndif
@@ -339,6 +340,7 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocSplitProcedureBody
         | RawKind::PreprocSplitProcedurePreamble
         | RawKind::PreprocSplitTableField
+        | RawKind::PreprocUndef
         | RawKind::Procedure
         | RawKind::ProcedureModifier
         | RawKind::ProfileDeclaration

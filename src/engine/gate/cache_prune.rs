@@ -37,7 +37,7 @@ use crate::engine::ids::sha256_hex;
 // ---------------------------------------------------------------------------
 
 /// Grammar version tag (mirrors `GRAMMAR_VERSION` in al-sem `discover.ts`).
-pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v3.2.0-native";
+pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v3.3.1-native";
 
 /// Symbol-reader schema version (al-sem `cache-versions.ts` `symbolReader`).
 /// Bumped 17→18 for the temp-state-tracking epoch (Task 16): the symbol-reader
@@ -582,7 +582,7 @@ mod tests {
     /// `"tree-sitter-al-v2.5.2-native"` — this test FAILS with `CACHE_VERSION_GRAMMAR
     /// is "tree-sitter-al-v2.5.2-native" but the linked grammar is v3.2.0 — bump the
     /// constant (it keys dependency-cache invalidation, it is not a comment)`.
-    /// Restore to `"tree-sitter-al-v3.2.0-native"` — this test PASSES.
+    /// Restore to the current constant — this test PASSES.
     #[test]
     fn cache_version_grammar_tracks_the_linked_grammar() {
         let root = std::env::var("TREE_SITTER_AL_PATH")

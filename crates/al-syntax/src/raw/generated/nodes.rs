@@ -5726,6 +5726,23 @@ impl<'t> RawPreprocConditionalXmlport<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocDefine<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocDefine<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocDefine {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocElif<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocElif<'t> {
     #[inline]
@@ -6504,6 +6521,23 @@ impl<'t> RawPreprocSplitTableField<'t> {
             .into_iter()
             .filter_map(RawTypeSpecification::cast)
             .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocUndef<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocUndef<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocUndef {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 

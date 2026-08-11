@@ -263,6 +263,7 @@ pub enum RawKind {
     PreprocConditionalVarBlock,
     PreprocConditionalWhere,
     PreprocConditionalXmlport,
+    PreprocDefine,
     PreprocElif,
     PreprocElse,
     PreprocEndif,
@@ -296,6 +297,7 @@ pub enum RawKind {
     PreprocSplitProcedureBody,
     PreprocSplitProcedurePreamble,
     PreprocSplitTableField,
+    PreprocUndef,
     Procedure,
     ProcedureKeyword,
     ProcedureModifier,
@@ -669,6 +671,7 @@ impl RawKind {
             "preproc_conditional_var_block" => Some(RawKind::PreprocConditionalVarBlock),
             "preproc_conditional_where" => Some(RawKind::PreprocConditionalWhere),
             "preproc_conditional_xmlport" => Some(RawKind::PreprocConditionalXmlport),
+            "preproc_define" => Some(RawKind::PreprocDefine),
             "preproc_elif" => Some(RawKind::PreprocElif),
             "preproc_else" => Some(RawKind::PreprocElse),
             "preproc_endif" => Some(RawKind::PreprocEndif),
@@ -704,6 +707,7 @@ impl RawKind {
             "preproc_split_procedure_body" => Some(RawKind::PreprocSplitProcedureBody),
             "preproc_split_procedure_preamble" => Some(RawKind::PreprocSplitProcedurePreamble),
             "preproc_split_table_field" => Some(RawKind::PreprocSplitTableField),
+            "preproc_undef" => Some(RawKind::PreprocUndef),
             "procedure" => Some(RawKind::Procedure),
             "procedure_keyword" => Some(RawKind::ProcedureKeyword),
             "procedure_modifier" => Some(RawKind::ProcedureModifier),
@@ -1082,6 +1086,7 @@ impl RawKind {
             RawKind::PreprocConditionalVarBlock => "preproc_conditional_var_block",
             RawKind::PreprocConditionalWhere => "preproc_conditional_where",
             RawKind::PreprocConditionalXmlport => "preproc_conditional_xmlport",
+            RawKind::PreprocDefine => "preproc_define",
             RawKind::PreprocElif => "preproc_elif",
             RawKind::PreprocElse => "preproc_else",
             RawKind::PreprocEndif => "preproc_endif",
@@ -1115,6 +1120,7 @@ impl RawKind {
             RawKind::PreprocSplitProcedureBody => "preproc_split_procedure_body",
             RawKind::PreprocSplitProcedurePreamble => "preproc_split_procedure_preamble",
             RawKind::PreprocSplitTableField => "preproc_split_table_field",
+            RawKind::PreprocUndef => "preproc_undef",
             RawKind::Procedure => "procedure",
             RawKind::ProcedureKeyword => "procedure_keyword",
             RawKind::ProcedureModifier => "procedure_modifier",
@@ -1485,6 +1491,7 @@ impl RawKind {
         RawKind::PreprocConditionalVarBlock,
         RawKind::PreprocConditionalWhere,
         RawKind::PreprocConditionalXmlport,
+        RawKind::PreprocDefine,
         RawKind::PreprocElif,
         RawKind::PreprocElse,
         RawKind::PreprocEndif,
@@ -1518,6 +1525,7 @@ impl RawKind {
         RawKind::PreprocSplitProcedureBody,
         RawKind::PreprocSplitProcedurePreamble,
         RawKind::PreprocSplitTableField,
+        RawKind::PreprocUndef,
         RawKind::Procedure,
         RawKind::ProcedureKeyword,
         RawKind::ProcedureModifier,
@@ -1627,7 +1635,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "cf86fd3038c012bcec3f4bbc6c7880a1baaeb2b90218c40208fd9d5cb62dd8ee";
+    "907159f735d457fcee2623911a49803c23aa0e0060cde2da2e93219b00637cd1";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 388;
+pub const NAMED_KIND_COUNT: usize = 390;
