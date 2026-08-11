@@ -97,7 +97,8 @@ jobs:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: target/release/al-call-hierarchy.exe
+          # The action requires rooted (absolute) paths
+          files: ${{ github.workspace }}\target\release\al-call-hierarchy.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
