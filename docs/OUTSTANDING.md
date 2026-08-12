@@ -37,13 +37,13 @@ sizings marked pre-arc).
   golden families and r4 needs a committed seed file — see CLAUDE.md), with
   discrimination proofs.
 
-- [ ] **Report the scanner.c MSVC `_Static_assert` guard defect upstream**
-  (tree-sitter-al): the `(defined(_MSC_VER) && _MSC_VER >= 1928)` arm is wrong —
-  MSVC accepts `_Static_assert` in C mode only under `/std:c11` (i.e. when
-  `__STDC_VERSION__` is defined), so the `__STDC_VERSION__` arm alone is the correct
-  guard. Without it every default-flags MSVC build of scanner.c fails (C2143 at the
-  assert). This engine works around it via `cc.std("c11")` in
-  `crates/al-syntax/build.rs`; plain-default consumers still break.
+- [x] **scanner.c MSVC `_Static_assert` guard defect — FIXED UPSTREAM in
+  tree-sitter-al v4.0.1** (2026-08-12, grammar commit `3bac021`): the guard is now
+  `__STDC_VERSION__ >= 201112L` alone, exactly the suggested condition; default-flags
+  MSVC builds work again. The engine keeps `cc.std("c11")` in
+  `crates/al-syntax/build.rs` deliberately — under C11 the compiler takes the
+  message-printing `_Static_assert` branch instead of the opaque negative-array
+  fallback.
 
 - [x] **Golden-gate coverage repair** — DONE 2026-07-25 (task-3 fix wave, review
   I-3). Every "goldens clean" claim in the l3-substrate/C1 arcs rested on a gate

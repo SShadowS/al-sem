@@ -72,7 +72,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al **v4.0.0** grammar (included as a git submodule at `tree-sitter-al/`,
+- tree-sitter-al **v4.0.1** grammar (included as a git submodule at `tree-sitter-al/`,
   pinned in the superproject's index; CI instead checks out the grammar repo's `main`
   branch unpinned — see the Grammar section below)
   - Clone with `git clone --recurse-submodules`, or run `git submodule update --init` after clone
@@ -296,11 +296,14 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.0.0)
+## Grammar (tree-sitter-al v4.0.1)
 
-**Current reality:** the grammar is **v4.0.0** (`tree-sitter-al/package.json`, tag
-`v4.0.0`; the pin sits a few commits past the tag on the grammar repo's `main`, matching
-what unpinned CI checks out). The submodule pointer in this repo's git index is pinned to a specific
+**Current reality:** the grammar is **v4.0.1** (`tree-sitter-al/package.json`; the pin
+sits at the grammar repo's `main` tip, matching what unpinned CI checks out). v4.0.0
+is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
+fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
+variable names — zero named-kind movement (`gen-syntax` hash unchanged).
+The submodule pointer in this repo's git index is pinned to a specific
 commit (reproducible local/dev builds); CI instead checks out `SShadowS/tree-sitter-al`
 `main` **unpinned** (`.github/workflows/ci.yml`) so a breaking grammar change surfaces
 on the next PR rather than silently drifting. `crates/al-syntax` is the **only** crate

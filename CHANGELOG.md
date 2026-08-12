@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed - tree-sitter-al upgraded v3.2.0 → v4.0.0 (breaking grammar release)
+### Changed - tree-sitter-al upgraded v3.2.0 → v4.0.0, then v4.0.1 (breaking grammar release)
 
-The submodule pin moved to the grammar repo's `main` tip (a few commits past the
-`v4.0.0` tag — the same thing unpinned CI checks out). v4.0.0 is a breaking parse-tree
-release; see the grammar repo's CHANGELOG for the full story. What it took on the
-engine side, in order of interest:
+The submodule pin moved to the grammar repo's `main` tip (the same thing unpinned CI
+checks out) — first to v4.0.0, then same-arc to v4.0.1. v4.0.0 is a breaking
+parse-tree release; see the grammar repo's CHANGELOG for the full story. v4.0.1 fixes
+the scanner `_Static_assert` MSVC guard defect this upgrade found (below) with exactly
+the suggested `__STDC_VERSION__`-only condition, and makes 14 section keywords legal
+as variable names — zero named-kind movement (`gen-syntax` hash byte-identical), zero
+golden movement, `CACHE_VERSION_GRAMMAR` + the two version-tuple cache fixtures
+re-minted to `v4.0.1-native`. What the v4.0.0 step took on the engine side, in order
+of interest:
 
 - **Zero lowerer code changes.** The v4 shape changes (statement `;` re-parented out of
   `code_block`/`if_statement`/branch rules, single-node body fields, dotted-reference
@@ -40,11 +45,13 @@ engine side, in order of interest:
   witness in `tests/r0-corpus/` (nothing pins them), and `case`/`repeat` spans never
   moved because v3 spans already excluded the `;` (changelog claim without a corpus
   witness, not a regen failure).
-- **`build.rs` now compiles the grammar with C11** (`cc.std("c11")`): v4's `scanner.c`
-  has a file-scope `_Static_assert` whose MSVC arm assumes `_MSC_VER >= 1928` implies
-  support, but MSVC only accepts `_Static_assert` in C mode under `/std:c11` — without
-  the flag every Windows build broke. (Upstream guard defect, worth fixing there too:
-  the `__STDC_VERSION__` arm alone is the correct condition.)
+- **`build.rs` now compiles the grammar with C11** (`cc.std("c11")`): v4.0.0's
+  `scanner.c` had a file-scope `_Static_assert` whose MSVC arm assumed
+  `_MSC_VER >= 1928` implies support, but MSVC only accepts `_Static_assert` in C
+  mode under `/std:c11` — without the flag every Windows build broke. Fixed upstream
+  in v4.0.1 (`__STDC_VERSION__`-only guard, the suggested condition); the C11 flag
+  stays because it selects the message-printing assert branch over the opaque
+  negative-array fallback.
 - **`CACHE_VERSION_GRAMMAR` bumped** to `tree-sitter-al-v4.0.0-native` (the
   `cache_version_grammar_tracks_the_linked_grammar` gate caught it — its designed
   purpose), and the two `cli-c-goldens/cache/fixture-cache/` artifacts that embed the

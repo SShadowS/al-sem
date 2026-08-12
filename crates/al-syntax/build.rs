@@ -39,10 +39,12 @@ fn main() {
     build
         .include(&src_dir)
         .file(src_dir.join("parser.c"))
-        // C11 is required: scanner.c (v4.0.0) has a file-scope _Static_assert whose
-        // MSVC arm fires on _MSC_VER >= 1928 — but MSVC only accepts _Static_assert
-        // in C mode under /std:c11, which cl does not default to. cc maps this to
-        // /std:c11 (MSVC) / -std=c11 (GNU-likes).
+        // C11: scanner.c has a file-scope _Static_assert (its depth-counter width
+        // gate). Since grammar v4.0.1 the guard is `__STDC_VERSION__ >= 201112L`
+        // alone, so builds work WITHOUT this flag too (a negative-array fallback
+        // fires instead) — but under C11 MSVC/gcc/clang take the _Static_assert
+        // branch, which prints the gate's actual MESSAGE on failure. cc maps this
+        // to /std:c11 (MSVC) / -std=c11 (GNU-likes).
         .std("c11")
         .warnings(false);
 
