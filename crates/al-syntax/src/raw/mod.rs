@@ -29,7 +29,7 @@ mod tests {
         assert_eq!(RawKind::from_raw("ERROR"), RawKind::Error);
         // Update when the grammar adds/removes a NAMED node kind (the generated
         // `NAMED_KIND_COUNT` const is authoritative; this pins it as a sanity anchor).
-        assert_eq!(NAMED_KIND_COUNT, 390);
+        assert_eq!(NAMED_KIND_COUNT, 467);
         assert_eq!(GRAMMAR_NODE_TYPES_HASH.len(), 64);
     }
 
