@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed - multi-root memory: roots now build lazily
+
+A 33-root VS Code workspace (a real customer report: Continia Banking) drove
+`al-call-hierarchy.exe` to a **17 GB peak / 4.7 GB resident** with nothing opened.
+`build_workspace` built a full program snapshot for EVERY configured root at
+`initialize`, and each snapshot independently retains its root's whole dependency
+closure — including every dependency app's source text (`AppSetSnapshot`) — with
+no sharing between roots. Thirty-three roots whose dependency closures are nearly
+identical (Base Application, System Application, the product's own base app) meant
+thirty-three copies of the same data. The session never opened a file.
+
+Roots are now built on the FIRST request that routes to them, and cached
+thereafter (`RootState::state`). Failures are cached too, so a broken root is
+diagnosed once rather than on every request, and a root's file watcher is started
+when that root is built rather than for every configured root up front.
+
+Measured with 8 roots of a real AL project, nothing opened:
+
+| | before | after |
+|---|---|---|
+| unsolicited `publishDiagnostics` | 72 | **0** |
+| working set | 3643 MB | **26 MB** |
+| peak working set | 4063 MB | **26 MB** |
+
+Touching one root then builds only that root (1.9 s, real code lenses returned).
+Per-root cost is unchanged — this makes you pay for the roots you use instead of
+every root you configured; sharing the dependency layer ACROSS roots is the
+follow-up that would cut the remaining per-root duplication.
+
+**Consumer note:** session-start telemetry is now recorded by the first root that
+builds rather than at `initialize`. A session that never opens a file records no
+session start, which is the truthful signal — nothing was analyzed.
+
+### Added - `--no-diagnostics`, and a server-side gate on the existing config
+
+Code-quality diagnostics are now skipped entirely when no detector is enabled,
+instead of being computed and then discarded. Previously a config with every
+detector `enabled: false` still paid a full whole-workspace analysis on every
+build and swap. This matters because the VS Code client ships with code-quality
+diagnostics **off by default** and drops them client-side on arrival — the
+default install was paying full price for output nothing consumed.
+
+- `DiagnosticConfig::any_enabled()` gates the initial publish and every
+  background swap.
+- `--no-diagnostics` forces every detector off regardless of `.al-sem.json`, so a
+  client that filters them away can tell the server not to bother.
+
 ## [1.1.1] - 2026-08-24
 
 ### Changed - tree-sitter-al upgraded v3.2.0 → v4.0.0, then v4.0.1 (breaking grammar release)

@@ -220,6 +220,34 @@ fn apply_defaults(section: DiagnosticsSection) -> DiagnosticConfig {
 }
 
 impl DiagnosticConfig {
+    /// `true` when at least one detector would ever emit a finding.
+    ///
+    /// When this is `false` computing diagnostics is pure waste: every
+    /// detector is off, so `compute_all` can only ever return an empty set.
+    /// The server checks this before doing any diagnostic work — the VS Code
+    /// client ships with code-quality diagnostics DISABLED by default and
+    /// drops them client-side on arrival, so without this gate a default
+    /// install pays a full whole-workspace analysis to produce output that
+    /// nothing consumes.
+    pub fn any_enabled(&self) -> bool {
+        self.complexity_enabled
+            || self.length_enabled
+            || self.params_enabled
+            || self.fan_in_enabled
+            || self.unused_procedures
+    }
+
+    /// Turn every detector off — the in-memory equivalent of a config file
+    /// with all `enabled: false`. Backs `--no-diagnostics`, which lets a
+    /// client that discards code-quality diagnostics skip producing them.
+    pub fn disable_all(&mut self) {
+        self.complexity_enabled = false;
+        self.length_enabled = false;
+        self.params_enabled = false;
+        self.fan_in_enabled = false;
+        self.unused_procedures = false;
+    }
+
     /// Load config by merging: defaults → global → workspace.
     pub fn load(workspace_root: &Path) -> Self {
         // Phase 1: Load both config files

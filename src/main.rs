@@ -57,6 +57,13 @@ struct Args {
     #[arg(long)]
     no_telemetry: bool,
 
+    /// Skip code-quality diagnostics entirely. For clients that discard
+    /// them anyway — computing them means a full analysis of every root
+    /// that is opened, so a client which filters them client-side pays a
+    /// large cost for output it throws away.
+    #[arg(long)]
+    no_diagnostics: bool,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -90,7 +97,7 @@ fn main() -> Result<()> {
         // asked for. Give it real, unconditional effect (highest precedence): it
         // always starts the LSP server, regardless of --project/--analyze.
         info!("Starting AL Call Hierarchy LSP server (--lsp)");
-        run_server(args.no_watcher, args.no_telemetry)?;
+        run_server(args.no_watcher, args.no_telemetry, args.no_diagnostics)?;
     } else if let Some(project) = args.project {
         if args.analyze {
             // Analysis mode
@@ -104,7 +111,7 @@ fn main() -> Result<()> {
     } else {
         // LSP server mode (default)
         info!("Starting AL Call Hierarchy LSP server");
-        run_server(args.no_watcher, args.no_telemetry)?;
+        run_server(args.no_watcher, args.no_telemetry, args.no_diagnostics)?;
     }
 
     Ok(())

@@ -86,6 +86,7 @@ use lsp_types::{
     PublishDiagnosticsParams, ServerCapabilities, Uri,
 };
 use serde_json::Value;
+use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -126,18 +127,118 @@ struct ServerState {
     config: DiagnosticConfig,
 }
 
-/// One configured workspace root plus whatever `ServerState` its OWN
-/// snapshot build produced. `state` is `None` exactly when THIS root's
-/// build failed (see the module doc's "no valid workspace" section, now
-/// applied per root) — [`build_workspace`] logs why and moves on; a broken
-/// root never stops any other root from building.
+/// A sink for outbound `Message`s, owned by each [`RootState`] so a root
+/// can publish diagnostics whenever it is eventually built. Deliberately a
+/// closure rather than a `crossbeam_channel::Sender<Message>` — that type
+/// is an indirect dependency this crate never names (same rationale as
+/// [`publish_changed`]'s generic `send`). `Arc` because the per-root
+/// background updater thread needs its own clone.
+type MessageSink = Arc<dyn Fn(Message) + Send + Sync>;
+
+/// Wrap a `Connection`'s sender as a [`MessageSink`], logging (never
+/// panicking) if the peer has already gone away.
+fn message_sink(connection: &Connection) -> MessageSink {
+    let sender = connection.sender.clone();
+    Arc::new(move |m| {
+        if let Err(e) = sender.send(m) {
+            warn!("Failed to publish message: {}", e);
+        }
+    })
+}
+
+/// Everything [`RootState::state`] needs to build its root on demand.
+struct RootBuild {
+    encoding: PositionEncoding,
+    sink: MessageSink,
+    /// Start this root's file watcher when (and only when) the root is
+    /// actually built — a root that is never touched never spawns a
+    /// watcher thread either.
+    start_watcher: bool,
+    /// `--no-diagnostics`: force every detector off for this root, whatever
+    /// its `.al-sem.json` says.
+    no_diagnostics: bool,
+}
+
+/// One configured workspace root plus — once anything actually asks for it
+/// — whatever `ServerState` its OWN snapshot build produced.
+///
+/// The state is built LAZILY, on the first request that routes to this
+/// root, and cached thereafter. It is `Some(None)` exactly when THIS root's
+/// build was attempted and failed (see the module doc's "no valid
+/// workspace" section, applied per root) — [`RootState::state`] logs why
+/// and moves on; a broken root never stops any other root from building.
+///
+/// Laziness is load-bearing, not an optimization: a snapshot retains its
+/// root's whole dependency closure INCLUDING every dependency app's source
+/// text (`AppSetSnapshot`), and nothing is shared between roots. Building
+/// all of them up front cost ~17 GB peak on a 33-root customer workspace
+/// whose session never opened a single file. Roots are cheap until touched.
 struct RootState {
     /// Always normalized ([`crate::protocol::normalize_path`] — case-folded
     /// on Windows), so it compares directly against a `uri_to_path`'d
     /// inbound URI with no further munging — see [`build_workspace`], the
     /// ONLY place a `RootState` is constructed.
     root: PathBuf,
-    state: Option<ServerState>,
+    /// `OnceCell` (not `Mutex`/`OnceLock`): the whole `Workspace` is only
+    /// ever borrowed from the single `main_loop` thread, so no locking is
+    /// needed and none is paid for.
+    state: OnceCell<Option<ServerState>>,
+    build: RootBuild,
+}
+
+impl RootState {
+    /// A root whose state is already built, for tests that assemble a
+    /// `Workspace` by hand (production always goes through the lazy path).
+    #[cfg(test)]
+    fn prebuilt(root: PathBuf, state: Option<ServerState>, build: RootBuild) -> Self {
+        let cell = OnceCell::new();
+        let _ = cell.set(state);
+        RootState {
+            root,
+            state: cell,
+            build,
+        }
+    }
+
+    /// This root's state, building it on first call. Returns `None` when
+    /// the build failed (or previously failed — the failure is cached, so a
+    /// broken root is diagnosed once, not on every request).
+    fn state(&self) -> Option<&ServerState> {
+        self.state
+            .get_or_init(|| {
+                let mut config = DiagnosticConfig::load(&self.root);
+                if self.build.no_diagnostics {
+                    config.disable_all();
+                }
+                let built =
+                    build_server_state(&self.root, self.build.encoding, config, &self.build.sink);
+                match &built {
+                    Some(st) => {
+                        info!("Built program snapshot for workspace root {}", self.root.display());
+                        if self.build.start_watcher {
+                            start_file_watcher(st.tx.clone(), self.root.clone());
+                        }
+                    }
+                    None => warn!(
+                        "Failed to build the program snapshot for workspace root {}                          (missing/invalid app.json?) — every request under this root                          will return an empty result until a valid single-app AL                          workspace is opened there; other configured roots are                          unaffected.",
+                        self.root.display()
+                    ),
+                }
+                built
+            })
+            .as_ref()
+    }
+
+    /// This root's state ONLY if it has already been built — never triggers
+    /// a build. For shutdown and for tests asserting laziness.
+    fn built(&self) -> Option<&ServerState> {
+        self.state.get().and_then(Option::as_ref)
+    }
+
+    /// Consume this root, yielding its state only if one was ever built.
+    fn into_built(self) -> Option<ServerState> {
+        self.state.into_inner().flatten()
+    }
 }
 
 /// The whole multi-root session: one [`RootState`] per root
@@ -162,7 +263,7 @@ impl Workspace {
 }
 
 /// Run the LSP server
-pub fn run_server(no_watcher: bool, no_telemetry: bool) -> Result<()> {
+pub fn run_server(no_watcher: bool, no_telemetry: bool, no_diagnostics: bool) -> Result<()> {
     info!("Starting AL Call Hierarchy LSP server (program-engine backend)");
 
     let (connection, io_threads) = Connection::stdio();
@@ -240,56 +341,23 @@ pub fn run_server(no_watcher: bool, no_telemetry: bool) -> Result<()> {
 
     // Build one `RootState` per configured root — see `build_workspace`'s
     // doc for the per-root fail-loud-but-isolated build semantics.
-    let workspace = build_workspace(&roots, position_encoding, &connection);
+    // Watchers are started per root by `RootState::state` when (and only
+    // when) that root is actually built — never for a root nothing touches.
+    let workspace = build_workspace(
+        &roots,
+        position_encoding,
+        &connection,
+        !no_watcher,
+        no_diagnostics,
+    );
 
-    #[cfg(feature = "telemetry")]
-    {
-        // Session-level counter, first root only — same rationale as the
-        // `TelemetryInputs::workspace_root` note above.
-        let (workspace_file_count, dep_app_count) = workspace
-            .roots
-            .first()
-            .and_then(|r| r.state.as_ref())
-            .map(|st| {
-                let snap = st.shared.get();
-                let definitions: usize = snap.decls_by_file.values().map(|v| v.len()).sum();
-                let call_sites: usize = snap.edges_by_file.values().map(|v| v.len()).sum();
-                let deps = snap.snap.apps.len().saturating_sub(1);
-                ((definitions + call_sites) as u32, deps)
-            })
-            .unwrap_or((0, 0));
-        let has_app_dependencies = dep_app_count > 0;
-        let dependency_count = dep_app_count.min(u8::MAX as usize) as u8;
-        crate::telemetry::record_session_start(
-            workspace_file_count,
-            dependency_count,
-            has_app_dependencies,
-        );
-    }
-
-    // Start file watcher thread(s) for incremental updates (unless
-    // disabled) — one PER root that built a valid snapshot, each with its
-    // OWN tx clone/root path (see `RootState`'s per-root isolation doc).
-    // `watcher_started` feeds the shutdown-sequence log decision below —
-    // true iff AT LEAST one watcher started.
-    let watcher_started = if no_watcher {
+    // The old eager "start a watcher for every built root" loop is gone:
+    // `RootState::state` starts a root's watcher at the moment that root is
+    // built, so watcher threads track actual use rather than configuration.
+    // `--no-watcher` is threaded through `build_workspace` above.
+    if no_watcher {
         info!("File watcher disabled (--no-watcher). Using LSP notifications for changes.");
-        false
-    } else {
-        let mut any_started = false;
-        for root_state in &workspace.roots {
-            if let Some(st) = &root_state.state {
-                start_file_watcher(st.tx.clone(), root_state.root.clone());
-                any_started = true;
-            }
-        }
-        if !any_started {
-            info!(
-                "File watcher not started (no active workspace snapshot in any configured root)."
-            );
-        }
-        any_started
-    };
+    }
 
     // Main loop. Takes OWNERSHIP of `connection` (not `&connection`) —
     // verified end to end (a real stdio round trip via a Python LSP client,
@@ -321,8 +389,13 @@ pub fn run_server(no_watcher: bool, no_telemetry: bool) -> Result<()> {
     // `--no-watcher` case (`watcher_started == false`) it's the ONLY signal
     // each updater thread gets, and lets it (and the `sender_bg`-held
     // `Message` sender clone it carries — see below) exit promptly.
+    // Only roots that were actually BUILT own a `tx` (or a watcher); an
+    // untouched root has nothing to signal. `watcher_started` is therefore
+    // derived here rather than at startup — with lazy roots, whether any
+    // watcher exists is only knowable once the session is over.
+    let watcher_started = !no_watcher && workspace.roots.iter().any(|r| r.built().is_some());
     for root_state in workspace.roots {
-        if let Some(st) = root_state.state {
+        if let Some(st) = root_state.into_built() {
             drop(st.tx);
         }
     }
@@ -456,31 +529,41 @@ fn build_server_state(
     workspace_root: &Path,
     encoding: PositionEncoding,
     config: DiagnosticConfig,
-    connection: &Connection,
+    sink: &MessageSink,
 ) -> Option<ServerState> {
     let (initial, workspace) = LspSnapshot::build_full_with_parsed(workspace_root)?;
     let initial = Arc::new(initial);
     let shared = Arc::new(SharedSnapshot::new(Arc::clone(&initial)));
 
+    // Session-start telemetry is recorded by the FIRST root that builds,
+    // not at `initialize`: with lazy roots there is no snapshot to measure
+    // until something is actually opened, and forcing one just to count it
+    // would reintroduce exactly the eager build this design removes.
+    record_session_start_once(&initial);
+
     let diag_state = Arc::new(Mutex::new(DiagnosticsState::new()));
-    {
-        let sender = connection.sender.clone();
+    // Diagnostics gate: with every detector disabled `compute_all` can only
+    // return an empty set, so skip the whole-workspace analysis rather than
+    // computing findings nothing will consume.
+    if config.any_enabled() {
+        let sink_initial = Arc::clone(sink);
         publish_full_diagnostics_diff(
-            move |m| {
-                if let Err(e) = sender.send(m) {
-                    warn!("Failed to publish initial diagnostics: {}", e);
-                }
-            },
+            move |m| sink_initial(m),
             &diag_state,
             &initial,
             encoding,
             &config,
         );
+    } else {
+        debug!(
+            "Diagnostics disabled for {} — skipping initial analysis",
+            workspace_root.display()
+        );
     }
 
     let (tx, rx) = mpsc::channel::<ChangeEvent>();
     let diag_state_bg = Arc::clone(&diag_state);
-    let sender_bg = connection.sender.clone();
+    let sink_bg = Arc::clone(sink);
     let config_bg = config.clone();
     let updater_handle = spawn_updater(
         Arc::clone(&shared),
@@ -488,12 +571,11 @@ fn build_server_state(
         workspace_root.to_path_buf(),
         workspace,
         move |new, scope| {
-            let sender = sender_bg.clone();
-            let send = move |m| {
-                if let Err(e) = sender.send(m) {
-                    warn!("Failed to publish diagnostics: {}", e);
-                }
-            };
+            if !config_bg.any_enabled() {
+                return;
+            }
+            let sink = Arc::clone(&sink_bg);
+            let send = move |m| sink(m);
             match scope {
                 SwapScope::Full => {
                     publish_full_diagnostics_diff(send, &diag_state_bg, new, encoding, &config_bg);
@@ -541,33 +623,56 @@ fn build_workspace(
     roots: &[PathBuf],
     encoding: PositionEncoding,
     connection: &Connection,
+    start_watchers: bool,
+    no_diagnostics: bool,
 ) -> Workspace {
     if roots.is_empty() {
         warn!(
-            "No workspace folder given at initialize — every request will \
-             return an empty result until a workspace is opened."
+            "No workspace folder given at initialize — every request will              return an empty result until a workspace is opened."
         );
     }
-    let roots = roots
+    let sink = message_sink(connection);
+    let roots: Vec<RootState> = roots
         .iter()
-        .map(|raw_root| {
-            let root = crate::protocol::normalize_path(raw_root);
-            let config = DiagnosticConfig::load(&root);
-            let state = build_server_state(&root, encoding, config, connection);
-            if state.is_none() {
-                warn!(
-                    "Failed to build the program snapshot for workspace root {} \
-                     (missing/invalid app.json?) — every request under this root \
-                     will return an empty result until a valid single-app AL \
-                     workspace is opened there; other configured roots are \
-                     unaffected.",
-                    root.display()
-                );
-            }
-            RootState { root, state }
+        .map(|raw_root| RootState {
+            root: crate::protocol::normalize_path(raw_root),
+            state: OnceCell::new(),
+            build: RootBuild {
+                encoding,
+                sink: Arc::clone(&sink),
+                start_watcher: start_watchers,
+                no_diagnostics,
+            },
         })
         .collect();
+    info!(
+        "Configured {} workspace root(s); each builds its snapshot on first use",
+        roots.len()
+    );
     Workspace { roots }
+}
+
+/// Record session-start telemetry exactly once per process, driven by the
+/// FIRST root that successfully builds.
+///
+/// Pre-lazy this was measured at `initialize` off root 0's snapshot. With
+/// lazy roots there is no snapshot to measure until something is actually
+/// opened, and forcing one just to count it would reintroduce the eager
+/// build this design exists to remove — so the measurement moves to the
+/// first real build. A session that never opens a file now records no
+/// session start at all, which is the truthful signal: nothing was analyzed.
+fn record_session_start_once(snap: &LspSnapshot) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let definitions: usize = snap.decls_by_file.values().map(|v| v.len()).sum();
+        let call_sites: usize = snap.edges_by_file.values().map(|v| v.len()).sum();
+        let dep_app_count = snap.snap.apps.len().saturating_sub(1);
+        crate::telemetry::record_session_start(
+            (definitions + call_sites) as u32,
+            dep_app_count.min(u8::MAX as usize) as u8,
+            dep_app_count > 0,
+        );
+    });
 }
 
 /// Recompute-diff-publish: run [`compute_all`] over `snap`, diff it through
@@ -904,19 +1009,19 @@ fn dispatch_dependency_document_symbol(
     params: DependencyDocumentSymbolParams,
 ) -> Vec<DependencyDocumentSymbol> {
     if !workspace.is_multi_root() {
-        let Some(state) = workspace.roots.first().and_then(|r| r.state.as_ref()) else {
+        let Some(state) = workspace.roots.first().and_then(RootState::state) else {
             return Vec::new();
         };
         return dependency_document_symbol(&state.shared.get(), params);
     }
     if let Some(uri) = params.uri.as_deref()
         && let Some(rs) = route_uri(workspace, uri)
-        && let Some(state) = rs.state.as_ref()
+        && let Some(state) = rs.state()
     {
         return dependency_document_symbol(&state.shared.get(), params);
     }
     for root_state in &workspace.roots {
-        let Some(state) = root_state.state.as_ref() else {
+        let Some(state) = root_state.state() else {
             continue;
         };
         let result = dependency_document_symbol(&state.shared.get(), params.clone());
@@ -966,7 +1071,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_uri_or_warn(workspace, &req.method, uri) else {
                 return Ok(Value::Null);
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Null);
             };
             let snap = state.shared.get();
@@ -985,7 +1090,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_item_or_warn(workspace, &req.method, &params.item) else {
                 return Ok(Value::Array(Vec::new()));
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Array(Vec::new()));
             };
             let snap = state.shared.get();
@@ -1002,7 +1107,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_item_or_warn(workspace, &req.method, &params.item) else {
                 return Ok(Value::Array(Vec::new()));
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Array(Vec::new()));
             };
             let snap = state.shared.get();
@@ -1019,7 +1124,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_uri_or_warn(workspace, &req.method, uri) else {
                 return Ok(Value::Array(Vec::new()));
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Array(Vec::new()));
             };
             let snap = state.shared.get();
@@ -1048,7 +1153,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_uri_or_warn(workspace, &req.method, &params.uri) else {
                 return Ok(Value::Array(Vec::new()));
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Array(Vec::new()));
             };
             let snap = state.shared.get();
@@ -1061,7 +1166,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
             let Some(root_state) = route_uri_or_warn(workspace, &req.method, &params.uri) else {
                 return Ok(Value::Null);
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return Ok(Value::Null);
             };
             let snap = state.shared.get();
@@ -1101,7 +1206,7 @@ fn handle_notification(workspace: &Workspace, notif: &lsp_server::Notification) 
             let Some(root_state) = route_uri_or_warn(workspace, &notif.method, uri) else {
                 return;
             };
-            let Some(state) = root_state.state.as_ref() else {
+            let Some(state) = root_state.state() else {
                 return;
             };
             let Some(path) = uri_to_path(&params.text_document.uri) else {
@@ -1231,11 +1336,12 @@ mod tests {
         write_fixture_workspace(dir.path());
 
         let (server_conn, client_conn) = Connection::memory();
+        let sink = message_sink(&server_conn);
         let state = build_server_state(
             dir.path(),
             PositionEncoding::Utf8,
             DiagnosticConfig::default(),
-            &server_conn,
+            &sink,
         )
         .expect("build_server_state must succeed for a valid fixture workspace");
         let root = state.shared.get().workspace_root.as_path().to_path_buf();
@@ -1249,15 +1355,18 @@ mod tests {
         // pre-multi-root version; only this construction and the final
         // shutdown teardown actually differ.
         let workspace = Workspace {
-            roots: vec![RootState {
+            roots: vec![RootState::prebuilt(
                 root,
-                state: Some(state),
-            }],
+                Some(state),
+                RootBuild {
+                    encoding: PositionEncoding::Utf8,
+                    sink: Arc::clone(&sink),
+                    start_watcher: false,
+                    no_diagnostics: false,
+                },
+            )],
         };
-        let state = workspace.roots[0]
-            .state
-            .as_ref()
-            .expect("just inserted above");
+        let state = workspace.roots[0].state().expect("just inserted above");
         assert_eq!(
             state.shared.get().generation,
             0,
@@ -1417,7 +1526,10 @@ mod tests {
             .expect("exactly one configured root");
         let ServerState {
             tx, updater_handle, ..
-        } = root_state.expect("this root's snapshot build succeeded above");
+        } = root_state
+            .into_inner()
+            .flatten()
+            .expect("this root's snapshot build succeeded above");
         drop(tx);
         updater_handle
             .join()
@@ -1433,7 +1545,7 @@ mod tests {
 
     fn join_all_roots(workspace: Workspace) {
         for root_state in workspace.roots {
-            if let Some(st) = root_state.state {
+            if let Some(st) = root_state.into_built() {
                 drop(st.tx);
                 st.updater_handle
                     .join()
@@ -1476,17 +1588,19 @@ mod tests {
             &[dir_a.path().to_path_buf(), dir_b],
             PositionEncoding::Utf8,
             &server_conn,
+            false,
+            false,
         );
         assert_eq!(workspace.roots.len(), 2);
-        assert!(workspace.roots[0].state.is_some(), "root A must build");
+        assert!(workspace.roots[0].state().is_some(), "root A must build");
         assert!(
-            workspace.roots[1].state.is_some(),
+            workspace.roots[1].state().is_some(),
             "root B (tests/fixtures/lsp-incr) must build"
         );
         assert!(workspace.is_multi_root());
 
-        let state_a = workspace.roots[0].state.as_ref().unwrap();
-        let state_b = workspace.roots[1].state.as_ref().unwrap();
+        let state_a = workspace.roots[0].state().unwrap();
+        let state_b = workspace.roots[1].state().unwrap();
         let alpha_a_uri = path_to_uri(&state_a.shared.get().workspace_root.join("Alpha.al"));
         let alpha_b_uri = path_to_uri(&state_b.shared.get().workspace_root.join("Alpha.al"));
 
@@ -1655,6 +1769,8 @@ mod tests {
             &[dir_a.path().to_path_buf(), dir_b],
             PositionEncoding::Utf8,
             &server_conn,
+            false,
+            false,
         );
         assert_eq!(workspace.roots.len(), 2);
 
@@ -1725,14 +1841,16 @@ mod tests {
             &[dir_a.path().to_path_buf(), dir_broken.path().to_path_buf()],
             PositionEncoding::Utf8,
             &server_conn,
+            false,
+            false,
         );
         assert_eq!(workspace.roots.len(), 2);
         assert!(
-            workspace.roots[0].state.is_some(),
+            workspace.roots[0].state().is_some(),
             "the good root must build"
         );
         assert!(
-            workspace.roots[1].state.is_none(),
+            workspace.roots[1].state().is_none(),
             "the broken root (no app.json) must fail to build, not panic"
         );
 
@@ -1740,8 +1858,7 @@ mod tests {
         // single-root.
         let alpha_uri = path_to_uri(
             &workspace.roots[0]
-                .state
-                .as_ref()
+                .state()
                 .unwrap()
                 .shared
                 .get()
@@ -1749,8 +1866,7 @@ mod tests {
                 .join("Alpha.al"),
         );
         let do_work = workspace.roots[0]
-            .state
-            .as_ref()
+            .state()
             .unwrap()
             .shared
             .get()
@@ -1871,5 +1987,97 @@ mod tests {
             vec![crate::protocol::normalize_path(dir_a.path())],
             "a pre-3.6 client's root_uri must still work when workspace_folders is absent"
         );
+    }
+
+    /// Lazy per-root build (memory: a 33-root workspace built 33 full
+    /// program snapshots at `initialize`, each retaining its own copy of
+    /// the shared dependency source text — ~17 GB peak on a real customer
+    /// workspace, for roots the session never touched). `build_workspace`
+    /// must now build NOTHING; a root's snapshot is built on the first
+    /// request that routes to it, and only for THAT root.
+    #[test]
+    fn build_workspace_builds_no_root_until_a_request_routes_to_one() {
+        let dir_a = tempfile::tempdir().expect("tempdir a");
+        write_fixture_workspace(dir_a.path());
+        let dir_b = tempfile::tempdir().expect("tempdir b");
+        write_fixture_workspace(dir_b.path());
+
+        let (server_conn, _client_conn) = Connection::memory();
+        let workspace = build_workspace(
+            &[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()],
+            PositionEncoding::Utf8,
+            &server_conn,
+            false,
+            false,
+        );
+
+        assert_eq!(workspace.roots.len(), 2);
+        assert!(
+            workspace.roots.iter().all(|r| r.built().is_none()),
+            "build_workspace must not build any root eagerly"
+        );
+
+        // Touching root A builds A — and ONLY A.
+        assert!(
+            workspace.roots[0].state().is_some(),
+            "root A must build on first access"
+        );
+        assert!(
+            workspace.roots[0].built().is_some(),
+            "root A must now be cached as built"
+        );
+        assert!(
+            workspace.roots[1].built().is_none(),
+            "an untouched root must stay unbuilt"
+        );
+
+        join_all_roots(workspace);
+    }
+
+    /// Server-side diagnostics gate. The VS Code client disables code-quality
+    /// diagnostics by DEFAULT and filters them away on arrival, so computing
+    /// them is pure waste in the default configuration. When every detector
+    /// is disabled the server must not compute or publish at all.
+    #[test]
+    fn all_detectors_disabled_publishes_no_diagnostics() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_fixture_workspace(dir.path());
+        std::fs::write(
+            dir.path().join(".al-sem.json"),
+            r#"{
+    "diagnostics": {
+        "complexity": { "enabled": false },
+        "parameters": { "enabled": false },
+        "lineCount": { "enabled": false },
+        "fanIn": { "enabled": false },
+        "unusedProcedures": false
+    }
+}"#,
+        )
+        .expect("write .al-sem.json");
+
+        let cfg = DiagnosticConfig::load(&crate::protocol::normalize_path(dir.path()));
+        assert!(
+            !cfg.any_enabled(),
+            "fixture config must disable every detector"
+        );
+
+        let (server_conn, client_conn) = Connection::memory();
+        let sink = message_sink(&server_conn);
+        let state = build_server_state(dir.path(), PositionEncoding::Utf8, cfg, &sink)
+            .expect("build must still succeed with diagnostics disabled");
+
+        // The fixture's `Extra()` would otherwise raise an unused-procedure
+        // hint on the initial publish (see `write_fixture_workspace`).
+        assert!(
+            client_conn.receiver.try_iter().next().is_none(),
+            "no message may be published when every detector is disabled"
+        );
+
+        drop(state.tx);
+        state
+            .updater_handle
+            .join()
+            .expect("updater thread must exit cleanly");
     }
 }
