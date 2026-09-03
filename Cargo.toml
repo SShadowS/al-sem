@@ -5,7 +5,7 @@
 # until the 2026-08-07 rename; the library name now matches what the engine is.
 name = "al-sem"
 default-run = "al-call-hierarchy"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2024"
 authors = ["SShadowS"]
 description = "Whole-program semantic analysis engine for AL (Microsoft Dynamics 365 Business Central): call-graph resolution, an LSP server, and a code-quality analyzer"
