@@ -44,3 +44,4 @@ Thumbs.db
 # committed anonymized CDO goldens under tests/goldens/semantic-edges/. NEVER
 # committed — see src/program/resolve/anon.rs's module docs.
 tests/goldens/semantic-edges/cdo-deanon-map.json
+.agent-review/
