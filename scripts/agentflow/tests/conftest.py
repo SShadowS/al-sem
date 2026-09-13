@@ -29,8 +29,9 @@ def dry_ctx(root):
 
 import subprocess  # noqa: E402
 
-MUTATING = ("issue edit", "issue comment", "issue create", "pr create", "pr merge", "issue reopen",
-            "-X POST", "-X PATCH", "-X DELETE", "--method POST", "--method PATCH", "--method DELETE")
+MUTATING = ("issue edit", "issue comment", "issue create", "pr create", "pr comment", "pr merge",
+            "issue reopen", "-X POST", "-X PATCH", "-X DELETE",
+            "--method POST", "--method PATCH", "--method DELETE")
 
 
 class FakeRunner:

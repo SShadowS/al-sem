@@ -28,6 +28,12 @@ class Attestation:
     register_hash: str
     gates: dict
     body_hash: str
+    # Absolute path of the findings register the hash above was taken from, so
+    # the merge can re-hash the same file and refuse one that moved since. An
+    # attestation that never recorded a path (only a hand-built one: `attest`
+    # always sets it) has nothing to re-check and is left to the other four
+    # bindings.
+    register_path: str = ""
 
 
 def body_hash(text: str) -> str:
@@ -55,8 +61,12 @@ def read_attestation(ctx: Ctx) -> Attestation:
     return Attestation(**data)
 
 
-def ci_green(checks: list[dict]) -> bool:
-    """All checks completed with SUCCESS. Empty, skipped, cancelled, or pending is not green."""
+def ci_green(checks: list[dict], required_workflow: str | None = None) -> bool:
+    """All checks completed with SUCCESS. Empty, skipped, cancelled, or pending is
+    not green. When `required_workflow` is given, at least one check run from that
+    workflow must also be PRESENT -- otherwise a bot check that succeeds before
+    `ci.yml`'s own jobs register would read as green, which is the "a missing
+    check is not green" half of the rule."""
     if not checks:
         return False
     for c in checks:
@@ -65,6 +75,8 @@ def ci_green(checks: list[dict]) -> bool:
                 return False
         elif c.get("state") != "SUCCESS":  # legacy status contexts
             return False
+    if required_workflow is not None:
+        return any(c.get("workflowName") == required_workflow for c in checks)
     return True
 
 
@@ -88,4 +100,12 @@ def merge(ctx: Ctx, gh: Gh, pr: int, att: Attestation, gate_reasons: list[str]) 
         raise RuntimeError("merge refused: " + ", ".join(gate_reasons))
     ctx.write_guard("merge")
     gh.merge_pr(pr, att.final_head)
-    return gh.pr_view(pr, "mergeCommit")["mergeCommit"]["oid"]
+    # The merge HAS happened by this point. If GitHub has not populated
+    # `mergeCommit` yet, say so by name rather than raising a TypeError out of
+    # a subscript: the caller needs a diagnosable state, because `master`
+    # already carries the commit and the post-merge backstop still has to run.
+    merged = gh.pr_view(pr, "mergeCommit").get("mergeCommit") or {}
+    oid = merged.get("oid")
+    if not oid:
+        raise RuntimeError("merge-sha-unavailable")
+    return oid

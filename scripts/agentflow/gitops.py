@@ -95,6 +95,13 @@ class Git:
     def push(self, remote: str, refspec: str) -> bool:
         return self.ok("push", "-q", remote, refspec)
 
+    def push_branch(self, branch: str, force_with_lease: bool = False) -> bool:
+        """Push one branch to `origin` and set its upstream. `--force-with-lease`
+        is the only force form the flow may ever use, and it is only reachable
+        from `cli.cmd_push_branch`, which refuses anything resolving to master."""
+        args = ["push", "-q", "-u"] + (["--force-with-lease"] if force_with_lease else []) + ["origin", branch]
+        return self.ok(*args)
+
     def ff(self, ref: str) -> bool:
         return self.ok("merge", "-q", "--ff-only", ref)
 

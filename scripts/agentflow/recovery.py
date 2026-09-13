@@ -18,7 +18,6 @@ from .gh import Gh
 from .gitops import Git, GitError
 from .state import Ctx
 
-NOTIFY_KINDS = ("regressed", "halted", "sanitize-failed", "gh-unavailable", "reviewer-unavailable", "crashed")
 WORKTREE_PREFIX = "al-sem-issue-"
 
 

@@ -125,16 +125,25 @@ def test_post_merge_refuses_when_run_id_does_not_own_lock(capsys, repo_pair):
     assert Git(clone).branch() == "master"
 
 
+GREEN_GATES = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0, "cdo-gate": 0})
+CONVERGED = json.dumps([{"id": "F1", "severity": "important", "disposition": "fixed",
+                         "reviews": {"astra": "accepted", "flash": "accepted"}}])
+
+
+def attest(capsys, root, register, *, gates=GREEN_GATES, body_hash="abc123", extra=()):
+    return run(capsys, root, "attest", "--issue", "8", "--B", "B", "--H", "H",
+               "--final-head", "F", "--register", str(register), "--gates", gates,
+               "--body-hash", body_hash, *extra, gh_run=FakeRunner())
+
+
 def test_attest_refuses_body_hash_mismatch_with_claim(capsys, root, tmp_path):
     # I8: attest must cross-check its --body-hash against claim.json, not
     # trust a caller-supplied hash on its own.
     ctx = Ctx(Paths(root), run_id="run-test")
     write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
     register = tmp_path / "findings.json"
-    register.write_text("[]")
-    code, out = run(capsys, root, "attest", "--issue", "8", "--B", "B", "--H", "H",
-                     "--final-head", "F", "--register", str(register), "--gates", "{}",
-                     "--body-hash", "different-hash", gh_run=FakeRunner())
+    register.write_text(CONVERGED)
+    code, out = attest(capsys, root, register, body_hash="different-hash")
     assert code == 1 and out["error"] == "body-hash mismatch with claim"
 
 
@@ -142,16 +151,114 @@ def test_attest_accepts_matching_body_hash(capsys, root, tmp_path):
     ctx = Ctx(Paths(root), run_id="run-test")
     write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
     register = tmp_path / "findings.json"
-    register.write_text("[]")
-    code, out = run(capsys, root, "attest", "--issue", "8", "--B", "B", "--H", "H",
-                     "--final-head", "F", "--register", str(register), "--gates", "{}",
-                     "--body-hash", "abc123", gh_run=FakeRunner())
+    register.write_text(CONVERGED)
+    code, out = attest(capsys, root, register)
     assert code == 0 and "path" in out
+
+
+def test_attest_refuses_when_there_is_no_claim_for_this_run(capsys, root, tmp_path):
+    # I6 (reversed ruling): with claim.json absent the body-hash cross-check
+    # used to be SKIPPED, so the issue-revision pin degraded into comparing a
+    # caller-supplied hash against itself. No claim, no attestation.
+    register = tmp_path / "findings.json"
+    register.write_text(CONVERGED)
+    code, out = attest(capsys, root, register)
+    assert code == 1 and out["error"] == "no claim.json for this run"
+    assert not (root / ".agent" / "runs" / "run-test" / "attestation.json").exists()
+
+
+def test_attest_refuses_missing_and_red_gates(capsys, root, tmp_path):
+    # I6: "all gates green" was a conductor assertion the executor recorded
+    # verbatim and never read. A `--gates '{}'` must not be attestable.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
+    register = tmp_path / "findings.json"
+    register.write_text(CONVERGED)
+    code, out = attest(capsys, root, register, gates="{}")
+    assert code == 1 and out["error"] == "gates-not-green"
+    assert set(out["gates"]) == {"ci-steps-all", "check-goldens-coverage", "check-goldens", "cdo-gate"}
+    red = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 1, "cdo-gate": 0})
+    code, out = attest(capsys, root, register, gates=red)
+    assert code == 1 and out["error"] == "gates-not-green" and out["gates"] == ["check-goldens"]
+
+
+def test_attest_docs_only_does_not_require_the_cdo_gate(capsys, root, tmp_path):
+    # A docs-only diff legitimately never runs cdo-gate, so demanding the key
+    # would make the check unusable exactly where it is least needed.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
+    register = tmp_path / "findings.json"
+    register.write_text(CONVERGED)
+    three = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0})
+    code, out = attest(capsys, root, register, gates=three)
+    assert code == 1 and out["gates"] == ["cdo-gate"]
+    code, out = attest(capsys, root, register, gates=three, extra=("--docs-only",))
+    assert code == 0 and "path" in out
+
+
+def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path):
+    # I6: "both reviewers converged" was likewise recorded as an opaque hash
+    # and never opened. Each of the three non-convergence shapes is named.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
+    register = tmp_path / "findings.json"
+    both = {"astra": "accepted", "flash": "accepted"}
+    for entries, offender in (
+        ([{"id": "F1", "severity": "minor", "disposition": "open", "reviews": both}], "F1"),
+        ([{"id": "F2", "severity": "minor", "disposition": "fixed",
+           "reviews": {"astra": "accepted", "flash": "re-raised"}}], "F2"),
+        ([{"id": "F3", "severity": "blocking", "disposition": "deferred", "reviews": both}], "F3"),
+        ([{"id": "F4", "severity": "minor", "blocking": True, "disposition": "deferred", "reviews": both}], "F4"),
+    ):
+        register.write_text(json.dumps(entries))
+        code, out = attest(capsys, root, register)
+        assert code == 1 and out["error"] == "register-not-converged", entries
+        assert out["entries"] == [offender], entries
+
+
+def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(capsys, repo_pair, tmp_path):
+    # I6: hashing the register at attest time only helps if something re-checks
+    # it. A register edited between the attestation and the merge -- a
+    # `deferred` quietly flipped to `fixed`, say -- must stop the merge.
+    _, clone = repo_pair
+    (clone / ".github" / "workflows").mkdir(parents=True)
+    (clone / ".github" / "workflows" / "ci.yml").write_text("name: CI\n")
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    body = json.loads(ISSUES)[0][0]["body"]
+    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": mergeops.body_hash(body)})
+    register = tmp_path / "findings.json"
+    register.write_text(CONVERGED)
+    B = Git(clone).rev("origin/master")
+    code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
+                     "--register", str(register), "--gates", GREEN_GATES,
+                     "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
+    assert code == 0
+    assert json.loads((ctx.run_dir / "attestation.json").read_text())["register_path"] == str(register.resolve())
+    register.write_text(json.dumps([{"id": "F1", "severity": "blocking", "disposition": "deferred",
+                                     "reviews": {"astra": "accepted", "flash": "accepted"}}]))
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    gh = FakeRunner({**READS,
+                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+                         {"headRefOid": B, "statusCheckRollup": [
+                             {"workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]})})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh)
+    assert code == 1 and "register-changed" in out["reasons"]
+    assert not any(c.startswith("pr merge") for c in gh.calls)
+
+
+def write_ci_workflow(clone, name="CI"):
+    (clone / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (clone / ".github" / "workflows" / "ci.yml").write_text(f"name: {name}\n\non:\n  pull_request:\n")
+
+
+def rollup(*, workflow="CI", conclusion="SUCCESS"):
+    return [{"workflowName": workflow, "status": "COMPLETED", "conclusion": conclusion}]
 
 
 def test_merge_gate_detects_moved_head(capsys, repo_pair):
     # I10(a): a PR head that moved since the attestation must be caught.
     _, clone = repo_pair
+    write_ci_workflow(clone)
     B = Git(clone).rev("master")
     body_hash = mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])
     att = mergeops.Attestation(issue=8, B=B, H=B, final_head="cafebabe" * 5,
@@ -160,19 +267,64 @@ def test_merge_gate_detects_moved_head(capsys, repo_pair):
     gh = FakeRunner({
         **READS,
         f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
-            {"headRefOid": "deadbeef" * 5,
-             "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}]}),
+            {"headRefOid": "deadbeef" * 5, "statusCheckRollup": rollup()}),
     })
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 1 and out["reasons"] == ["head-moved"]
+
+
+def test_merge_gate_is_not_green_without_the_ci_workflows_own_checks(capsys, repo_pair):
+    # I7: an unrelated SUCCESS check (a bot, a second workflow) that lands
+    # before ci.yml's jobs register must not read as green.
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    B = Git(clone).rev("master")
+    body_hash = mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])
+    att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
+                               gates={}, body_hash=body_hash)
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+        {"headRefOid": B, "statusCheckRollup": rollup(workflow="Dependabot")})})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["ci_green"] is False and out["reasons"] == ["ci-not-green"]
+
+
+def test_merge_gate_reports_ci_workflow_unknown_when_the_workflow_file_is_missing(capsys, repo_pair):
+    # I7: the required-workflow name is read from .github/workflows/ci.yml. If
+    # that file (or its `name:`) is gone, the gate has no idea what to require
+    # -- which is a refusal, not a green.
+    _, clone = repo_pair
+    B = Git(clone).rev("master")
+    body_hash = mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])
+    att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
+                               gates={}, body_hash=body_hash)
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+        {"headRefOid": B, "statusCheckRollup": rollup()})})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["ci_green"] is False and out["reasons"] == ["ci-workflow-unknown"]
+
+
+def test_merge_gate_passes_with_the_ci_workflows_checks_green(capsys, repo_pair):
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    B = Git(clone).rev("master")
+    body_hash = mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])
+    att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
+                               gates={}, body_hash=body_hash)
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+        {"headRefOid": B, "statusCheckRollup": rollup()})})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+    assert code == 0 and out["ci_green"] is True and out["reasons"] == []
 
 
 def test_post_merge_happy_path_restores_master_and_reports_ok(capsys, repo_pair, monkeypatch):
     # I10(b): the full post-merge success path -- both gate lists patched to
     # a real, instant no-op child so no actual build/test tooling is needed.
     _, clone = repo_pair
-    monkeypatch.setattr(cli, "GATES", [("noop", [sys.executable, "-c", "pass"], 1)])
-    monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
     merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
     assert Git(clone).push("origin", "master")
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
@@ -195,8 +347,8 @@ def test_post_merge_reverts_when_a_gate_leaves_a_tracked_file_modified(capsys, r
     # named `tree-dirty-after-gates`, and routed through the revert path.
     _, clone = repo_pair
     dirty_gate = [sys.executable, "-c", "open('README.md', 'a').write('x')"]
-    monkeypatch.setattr(cli, "GATES", [("dirty", dirty_gate, 1)])
-    monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    monkeypatch.setattr(cli, "gates", lambda: [("dirty", dirty_gate, 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
     merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
     assert Git(clone).push("origin", "master")
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
@@ -216,8 +368,8 @@ def test_post_merge_reports_restore_failed_when_the_final_checkout_fails(capsys,
     # Fix round 2, finding 3: a failed restore-to-master must always surface
     # as a `restore_failed` JSON field, never a bare exception.
     _, clone = repo_pair
-    monkeypatch.setattr(cli, "GATES", [("noop", [sys.executable, "-c", "pass"], 1)])
-    monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
     merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
     assert Git(clone).push("origin", "master")
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
@@ -349,6 +501,195 @@ def test_cleanup_spike_succeeds_when_worktree_already_removed_by_hand(capsys, re
                      "--spike", gh_run=FakeRunner(), run_id="run-test")
     assert code == 0 and out["removed"] == str(wt)
     assert "issue/9-vanished-spike-a1" not in g.out("branch", "--list")
+
+
+def test_file_discoveries_refuses_a_file_carrying_a_customer_path(capsys, root, tmp_path, monkeypatch):
+    # C1: the discoveries file is conductor-written and every field in it is
+    # published verbatim to a PUBLIC repository, so the file is scanned before
+    # it is even parsed -- nothing is filed when it carries a CDO_WS path.
+    monkeypatch.setenv("CDO_WS", r"U:\Git\CDO")
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    f = tmp_path / "discoveries.json"
+    f.write_text(json.dumps([{
+        "subsystem": "resolve", "locator": "U:/Git/CDO/App/Src/Thing.al",
+        "symptom": "edge dropped", "kind": "bug", "origin_issue": 8,
+        "reproducer": "aldump --program-call-graph-stats", "pre_existing": True,
+        "capability": "x resolves", "acceptance": "y",
+    }]), encoding="utf-8")
+    gh = FakeRunner({"issue list *": "[]", "issue create *": "https://github.com/SShadowS/al-sem/issues/90\n"})
+    code, out = run(capsys, root, "file-discoveries", str(f), "--session", "https://s", gh_run=gh)
+    assert code == 1 and out["error"] == "sanitize-failed"
+    assert out["violations"][0]["kind"] == "cdo-path"
+    assert gh.calls == []
+
+
+def test_finish_refuses_a_reason_that_leaks_a_dependency_path(capsys, root):
+    # C1: a spike answer and a block reason are both posted as issue comments.
+    # The refusal must land BEFORE any label or comment, so a rejected text
+    # leaves no half-finished bookkeeping behind.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = FakeRunner({"issue edit 8 --add-label agent-blocked": "", "issue edit 8 --remove-label agent-working": "",
+                     "issue comment 8 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "8", "--outcome", "blocked",
+                     "--reason", "fails only against .alpackages/Microsoft_Base Application.app",
+                     gh_run=gh)
+    assert code == 1 and out["error"] == "sanitize-failed"
+    assert out["violations"][0]["kind"] == "alpackages-path"
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(root))) is not None  # nothing terminal happened
+
+
+def test_finish_accepts_an_answer_from_a_reason_file(capsys, root, tmp_path, monkeypatch):
+    # I9: a spike's `## Answer` is multi-line markdown. Passing it as an argv
+    # argument is fragile through two shells and capped near 32 KB, so the
+    # conductor hands over a file instead.
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    ctx = Ctx(Paths(root), run_id="run-test")
+    lock.acquire(ctx, 8, "s", 1)
+    ctx.run_dir.mkdir(parents=True)  # `claim` makes this; retention copies it
+    answer = tmp_path / "answer.md"
+    answer.write_text("## Answer\n\nYes -- `resolve_in_table_scope` already covers it.\n\n- one\n- two\n")
+    gh = FakeRunner({"issue edit 8 --add-label agent-answered": "", "issue edit 8 --remove-label agent-working": "",
+                     "issue comment 8 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "8", "--outcome", "answered",
+                     "--reason-file", str(answer), gh_run=gh)
+    assert code == 0 and out["outcome"] == "answered"
+    assert any(c.startswith("issue comment 8") for c in gh.calls)
+
+
+def test_finish_regressed_releases_the_lock_without_relabelling(capsys, root, tmp_path, monkeypatch):
+    # I8: post-merge's revert path has already labelled the issue
+    # `agent-regressed` and set HALT. The tick still needs its terminal
+    # bookkeeping -- release the lock, retain the evidence -- without a second
+    # label transition and without being refused by the HALT it just set.
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    ctx = Ctx(Paths(root), run_id="run-test")
+    lock.acquire(ctx, 8, "s", 1)
+    ctx.run_dir.mkdir(parents=True)  # `claim` makes this; retention copies it
+    lock.set_halt(ctx, "regression: merge deadbeef failed post-merge gates")
+    gh = FakeRunner(readonly=True)
+    code, out = run(capsys, root, "finish", "--issue", "8", "--outcome", "regressed", gh_run=gh)
+    assert code == 0 and out["outcome"] == "regressed"
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(root))) is None
+    assert (tmp_path / "home" / ".al-sem" / "agentflow" / "runs" / "run-test").exists()
+
+
+# ---- I4: PR creation, PR comments and branch pushes belong to the executor --
+# Before this, all three were conductor-side raw `gh`/`git`: outside the
+# dry-run guard, outside the fence, outside the HALT check, and outside the
+# sanitizer -- while the spec and CHANGELOG both claimed every mutation went
+# through the executor.
+
+def test_pr_create_refuses_master_as_head(capsys, repo_pair):
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    body = clone / "body.md"
+    body.write_text("ledger\n")
+    gh = FakeRunner(readonly=True)
+    code, out = run(capsys, clone, "pr-create", "--title", "T", "--body-file", str(body),
+                     "--head", "master", gh_run=gh)
+    assert code == 1 and out["error"] == "refusing to open a PR from master"
+    assert gh.calls == []
+
+
+def test_pr_create_refuses_a_body_that_leaks_a_customer_path(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    monkeypatch.setenv("CDO_WS", r"U:\Git\CDO")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    body = clone / "body.md"
+    body.write_text("## Gate results\n\ncdo-gate log: U:/Git/CDO/App/Src/Thing.al\n")
+    gh = FakeRunner(readonly=True)
+    code, out = run(capsys, clone, "pr-create", "--title", "T", "--body-file", str(body),
+                     "--head", "issue/8-x-a1", gh_run=gh)
+    assert code == 1 and out["error"] == "sanitize-failed"
+    assert gh.calls == []
+
+
+def test_pr_create_and_pr_comment_refuse_without_a_lock(capsys, repo_pair):
+    _, clone = repo_pair
+    body = clone / "body.md"
+    body.write_text("ledger\n")
+    gh = FakeRunner(readonly=True)
+    code, out = run(capsys, clone, "pr-create", "--title", "T", "--body-file", str(body),
+                     "--head", "issue/8-x-a1", gh_run=gh)
+    assert code == 1 and "FenceError" in out["error"]
+    code, out = run(capsys, clone, "pr-comment", "--pr", "12", "--body-file", str(body), gh_run=gh)
+    assert code == 1 and "FenceError" in out["error"]
+    assert gh.calls == []
+
+
+def test_pr_create_then_comment_under_the_lock(capsys, repo_pair):
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    body = clone / "body.md"
+    body.write_text("## Ledger\n\nall gates green\n")
+    gh = FakeRunner({"pr create *": "https://github.com/SShadowS/al-sem/pull/77\n",
+                     "pr comment *": ""})
+    code, out = run(capsys, clone, "pr-create", "--title", "c10: scope (#8)", "--body-file", str(body),
+                     "--head", "issue/8-x-a1", gh_run=gh)
+    assert code == 0 and out["pr"] == 77
+    assert any(c.startswith("pr create --title c10: scope (#8)") and "--head issue/8-x-a1 --base master" in c
+               for c in gh.calls)
+    code, out = run(capsys, clone, "pr-comment", "--pr", "77", "--body-file", str(body), gh_run=gh)
+    assert code == 0 and out["commented"] == 77
+    assert any(c.startswith(f"pr comment 77 --repo {REPO} --body-file") for c in gh.calls)
+
+
+def test_push_branch_refuses_master_and_anything_resolving_to_it(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    before = g.rev("origin/master")
+    for ref in ("master", "refs/heads/master", "HEAD"):
+        code, out = run(capsys, clone, "push-branch", "--branch", ref, gh_run=FakeRunner(readonly=True))
+        assert code == 1 and out["error"] == "refusing to push master", ref
+    assert g.rev("origin/master") == before
+
+
+def test_push_branch_refuses_without_a_lock(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    g._run("checkout", "-q", "-b", "issue/8-x-a1")
+    head = commit_file(clone, "src/x.rs", "x\n", "work")
+    g.checkout("master")
+    code, out = run(capsys, clone, "push-branch", "--branch", "issue/8-x-a1", gh_run=FakeRunner(readonly=True))
+    assert code == 1 and "FenceError" in out["error"]
+    assert not g.ok("rev-parse", "--verify", "origin/issue/8-x-a1")
+    assert head  # the branch exists locally; only the push was refused
+
+
+def test_push_branch_pushes_a_feature_branch_and_sets_upstream(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    g._run("checkout", "-q", "-b", "issue/8-x-a1")
+    head = commit_file(clone, "src/x.rs", "x\n", "work")
+    g.checkout("master")
+    code, out = run(capsys, clone, "push-branch", "--branch", "issue/8-x-a1", gh_run=FakeRunner(readonly=True))
+    assert code == 0 and out["pushed"] == "issue/8-x-a1" and out["head"] == head
+    g.fetch()
+    assert g.rev("origin/issue/8-x-a1") == head
+
+
+def test_push_branch_force_with_lease_after_a_rebase(capsys, repo_pair):
+    # The force-with-lease carve-out becomes enforceable rather than
+    # aspirational only if the force form is issued by code that refuses
+    # `master` -- which is the whole point of routing it through here.
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    g._run("checkout", "-q", "-b", "issue/8-x-a1")
+    commit_file(clone, "src/x.rs", "x\n", "work")
+    run(capsys, clone, "push-branch", "--branch", "issue/8-x-a1", gh_run=FakeRunner(readonly=True))
+    g._run("commit", "-q", "--amend", "-m", "work, rebased")  # history rewritten
+    rewritten = g.rev("HEAD")
+    g.checkout("master")
+    code, out = run(capsys, clone, "push-branch", "--branch", "issue/8-x-a1", "--force-with-lease",
+                     gh_run=FakeRunner(readonly=True))
+    assert code == 0 and out["head"] == rewritten
+    g.fetch()
+    assert g.rev("origin/issue/8-x-a1") == rewritten
 
 
 def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):

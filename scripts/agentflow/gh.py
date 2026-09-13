@@ -168,6 +168,9 @@ class Gh:
             raise GhError(f"could not parse issue number from: {out!r}")
         return int(m.group(1))
 
+    def pr_comment(self, n: int, body: str) -> None:
+        self._raw(["pr", "comment", str(n), "--repo", self.repo, "--body-file", self._body_file(body)], mutating=True)
+
     def create_pr(self, title: str, body: str, head: str, base: str) -> int:
         out = self._raw(["pr", "create", "--title", title, "--body-file", self._body_file(body),
                          "--head", head, "--base", base], mutating=True)

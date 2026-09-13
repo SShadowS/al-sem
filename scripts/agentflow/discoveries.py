@@ -3,19 +3,20 @@ a marker in every filed body, and reconciliation before any new creation.
 
 Order for each discovery: index check (only a `filed` entry is skipped; a
 `pending` entry is retryable) -> remote marker search, bounded to the
-`agent-filed` label (never a free-text search) -> write `pending` -> create
--> charge the discovery budget only after a successful create -> write
-`filed`. A crash between create and the index write leaves `pending`; the
-next run retries it like a new discovery and the marker search resolves it
-without recreating.
+`agent-filed` label (never a free-text search) -> sanitize the rendered title
+and body -> write `pending` -> create -> charge the discovery budget only
+after a successful create -> write `filed`. A crash between create and the
+index write leaves `pending`; the next run retries it like a new discovery
+and the marker search resolves it without recreating.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 
-from . import budget
+from . import budget, sanitize
 from .gh import Gh
 from .state import Ctx, read_json, write_json
 
@@ -125,6 +126,18 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
             # refuses to for the same reason): leave the index as-is.
             out.append({"fp": fp, "status": "ambiguous", "number": None, "error": f"{len(hits)} hits"})
             continue
+        # A filed discovery becomes a PUBLIC issue, and every field in it came
+        # from a conductor-written file (`locator` is by definition a path).
+        # Scan the exact text that would be published -- earlier than the
+        # `create_issue` call itself only so that a refusal leaves no `pending`
+        # index entry behind for `reconcile_pending` to chase forever.
+        head, body = title(d), render_body(d, session_url)
+        violations = sanitize.scan(f"{head}\n{body}", os.environ.get("CDO_WS"))
+        if violations:
+            kinds = sorted({v.kind for v in violations})
+            out.append({"fp": fp, "status": "sanitize-failed", "number": None,
+                        "error": f"{len(violations)} violation(s): {', '.join(kinds)}"})
+            continue
         budget.check_deadline(ctx)
         if budget.snapshot(ctx)["counts"].get("discoveries", 0) >= budget.CAPS["discoveries"]:
             out.append({"fp": fp, "status": "over-cap", "number": None, "error": None})
@@ -132,7 +145,7 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
         idx[fp] = {"status": "pending", "number": None, "origin": d.origin_issue}
         _save_index(ctx, idx)
         try:
-            number = gh.create_issue(title(d), render_body(d, session_url), ["agent-filed", d.kind])
+            number = gh.create_issue(head, body, ["agent-filed", d.kind])
         except Exception as e:
             out.append({"fp": fp, "status": "pending", "number": None, "error": str(e)})
             continue

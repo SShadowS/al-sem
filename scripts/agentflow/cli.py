@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -20,11 +21,64 @@ from .gitops import Git, GitError
 from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, write_json
 
 LABELS = ["agent-working", "agent-done", "agent-blocked", "agent-answered", "agent-regressed", "agent-filed"]
-GATES = [
-    ("ci-steps-all", ["bash", "scripts/ci-steps", "all"], 45),
-    ("check-goldens", ["bash", "scripts/check-goldens"], 45),
-]
-CDO_GATE = ("cdo-gate", ["bash", "scripts/cdo-gate"], 45)
+# Every gate's exit code is a claim about the repository, so the interpreter
+# that runs it has to be the right one. A bare "bash" is resolved by
+# CreateProcess against the inherited PATH, and from PowerShell that finds
+# C:\WINDOWS\system32\bash.exe (the WSL launcher) before Git Bash -- which
+# turns an environment problem into a RED GATE on every issue. `resolve_bash`
+# below picks the interpreter; these two build their argv at CALL time from it
+# rather than freezing a "bash" at import time.
+REQUIRED_GATE_KEYS = ("ci-steps-all", "check-goldens-coverage", "check-goldens")
+CDO_GATE_KEY = "cdo-gate"
+_REJECTED_BASH_DIRS = ("system32", "windowsapps")
+
+
+def _git_exec_path() -> str | None:
+    """`git --exec-path`, or None when git is absent or fails. Seam for tests."""
+    try:
+        r = subprocess.run(["git", "--exec-path"], capture_output=True, text=True)
+    except OSError:
+        return None
+    return r.stdout.strip() or None if r.returncode == 0 else None
+
+
+def resolve_bash() -> str:
+    """The bash the gates run under: `$AGENTFLOW_BASH`, else the one shipped with
+    the Git installation `git` itself runs from, else a `bash` on PATH that is
+    neither the WSL launcher nor a WindowsApps alias. No usable candidate is an
+    environment error, never a silent fallback to whatever PATH offers."""
+    override = os.environ.get("AGENTFLOW_BASH")
+    if override:
+        return override
+    exec_path = _git_exec_path()
+    if exec_path:
+        # Git for Windows: <git-root>/mingw64/libexec/git-core -- walk up to the
+        # ancestor that owns `usr/bin` and take its bash.
+        p = Path(exec_path.replace("\\", "/"))
+        for anc in (p, *p.parents):
+            if not (anc / "usr" / "bin").is_dir():
+                continue
+            for cand in (anc / "usr" / "bin" / "bash.exe", anc / "bin" / "bash.exe",
+                         anc / "usr" / "bin" / "bash", anc / "bin" / "bash"):
+                if cand.exists():
+                    return str(cand)
+            break
+    found = shutil.which("bash")
+    if found and not any(d in found.replace("\\", "/").lower() for d in _REJECTED_BASH_DIRS):
+        return found
+    raise RuntimeError("no usable bash")
+
+
+def gates() -> list[tuple[str, list[str], int]]:
+    b = resolve_bash()
+    return [
+        ("ci-steps-all", [b, "scripts/ci-steps", "all"], 45),
+        ("check-goldens", [b, "scripts/check-goldens"], 45),
+    ]
+
+
+def cdo_gate() -> tuple[str, list[str], int]:
+    return (CDO_GATE_KEY, [resolve_bash(), "scripts/cdo-gate"], 45)
 
 
 class Fail(Exception):
@@ -103,6 +157,10 @@ def cmd_preflight(args, ctx, gh, git):
         fails.append("cdo-ws")
     if not (ctx.paths.root / "tree-sitter-al" / "src" / "node-types.json").exists():
         fails.append("grammar")
+    try:
+        resolve_bash()
+    except RuntimeError:
+        fails.append("bash")
     free_gb = shutil.disk_usage(ctx.paths.root).free // 2**30
     if free_gb < 20:
         fails.append(f"disk-free:{free_gb}GB")
@@ -254,13 +312,66 @@ def cmd_freeze_check(args, ctx, gh, git):
     return _emit({"violations": v}, 0 if not v else 1)
 
 
+def _gate_failures(blob: dict, docs_only: bool) -> list[str]:
+    """The gate keys that are missing or not exit-code 0. `cdo-gate` is required
+    for everything but a docs-only diff, which never runs it."""
+    required = [*REQUIRED_GATE_KEYS] + ([] if docs_only else [CDO_GATE_KEY])
+    bad = []
+    for k in required:
+        v = blob.get(k) if isinstance(blob, dict) else None
+        if not isinstance(v, int) or isinstance(v, bool) or v != 0:
+            bad.append(k)
+    return bad
+
+
+def _register_failures(entries) -> list[str]:
+    """Ids of findings-register entries that block a merge: still `open`, not
+    `accepted` by BOTH reviewers, or blocking-and-merely-`deferred`. Anything
+    that is not a list of entries is itself a failure -- an unreadable register
+    is never a converged one."""
+    if not isinstance(entries, list):
+        return ["<register is not a JSON list of entries>"]
+    bad = []
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict):
+            bad.append(f"#{i}")
+            continue
+        eid = str(e.get("id", f"#{i}"))
+        reviews = e.get("reviews")
+        marks = [reviews.get("astra"), reviews.get("flash")] if isinstance(reviews, dict) else [None, None]
+        blocking = e.get("blocking") is True or str(e.get("severity", "")).strip().lower() == "blocking"
+        if e.get("disposition") == "open":
+            bad.append(eid)
+        elif marks != ["accepted", "accepted"]:
+            bad.append(eid)
+        elif blocking and e.get("disposition") == "deferred":
+            bad.append(eid)
+    return bad
+
+
 def cmd_attest(args, ctx, gh, git):
+    # Fail closed on an absent claim: skipping the cross-check turned the
+    # issue-revision pin into a comparison of a caller-supplied hash with
+    # itself, which is a guard that silently degrades to a no-op.
     claim = read_json(ctx.run_dir / "claim.json")
-    if claim is not None and claim.get("body_hash") != args.body_hash:
+    if claim is None:
+        return _emit({"error": "no claim.json for this run"}, 1)
+    if claim.get("body_hash") != args.body_hash:
         return _emit({"error": "body-hash mismatch with claim"}, 1)
+    # "All gates green" and "the register converged" are the two merge
+    # preconditions the conductor used to simply assert. They are checked here,
+    # before the PR exists, so a refusal costs nothing to recover from.
+    bad_gates = _gate_failures(json.loads(args.gates), args.docs_only)
+    if bad_gates:
+        return _emit({"error": "gates-not-green", "gates": bad_gates}, 1)
+    register = Path(args.register).resolve()
+    bad_entries = _register_failures(read_json(register))
+    if bad_entries:
+        return _emit({"error": "register-not-converged", "entries": bad_entries}, 1)
     att = mergeops.Attestation(issue=args.issue, B=args.B, H=args.H, final_head=args.final_head,
-                               register_hash=mergeops.register_hash(Path(args.register)),
-                               gates=json.loads(args.gates), body_hash=args.body_hash)
+                               register_hash=mergeops.register_hash(register),
+                               gates=json.loads(args.gates), body_hash=args.body_hash,
+                               register_path=str(register))
     return _emit({"path": str(mergeops.write_attestation(ctx, att))})
 
 
@@ -268,11 +379,39 @@ def cmd_body_hash(args, ctx, gh, git):
     return _emit({"body_hash": mergeops.body_hash(gh.issue(args.issue).body)})
 
 
+_WORKFLOW_NAME = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
+
+
+def _ci_workflow_name(ctx: Ctx) -> str | None:
+    """The `name:` of `.github/workflows/ci.yml` -- the workflow whose checks must
+    be present on the PR. Absent file or absent name means the gate cannot know
+    what to require, which is a refusal rather than a pass."""
+    try:
+        text = (ctx.paths.root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _WORKFLOW_NAME.search(text)
+    return m.group(1).strip().strip("'\"") or None if m else None
+
+
 def _gate_reasons(ctx, gh, git, pr: int):
     att = mergeops.read_attestation(ctx)
     pr_info = gh.pr_view(pr, "headRefOid,statusCheckRollup")
     reasons = mergeops.merge_gate(git, att, pr_info["headRefOid"], gh.issue(att.issue).body)
-    green = mergeops.ci_green(pr_info.get("statusCheckRollup", []))
+    if att.register_path:
+        # The register was checked for convergence at attest time; re-hash the
+        # same file here so an entry edited in the window between the two --
+        # a `deferred` quietly flipped to `fixed` -- cannot ride into the merge.
+        try:
+            if mergeops.register_hash(Path(att.register_path)) != att.register_hash:
+                reasons.append("register-changed")
+        except OSError:
+            reasons.append("register-changed")
+    workflow = _ci_workflow_name(ctx)
+    if workflow is None:
+        reasons.append("ci-workflow-unknown")
+        return att, reasons, False
+    green = mergeops.ci_green(pr_info.get("statusCheckRollup", []), workflow)
     if not green:
         reasons.append("ci-not-green")
     return att, reasons, green
@@ -307,20 +446,21 @@ def cmd_post_merge(args, ctx, gh, git):
         # writes on the shared checkout; if either raises, the `finally`
         # below must still run to restore `master` (Important 2).
         git.checkout(args.merge_sha)
-        gates = list(GATES)
+        gate_list = gates()
         if not _docs_only(git, f"{args.merge_sha}~1", args.merge_sha):
-            gates.append(CDO_GATE)
+            gate_list.append(cdo_gate())
 
         def rerun_all():
             good = True
-            for gname, gcmd, gminutes in gates:
+            for gname, gcmd, gminutes in gate_list:
                 if _run_gate(ctx, gname + "-on-revert", gcmd, gminutes, ctx.paths.root).exit_code != 0:
                     good = False
-            if _run_gate(ctx, "ci-steps-test-on-revert", ["bash", "scripts/ci-steps", "test"], 45, ctx.paths.root).exit_code != 0:
+            rerun_cmd = [resolve_bash(), "scripts/ci-steps", "test"]
+            if _run_gate(ctx, "ci-steps-test-on-revert", rerun_cmd, 45, ctx.paths.root).exit_code != 0:
                 good = False
             return good
 
-        for name, cmd, minutes in gates:
+        for name, cmd, minutes in gate_list:
             r = _run_gate(ctx, name, cmd, minutes, ctx.paths.root)
             results[name] = r.exit_code
             if r.exit_code != 0:
@@ -360,11 +500,71 @@ def cmd_post_merge(args, ctx, gh, git):
     return _emit(payload, 0 if ok else 1)
 
 
+def _scan_or_fail(text: str) -> None:
+    """Refuse any text that would leave this machine carrying a customer path,
+    a dependency-package path, or a token. Raises rather than returning, so no
+    caller can file/comment first and inspect the verdict afterwards."""
+    violations = sanitize.scan(text, os.environ.get("CDO_WS"))
+    if violations:
+        raise Fail({"error": "sanitize-failed", "violations": [asdict(v) for v in violations]})
+
+
 def cmd_file_discoveries(args, ctx, gh, git):
     lock.require_not_halted(ctx)  # issue filing is refused under HALT
+    # The whole file is scanned before it is parsed: every field in it is
+    # published verbatim to a public repository, and a violation anywhere means
+    # the conductor's own rule failed, so none of it is trustworthy. `file_all`
+    # scans each rendered body again -- that is the guard that survives a
+    # future caller who does not come through this subcommand.
+    _scan_or_fail(Path(args.file).read_text(encoding="utf-8", errors="replace"))
     raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
     ds = [discoveries.Discovery(**d) for d in raw]
     return _emit({"filed": discoveries.file_all(ctx, gh, ds, args.session)})
+
+
+def _guard_external_write(ctx: Ctx, what: str) -> None:
+    """The three guards every outward-facing write shares: refuse under
+    --dry-run, refuse under HALT, and refuse unless the lock names THIS run.
+    The fence here is the strict one -- a PR, a PR comment and a branch push
+    are all new work, never terminal bookkeeping, so an absent lock is a
+    refusal, not the lenient `run`/`cleanup` case."""
+    ctx.write_guard(what)
+    lock.require_not_halted(ctx)
+    lock.check_fence(ctx)
+
+
+def _body_or_fail(path: str) -> str:
+    body = Path(path).read_text(encoding="utf-8")
+    _scan_or_fail(body)
+    return body
+
+
+def cmd_pr_create(args, ctx, gh, git):
+    _guard_external_write(ctx, "create PR")
+    body = _body_or_fail(args.body_file)
+    if args.head.strip().removeprefix("refs/heads/") == "master":
+        raise Fail({"error": "refusing to open a PR from master"})
+    return _emit({"pr": gh.create_pr(args.title, body, args.head, args.base)})
+
+
+def cmd_pr_comment(args, ctx, gh, git):
+    _guard_external_write(ctx, "comment on PR")
+    gh.pr_comment(args.pr, _body_or_fail(args.body_file))
+    return _emit({"commented": args.pr})
+
+
+def cmd_push_branch(args, ctx, gh, git):
+    _guard_external_write(ctx, "push branch")
+    g = Git(args.cwd) if args.cwd else git
+    name = args.branch.strip()
+    resolved = g.out("rev-parse", "--abbrev-ref", name) if g.ok("rev-parse", "--verify", name) else name
+    if "master" in (name.removeprefix("refs/heads/"), resolved):
+        # Nothing in code stopped a mistyped refspec from naming `master`
+        # while this was a conductor-side `git push`. Now something does.
+        raise Fail({"error": "refusing to push master"})
+    if not g.push_branch(name, args.force_with_lease):
+        raise Fail({"error": f"push of {name} was rejected"})
+    return _emit({"pushed": name, "head": g.rev(name)})
 
 
 def cmd_cleanup(args, ctx, gh, git):
@@ -389,16 +589,38 @@ def cmd_cleanup(args, ctx, gh, git):
     return _emit({"removed": args.worktree})
 
 
+def _reason(args) -> str | None:
+    """`--reason` or the contents of `--reason-file`. A spike's `## Answer` is
+    multi-line markdown: passing it as an argv argument is fragile through two
+    shells and capped near 32 KB on Windows, so a file is the honest transport."""
+    if getattr(args, "reason_file", None):
+        return Path(args.reason_file).read_text(encoding="utf-8")
+    return args.reason
+
+
 def cmd_finish(args, ctx, gh, git):
-    label = {"merged": "agent-done", "blocked": "agent-blocked", "answered": "agent-answered"}[args.outcome]
-    gh.add_labels(args.issue, [label])
-    gh.remove_label(args.issue, "agent-working")
+    reason = _reason(args)
+    if args.outcome in ("answered", "blocked"):
+        # Both outcomes post this text as a comment on a PUBLIC issue, and a
+        # spike's answer is free-form output from a probe that may have read
+        # CDO_WS. Refuse BEFORE any label or comment, so a rejected text never
+        # leaves half-finished bookkeeping behind.
+        _scan_or_fail(reason or "")
+    if args.outcome != "regressed":
+        # `regressed` is the post-merge revert path's terminal bookkeeping:
+        # that path has ALREADY labelled the issue `agent-regressed`, commented
+        # the failure, and set HALT. Relabelling here would be a second
+        # transition saying nothing new; what is still missing is only the
+        # local half -- retain the evidence and release the lock.
+        label = {"merged": "agent-done", "blocked": "agent-blocked", "answered": "agent-answered"}[args.outcome]
+        gh.add_labels(args.issue, [label])
+        gh.remove_label(args.issue, "agent-working")
     if args.outcome == "answered":
-        gh.comment(args.issue, f"agentflow run `{ctx.run_id}` answered this as a spike (no code change):\n\n{args.reason or '(see ledger)'}")
+        gh.comment(args.issue, f"agentflow run `{ctx.run_id}` answered this as a spike (no code change):\n\n{reason or '(see ledger)'}")
     if args.outcome == "blocked":
-        gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped: **{args.reason or 'blocked'}**. "
+        gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped: **{reason or 'blocked'}**. "
                                f"Branch and worktree are left in place. See the ledger in the run's PR or comments.")
-        recovery.notify(ctx, "halted" if args.reason == "halted" else "blocked", f"#{args.issue}: {args.reason}")
+        recovery.notify(ctx, "halted" if reason == "halted" else "blocked", f"#{args.issue}: {reason}")
     dest = recovery.retain(ctx)
     lock.release(ctx)
     return _emit({"outcome": args.outcome, "retained": str(dest)})
@@ -458,14 +680,21 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("attest", cmd_attest)
     for a in ("--B", "--H", "--final-head", "--register", "--gates", "--body-hash"):
         s.add_argument(a, required=True)
-    s.add_argument("--issue", type=int, required=True)
+    s.add_argument("--issue", type=int, required=True); s.add_argument("--docs-only", action="store_true")
     s = add("body-hash", cmd_body_hash); s.add_argument("issue", type=int)
     s = add("merge-gate", cmd_merge_gate); s.add_argument("--pr", type=int, required=True)
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)
     s = add("post-merge", cmd_post_merge); s.add_argument("--issue", type=int, required=True); s.add_argument("--merge-sha", required=True)
+    s = add("pr-create", cmd_pr_create); s.add_argument("--title", required=True); s.add_argument("--body-file", required=True)
+    s.add_argument("--head", required=True); s.add_argument("--base", default="master")
+    s = add("pr-comment", cmd_pr_comment); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file", required=True)
+    s = add("push-branch", cmd_push_branch); s.add_argument("--branch", required=True)
+    s.add_argument("--force-with-lease", action="store_true"); s.add_argument("--cwd")
     s = add("file-discoveries", cmd_file_discoveries); s.add_argument("file"); s.add_argument("--session", required=True)
     s = add("cleanup", cmd_cleanup); s.add_argument("--worktree", required=True); s.add_argument("--branch", required=True); s.add_argument("--merge-sha"); s.add_argument("--spike", action="store_true")
-    s = add("finish", cmd_finish); s.add_argument("--issue", type=int, required=True); s.add_argument("--outcome", choices=["merged", "blocked", "answered"], required=True); s.add_argument("--reason")
+    s = add("finish", cmd_finish); s.add_argument("--issue", type=int, required=True)
+    s.add_argument("--outcome", choices=["merged", "blocked", "answered", "regressed"], required=True)
+    g = s.add_mutually_exclusive_group(); g.add_argument("--reason"); g.add_argument("--reason-file")
     s = add("loop-tick", cmd_loop_tick); s.add_argument("--max", type=int, required=True)
     add("loop-reset", cmd_loop_reset)
     add("status", cmd_status)

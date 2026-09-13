@@ -148,3 +148,22 @@ def test_ambiguous_marker_hits_in_file_all_are_reported_not_resolved(ctx):
     assert out == [{"fp": fp, "status": "ambiguous", "number": None, "error": "2 hits"}]
     assert fp not in read_json(ctx.paths.discoveries_index, default={})
     assert not any("issue create" in c for c in r.calls)
+
+
+def test_file_all_refuses_a_body_that_leaks_a_customer_path_and_files_the_rest(ctx, monkeypatch):
+    # C1: a filed discovery becomes a PUBLIC issue. The body is rendered from
+    # conductor-supplied fields (`locator` is by definition a path), so it is
+    # scanned immediately before the create -- and one poisoned discovery must
+    # not stop the clean ones behind it from being filed.
+    monkeypatch.setenv("CDO_WS", r"U:\Git\CDO")
+    setup(ctx)
+    leaky = disc(sym="edge dropped in customer app", loc="U:/Git/CDO/App/Src/Thing.al")
+    clean = disc(sym="edge dropped in fixture", loc="tests/gap/y.rs")
+    leak_fp = discoveries.fingerprint(leaky.subsystem, leaky.locator, leaky.symptom)
+    r = FakeRunner({"issue list *": "[]",
+                    "issue create *": "https://github.com/SShadowS/al-sem/issues/80\n"})
+    out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [leaky, clean], "https://s")
+    assert out[0]["fp"] == leak_fp and out[0]["status"] == "sanitize-failed" and out[0]["number"] is None
+    assert out[1]["status"] == "filed" and out[1]["number"] == 80
+    assert sum(c.startswith("issue create") for c in r.calls) == 1
+    assert read_json(ctx.paths.discoveries_index, default={}).get(leak_fp, {}).get("status") != "filed"
