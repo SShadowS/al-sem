@@ -24,7 +24,8 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 const DETECTOR: &str = "d10-self-modifying-loop";
 
-const MUTATING_OPS: &[&str] = &["Modify", "ModifyAll", "Validate", "Delete", "DeleteAll"];
+const MUTATING_OPS: &[&str] =
+    &["Modify", "ModifyAll", "Validate", "Delete", "DeleteAll", "Rename"];
 
 pub fn detect_d10(
     resolved: &L3Resolved,

@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Rename` is now a tracked record operation (#9).** AL's `Record.Rename()` resolved
+  as a member call but was absent from `record_op_type`, so it emitted **no db effect at
+  all** — every consumer of the db-effect store (`query touches`/`effects`, the L4 effect
+  summaries, `cone_derived`'s physical-write sets, the L5 detectors) treated a real write
+  as a no-op. Measured before/after on a routine whose only op is a `Rename`: the table
+  went from **0** touching routines to **1**.
+
+  Ten sites were updated together, because a partial addition is the failure mode that
+  matters: the L2 op map; `program::resolve::extract::record_op_names` (a hand-copied
+  duplicate of it that gates the FRESH resolver's `RecordOp` branch, and therefore the
+  LSP); `classify_op` (→ `DbWrite`); both capability tables (→ `modify`);
+  `summary_runner`'s db-op list; `implicit_edges` (→ **`OnRename`**, never `OnModify` —
+  Learn is explicit that `Rename` does not call `OnModify`, and the fresh resolver
+  already mapped `rename → onrename`, so the legacy path had silently diverged); and the
+  `WRITE_OPS`/`MUTATING_OPS` lists of d1, d10 and d11.
+
+  `Rename` was deliberately NOT added to d33/d52 (bulk ops by construction), d41
+  (filtered-set ops), d29 (Modify/Delete event families), d5, d56, `cone_derived`'s
+  lowercase capability vocabulary, or `ir_walk`'s run-trigger capture (AL's `Rename`
+  takes primary-key values, not a `RunTrigger` boolean). d39/d61/d62 already listed
+  `Rename`; those branches were dead until now and become live.
+
+### Fixed
+
+- **`Rename` persists the current record — measured, not assumed (#9).** `d37`'s
+  `PERSIST_OPS` omitted `Rename` while `d39`'s included it. Settled by running real AL on
+  a BC 28 container: with a pending non-key field change and **no** `Modify`, a `Rename`
+  wrote that change (control: assign-only re-read `ORIG`; correct: assign+`Modify` re-read
+  `CHANGED`; suspect: assign+`Rename` re-read `CHANGED`). So `d39` was right, `d37` was
+  wrong, and `record_flow_role` now classifies `Rename` as `persistsCurrent`. Probe source
+  is retained in the issue's run directory.
+- **A duplicated record-op vocabulary can no longer drift silently (#9).**
+  `program::resolve::extract::record_op_names` restates `record_op_type`'s match arms by
+  hand and the two gate different engines; they were identical only by luck. A drift guard
+  now asserts both directions. It lives on the L2 side deliberately, because
+  `src/program/resolve/` is guarded to stay L2/L3-independent.
+
 - **Autonomous issue orchestrator.** `/orchestrate` (one tick: preflight, fetch,
   deterministic eligibility, model ranking, claim, `/issue`, post-merge check with
   validated revert, discovery filing) and `/issue N` (worktree, classification,

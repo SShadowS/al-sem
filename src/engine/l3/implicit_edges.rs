@@ -49,6 +49,10 @@ fn trigger_mapping(op: &str) -> Option<(&'static str, Resolution)> {
         "Insert" => Some(("OnInsert", Resolution::Maybe)),
         "Modify" => Some(("OnModify", Resolution::Maybe)),
         "Delete" => Some(("OnDelete", Resolution::Maybe)),
+        // Rename fires OnRename (NOT OnModify — Learn is explicit that Rename does
+        // not call OnModify). The fresh resolver already maps this
+        // (resolve/resolver.rs "rename" => "onrename"); this closes the gap.
+        "Rename" => Some(("OnRename", Resolution::Maybe)),
         _ => None,
     }
 }

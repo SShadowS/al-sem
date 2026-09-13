@@ -117,7 +117,14 @@ const BOUNDS: WalkBounds = WalkBounds {
     max_nodes: 500,
 };
 
-const WRITE_OPS: [&str; 5] = ["Modify", "ModifyAll", "Insert", "Delete", "DeleteAll"];
+const WRITE_OPS: [&str; 6] = [
+    "Modify",
+    "ModifyAll",
+    "Insert",
+    "Delete",
+    "DeleteAll",
+    "Rename",
+];
 const HEAVY_READ_OPS: [&str; 2] = ["CalcFields", "CalcSums"];
 /// RV-1 (Task 11): ops whose temp-downgrade is GATED on the field arguments. A
 /// FlowField calculation queries the (physical) flow-target tables even on a

@@ -165,7 +165,9 @@ fn map_table_op(op: &str) -> Option<&'static str> {
     match op {
         "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
         | "CountApprox" | "Next" | "CalcFields" | "CalcSums" | "TestField" => Some("read"),
-        "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" => Some("modify"),
+        "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" | "Rename" => {
+            Some("modify")
+        }
         "Insert" => Some("insert"),
         "Delete" | "DeleteAll" => Some("delete"),
         _ => None,

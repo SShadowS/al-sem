@@ -35,7 +35,7 @@ const DETECTOR: &str = "d11-modify-without-get";
 /// (`detectors::RECORD_LOAD_OPS`), so both stay in lockstep.
 const LOAD_OPS: &[&str] = RECORD_LOAD_OPS;
 
-const MUTATING_OPS: &[&str] = &["Modify", "Validate"];
+const MUTATING_OPS: &[&str] = &["Modify", "Validate", "Rename"];
 
 pub fn detect_d11(
     resolved: &L3Resolved,

@@ -68,6 +68,9 @@ pub fn classify_op(op: &str) -> OpEffectClass {
         "Insert" => OpEffectClass::DbWrite,
         "Delete" => OpEffectClass::DbWrite,
         "DeleteAll" => OpEffectClass::DbWrite,
+        "Rename" => OpEffectClass::DbWrite,
+        // Rename writes the row: it changes the primary key and, MEASURED on BC 28,
+        // also persists pending non-key field changes (see issue #9's ledger probe).
         "LockTable" => OpEffectClass::DbLock,
         "SetLoadFields" => OpEffectClass::StateOnly,
         "AddLoadFields" => OpEffectClass::StateOnly,
@@ -144,7 +147,7 @@ mod tests {
             );
             assert!(is_db_touching_class(classify_op(op)));
         }
-        for op in ["Modify", "ModifyAll", "Insert", "Delete", "DeleteAll"] {
+        for op in ["Modify", "ModifyAll", "Insert", "Delete", "DeleteAll", "Rename"] {
             assert_eq!(
                 classify_op(op),
                 OpEffectClass::DbWrite,
@@ -184,8 +187,21 @@ mod tests {
 
     #[test]
     fn unknown_op_falls_through_to_state_only() {
-        // An op al-sem's grammar never emits → state-only (not db-touching).
-        assert_eq!(classify_op("Rename"), OpEffectClass::StateOnly);
-        assert!(!is_db_touching_class(classify_op("Rename")));
+        // An op the record-operation extractor never emits → state-only (not
+        // db-touching). The empty string is demonstrably outside
+        // `record_op_type`'s closed output vocabulary. This USED to use "Rename"
+        // as its example, which stopped being true when Rename joined the map —
+        // the test would have kept passing while asserting that a real emitted
+        // write is state-only.
+        assert_eq!(classify_op(""), OpEffectClass::StateOnly);
+        assert!(!is_db_touching_class(classify_op("")));
+    }
+
+    #[test]
+    fn rename_is_a_db_write() {
+        // Rename changes the primary key and (MEASURED on BC 28) persists pending
+        // non-key changes — see issue #9's ledger probe.
+        assert_eq!(classify_op("Rename"), OpEffectClass::DbWrite);
+        assert!(is_db_touching_class(classify_op("Rename")));
     }
 }

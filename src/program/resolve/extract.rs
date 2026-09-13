@@ -207,7 +207,7 @@ pub enum WithState {
     Unknown,
 }
 
-/// The 28 record-operation method names (lowercased), copied verbatim from
+/// The 29 record-operation method names (lowercased), copied verbatim from
 /// `src/engine/l2/record_op.rs` (`record_op_type` match arms).
 pub fn record_op_names() -> &'static [&'static str] {
     &[
@@ -224,6 +224,7 @@ pub fn record_op_names() -> &'static [&'static str] {
         "insert",
         "delete",
         "deleteall",
+        "rename",
         "setloadfields",
         "addloadfields",
         "setrange",

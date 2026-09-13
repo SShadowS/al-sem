@@ -37,7 +37,10 @@ const DETECTOR: &str = "d37-validate-without-persist";
 
 // ModifyAll is intentionally EXCLUDED — it does not persist R's current record
 // (see the module doc, d37 FN-1). Only Modify / Insert write R's Validate'd state.
-const PERSIST_OPS: &[&str] = &["Modify", "Insert"];
+// `Rename` persists the current record: MEASURED on BC 28 that a pending non-key
+// change is written by `Rename` with no `Modify` (issue #9 ledger probe). d39's
+// PERSIST_OPS already listed it; this aligns d37 with it and with `record_flow_role`.
+const PERSIST_OPS: &[&str] = &["Modify", "Insert", "Rename"];
 const RESET_LIKE_OPS: &[&str] = &[
     "Init",
     "Reset",
