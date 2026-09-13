@@ -1,7 +1,7 @@
 import json
 import sys
 
-from agentflow import cli, lock, mergeops
+from agentflow import cli, lock, mergeops, recovery
 from agentflow.gitops import Git
 from agentflow.state import Ctx, Paths, tree_snapshot, write_json
 from agentflow.tests.conftest import FakeRunner, commit_file
@@ -262,6 +262,62 @@ def test_cleanup_refuses_foreign_lock_and_keeps_worktree(capsys, repo_pair):
     code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-y-a1",
                      "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
     assert code == 1 and "FenceError" in out["error"]
+    assert wt.exists()
+
+
+def test_recover_of_a_merged_stale_run_claims_the_lock_for_the_recovering_run(capsys, repo_pair, monkeypatch):
+    # Review round 1, Important 6: recovering a merged stale run must not stop
+    # at unlinking the old lock -- the recovering run needs its OWN lock and
+    # budget/claim.json so post-merge/discoveries/cleanup/finish can run
+    # fenced, exactly like any other claimed work.
+    _, clone = repo_pair
+    old_ctx = Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0)
+    lk = lock.acquire(old_ctx, 8, "s", 1)
+    monkeypatch.setenv("AGENTFLOW_NOW", str(lk.heartbeat + 4000))
+    gh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a1",
+                                               "headRefOid": "h", "mergeCommit": {"oid": "abc"}, "mergedAt": "x"}])})
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
+    assert code == 0
+    assert out["action"] == "merged-needs-post-merge" and out["merge_sha"] == "abc" and out["branch"] == "issue/8-x-a1"
+    expected_worktree = str(clone.parent / recovery.worktree_name(8, 1))
+    assert out["worktree"] == expected_worktree
+    lk2 = lock.read(Ctx(Paths(clone)))
+    assert lk2 is not None and lk2.run_id == "run-new" and lk2.issue == 8 and lk2.attempt == 1
+    claim = json.loads((clone / ".agent" / "runs" / "run-new" / "claim.json").read_text())
+    assert claim == {"issue": 8, "attempt": 1, "branch": "issue/8-x-a1", "worktree": expected_worktree}
+
+
+def test_cleanup_spike_removes_a_commit_free_worktree_and_branch(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-spike-a1"
+    g.worktree_add(wt, "issue/9-spike-a1", "master")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/9-spike-a1", "--spike",
+                     gh_run=FakeRunner(), run_id="run-test")
+    assert code == 0 and out["removed"] == str(wt)
+    assert not wt.exists() and "issue/9-spike-a1" not in g.out("branch", "--list")
+
+
+def test_cleanup_spike_refuses_a_branch_with_a_commit(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-spike-a2"
+    g.worktree_add(wt, "issue/9-spike-a2", "master")
+    commit_file(wt, "probe.txt", "code, not just a read-only probe result\n", "spike accidentally committed code")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/9-spike-a2", "--spike",
+                     gh_run=FakeRunner(), run_id="run-test")
+    assert code == 1 and "not spike-clean" in out["error"]
+    assert wt.exists()
+
+
+def test_cleanup_rejects_spike_and_merge_sha_together(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-spike-a3"
+    g.worktree_add(wt, "issue/9-spike-a3", "master")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/9-spike-a3", "--spike",
+                     "--merge-sha", "deadbeef", gh_run=FakeRunner(), run_id="run-test")
+    assert code == 2 and "mutually exclusive" in out["error"]
     assert wt.exists()
 
 

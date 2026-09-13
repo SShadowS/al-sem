@@ -129,7 +129,20 @@ def cmd_recover(args, ctx, gh, git):
     if lk is None or not lock.is_stale(lk, ctx.now()):
         raise Fail({"error": "no stale lock"})
     ctx.run_id = ctx.run_id or new_run_id(ctx.now())
-    return _emit(recovery.recover_stale(ctx, git, gh, lk, worktrees_parent=ctx.paths.root.parent))
+    out = recovery.recover_stale(ctx, git, gh, lk, worktrees_parent=ctx.paths.root.parent)
+    if out.get("action") == "merged-needs-post-merge":
+        # A merged stale run is not fully recovered until ITS follow-through
+        # (post-merge, discoveries, finish, cleanup) runs -- under the
+        # recovering run's OWN lock, so those calls are fenced exactly like
+        # any other claimed work rather than running lock-free.
+        lock.acquire(ctx, lk.issue, "recover", lk.attempt)
+        ctx.run_dir.mkdir(parents=True, exist_ok=True)
+        budget.init(ctx, claimed_at=ctx.now())
+        worktree = str(ctx.paths.root.parent / recovery.worktree_name(lk.issue, lk.attempt))
+        write_json(ctx, ctx.run_dir / "claim.json",
+                   {"issue": lk.issue, "attempt": lk.attempt, "branch": out["branch"], "worktree": worktree})
+        out["worktree"] = worktree
+    return _emit(out)
 
 
 def cmd_claim(args, ctx, gh, git):
@@ -362,7 +375,14 @@ def cmd_cleanup(args, ctx, gh, git):
     lk = lock.read(ctx)
     if lk is not None and lk.run_id != ctx.run_id:
         raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
-    recovery.remove_worktree(ctx, git, Path(args.worktree), args.branch, ctx.paths.root.parent, args.merge_sha)
+    if args.spike:
+        if args.merge_sha:
+            raise Fail({"error": "--spike and --merge-sha are mutually exclusive"}, 2)
+        recovery.remove_spike_worktree(ctx, git, Path(args.worktree), args.branch, ctx.paths.root.parent)
+    else:
+        if not args.merge_sha:
+            raise Fail({"error": "--merge-sha is required unless --spike is set"}, 2)
+        recovery.remove_worktree(ctx, git, Path(args.worktree), args.branch, ctx.paths.root.parent, args.merge_sha)
     return _emit({"removed": args.worktree})
 
 
@@ -441,7 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)
     s = add("post-merge", cmd_post_merge); s.add_argument("--issue", type=int, required=True); s.add_argument("--merge-sha", required=True)
     s = add("file-discoveries", cmd_file_discoveries); s.add_argument("file"); s.add_argument("--session", required=True)
-    s = add("cleanup", cmd_cleanup); s.add_argument("--worktree", required=True); s.add_argument("--branch", required=True); s.add_argument("--merge-sha", required=True)
+    s = add("cleanup", cmd_cleanup); s.add_argument("--worktree", required=True); s.add_argument("--branch", required=True); s.add_argument("--merge-sha"); s.add_argument("--spike", action="store_true")
     s = add("finish", cmd_finish); s.add_argument("--issue", type=int, required=True); s.add_argument("--outcome", choices=["merged", "blocked", "answered"], required=True); s.add_argument("--reason")
     s = add("loop-tick", cmd_loop_tick); s.add_argument("--max", type=int, required=True)
     add("loop-reset", cmd_loop_reset)

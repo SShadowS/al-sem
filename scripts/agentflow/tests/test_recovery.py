@@ -120,7 +120,7 @@ def test_recover_stale_preserves_tree_and_finishes_if_merged(repo_pair, tmp_path
     r2 = FakeRunner({"pr list *": '[{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a2", "headRefOid": "h", "mergeCommit": {"oid": "abc"}, "mergedAt": "x"}]'})
     rep2 = recovery.recover_stale(Ctx(paths=ctx.paths, run_id="run-new2", now=lambda: lk2.heartbeat + 4000), g,
                                   Gh(ctx, REPO, run=r2), lk2, worktrees_parent=tmp_path)
-    assert rep2 == {"action": "merged-needs-post-merge", "merge_sha": "abc", "pr": 3}
+    assert rep2 == {"action": "merged-needs-post-merge", "merge_sha": "abc", "pr": 3, "branch": "issue/8-x-a2"}
 
 
 def test_recover_stale_removes_lock_even_when_gh_comment_fails(repo_pair, tmp_path):
@@ -160,6 +160,42 @@ def test_remove_worktree_checks_parent_clean_and_merged(repo_pair, tmp_path):
     sha = g.merge_squash("issue/8-x-a1", "squash")
     recovery.remove_worktree(ctx, g, wt, "issue/8-x-a1", expected_parent=tmp_path, merge_sha=sha)
     assert not wt.exists() and "issue/8-x-a1" not in g.out("branch", "--list")
+
+
+def test_remove_spike_worktree_removes_a_commit_free_branch(repo_pair, tmp_path):
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(9, 1)
+    g.worktree_add(wt, "issue/9-spike-a1", "master")
+    recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a1", expected_parent=tmp_path)
+    assert not wt.exists() and "issue/9-spike-a1" not in g.out("branch", "--list")
+
+
+def test_remove_spike_worktree_refuses_a_branch_with_a_commit(repo_pair, tmp_path):
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(9, 2)
+    g.worktree_add(wt, "issue/9-spike-a2", "master")
+    commit_file(wt, "probe.txt", "spike code, not just reading\n", "spike accidentally committed code")
+    with pytest.raises(RuntimeError, match="not spike-clean"):
+        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a2", expected_parent=tmp_path)
+    assert wt.exists()
+
+
+def test_remove_spike_worktree_checks_parent_and_clean(repo_pair, tmp_path):
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(9, 3)
+    g.worktree_add(wt, "issue/9-spike-a3", "master")
+    (wt / "dirty.txt").write_text("d")
+    with pytest.raises(RuntimeError, match="not clean"):
+        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a3", expected_parent=tmp_path)
+    (wt / "dirty.txt").unlink()
+    with pytest.raises(RuntimeError, match="outside"):
+        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a3", expected_parent=tmp_path / "elsewhere")
 
 
 def test_retain_copies_run_dir(ctx, tmp_path):

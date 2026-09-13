@@ -106,7 +106,8 @@ def recover_stale(ctx: Ctx, git: Git, gh: Gh, lk: lock.Lock, worktrees_parent: P
     pr = gh.pr_for_branch_prefix(f"issue/{lk.issue}-")
     if pr and pr.get("state") == "MERGED":
         ctx.paths.lock.unlink(missing_ok=True)
-        return {"action": "merged-needs-post-merge", "merge_sha": pr["mergeCommit"]["oid"], "pr": pr["number"]}
+        return {"action": "merged-needs-post-merge", "merge_sha": pr["mergeCommit"]["oid"], "pr": pr["number"],
+                "branch": pr["headRefName"]}
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(ctx.now()))
     moved = []
     try:
@@ -144,6 +145,32 @@ def remove_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent
     # squash commit's tree (the merge gate held the base fixed), so compare trees.
     if not git.ok("diff", "--quiet", branch, merge_sha):
         raise RuntimeError(f"branch {branch} is not merged: tree differs from {merge_sha[:12]}")
+    for attempt in range(3):
+        try:
+            shutil.rmtree(path)
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(2)
+    git.worktree_prune()
+    git.branch_delete(branch)
+
+
+def remove_spike_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent: Path) -> None:
+    """A spike never commits code (Step 2 of `/issue` says so), so there is no
+    merge SHA to compare trees against the way `remove_worktree` does. The
+    ownership/cleanliness checks are the same; the merge-proof check becomes
+    "the branch has zero commits of its own on top of master" instead."""
+    ctx.write_guard("remove spike worktree")
+    path = path.resolve()
+    if path.parent != expected_parent.resolve():
+        raise RuntimeError(f"worktree {path} is outside {expected_parent}")
+    if not Git(path).is_clean():
+        raise RuntimeError(f"worktree {path} is not clean")
+    ahead = int(git.out("rev-list", "--count", f"master..{branch}"))
+    if ahead != 0:
+        raise RuntimeError(f"branch {branch} has {ahead} commit(s) ahead of master; not spike-clean")
     for attempt in range(3):
         try:
             shutil.rmtree(path)
