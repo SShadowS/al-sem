@@ -111,17 +111,27 @@ class Gh:
                          "--limit", "100", "--json", ISSUE_FIELDS])
         return [_issue_from_cli(d) for d in json.loads(out or "[]")]
 
+    def list_labeled(self, label: str) -> list[Issue]:
+        out = self._raw(["issue", "list", "--repo", self.repo, "--label", label, "--state", "all",
+                         "--limit", "500", "--json", ISSUE_FIELDS])
+        return [_issue_from_cli(d) for d in json.loads(out or "[]")]
+
     def pr_for_branch_prefix(self, prefix: str) -> dict | None:
         out = self._raw(["pr", "list", "--repo", self.repo, "--state", "all", "--limit", "50",
                          "--json", "number,state,headRefName,headRefOid,mergeCommit,mergedAt"])
-        for pr in json.loads(out or "[]"):
-            if pr["headRefName"].startswith(prefix):
-                return pr
-        return None
+        matches = [pr for pr in json.loads(out or "[]") if pr["headRefName"].startswith(prefix)]
+        if not matches:
+            return None
+        rank = {"MERGED": 0, "OPEN": 1}
+        return min(matches, key=lambda pr: rank.get(pr.get("state"), 2))
 
     def pr_checks(self, n: int) -> list[dict]:
         out = self._raw(["pr", "view", str(n), "--repo", self.repo, "--json", "statusCheckRollup"])
         return json.loads(out or "{}").get("statusCheckRollup", [])
+
+    def pr_view(self, n: int, fields: str) -> dict:
+        out = self._raw(["pr", "view", str(n), "--repo", self.repo, "--json", fields])
+        return json.loads(out or "{}")
 
     # ---- writes ----------------------------------------------------------
     def ensure_labels(self, names: list[str]) -> None:

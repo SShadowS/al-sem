@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from agentflow import budget, discoveries, lock
 from agentflow.gh import Gh
 from agentflow.state import read_json
@@ -36,28 +34,63 @@ def test_file_all_writes_pending_before_create_then_filed(ctx):
     setup(ctx)
     d = disc()
     fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
-    r = FakeRunner({f"issue list --repo {REPO} --state all --search {discoveries.MARKER_FMT.format(fp=fp)} --limit 100 --json *": "[]",
+    r = FakeRunner({"issue list *": "[]",
                     "issue create *": "https://github.com/SShadowS/al-sem/issues/50\n"})
     out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
-    assert out == [{"fp": fp, "status": "filed", "number": 50}]
+    assert out == [{"fp": fp, "status": "filed", "number": 50, "error": None}]
     idx = read_json(ctx.paths.discoveries_index)
     assert idx[fp] == {"status": "filed", "number": 50, "origin": 8}
     create = next(c for c in r.calls if c.startswith("issue create"))
     assert "--label agent-filed --label bug" in create and "[agent-discovery][resolve]" in create
+    list_call = next(c for c in r.calls if c.startswith("issue list"))
+    assert f"--repo {REPO} --label agent-filed --state all --limit 500 --json" in list_call
 
 
 def test_crash_between_create_and_index_leaves_pending_and_reconcile_finds_marker(ctx):
     setup(ctx)
     d = disc()
     fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
-    r = FakeRunner({f"issue list --repo {REPO} --state all --search {discoveries.MARKER_FMT.format(fp=fp)} --limit 100 --json *": "[]",
-                    "issue create *": "garbage without a number"})
+    r = FakeRunner({"issue list *": "[]", "issue create *": "garbage without a number"})
     out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
     assert out[0]["status"] == "pending"
     assert read_json(ctx.paths.discoveries_index)[fp]["status"] == "pending"
-    r2 = FakeRunner({f"issue list --repo {REPO} --state all --search {discoveries.MARKER_FMT.format(fp=fp)} --limit 100 --json *": search_hit(fp, 51)})
+    r2 = FakeRunner({"issue list *": search_hit(fp, 51)})
     rep = discoveries.reconcile_pending(ctx, Gh(ctx, REPO, run=r2))
     assert rep == [{"fp": fp, "status": "filed", "number": 51}]
+    assert read_json(ctx.paths.discoveries_index)[fp]["status"] == "filed"
+
+
+def test_reconcile_zero_hits_is_pending_not_found_and_index_unchanged(ctx):
+    setup(ctx)
+    d = disc()
+    fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
+    discoveries._save_index(ctx, {fp: {"status": "pending", "number": None, "origin": 8}})
+    r = FakeRunner({"issue list *": "[]"})
+    rep = discoveries.reconcile_pending(ctx, Gh(ctx, REPO, run=r))
+    assert rep == [{"fp": fp, "status": "pending-not-found"}]
+    assert read_json(ctx.paths.discoveries_index)[fp] == {"status": "pending", "number": None, "origin": 8}
+
+
+def test_pending_not_found_then_later_file_all_retries_and_creates(ctx):
+    setup(ctx)
+    d = disc()
+    fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
+    discoveries._save_index(ctx, {fp: {"status": "pending", "number": None, "origin": 8}})
+    r = FakeRunner({"issue list *": "[]"})
+    rep = discoveries.reconcile_pending(ctx, Gh(ctx, REPO, run=r))
+    assert rep == [{"fp": fp, "status": "pending-not-found"}]
+    r2 = FakeRunner({"issue list *": "[]", "issue create *": "https://github.com/SShadowS/al-sem/issues/70\n"})
+    out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r2), [d], "https://s")
+    assert out == [{"fp": fp, "status": "filed", "number": 70, "error": None}]
+    assert any(c.startswith("issue create") for c in r2.calls)
+
+
+def test_charge_after_success_failed_create_leaves_budget_unchanged(ctx):
+    setup(ctx)
+    d = disc()
+    r = FakeRunner({"issue list *": "[]", "issue create *": "garbage without a number"})
+    discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
+    assert budget.snapshot(ctx)["counts"].get("discoveries", 0) == 0
 
 
 def test_ambiguous_reconcile_stays_pending_and_never_recreates(ctx):
@@ -66,11 +99,23 @@ def test_ambiguous_reconcile_stays_pending_and_never_recreates(ctx):
     fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
     discoveries._save_index(ctx, {fp: {"status": "pending", "number": None, "origin": 8}})
     two = json.loads(search_hit(fp, 1)) + json.loads(search_hit(fp, 2))
-    r = FakeRunner({f"issue list --repo {REPO} --state all --search {discoveries.MARKER_FMT.format(fp=fp)} --limit 100 --json *": json.dumps(two)})
+    r = FakeRunner({"issue list *": json.dumps(two)})
     rep = discoveries.reconcile_pending(ctx, Gh(ctx, REPO, run=r))
     assert rep[0]["status"] == "pending-ambiguous"
+    assert read_json(ctx.paths.discoveries_index)[fp]["status"] == "pending"  # unchanged (M16)
     out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
-    assert out[0]["status"] == "skipped-index" and not any("issue create" in c for c in r.calls)
+    assert out[0]["status"] == "skipped-remote" and not any("issue create" in c for c in r.calls)
+
+
+def test_search_failure_in_file_all_reports_search_failed_and_continues(ctx):
+    setup(ctx)
+    d = disc()
+    fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
+    r = FakeRunner({})
+    r.responses["issue list *"] = (1, "", "HTTP 404: gone")
+    out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r, sleep=lambda s: None), [d], "https://s")
+    assert out[0]["fp"] == fp and out[0]["status"] == "search-failed" and out[0]["number"] is None
+    assert "HTTP 404" in out[0]["error"]
 
 
 def test_cap_five_per_issue(ctx):

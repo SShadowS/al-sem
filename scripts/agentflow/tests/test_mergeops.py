@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from agentflow import lock, mergeops
@@ -53,11 +55,23 @@ def test_merge_gate_binds_base_head_and_body(repo_pair):
     assert "base-moved" in mergeops.merge_gate(g, att, pr_head_sha=H, issue_body_now="body v1")
 
 
-def test_merge_calls_gh_with_match_head_and_refuses_dry_run(ctx, dry_ctx):
+def test_merge_calls_gh_with_match_head_returns_sha_and_refuses_dry_run(ctx, dry_ctx):
     lock.acquire(ctx, 8, "s", 1)
     att = mergeops.Attestation(8, "b", "h", "f" * 40, "r", {}, "bh")
-    r = FakeRunner({f"pr merge 12 --squash --match-head-commit {'f' * 40}": ""})
-    mergeops.merge(ctx, Gh(ctx, "SShadowS/al-sem", run=r), 12, att)
-    assert r.calls == [f"pr merge 12 --squash --match-head-commit {'f' * 40}"]
+    r = FakeRunner({f"pr merge 12 --squash --match-head-commit {'f' * 40}": "",
+                    "pr view 12 --repo SShadowS/al-sem --json mergeCommit": json.dumps({"mergeCommit": {"oid": "m" * 40}})})
+    sha = mergeops.merge(ctx, Gh(ctx, "SShadowS/al-sem", run=r), 12, att, [])
+    assert sha == "m" * 40
+    assert r.calls == [f"pr merge 12 --squash --match-head-commit {'f' * 40}",
+                       "pr view 12 --repo SShadowS/al-sem --json mergeCommit"]
     with pytest.raises(DryRunViolation):
-        mergeops.merge(dry_ctx, Gh(dry_ctx, "SShadowS/al-sem", run=FakeRunner(readonly=True)), 12, att)
+        mergeops.merge(dry_ctx, Gh(dry_ctx, "SShadowS/al-sem", run=FakeRunner(readonly=True)), 12, att, [])
+
+
+def test_merge_refuses_without_calling_gh_when_gate_reasons_present(ctx):
+    lock.acquire(ctx, 8, "s", 1)
+    att = mergeops.Attestation(8, "b", "h", "f" * 40, "r", {}, "bh")
+    r = FakeRunner(readonly=True)
+    with pytest.raises(RuntimeError, match="merge refused"):
+        mergeops.merge(ctx, Gh(ctx, "SShadowS/al-sem", run=r), 12, att, ["head-moved", "issue-edited"])
+    assert r.calls == []

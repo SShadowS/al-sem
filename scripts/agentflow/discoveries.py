@@ -1,10 +1,13 @@
 """Discovery filing: deterministic fingerprints, a crash-safe local index,
 a marker in every filed body, and reconciliation before any new creation.
 
-Order for each discovery: index check -> remote marker search -> write
-`pending` -> create -> write `filed`. A crash between create and the index
-write leaves `pending`; the next run reconciles by marker and never
-recreates on an ambiguous search.
+Order for each discovery: index check (only a `filed` entry is skipped; a
+`pending` entry is retryable) -> remote marker search, bounded to the
+`agent-filed` label (never a free-text search) -> write `pending` -> create
+-> charge the discovery budget only after a successful create -> write
+`filed`. A crash between create and the index write leaves `pending`; the
+next run retries it like a new discovery and the marker search resolves it
+without recreating.
 """
 from __future__ import annotations
 
@@ -68,15 +71,15 @@ def _save_index(ctx: Ctx, idx: dict) -> None:
     write_json(ctx, ctx.paths.discoveries_index, idx)
 
 
-def _search_marker(gh: Gh, fp: str):
+def _search_marker(gh: Gh, fp: str) -> list:
     marker = MARKER_FMT.format(fp=fp)
-    hits = [i for i in gh.search_issues(marker) if marker in i.body]
-    return hits
+    return [i for i in gh.list_labeled("agent-filed") if marker in i.body]
 
 
 def reconcile_pending(ctx: Ctx, gh: Gh) -> list[dict]:
     idx = _load_index(ctx)
     report = []
+    changed = False
     for fp, entry in idx.items():
         if entry["status"] != "pending":
             continue
@@ -85,12 +88,16 @@ def reconcile_pending(ctx: Ctx, gh: Gh) -> list[dict]:
         except Exception as e:  # gh failure: stay pending
             report.append({"fp": fp, "status": "pending-search-failed", "error": str(e)})
             continue
-        if len(hits) == 1:
+        if not hits:
+            report.append({"fp": fp, "status": "pending-not-found"})
+        elif len(hits) == 1:
             entry.update(status="filed", number=hits[0].number)
+            changed = True
             report.append({"fp": fp, "status": "filed", "number": hits[0].number})
         else:
             report.append({"fp": fp, "status": "pending-ambiguous", "hits": [h.number for h in hits]})
-    _save_index(ctx, idx)
+    if changed:
+        _save_index(ctx, idx)
     return report
 
 
@@ -99,19 +106,22 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
     out = []
     for d in discoveries:
         fp = fingerprint(d.subsystem, d.locator, d.symptom)
-        if fp in idx:
-            out.append({"fp": fp, "status": "skipped-index", "number": idx[fp].get("number")})
+        entry = idx.get(fp)
+        if entry is not None and entry["status"] == "filed":
+            out.append({"fp": fp, "status": "skipped-index", "number": entry.get("number"), "error": None})
             continue
-        hits = _search_marker(gh, fp)
+        try:
+            hits = _search_marker(gh, fp)
+        except Exception as e:
+            out.append({"fp": fp, "status": "search-failed", "number": None, "error": str(e)})
+            continue
         if hits:
             idx[fp] = {"status": "filed", "number": hits[0].number, "origin": d.origin_issue}
             _save_index(ctx, idx)
-            out.append({"fp": fp, "status": "skipped-remote", "number": hits[0].number})
+            out.append({"fp": fp, "status": "skipped-remote", "number": hits[0].number, "error": None})
             continue
-        try:
-            budget.charge(ctx, "discoveries")
-        except budget.BudgetExceeded:
-            out.append({"fp": fp, "status": "over-cap", "number": None})
+        if budget.snapshot(ctx)["counts"].get("discoveries", 0) >= budget.CAPS["discoveries"]:
+            out.append({"fp": fp, "status": "over-cap", "number": None, "error": None})
             continue
         idx[fp] = {"status": "pending", "number": None, "origin": d.origin_issue}
         _save_index(ctx, idx)
@@ -120,7 +130,8 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
         except Exception as e:
             out.append({"fp": fp, "status": "pending", "number": None, "error": str(e)})
             continue
+        budget.charge(ctx, "discoveries")
         idx[fp] = {"status": "filed", "number": number, "origin": d.origin_issue}
         _save_index(ctx, idx)
-        out.append({"fp": fp, "status": "filed", "number": number})
+        out.append({"fp": fp, "status": "filed", "number": number, "error": None})
     return out

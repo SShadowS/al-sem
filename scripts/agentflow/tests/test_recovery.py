@@ -1,9 +1,7 @@
-import shutil
-
 import pytest
 
 from agentflow import lock, recovery
-from agentflow.gh import Gh
+from agentflow.gh import Gh, GhError
 from agentflow.gitops import Git
 from agentflow.state import Ctx, Paths
 from agentflow.tests.conftest import FakeRunner, commit_file
@@ -70,11 +68,43 @@ def test_post_merge_failure_refuses_push_when_master_advanced(repo_pair, tmp_pat
     assert out.reverted and not out.pushed and out.reason == "master-advanced"
 
 
+def test_post_merge_failure_refuses_when_local_master_diverged(repo_pair):
+    """C1: an unpushed local commit on top of the merge SHA must never ride along
+    on the revert push. The function must refuse (`master-not-ff`), reset local
+    `master` back to `origin/master`, and leave the remote untouched."""
+    _, clone = repo_pair
+    g = Git(clone)
+    bad = commit_file(clone, "bad.txt", "bad\n", "merge of #8")
+    g.push("origin", "master")
+    extra = commit_file(clone, "extra.txt", "extra\n", "unpushed local work")
+    ctx = make_ctx(clone)
+    out = recovery.post_merge_failure(ctx, g, Gh(ctx, REPO, run=gh_ok()), 8, bad, rerun_gates=lambda: True)
+    assert out.reason == "master-not-ff" and not out.pushed and not out.reverted
+    g.fetch()
+    assert g.rev("origin/master") == bad
+    assert g.rev("master") == bad  # local reset to match origin, "extra" discarded
+    assert not (clone / "extra.txt").exists()
+
+
+def test_post_merge_failure_sets_halt_even_when_merge_sha_is_unknown(repo_pair):
+    """I2: HALT must be written before any git call that can raise on a bad SHA
+    (e.g. one handed over from `recover_stale` before a fetch)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    bogus = "0" * 40
+    try:
+        recovery.post_merge_failure(ctx, g, Gh(ctx, REPO, run=gh_ok()), 8, bogus, rerun_gates=lambda: True)
+    except Exception:
+        pass
+    assert lock.halted(ctx) is not None
+
+
 def test_recover_stale_preserves_tree_and_finishes_if_merged(repo_pair, tmp_path):
     _, clone = repo_pair
     g = Git(clone)
     ctx = make_ctx(clone)
-    wt = tmp_path / "al-sem-issue-8-a1"
+    wt = tmp_path / recovery.worktree_name(8, 1)
     g.worktree_add(wt, "issue/8-x-a1", "master")
     lk = lock.read(ctx)
     stale_ctx = Ctx(paths=ctx.paths, run_id="run-new", now=lambda: lk.heartbeat + 4000)
@@ -82,7 +112,7 @@ def test_recover_stale_preserves_tree_and_finishes_if_merged(repo_pair, tmp_path
                     "issue edit 8 --remove-label agent-working": ""})
     rep = recovery.recover_stale(stale_ctx, g, Gh(stale_ctx, REPO, run=r), lk, worktrees_parent=tmp_path)
     assert rep["action"] == "blocked-crashed"
-    assert not wt.exists() and list(tmp_path.glob("al-sem-issue-8-a1.crashed-*"))
+    assert not wt.exists() and list(tmp_path.glob(f"{recovery.worktree_name(8, 1)}.crashed-*"))
     assert lock.read(ctx) is None
     lk2 = lock.acquire(ctx, 8, "s", 2)
     r2 = FakeRunner({"pr list *": '[{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a2", "headRefOid": "h", "mergeCommit": {"oid": "abc"}, "mergedAt": "x"}]'})
@@ -91,11 +121,30 @@ def test_recover_stale_preserves_tree_and_finishes_if_merged(repo_pair, tmp_path
     assert rep2 == {"action": "merged-needs-post-merge", "merge_sha": "abc", "pr": 3}
 
 
+def test_recover_stale_removes_lock_even_when_gh_comment_fails(repo_pair, tmp_path):
+    """I3: everything after the merged-PR check must run under try/finally so a
+    gh outage during bookkeeping still frees the stale lock and still notifies."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(8, 1)
+    g.worktree_add(wt, "issue/8-x-a1", "master")
+    lk = lock.read(ctx)
+    stale_ctx = Ctx(paths=ctx.paths, run_id="run-new", now=lambda: lk.heartbeat + 4000)
+    r = FakeRunner({"pr list *": "[]"})
+    r.responses["issue comment 8 *"] = (1, "", "HTTP 500: boom")
+    with pytest.raises(GhError):
+        recovery.recover_stale(stale_ctx, g, Gh(stale_ctx, REPO, run=r, sleep=lambda s: None),
+                               lk, worktrees_parent=tmp_path)
+    assert not ctx.paths.lock.exists()
+    assert (stale_ctx.run_dir / "notify.log").exists()
+
+
 def test_remove_worktree_checks_parent_clean_and_merged(repo_pair, tmp_path):
     _, clone = repo_pair
     g = Git(clone)
     ctx = make_ctx(clone)
-    wt = tmp_path / "al-sem-issue-8-a1"
+    wt = tmp_path / recovery.worktree_name(8, 1)
     g.worktree_add(wt, "issue/8-x-a1", "master")
     (wt / "dirty.txt").write_text("d")
     with pytest.raises(RuntimeError, match="not clean"):

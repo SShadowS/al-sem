@@ -66,6 +66,18 @@ def test_create_issue_parses_number_from_url(ctx):
     assert n == 42
 
 
+def test_pr_for_branch_prefix_prefers_merged_over_closed(ctx):
+    prs = [
+        {"number": 1, "state": "CLOSED", "headRefName": "issue/8-x-a1", "headRefOid": "h1",
+         "mergeCommit": None, "mergedAt": None},
+        {"number": 2, "state": "MERGED", "headRefName": "issue/8-x-a2", "headRefOid": "h2",
+         "mergeCommit": {"oid": "abc"}, "mergedAt": "x"},
+    ]
+    r = FakeRunner({"pr list *": json.dumps(prs)})
+    pr = Gh(ctx, REPO, run=r).pr_for_branch_prefix("issue/8-")
+    assert pr["number"] == 2
+
+
 def test_ensure_labels_creates_only_missing(ctx):
     lock.acquire(ctx, 8, "s", 1)
     r = FakeRunner({f"api repos/{REPO}/labels?per_page=100 --paginate --slurp": json.dumps([[{"name": "agent-done"}]]),

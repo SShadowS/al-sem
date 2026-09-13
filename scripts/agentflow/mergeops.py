@@ -80,6 +80,12 @@ def merge_gate(git: Git, att: Attestation, pr_head_sha: str, issue_body_now: str
     return reasons
 
 
-def merge(ctx: Ctx, gh: Gh, pr: int, att: Attestation) -> None:
+def merge(ctx: Ctx, gh: Gh, pr: int, att: Attestation, gate_reasons: list[str]) -> str:
+    """Merge only when `gate_reasons` (the merge gate's own verdict) is empty;
+    returns the resolved squash-merge SHA the caller hands to `post_merge_failure`.
+    """
+    if gate_reasons:
+        raise RuntimeError("merge refused: " + ", ".join(gate_reasons))
     ctx.write_guard("merge")
     gh.merge_pr(pr, att.final_head)
+    return gh.pr_view(pr, "mergeCommit")["mergeCommit"]["oid"]
