@@ -400,6 +400,7 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocIf
         | RawKind::PreprocNotExpression
         | RawKind::PreprocOpen
+        | RawKind::PreprocOperandPrefix
         | RawKind::PreprocOrExpression
         | RawKind::PreprocPragmaOnly
         | RawKind::PreprocRegion
@@ -408,7 +409,9 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocSplitBraceCloseIfOnly
         | RawKind::PreprocSplitCallStatement
         | RawKind::PreprocSplitCaseBranch
+        | RawKind::PreprocSplitCaseEndBranch
         | RawKind::PreprocSplitCaseExtended
+        | RawKind::PreprocSplitCaseStatementEnd
         | RawKind::PreprocSplitCodeBlockEnd
         | RawKind::PreprocSplitCompleteBody
         | RawKind::PreprocSplitDeclaration
@@ -423,6 +426,9 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocSplitProcedure
         | RawKind::PreprocSplitProcedureBody
         | RawKind::PreprocSplitProcedurePreamble
+        | RawKind::PreprocSplitReportBraceClose
+        | RawKind::PreprocSplitReportDataitemHeader
+        | RawKind::PreprocSplitReportDataitemOpenOverEndif
         | RawKind::PreprocSplitTableField
         | RawKind::PreprocUndef
         | RawKind::Procedure

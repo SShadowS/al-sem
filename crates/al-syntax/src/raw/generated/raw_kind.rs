@@ -319,6 +319,7 @@ pub enum RawKind {
     PreprocIf,
     PreprocNotExpression,
     PreprocOpen,
+    PreprocOperandPrefix,
     PreprocOrExpression,
     PreprocParenthesizedExpression,
     PreprocPragmaOnly,
@@ -328,7 +329,9 @@ pub enum RawKind {
     PreprocSplitBraceCloseIfOnly,
     PreprocSplitCallStatement,
     PreprocSplitCaseBranch,
+    PreprocSplitCaseEndBranch,
     PreprocSplitCaseExtended,
+    PreprocSplitCaseStatementEnd,
     PreprocSplitCodeBlockEnd,
     PreprocSplitCodeBlockOverEndif,
     PreprocSplitCompleteBody,
@@ -345,6 +348,9 @@ pub enum RawKind {
     PreprocSplitProcedure,
     PreprocSplitProcedureBody,
     PreprocSplitProcedurePreamble,
+    PreprocSplitReportBraceClose,
+    PreprocSplitReportDataitemHeader,
+    PreprocSplitReportDataitemOpenOverEndif,
     PreprocSplitTableField,
     PreprocUndef,
     Procedure,
@@ -806,6 +812,7 @@ impl RawKind {
             "preproc_if" => Some(RawKind::PreprocIf),
             "preproc_not_expression" => Some(RawKind::PreprocNotExpression),
             "preproc_open" => Some(RawKind::PreprocOpen),
+            "preproc_operand_prefix" => Some(RawKind::PreprocOperandPrefix),
             "preproc_or_expression" => Some(RawKind::PreprocOrExpression),
             "preproc_parenthesized_expression" => Some(RawKind::PreprocParenthesizedExpression),
             "preproc_pragma_only" => Some(RawKind::PreprocPragmaOnly),
@@ -815,7 +822,9 @@ impl RawKind {
             "preproc_split_brace_close_if_only" => Some(RawKind::PreprocSplitBraceCloseIfOnly),
             "preproc_split_call_statement" => Some(RawKind::PreprocSplitCallStatement),
             "preproc_split_case_branch" => Some(RawKind::PreprocSplitCaseBranch),
+            "preproc_split_case_end_branch" => Some(RawKind::PreprocSplitCaseEndBranch),
             "preproc_split_case_extended" => Some(RawKind::PreprocSplitCaseExtended),
+            "preproc_split_case_statement_end" => Some(RawKind::PreprocSplitCaseStatementEnd),
             "preproc_split_code_block_end" => Some(RawKind::PreprocSplitCodeBlockEnd),
             "preproc_split_code_block_over_endif" => Some(RawKind::PreprocSplitCodeBlockOverEndif),
             "preproc_split_complete_body" => Some(RawKind::PreprocSplitCompleteBody),
@@ -834,6 +843,13 @@ impl RawKind {
             "preproc_split_procedure" => Some(RawKind::PreprocSplitProcedure),
             "preproc_split_procedure_body" => Some(RawKind::PreprocSplitProcedureBody),
             "preproc_split_procedure_preamble" => Some(RawKind::PreprocSplitProcedurePreamble),
+            "preproc_split_report_brace_close" => Some(RawKind::PreprocSplitReportBraceClose),
+            "preproc_split_report_dataitem_header" => {
+                Some(RawKind::PreprocSplitReportDataitemHeader)
+            }
+            "preproc_split_report_dataitem_open_over_endif" => {
+                Some(RawKind::PreprocSplitReportDataitemOpenOverEndif)
+            }
             "preproc_split_table_field" => Some(RawKind::PreprocSplitTableField),
             "preproc_undef" => Some(RawKind::PreprocUndef),
             "procedure" => Some(RawKind::Procedure),
@@ -1298,6 +1314,7 @@ impl RawKind {
             RawKind::PreprocIf => "preproc_if",
             RawKind::PreprocNotExpression => "preproc_not_expression",
             RawKind::PreprocOpen => "preproc_open",
+            RawKind::PreprocOperandPrefix => "preproc_operand_prefix",
             RawKind::PreprocOrExpression => "preproc_or_expression",
             RawKind::PreprocParenthesizedExpression => "preproc_parenthesized_expression",
             RawKind::PreprocPragmaOnly => "preproc_pragma_only",
@@ -1307,7 +1324,9 @@ impl RawKind {
             RawKind::PreprocSplitBraceCloseIfOnly => "preproc_split_brace_close_if_only",
             RawKind::PreprocSplitCallStatement => "preproc_split_call_statement",
             RawKind::PreprocSplitCaseBranch => "preproc_split_case_branch",
+            RawKind::PreprocSplitCaseEndBranch => "preproc_split_case_end_branch",
             RawKind::PreprocSplitCaseExtended => "preproc_split_case_extended",
+            RawKind::PreprocSplitCaseStatementEnd => "preproc_split_case_statement_end",
             RawKind::PreprocSplitCodeBlockEnd => "preproc_split_code_block_end",
             RawKind::PreprocSplitCodeBlockOverEndif => "preproc_split_code_block_over_endif",
             RawKind::PreprocSplitCompleteBody => "preproc_split_complete_body",
@@ -1324,6 +1343,11 @@ impl RawKind {
             RawKind::PreprocSplitProcedure => "preproc_split_procedure",
             RawKind::PreprocSplitProcedureBody => "preproc_split_procedure_body",
             RawKind::PreprocSplitProcedurePreamble => "preproc_split_procedure_preamble",
+            RawKind::PreprocSplitReportBraceClose => "preproc_split_report_brace_close",
+            RawKind::PreprocSplitReportDataitemHeader => "preproc_split_report_dataitem_header",
+            RawKind::PreprocSplitReportDataitemOpenOverEndif => {
+                "preproc_split_report_dataitem_open_over_endif"
+            }
             RawKind::PreprocSplitTableField => "preproc_split_table_field",
             RawKind::PreprocUndef => "preproc_undef",
             RawKind::Procedure => "procedure",
@@ -1780,6 +1804,7 @@ impl RawKind {
         RawKind::PreprocIf,
         RawKind::PreprocNotExpression,
         RawKind::PreprocOpen,
+        RawKind::PreprocOperandPrefix,
         RawKind::PreprocOrExpression,
         RawKind::PreprocParenthesizedExpression,
         RawKind::PreprocPragmaOnly,
@@ -1789,7 +1814,9 @@ impl RawKind {
         RawKind::PreprocSplitBraceCloseIfOnly,
         RawKind::PreprocSplitCallStatement,
         RawKind::PreprocSplitCaseBranch,
+        RawKind::PreprocSplitCaseEndBranch,
         RawKind::PreprocSplitCaseExtended,
+        RawKind::PreprocSplitCaseStatementEnd,
         RawKind::PreprocSplitCodeBlockEnd,
         RawKind::PreprocSplitCodeBlockOverEndif,
         RawKind::PreprocSplitCompleteBody,
@@ -1806,6 +1833,9 @@ impl RawKind {
         RawKind::PreprocSplitProcedure,
         RawKind::PreprocSplitProcedureBody,
         RawKind::PreprocSplitProcedurePreamble,
+        RawKind::PreprocSplitReportBraceClose,
+        RawKind::PreprocSplitReportDataitemHeader,
+        RawKind::PreprocSplitReportDataitemOpenOverEndif,
         RawKind::PreprocSplitTableField,
         RawKind::PreprocUndef,
         RawKind::Procedure,
@@ -1945,7 +1975,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "23ed60683462cada537ef4b4ff20e54d4704ef25fa6e63eb5fd6cdb275d1cfa7";
+    "6139533df83cce096e4e1bd0cf8c61a53a69391383db93d27fe3a0e44ab74a0a";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 467;
+pub const NAMED_KIND_COUNT: usize = 473;

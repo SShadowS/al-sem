@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **tree-sitter-al pin v4.3.0 -> v4.4.0** — the grammar release that fixes two REAL parse
+  failures in Microsoft's own Base Application (grammar issues #24/#25, filed from this
+  repo's evidence).
+  - **How they were found:** the CDO `recovered_files` ratchet moved from a pinned 0 to 5
+    once BC 28.1 symbols were downloaded into `CDO_WS`. All 5 were Base Application files,
+    so this was shipped Microsoft source failing to parse, not an edge case. Both defects
+    were reduced to minimal repros with controls differing only by the directive:
+    (a) a mid-expression `#if` where the binary operator DANGLES before the directive and
+    the branch opens with an operand — the existing `preproc_conditional_expression_tail`
+    covered only the operator-first form; (b) a block opened inside a preproc branch and
+    closed after `#endif`, which errored across the whole enclosing procedure.
+    All 5 files parse clean on v4.4.0.
+  - **The vocabulary moved this time: 467 -> 473 named kinds, +3 fields** (v4.0.1 -> v4.3.0
+    had moved none). All six additions are preproc-split shapes. They failed
+    `kind_policy.rs`'s exhaustive match exactly as that loudness gate intends and were
+    triaged `Structural`, like every other `Preproc*` node; `raw/mod.rs`'s
+    `NAMED_KIND_COUNT` anchor was updated alongside.
+  - **Zero goldens moved** — all 9 golden targets green — because the golden corpus
+    contains none of the preprocessor shapes this release fixes.
+  - `CACHE_VERSION_GRAMMAR` bumped to `tree-sitter-al-v4.4.0-native` with its test mirror
+    and both `fixture-cache` stamps; the `Kept` fixture's `artifactContentHash` recomputed.
+  - CLAUDE.md's "Upgrading the grammar" checklist gained the `kind_policy.rs` triage and
+    `NAMED_KIND_COUNT` steps this upgrade needed but the v4.3.0 one did not.
+
+### Added
+
 - **tree-sitter-al grammar pin v4.0.1 -> v4.3.0**, and the pin is now policy-bound to
   track the newest release rather than lag it. We own the grammar repo, so the pin exists
   for build reproducibility, not to hold a version back.

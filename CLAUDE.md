@@ -72,7 +72,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al **v4.3.0** grammar (included as a git submodule at `tree-sitter-al/`,
+- tree-sitter-al **v4.4.0** grammar (included as a git submodule at `tree-sitter-al/`,
   pinned in the superproject's index; CI instead checks out the grammar repo's `main`
   branch unpinned — see the Grammar section below)
   - **Standing policy: track the newest grammar.** We own `SShadowS/tree-sitter-al`, so
@@ -300,9 +300,9 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.3.0)
+## Grammar (tree-sitter-al v4.4.0)
 
-**Current reality:** the grammar is **v4.3.0** (`tree-sitter-al/package.json`; the pin
+**Current reality:** the grammar is **v4.4.0** (`tree-sitter-al/package.json`; the pin
 sits at the grammar repo's `main` tip, matching what unpinned CI checks out). v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
 fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
@@ -312,14 +312,30 @@ comparison; `CalcFormula` aggregates and `order()` views are not calls while
 `Continue(X)` is a call and not the statement; and a negative literal in a property is
 one signed literal and not a `unary_expression`.
 
-**None of these moved the VOCABULARY.** `NAMED_KIND_COUNT` has been 467 across all four
-releases, so `gen-syntax` rewrites only the `node-types.json` hash constant — no new
-`RawKind` variant, so `kind_policy.rs`'s exhaustive match is untouched. The
-v4.0.1 -> v4.3.0 upgrade was measured on 2026-09-13 by running the ENTIRE workspace
-suite (`cargo test --workspace --no-fail-fast`, ~2500 tests) on both grammars back to
-back: every single test outcome was identical. Zero goldens moved. Treat that as the
-measured precedent it is, not as a rule — a future grammar release CAN move shapes, and
-the same two-sided measurement is how you find out.
+**v4.4.0 (2026-09-13) fixes two REAL parse failures in Microsoft's own Base Application**,
+found by the CDO `recovered_files` ratchet moving 0 -> 5 once BC 28.1 symbols were ingested
+(filed as grammar issues #24/#25): (a) a mid-expression `#if` where the binary operator
+DANGLES at the end of the line before the directive and the branch opens with an operand —
+the already-existing `preproc_conditional_expression_tail` covered only the operator-first
+form; (b) a block opened inside a preproc branch and closed after `#endif`, which errored
+across the whole enclosing procedure. All 5 Base Application files parse clean on v4.4.0.
+
+**v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
+v4.3.0, which moved none.** The six additions are all preproc-split shapes
+(`PreprocOperandPrefix`, `PreprocSplitCaseEndBranch`, `PreprocSplitCaseStatementEnd`,
+`PreprocSplitReportBraceClose`, `PreprocSplitReportDataitemHeader`,
+`PreprocSplitReportDataitemOpenOverEndif`). They tripped `kind_policy.rs`'s exhaustive
+match exactly as that gate intends, and were triaged `Structural` like every other
+`Preproc*` node (the lowerer owns descent). `crates/al-syntax/src/raw/mod.rs`'s
+`NAMED_KIND_COUNT` sanity anchor needs updating in the same commit — it is a `--lib` test,
+so `scripts/check-goldens` will NOT catch it.
+
+**Measure a grammar bump on BOTH sides — neither outcome is a rule.** v4.0.1 -> v4.3.0 moved
+zero test outcomes across ~2500 tests; v4.4.0 moved the vocabulary but still moved ZERO
+goldens (all 9 targets green), because the golden corpus contains none of the preprocessor
+shapes it fixes. A future release can do either. Run the full suite on the old grammar and
+the new one and diff the per-test outcomes; that is the only way to attribute a moved golden
+to the grammar rather than to whatever else is in your diff.
 The submodule pointer in this repo's git index is pinned to a specific
 commit (reproducible local/dev builds); CI instead checks out `SShadowS/tree-sitter-al`
 `main` **unpinned** (`.github/workflows/ci.yml`) so a breaking grammar change surfaces
@@ -333,14 +349,17 @@ all — the IR's `Block`/`Stmt` items are already flattened once, at the lowerin
 boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
 wrapper node.
 
-**Upgrading the grammar (the checklist the 2026-09-13 v4.3.0 bump followed):**
+**Upgrading the grammar (the checklist the v4.3.0 and v4.4.0 bumps followed):**
 
 1. `cd tree-sitter-al && git fetch origin && git checkout <new tip>` — the submodule.
 2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
    `node-types.sha256` sidecar. Skipping this is not an option: `crates/al-syntax/build.rs`
    sha256s the grammar's `node-types.json` and PANICS on mismatch, so the build refuses
    before a single test runs.
-3. **Bump `CACHE_VERSION_GRAMMAR`** (`src/engine/gate/cache_prune.rs`) and its mirror in
+3. **Triage any new `RawKind` in `crates/al-syntax/src/schema/kind_policy.rs`** (the
+   exhaustive match fails the build on purpose — classify it, never wildcard it) and update
+   `crates/al-syntax/src/raw/mod.rs`'s `NAMED_KIND_COUNT` anchor.
+4. **Bump `CACHE_VERSION_GRAMMAR`** (`src/engine/gate/cache_prune.rs`) and its mirror in
    `tests/cli/cli_c_cache_differential.rs`, plus the `grammar` stamp in the two
    `tests/cli-c-goldens/cache/fixture-cache/` artifacts that carry the CURRENT tuple
    (`1234...` and `cafecafe...`; `babebabe...` is deliberately stale). The `cafecafe`
@@ -350,12 +369,12 @@ wrapper node.
    are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
    is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
    it** — run `cargo test -p al-sem --lib` too.
-4. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
+5. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
    the per-test outcomes; that is the only way to attribute a moved golden to the grammar
    rather than to whatever else is in your diff. `gen-syntax` makes the revert cheap: check
    the submodule back out, re-run it, and the vocabulary returns to the committed bytes —
    no `git checkout --` of generated files needed.
-5. Update this section's version numbers and the Prerequisites line.
+6. Update this section's version numbers and the Prerequisites line.
 
 **Notes still relevant if you touch the lowerer itself** (`crates/al-syntax/src/lower/mod.rs`,
 the one place that still reads raw grammar shapes):

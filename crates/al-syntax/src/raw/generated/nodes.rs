@@ -6774,6 +6774,29 @@ impl<'t> RawPreprocOpen<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocOperandPrefix<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocOperandPrefix<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocOperandPrefix {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn operand(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operand)
+    }
+    pub fn operator(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operator)
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocOrExpression<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocOrExpression<'t> {
     #[inline]
@@ -6933,6 +6956,31 @@ impl<'t> RawPreprocSplitCaseBranch<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocSplitCaseEndBranch<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitCaseEndBranch<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitCaseEndBranch {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Body)
+    }
+    pub fn following(self) -> Option<RawStatementBlock<'t>> {
+        self.0
+            .field(FieldName::Following)
+            .and_then(RawStatementBlock::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocSplitCaseExtended<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocSplitCaseExtended<'t> {
     #[inline]
@@ -6949,6 +6997,32 @@ impl<'t> RawPreprocSplitCaseExtended<'t> {
     }
     pub fn body(self) -> Option<RawNode<'t>> {
         self.0.field(FieldName::Body)
+    }
+    pub fn pattern(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Pattern)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitCaseStatementEnd<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitCaseStatementEnd<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitCaseStatementEnd {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawCaseBody<'t>> {
+        self.0.field(FieldName::Body).and_then(RawCaseBody::cast)
+    }
+    pub fn expression(self) -> Option<RawNode<'t>> {
+        self.0.field(FieldName::Expression)
     }
     pub fn pattern(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Pattern)
@@ -7384,6 +7458,96 @@ impl<'t> RawPreprocSplitProcedurePreamble<'t> {
             .children_by_field(FieldName::ReturnValue)
             .into_iter()
             .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitReportBraceClose<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitReportBraceClose<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitReportBraceClose {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitReportDataitemHeader<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitReportDataitemHeader<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitReportDataitemHeader {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawReportBody<'t>> {
+        self.0.field(FieldName::Body).and_then(RawReportBody::cast)
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn table_name(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::TableName)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitReportDataitemOpenOverEndif<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitReportDataitemOpenOverEndif<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitReportDataitemOpenOverEndif {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn conditional_body(self) -> Option<RawReportBody<'t>> {
+        self.0
+            .field(FieldName::ConditionalBody)
+            .and_then(RawReportBody::cast)
+    }
+    pub fn name(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .field(FieldName::Name)
+            .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+    pub fn shared_body(self) -> Option<RawReportBody<'t>> {
+        self.0
+            .field(FieldName::SharedBody)
+            .and_then(RawReportBody::cast)
+    }
+    pub fn table_name(self) -> Vec<IdentifierOrIntegerOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::TableName)
+            .into_iter()
+            .filter_map(IdentifierOrIntegerOrQuotedIdentifier::cast)
             .collect()
     }
 }
