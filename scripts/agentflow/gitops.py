@@ -42,6 +42,13 @@ class Git:
     def is_clean(self) -> bool:
         return self.out("status", "--porcelain") == ""
 
+    def tracked_dirty(self) -> bool:
+        """Like `is_clean`, but ignores untracked paths -- a probe for a TRACKED
+        file left modified (e.g. a build touching Cargo.lock), not for whatever
+        untracked artifacts the caller's own tooling may have just created
+        (log files, __pycache__, ...)."""
+        return self.out("status", "--porcelain", "--untracked-files=no") != ""
+
     def branch(self) -> str:
         return self.out("rev-parse", "--abbrev-ref", "HEAD")
 

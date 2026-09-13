@@ -13,6 +13,18 @@ def test_basic_queries(repo_pair):
     assert g.is_ancestor(a, b) and not g.is_ancestor(b, a)
 
 
+def test_tracked_dirty_ignores_untracked_but_sees_modified_tracked_files(repo_pair):
+    origin, clone = repo_pair
+    g = Git(clone)
+    assert not g.tracked_dirty()
+    (clone / "untracked.txt").write_text("x\n")
+    assert not g.tracked_dirty()  # untracked: not tracked-dirty
+    assert not g.is_clean()       # but the plain porcelain check DOES see it
+    (clone / "untracked.txt").unlink()
+    (clone / "README.md").write_text("changed\n")
+    assert g.tracked_dirty()      # a modified TRACKED file: dirty
+
+
 def test_worktree_add_and_prune(repo_pair, tmp_path):
     origin, clone = repo_pair
     g = Git(clone)

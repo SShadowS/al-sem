@@ -288,7 +288,7 @@ def cmd_post_merge(args, ctx, gh, git):
     if not git.ff("origin/master"):
         raise Fail({"error": "master does not fast-forward to origin/master"})
     results: dict = {}
-    ok, revert, restore_failed = True, None, None
+    ok, revert, restore_failed, original_exc = True, None, None, None
     try:
         # The merge-SHA checkout and the docs-only probe are themselves git
         # writes on the shared checkout; if either raises, the `finally`
@@ -315,25 +315,35 @@ def cmd_post_merge(args, ctx, gh, git):
                 ok, revert = False, asdict(out)
                 break
         else:
-            # All gates passed on their own terms; a gate that leaves a
-            # tracked file modified (e.g. a build touching Cargo.lock) is
-            # itself a regression the next tick's preflight would otherwise
-            # report unexplained as `tree-dirty` (Important 3).
-            if not git.is_clean():
+            # All gates passed on their own terms; a TRACKED file left
+            # modified (e.g. a build touching Cargo.lock) is itself a
+            # regression -- untracked artifacts the gates' OWN run just
+            # created (log files under .agent/runs, __pycache__, ...) must
+            # NOT trip this, or every successful merge gets reverted.
+            if git.tracked_dirty():
                 results["tree-dirty-after-gates"] = 1
                 out = recovery.post_merge_failure(ctx, git, gh, args.issue, args.merge_sha, rerun_all)
                 ok, revert = False, asdict(out)
+    except AssertionError:
+        raise  # a test double's invariant violation must never become a JSON payload
+    except Exception as e:
+        ok, original_exc = False, e
     finally:
         # A failed restore must not raise and discard the verdict computed
-        # above (Important 3) -- it becomes a field on the emitted JSON.
+        # above -- it becomes a field on the emitted JSON either way, even
+        # when the try block itself already raised.
         try:
             git.checkout("master")
-        except GitError as e:
+        except Exception as e:
             restore_failed = str(e)
     payload = {"ok": ok, "gates": results, "revert": revert}
     if restore_failed is not None:
         payload["restore_failed"] = restore_failed
+        if original_exc is not None:
+            raise Fail(payload, 1)
         return _emit(payload, 1)
+    if original_exc is not None:
+        raise original_exc
     return _emit(payload, 0 if ok else 1)
 
 
@@ -345,7 +355,13 @@ def cmd_file_discoveries(args, ctx, gh, git):
 
 
 def cmd_cleanup(args, ctx, gh, git):
-    lock.check_fence(ctx)
+    # Fenced like `run`, not like `post-merge`: the documented flow is
+    # finish (which releases the lock) THEN cleanup, so an absent lock is the
+    # normal case here, not a violation -- only a lock naming ANOTHER run
+    # is refused.
+    lk = lock.read(ctx)
+    if lk is not None and lk.run_id != ctx.run_id:
+        raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
     recovery.remove_worktree(ctx, git, Path(args.worktree), args.branch, ctx.paths.root.parent, args.merge_sha)
     return _emit({"removed": args.worktree})
 
@@ -437,11 +453,14 @@ def main(argv: list[str], gh_run=None, git_run=None) -> int:
     args = build_parser().parse_args(argv)
     if args.cmd == "run" and args.child and args.child[0] == "--":
         args.child = args.child[1:]
-    ctx = _ctx(args)
-    gh_kw = {"run": gh_run} if gh_run else {}
-    gh = Gh(ctx, args.repo, **gh_kw)
-    git = Git(ctx.paths.root, run=git_run) if git_run else Git(ctx.paths.root)
     try:
+        # Construction lives inside the try too: a bad --root, a broken
+        # AGENTFLOW_NOW, or any other setup failure must still emit one JSON
+        # object rather than a bare traceback.
+        ctx = _ctx(args)
+        gh_kw = {"run": gh_run} if gh_run else {}
+        gh = Gh(ctx, args.repo, **gh_kw)
+        git = Git(ctx.paths.root, run=git_run) if git_run else Git(ctx.paths.root)
         return args.fn(args, ctx, gh, git)
     except Fail as f:
         return _emit(f.payload, f.code)
@@ -450,6 +469,10 @@ def main(argv: list[str], gh_run=None, git_run=None) -> int:
     except (lock.LockHeld, lock.FenceError, lock.HaltError, GhError, GitError, budget.BudgetExceeded,
             budget.DeadlineExceeded, RuntimeError) as e:
         return _emit({"error": f"{type(e).__name__}: {e}"}, 1)
+    except AssertionError:
+        # A test double's own invariant violation (e.g. FakeRunner's readonly
+        # guard) must escape uncaught, not be laundered into a JSON payload.
+        raise
     except Exception as e:
         # No subcommand may exit without one JSON object on stdout -- an
         # unanticipated exception (KeyError, malformed JSON input, a missing

@@ -9,6 +9,13 @@ def test_sanitized_env_drops_regen_and_sets_flags():
     assert env["ALSEM_NO_PREFLIGHT_CACHE"] == "1" and env["TREE_SITTER_AL_PATH"] == "/g" and env["PATH"] == "p"
 
 
+def test_sanitized_env_drops_agentflow_now():
+    # AGENTFLOW_NOW is the CLI's test-only clock seam; it must never leak into
+    # a gate child, or an operator who exports it freezes every heartbeat.
+    env = supervise.sanitized_env({"AGENTFLOW_NOW": "1000000.0", "PATH": "p"}, tree_sitter_path="/g")
+    assert "AGENTFLOW_NOW" not in env
+
+
 def test_run_captures_exit_code_and_log(ctx, tmp_path):
     log = tmp_path / "x.log"
     r = supervise.run(ctx, [sys.executable, "-c", "print('hello'); raise SystemExit(3)"], cwd=tmp_path,

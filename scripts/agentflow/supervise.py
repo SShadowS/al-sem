@@ -19,7 +19,7 @@ from typing import Callable
 
 from .state import Ctx
 
-DROP_ENV = ("REGEN_TEMP_GOLDENS",)
+DROP_ENV = ("REGEN_TEMP_GOLDENS", "AGENTFLOW_NOW")
 
 
 @dataclass

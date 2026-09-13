@@ -172,18 +172,107 @@ def test_post_merge_happy_path_restores_master_and_reports_ok(capsys, repo_pair,
     _, clone = repo_pair
     monkeypatch.setattr(cli, "GATES", [("noop", [sys.executable, "-c", "pass"], 1)])
     monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
-    # `.agent/` is the executor's own state directory; it is not yet
-    # gitignored in this fixture repo (a known, separately-tracked gap --
-    # Task 17 adds `.agent/*`), so the gates' own log-file writes under it
-    # would otherwise make the new post-gate git.is_clean() check (Important
-    # 3) spuriously fail on something unrelated to the property under test.
-    commit_file(clone, ".gitignore", ".agent/\n", "ignore executor state")
-    assert Git(clone).push("origin", "master")
     merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
     assert Git(clone).push("origin", "master")
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    # Fix round 2, finding 1: an untracked file -- exactly what the
+    # executor's own gates leave behind (log files under .agent/runs,
+    # __pycache__, ...) -- must NOT trip the post-gate cleanliness probe.
+    # No `.gitignore` accommodation is needed any more: tracked_dirty()
+    # ignores untracked paths outright.
+    (clone / "untracked-artifact.log").write_text("noise\n")
     code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=FakeRunner())
     assert code == 0 and out["ok"] is True and out["revert"] is None
     assert out["gates"] == {"noop": 0, "noop-cdo": 0}
     assert Git(clone).branch() == "master"
-    assert Git(clone).is_clean()
+    assert not Git(clone).tracked_dirty()
+
+
+def test_post_merge_reverts_when_a_gate_leaves_a_tracked_file_modified(capsys, repo_pair, monkeypatch):
+    # Fix round 2, finding 1's other half: a gate that leaves a TRACKED file
+    # modified (unlike the untracked artifact above) must still be caught,
+    # named `tree-dirty-after-gates`, and routed through the revert path.
+    _, clone = repo_pair
+    dirty_gate = [sys.executable, "-c", "open('README.md', 'a').write('x')"]
+    monkeypatch.setattr(cli, "GATES", [("dirty", dirty_gate, 1)])
+    monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    gh = FakeRunner({
+        "issue edit 8 --add-label agent-regressed": "",
+        "issue edit 8 --remove-label agent-working": "",
+        "issue comment 8 *": "",
+        "issue reopen 8": "",
+    })
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=gh)
+    assert code == 1
+    assert out["gates"]["tree-dirty-after-gates"] == 1
+    assert Git(clone).branch() == "master"
+
+
+def test_post_merge_reports_restore_failed_when_the_final_checkout_fails(capsys, repo_pair, monkeypatch):
+    # Fix round 2, finding 3: a failed restore-to-master must always surface
+    # as a `restore_failed` JSON field, never a bare exception.
+    _, clone = repo_pair
+    monkeypatch.setattr(cli, "GATES", [("noop", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "CDO_GATE", ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+
+    calls = {"master": 0}
+    original_checkout = Git.checkout
+
+    def flaky_checkout(self, ref):
+        if ref == "master":
+            calls["master"] += 1
+            if calls["master"] > 1:
+                raise RuntimeError("simulated restore failure")
+        return original_checkout(self, ref)
+
+    monkeypatch.setattr(Git, "checkout", flaky_checkout)
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=FakeRunner())
+    assert code == 1 and "restore_failed" in out and "simulated restore failure" in out["restore_failed"]
+
+
+def test_cleanup_succeeds_with_no_lock_and_removes_worktree(capsys, repo_pair):
+    # Fix round 2, finding 2: cleanup follows finish (which releases the
+    # lock), so an ABSENT lock is the normal case and must not be refused.
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-cleanup-a1"
+    g.worktree_add(wt, "issue/8-x-a1", "master")
+    commit_file(wt, "issue.txt", "x\n", "issue work")
+    merge_sha = g.merge_squash("issue/8-x-a1", "squash issue/8-x-a1")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-x-a1",
+                     "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="run-test")
+    assert code == 0 and out["removed"] == str(wt)
+    assert not wt.exists()
+
+
+def test_cleanup_refuses_foreign_lock_and_keeps_worktree(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-cleanup-a2"
+    g.worktree_add(wt, "issue/8-y-a1", "master")
+    commit_file(wt, "issue2.txt", "y\n", "issue work 2")
+    merge_sha = g.merge_squash("issue/8-y-a1", "squash issue/8-y-a1")
+    lock.acquire(Ctx(Paths(clone), run_id="owner-run"), 8, "s", 1)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-y-a1",
+                     "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
+    assert code == 1 and "FenceError" in out["error"]
+    assert wt.exists()
+
+
+def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):
+    # Pin I6: a lock owned by another run refuses `run` outright; no lock at
+    # all runs unsupervised and says so in the JSON.
+    lock.acquire(Ctx(Paths(root), run_id="owner-run"), 8, "s", 1)
+    code, out = run(capsys, root, "run", "--name", "probe", "--timeout", "1", "--",
+                     sys.executable, "-c", "print('x')", gh_run=FakeRunner(), run_id="other-run")
+    assert code == 1 and "FenceError" in out["error"]
+    lock.release(Ctx(Paths(root), run_id="owner-run"))
+    code, out = run(capsys, root, "run", "--name", "probe2", "--timeout", "1", "--",
+                     sys.executable, "-c", "print('x')", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 0 and out["supervised"] is False
