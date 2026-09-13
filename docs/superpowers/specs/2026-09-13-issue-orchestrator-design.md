@@ -349,9 +349,13 @@ render of the ledger becomes the PR body.
     The attestation is not a transcript of conductor assertions: `attest` refuses
     to write one unless this run's `claim.json` exists and its body hash matches,
     every required gate key is present with exit code `0` (`cdo-gate` included
-    unless the diff was docs-only), and the findings register has converged — no
-    `open` entry, both reviewers `accepted` on every entry, no blocking entry left
-    `deferred`. It binds the register's path as well as its hash — relative to
+    unless the diff was docs-only), and the findings register has converged — a
+    `disposition` from the closed set on every entry, none `open`, both reviewers
+    `accepted` on every entry, and no blocking entry left `deferred`. Blocking is
+    derived from the severity vocabulary the panel writes (`critical` or
+    `important`) or an explicit `blocking: true`, so the rule fires against the
+    registers the commands actually produce. It binds the register's path as
+    well as its hash — relative to
     the claim's worktree, since the attestation is published as a PR comment and
     must not carry a local absolute path — and the merge joins that path back
     onto the worktree and re-hashes the file, so a register edited afterwards is
@@ -359,8 +363,12 @@ render of the ledger becomes the PR body.
 13. **PR and merge** (executor). PR creation, the attestation comment, and every
     branch push go through the executor (`pr-create`, `pr-comment`,
     `push-branch`), so all three are inside the dry-run guard, the HALT check and
-    the run-id fence, their bodies are sanitized, and no refspec can name
-    `master`; `push-branch --force-with-lease` is the only force form in the flow.
+    the run-id fence, and their bodies are sanitized. `push-branch` takes a plain
+    branch NAME — never a refspec, an option, or a full ref — and pushes an
+    explicit `refs/heads/<name>:refs/heads/<name>`, so the destination ref is
+    built by the executor and can never be inferred from caller text;
+    `--force-with-lease` is the only force form in the flow and reaches only that
+    validated branch.
     The PR body is the sanitized ledger, with `Closes #N` only if the acceptance
     matrix is fully met. Required CI: the `ci.yml` workflow's checks must be
     PRESENT on the PR and all `success` — a `skipped`, `cancelled`, or missing

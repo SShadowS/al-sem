@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.agent/HALT` kill switch, per-issue budgets, evidence sanitizer, supervised
   gates with timeouts, crash-safe discovery filing), including PR creation, PR
   comments and branch pushes — `pr-create`, `pr-comment` and `push-branch`, the
-  last of which refuses any branch resolving to `master` and owns the one
-  permitted `--force-with-lease`. Spec:
+  last of which takes a plain branch name, refuses `master`, pushes an explicit
+  `refs/heads/<name>:refs/heads/<name>` so the destination cannot be inferred
+  from caller text, and owns the one permitted `--force-with-lease`. Spec:
   `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`.
 
 ### Changed

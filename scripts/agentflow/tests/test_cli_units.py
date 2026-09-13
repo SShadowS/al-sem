@@ -83,11 +83,26 @@ def test_loop_tick(capsys, root):
     assert code == 1
 
 
-def test_resolve_bash_prefers_the_env_override(monkeypatch):
+def test_resolve_bash_prefers_the_env_override(monkeypatch, tmp_path):
     # I1: an operator who knows which bash is right must be able to say so,
     # and nothing else may second-guess it.
-    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\tools\bash.exe")
-    assert cli.resolve_bash() == r"D:\tools\bash.exe"
+    override = tmp_path / "my-bash.exe"
+    override.write_text("")
+    monkeypatch.setenv("AGENTFLOW_BASH", str(override))
+    assert cli.resolve_bash() == str(override)
+
+
+def test_resolve_bash_ignores_an_override_that_is_not_a_file(monkeypatch):
+    # N4: a typo'd override used to be trusted, so preflight passed and the
+    # failure surfaced later as a FileNotFoundError out of Popen. An override
+    # that is not there is not an override.
+    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\nope\bash.exe")
+    monkeypatch.setattr(cli, "_git_exec_path", lambda: None)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/bash")
+    assert cli.resolve_bash() == "/usr/bin/bash"
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="no usable bash"):
+        cli.resolve_bash()
 
 
 def test_resolve_bash_rejects_the_wsl_launcher_on_path(monkeypatch):

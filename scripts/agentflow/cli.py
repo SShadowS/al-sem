@@ -43,12 +43,15 @@ def _git_exec_path() -> str | None:
 
 
 def resolve_bash() -> str:
-    """The bash the gates run under: `$AGENTFLOW_BASH`, else the one shipped with
-    the Git installation `git` itself runs from, else a `bash` on PATH that is
-    neither the WSL launcher nor a WindowsApps alias. No usable candidate is an
-    environment error, never a silent fallback to whatever PATH offers."""
+    """The bash the gates run under: `$AGENTFLOW_BASH` if it names a file that
+    exists, else the one shipped with the Git installation `git` itself runs
+    from, else a `bash` on PATH that is neither the WSL launcher nor a
+    WindowsApps alias. No usable candidate is an environment error, never a
+    silent fallback to whatever PATH offers. A typo'd override falls THROUGH
+    rather than being trusted, so it is reported by `preflight` instead of by
+    a FileNotFoundError out of `Popen` much later."""
     override = os.environ.get("AGENTFLOW_BASH")
-    if override:
+    if override and os.path.isfile(override):
         return override
     exec_path = _git_exec_path()
     if exec_path:
@@ -340,11 +343,22 @@ def _gate_failures(blob: dict, docs_only: bool) -> list[str]:
     return bad
 
 
+DISPOSITIONS = ("open", "fixed", "refuted", "deferred")
+BLOCKING_SEVERITIES = ("critical", "important")
+
+
 def _register_failures(entries) -> list[str]:
-    """Ids of findings-register entries that block a merge: still `open`, not
-    `accepted` by BOTH reviewers, or blocking-and-merely-`deferred`. Anything
-    that is not a list of entries is itself a failure -- an unreadable register
-    is never a converged one."""
+    """Ids of findings-register entries that block a merge: a `disposition` that
+    is missing or not one of the four documented states, one still `open`, one
+    not `accepted` by BOTH reviewers, or a blocking finding merely `deferred`.
+    Anything that is not a list of entries is itself a failure -- an unreadable
+    register is never a converged one.
+
+    "Blocking" is derived from the severity vocabulary the panel actually
+    writes (`critical`/`important`, case-insensitively), or an explicit
+    `blocking: true`. Matching the literal word "blocking" instead meant the
+    rule could not fire against any register the commands produce, so a
+    Critical finding both reviewers accepted as deferred merged."""
     if not isinstance(entries, list):
         return ["<register is not a JSON list of entries>"]
     bad = []
@@ -355,12 +369,15 @@ def _register_failures(entries) -> list[str]:
         eid = str(e.get("id", f"#{i}"))
         reviews = e.get("reviews")
         marks = [reviews.get("astra"), reviews.get("flash")] if isinstance(reviews, dict) else [None, None]
-        blocking = e.get("blocking") is True or str(e.get("severity", "")).strip().lower() == "blocking"
-        if e.get("disposition") == "open":
+        disposition = e.get("disposition")
+        blocking = e.get("blocking") is True or str(e.get("severity", "")).strip().lower() in BLOCKING_SEVERITIES
+        if disposition not in DISPOSITIONS:
+            bad.append(eid)  # missing or unknown: a malformed register, not a pass
+        elif disposition == "open":
             bad.append(eid)
         elif marks != ["accepted", "accepted"]:
             bad.append(eid)
-        elif blocking and e.get("disposition") == "deferred":
+        elif blocking and disposition == "deferred":
             bad.append(eid)
     return bad
 
@@ -558,12 +575,13 @@ def cmd_file_discoveries(args, ctx, gh, git):
     lock.require_not_halted(ctx)  # issue filing is refused under HALT
     # The whole file is scanned before it is parsed: every field in it is
     # published verbatim to a public repository, and a violation anywhere means
-    # the conductor's own rule failed, so none of it is trustworthy. `file_all`
-    # scans each rendered body again -- that is the guard that survives a
-    # future caller who does not come through this subcommand.
-    _scan_or_fail(Path(args.file).read_text(encoding="utf-8", errors="replace"))
-    raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
-    ds = [discoveries.Discovery(**d) for d in raw]
+    # the conductor's own rule failed, so none of it is trustworthy. ONE read,
+    # so the scanned bytes are provably the parsed bytes rather than only
+    # probably. `file_all` scans each rendered body again -- that is the guard
+    # that survives a future caller who does not come through this subcommand.
+    text = Path(args.file).read_text(encoding="utf-8")
+    _scan_or_fail(text)
+    ds = [discoveries.Discovery(**d) for d in json.loads(text)]
     return _emit({"filed": discoveries.file_all(ctx, gh, ds, args.session)})
 
 
@@ -584,12 +602,36 @@ def _body_or_fail(path: str) -> str:
     return body
 
 
+def _validate_branch_name(git: Git, name: str) -> None:
+    """`--branch`/`--head` must be a PLAIN branch name: not a refspec, not an
+    option, not a fully-qualified ref. This is the guard that matters most in the
+    package. A colon in a push argument means "push this local ref onto THAT
+    remote ref", so a one-sided `git push origin feat:master` moves remote
+    `master` -- and a name comparison never sees it, because `feat:master` is
+    neither `master` nor resolves to it. `refs/` spellings are refused as well:
+    the caller means a branch, and rejecting them keeps the two-sided refspec
+    `push_branch` builds well-formed."""
+    bad = (not name or name != name.strip() or any(c.isspace() for c in name)
+           or ":" in name or name.startswith("-") or name.startswith("refs/") or name == "HEAD")
+    if bad or not git.ok("check-ref-format", "--branch", name):
+        raise Fail({"error": "not a plain branch name", "branch": name})
+
+
 def cmd_pr_create(args, ctx, gh, git):
     _guard_external_write(ctx, "create PR")
     body = _body_or_fail(args.body_file)
-    if args.head.strip().removeprefix("refs/heads/") == "master":
-        raise Fail({"error": "refusing to open a PR from master"})
-    return _emit({"pr": gh.create_pr(args.title, body, args.head, args.base)})
+    head = args.head.strip()
+    if ":" in head:
+        # The cross-repo spelling, `owner:branch`. Only the branch half names a
+        # ref; GitHub owns the rest, so validate that half and no more.
+        _, _, branch = head.partition(":")
+        if branch.removeprefix("refs/heads/") == "master":
+            raise Fail({"error": "refusing to open a PR from master"})
+    else:
+        if head.removeprefix("refs/heads/") == "master":
+            raise Fail({"error": "refusing to open a PR from master"})
+        _validate_branch_name(git, head)
+    return _emit({"pr": gh.create_pr(args.title, body, head, args.base)})
 
 
 def cmd_pr_comment(args, ctx, gh, git):
@@ -601,15 +643,21 @@ def cmd_pr_comment(args, ctx, gh, git):
 def cmd_push_branch(args, ctx, gh, git):
     _guard_external_write(ctx, "push branch")
     g = Git(args.cwd) if args.cwd else git
-    name = args.branch.strip()
-    resolved = g.out("rev-parse", "--abbrev-ref", name) if g.ok("rev-parse", "--verify", name) else name
-    if "master" in (name.removeprefix("refs/heads/"), resolved):
-        # Nothing in code stopped a mistyped refspec from naming `master`
-        # while this was a conductor-side `git push`. Now something does.
+    name = args.branch
+    # Shape first, identity second: anything that is not a plain branch name is
+    # refused before `master` is even considered, because a refspec argument can
+    # reach `master` without ever containing a string that compares equal to it.
+    _validate_branch_name(g, name)
+    resolved = g.out("rev-parse", "--abbrev-ref", name) if g.ok("rev-parse", "--verify", f"refs/heads/{name}") else name
+    if "master" in (name, resolved):
         raise Fail({"error": "refusing to push master"})
+    # Read the head BEFORE the push. Reading it after meant a failure on this
+    # line reported a push that HAD happened as a refusal -- the same
+    # false-verdict shape the `mergeCommit` guard exists to prevent.
+    head = g.rev(f"refs/heads/{name}")
     if not g.push_branch(name, args.force_with_lease):
         raise Fail({"error": f"push of {name} was rejected"})
-    return _emit({"pushed": name, "head": g.rev(name)})
+    return _emit({"pushed": name, "head": head})
 
 
 def cmd_cleanup(args, ctx, gh, git):

@@ -65,9 +65,14 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
 5. **Spec panel.** `charge spec_rounds` per round (cap 3). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
    confirm/reject checklist; both reviewers in parallel. Maintain
-   `findings.json` as a list of `{id, source, round, file, line, severity,
-   text, disposition: open|fixed|refuted|deferred, evidence, hash,
-   reviews: {astra: accepted|re-raised|unreviewed, flash: …}}`. Each later round
+   `findings.json` as a list of `{id, source, round, file, line,
+   severity: critical|important|minor, text,
+   disposition: open|fixed|refuted|deferred, evidence, hash,
+   reviews: {astra: accepted|re-raised|unreviewed, flash: …}}`. Both
+   vocabularies are closed and the executor enforces them: `attest` refuses a
+   register whose `disposition` is missing or outside those four values, and
+   treats `critical` and `important` — or an explicit `blocking: true` — as
+   BLOCKING, which may not be merely `deferred`. Each later round
    sends the spec diff plus the register and asks each reviewer to mark every
    entry `accepted` or `re-raised`. Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
@@ -171,8 +176,11 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
       exit code and every one must be `0`; use the `--name` strings from step 9
       verbatim as the keys.
     - a findings register that has not converged (`register-not-converged`,
-      listing the entry ids): any entry still `open`, any entry not marked
-      `accepted` by BOTH reviewers, or any blocking entry left `deferred`.
+      listing the entry ids): any entry whose `disposition` is missing or not
+      one of `open|fixed|refuted|deferred`, any entry still `open`, any entry
+      not marked `accepted` by BOTH reviewers, or any blocking entry
+      (`severity` `critical` or `important`, or `blocking: true`) left
+      `deferred`.
 
     `attest` also records the register's path — relative to the claim's
     worktree, because the attestation is posted verbatim as a public PR comment

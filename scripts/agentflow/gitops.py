@@ -96,10 +96,17 @@ class Git:
         return self.ok("push", "-q", remote, refspec)
 
     def push_branch(self, branch: str, force_with_lease: bool = False) -> bool:
-        """Push one branch to `origin` and set its upstream. `--force-with-lease`
-        is the only force form the flow may ever use, and it is only reachable
-        from `cli.cmd_push_branch`, which refuses anything resolving to master."""
-        args = ["push", "-q", "-u"] + (["--force-with-lease"] if force_with_lease else []) + ["origin", branch]
+        """Push one branch to `origin` under an EXPLICIT two-sided refspec, so the
+        destination ref is built here and can never be inferred from caller text.
+        A one-sided `git push origin <arg>` reads a colon in `<arg>` as
+        "local:remote", which is how `feat:master` reaches remote `master`;
+        `refs/heads/<b>:refs/heads/<b>` cannot name anything but `<b>`.
+        `branch` must already be a validated plain branch name (see
+        `cli._validate_branch_name`) -- a name carrying a colon would otherwise
+        produce a malformed refspec. `--force-with-lease` is the only force form
+        the flow may ever use."""
+        refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+        args = ["push", "-q", "-u"] + (["--force-with-lease"] if force_with_lease else []) + ["origin", refspec]
         return self.ok(*args)
 
     def ff(self, ref: str) -> bool:

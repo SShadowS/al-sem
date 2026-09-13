@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+from pathlib import Path
 
 from agentflow import cli, lock, mergeops, recovery, supervise
 from agentflow.gitops import Git
@@ -106,25 +107,27 @@ def capture_child(monkeypatch):
     return seen
 
 
-def test_run_maps_a_literal_bash_child_to_the_resolved_interpreter(capsys, root, monkeypatch):
+def test_run_maps_a_literal_bash_child_to_the_resolved_interpreter(capsys, root, tmp_path, monkeypatch):
     # Residual (3): the /issue gates reach the executor as
     # `run --name … -- bash scripts/ci-steps all`. That literal `bash` is
     # resolved by CreateProcess against the inherited PATH, which from
     # PowerShell is the WSL launcher -- the same red-gate-on-every-issue
     # failure resolve_bash() was introduced for.
-    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\tools\bash.exe")
+    bash = tmp_path / "my-bash.exe"
+    bash.write_text("")
+    monkeypatch.setenv("AGENTFLOW_BASH", str(bash))
     seen = capture_child(monkeypatch)
     code, out = run(capsys, root, "run", "--name", "probe", "--timeout", "1", "--",
                      "bash", "scripts/ci-steps", "all", gh_run=FakeRunner(), run_id="solo-run")
     assert code == 0 and out["exit_code"] == 0
-    assert seen["cmd"] == [r"D:\tools\bash.exe", "scripts/ci-steps", "all"]
+    assert seen["cmd"] == [str(bash), "scripts/ci-steps", "all"]
 
 
 def test_run_leaves_any_other_child_argv_alone(capsys, root, monkeypatch):
     # Only the exact token `bash` is rewritten: a child that already names its
     # interpreter -- including a bash by full path -- is passed through, or the
-    # mapping would be second-guessing a caller who was explicit.
-    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\tools\bash.exe")
+    # mapping would be second-guessing a caller who was explicit. No
+    # AGENTFLOW_BASH is needed: resolve_bash must never be consulted at all.
     seen = capture_child(monkeypatch)
     run(capsys, root, "run", "--name", "p1", "--timeout", "1", "--",
         sys.executable, "-c", "pass", gh_run=FakeRunner(), run_id="solo-run")
@@ -273,8 +276,17 @@ def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path
         ([{"id": "F1", "severity": "minor", "disposition": "open", "reviews": both}], "F1"),
         ([{"id": "F2", "severity": "minor", "disposition": "fixed",
            "reviews": {"astra": "accepted", "flash": "re-raised"}}], "F2"),
-        ([{"id": "F3", "severity": "blocking", "disposition": "deferred", "reviews": both}], "F3"),
-        ([{"id": "F4", "severity": "minor", "blocking": True, "disposition": "deferred", "reviews": both}], "F4"),
+        # N2: the blocking rule has to fire against the severities the panel
+        # actually writes. `critical` and `important` ARE blocking; a register
+        # only ever marked that way would otherwise deferred-and-merge a
+        # finding both reviewers accepted as deferred.
+        ([{"id": "F3", "severity": "Critical", "disposition": "deferred", "reviews": both}], "F3"),
+        ([{"id": "F4", "severity": "important", "disposition": "deferred", "reviews": both}], "F4"),
+        ([{"id": "F5", "severity": "minor", "blocking": True, "disposition": "deferred", "reviews": both}], "F5"),
+        # N3: `disposition` is required by the schema, so a missing or unknown
+        # one is a malformed register, not a silently-passing entry.
+        ([{"id": "F6", "severity": "minor", "reviews": both}], "F6"),
+        ([{"id": "F7", "severity": "minor", "disposition": "wontfix", "reviews": both}], "F7"),
     ):
         register.write_text(json.dumps(entries))
         code, out = attest(capsys, root, register)
@@ -588,6 +600,27 @@ def test_file_discoveries_refuses_a_file_carrying_a_customer_path(capsys, root, 
     assert gh.calls == []
 
 
+def test_file_discoveries_scans_the_same_bytes_it_parses(capsys, root, tmp_path, monkeypatch):
+    # N6: scanning one read and parsing another leaves the scanned bytes only
+    # probably equal to the published ones. One read, one string.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    f = tmp_path / "discoveries.json"
+    f.write_text("[]", encoding="utf-8")
+    reads = []
+    real_read_text = Path.read_text
+
+    def counting(self, *a, **kw):
+        if str(self) == str(f):
+            reads.append(str(self))
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+    code, out = run(capsys, root, "file-discoveries", str(f), "--session", "https://s",
+                     gh_run=FakeRunner({"issue list *": "[]"}))
+    assert code == 0 and out["filed"] == []
+    assert len(reads) == 1, reads
+
+
 def test_finish_refuses_a_reason_that_leaks_a_dependency_path(capsys, root):
     # C1: a spike answer and a block reason are both posted as issue comments.
     # The refusal must land BEFORE any label or comment, so a rejected text
@@ -658,6 +691,23 @@ def test_pr_create_refuses_master_as_head(capsys, repo_pair):
     assert gh.calls == []
 
 
+def test_pr_create_refuses_the_cross_repo_and_malformed_head_spellings(capsys, repo_pair):
+    # N5: `owner:master` is the cross-repo spelling of the same head, and a
+    # head that is not a plain branch name at all is a conductor error worth
+    # naming here rather than as a confusing error from GitHub.
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    body = clone / "body.md"
+    body.write_text("ledger\n")
+    gh = FakeRunner(readonly=True)
+    for head in ("SShadowS:master", "SShadowS:refs/heads/master", "refs/heads/master", "-x", "feat branch"):
+        arg = [f"--head={head}"] if head.startswith("-") else ["--head", head]
+        code, out = run(capsys, clone, "pr-create", "--title", "T", "--body-file", str(body),
+                         *arg, gh_run=gh)
+        assert code == 1 and "error" in out, head
+    assert gh.calls == []
+
+
 def test_pr_create_refuses_a_body_that_leaks_a_customer_path(capsys, repo_pair, monkeypatch):
     _, clone = repo_pair
     monkeypatch.setenv("CDO_WS", r"U:\Git\CDO")
@@ -706,10 +756,53 @@ def test_push_branch_refuses_master_and_anything_resolving_to_it(capsys, repo_pa
     g = Git(clone)
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
     before = g.rev("origin/master")
-    for ref in ("master", "refs/heads/master", "HEAD"):
-        code, out = run(capsys, clone, "push-branch", "--branch", ref, gh_run=FakeRunner(readonly=True))
-        assert code == 1 and out["error"] == "refusing to push master", ref
+    code, out = run(capsys, clone, "push-branch", "--branch", "master", gh_run=FakeRunner(readonly=True))
+    assert code == 1 and out["error"] == "refusing to push master"
     assert g.rev("origin/master") == before
+
+
+def test_push_branch_refuses_every_argument_that_is_not_a_plain_branch_name(capsys, repo_pair):
+    # N1 (Critical): a colon in a push argument means "push this local ref onto
+    # THAT remote ref". `feat:master` is not a ref, so a name comparison sees
+    # neither `master` nor anything resolving to it, and `git push origin
+    # <arg>` then moves remote master -- with --force-with-lease, destroying
+    # whatever was only there. The remote SHA is asserted around EVERY case,
+    # because a refusal that still wrote is the failure being guarded against.
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    g._run("checkout", "-q", "-b", "feat")
+    commit_file(clone, "src/x.rs", "x\n", "work only on feat")
+    g.checkout("master")
+    for ref in ("refs/heads/master", "HEAD", "feat:master", "HEAD:master",
+                "feat:refs/heads/master", "-x", "feat branch", "feat:feat"):
+        # `--branch=-x` rather than `--branch -x`: argparse refuses the spaced
+        # form as a usage error before the executor ever sees the value, so
+        # only the `=` form actually reaches the validator under test.
+        arg = [f"--branch={ref}"] if ref.startswith("-") else ["--branch", ref]
+        before = g.out("ls-remote", "origin", "refs/heads/master")
+        code, out = run(capsys, clone, "push-branch", *arg, gh_run=FakeRunner(readonly=True))
+        after = g.out("ls-remote", "origin", "refs/heads/master")
+        assert code == 1 and "error" in out, ref
+        assert after == before, f"remote master moved for {ref!r}"
+
+
+def test_push_branch_force_with_lease_cannot_reach_master_either(capsys, repo_pair):
+    # The same argument under --force-with-lease is the destructive variant:
+    # it would overwrite a commit that exists only on remote master.
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    commit_file(clone, "precious.txt", "only on remote master\n", "precious")
+    assert g.push("origin", "master")
+    precious = g.out("ls-remote", "origin", "refs/heads/master")
+    g._run("checkout", "-q", "-b", "feat", "HEAD~1")
+    commit_file(clone, "other.txt", "x\n", "diverged work")
+    g.checkout("master")
+    code, out = run(capsys, clone, "push-branch", "--branch", "feat:master", "--force-with-lease",
+                     gh_run=FakeRunner(readonly=True))
+    assert code == 1 and "error" in out
+    assert g.out("ls-remote", "origin", "refs/heads/master") == precious
 
 
 def test_push_branch_refuses_without_a_lock(capsys, repo_pair):
