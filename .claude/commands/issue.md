@@ -7,8 +7,19 @@ Take GitHub issue `$ARGUMENTS` (a number) from claimed to merged, per
 existing claim (`python scripts/agentflow status` shows a lock for this issue and
 `AGENTFLOW_RUN_ID` is set). Standalone use: run `claim` first, exactly as
 `/orchestrate` step 6 does. Never set `AGENTFLOW_NOW` — it exists only to freeze
-the executor's clock for tests. Any executor call that returns JSON with an
-`error` key is a stop: print it and return `blocked <error>`.
+the executor's clock for tests. An executor call that exits non-zero, or whose
+JSON has a TOP-LEVEL `error` key, stops this step: print it and return `blocked
+<error-or-reason>`. A per-item `error` field inside a list in an otherwise-ok
+reply (e.g. `file-discoveries`'s `filed[]`, where a per-discovery `error` is
+`null` on success) is informational, not a stop.
+
+**Invocation.** Every executor call in this file is `python scripts/agentflow
+--root <main checkout> --run-id "$AGENTFLOW_RUN_ID" <subcommand …>`, run FROM the
+main checkout (`U:\Git\al-call-hierarchy`) — even for work that lives in the
+worktree. A gate's own build/test commands run inside the worktree via that same
+call's `--cwd <worktree>`; the `agentflow` invocation itself never runs from
+inside the worktree. The lock, `HALT`, the budget file, and this run's directory
+all live under the MAIN checkout's `.agent/`, never the worktree's.
 
 Ledger: `<worktree>/.agent/issue-N/ledger.md`. Findings register:
 `<worktree>/.agent/issue-N/findings.json`. Both are committed; nothing else under
@@ -38,7 +49,8 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
      needed). Write the full answer under `## Answer` in the ledger and return
      `spike-answered`. Do not comment on the issue yourself; the orchestrator
      posts the answer and the label through `finish --outcome answered`.
-   - Bounded: a short design (a few paragraphs) in the ledger under `## Design`.
+   - Bounded: a short design (a few paragraphs) in the ledger under `## Design`,
+     then continue at step 3.
    - Architectural: continue to step 3.
 3. **Assumption probes.** List every fact the issue's Acceptance depends on (its
    Dependencies section and any "assumes" in the body). Verify each against real
@@ -65,13 +77,22 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    the fixture conventions from CLAUDE.md "Adding New AL Constructs" and
    "Testing Philosophy & Goldens", and the rule that a new golden family needs a
    seed file. Tests must compile and fail for the stated reason; capture the
-   failing output in the ledger. Do NOT commit them alone.
+   failing output in the ledger. Do NOT commit them alone — the pre-commit hook
+   runs `check-goldens` and rejects a red golden family, so a failing test
+   committed by itself (before its implementation lands) would block every
+   subsequent commit on this branch until they are committed together.
 7. **Plan.** `superpowers:writing-plans` to
-   `docs/superpowers/plans/<today>-issue-N-<slug>.md`. Count tasks; more than 12:
-   return `blocked plan-too-large` after commenting "split this issue" in the
-   ledger.
-8. **Implement.** `superpowers:subagent-driven-development`. Per task:
-   implementer `opus`, reviewer `sonnet`, review-fix `sonnet`. Every task prompt
+   `docs/superpowers/plans/<today>-issue-N-<slug>.md`. Charge `plan_tasks` once
+   per task in the plan (`python scripts/agentflow charge plan_tasks`) so the cap
+   is enforced by the executor, not by the conductor counting; the first
+   `exhausted` result is `blocked plan-too-large` — comment "split this issue" in
+   the ledger first.
+8. **Implement.** `superpowers:subagent-driven-development`. `halt-check` first;
+   if halted, write the ledger and return `blocked halted`. Per task: implementer
+   `opus`, reviewer `sonnet`, review-fix `sonnet` — call `python scripts/agentflow
+   beat` immediately before AND immediately after each of these three dispatches
+   (not only around the pi calls above; an `opus` implementer dispatch routinely
+   runs longer than the 30-minute staleness threshold). Every task prompt
    includes: TDD red then green; `discrimination-proof` for every new or changed
    test (record test, mutation patch, fail output, pass output, commit in the
    ledger's proof table); `rustfmt <file>` only; SOLID and DRY as review
@@ -80,22 +101,28 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    per dispatch; `charge task_attempts --sub <task-id>` per red-to-green attempt.
    Before each task's commit: `python scripts/agentflow check-diff --base master
    --head HEAD --issue N --cwd <worktree>`; any reason is `blocked <reason>`.
-9. **Repo gates**, from the worktree, each through the supervisor:
+9. **Repo gates.** `halt-check` first; if halted, write the ledger and return
+   `blocked halted`. From the worktree, each through the supervisor:
    `python scripts/agentflow run --name ci-steps-all --timeout 45 --cwd <worktree> -- bash scripts/ci-steps all`
    `python scripts/agentflow run --name check-goldens-coverage --timeout 5 --cwd <worktree> -- bash scripts/check-goldens --verify-coverage`
    `python scripts/agentflow run --name check-goldens --timeout 45 --cwd <worktree> -- bash scripts/check-goldens`
-   then `git status --porcelain` in the worktree must be empty. Each `run` result
-   carries `"supervised": true|false`; it must be `true` here (this run holds the
-   claim's lock) — `false` means the lock was lost or never held and the gate did
-   not run under supervision, which is `blocked lock-lost`, not a passed gate. A
-   moved golden: dispatch `golden-diff-triager`; only when every line is explained
-   run
+   then `git status --porcelain -- . ':!.agent'` in the worktree must be empty —
+   this excludes the issue's own `.agent/issue-N/ledger.md` and
+   `.agent/issue-N/findings.json`, which are written as you go and stay
+   uncommitted until step 12, so the gates only assert that nothing ELSE moved.
+   Each `run` result carries `"supervised": true|false`; it must be `true` here
+   (this run holds the claim's lock) — `false` means the lock was lost or never
+   held and the gate did not run under supervision, which is `blocked lock-lost`,
+   not a passed gate. A moved golden: dispatch `golden-diff-triager`; only when
+   every line is explained run
    `python scripts/agentflow run --name check-goldens-regen --timeout 45 --cwd <worktree> -- bash scripts/check-goldens --regen`
    and commit the regenerated files with the triage summary in the message;
    an unexplained line is a discovery and the golden is not blessed. If the diff
    is not docs-only:
    `python scripts/agentflow run --name cdo-gate --timeout 45 --cwd <worktree> -- bash scripts/cdo-gate`
-   and the north-star numbers in CLAUDE.md "Resolution Coverage" must hold. A new
+   — its exit code 0 is the check; `cdo-gate`'s own ratchets carry the north-star
+   numbers (CLAUDE.md's "Resolution Coverage" table is a point-in-time snapshot
+   the ratchets re-verify, not something to compare against directly). A new
    DEFAULT detector: run `/triage-wave` first; above 30% false positives it ships
    opt-in. Add the CHANGELOG entry under `## [Unreleased]`. Record every exit
    code and log path in the ledger.
@@ -106,12 +133,15 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     step 9's gates.
 11. **Rebase and re-gate.** `git fetch origin && git rebase origin/master` in the
     worktree. Conflicts: resolve once (`charge rebase_regate`), else `blocked
-    rebase-conflict`. After ANY rebase rerun step 9. If `git diff <old H> HEAD`
-    on non-evidence files is non-empty, run one more final-panel round. Record
-    `B = origin/master` and `H = HEAD` in the ledger.
-12. **Freeze.** Commit the ledger and `findings.json` (first
-    `python scripts/agentflow sanitize .agent/issue-N/ledger.md .agent/issue-N/findings.json`;
-    a violation is `blocked sanitize-failed`). Then
+    rebase-conflict`. After ANY rebase rerun step 9. If `git diff <the pre-rebase
+    HEAD> HEAD` on non-evidence files is non-empty, run one more final-panel
+    round. Record `B = origin/master` and `H = HEAD` in the ledger.
+12. **Freeze.** `halt-check` first; if halted, write the ledger and return
+    `blocked halted`. Commit the ledger and `findings.json` (first
+    `python scripts/agentflow sanitize <worktree>/.agent/issue-N/ledger.md <worktree>/.agent/issue-N/findings.json`
+    — absolute paths: `sanitize` resolves its arguments against the process's own
+    working directory, which per Invocation above is the main checkout, not the
+    worktree; a violation is `blocked sanitize-failed`). Then
     `python scripts/agentflow freeze-check --H <H> --issue N --cwd <worktree>` must be
     empty. `python scripts/agentflow attest --issue N --B <B> --H <H> --final-head
     <HEAD> --register <worktree>/.agent/issue-N/findings.json --gates '<json of
@@ -119,19 +149,31 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     `--body-hash` against this run's `claim.json` and refuses (`error`: body-hash
     mismatch) if the issue body changed since claim, so pass the claim's
     `body_hash` verbatim, never a freshly recomputed one.
-13. **PR and merge.** Push the branch (`git push -u origin <branch>`). Create the
-    PR with the sanitized ledger as body, title `<issue title> (#N)`, and
-    `Closes #N` ONLY if every acceptance-matrix row is met; otherwise return
-    `blocked acceptance-unmet` (no PR). Poll `gh pr checks <pr> --watch` through
-    the supervisor (`run --name ci-wait --timeout 45`). CI red: one fix
-    (`charge ci_fix`), then steps 9–12 again with a new attestation. Then
-    `python scripts/agentflow merge-gate --pr <pr>`; `base-moved` means one more
-    step 11 (`charge rebase_regate`); any other reason is `blocked <reason>`.
+13. **PR and merge.** `halt-check` first; if halted, write the ledger and return
+    `blocked halted` — never push, create a PR, or comment past this point while
+    halted. Push the branch (`git push -u origin <branch>`). Create the PR with
+    the sanitized ledger as body, title `<issue title> (#N)`, and `Closes #N`
+    ONLY if every acceptance-matrix row is met; otherwise return `blocked
+    acceptance-unmet` (no PR). Poll CI through the supervisor:
+    `python scripts/agentflow run --name ci-wait --timeout 45 --cwd <worktree> -- gh pr checks <pr> --watch`.
+    CI red: one fix (`charge ci_fix`), then steps 9–12 again with a new
+    attestation. Then `python scripts/agentflow merge-gate --pr <pr>`;
+    `base-moved` means one more step 11 (`charge rebase_regate`); any other
+    reason is `blocked <reason>`. Both the CI-fix path and the `base-moved` path
+    go back through step 11's rebase, which rewrites the ALREADY-pushed branch's
+    history — a plain `git push` would be rejected, so re-push it before
+    continuing: `git push --force-with-lease origin <branch>` (the only permitted
+    force form here, and only ever on this issue branch, never on `master`).
     Finally `python scripts/agentflow merge --pr <pr>`, which returns
     `{"merge_sha": …}` only once the gate has passed a second time internally —
     a refused merge instead returns `{"reasons": […]}` with exit 1, which is
     `blocked <reasons joined>`. On success, post the attestation JSON as a PR
     comment via `gh pr comment`. Print `merged <merge_sha>`.
+
+## Rules
+
+- `halt-check` before steps 8, 9, 12, and 13 (each stated inline above too).
+  Never push, create a PR, or comment when `halt-check` reports halted.
 
 ## Ledger sections (in this order)
 
