@@ -121,13 +121,32 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 9. **Post-merge check** (only on `merged`): `post-merge --issue N --merge-sha
    <sha>`. It checks out the merge SHA, runs `ci-steps all`, `check-goldens`, and
    `cdo-gate` (unless docs-only), and on red performs the validated revert,
-   labels `agent-regressed`, and writes HALT. If `ok` is false, OR the JSON
-   carries a `restore_failed` field (the main checkout could not be restored to
-   `master` and is left detached or dirty): print the `revert` outcome (and
-   `restore_failed` if present), call the push-notification tool with it, and
-   STOP the loop — a `restore_failed` means a human must look at the main
-   checkout before any further tick runs. If a discovery outside the issue's diff
-   caused the failure, add it to the discoveries file before step 10.
+   labels `agent-regressed`, and writes HALT. **This call always runs after a
+   merge, HALT or no HALT** — it is the emergency-rollback carve-out, and
+   skipping it because a human pressed HALT in the window between the merge and
+   this check would leave `master` carrying a commit that nothing verified and
+   nothing will revert.
+
+   If `ok` is false, OR the JSON carries a `restore_failed` field (the main
+   checkout could not be restored to `master` and is left detached or dirty):
+   1. Print the `revert` outcome (and `restore_failed` if present) and call the
+      push-notification tool with it.
+   2. Do NOT run step 10. Filing is refused under the HALT `post-merge` has just
+      set, and the regression comment `post-merge` already left on the issue is
+      the record a human needs.
+   3. Run `finish --issue N --outcome regressed` (no `--reason`). That outcome
+      changes no label — `post-merge` has already set `agent-regressed` — and
+      only does the local half: retain the run directory and release the lock,
+      so the next tick is stopped by HALT alone rather than by a stranded lock.
+   4. STOP the loop. A `restore_failed` additionally means a human must look at
+      the main checkout before any further tick runs.
+
+   This applies when step 9 is reached from step 1's recovery follow-through
+   too, and the `finish` above is then the ONLY terminal bookkeeping: step 1's
+   `--outcome blocked --reason recovery-followthrough-failed` fallback covers
+   its OTHER two calls, not this one. Running both would try to relabel an
+   issue `post-merge` has already marked `agent-regressed`, and the second
+   `finish` would fail anyway because the first released the lock.
 10. **Discoveries.** Write the issue's `## Discoveries` entries from the ledger to
     `.agent/runs/$AGENTFLOW_RUN_ID/discoveries.json` as a JSON array of
     `{subsystem, locator, symptom, kind, origin_issue, reproducer, pre_existing,
@@ -142,10 +161,16 @@ the recovered run's just-retained evidence directory — see step 1. Never set
     merged`. On `spike-answered`, first `cleanup --spike --worktree <path>
     --branch <branch>` (no `--merge-sha` for a spike — it never commits code;
     cleanup goes first for the same fencing reason as the merged path above),
-    then `finish --issue N --outcome answered --reason "<full text of the ##
-    Answer section from <worktree>/.agent/issue-N/ledger.md>"`. On other
-    `blocked` outcomes, just `finish --issue N --outcome blocked --reason R`
-    and leave the worktree in place.
+    then post the answer from a FILE, never as an argv argument: write the full
+    text of the `## Answer` section of `<worktree>/.agent/issue-N/ledger.md` to
+    `.agent/runs/$AGENTFLOW_RUN_ID/answer.md` (do this BEFORE `cleanup`, which
+    removes the worktree the ledger lives in) and run `finish --issue N
+    --outcome answered --reason-file .agent/runs/$AGENTFLOW_RUN_ID/answer.md`.
+    Multi-line markdown through two shells is fragile and a Windows command
+    line caps near 32 KB. `finish` scans that text and refuses
+    (`sanitize-failed`) if the probe's answer quotes a `CDO_WS` or
+    `.alpackages/` path. On other `blocked` outcomes, just `finish --issue N
+    --outcome blocked --reason R` and leave the worktree in place.
 12. **Report** a short table: issue, classification, outcome, PR, merge SHA or
     block reason, discoveries filed, caps used (from `status`). Under `/loop`,
     the next tick fires only if the outcome was not `regressed` and HALT is
@@ -153,11 +178,15 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 
 ## Rules
 
-- `halt-check` before steps 7, 9, 10, 11. If halted, finish the current step's
-  local work, then `finish --outcome blocked --reason halted` and STOP.
-- Never `--force` on any branch. The one exception lives in `/issue` step 13:
-  `--force-with-lease`, only on the issue branch, only right after a re-rebase,
-  never on `master`.
+- `halt-check` before steps 7, 10, 11. If halted, finish the current step's
+  local work, then `finish --issue N --outcome blocked --reason halted` and
+  STOP (`--issue` is required; without it the call is an argparse usage error
+  that exits 2 without releasing the lock). Step 9 is deliberately absent from
+  that list: `post-merge` always runs after a merge, HALT or not — see step 9.
+- Never `--force` on any branch. The one exception is `push-branch
+  --force-with-lease` in `/issue` step 13, only on the issue branch, only right
+  after a re-rebase. Never issue a `git push` yourself: `push-branch` is the
+  only path, and it refuses any branch that is — or resolves to — `master`.
 - Never edit `.agent/HALT` except through `set-halt`, never touch `scripts/`,
   `.claude/`, `.github/`, `CLAUDE.md`.
 - An executor call that exits non-zero, or whose JSON has a TOP-LEVEL `error` key,

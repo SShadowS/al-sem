@@ -234,10 +234,17 @@ Labels are a mirror for humans, not a lock. The lock is local:
    `scripts/ci-steps test`; push it to `master` only if those pass and
    `origin/master` still equals the merge SHA (a push rejected because `master`
    advanced is reported, not forced); reopen the issue; label it `agent-regressed`;
-   comment with the failing output and the revert SHA; file a bug if the failure is
-   outside the issue's diff; notify; stop the loop. A revert that conflicts, fails
-   its own gates, or cannot be pushed leaves `master` as is, posts exactly that,
-   notifies, and stops the loop; HALT is already set.
+   comment with the failing gate and the path of its retained log, plus the revert
+   SHA; notify; stop the loop. Nothing is FILED on this path: HALT is set by now
+   and issue filing is refused under HALT, so that comment is the record and a
+   human files any follow-up. A revert that conflicts, fails its own gates, or
+   cannot be pushed leaves `master` as is, posts exactly that, notifies, and stops
+   the loop; HALT is already set. This check always runs after a merge, HALT or
+   not — it is one of the two writes HALT permits, because a HALT pressed between
+   the merge and the check must not leave an unverified commit on `master`
+   unexamined. The tick then runs `finish --outcome regressed`, which changes no
+   label (the revert path already set `agent-regressed`) and only retains the run
+   directory and releases the lock.
 8. **Cleanup, then finish** (executor). File discoveries (see below). Cleanup runs
    **before** finish: `cleanup` refuses to act if `lock.json` names a different
    run (the same fencing as every mutating command). On `merged` it removes the
@@ -328,17 +335,37 @@ render of the ledger becomes the PR body.
     changed. One rebase re-gate is budgeted. The validated pair is `(B, H)`: `B` the
     `origin/master` commit rebased onto, `H` the head the gates and panel passed on.
 12. **Freeze.** The freeze boundary is set **after** step 11, so `H` is post-rebase.
-    The only commits allowed after `H` are evidence commits touching nothing but
-    the two `.agent/issue-N/` files; the executor asserts
+    The protected-path check runs once more over the whole approved diff (`B..H`)
+    immediately after the rebase and **before** the attestation — step 8's
+    per-task check cannot see the commits that steps 10 and 11 add, so this is
+    the only thing stopping a panel-fix edit from landing a protected path inside
+    the approved diff. The only commits allowed after `H` are evidence commits
+    touching nothing but the two `.agent/issue-N/` files; the executor asserts
     `git diff H..HEAD --name-only` is a subset of those two paths, so recording the
     approval cannot invalidate it. The committed ledger records `B` and `H` only;
     `final_head` (the evidence commit) lives solely in the attestation
-    `{issue, B, H, final_head, register_hash, gates, body_hash}`, which the executor
-    writes to the run directory and posts as a PR comment.
-13. **PR and merge** (executor). `gh pr create` with the sanitized ledger as body
-    and `Closes #N` only if the acceptance matrix is fully met. Required CI: the
-    `ci.yml` workflow's jobs all `success`; a `skipped`, `cancelled`, or missing
-    check is not green. One CI fix attempt allowed, independent of the rebase
+    `{issue, B, H, final_head, register_hash, register_path, gates, body_hash}`,
+    which the executor writes to the run directory and posts as a PR comment.
+    The attestation is not a transcript of conductor assertions: `attest` refuses
+    to write one unless this run's `claim.json` exists and its body hash matches,
+    every required gate key is present with exit code `0` (`cdo-gate` included
+    unless the diff was docs-only), and the findings register has converged — no
+    `open` entry, both reviewers `accepted` on every entry, no blocking entry left
+    `deferred`. It binds the register's path as well as its hash, and the merge
+    re-hashes that file, so a register edited afterwards is `register-changed`.
+13. **PR and merge** (executor). PR creation, the attestation comment, and every
+    branch push go through the executor (`pr-create`, `pr-comment`,
+    `push-branch`), so all three are inside the dry-run guard, the HALT check and
+    the run-id fence, their bodies are sanitized, and no refspec can name
+    `master`; `push-branch --force-with-lease` is the only force form in the flow.
+    The PR body is the sanitized ledger, with `Closes #N` only if the acceptance
+    matrix is fully met. Required CI: the `ci.yml` workflow's checks must be
+    PRESENT on the PR and all `success` — a `skipped`, `cancelled`, or missing
+    check is not green, and neither is a PR where only an unrelated workflow has
+    reported. The required workflow is identified by the `name:` of
+    `.github/workflows/ci.yml`; if that cannot be read, the gate refuses
+    (`ci-workflow-unknown`) rather than passing. One CI fix attempt allowed,
+    independent of the rebase
     budget; a CI fix is a code change, so it returns to step 11 (gates, one panel
     round, new `H`, new attestation). Immediately before merging, the executor
     re-fetches and requires **all** of: `origin/master == B` (the base is bound,

@@ -140,7 +140,16 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     HEAD> HEAD` on non-evidence files is non-empty, run one more final-panel
     round. Record `B = origin/master` and `H = HEAD` in the ledger.
 12. **Freeze.** `halt-check` first; if halted, write the ledger and return
-    `blocked halted`. Commit the ledger and `findings.json` (first
+    `blocked halted`. First re-run the protected-path check over the WHOLE
+    approved diff:
+    `python scripts/agentflow check-diff --base <B> --head <H> --issue N --cwd <worktree>`
+    — step 8 only ran it before each task commit, and steps 10 (panel fixes),
+    11 (rebase) and this step all add commits after that, so this is the only
+    thing standing between a panel-fix edit that adds `#[allow(` or touches
+    `scripts/` and the approved diff. Run it immediately after the rebase and
+    BEFORE `attest`; any reason is `blocked <reason>`.
+
+    Then commit the ledger and `findings.json` (first
     `python scripts/agentflow sanitize <worktree>/.agent/issue-N/ledger.md <worktree>/.agent/issue-N/findings.json`
     — absolute paths: `sanitize` resolves its arguments against the process's own
     working directory, which per Invocation above is the main checkout, not the
@@ -151,27 +160,63 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     step 9 exit codes>' --body-hash <claim body_hash>` — `attest` cross-checks
     `--body-hash` against this run's `claim.json` and refuses (`error`: body-hash
     mismatch) if the issue body changed since claim, so pass the claim's
-    `body_hash` verbatim, never a freshly recomputed one.
+    `body_hash` verbatim, never a freshly recomputed one. It refuses three more
+    things, all of which are conductor errors rather than surprises:
+    - no `claim.json` for this run (`no claim.json for this run`) — the run
+      directory and `--run-id` must be the claim's;
+    - `--gates` that is not all green (`gates-not-green`, listing the keys).
+      The JSON must carry `ci-steps-all`, `check-goldens-coverage` and
+      `check-goldens`, plus `cdo-gate` unless the diff was docs-only, in which
+      case pass `--docs-only` and omit that key. Every value is the gate's own
+      exit code and every one must be `0`; use the `--name` strings from step 9
+      verbatim as the keys.
+    - a findings register that has not converged (`register-not-converged`,
+      listing the entry ids): any entry still `open`, any entry not marked
+      `accepted` by BOTH reviewers, or any blocking entry left `deferred`.
+
+    `attest` also records the register's absolute path, and `merge` re-hashes
+    that file — so do not edit `findings.json` after attesting, or the merge
+    refuses with `register-changed`.
 13. **PR and merge.** `halt-check` first; if halted, write the ledger and return
     `blocked halted` — never push, create a PR, or comment past this point while
-    halted. Push the branch (`git push -u origin <branch>`). Create the PR with
-    the sanitized ledger as body, title `<issue title> (#N)`, and `Closes #N`
-    ONLY if every acceptance-matrix row is met; otherwise return `blocked
-    acceptance-unmet` (no PR). Poll CI through the supervisor:
+    halted. The push, the PR and the PR comment all go through the executor;
+    never run `git push` or `gh` yourself here. Each of the three refuses under
+    `--dry-run`, under HALT, and unless the lock names this run, and the two
+    that publish text scan it first (a violation is `blocked sanitize-failed`).
+
+    Push the branch:
+    `python scripts/agentflow push-branch --branch <branch> --cwd <worktree>`
+    — it refuses any branch that is, or resolves to, `master`.
+
+    Create the PR with the sanitized ledger as body, title `<issue title> (#N)`,
+    and `Closes #N` ONLY if every acceptance-matrix row is met; otherwise return
+    `blocked acceptance-unmet` (no PR):
+    `python scripts/agentflow pr-create --title "<issue title> (#N)" --body-file <path to the PR body> --head <branch>`
+    (`--base` defaults to `master`). It replies `{"pr": <n>}`.
+
+    Poll CI through the supervisor:
     `python scripts/agentflow run --name ci-wait --timeout 45 --cwd <worktree> -- gh pr checks <pr> --watch`.
     CI red: one fix (`charge ci_fix`), then steps 9–12 again with a new
     attestation. Then `python scripts/agentflow merge-gate --pr <pr>`;
     `base-moved` means one more step 11 (`charge rebase_regate`); any other
-    reason is `blocked <reason>`. Both the CI-fix path and the `base-moved` path
-    go back through step 11's rebase, which rewrites the ALREADY-pushed branch's
-    history — a plain `git push` would be rejected, so re-push it before
-    continuing: `git push --force-with-lease origin <branch>` (the only permitted
-    force form here, and only ever on this issue branch, never on `master`).
+    reason is `blocked <reason>` — including `ci-workflow-unknown`, which means
+    the executor could not read the required workflow's name from
+    `.github/workflows/ci.yml` and so cannot tell a green PR from one whose CI
+    has not started, and `register-changed`, which means `findings.json` moved
+    after the attestation. Both the CI-fix path and the `base-moved` path go
+    back through step 11's rebase, which rewrites the ALREADY-pushed branch's
+    history — a plain push would be rejected, so re-push with the one permitted
+    force form, and only ever on this issue branch:
+    `python scripts/agentflow push-branch --branch <branch> --cwd <worktree> --force-with-lease`.
+
     Finally `python scripts/agentflow merge --pr <pr>`, which returns
     `{"merge_sha": …}` only once the gate has passed a second time internally —
     a refused merge instead returns `{"reasons": […]}` with exit 1, which is
     `blocked <reasons joined>`. On success, post the attestation JSON as a PR
-    comment via `gh pr comment`. Print `merged <merge_sha>`.
+    comment, using the `path` that `attest` replied with
+    (`.agent/runs/$AGENTFLOW_RUN_ID/attestation.json`):
+    `python scripts/agentflow pr-comment --pr <pr> --body-file <that path>`.
+    Print `merged <merge_sha>`.
 
 ## Rules
 

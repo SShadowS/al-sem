@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attestation, base+head+body-bound squash-merge). Every mutation runs through the
   tested executor `scripts/agentflow/` (lock with heartbeat and run-id fence,
   `.agent/HALT` kill switch, per-issue budgets, evidence sanitizer, supervised
-  gates with timeouts, crash-safe discovery filing). Spec:
+  gates with timeouts, crash-safe discovery filing), including PR creation, PR
+  comments and branch pushes — `pr-create`, `pr-comment` and `push-branch`, the
+  last of which refuses any branch resolving to `master` and owns the one
+  permitted `--force-with-lease`. Spec:
   `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`.
 
 ### Changed
