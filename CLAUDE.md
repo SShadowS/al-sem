@@ -72,9 +72,13 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al **v4.0.1** grammar (included as a git submodule at `tree-sitter-al/`,
+- tree-sitter-al **v4.3.0** grammar (included as a git submodule at `tree-sitter-al/`,
   pinned in the superproject's index; CI instead checks out the grammar repo's `main`
   branch unpinned — see the Grammar section below)
+  - **Standing policy: track the newest grammar.** We own `SShadowS/tree-sitter-al`, so
+    the pin exists for reproducibility, NOT to hold a version back. When `main` moves,
+    bump the pin — do not let it drift (it sat 3 releases behind for 4 days and left CI
+    red the whole time). See "Upgrading the grammar" below for the exact steps.
   - Clone with `git clone --recurse-submodules`, or run `git submodule update --init` after clone
   - **Git worktrees do not get their own submodule checkout.** From a worktree, either
     run `git submodule update --init` there too, or set `TREE_SITTER_AL_PATH` to point
@@ -296,13 +300,26 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.0.1)
+## Grammar (tree-sitter-al v4.3.0)
 
-**Current reality:** the grammar is **v4.0.1** (`tree-sitter-al/package.json`; the pin
+**Current reality:** the grammar is **v4.3.0** (`tree-sitter-al/package.json`; the pin
 sits at the grammar repo's `main` tip, matching what unpinned CI checks out). v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
 fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
-variable names — zero named-kind movement (`gen-syntax` hash unchanged).
+variable names. v4.1.0/v4.2.0/v4.3.0 (all 2026-09-09) are three parse-SHAPE corrections:
+a single-entry `Implementation` mapping is an `implementation_value` and not a
+comparison; `CalcFormula` aggregates and `order()` views are not calls while
+`Continue(X)` is a call and not the statement; and a negative literal in a property is
+one signed literal and not a `unary_expression`.
+
+**None of these moved the VOCABULARY.** `NAMED_KIND_COUNT` has been 467 across all four
+releases, so `gen-syntax` rewrites only the `node-types.json` hash constant — no new
+`RawKind` variant, so `kind_policy.rs`'s exhaustive match is untouched. The
+v4.0.1 -> v4.3.0 upgrade was measured on 2026-09-13 by running the ENTIRE workspace
+suite (`cargo test --workspace --no-fail-fast`, ~2500 tests) on both grammars back to
+back: every single test outcome was identical. Zero goldens moved. Treat that as the
+measured precedent it is, not as a rule — a future grammar release CAN move shapes, and
+the same two-sided measurement is how you find out.
 The submodule pointer in this repo's git index is pinned to a specific
 commit (reproducible local/dev builds); CI instead checks out `SShadowS/tree-sitter-al`
 `main` **unpinned** (`.github/workflows/ci.yml`) so a breaking grammar change surfaces
@@ -315,6 +332,30 @@ tree-sitter-query architecture (see History below) no longer applies to engine c
 all — the IR's `Block`/`Stmt` items are already flattened once, at the lowering
 boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
 wrapper node.
+
+**Upgrading the grammar (the checklist the 2026-09-13 v4.3.0 bump followed):**
+
+1. `cd tree-sitter-al && git fetch origin && git checkout <new tip>` — the submodule.
+2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
+   `node-types.sha256` sidecar. Skipping this is not an option: `crates/al-syntax/build.rs`
+   sha256s the grammar's `node-types.json` and PANICS on mismatch, so the build refuses
+   before a single test runs.
+3. **Bump `CACHE_VERSION_GRAMMAR`** (`src/engine/gate/cache_prune.rs`) and its mirror in
+   `tests/cli/cli_c_cache_differential.rs`, plus the `grammar` stamp in the two
+   `tests/cli-c-goldens/cache/fixture-cache/` artifacts that carry the CURRENT tuple
+   (`1234...` and `cafecafe...`; `babebabe...` is deliberately stale). The `cafecafe`
+   Kept fixture's `artifactContentHash` is a sha256 over its own raw text, so it must be
+   RECOMPUTED after the stamp changes — edit the stamp, then rehash. This constant keys
+   dependency-cache invalidation: leave it stale and caches minted under the old grammar
+   are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
+   is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
+   it** — run `cargo test -p al-sem --lib` too.
+4. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
+   the per-test outcomes; that is the only way to attribute a moved golden to the grammar
+   rather than to whatever else is in your diff. `gen-syntax` makes the revert cheap: check
+   the submodule back out, re-run it, and the vocabulary returns to the committed bytes —
+   no `git checkout --` of generated files needed.
+5. Update this section's version numbers and the Prerequisites line.
 
 **Notes still relevant if you touch the lowerer itself** (`crates/al-syntax/src/lower/mod.rs`,
 the one place that still reads raw grammar shapes):
