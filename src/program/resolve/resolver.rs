@@ -2164,6 +2164,13 @@ fn object_instance_framework_kind(kind: ObjectKind) -> Option<FrameworkKind> {
     match kind {
         ObjectKind::Page => Some(FrameworkKind::PageInstance),
         ObjectKind::Report => Some(FrameworkKind::ReportInstance),
+        // A `V: Query "Name"` variable's members (`Open`/`Read`/`Close`/...)
+        // unconditionally exist on every Query object. Added 2026-09-13 after
+        // 3 CDO sites resolved their RECEIVER to a workspace Query object and
+        // then found no catalog to look the member up in — see
+        // `member_catalog::ENTRY_DISPATCH_BUILTIN_IDS`'s doc for why the
+        // ENTRY-DISPATCH exclusion was never a reason to withhold the catalog.
+        ObjectKind::Query => Some(FrameworkKind::QueryInstance),
         _ => None,
     }
 }
@@ -2559,7 +2566,8 @@ pub(crate) fn resolve_member_with_args(
                 // (and, for Page/Report, absent from every visible
                 // extension's too). Fall through to the instance-builtin
                 // catalog for kinds that have one
-                // (Page→PageInstance, Report→ReportInstance), EXCLUDING only the
+                // (Page→PageInstance, Report→ReportInstance, Query→QueryInstance),
+                // EXCLUDING only the
                 // CurrPage-only `SaveRecord` (see `is_metadata_sensitive_instance_
                 // method`'s doc — argtype-dispatch-and-page-catalog plan, Task 1):
                 // every other Page/Report instance-catalog method (SetTableView/
@@ -3110,6 +3118,48 @@ pub fn emit_event_flow_edges(
 
 #[cfg(test)]
 mod tests {
+
+    /// The WIRING, not the catalog: `ObjectKind::Query` must map to a framework
+    /// kind, or a `V: Query "X"; V.Open()` site resolves its receiver and then
+    /// has no catalog to look the member up in — which is exactly how 3 CDO
+    /// sites became `Unknown(MemberNotFound)` and held the north-star metric
+    /// off zero (found 2026-09-13).
+    ///
+    /// This pins the LINK. `member_catalog`'s own tests pin the member SET; the
+    /// set being right is useless if nothing routes to it, and that is the half
+    /// that was actually missing.
+    ///
+    /// DISCRIMINATION PROOF (recorded 2026-09-13): delete the
+    /// `ObjectKind::Query => Some(FrameworkKind::QueryInstance)` arm in
+    /// `object_instance_framework_kind` so `Query` falls to `_ => None` — this
+    /// test FAILS (`left: None, right: Some(QueryInstance)`). Restore it — it
+    /// PASSES. Verified both directions.
+    #[test]
+    fn query_objects_route_to_the_query_instance_catalog() {
+        assert_eq!(
+            object_instance_framework_kind(ObjectKind::Query),
+            Some(FrameworkKind::QueryInstance),
+            "a Query object must reach an instance-builtin catalog"
+        );
+        // The end-to-end consequence: the three members CDO actually calls
+        // resolve through that catalog. Stated literally, so this survives any
+        // change to how the catalog is spelled.
+        for m in ["open", "read", "close"] {
+            let fk = object_instance_framework_kind(ObjectKind::Query)
+                .expect("Query must have a framework kind");
+            assert!(
+                member_builtin_id(MemberCatalogKind::Framework(&fk), m).is_some(),
+                "Query.{m}() must resolve via the instance catalog"
+            );
+        }
+        // Page/Report unchanged — the positive control that keeps a blanket
+        // `Some(..)` from passing this test.
+        assert_eq!(
+            object_instance_framework_kind(ObjectKind::Codeunit),
+            None,
+            "Codeunit still has no instance-builtin catalog"
+        );
+    }
     use super::*;
 
     use crate::engine::deps::symbol_reference::SubtypeTag;

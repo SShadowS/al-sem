@@ -320,6 +320,26 @@ static REPORT_INSTANCE: phf::Set<&'static str> = phf_set! {
     "validateandpreparelayout", "wordlayout", "wordxmlpart"
 };
 
+/// INSTANCE methods of the `Query` data type, per MS Learn's "Query data type"
+/// reference (retrieved 2026-09-13). Reached only via a variable's DECLARED
+/// object type (`V: Query "Name"`) — `object_instance_framework_kind` maps
+/// `ObjectKind::Query` here; there is no `CurrQuery` receiver-name singleton.
+///
+/// The page also lists five STATIC overloads (`SaveAsCsv`/`SaveAsJson`/
+/// `SaveAsXml` on the `Query` TYPE). Those are a different receiver surface and
+/// are deliberately NOT modelled — no measured population, and the doctrine here
+/// is to measure a population before building for it.
+///
+/// None of these dispatch into user code (they execute a platform query), so
+/// none belongs in `ENTRY_DISPATCH_BUILTIN_IDS` — see that const's doc, which
+/// is where the reasoning for excluding Query from the ENTRY-DISPATCH list was
+/// mistaken for a reason to give Query no catalog at all.
+static QUERY_INSTANCE: phf::Set<&'static str> = phf_set! {
+    "close", "columncaption", "columnname", "columnno", "getfilter",
+    "getfilters", "open", "read", "saveascsv", "saveasjson", "saveasxml",
+    "securityfiltering", "setfilter", "setrange", "topnumberofrows"
+};
+
 static SESSION: phf::Set<&'static str> = phf_set! {
     "applicationarea", "applicationidentifier", "bindsubscription",
     "currentclienttype", "currentexecutionmode", "defaultclienttype",
@@ -482,6 +502,7 @@ fn framework_lookup(fk: &FrameworkKind, method_lc: &str) -> bool {
         FrameworkKind::Dialog => DIALOG.contains(method_lc),
         FrameworkKind::PageInstance => PAGE_INSTANCE.contains(method_lc),
         FrameworkKind::ReportInstance => REPORT_INSTANCE.contains(method_lc),
+        FrameworkKind::QueryInstance => QUERY_INSTANCE.contains(method_lc),
         FrameworkKind::Session => SESSION.contains(method_lc),
         FrameworkKind::NavApp => NAVAPP.contains(method_lc),
         FrameworkKind::Database => DATABASE.contains(method_lc),
@@ -594,14 +615,25 @@ pub fn member_builtin_id(kind: MemberCatalogKind<'_>, method_lc: &str) -> Option
 ///   all (MS Learn: only Page/Report document a `RunModal` overload) and
 ///   `object_instance_framework_kind` (`resolver.rs:2137`) returns `None` for
 ///   `Codeunit` — there is no instance-builtin catalog for it to fall into.
-/// - **XmlPort/Query excluded:** `object_instance_framework_kind` returns
-///   `None` for both (no instance-builtin catalog exists for either kind in
-///   this file), and neither has a `Run`/`RunModal`-shaped member that
-///   dispatches into user code per MS Learn — `XmlPort.Import`/`Export`
-///   stream data through a declared XmlPort's OWN ports (not a fan-out into
-///   a NAMED target), and `Query.Open`/`ReadAndClear`-family members execute
-///   a platform query, never a callee's code. Neither is a member of this
-///   list.
+/// - **XmlPort/Query excluded from THIS list, for a reason about dispatch —
+///   not about member existence.** Neither has a `Run`/`RunModal`-shaped member
+///   that dispatches into user code per MS Learn: `XmlPort.Import`/`Export`
+///   stream data through a declared XmlPort's OWN ports (not a fan-out into a
+///   NAMED target), and `Query.Open`/`Read`/`Close` execute a platform query,
+///   never a callee's code. So neither belongs in this ENTRY-DISPATCH list.
+///
+///   **That is NOT a reason to give them no catalog, and treating it as one was
+///   a real defect** (2026-09-13): `object_instance_framework_kind` returned
+///   `None` for `ObjectKind::Query`, so `V: Query "X"; V.Open()` had no catalog
+///   to resolve against and became `Unknown(MemberNotFound)` — 3 such sites on
+///   CDO, the entire residual of the north-star metric. `QUERY_INSTANCE` above
+///   now supplies the members; they stay out of THIS list, which is correct.
+///   This is the same conflation the Page/Report catalog fixed once already —
+///   see `is_metadata_sensitive_instance_method`'s history note.
+///   **`XmlPort` still has no catalog** and will fail the same way the moment a
+///   workspace declares an XmlPort variable and calls `Import`/`Export` on it.
+///   Left unbuilt deliberately: zero measured population today, and this repo's
+///   standing rule is to measure the population before building for it.
 pub const ENTRY_DISPATCH_BUILTIN_IDS: &[&str] = &[
     "PageInstance::run",
     "PageInstance::runmodal",
@@ -624,6 +656,36 @@ pub fn is_entry_dispatch_builtin(id: &BuiltinId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `QUERY_INSTANCE` membership, per MS Learn's Query data type reference.
+    /// The wiring that routes a `Query` object here is pinned separately in
+    /// `resolver.rs` — a correct set nothing routes to is the failure mode that
+    /// actually occurred.
+    #[test]
+    fn query_instance_members_resolve() {
+        let kind = FrameworkKind::QueryInstance;
+        // The three CDO actually calls.
+        for m in ["open", "read", "close"] {
+            assert!(member_builtin(MemberCatalogKind::Framework(&kind), m));
+        }
+        // A representative spread of the rest of the documented surface.
+        for m in [
+            "setrange",
+            "setfilter",
+            "topnumberofrows",
+            "getfilters",
+            "saveasxml",
+        ] {
+            assert!(member_builtin(MemberCatalogKind::Framework(&kind), m));
+        }
+        // Not a Query member: `Find` is Record vocabulary, and catalogs must not
+        // accept a method merely because some other AL type has it.
+        assert!(!member_builtin(MemberCatalogKind::Framework(&kind), "find"));
+        assert!(!member_builtin(
+            MemberCatalogKind::Framework(&kind),
+            "notamethod"
+        ));
+    }
 
     #[test]
     fn json_object_members_resolve() {

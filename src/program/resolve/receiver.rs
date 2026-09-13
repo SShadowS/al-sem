@@ -237,6 +237,11 @@ pub enum FrameworkKind {
     // Page/Report singleton types (from receiver name, not declared type)
     PageInstance,
     ReportInstance,
+    // Query instance (from a variable's DECLARED type — `V: Query "Name"`),
+    // never a receiver name. Unlike Page/Report there is no `CurrQuery`
+    // singleton; the `Query.SaveAsXml(...)` STATIC form is a separate surface
+    // and is deliberately not modelled here (no measured population).
+    QueryInstance,
     // Platform singletons (from receiver name)
     Session,
     NavApp,

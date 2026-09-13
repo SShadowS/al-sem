@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Query` object variables had no instance-method catalog, so every member call
+  on one resolved as `Unknown(MemberNotFound)`.** `object_instance_framework_kind`
+  mapped only `Page`/`Report` to a framework kind; a `V: Query "Name"` receiver
+  resolved correctly to the workspace Query object and then had nothing to look the
+  member up in. Added `FrameworkKind::QueryInstance` plus the `QUERY_INSTANCE`
+  catalog (the 15 instance methods MS Learn documents for the Query data type).
+  - **This was the entire residual of the north-star metric.** On CDO it was 3 sites,
+    all in one routine (`AppResponses.Open()` / `.Read()` / `.Close()`), and
+    `primary real_unknown_rate` goes **0.0144% -> 0.0000%** with
+    `unknownByReason` now empty in both scopes. `resolvedCatalog` moves 6728 -> 6731:
+    exactly the three calls, nothing else.
+  - Not a regression — the construct is new CDO code, so nothing had exercised the
+    gap before. The same defect class was already fixed once for Page/Report
+    (`is_metadata_sensitive_instance_method`'s history note): a member EXCLUSION that
+    is correct for one purpose being read as a reason to withhold the catalog
+    entirely. Here the correct fact was that `Query.Open`/`Read`/`Close` never
+    dispatch into user code, so they rightly stay out of
+    `ENTRY_DISPATCH_BUILTIN_IDS` — which was never a reason to give Query no catalog.
+    That doc now says so explicitly.
+  - The `Query` TYPE's five STATIC `SaveAs*` overloads and `XmlPort`'s instance
+    members are both still unmodelled, deliberately: zero measured population, and
+    the standing rule here is to measure the population before building for it.
+    `XmlPort` will fail the same way the moment a workspace calls `Import`/`Export`
+    on an XmlPort variable.
+  - Tests pin the WIRING (`ObjectKind::Query` -> a framework kind) separately from
+    the member SET, because a correct set nothing routes to is precisely the failure
+    that occurred. Discrimination proof recorded: deleting the `ObjectKind::Query`
+    arm fails the wiring test with `left: None, right: Some(QueryInstance)`;
+    restoring it passes.
+
 ### Changed
 
 - **tree-sitter-al pin v4.3.0 -> v4.4.0** — the grammar release that fixes two REAL parse
