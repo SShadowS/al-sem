@@ -1,5 +1,4 @@
 import json
-import time
 
 from agentflow import cli, lock
 from agentflow.tests.conftest import FakeRunner
@@ -33,19 +32,26 @@ def test_halt_check_and_set(capsys, root):
     assert code == 0
 
 
-def test_charge_and_status(capsys, root, ctx):
+def test_charge_and_status(capsys, root, ctx, monkeypatch):
     from agentflow import budget
-    # claimed_at must be a REAL current timestamp, not the fixture's frozen
-    # clock: `run_cli` drives `cli.main`, which builds its own Ctx with the
-    # default (real) `time.time` clock, so budget.charge's wall-clock-deadline
-    # check compares against actual now(), not this fixture's now().
-    budget.init(ctx, claimed_at=time.time())
+    # AGENTFLOW_NOW is the clock seam cli._ctx honours: it lets this test hand
+    # cli.main the SAME frozen clock the `ctx` fixture used to write
+    # claimed_at, so budget.charge's wall-clock-deadline check compares a
+    # frozen `now()` against a frozen `claimed_at`, not a frozen `claimed_at`
+    # against the real wall clock (which would always exceed the 4h cap).
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    budget.init(ctx, claimed_at=ctx.now())
     code, out = run_cli(capsys, root, "charge", "ci_fix")
     assert code == 0 and out["remaining"] == 0
     code, out = run_cli(capsys, root, "charge", "ci_fix")
     assert code == 1 and out["exhausted"] == "ci_fix"
     code, out = run_cli(capsys, root, "status")
     assert out["budget"]["counts"] == {"ci_fix": 1}
+
+
+def test_charge_unknown_key_yields_json_not_traceback(capsys, root):
+    code, out = run_cli(capsys, root, "charge", "bogus_key")
+    assert code == 2 and "KeyError" in out["error"]
 
 
 def test_sanitize_command(capsys, root, tmp_path, monkeypatch):
