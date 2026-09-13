@@ -8,6 +8,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from agentflow.state import Ctx, Paths  # noqa: E402
+from agentflow.gitops import Git  # noqa: E402
 
 
 @pytest.fixture
@@ -67,3 +68,31 @@ class FakeRunner:
 @pytest.fixture
 def runner():
     return FakeRunner()
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+
+
+@pytest.fixture
+def repo_pair(tmp_path):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-b", "master", str(origin)], check=True, capture_output=True)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
+    _git(clone, "config", "user.email", "t@example.com")
+    _git(clone, "config", "user.name", "T")
+    _git(clone, "checkout", "-q", "-b", "master")
+    (clone / "README.md").write_text("hello\n")
+    _git(clone, "add", "README.md")
+    _git(clone, "commit", "-q", "-m", "init")
+    _git(clone, "push", "-q", "-u", "origin", "master")
+    return origin, clone
+
+
+def commit_file(repo: Path, name: str, text: str, msg: str) -> str:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", msg)
+    return Git(repo).rev("HEAD")
