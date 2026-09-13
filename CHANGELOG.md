@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A codeunit `OnRun` is now a classified root (#12).** `kinds_for` matched `kind ==
+  "trigger"` only for Table/TableExtension/Page/PageExtension/Report, so a Codeunit `OnRun` —
+  the routine `Codeunit.Run(id)` and the job-queue runner reach — received **no** classification
+  and was skipped by `classify_roots` entirely. A thirteenth root kind `onrun-codeunit` is
+  appended to `ROOT_KIND_VALUES` (appended, never inserted: `canonical_kinds` filters that array
+  in declaration order, so no existing kind's position in that order changes)
+  and emitted for a Codeunit trigger named `OnRun`. The predicate keys on `kind == "trigger"`,
+  never the name, so a default-access procedure called `OnRun` still classifies only as
+  `public-procedure`.
+
+  Goldens: 13 files move across two families, each a new `onrun-codeunit` classification or its
+  anchor -- `tests/cli-b-goldens/*/ws-d14-dead-routine.*` (11) and
+  `tests/r4f-goldens/ws-d50-{neg,pos}.rootclass.golden.json` (2, the `Codeunit.Run` workers).
+  No CDO-gated result moves.
+
+  Scope correction worth stating: this does **not** fix a general reachability blind spot.
+  `engine::l5::entry_points::find_entry_points` already selects any `trigger` routine
+  independently of `RootClassification`. What was missing is the root-classification-driven
+  surfaces — the r4f projection, `policy`'s `root.kinds` predicate, and `fingerprint --roots`
+  filtering.
+
+### Changed
+
+- **Published output: the digest and prove `routine.anchor` for a codeunit `OnRun` now points at
+  the declaration rather than at the first call site in its body (#12).** This is not a new rule
+  — `digest_cli.rs`'s three-tier precedence has always preferred a root classification's
+  `source_anchor`, falling through to the operation and call-site indexes only when absent. The
+  OnRun was the single unclassified outlier; in the pre-change goldens 35 of 35 classified
+  routines already anchored at tier 1. Consumers pinning that field will see it move.
+
 - **A declared reviewer stand-in for `agentflow attest`** (`scripts/agentflow/{cli,mergeops}.py`).
   `attest` required every findings-register entry to be `accepted` by `astra` and `flash`, read
   by name. On 2026-09-18 pi's single provider returned `429 quota exceeded` for every model it
