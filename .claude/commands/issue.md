@@ -69,10 +69,13 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    severity: critical|important|minor, text,
    disposition: open|fixed|refuted|deferred, evidence, hash,
    reviews: {astra: accepted|re-raised|unreviewed, flash: …}}`. Both
-   vocabularies are closed and the executor enforces them: `attest` refuses a
-   register whose `disposition` is missing or outside those four values, and
-   treats `critical` and `important` — or an explicit `blocking: true` — as
-   BLOCKING, which may not be merely `deferred`. Each later round
+   vocabularies are closed and the executor refuses an entry whose `severity`
+   or `disposition` is missing or outside them — an unrecognised word is a
+   malformed entry, never a silently non-blocking one. It treats `critical`
+   and `important` — or an explicit `blocking: true` — as BLOCKING, which may
+   not be merely `deferred`. Normalise a reviewer's own wording (a panel that
+   says "High" or "Blocker") into the three words before writing the register.
+   Each later round
    sends the spec diff plus the register and asks each reviewer to mark every
    entry `accepted` or `re-raised`. Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
@@ -176,7 +179,8 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
       exit code and every one must be `0`; use the `--name` strings from step 9
       verbatim as the keys.
     - a findings register that has not converged (`register-not-converged`,
-      listing the entry ids): any entry whose `disposition` is missing or not
+      listing the entry ids): any entry whose `severity` is missing or not one
+      of `critical|important|minor`, any whose `disposition` is missing or not
       one of `open|fixed|refuted|deferred`, any entry still `open`, any entry
       not marked `accepted` by BOTH reviewers, or any blocking entry
       (`severity` `critical` or `important`, or `blocking: true`) left
@@ -198,7 +202,10 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
 
     Push the branch:
     `python scripts/agentflow push-branch --branch <branch> --cwd <worktree>`
-    — it refuses any branch that is, or resolves to, `master`.
+    — it accepts only a plain branch name (no `:`, no `refs/`, no revision
+    syntax; anything else is `not a plain branch name`), refuses `master` or
+    anything resolving to it whatever the casing, and pushes an explicit
+    `refs/heads/<name>:refs/heads/<name>` refspec.
 
     Create the PR with the sanitized ledger as body, title `<issue title> (#N)`,
     and `Closes #N` ONLY if every acceptance-matrix row is met; otherwise return

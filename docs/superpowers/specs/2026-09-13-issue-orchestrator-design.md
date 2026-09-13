@@ -394,10 +394,17 @@ reason code, leave the branch and worktree in place for a human.
 
 `.agent/issue-N/findings.json`: one entry per finding from any reviewer or the
 `code-review` skill, with a stable id, source (which reviewer, which round), the
-cited file and line, severity as the reviewer stated it, the conductor's disposition
+cited file and line, severity normalised to `critical` | `important` | `minor`,
+the conductor's disposition
 (`fixed` with commit SHA, `refuted` with source evidence, `deferred` as discovery
 with the reproducer, or `open`), the artifact hash it was raised against, and a
 per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
+
+Severity is a closed vocabulary rather than the reviewer's own wording, because
+the merge gate pattern-matches it: `critical` and `important` are BLOCKING, so
+they may not be merely `deferred`. The conductor normalises a reviewer's phrasing
+into the three words when writing the entry; the executor refuses a register
+carrying anything else, rather than treating an unrecognised word as non-blocking.
 
 Each round's prompt shows every entry with its conductor disposition and asks each
 reviewer to mark each one `accepted` or `re-raised` against the current hash. A
@@ -407,10 +414,11 @@ must fix it or produce a new refutation for the next round. Silence is
 for a human to arbitrate; the register never converts a rejection into approval
 on its own (fail closed, at the cost of an occasional blocked-by-dispute issue).
 
-Convergence means: no `open` entries; every entry is `accepted` by **both**
+Convergence means: every entry carries a severity and a disposition from the two
+closed vocabularies; no `open` entries; every entry is `accepted` by **both**
 reviewers against the current hash (including the originating reviewer's own);
-every entry a reviewer marked blocking is `fixed` or `refuted` with evidence, never
-`deferred`. A reviewer downgrading its own blocking finding without a refutation is
+every blocking entry — `critical`, `important`, or explicitly `blocking: true` —
+is `fixed` or `refuted` with evidence, never `deferred`. A reviewer downgrading its own blocking finding without a refutation is
 recorded but does not count. The final round may be confirm-only (no changes since
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.

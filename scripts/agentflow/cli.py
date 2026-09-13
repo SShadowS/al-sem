@@ -344,21 +344,28 @@ def _gate_failures(blob: dict, docs_only: bool) -> list[str]:
 
 
 DISPOSITIONS = ("open", "fixed", "refuted", "deferred")
+SEVERITIES = ("critical", "important", "minor")
 BLOCKING_SEVERITIES = ("critical", "important")
 
 
 def _register_failures(entries) -> list[str]:
-    """Ids of findings-register entries that block a merge: a `disposition` that
-    is missing or not one of the four documented states, one still `open`, one
-    not `accepted` by BOTH reviewers, or a blocking finding merely `deferred`.
-    Anything that is not a list of entries is itself a failure -- an unreadable
-    register is never a converged one.
+    """Ids of findings-register entries that block a merge: a `severity` or a
+    `disposition` outside its closed vocabulary (missing included), an entry
+    still `open`, one not `accepted` by BOTH reviewers, or a blocking finding
+    merely `deferred`. Anything that is not a list of entries is itself a
+    failure -- an unreadable register is never a converged one.
 
     "Blocking" is derived from the severity vocabulary the panel actually
     writes (`critical`/`important`, case-insensitively), or an explicit
     `blocking: true`. Matching the literal word "blocking" instead meant the
     rule could not fire against any register the commands produce, so a
-    Critical finding both reviewers accepted as deferred merged."""
+    Critical finding both reviewers accepted as deferred merged.
+
+    BOTH vocabularies fail CLOSED, and for the same reason. Testing severity
+    for membership in the blocking pair alone would make every unrecognised
+    spelling (`High`, `Blocker`, an empty string) a silent downgrade to
+    non-blocking -- a guard failing open in the line next to one failing
+    closed. An unrecognised word is a malformed entry, not a minor one."""
     if not isinstance(entries, list):
         return ["<register is not a JSON list of entries>"]
     bad = []
@@ -370,8 +377,11 @@ def _register_failures(entries) -> list[str]:
         reviews = e.get("reviews")
         marks = [reviews.get("astra"), reviews.get("flash")] if isinstance(reviews, dict) else [None, None]
         disposition = e.get("disposition")
-        blocking = e.get("blocking") is True or str(e.get("severity", "")).strip().lower() in BLOCKING_SEVERITIES
-        if disposition not in DISPOSITIONS:
+        severity = str(e.get("severity", "")).strip().lower()
+        blocking = e.get("blocking") is True or severity in BLOCKING_SEVERITIES
+        if severity not in SEVERITIES:
+            bad.append(eid)  # missing or unknown: malformed, never "not blocking"
+        elif disposition not in DISPOSITIONS:
             bad.append(eid)  # missing or unknown: a malformed register, not a pass
         elif disposition == "open":
             bad.append(eid)
@@ -649,7 +659,12 @@ def cmd_push_branch(args, ctx, gh, git):
     # reach `master` without ever containing a string that compares equal to it.
     _validate_branch_name(g, name)
     resolved = g.out("rev-parse", "--abbrev-ref", name) if g.ok("rev-parse", "--verify", f"refs/heads/{name}") else name
-    if "master" in (name, resolved):
+    # Casefolded: on a case-insensitive filesystem `refs/heads/Master` resolves
+    # to the local `master` ref, so a case-sensitive comparison let `Master`
+    # through to `git push` and left the refusal to the remote's own ref
+    # collision. Against a case-sensitive remote that instead creates a stray
+    # branch carrying master's commits.
+    if "master" in (name.lower(), resolved.lower()):
         raise Fail({"error": "refusing to push master"})
     # Read the head BEFORE the push. Reading it after meant a failure on this
     # line reported a push that HAD happened as a refusal -- the same

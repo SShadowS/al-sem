@@ -287,6 +287,13 @@ def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path
         # one is a malformed register, not a silently-passing entry.
         ([{"id": "F6", "severity": "minor", "reviews": both}], "F6"),
         ([{"id": "F7", "severity": "minor", "disposition": "wontfix", "reviews": both}], "F7"),
+        # B1: and `severity` the same way. Matching two exact words meant any
+        # other spelling silently downgraded the entry to non-blocking, so a
+        # `High` finding accepted as deferred attested green -- a guard that
+        # fails open in the line next to one that fails closed.
+        ([{"id": "F8", "severity": "High", "disposition": "deferred", "reviews": both}], "F8"),
+        ([{"id": "F9", "severity": "blocking", "disposition": "deferred", "reviews": both}], "F9"),
+        ([{"id": "F10", "disposition": "deferred", "reviews": both}], "F10"),
     ):
         register.write_text(json.dumps(entries))
         code, out = attest(capsys, root, register)
@@ -751,7 +758,10 @@ def test_pr_create_then_comment_under_the_lock(capsys, repo_pair):
     assert any(c.startswith(f"pr comment 77 --repo {REPO} --body-file") for c in gh.calls)
 
 
-def test_push_branch_refuses_master_and_anything_resolving_to_it(capsys, repo_pair):
+def test_push_branch_refuses_the_master_literal(capsys, repo_pair):
+    # B4: this test covers the literal spelling only. The refspec and full-ref
+    # forms, and the "remote master is unmoved" property, are pinned by
+    # test_push_branch_refuses_every_argument_that_is_not_a_plain_branch_name.
     _, clone = repo_pair
     g = Git(clone)
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
@@ -759,6 +769,23 @@ def test_push_branch_refuses_master_and_anything_resolving_to_it(capsys, repo_pa
     code, out = run(capsys, clone, "push-branch", "--branch", "master", gh_run=FakeRunner(readonly=True))
     assert code == 1 and out["error"] == "refusing to push master"
     assert g.rev("origin/master") == before
+
+
+def test_push_branch_refuses_a_case_variant_of_master(capsys, repo_pair):
+    # B3: on a case-insensitive filesystem `refs/heads/Master` resolves to the
+    # local `master` ref, so a case-sensitive comparison let the call through
+    # to `git push`. Git then refused it on its own ref collision -- but the
+    # thing that stopped it must be this guard, not the remote's luck: against
+    # a case-sensitive remote the same call creates a stray branch carrying
+    # master's commits.
+    _, clone = repo_pair
+    g = Git(clone)
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    for spelling in ("Master", "MASTER"):
+        before = g.out("ls-remote", "origin")
+        code, out = run(capsys, clone, "push-branch", "--branch", spelling, gh_run=FakeRunner(readonly=True))
+        assert code == 1 and out["error"] == "refusing to push master", spelling
+        assert g.out("ls-remote", "origin") == before, spelling
 
 
 def test_push_branch_refuses_every_argument_that_is_not_a_plain_branch_name(capsys, repo_pair):
