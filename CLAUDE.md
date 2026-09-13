@@ -618,8 +618,9 @@ not by assertion.
   the findings register (both reviewers `accepted` every entry), and GitHub CI are
   all green and the attested base, head, and issue-body hash still match at merge
   time; (2) the validated revert of a commit the flow itself merged, after the
-  post-merge check fails; and, after a re-rebase, `--force-with-lease` on the
-  flow's own issue branch — the only permitted force form. The flow never touches
+  post-merge check fails. A third, non-`master` exception: after a re-rebase,
+  `--force-with-lease` on the flow's own issue branch is the only permitted force
+  form. The flow never touches
   `.github/`, `scripts/`, `.claude/`, this file, `.gitignore`, `Cargo.toml` version
   fields, or the `tree-sitter-al` pointer; a diff that does is blocked. `master`
   carries no branch protection; adding it is a spec change for the flow. Kill

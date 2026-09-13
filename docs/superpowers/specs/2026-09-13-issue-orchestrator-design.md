@@ -461,7 +461,9 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
   exception).
 - `.claude/commands/orchestrate.md`, `.claude/commands/issue.md`.
 - `.claude/commands/README.md` (new): one entry per command, plus `/triage-wave`.
-- `.gitignore`: `.agent/**` with the two exceptions above.
+- `.gitignore`: `.agent/*` with per-directory re-includes for the two evidence
+  files (a fully-ignored directory cannot be re-included, so the pattern is
+  single-level).
 - CLAUDE.md: one paragraph recording the doctrine exception for this flow. It
   authorizes exactly two writes to `master` without a human request: the gated
   squash-merge (every gate in step 9 green, register converged, CI green, head SHA
