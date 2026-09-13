@@ -1,4 +1,5 @@
 import json
+import shutil
 import sys
 
 from agentflow import cli, lock, mergeops, recovery
@@ -319,6 +320,35 @@ def test_cleanup_rejects_spike_and_merge_sha_together(capsys, repo_pair):
                      "--merge-sha", "deadbeef", gh_run=FakeRunner(), run_id="run-test")
     assert code == 2 and "mutually exclusive" in out["error"]
     assert wt.exists()
+
+
+def test_cleanup_succeeds_when_worktree_already_removed_by_hand(capsys, repo_pair):
+    # Review round 2, New Breakage 5: a crash between cleanup deleting the
+    # directory and `finish` running must not turn a re-run into a permanent
+    # stuck lock -- an already-absent worktree is success.
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-vanished-a1"
+    g.worktree_add(wt, "issue/8-vanished-a1", "master")
+    commit_file(wt, "issue.txt", "x\n", "issue work")
+    merge_sha = g.merge_squash("issue/8-vanished-a1", "squash issue/8-vanished-a1")
+    shutil.rmtree(wt)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-vanished-a1",
+                     "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="run-test")
+    assert code == 0 and out["removed"] == str(wt)
+    assert "issue/8-vanished-a1" not in g.out("branch", "--list")
+
+
+def test_cleanup_spike_succeeds_when_worktree_already_removed_by_hand(capsys, repo_pair):
+    _, clone = repo_pair
+    g = Git(clone)
+    wt = clone.parent / "wt-vanished-spike-a1"
+    g.worktree_add(wt, "issue/9-vanished-spike-a1", "master")
+    shutil.rmtree(wt)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/9-vanished-spike-a1",
+                     "--spike", gh_run=FakeRunner(), run_id="run-test")
+    assert code == 0 and out["removed"] == str(wt)
+    assert "issue/9-vanished-spike-a1" not in g.out("branch", "--list")
 
 
 def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):

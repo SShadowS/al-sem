@@ -26,6 +26,10 @@ def worktree_name(issue: int, attempt: int) -> str:
     return f"{WORKTREE_PREFIX}{issue}-a{attempt}"
 
 
+def _branch_exists(git: Git, branch: str) -> bool:
+    return git.ok("show-ref", "--verify", "--quiet", f"refs/heads/{branch}")
+
+
 def notify(ctx: Ctx, kind: str, message: str) -> None:
     line = f"NOTIFY: {kind}: {message}"
     print(line, file=sys.stderr)
@@ -139,6 +143,16 @@ def remove_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent
     path = path.resolve()
     if path.parent != expected_parent.resolve():
         raise RuntimeError(f"worktree {path} is outside {expected_parent}")
+    if not path.exists():
+        # Already gone -- e.g. a previous attempt got this far and crashed
+        # before `finish` ran. Treating this as a failure (an unmerged-branch
+        # raise, or a bare OSError from `is_clean`'s `git status`) turns a
+        # transient crash into a self-repeating tick that never makes progress
+        # (review round 2, New Breakage 5): idempotent success instead.
+        git.worktree_prune()
+        if _branch_exists(git, branch):
+            git.branch_delete(branch)
+        return
     if not Git(path).is_clean():
         raise RuntimeError(f"worktree {path} is not clean")
     # A squash-merged branch is never an ancestor of master; its TREE equals the
@@ -166,7 +180,20 @@ def remove_spike_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_
     path = path.resolve()
     if path.parent != expected_parent.resolve():
         raise RuntimeError(f"worktree {path} is outside {expected_parent}")
-    if not Git(path).is_clean():
+    if not path.exists():
+        # See the matching comment in `remove_worktree`: already gone is
+        # success, not a failure to route through HALT.
+        git.worktree_prune()
+        if _branch_exists(git, branch):
+            git.branch_delete(branch)
+        return
+    if Git(path).tracked_dirty():
+        # `is_clean()` counts untracked files as dirt, but `/issue` step 1
+        # unconditionally leaves an untracked `.agent/issue-N/ledger.md` in
+        # every spike's worktree (a spike never commits), so that check could
+        # never pass for the caller this function actually has (review round
+        # 2, New Breakage 4). A tracked file left modified is real dirt and
+        # still refuses.
         raise RuntimeError(f"worktree {path} is not clean")
     ahead = int(git.out("rev-list", "--count", f"master..{branch}"))
     if ahead != 0:

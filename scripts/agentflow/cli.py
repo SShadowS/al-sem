@@ -368,10 +368,13 @@ def cmd_file_discoveries(args, ctx, gh, git):
 
 
 def cmd_cleanup(args, ctx, gh, git):
-    # Fenced like `run`, not like `post-merge`: the documented flow is
-    # finish (which releases the lock) THEN cleanup, so an absent lock is the
-    # normal case here, not a violation -- only a lock naming ANOTHER run
-    # is refused.
+    # Fenced like `run`, not like `post-merge`: the documented flow runs
+    # cleanup BEFORE finish -- finish releases the lock, and running cleanup
+    # first, while this run still holds it, is what stops a foreign run from
+    # claiming the issue mid-cleanup -- so only a lock naming ANOTHER run is
+    # refused. An absent lock is still accepted: the recovery follow-through's
+    # own `finish` call comes AFTER cleanup and releases it only then, and a
+    # standalone invocation may never have held one at all.
     lk = lock.read(ctx)
     if lk is not None and lk.run_id != ctx.run_id:
         raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")

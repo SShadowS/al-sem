@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from agentflow import lock, recovery
@@ -184,18 +186,67 @@ def test_remove_spike_worktree_refuses_a_branch_with_a_commit(repo_pair, tmp_pat
     assert wt.exists()
 
 
-def test_remove_spike_worktree_checks_parent_and_clean(repo_pair, tmp_path):
+def test_remove_spike_worktree_ignores_untracked_but_refuses_tracked_dirt(repo_pair, tmp_path):
+    # Review round 2, New Breakage 4: `/issue` step 1 always leaves an
+    # untracked `.agent/issue-N/ledger.md` in a spike's worktree (a spike
+    # never commits it), so `is_clean()` -- which counts untracked files as
+    # dirt -- could never pass for the caller this function actually has.
+    # `tracked_dirty()` must ignore the untracked ledger but still refuse a
+    # genuinely modified TRACKED file.
     _, clone = repo_pair
     g = Git(clone)
     ctx = make_ctx(clone)
     wt = tmp_path / recovery.worktree_name(9, 3)
     g.worktree_add(wt, "issue/9-spike-a3", "master")
-    (wt / "dirty.txt").write_text("d")
+    (wt / "ledger.md").write_text("untracked spike evidence\n")
+    recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a3", expected_parent=tmp_path)
+    assert not wt.exists() and "issue/9-spike-a3" not in g.out("branch", "--list")
+
+    wt2 = tmp_path / recovery.worktree_name(9, 4)
+    g.worktree_add(wt2, "issue/9-spike-a4", "master")
+    (wt2 / "README.md").write_text("tracked and modified\n")  # README.md is tracked, see repo_pair
     with pytest.raises(RuntimeError, match="not clean"):
-        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a3", expected_parent=tmp_path)
-    (wt / "dirty.txt").unlink()
+        recovery.remove_spike_worktree(ctx, g, wt2, "issue/9-spike-a4", expected_parent=tmp_path)
+    assert wt2.exists()
+
+
+def test_remove_spike_worktree_checks_parent(repo_pair, tmp_path):
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(9, 5)
+    g.worktree_add(wt, "issue/9-spike-a5", "master")
     with pytest.raises(RuntimeError, match="outside"):
-        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a3", expected_parent=tmp_path / "elsewhere")
+        recovery.remove_spike_worktree(ctx, g, wt, "issue/9-spike-a5", expected_parent=tmp_path / "elsewhere")
+    assert wt.exists()
+
+
+def test_remove_worktree_succeeds_when_already_removed_by_hand(repo_pair, tmp_path):
+    # Review round 2, New Breakage 5: a prior attempt can crash after deleting
+    # the worktree directory but before `finish` ran. Re-running cleanup on
+    # that now-nonexistent path must succeed (prune + delete the leftover
+    # branch), not raise, or the tick that hits it can never make progress.
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(8, 5)
+    g.worktree_add(wt, "issue/8-vanished-a1", "master")
+    commit_file(wt, "f.txt", "f\n", "issue work")
+    merge_sha = g.merge_squash("issue/8-vanished-a1", "squash issue/8-vanished-a1")
+    shutil.rmtree(wt)
+    recovery.remove_worktree(ctx, g, wt, "issue/8-vanished-a1", expected_parent=tmp_path, merge_sha=merge_sha)
+    assert "issue/8-vanished-a1" not in g.out("branch", "--list")
+
+
+def test_remove_spike_worktree_succeeds_when_already_removed_by_hand(repo_pair, tmp_path):
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = make_ctx(clone)
+    wt = tmp_path / recovery.worktree_name(9, 6)
+    g.worktree_add(wt, "issue/9-vanished-a1", "master")
+    shutil.rmtree(wt)
+    recovery.remove_spike_worktree(ctx, g, wt, "issue/9-vanished-a1", expected_parent=tmp_path)
+    assert "issue/9-vanished-a1" not in g.out("branch", "--list")
 
 
 def test_retain_copies_run_dir(ctx, tmp_path):
