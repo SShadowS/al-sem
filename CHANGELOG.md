@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Autonomous issue orchestrator.** `/orchestrate` (one tick: preflight, fetch,
+  deterministic eligibility, model ranking, claim, `/issue`, post-merge check with
+  validated revert, discovery filing) and `/issue N` (worktree, classification,
+  assumption probes, spec, two-model spec panel with a findings register,
+  acceptance tests, plan, TDD with discrimination proofs, the full CI-equivalent
+  gate set plus goldens and CDO, two-model final panel, freeze boundary,
+  attestation, base+head+body-bound squash-merge). Every mutation runs through the
+  tested executor `scripts/agentflow/` (lock with heartbeat and run-id fence,
+  `.agent/HALT` kill switch, per-issue budgets, evidence sanitizer, supervised
+  gates with timeouts, crash-safe discovery filing), including PR creation, PR
+  comments and branch pushes — `pr-create`, `pr-comment` and `push-branch`, the
+  last of which takes a plain branch name, refuses `master`, pushes an explicit
+  `refs/heads/<name>:refs/heads/<name>` so the destination cannot be inferred
+  from caller text, and owns the one permitted `--force-with-lease`. Spec:
+  `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`.
+
+### Changed
+
+- CLAUDE.md records the one exception to "never merge to `master` without a
+  request": the orchestrator's gated squash-merge and its validated revert.
+
 ## [1.2.0] - 2026-09-03
 
 ### Fixed - multi-root memory: roots now build lazily

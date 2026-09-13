@@ -41,7 +41,7 @@ Three parts:
 
 | Part | Role |
 |------|------|
-| `scripts/agentflow.py` | The **executor**: every state mutation lives here (lock, claim, release, cleanup, merge, revert, discovery filing, HALT check, evidence sanitizing, gate supervision). Deterministic, unit-tested with a fake `gh`, has a `--dry-run` that performs no write anywhere. |
+| `scripts/agentflow/` (package; entry `python scripts/agentflow`) | The **executor**: every state mutation lives here (lock, claim, release, cleanup, merge, revert, discovery filing, HALT check, evidence sanitizing, gate supervision). Deterministic, unit-tested with a fake `gh`, has a `--dry-run` that performs no write anywhere. |
 | `/orchestrate [--dry-run] [--max-issues N]` | One tick: preflight, fetch, filter, rank, pick, claim, run `/issue N`, post-merge check, file discoveries, reschedule. Re-fired by `/loop`. |
 | `/issue N` | The per-issue pipeline: worktree, classify, probes, spec, spec panel, acceptance tests, plan, implement, gates, final panel, PR, merge. |
 
@@ -103,7 +103,9 @@ instructions to the flow. Concretely:
   AL source excerpts longer than one line from dependency packages, and anything
   matching token patterns. A rejected commit is a `blocked` with reason
   `sanitize-failed`; the unsanitized originals stay in the local run directory
-  (Retention, below).
+  (Retention, below). Limit: dependency-source excerpts are detected by path
+  attribution (`.alpackages/` and `CDO_WS` paths), not by recognising AL source
+  text.
 - **Issue revision pinning.** The executor records a hash of the issue body at claim.
   Before `Closes #N` is written into the PR, the body is re-fetched; a changed hash
   is `blocked` with reason `issue-edited`, so acceptance edited during a run is never
@@ -115,9 +117,11 @@ instructions to the flow. Concretely:
   external write. Under HALT the only permitted writes are **terminal bookkeeping**
   (one comment and the label transition on the current issue) and **emergency
   rollback** (the revert path below). Claims, merges, pushes of new work, and issue
-  filing are refused. The current step's local work finishes, the ledger is written,
+  filing are refused; so is `run` (gate execution), both under HALT and under a
+  lock held by another run — `finish` is the one command permitted for terminal
+  bookkeeping. The current step's local work finishes, the ledger is written,
   the issue is labeled `agent-blocked` with reason `halted`. Resume: the human removes
-  the file and runs `agentflow.py unblock N`, which removes `agent-blocked` and lets
+  the file and runs `python scripts/agentflow unblock N`, which removes `agent-blocked` and lets
   the issue re-enter eligibility (as a fresh attempt, see Locking).
 - **Regression halts.** An `agent-regressed` outcome writes `.agent/HALT` itself
   with the reason, so no later tick or second session resumes until a human looks.
@@ -162,11 +166,11 @@ Labels are a mirror for humans, not a lock. The lock is local:
   heartbeat}`. Taken atomically (create-exclusive) at claim. Both `/orchestrate`
   and a standalone `/issue N` take it; `/issue N` refuses to run without it.
 - **Supervision.** Long-running work (every gate, every `cargo` invocation the
-  pipeline runs) goes through `agentflow.py run --timeout <min> -- <cmd>`, which
+  pipeline runs) goes through `python scripts/agentflow run --timeout <min> -- <cmd>`, which
   refreshes the heartbeat every 60 s while the child runs, captures the exit code
   and log path, and kills the child's process tree on timeout. That is the
   watchdog: no gate can hang past its cap. Reviewer calls (pi) are launched as
-  background tasks, and the conductor runs `agentflow.py beat` while polling them,
+  background tasks, and the conductor runs `python scripts/agentflow beat` while polling them,
   so a long model call cannot look like a death. Subagent dispatches are bounded by
   the harness; the conductor beats before and after each one.
 - **Fencing.** Every mutating executor command takes `--run-id` and refuses to act
@@ -179,9 +183,12 @@ Labels are a mirror for humans, not a lock. The lock is local:
   conductor is a chat session, not a supervisable process, and a 30-minute silence
   with supervision in place means it is gone. Recovery (never under `--dry-run`):
   reconcile with GitHub first (open PR for `issue/N-*`? merged? partially pushed?).
-  If the PR was already merged, recovery finishes the run instead of blocking it:
-  post-merge check on the merge SHA, discoveries, `agent-done`, cleanup. Otherwise:
-  comment on the issue with what was found, rename the worktree to
+  If the PR was already merged, recovery finishes the run instead of blocking it,
+  under a lock the recovering run re-acquires for the crashed issue: post-merge
+  check on the merge SHA, discoveries filed from the crashed run's ledger, cleanup,
+  then `agent-done`. If that follow-through fails partway, the issue is labeled
+  `agent-blocked` with reason `recovery-followthrough-failed` and the tick stops.
+  Otherwise: comment on the issue with what was found, rename the worktree to
   `../al-sem-issue-N.crashed-<ts>`, label `agent-blocked` with reason `crashed`,
   remove the lock. The human decides what to do with the crashed tree.
 - **Attempts.** Every claim gets an attempt number. Branch and worktree are
@@ -207,9 +214,11 @@ Labels are a mirror for humans, not a lock. The lock is local:
    `.agent/runs/<run-id>/ranking.json`.
 4. **Dry run stops here** and prints the ranking and the pick. No labels, comments,
    locks, worktrees, files, or recovery under `--dry-run`.
-5. **Claim** (executor). Take the lock; record the issue body hash; label
-   `agent-working`; comment with the session link, classification hint, run id, and
-   attempt number.
+5. **Claim** (executor). `loop-tick` runs here — after ranking (step 3), before
+   claim — charging the per-loop `--max-issues` counter (`.agent/runs/loop.json`),
+   so an empty ranked queue burns no slot and exactly N issues are claimed per
+   loop. Take the lock; record the issue body hash; label `agent-working`; comment
+   with the session link, classification hint, run id, and attempt number.
 6. **Run `/issue N`.** Returns `merged`, `blocked`, or `spike-answered`.
 7. **Post-merge check** (executor). On `merged`: `git fetch` and fast-forward the
    main checkout's `master` to `origin/master` (it must fast-forward; anything else
@@ -217,21 +226,35 @@ Labels are a mirror for humans, not a lock. The lock is local:
    (detached, so a moving `master` is not what gets tested), then `scripts/ci-steps
    all`, `scripts/check-goldens`, and `scripts/cdo-gate` unless the diff was docs-only.
    Red means, in this order: write `.agent/HALT` with the reason first (durable
-   before any fallible remote action); create the revert commit locally
-   (`git revert --no-edit <merge-sha>`); rerun on it the gate that failed plus
+   before any fallible remote action); if the main checkout's local `master` has
+   diverged from `origin/master` (unpushed human work sitting on it), leave
+   `master` untouched, comment with the reason (`master-not-ff`), and stop the loop
+   without reverting — HALT is already set; otherwise create the revert commit
+   locally (`git revert --no-edit <merge-sha>`); rerun on it the gate that failed plus
    `scripts/ci-steps test`; push it to `master` only if those pass and
    `origin/master` still equals the merge SHA (a push rejected because `master`
    advanced is reported, not forced); reopen the issue; label it `agent-regressed`;
-   comment with the failing output and the revert SHA; file a bug if the failure is
-   outside the issue's diff; notify; stop the loop. A revert that conflicts, fails
-   its own gates, or cannot be pushed leaves `master` as is, posts exactly that,
-   notifies, and stops the loop; HALT is already set.
-8. **File discoveries** (see below); relabel `agent-done` / `agent-blocked` /
-   `agent-answered`; copy the run directory to retention; release the lock. On
-   `merged`, remove the worktree after the executor verifies the path is under the
-   expected parent, the tree is clean, and the branch is merged into `master`
-   (`rm -rf` with two retries for Windows file locks, then `git worktree prune`,
-   then delete the local branch). On `blocked` the worktree stays.
+   comment with the failing gate and the path of its retained log, plus the revert
+   SHA; notify; stop the loop. Nothing is FILED on this path: HALT is set by now
+   and issue filing is refused under HALT, so that comment is the record and a
+   human files any follow-up. A revert that conflicts, fails its own gates, or
+   cannot be pushed leaves `master` as is, posts exactly that, notifies, and stops
+   the loop; HALT is already set. This check always runs after a merge, HALT or
+   not — it is one of the two writes HALT permits, because a HALT pressed between
+   the merge and the check must not leave an unverified commit on `master`
+   unexamined. The tick then runs `finish --outcome regressed`, which changes no
+   label (the revert path already set `agent-regressed`) and only retains the run
+   directory and releases the lock.
+8. **Cleanup, then finish** (executor). File discoveries (see below). Cleanup runs
+   **before** finish: `cleanup` refuses to act if `lock.json` names a different
+   run (the same fencing as every mutating command). On `merged` it removes the
+   worktree after verifying the path is under the expected parent, the tree is
+   clean, and the branch is merged into `master` (`rm -rf` with two retries for
+   Windows file locks, then `git worktree prune`, then delete the local branch);
+   on `blocked` the worktree stays; on `spike-answered` (the branch never carries
+   a commit of its own) `cleanup --spike` removes the worktree and branch outright.
+   Finish then relabels `agent-done` / `agent-blocked` / `agent-answered`, copies
+   the run directory to retention, and releases the lock last.
 9. **Reschedule.** Under `/loop`, the next tick fires when the eligible queue is
    non-empty and `--max-issues` is not exhausted. Empty queue, HALT, or
    `agent-regressed` ends the loop.
@@ -312,17 +335,48 @@ render of the ledger becomes the PR body.
     changed. One rebase re-gate is budgeted. The validated pair is `(B, H)`: `B` the
     `origin/master` commit rebased onto, `H` the head the gates and panel passed on.
 12. **Freeze.** The freeze boundary is set **after** step 11, so `H` is post-rebase.
-    The only commits allowed after `H` are evidence commits touching nothing but
-    the two `.agent/issue-N/` files; the executor asserts
+    The protected-path check runs once more over the whole approved diff (`B..H`)
+    immediately after the rebase and **before** the attestation — step 8's
+    per-task check cannot see the commits that steps 10 and 11 add, so this is
+    the only thing stopping a panel-fix edit from landing a protected path inside
+    the approved diff. The only commits allowed after `H` are evidence commits
+    touching nothing but the two `.agent/issue-N/` files; the executor asserts
     `git diff H..HEAD --name-only` is a subset of those two paths, so recording the
     approval cannot invalidate it. The committed ledger records `B` and `H` only;
     `final_head` (the evidence commit) lives solely in the attestation
-    `{issue, B, H, final_head, register_hash, gates, body_hash}`, which the executor
-    writes to the run directory and posts as a PR comment.
-13. **PR and merge** (executor). `gh pr create` with the sanitized ledger as body
-    and `Closes #N` only if the acceptance matrix is fully met. Required CI: the
-    `ci.yml` workflow's jobs all `success`; a `skipped`, `cancelled`, or missing
-    check is not green. One CI fix attempt allowed, independent of the rebase
+    `{issue, B, H, final_head, register_hash, register_path, gates, body_hash}`,
+    which the executor writes to the run directory and posts as a PR comment.
+    The attestation is not a transcript of conductor assertions: `attest` refuses
+    to write one unless this run's `claim.json` exists and its body hash matches,
+    every required gate key is present with exit code `0` (`cdo-gate` included
+    unless the diff was docs-only), and the findings register has converged — a
+    `disposition` from the closed set on every entry, none `open`, both reviewers
+    `accepted` on every entry, and no blocking entry left `deferred`. Blocking is
+    derived from the severity vocabulary the panel writes (`critical` or
+    `important`) or an explicit `blocking: true`, so the rule fires against the
+    registers the commands actually produce. It binds the register's path as
+    well as its hash — relative to
+    the claim's worktree, since the attestation is published as a PR comment and
+    must not carry a local absolute path — and the merge joins that path back
+    onto the worktree and re-hashes the file, so a register edited afterwards is
+    `register-changed`.
+13. **PR and merge** (executor). PR creation, the attestation comment, and every
+    branch push go through the executor (`pr-create`, `pr-comment`,
+    `push-branch`), so all three are inside the dry-run guard, the HALT check and
+    the run-id fence, and their bodies are sanitized. `push-branch` takes a plain
+    branch NAME — never a refspec, an option, or a full ref — and pushes an
+    explicit `refs/heads/<name>:refs/heads/<name>`, so the destination ref is
+    built by the executor and can never be inferred from caller text;
+    `--force-with-lease` is the only force form in the flow and reaches only that
+    validated branch.
+    The PR body is the sanitized ledger, with `Closes #N` only if the acceptance
+    matrix is fully met. Required CI: the `ci.yml` workflow's checks must be
+    PRESENT on the PR and all `success` — a `skipped`, `cancelled`, or missing
+    check is not green, and neither is a PR where only an unrelated workflow has
+    reported. The required workflow is identified by the `name:` of
+    `.github/workflows/ci.yml`; if that cannot be read, the gate refuses
+    (`ci-workflow-unknown`) rather than passing. One CI fix attempt allowed,
+    independent of the rebase
     budget; a CI fix is a code change, so it returns to step 11 (gates, one panel
     round, new `H`, new attestation). Immediately before merging, the executor
     re-fetches and requires **all** of: `origin/master == B` (the base is bound,
@@ -340,10 +394,17 @@ reason code, leave the branch and worktree in place for a human.
 
 `.agent/issue-N/findings.json`: one entry per finding from any reviewer or the
 `code-review` skill, with a stable id, source (which reviewer, which round), the
-cited file and line, severity as the reviewer stated it, the conductor's disposition
+cited file and line, severity normalised to `critical` | `important` | `minor`,
+the conductor's disposition
 (`fixed` with commit SHA, `refuted` with source evidence, `deferred` as discovery
 with the reproducer, or `open`), the artifact hash it was raised against, and a
 per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
+
+Severity is a closed vocabulary rather than the reviewer's own wording, because
+the merge gate pattern-matches it: `critical` and `important` are BLOCKING, so
+they may not be merely `deferred`. The conductor normalises a reviewer's phrasing
+into the three words when writing the entry; the executor refuses a register
+carrying anything else, rather than treating an unrecognised word as non-blocking.
 
 Each round's prompt shows every entry with its conductor disposition and asks each
 reviewer to mark each one `accepted` or `re-raised` against the current hash. A
@@ -353,10 +414,11 @@ must fix it or produce a new refutation for the next round. Silence is
 for a human to arbitrate; the register never converts a rejection into approval
 on its own (fail closed, at the cost of an occasional blocked-by-dispute issue).
 
-Convergence means: no `open` entries; every entry is `accepted` by **both**
+Convergence means: every entry carries a severity and a disposition from the two
+closed vocabularies; no `open` entries; every entry is `accepted` by **both**
 reviewers against the current hash (including the originating reviewer's own);
-every entry a reviewer marked blocking is `fixed` or `refuted` with evidence, never
-`deferred`. A reviewer downgrading its own blocking finding without a refutation is
+every blocking entry — `critical`, `important`, or explicitly `blocking: true` —
+is `fixed` or `refuted` with evidence, never `deferred`. A reviewer downgrading its own blocking finding without a refutation is
 recorded but does not count. The final round may be confirm-only (no changes since
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.
@@ -381,15 +443,19 @@ the symptom). Filing is crash-safe: the executor writes a `pending` entry to
 `.agent/discoveries-index.json` first, creates the issue with the fingerprint
 embedded as an HTML comment marker (`<!-- agentflow-fp: … -->`) in the body, then
 marks the entry `filed` with the number. On startup, every `pending` entry is
-reconciled by searching all issues (open and closed) for the marker before any new
-creation; a `pending` entry whose search is ambiguous or fails stays `pending` and
-is reported to the human, never recreated. Discoveries are attributed to a baseline:
-a gate failure that also reproduces on `master` at `B` is filed as pre-existing (and
-does not block the issue); one that does not is the issue's own defect. Titles are `[agent-discovery][<subsystem>] <symptom>`, labels
+reconciled by listing `agent-filed` issues (state all) and scanning bodies for the
+marker, because GitHub search does not reliably index HTML comments. A `pending`
+entry whose marker is not found in that scan is `pending-not-found` (retryable — a
+new creation is attempted); one matched by more than one issue is
+`pending-ambiguous` (reported to the human, never recreated). Discoveries are
+attributed to a baseline: a gate failure that also reproduces on `master` at `B` is
+filed as pre-existing (and does not block the issue); one that does not is the
+issue's own defect. Titles are `[agent-discovery][<subsystem>] <symptom>`, labels
 `agent-filed` + `bug` or `enhancement`, body in the same shape `/issue` expects
 (Capability, Acceptance, origin issue, reproducer, session link). At most 5 per
-issue. Filed issues enter ranking on the next tick like any other; `agent-filed`
-grants no special eligibility.
+issue, the cap charged only after a successful create — a crash before creation
+completes does not consume budget. Filed issues enter ranking on the next tick
+like any other; `agent-filed` grants no special eligibility.
 
 ## Ledger and retention
 
@@ -423,8 +489,10 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
 - Crashed session: stale-heartbeat recovery above; the worktree is preserved, never
   deleted by recovery.
 - pi unreachable: retry once after `pi_cleanup`, then `blocked`.
-- Moved `master`: rebase, gates rerun always, panel rerun if the diff changed;
-  the merge requires `origin/master == B` and `--match-head-commit`, so neither a
+- Moved `master`: rebase, gates rerun always, panel rerun if the diff changed; the
+  rebased issue branch is re-pushed with `git push --force-with-lease` — the only
+  permitted force form, used only on the issue branch, never on `master`; the
+  merge requires `origin/master == B` and `--match-head-commit`, so neither a
   stale base nor a stale head can merge.
 - Red `master` after merge: validated revert, reopen, `agent-regressed`, HALT,
   notify, loop stops.
@@ -432,13 +500,16 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
 
 ## Repo changes
 
-- `scripts/agentflow.py` and `scripts/test_agentflow.py` (fake `gh`, fault injection
-  before and after every side effect, dry-run write-free assertion, lock races,
-  stale recovery preserving the tree, sanitizer rejection, protected-path detection,
-  freeze-boundary assertion, pending-discovery reconciliation, gitignore exception).
+- `scripts/agentflow/` (package) and `scripts/agentflow/tests/` (fake `gh`, fault
+  injection before and after every side effect, dry-run write-free assertion, lock
+  races, stale recovery preserving the tree, sanitizer rejection, protected-path
+  detection, freeze-boundary assertion, pending-discovery reconciliation, gitignore
+  exception).
 - `.claude/commands/orchestrate.md`, `.claude/commands/issue.md`.
 - `.claude/commands/README.md` (new): one entry per command, plus `/triage-wave`.
-- `.gitignore`: `.agent/**` with the two exceptions above.
+- `.gitignore`: `.agent/*` with per-directory re-includes for the two evidence
+  files (a fully-ignored directory cannot be re-included, so the pattern is
+  single-level).
 - CLAUDE.md: one paragraph recording the doctrine exception for this flow. It
   authorizes exactly two writes to `master` without a human request: the gated
   squash-merge (every gate in step 9 green, register converged, CI green, head SHA
