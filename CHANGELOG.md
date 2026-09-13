@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **tree-sitter-al grammar pin v4.0.1 -> v4.3.0**, and the pin is now policy-bound to
+  track the newest release rather than lag it. We own the grammar repo, so the pin exists
+  for build reproducibility, not to hold a version back.
+  - **This had left CI red since 2026-09-09.** `.github/workflows/ci.yml` checks out the
+    grammar's `main` UNPINNED while the superproject pinned v4.0.1, so once v4.1.0 landed
+    every CI run died in `crates/al-syntax/build.rs`'s node-types hash guard. The last
+    green run was 2026-09-03; the four runs after it all failed at the **Lint** step,
+    which is *before* the `gen-syntax` step that would have regenerated the vocabulary.
+    Ordering the pipeline so the fix runs after the steps that need it is a latent trap
+    that will re-fire on the next grammar release whenever the pin lags `main`.
+  - Regenerated the raw vocabulary (`cargo run -p xtask -- gen-syntax`). The entire
+    generated diff is the `GRAMMAR_NODE_TYPES_HASH` constant: `NAMED_KIND_COUNT` stays
+    467, no `RawKind` variant added or removed, so `kind_policy.rs`'s exhaustive match is
+    untouched. v4.1.0-v4.3.0 are three parse-SHAPE fixes (single-entry `Implementation`
+    mappings; `CalcFormula`/`order()` are not calls while `Continue(X)` is; a negative
+    literal in a property is one signed literal), not vocabulary changes.
+  - **Measured on both sides, not assumed.** `cargo test --workspace --no-fail-fast`
+    (~2500 tests) was run on v4.0.1 and v4.3.0 back to back against the same tree and the
+    same `CDO_WS`; the per-test outcome sets differ by exactly ONE entry, the guard bumped
+    below. **Zero goldens moved.** The 13 failures present are identical on both grammars
+    and are pre-existing CDO-workspace drift, unrelated to this change.
+
+### Fixed
+
+- **`CACHE_VERSION_GRAMMAR` was stale and would have silently reused v4.0.1-minted
+  dependency caches under the newer grammar.** Bumped to `tree-sitter-al-v4.3.0-native`,
+  with its mirror in `tests/cli/cli_c_cache_differential.rs` and the `grammar` stamp in
+  the two `fixture-cache/` artifacts carrying the current version tuple; the `Kept`
+  fixture's `artifactContentHash` was recomputed, since that hash covers the stamp's own
+  bytes. The repo's own `cache_version_grammar_tracks_the_linked_grammar` guard caught
+  this exactly as designed — but it is a `--lib` unit test and `scripts/check-goldens`
+  runs only the 9 integration targets, so the golden gate alone would have shipped it.
+  CLAUDE.md's new "Upgrading the grammar" checklist records that gap.
+
 ### Added
 
 - **Autonomous issue orchestrator.** `/orchestrate` (one tick: preflight, fetch,
