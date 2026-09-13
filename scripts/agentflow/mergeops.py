@@ -28,11 +28,13 @@ class Attestation:
     register_hash: str
     gates: dict
     body_hash: str
-    # Absolute path of the findings register the hash above was taken from, so
-    # the merge can re-hash the same file and refuse one that moved since. An
-    # attestation that never recorded a path (only a hand-built one: `attest`
-    # always sets it) has nothing to re-check and is left to the other four
-    # bindings.
+    # Path of the findings register the hash above was taken from, RELATIVE to
+    # the worktree the claim records -- this attestation is posted as a public
+    # PR comment, so it must not carry a local absolute path. The merge joins
+    # it back onto the claim's worktree to re-hash the same file and refuse one
+    # that moved since. An attestation that never recorded a path (only a
+    # hand-built one: `attest` always sets it) has nothing to re-check and is
+    # left to the other four bindings.
     register_path: str = ""
 
 

@@ -123,11 +123,27 @@ def _grammar(ctx: Ctx) -> str:
     return str(ctx.paths.root / "tree-sitter-al")
 
 
+def _with_bash(cmd: list[str]) -> list[str]:
+    """Rewrite a child argv whose first element is the bare token `bash` to the
+    interpreter `resolve_bash` picked. The conductor's gate lines read
+    `-- bash scripts/ci-steps all`, and a bare `bash` is resolved by
+    CreateProcess against the inherited PATH -- from PowerShell, the WSL
+    launcher, which fails every gate red instead of failing as an environment
+    error. Only the exact token is rewritten: a caller that already named its
+    interpreter, by full path or otherwise, is passed through untouched. The
+    rewrite is idempotent, so applying it at both the CLI boundary and here
+    costs nothing."""
+    return [resolve_bash(), *cmd[1:]] if cmd and cmd[0] == "bash" else list(cmd)
+
+
 def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path) -> supervise.Result:
     ctx.write_guard("run gate")
     env = supervise.sanitized_env(os.environ.copy(), _grammar(ctx))
     log = ctx.run_dir / "logs" / f"{name}.log"
-    return supervise.run(ctx, cmd, cwd=cwd, log_path=log, timeout_s=minutes * 60, beat=_beat_if_owner(ctx), env=env)
+    # Here as well as at the `run` boundary, so every caller is covered rather
+    # than only the one that happens to pass conductor-supplied argv.
+    return supervise.run(ctx, _with_bash(cmd), cwd=cwd, log_path=log, timeout_s=minutes * 60,
+                         beat=_beat_if_owner(ctx), env=env)
 
 
 # ---- subcommands -----------------------------------------------------------
@@ -278,7 +294,7 @@ def cmd_run(args, ctx, gh, git):
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
-    r = _run_gate(ctx, args.name, args.child, args.timeout, cwd)
+    r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
     return _emit({"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
                   "seconds": round(r.seconds, 1), "supervised": supervised},
                  0 if r.exit_code == 0 else 1)
@@ -364,19 +380,41 @@ def cmd_attest(args, ctx, gh, git):
     bad_gates = _gate_failures(json.loads(args.gates), args.docs_only)
     if bad_gates:
         return _emit({"error": "gates-not-green", "gates": bad_gates}, 1)
+    # The attestation is posted verbatim as a PR comment on a public repo, so
+    # the register is named RELATIVE to the worktree the claim recorded -- an
+    # absolute path would publish this machine's drive letter and layout, and
+    # the sanitizer would not catch it (it is neither a CDO_WS nor an
+    # .alpackages path). A register the worktree does not contain cannot be
+    # named that way, and is not the issue's own register either.
     register = Path(args.register).resolve()
+    worktree = claim.get("worktree")
+    if not worktree:
+        return _emit({"error": "claim has no worktree"}, 1)
+    try:
+        rel = register.relative_to(Path(worktree).resolve())
+    except ValueError:
+        return _emit({"error": "register-outside-worktree", "register": str(register)}, 1)
     bad_entries = _register_failures(read_json(register))
     if bad_entries:
         return _emit({"error": "register-not-converged", "entries": bad_entries}, 1)
     att = mergeops.Attestation(issue=args.issue, B=args.B, H=args.H, final_head=args.final_head,
                                register_hash=mergeops.register_hash(register),
                                gates=json.loads(args.gates), body_hash=args.body_hash,
-                               register_path=str(register))
+                               register_path=rel.as_posix())
     return _emit({"path": str(mergeops.write_attestation(ctx, att))})
 
 
 def cmd_body_hash(args, ctx, gh, git):
     return _emit({"body_hash": mergeops.body_hash(gh.issue(args.issue).body)})
+
+
+def _attested_register(ctx: Ctx, att: mergeops.Attestation) -> Path | None:
+    """The attested findings register as a real path: the attestation stores it
+    relative to the worktree, and this run's `claim.json` is what names that
+    worktree. None when the claim (or its worktree) is gone."""
+    claim = read_json(ctx.run_dir / "claim.json") or {}
+    worktree = claim.get("worktree")
+    return Path(worktree) / att.register_path if worktree else None
 
 
 _WORKFLOW_NAME = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
@@ -402,11 +440,18 @@ def _gate_reasons(ctx, gh, git, pr: int):
         # The register was checked for convergence at attest time; re-hash the
         # same file here so an entry edited in the window between the two --
         # a `deferred` quietly flipped to `fixed` -- cannot ride into the merge.
-        try:
-            if mergeops.register_hash(Path(att.register_path)) != att.register_hash:
+        # The attestation names it relative to the worktree, so the claim is
+        # what turns it back into a file; without the claim there is nothing to
+        # verify against, which is a refusal rather than a pass.
+        registered = _attested_register(ctx, att)
+        if registered is None:
+            reasons.append("register-unresolvable")
+        else:
+            try:
+                if mergeops.register_hash(registered) != att.register_hash:
+                    reasons.append("register-changed")
+            except OSError:
                 reasons.append("register-changed")
-        except OSError:
-            reasons.append("register-changed")
     workflow = _ci_workflow_name(ctx)
     if workflow is None:
         reasons.append("ci-workflow-unknown")

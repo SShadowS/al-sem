@@ -2,7 +2,7 @@ import json
 import shutil
 import sys
 
-from agentflow import cli, lock, mergeops, recovery
+from agentflow import cli, lock, mergeops, recovery, supervise
 from agentflow.gitops import Git
 from agentflow.state import Ctx, Paths, tree_snapshot, write_json
 from agentflow.tests.conftest import FakeRunner, commit_file
@@ -93,6 +93,47 @@ def test_check_diff_and_freeze_via_cli(capsys, repo_pair):
     assert code == 0 and out["violations"] == []
 
 
+def capture_child(monkeypatch):
+    """Replace the supervisor with a probe that records the argv it was handed
+    and never spawns anything."""
+    seen = {}
+
+    def fake_run(ctx, cmd, *, cwd, log_path, timeout_s, beat=None, beat_every=60.0, env=None):
+        seen["cmd"] = list(cmd)
+        return supervise.Result(exit_code=0, log_path=log_path, timed_out=False, seconds=0.0)
+
+    monkeypatch.setattr(cli.supervise, "run", fake_run)
+    return seen
+
+
+def test_run_maps_a_literal_bash_child_to_the_resolved_interpreter(capsys, root, monkeypatch):
+    # Residual (3): the /issue gates reach the executor as
+    # `run --name … -- bash scripts/ci-steps all`. That literal `bash` is
+    # resolved by CreateProcess against the inherited PATH, which from
+    # PowerShell is the WSL launcher -- the same red-gate-on-every-issue
+    # failure resolve_bash() was introduced for.
+    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\tools\bash.exe")
+    seen = capture_child(monkeypatch)
+    code, out = run(capsys, root, "run", "--name", "probe", "--timeout", "1", "--",
+                     "bash", "scripts/ci-steps", "all", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 0 and out["exit_code"] == 0
+    assert seen["cmd"] == [r"D:\tools\bash.exe", "scripts/ci-steps", "all"]
+
+
+def test_run_leaves_any_other_child_argv_alone(capsys, root, monkeypatch):
+    # Only the exact token `bash` is rewritten: a child that already names its
+    # interpreter -- including a bash by full path -- is passed through, or the
+    # mapping would be second-guessing a caller who was explicit.
+    monkeypatch.setenv("AGENTFLOW_BASH", r"D:\tools\bash.exe")
+    seen = capture_child(monkeypatch)
+    run(capsys, root, "run", "--name", "p1", "--timeout", "1", "--",
+        sys.executable, "-c", "pass", gh_run=FakeRunner(), run_id="solo-run")
+    assert seen["cmd"] == [sys.executable, "-c", "pass"]
+    run(capsys, root, "run", "--name", "p2", "--timeout", "1", "--",
+        "/usr/bin/bash", "-c", "true", gh_run=FakeRunner(), run_id="solo-run")
+    assert seen["cmd"] == ["/usr/bin/bash", "-c", "true"]
+
+
 def test_dry_run_run_refuses_before_spawning_child(capsys, root):
     # C1: `run`'s child must never actually spawn under --dry-run.
     code, out = run(capsys, root, "run", "--name", "probe", "--timeout", "1", "--",
@@ -136,24 +177,57 @@ def attest(capsys, root, register, *, gates=GREEN_GATES, body_hash="abc123", ext
                "--body-hash", body_hash, *extra, gh_run=FakeRunner())
 
 
+def claimed_register(ctx, tmp_path, *, body_hash="abc123", contents=CONVERGED, name="wt"):
+    """A claim naming a worktree, plus the findings register inside it. The
+    attestation stores that register RELATIVE to the worktree -- an absolute
+    local path would be published verbatim in the attestation's PR comment --
+    so the claim and the register have to be set up together."""
+    wt = tmp_path / name
+    (wt / ".agent" / "issue-8").mkdir(parents=True, exist_ok=True)
+    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": body_hash, "worktree": str(wt)})
+    register = wt / ".agent" / "issue-8" / "findings.json"
+    register.write_text(contents)
+    return register
+
+
 def test_attest_refuses_body_hash_mismatch_with_claim(capsys, root, tmp_path):
     # I8: attest must cross-check its --body-hash against claim.json, not
     # trust a caller-supplied hash on its own.
-    ctx = Ctx(Paths(root), run_id="run-test")
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
-    register = tmp_path / "findings.json"
-    register.write_text(CONVERGED)
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
     code, out = attest(capsys, root, register, body_hash="different-hash")
     assert code == 1 and out["error"] == "body-hash mismatch with claim"
 
 
 def test_attest_accepts_matching_body_hash(capsys, root, tmp_path):
-    ctx = Ctx(Paths(root), run_id="run-test")
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
-    register = tmp_path / "findings.json"
-    register.write_text(CONVERGED)
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
     code, out = attest(capsys, root, register)
     assert code == 0 and "path" in out
+
+
+def test_attest_stores_the_register_relative_to_the_worktree(capsys, root, tmp_path):
+    # Residual (4): the attestation is posted verbatim as a PR comment on a
+    # PUBLIC repository. An absolute path in it publishes the maintainer's
+    # drive letter and directory layout, which the sanitizer does not catch
+    # (it is neither a CDO_WS nor an .alpackages path).
+    ctx = Ctx(Paths(root), run_id="run-test")
+    register = claimed_register(ctx, tmp_path)
+    code, out = attest(capsys, root, register)
+    assert code == 0
+    text = (ctx.run_dir / "attestation.json").read_text()
+    assert json.loads(text)["register_path"] == ".agent/issue-8/findings.json"
+    assert str(tmp_path) not in text and str(register.resolve()) not in text
+
+
+def test_attest_refuses_a_register_outside_the_worktree(capsys, root, tmp_path):
+    # A register the worktree does not contain cannot be named relative to it,
+    # and is not the issue's own register either way.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    claimed_register(ctx, tmp_path)
+    stray = tmp_path / "findings.json"
+    stray.write_text(CONVERGED)
+    code, out = attest(capsys, root, stray)
+    assert code == 1 and out["error"] == "register-outside-worktree"
+    assert not (ctx.run_dir / "attestation.json").exists()
 
 
 def test_attest_refuses_when_there_is_no_claim_for_this_run(capsys, root, tmp_path):
@@ -170,10 +244,7 @@ def test_attest_refuses_when_there_is_no_claim_for_this_run(capsys, root, tmp_pa
 def test_attest_refuses_missing_and_red_gates(capsys, root, tmp_path):
     # I6: "all gates green" was a conductor assertion the executor recorded
     # verbatim and never read. A `--gates '{}'` must not be attestable.
-    ctx = Ctx(Paths(root), run_id="run-test")
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
-    register = tmp_path / "findings.json"
-    register.write_text(CONVERGED)
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
     code, out = attest(capsys, root, register, gates="{}")
     assert code == 1 and out["error"] == "gates-not-green"
     assert set(out["gates"]) == {"ci-steps-all", "check-goldens-coverage", "check-goldens", "cdo-gate"}
@@ -185,10 +256,7 @@ def test_attest_refuses_missing_and_red_gates(capsys, root, tmp_path):
 def test_attest_docs_only_does_not_require_the_cdo_gate(capsys, root, tmp_path):
     # A docs-only diff legitimately never runs cdo-gate, so demanding the key
     # would make the check unusable exactly where it is least needed.
-    ctx = Ctx(Paths(root), run_id="run-test")
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
-    register = tmp_path / "findings.json"
-    register.write_text(CONVERGED)
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
     three = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0})
     code, out = attest(capsys, root, register, gates=three)
     assert code == 1 and out["gates"] == ["cdo-gate"]
@@ -199,9 +267,7 @@ def test_attest_docs_only_does_not_require_the_cdo_gate(capsys, root, tmp_path):
 def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path):
     # I6: "both reviewers converged" was likewise recorded as an opaque hash
     # and never opened. Each of the three non-convergence shapes is named.
-    ctx = Ctx(Paths(root), run_id="run-test")
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": "abc123"})
-    register = tmp_path / "findings.json"
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
     both = {"astra": "accepted", "flash": "accepted"}
     for entries, offender in (
         ([{"id": "F1", "severity": "minor", "disposition": "open", "reviews": both}], "F1"),
@@ -219,21 +285,20 @@ def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path
 def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(capsys, repo_pair, tmp_path):
     # I6: hashing the register at attest time only helps if something re-checks
     # it. A register edited between the attestation and the merge -- a
-    # `deferred` quietly flipped to `fixed`, say -- must stop the merge.
+    # `deferred` quietly flipped to `fixed`, say -- must stop the merge. The
+    # merge resolves the attestation's relative path against the claim's
+    # worktree to find the file again.
     _, clone = repo_pair
-    (clone / ".github" / "workflows").mkdir(parents=True)
-    (clone / ".github" / "workflows" / "ci.yml").write_text("name: CI\n")
+    write_ci_workflow(clone)
     ctx = Ctx(Paths(clone), run_id="run-test")
     body = json.loads(ISSUES)[0][0]["body"]
-    write_json(ctx, ctx.run_dir / "claim.json", {"body_hash": mergeops.body_hash(body)})
-    register = tmp_path / "findings.json"
-    register.write_text(CONVERGED)
+    register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body))
     B = Git(clone).rev("origin/master")
     code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
                      "--register", str(register), "--gates", GREEN_GATES,
                      "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
     assert code == 0
-    assert json.loads((ctx.run_dir / "attestation.json").read_text())["register_path"] == str(register.resolve())
+    assert json.loads((ctx.run_dir / "attestation.json").read_text())["register_path"] == ".agent/issue-8/findings.json"
     register.write_text(json.dumps([{"id": "F1", "severity": "blocking", "disposition": "deferred",
                                      "reviews": {"astra": "accepted", "flash": "accepted"}}]))
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)

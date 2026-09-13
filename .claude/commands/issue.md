@@ -174,9 +174,13 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
       listing the entry ids): any entry still `open`, any entry not marked
       `accepted` by BOTH reviewers, or any blocking entry left `deferred`.
 
-    `attest` also records the register's absolute path, and `merge` re-hashes
-    that file — so do not edit `findings.json` after attesting, or the merge
-    refuses with `register-changed`.
+    `attest` also records the register's path — relative to the claim's
+    worktree, because the attestation is posted verbatim as a public PR comment
+    and must not carry a local absolute path — and `merge` joins it back onto
+    that worktree and re-hashes the file. So pass a `--register` inside the
+    worktree (anything else is `register-outside-worktree`) and do not edit
+    `findings.json` after attesting, or the merge refuses with
+    `register-changed`.
 13. **PR and merge.** `halt-check` first; if halted, write the ledger and return
     `blocked halted` — never push, create a PR, or comment past this point while
     halted. The push, the PR and the PR comment all go through the executor;
@@ -202,8 +206,10 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     reason is `blocked <reason>` — including `ci-workflow-unknown`, which means
     the executor could not read the required workflow's name from
     `.github/workflows/ci.yml` and so cannot tell a green PR from one whose CI
-    has not started, and `register-changed`, which means `findings.json` moved
-    after the attestation. Both the CI-fix path and the `base-moved` path go
+    has not started, `register-changed`, which means `findings.json` moved
+    after the attestation, and `register-unresolvable`, which means this run's
+    `claim.json` is gone so the attested register cannot be located at all.
+    Both the CI-fix path and the `base-moved` path go
     back through step 11's rebase, which rewrites the ALREADY-pushed branch's
     history — a plain push would be rejected, so re-push with the one permitted
     force form, and only ever on this issue branch:

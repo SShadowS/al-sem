@@ -351,8 +351,11 @@ render of the ledger becomes the PR body.
     every required gate key is present with exit code `0` (`cdo-gate` included
     unless the diff was docs-only), and the findings register has converged — no
     `open` entry, both reviewers `accepted` on every entry, no blocking entry left
-    `deferred`. It binds the register's path as well as its hash, and the merge
-    re-hashes that file, so a register edited afterwards is `register-changed`.
+    `deferred`. It binds the register's path as well as its hash — relative to
+    the claim's worktree, since the attestation is published as a PR comment and
+    must not carry a local absolute path — and the merge joins that path back
+    onto the worktree and re-hashes the file, so a register edited afterwards is
+    `register-changed`.
 13. **PR and merge** (executor). PR creation, the attestation comment, and every
     branch push go through the executor (`pr-create`, `pr-comment`,
     `push-branch`), so all three are inside the dry-run guard, the HALT check and
