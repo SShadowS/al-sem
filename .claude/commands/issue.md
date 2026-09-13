@@ -73,11 +73,14 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    `accepted` by both against the current hash; every blocking entry is `fixed`
    or `refuted` with evidence. A `re-raised` stays unresolved even without new
    evidence. Not converged after 3 rounds: return `blocked spec-panel-cap`.
-6. **Acceptance tests.** Dispatch an `opus` subagent with the acceptance matrix,
-   the fixture conventions from CLAUDE.md "Adding New AL Constructs" and
-   "Testing Philosophy & Goldens", and the rule that a new golden family needs a
-   seed file. Tests must compile and fail for the stated reason; capture the
-   failing output in the ledger. Do NOT commit them alone — the pre-commit hook
+6. **Acceptance tests.** Call `python scripts/agentflow beat` immediately before
+   AND immediately after dispatching this step's subagent — the same
+   30-minute-staleness reason as step 8's dispatches. Dispatch an `opus`
+   subagent with the acceptance matrix, the fixture conventions from CLAUDE.md
+   "Adding New AL Constructs" and "Testing Philosophy & Goldens", and the rule
+   that a new golden family needs a seed file. Tests must compile and fail for
+   the stated reason; capture the failing output in the ledger. Do NOT commit
+   them alone — the pre-commit hook
    runs `check-goldens` and rejects a red golden family, so a failing test
    committed by itself (before its implementation lands) would block every
    subsequent commit on this branch until they are committed together.
