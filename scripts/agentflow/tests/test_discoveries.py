@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agentflow import budget, discoveries, lock
 from agentflow.gh import Gh
 from agentflow.state import read_json
@@ -104,7 +106,7 @@ def test_ambiguous_reconcile_stays_pending_and_never_recreates(ctx):
     assert rep[0]["status"] == "pending-ambiguous"
     assert read_json(ctx.paths.discoveries_index)[fp]["status"] == "pending"  # unchanged (M16)
     out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
-    assert out[0]["status"] == "skipped-remote" and not any("issue create" in c for c in r.calls)
+    assert out[0]["status"] == "ambiguous" and not any("issue create" in c for c in r.calls)
 
 
 def test_search_failure_in_file_all_reports_search_failed_and_continues(ctx):
@@ -124,3 +126,25 @@ def test_cap_five_per_issue(ctx):
     r = FakeRunner({"issue list *": "[]", "issue create *": "https://github.com/SShadowS/al-sem/issues/60\n"})
     out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), ds, "https://s")
     assert [o["status"] for o in out].count("filed") == 5 and out[-1]["status"] == "over-cap"
+
+
+def test_deadline_exceeded_raises_before_any_create(ctx):
+    lock.acquire(ctx, 8, "s", 1)
+    budget.init(ctx, claimed_at=ctx.now() - budget.WALL_CLOCK_SECONDS - 1)
+    d = disc()
+    r = FakeRunner({"issue list *": "[]", "issue create *": "https://github.com/SShadowS/al-sem/issues/99\n"})
+    with pytest.raises(budget.DeadlineExceeded):
+        discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
+    assert not any(c.startswith("issue create") for c in r.calls)
+
+
+def test_ambiguous_marker_hits_in_file_all_are_reported_not_resolved(ctx):
+    setup(ctx)
+    d = disc()
+    fp = discoveries.fingerprint(d.subsystem, d.locator, d.symptom)
+    two = json.loads(search_hit(fp, 1)) + json.loads(search_hit(fp, 2))
+    r = FakeRunner({"issue list *": json.dumps(two)})
+    out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [d], "https://s")
+    assert out == [{"fp": fp, "status": "ambiguous", "number": None, "error": "2 hits"}]
+    assert fp not in read_json(ctx.paths.discoveries_index, default={})
+    assert not any("issue create" in c for c in r.calls)

@@ -115,11 +115,17 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
         except Exception as e:
             out.append({"fp": fp, "status": "search-failed", "number": None, "error": str(e)})
             continue
-        if hits:
+        if len(hits) == 1:
             idx[fp] = {"status": "filed", "number": hits[0].number, "origin": d.origin_issue}
             _save_index(ctx, idx)
             out.append({"fp": fp, "status": "skipped-remote", "number": hits[0].number, "error": None})
             continue
+        if len(hits) > 1:
+            # Never silently resolve an ambiguous marker hit (reconcile_pending
+            # refuses to for the same reason): leave the index as-is.
+            out.append({"fp": fp, "status": "ambiguous", "number": None, "error": f"{len(hits)} hits"})
+            continue
+        budget.check_deadline(ctx)
         if budget.snapshot(ctx)["counts"].get("discoveries", 0) >= budget.CAPS["discoveries"]:
             out.append({"fp": fp, "status": "over-cap", "number": None, "error": None})
             continue

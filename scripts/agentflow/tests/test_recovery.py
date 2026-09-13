@@ -69,9 +69,11 @@ def test_post_merge_failure_refuses_push_when_master_advanced(repo_pair, tmp_pat
 
 
 def test_post_merge_failure_refuses_when_local_master_diverged(repo_pair):
-    """C1: an unpushed local commit on top of the merge SHA must never ride along
-    on the revert push. The function must refuse (`master-not-ff`), reset local
-    `master` back to `origin/master`, and leave the remote untouched."""
+    """C1 (round 2 ruling): an unpushed local commit on top of the merge SHA must
+    never ride along on the revert push, but the flow must also never DISCARD
+    state it did not create. The function must refuse (`master-not-ff`), leave
+    local `master` and the working tree exactly as found, and leave the remote
+    untouched."""
     _, clone = repo_pair
     g = Git(clone)
     bad = commit_file(clone, "bad.txt", "bad\n", "merge of #8")
@@ -81,9 +83,9 @@ def test_post_merge_failure_refuses_when_local_master_diverged(repo_pair):
     out = recovery.post_merge_failure(ctx, g, Gh(ctx, REPO, run=gh_ok()), 8, bad, rerun_gates=lambda: True)
     assert out.reason == "master-not-ff" and not out.pushed and not out.reverted
     g.fetch()
-    assert g.rev("origin/master") == bad
-    assert g.rev("master") == bad  # local reset to match origin, "extra" discarded
-    assert not (clone / "extra.txt").exists()
+    assert g.rev("origin/master") == bad  # remote untouched
+    assert g.rev("master") == extra  # local left exactly as found, nothing discarded
+    assert (clone / "extra.txt").exists()
 
 
 def test_post_merge_failure_sets_halt_even_when_merge_sha_is_unknown(repo_pair):

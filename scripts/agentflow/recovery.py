@@ -61,9 +61,11 @@ def post_merge_failure(ctx: Ctx, git: Git, gh: Gh, issue: int, merge_sha: str,
         pass  # merge_sha not (yet) reachable locally; keep the SHA-only reason
     git.checkout("master")
     if not git.ff("origin/master") or git.rev("master") != git.rev("origin/master"):
-        git.out("reset", "-q", "--hard", "origin/master")
-        _bookkeeping(gh, issue, f"Post-merge gates failed on {merge_sha}; local `master` had diverged from "
-                                 f"`origin/master`. Reset to `origin/master`; nothing reverted or pushed. HALT set.")
+        # Never discard state the flow did not create: local `master` is left
+        # exactly as found, unlike the resets below (which only ever discard
+        # this function's OWN revert commit).
+        _bookkeeping(gh, issue, f"Post-merge gates failed on {merge_sha}; local `master` has diverged from "
+                                 f"`origin/master`. Left untouched; nothing reverted or pushed. HALT set.")
         notify(ctx, "regressed", f"#{issue}: local master diverged from origin/master, refusing to act")
         return RevertOutcome(True, False, False, "master-not-ff")
     if not git.revert(merge_sha):
