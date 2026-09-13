@@ -45,3 +45,17 @@ Thumbs.db
 # committed — see src/program/resolve/anon.rs's module docs.
 tests/goldens/semantic-edges/cdo-deanon-map.json
 .agent-review/
+
+# agentflow (the autonomous issue orchestrator) — local state is ignored; the two
+# per-issue evidence files are versioned. Pattern shape matters: `.agent/*` plus
+# re-includes, because git never descends into a fully-ignored directory.
+.agent/*
+!.agent/issue-*/
+.agent/issue-*/*
+!.agent/issue-*/ledger.md
+!.agent/issue-*/findings.json
+
+# agentflow's test suite (scripts/agentflow/tests/) — nothing else in the repo
+# ignores these.
+__pycache__/
+.pytest_cache/
