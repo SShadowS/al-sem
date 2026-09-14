@@ -640,6 +640,27 @@ under `docs/superpowers/specs/`.
   `al-sem-OBOLETE`; nothing in this repo reads from it or writes into it at test
   time, and zero tests point at it any more. Every differential/golden is
   Rust-owned and regenerable via `REGEN_TEMP_GOLDENS=1 cargo test` (see above).
+- **The CDO baseline is a PINNED, reproducible workspace — keep it that way.**
+  `CDO_WS` must point at `U:/Git/DO-cdo-baseline/Cloud`: a git worktree of the DO
+  repo parked DETACHED at `bc3ccb18`, with a clean tree and its own copy of
+  `.alpackages`. It is deliberately separate from the day-to-day `U:/Git/DO/Cloud`
+  checkout, which moves as work happens.
+  The previous baseline was minted from a tree that was later copied out of its git
+  repo, losing `.git`; its recorded mint SHA (`64643a2f`) then existed in no checkout
+  at all, so nobody could tell "the engine regressed" from "the input changed". The
+  concrete cost: the semantic audit paired ZERO sites against it and still reported a
+  pass for two months. **A baseline you cannot reconstruct is not a baseline.**
+  Every golden stamps `workspace_git_sha`, `workspace_dirty` AND
+  `dependency_closure_sha256` (SHA-256 over each `.alpackages` file's name + bytes).
+  That third field exists because git state covers only TRACKED files — the symbol
+  closure is gitignored, so a workspace can report `dirty: false` while the
+  dependencies the resolver reads were swapped wholesale. Under `ENFORCE_CDO_WS=1`
+  any drift in these is a HARD FAILURE, not a warning; ungated developer runs still
+  only warn. Advancing the pin is deliberate: move the worktree, re-mint, re-triage.
+  **Known limit:** the closure digest covers only `<workspace>/.alpackages`, while
+  `dependencies.rs` walks EVERY `.alpackages` up the ancestor chain — a same-GUID
+  higher-version `.app` in an ancestor cache still moves dependency selection
+  invisibly. Do not read `dependency_closure_sha256` as "the closure is pinned".
 - **CDO ratchet tests skip silently by default, but can be made to fail loudly.**
   The north-star zero-ratchets (real-unknown rate, unknown count, `ambiguousResolved`
   pin, coverage contract) live in tests gated on the `CDO_WS` env var pointing at a

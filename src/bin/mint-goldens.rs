@@ -61,8 +61,8 @@ use al_sem::program::resolve::anon::{self, ANON_KEY_ENV};
 use al_sem::program::resolve::semantic_golden::{
     MintMetadata, anonymize_event_rows_with_deanon, anonymize_golden_with_deanon,
     cdo_anon_golden_path, cdo_deanon_map_path, cdo_event_anon_golden_path,
-    cdo_trigger_anon_golden_path, merge_deanon_map, mint_l3_trigger_golden,
-    mint_l3_validated_golden, workspace_git_info,
+    cdo_trigger_anon_golden_path, dependency_closure_digest, merge_deanon_map,
+    mint_l3_trigger_golden, mint_l3_validated_golden, workspace_git_info,
 };
 
 fn usage() -> ExitCode {
@@ -138,9 +138,20 @@ fn main() -> ExitCode {
     // before minting; re-mint when intentionally advancing the pin.
     let (workspace_git_sha, workspace_dirty) = workspace_git_info(&workspace_root);
     eprintln!("  workspace git: sha={workspace_git_sha:?} dirty={workspace_dirty:?}");
+    // git state covers only TRACKED files; `.alpackages` is gitignored, so the
+    // dependency symbols the resolver actually reads are invisible to `dirty`.
+    // Stamp them separately or the baseline is only half pinned.
+    let dependency_closure_sha256 = dependency_closure_digest(&workspace_root);
+    match &dependency_closure_sha256 {
+        Some(d) => eprintln!("  .alpackages closure: {d}"),
+        None => eprintln!(
+            "  .alpackages closure: NONE (no dependency symbols found) — cross-app              resolution will see nothing, and drift in this closure cannot be detected"
+        ),
+    }
     let mint_metadata = MintMetadata {
         workspace_git_sha,
         workspace_dirty,
+        dependency_closure_sha256,
     };
 
     eprintln!(
