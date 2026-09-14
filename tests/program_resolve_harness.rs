@@ -2814,11 +2814,17 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
     // makes no resolver changes. Combined with the `real_unknown_rate`/
     // `unknown`-COUNT ceilings above (also confirmed at 0), the
     // **legacy-inclusive** rate (`(unknown + ambiguous_resolved) / total`,
-    // the pre-sigfp-reclassification-plan metric definition —
-    // `Histogram::legacy_unknown_rate_including_ambiguous()`) is ALSO exactly
-    // 0.0000% now: every statically-resolvable call obligation on CDO
-    // resolves under EITHER metric definition, closing the arc this plan's
-    // preamble opened at real-unknown 0.0497%/9 + ambiguousResolved 7.
+    // the pre-sigfp-reclassification-plan metric definition --
+    // `Histogram::legacy_unknown_rate_including_ambiguous()`) was ALSO exactly
+    // 0.0000% on the 2026-07-04 workspace.
+    //
+    // STALE AS WRITTEN, corrected 2026-09-14 (caught by gpt-5.6-sol in review):
+    // that sentence sat directly above a ratchet now pinned at ambiguousResolved
+    // = 67, which is arithmetically incompatible with it. On the pinned
+    // `bc3ccb18` baseline the legacy-inclusive rate is (0 + 67) / 20897 =
+    // **0.3206%**, not 0. `real_unknown_rate` alone is still exactly 0.0000% --
+    // the two definitions have diverged again, which is precisely the situation
+    // the dual-metric reporting exists to keep visible rather than average away.
     // RE-DERIVED 2026-09-14 for the pinned `bc3ccb18` baseline: 0 -> 67.
     //
     // The 0 was measured on 2026-07-04 against a workspace whose mint SHA
@@ -4151,6 +4157,29 @@ fn committed_goldens_metadata_is_valid() {
         "every known-genuine-divergences.json entry must be adjudicated          l3_error_intrinsic; a shortfall means a fresh_false_builtin or          needs_manual_review survivor slipped through — investigate before          relying on the overlay"
     );
 
+    // ARTIFACT RATCHET — pins the COMMITTED files, which this test can see.
+    //
+    // An earlier revision deleted every exact count here, arguing an unconditional
+    // test 'cannot know the count'. That conflated two different things (caught by
+    // gpt-5.6-sol in review): it cannot derive the LIVE WORKSPACE's divergence
+    // count without CDO_WS, but it can absolutely pin what is COMMITTED. Without
+    // that, both files could be emptied in lockstep and sail through every machine
+    // where CDO_WS is unset -- which is most of them, and all of public CI.
+    //
+    // 0 is the real committed value for the pinned bc3ccb18 baseline: the raw
+    // pre-overlay audit reports no genuine_wrong sites there, so there is nothing
+    // to adjudicate. Moving the baseline is a deliberate act; so is updating this.
+    const COMMITTED_ADJUDICATED_ENTRIES: usize = 0;
+    assert_eq!(
+        manifest_entries.len(),
+        COMMITTED_ADJUDICATED_ENTRIES,
+        "known-genuine-divergences.json must carry exactly {} entries for the \
+         committed bc3ccb18 baseline. A change here is either a real baseline move \
+         (update this constant deliberately, with the new population triaged) or \
+         tampering. Do NOT relax it to make a red gate green.",
+        COMMITTED_ADJUDICATED_ENTRIES,
+    );
+
     // The adjudication overlay itself (`adjudicated-overrides.json`) — also
     // unconditionally checkable (pure JSON, no CDO_WS needed to validate its
     // SHAPE; the CDO-gated `cdo_genuine_wrong_is_precedence_adjudicated` test
@@ -5047,11 +5076,29 @@ fn cdo_genuine_wrong_is_precedence_adjudicated() {
         .iter()
         .map(|k| (k.unit.clone(), k.line, k.callee_fp))
         .collect();
+    // O is built from the entries the overlay ACTUALLY APPLIES, i.e. the
+    // `l3_error_intrinsic` ones -- `apply_adjudicated_overrides_detailed` skips
+    // every other verdict. Mapping ALL entries here was a real hole (found by
+    // gemini-3.8-flash in review): an entry with any other verdict would satisfy
+    // O == G while never being applied, so the divergence it names would survive
+    // into the effective audit unadjudicated. The effective genuine_wrong_count
+    // assertion below is the backstop, but the set itself must describe reality.
     let overlay_keys: std::collections::BTreeSet<(String, u32, u64)> = overrides
         .entries
         .iter()
+        .filter(|ov| ov.verdict == VERDICT_L3_ERROR_INTRINSIC)
         .map(|ov| (ov.unit.clone(), ov.line, ov.callee_fp))
         .collect();
+    // An entry with any other verdict is never applied, so it can only mislead.
+    assert!(
+        overrides
+            .entries
+            .iter()
+            .all(|ov| ov.verdict == VERDICT_L3_ERROR_INTRINSIC),
+        "adjudicated-overrides.json holds an entry whose verdict is not \
+         l3_error_intrinsic; such an entry is silently NOT applied by the \
+         overlay, so it would claim to adjudicate a divergence it never touches"
+    );
 
     // Non-vacuity FIRST: a raw audit that paired nothing makes `raw_genuine`
     // trivially empty, which would make the equality below meaningless. This is

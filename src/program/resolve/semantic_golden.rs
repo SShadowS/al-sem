@@ -208,8 +208,8 @@ pub const ANON_GOLDEN_SCHEMA_VERSION: u32 = 2;
 /// Mint-time provenance metadata stamped into every committed golden (1B.3b
 /// Task 1 fix, Fix 4): the CDO workspace's git HEAD SHA and dirty state at
 /// mint time, captured by [`workspace_git_info`]. Audit time re-probes the
-/// CURRENT workspace and WARNS (does not fail — drift is operational, not a
-/// correctness signal) when it differs from the stamp; see
+/// CURRENT workspace and warns on a mismatch -- or PANICS under
+/// `ENFORCE_CDO_WS=1`; see the drift check, and
 /// `run_cdo_semantic_audit`/`run_cdo_trigger_audit`/`run_cdo_event_audit`'s
 /// drift-warning step. `#[serde(default)]` on both fields so a golden minted
 /// before this field existed (or from a non-git workspace export) still
@@ -308,8 +308,12 @@ pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool
 
 /// Emit a `WARNING` on stderr when the CURRENT `workspace_root`'s git SHA/
 /// dirty state differs from `stamped` (the golden's mint-time
-/// [`MintMetadata`]). Never fails the audit — drift is operational (a
-/// developer pointing `CDO_WS` at a workspace that has moved on since the
+/// **Ungated: warns. Under `ENFORCE_CDO_WS=1`: PANICS.** The old never-fails
+/// behaviour is exactly how the previous baseline rotted -- every run printed a
+/// drift warning for two months while the audit it guarded paired ZERO sites and
+/// still reported a pass. A gated run is the one place an unreproducible baseline
+/// must stop the build; ungated developer runs keep the warning, because drift
+/// there is ordinary and asserts nothing.
 /// last mint), not a resolver regression; see [`MintMetadata`]'s doc comment.
 fn warn_on_workspace_drift(stamped: &MintMetadata, workspace_root: &Path) {
     let (current_sha, current_dirty) = workspace_git_info(workspace_root);

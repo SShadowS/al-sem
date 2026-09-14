@@ -657,6 +657,10 @@ under `docs/superpowers/specs/`.
   dependencies the resolver reads were swapped wholesale. Under `ENFORCE_CDO_WS=1`
   any drift in these is a HARD FAILURE, not a warning; ungated developer runs still
   only warn. Advancing the pin is deliberate: move the worktree, re-mint, re-triage.
+  **Known limit:** the closure digest covers only `<workspace>/.alpackages`, while
+  `dependencies.rs` walks EVERY `.alpackages` up the ancestor chain — a same-GUID
+  higher-version `.app` in an ancestor cache still moves dependency selection
+  invisibly. Do not read `dependency_closure_sha256` as "the closure is pinned".
 - **CDO ratchet tests skip silently by default, but can be made to fail loudly.**
   The north-star zero-ratchets (real-unknown rate, unknown count, `ambiguousResolved`
   pin, coverage contract) live in tests gated on the `CDO_WS` env var pointing at a
