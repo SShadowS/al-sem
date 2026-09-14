@@ -517,34 +517,37 @@ mod tests {
         .build_with_diagnostics()
         .expect("snapshot build");
 
-        assert_eq!(
-            dropped.len(),
-            12,
-            "CDO's real .alpackages duplicate-GUID population moved — \
-             re-derive this pin, don't just loosen it; got {dropped:#?}"
-        );
-
-        let byte_identical = dropped
-            .iter()
-            .filter(|d| d.kept_version == d.dropped_version)
-            .count();
-        assert_eq!(
-            byte_identical, 10,
-            "10 of CDO's 12 drops are the SAME version cached in both the \
-             workspace's own and its ancestor's .alpackages; got {dropped:#?}"
-        );
-
-        let mut stale_names: Vec<&str> = dropped
-            .iter()
-            .filter(|d| d.kept_version != d.dropped_version)
-            .map(|d| d.name.as_str())
-            .collect();
-        stale_names.sort_unstable();
-        assert_eq!(
-            stale_names,
-            vec!["Continia Connector App", "Continia Document Output"],
-            "exactly these two drops must be a genuine version mismatch \
-             (the stale-ancestor-copy scenario); got {dropped:#?}"
+        // RE-DERIVED 2026-09-14 for the pinned `bc3ccb18` baseline: 12 -> 0.
+        //
+        // The 12 were never a property of CDO's dependencies. They were a property
+        // of the OLD workspace's LAYOUT: that tree had its own `.alpackages` AND an
+        // ancestor one (`DocumentOutput/Cloud` plus `DocumentOutput`), and
+        // `find_all_alpackages_folders` scans both, so 10 apps appeared twice
+        // byte-identically and 2 more carried a genuinely stale ancestor copy.
+        //
+        // `U:/Git/DO-cdo-baseline/Cloud` has ONE `.alpackages` and an ancestor with
+        // none, so that duplicate population cannot form. 0 is not a loosened pin --
+        // it is the honest count for a workspace shaped this way, and the
+        // byte-identical / stale-name breakdowns that used to follow have no
+        // population left to describe (see git history, pre-2026-09-14).
+        //
+        // Found late, by `ci-steps all` on an issue branch rather than by the
+        // baseline arc that caused it: this is a `--lib` test, and NEITHER
+        // `scripts/check-goldens` NOR `scripts/cdo-gate` runs `--lib`. That blind
+        // spot hid a real failure twice in one session -- the other was
+        // `cache_version_grammar_tracks_the_linked_grammar` during the v4.4.0
+        // grammar bump. Run `cargo test -p al-sem --lib` after any baseline or
+        // grammar move; the golden gate will not tell you.
+        //
+        // If a future baseline reintroduces an ancestor package cache this becomes
+        // nonzero again -- RE-DERIVE it against that workspace, do not restore 12.
+        assert!(
+            dropped.is_empty(),
+            "the pinned bc3ccb18 baseline has ONE .alpackages and no ancestor \
+             cache, so no duplicate-GUID drop is possible; got {dropped:#?}. A \
+             nonzero count means the workspace gained an ancestor package cache: \
+             re-derive this pin against it, and restore the byte-identical and \
+             stale-name breakdowns from git history."
         );
     }
 
