@@ -1,0 +1,258 @@
+[
+  {
+    "id": "ASTRA-01",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "src/engine/l3/l3_workspace.rs",
+    "line": 1237,
+    "severity": "minor",
+    "text": "Q1 CONFIRMED, and more strongly than the spec claimed: L3 does not copy an L2 projection, it CALLS ir_routine_kind directly (l3_workspace.rs:1237-1248) and stores the result as L3Routine.kind (:1268-1281), which is the exact field d19 reads (d19.rs:29-50). The kind-based skip is the right mechanism.",
+    "disposition": "fixed",
+    "evidence": "Design rationale strengthened in the ledger to cite the direct L3 call chain rather than 'L2 already classifies this'.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "ASTRA-02",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "src/engine/l2/ir_walk.rs",
+    "line": 2517,
+    "severity": "important",
+    "text": "Unconditional predicate equivalence between the kind skip and an attribute gate is REJECTED. Three differences: (a) the issue's IntegrationEvent-only gate is narrower than kind, which also covers BusinessEvent; (b) a routine carrying BOTH subscriber and publisher attributes classifies event-subscriber (ir_walk.rs:2519-2522), so the publisher check must stay AFTER the existing subscriber skip to preserve skip accounting; (c) fold_identifier folds Turkish dotted-I to 'i' while has_attribute uses to_lowercase (casing.rs:12-35 vs al_attributes.rs:62-64), so the predicates are not universally identical.",
+    "disposition": "fixed",
+    "evidence": "Design revised: the skip is stated as covering IntegrationEvent AND BusinessEvent via the existing classification, with NO claim of universal predicate equivalence. The publisher check is placed AFTER the existing event-subscriber skip so a dual-attribute routine still books a subscriber skip (ir_walk.rs:2519-2522 gives event-subscriber precedence). Acceptance adds an ASCII mixed-casing publisher case. The Turkish dotted-I divergence (casing.rs:12-35 vs al_attributes.rs:62-64) is recorded as a known non-equivalence rather than claimed away; it cannot arise here because the kind path never consults has_attribute.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "ASTRA-03",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "tests/r0-corpus/ws-r0-canon-stress/src/publisher.al",
+    "line": 56,
+    "severity": "minor",
+    "text": "Bounded deferral of InternalEvent CONFIRMED, but the spec's P3 overstated it: OnInternalSignal() takes NO parameters, so it demonstrates the classification gap and is NOT an executable d19 false positive today. Also the fixture and r1a golden actively ENCODE 'InternalEvent classifies as procedure', and routine.kind additionally feeds routine-ID construction (l3_workspace.rs:890-902), so the follow-up carries ID blast radius and must revisit that expectation rather than preserve it because it is golden-backed (CLAUDE.md:562-572).",
+    "disposition": "fixed",
+    "evidence": "Ledger P3 corrected: OnInternalSignal() in ws-r0-canon-stress takes NO parameters, so InternalEvent is a classification gap and NOT an active d19 false positive today -- my original wording overstated it. The discovery text now also records that routine.kind feeds routine-ID construction (l3_workspace.rs:890-903), so the follow-up carries ID blast radius, and that the follow-up must revisit the fixture's expectation rather than preserve it because it is golden-backed (CLAUDE.md:562-572). flash independently confirmed deferral is correct and added that special-casing InternalEvent inside d19 alone would create the second-definition problem the design exists to avoid.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "ASTRA-04",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d19.rs",
+    "line": 59,
+    "severity": "minor",
+    "text": "Exemption CONFIRMED, but the stronger claim that a publisher parameter can never deserve removal is REJECTED. d19 checks only the publisher's own identifier_references and cannot distinguish a useful subscriber-facing parameter from a genuinely redundant one. The rationale must cite subscriber READS as well as writes (ws-d59 has a non-var informational parameter). A redundant-parameter detector would need subscriber-use evidence; the dead-event case already has separate coverage via d12.",
+    "disposition": "fixed",
+    "evidence": "Rationale broadened in the ledger: publisher parameters serve subscriber READS as well as writes (ws-d59 carries a non-var informational parameter), and the claim is narrowed to 'd19 cannot evaluate this property', not 'a publisher parameter can never deserve removal'. A redundant-parameter detector would need subscriber-use evidence; dead events are already covered by d12. flash concurred that no genuine d19 signal is lost.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "ASTRA-05",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "tests/r0-corpus/ws-d19/src/Codeunit.al",
+    "line": 1,
+    "severity": "important",
+    "text": "Existing d19 coverage contains NO publisher at all, so classifier-only or existing-golden-only coverage is rejected. Needs an inline-source integration test through assemble_and_resolve + the registered detector, asserting assembly actually produced the routines (do NOT copy r4_differential.rs:1346-1355's failed-assembly-to-empty fallback, which lets a negative test pass without analyzing anything), plus IntegrationEvent and BusinessEvent publishers incl. ASCII mixed casing emitting nothing, and ordinary unused parameters still emitting. Expected corpus deltas: ws-d59 6->0 (5 publisher routines skipped), ws-d38 3->0 (3), ws-d12-dead-event 1->0 (1), ws-d19 2->2 (0). Count ROUTINES not parameters in the skip statistic.",
+    "disposition": "fixed",
+    "evidence": "Acceptance matrix rewritten: an integration test drives real assembly plus the registered detector (never a helper), asserts the assembly actually produced the routines rather than falling back to an empty result (avoiding r4_differential.rs:1346-1355's shape), covers an IntegrationEvent publisher, a BusinessEvent publisher, ASCII mixed casing, and an ordinary unused parameter control, and pins corpus deltas ws-d59 6->0, ws-d38 3->0, ws-d12-dead-event 1->0, ws-d19 2->2. The skip statistic counts ROUTINES (5/3/1), not parameters. Discrimination proof will remove ONLY the new skip, assert the patch applied, record the real fail output, restore, and record the real pass.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "ASTRA-06",
+    "source": "gpt-6-astra",
+    "round": 1,
+    "file": "tests/r4-goldens/ws-d59.r4.golden.json",
+    "line": 1,
+    "severity": "important",
+    "text": "The spec's assumption that the three publisher r4 goldens must be regenerated is REJECTED: each encodes only its own selected detector (d38/d59/d12), none carries the ten buggy d19 findings, and all four should stay byte-identical. Their passing today is a coverage gap, not evidence against the bug. Separately, CLI stats goldens DO include d19 (cli_a_stats_differential.rs:31-65,148-171) and zero-valued skip counts are omitted from serialization (registry.rs:169-175), so adding the counter alone changes nothing, but a body-bearing publisher can move stats.",
+    "disposition": "fixed",
+    "evidence": "Spec corrected: NO committed golden is expected to move. Each publisher fixture's r4 golden encodes only its own selected detector (d38/d59/d12) and none carries d19 output; ws-d19's golden keeps its 2 genuine findings. Their passing today is recorded as a coverage gap, not evidence against the bug. check-goldens is still run to verify rather than assert. The CLI stats note is carried into the gate plan: zero-valued skips are omitted (registry.rs:169-175), so the new counter alone moves nothing.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-01",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "src/engine/l3/l3_workspace.rs",
+    "line": 903,
+    "severity": "important",
+    "text": "Q1 CONFIRMED independently, with a second call site astra did not name: ir_routine_kind is called at l3_workspace.rs:903 to compute kind_for_id when minting routine_id, as well as at :1257 for L3Routine.kind. RoutineDecl.attributes are stored already-lowercased (ir/decl.rs:152), so the classifier's bare string compares are sound.",
+    "disposition": "fixed",
+    "evidence": "Recorded in the ledger's design rationale; it also sharpens ASTRA-03's blast-radius point, since the ID path is the reason an InternalEvent classification change is not a local edit.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-02",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "src/engine/l2/ir_walk.rs",
+    "line": 2520,
+    "severity": "important",
+    "text": "Q2 CONFIRMED as equivalent IN SCOPE: for IntegrationEvent and BusinessEvent the kind check and an attribute gate are strictly identical, the only in-scope divergence being InternalEvent which neither matches. Dual-attribute routines resolve to event-subscriber and are already skipped, so both paths emit nothing.",
+    "disposition": "fixed",
+    "evidence": "Consistent with ASTRA-02; the design claims scope equivalence only, never universal equivalence. flash and astra agree on the ordering requirement.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-03",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "src/engine/l2/ir_walk.rs",
+    "line": 2522,
+    "severity": "critical",
+    "text": "Q3 CONFIRMED that deferring InternalEvent is correct, and adds the decisive architectural reason: special-casing InternalEvent inside d19 via an attribute check would create a second, conflicting definition of publisher status next to ir_routine_kind -- the exact duplication the kind-based design exists to avoid. Shipping the event-publisher skip clears 100% of the ACTIVE corpus false positives.",
+    "disposition": "fixed",
+    "evidence": "Deferral retained and the reason recorded in the ledger. The discovery is filed against ir_routine_kind (the single definition), not against d19.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-04",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d19.rs",
+    "line": 1,
+    "severity": "critical",
+    "text": "Q4 CONFIRMED that no genuine d19 signal is lost: a publisher body is empty by language definition, so d19's body-local predicate is 100% false-positive on that population by construction. A parameter no subscriber uses is a different question owned by the event-graph detectors (d12 dead event, d14 dead routine), not by d19's stated definition.",
+    "disposition": "fixed",
+    "evidence": "Matches ASTRA-04 once astra's narrowing is applied. The ledger states the limit explicitly rather than claiming publisher parameters are always justified.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-05",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "tests/r4/r4_differential.rs",
+    "line": 528,
+    "severity": "important",
+    "text": "Q5 CONFIRMED: the test must drive the production detector over an assembled workspace, not a helper (CLAUDE.md:512). Proposes a three-case fixture -- IntegrationEvent publisher with parameters, BusinessEvent publisher with parameters, ordinary procedure with an unused parameter -- asserting 0/0/1 findings plus the eventPublisher skip count, and a break that makes it report 3.",
+    "disposition": "fixed",
+    "evidence": "Folded into the same acceptance matrix as ASTRA-05, which is the stricter of the two (it additionally requires asserting assembly succeeded and forbids the empty-result fallback). Both reviewers independently demand the skip statistic be asserted.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FLASH-06",
+    "source": "gemini-3.8-flash",
+    "round": 1,
+    "file": "tests/r4-goldens/ws-d59.r4.golden.json",
+    "line": 3,
+    "severity": "critical",
+    "text": "Q6 REJECTED the briefing's premise outright and FALSIFIED it: r4 goldens are scoped per-detector, the three publisher fixtures list only d38/d59/d12, and ws-d19's fixture contains no publisher at all -- so no committed golden encodes the buggy output and none requires regeneration.",
+    "disposition": "fixed",
+    "evidence": "Identical conclusion to ASTRA-06, reached independently. The spec now predicts zero golden movement and treats check-goldens as the verification of that prediction.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CONDUCTOR-01",
+    "source": "implementation + repo gate",
+    "round": 2,
+    "file": "tests/cli-a-goldens/stats/ws-d8-commit-in-tx.default.json",
+    "line": 1,
+    "severity": "important",
+    "text": "ASTRA-06 and FLASH-06 BOTH concluded that no committed golden encodes the buggy d19 output and that none would move. Running the gate FALSIFIED that. Both reviewers, and the spec, reasoned only about r4 goldens -- where they were right -- and neither checked the cli-a / gate families. tests/r0-corpus/ws-d8-commit-in-tx/src/posting.al:18-21 carries `[IntegrationEvent(false, false)] procedure OnAfterPostSalesDoc(Header: Record \"Sales Header\")` with an empty body, and the committed stats golden encodes the false positive verbatim: {\"detector\": \"d19-unused-parameter\", \"findingsEmitted\": 1, \"skipped\": {\"eventSubscriber\": 1}}. 14 cli_a_* tests move across stats/json/html plus the gate pr-summary/SARIF families; the other 8 of 9 golden targets are byte-clean.",
+    "disposition": "fixed",
+    "evidence": "Triaged line by line: every moved line is this one fixture's d19 entry going findingsEmitted 1 -> 0 with skipped gaining eventPublisher: 1 -- i.e. exactly the false positive this issue exists to remove, in a family nobody thought to check. No unexplained line. The spec had already framed zero-movement as 'a prediction the gate VERIFIES, not an assumption', so the process held even though the prediction did not; the spec text is corrected to record the real outcome. Regeneration is BLOCKED pending the GOLDEN_TRIAGED gate (see ledger Gate results). ACCEPTED BY BOTH AT THE FINAL PANEL, which reviewed the same golden movement on the real diff. astra: 'All nine changed golden files represent the same justified suppression ... the updated stats show zero findings and one publisher skip ... I found no evidence of a missed family.' flash (Finding 4): 'exactly one fixture changed ... Its previous presence in the golden was an exact instance of the d19 false positive ... No other golden moved because r4 goldens run per-detector.' Both qualified that they did not re-run the gates themselves; `check-goldens` exit 0 on this commit is that half of the evidence.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FINAL-01",
+    "source": "gpt-6-astra + gemini-3.8-flash",
+    "round": 2,
+    "file": "docs/superpowers/plans/2026-09-14-issue-25-d19-publisher-skip.md",
+    "line": 12,
+    "severity": "minor",
+    "text": "RAISED INDEPENDENTLY BY BOTH REVIEWERS. The committed plan still stated 'Ordering is load-bearing ... the publisher check MUST come after the subscriber check' as a live requirement, although implementation FALSIFIED it (the ordering break came back green: d19's three checks are mutually-exclusive equality tests on one already-decided scalar, so their order is unobservable). d19.rs and the ledger's implementation notes retract it; the plan did not.",
+    "disposition": "fixed",
+    "evidence": "The paragraph is struck through and annotated SUPERSEDED, naming the measurement that falsified it and pointing at dual_attribute_routine_books_the_subscriber_counter as the guard that actually pins the upstream precedence.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FINAL-02",
+    "source": "gpt-6-astra",
+    "round": 2,
+    "file": ".agent/issue-25/ledger.md",
+    "line": 97,
+    "severity": "minor",
+    "text": "The acceptance matrix still carried the row 'No committed golden moves', which the gate FALSIFIED: ws-d8-commit-in-tx's committed golden encoded the false positive verbatim, and nine golden files moved.",
+    "disposition": "fixed",
+    "evidence": "Row struck through and marked FALSIFIED, pointing at the Gate results section which records what moved and why. The prediction was always framed as something the gate VERIFIES; the verification said no.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FINAL-03",
+    "source": "gpt-6-astra",
+    "round": 2,
+    "file": ".agent/issue-25/ledger.md",
+    "line": 325,
+    "severity": "minor",
+    "text": "The discrimination proof was SUMMARISED ('remove the skip and 4 publisher cases fail') rather than evidenced. CLAUDE.md requires recording both outcomes, and a summary cannot be audited against the run that produced it.",
+    "disposition": "fixed",
+    "evidence": "The verbatim outcomes are now in the ledger: the mutation with its applied-count assertion, the real FAILED transcript including a quoted finding, and the real 7-passed restore. The separately-falsified ordering break is recorded alongside as evidence about the CODE, not the test.",
+    "hash": "265d47e3a8d3ba0b",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  }
+]

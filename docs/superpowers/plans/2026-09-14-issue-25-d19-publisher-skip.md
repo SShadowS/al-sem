@@ -9,9 +9,18 @@ Spec panel converged round 2, 12/12 accepted by both reviewers.
 skip, add a `"event-publisher"` skip plus a `skipped_event_publisher` counter wired into the
 detector's stats exactly like `skipped_trigger` / `skipped_event_subscriber`.
 
-Ordering is load-bearing: `ir_routine_kind` gives `eventsubscriber` precedence, so the
+~~Ordering is load-bearing: `ir_routine_kind` gives `eventsubscriber` precedence, so the
 publisher check MUST come after the subscriber check or a dual-attribute routine is booked
-against the wrong counter.
+against the wrong counter.~~
+
+**SUPERSEDED — this claim was FALSIFIED during implementation.** The ordering break came
+back GREEN, so it was investigated rather than shipped: d19's three checks are
+mutually-exclusive equality tests against ONE already-decided scalar (`routine.kind`), so
+reordering them is unobservable. The precedence that actually matters lives upstream in
+`ir_routine_kind`, and `dual_attribute_routine_books_the_subscriber_counter` is what pins
+it — inverting THAT branch order fails the test. See `d19.rs`'s comment and the ledger's
+implementation notes. Both final-panel reviewers flagged this paragraph as still reading
+like a live requirement; it is history, not instruction.
 
 **Tests.** TDD — red first, in the same commit as the fix (a test committed alone would fail
 the pre-commit golden gate). The test drives REAL workspace assembly and the REGISTERED
