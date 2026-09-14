@@ -228,6 +228,47 @@ pub struct MintMetadata {
     /// git probe failed (same best-effort caveat as `workspace_git_sha`).
     #[serde(default)]
     pub workspace_dirty: Option<bool>,
+    /// SHA-256 over the workspace `.alpackages` symbol closure at mint time
+    /// -- see [`dependency_closure_digest`].
+    ///
+    /// **Why this exists.** `workspace_git_sha` + `workspace_dirty` describe only
+    /// TRACKED files. `.alpackages` is gitignored, so a workspace can report
+    /// `dirty: false` while the dependency symbols the resolver actually reads
+    /// have been swapped wholesale. Cross-app resolution reads those bytes, so a
+    /// golden pinned by git state alone is only HALF pinned -- and this repo has
+    /// already lost a baseline that looked pinned and was not. `None` for a golden
+    /// minted before this field existed, or a workspace with no `.alpackages`.
+    #[serde(default)]
+    pub dependency_closure_sha256: Option<String>,
+}
+
+/// SHA-256 over the workspace `.alpackages` symbol closure: every file NAME and
+/// its BYTES, in sorted-name order.
+///
+/// `None` when the directory is absent or empty -- a workspace without dependency
+/// symbols has no closure to pin, which is a legitimate state and must never be
+/// confused with "the closure changed".
+#[must_use]
+pub fn dependency_closure_digest(workspace_root: &Path) -> Option<String> {
+    let dir = workspace_root.join(".alpackages");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    files.sort();
+    let mut hasher = Sha256::new();
+    for f in &files {
+        let name = f.file_name()?.to_string_lossy().to_string();
+        hasher.update(name.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(std::fs::read(f).ok()?);
+        hasher.update([0u8]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Probe `workspace_root`'s git HEAD SHA + dirty state via the `git` CLI
@@ -272,15 +313,48 @@ pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool
 /// last mint), not a resolver regression; see [`MintMetadata`]'s doc comment.
 fn warn_on_workspace_drift(stamped: &MintMetadata, workspace_root: &Path) {
     let (current_sha, current_dirty) = workspace_git_info(workspace_root);
-    if current_sha != stamped.workspace_git_sha || current_dirty != stamped.workspace_dirty {
-        eprintln!(
-            "WARNING: CDO workspace drifted from mint-time SHA {:?} (dirty={:?}); \
-             current SHA {:?} (dirty={:?}). Audit diffs may reflect workspace drift, \
-             not engine regressions — re-mint to advance the pin (see \
-             src/bin/mint-goldens.rs).",
-            stamped.workspace_git_sha, stamped.workspace_dirty, current_sha, current_dirty,
-        );
+    let current_closure = dependency_closure_digest(workspace_root);
+    // A stamp of `None` predates this field — do not report drift against a
+    // golden that never recorded a closure, or every older golden becomes
+    // permanently "drifted" and the signal is noise again.
+    let closure_drifted = stamped
+        .dependency_closure_sha256
+        .as_ref()
+        .is_some_and(|st| current_closure.as_ref() != Some(st));
+    let git_drifted =
+        current_sha != stamped.workspace_git_sha || current_dirty != stamped.workspace_dirty;
+    if !git_drifted && !closure_drifted {
+        return;
     }
+
+    let msg = format!(
+        "CDO workspace drifted from the golden mint stamp.\n  \
+         git SHA: stamped {:?} (dirty={:?}), current {:?} (dirty={:?})\n  \
+         .alpackages closure: stamped {:?}, current {:?}\n  \
+         Audit diffs may reflect workspace drift rather than engine regressions \
+         -- re-mint to advance the pin (see src/bin/mint-goldens.rs).",
+        stamped.workspace_git_sha,
+        stamped.workspace_dirty,
+        current_sha,
+        current_dirty,
+        stamped.dependency_closure_sha256.as_deref(),
+        current_closure.as_deref(),
+    );
+
+    // Under ENFORCE_CDO_WS=1 this is a HARD FAILURE, not a warning.
+    //
+    // Warning-only is exactly how the previous baseline rotted: the goldens were
+    // minted from a tree whose SHA later existed in no checkout at all, every run
+    // printed this message, and nobody acted on it for two months -- while the
+    // audits it guards silently paired ZERO sites and still reported a pass. A
+    // gated run (`scripts/cdo-gate`) is the one context where an unreproducible
+    // baseline must stop the build rather than narrate at it. Ungated developer
+    // runs keep the warning, because drift there is ordinary and claims nothing.
+    assert!(
+        std::env::var("ENFORCE_CDO_WS").as_deref() != Ok("1"),
+        "{msg}"
+    );
+    eprintln!("WARNING: {msg}");
 }
 
 /// Anonymized, serde-able mirror of [`GoldenSiteKey`]. The four identifying
@@ -668,6 +742,9 @@ pub struct CdoSemanticAuditReport {
     /// SHA-256 hex digest over the sorted site→(l3_targets, fresh_targets) pairs.
     /// Deterministic across runs; used as a pinnable CDO audit fingerprint.
     pub digest: String,
+    /// What the adjudication overlay actually did on this run. Empty/default
+    /// for a RAW audit ([`run_cdo_semantic_audit_on_raw`]), which applies none.
+    pub overlay: OverlayOutcome,
 }
 
 /// Result of the L3/fresh ImplicitTrigger frozen-golden audit
@@ -1007,37 +1084,79 @@ pub fn apply_adjudicated_overrides(
     golden: &mut AnonSemanticGolden,
     overrides: &AdjudicatedOverrides,
 ) -> usize {
-    let mut applied = 0usize;
+    apply_adjudicated_overrides_detailed(golden, overrides).matched
+}
+
+/// What the overlay actually DID, as opposed to how many entries it contains.
+///
+/// [`apply_adjudicated_overrides`] returns only a matched count, which cannot
+/// distinguish an override that CORRECTED the oracle from one that rewrote a
+/// site with the value it already held. That distinction is load-bearing: a
+/// no-op override is indistinguishable from a live one in every count, so a
+/// stale overlay can look maintained forever. The committed overlay already
+/// contained one such entry (a `Run()` site whose adjudicated target equalled
+/// the raw golden's), which is what prompted this split.
+#[derive(Clone, Debug, Default)]
+pub struct OverlayOutcome {
+    /// Entries carrying [`VERDICT_L3_ERROR_INTRINSIC`] — the only kind applied.
+    pub intrinsic_total: usize,
+    /// Entries that located an existing golden site.
+    pub matched: usize,
+    /// Entries that located a site AND changed its target set. A correction.
+    pub changed: usize,
+    /// Matched, but the adjudicated target already equalled the golden's — the
+    /// override corrects nothing and is dead weight.
+    pub no_op_sites: Vec<GoldenSiteKey>,
+    /// Located no golden site at all — the overlay names a site the golden
+    /// does not contain (a renamed unit, a re-mint, or a stale adjudication).
+    pub unmatched_sites: Vec<GoldenSiteKey>,
+}
+
+/// [`apply_adjudicated_overrides`] with the full account of what it did.
+pub fn apply_adjudicated_overrides_detailed(
+    golden: &mut AnonSemanticGolden,
+    overrides: &AdjudicatedOverrides,
+) -> OverlayOutcome {
+    let mut out = OverlayOutcome::default();
     for ov in &overrides.entries {
         if ov.verdict != VERDICT_L3_ERROR_INTRINSIC {
             continue;
         }
+        out.intrinsic_total += 1;
         let anon_key = anonymize_site_key(&ov.site_key(), anon::SITE_DOMAIN_V1);
-        if let Ok(idx) = golden.entries.binary_search_by(|e| e.site.cmp(&anon_key)) {
-            let target = match (
-                ov.target_kind,
-                &ov.target_app_guid,
-                &ov.target_object_lc,
-                &ov.target_routine_lc,
-            ) {
-                (Some(kind), Some(app_guid), Some(object_lc), Some(routine_lc)) => GoldenTarget {
-                    kind,
-                    app: Some(app_guid.clone()),
-                    object_lc: object_lc.clone(),
-                    routine_lc: Some(routine_lc.clone()),
-                },
-                _ => GoldenTarget {
-                    kind: 255,
-                    app: None,
-                    object_lc: ov.catalog_key.clone(),
-                    routine_lc: None,
-                },
-            };
-            golden.entries[idx].targets = BTreeSet::from([anonymize_target(&target)]);
-            applied += 1;
+        let Ok(idx) = golden.entries.binary_search_by(|e| e.site.cmp(&anon_key)) else {
+            out.unmatched_sites.push(ov.site_key());
+            continue;
+        };
+        let target = match (
+            ov.target_kind,
+            &ov.target_app_guid,
+            &ov.target_object_lc,
+            &ov.target_routine_lc,
+        ) {
+            (Some(kind), Some(app_guid), Some(object_lc), Some(routine_lc)) => GoldenTarget {
+                kind,
+                app: Some(app_guid.clone()),
+                object_lc: object_lc.clone(),
+                routine_lc: Some(routine_lc.clone()),
+            },
+            _ => GoldenTarget {
+                kind: 255,
+                app: None,
+                object_lc: ov.catalog_key.clone(),
+                routine_lc: None,
+            },
+        };
+        let replacement = BTreeSet::from([anonymize_target(&target)]);
+        out.matched += 1;
+        if golden.entries[idx].targets == replacement {
+            out.no_op_sites.push(ov.site_key());
+        } else {
+            out.changed += 1;
         }
+        golden.entries[idx].targets = replacement;
     }
-    applied
+    out
 }
 
 /// Merge `new_entries` into the GITIGNORED local de-anonymization map at
@@ -2259,6 +2378,35 @@ pub fn run_cdo_semantic_audit_on(
     report: &crate::program::resolve::full::ProgramReport,
     workspace_root: &Path,
 ) -> CdoSemanticAuditReport {
+    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, true)
+}
+
+/// The audit WITHOUT the adjudication overlay — fresh against the raw,
+/// unmodified L3 golden.
+///
+/// This exists so a caller can ask the question the effective audit cannot:
+/// *which sites does the overlay actually need to correct?* The overlay is
+/// applied before the only diff, so an effective `genuine_wrong == 0` is
+/// equally consistent with "nothing is wrong" and with "the overlay is
+/// silencing something". Comparing the RAW genuine-wrong set against the
+/// overlay's own entries is what makes an EMPTY overlay a checked claim rather
+/// than an accepted one — delete a needed override and the raw site remains
+/// while the overlay does not.
+#[must_use]
+pub fn run_cdo_semantic_audit_on_raw(
+    ctx: &crate::program::resolve::full::ProgramContext,
+    report: &crate::program::resolve::full::ProgramReport,
+    workspace_root: &Path,
+) -> CdoSemanticAuditReport {
+    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, false)
+}
+
+fn run_cdo_semantic_audit_on_with(
+    ctx: &crate::program::resolve::full::ProgramContext,
+    report: &crate::program::resolve::full::ProgramReport,
+    workspace_root: &Path,
+    apply_overlay: bool,
+) -> CdoSemanticAuditReport {
     // ── Load the committed, anonymized golden (NO project_l3 call here) ──────
     let golden = load_anon_golden(&cdo_anon_golden_path());
     let golden_loaded = golden.is_some();
@@ -2276,15 +2424,19 @@ pub fn run_cdo_semantic_audit_on(
     // replaced with the independently-confirmed catalog target BEFORE the
     // diff below, so fresh is compared against the ADJUDICATED oracle, not
     // the raw (known-wrong) L3 one. See `apply_adjudicated_overrides`.
-    if let Some(overrides) = load_adjudicated_overrides(&adjudicated_overrides_path()) {
-        let intrinsic_count = overrides
-            .entries
-            .iter()
-            .filter(|e| e.verdict == VERDICT_L3_ERROR_INTRINSIC)
-            .count();
-        let applied = apply_adjudicated_overrides(&mut golden, &overrides);
+    let mut overlay = OverlayOutcome::default();
+    if apply_overlay
+        && let Some(overrides) = load_adjudicated_overrides(&adjudicated_overrides_path())
+    {
+        overlay = apply_adjudicated_overrides_detailed(&mut golden, &overrides);
         eprintln!(
-            "Adjudication overlay: {applied}/{intrinsic_count} l3_error_intrinsic override(s) applied"
+            "Adjudication overlay: {}/{} l3_error_intrinsic override(s) applied \
+             ({} changed a target, {} no-op, {} unmatched)",
+            overlay.matched,
+            overlay.intrinsic_total,
+            overlay.changed,
+            overlay.no_op_sites.len(),
+            overlay.unmatched_sites.len(),
         );
     }
 
@@ -2404,6 +2556,7 @@ pub fn run_cdo_semantic_audit_on(
         fresh_novel: diff.fresh_novel,
         golden_missing: diff.golden_missing,
         digest,
+        overlay,
     }
 }
 

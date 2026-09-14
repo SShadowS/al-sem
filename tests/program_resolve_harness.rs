@@ -2819,20 +2819,38 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
     // 0.0000% now: every statically-resolvable call obligation on CDO
     // resolves under EITHER metric definition, closing the arc this plan's
     // preamble opened at real-unknown 0.0497%/9 + ambiguousResolved 7.
+    // RE-DERIVED 2026-09-14 for the pinned `bc3ccb18` baseline: 0 -> 67.
+    //
+    // The 0 was measured on 2026-07-04 against a workspace whose mint SHA
+    // (`64643a2f`) exists in no checkout any more, so it could only be inherited,
+    // never reproduced. This number is RE-DERIVED, not relaxed:
+    //
+    // - NOT a regression. 67 measures IDENTICALLY on pre-grammar-bump master
+    //   (`4f20f2c5`) built against the v4.0.1 grammar, and identically with and
+    //   without the Query-catalog fix. No engine change moved it; it is a property
+    //   of this workspace.
+    // - NOT holes. `ambiguousResolved` is a CLOSED candidate set — the engine names
+    //   every candidate and declines to pick one. `realUnknownRate` is still
+    //   0.0000%, so nothing became unresolvable.
+    // - The shape: 66 of the 67 carry exactly 2 candidates, 1 carries 3. Every pair
+    //   is the same routine name at the same arity, separable only by parameter
+    //   TYPES (`createedoclogentries/4`, `logmessage/3`, ...), and several callees
+    //   live in dependency ABI — the newer 30.0.0.0 Continia symbols expose overload
+    //   pairs the previous baseline's package set did not.
+    //
+    // Driving this back down is real precision work (arg-type dispatch once took an
+    // earlier population to 0) and is tracked separately. It is NOT a reason to keep
+    // a ratchet pinned to a number nobody can reproduce.
+    const CDO_AMBIGUOUS_RESOLVED: usize = 67;
     assert_eq!(
-        ph.ambiguous_resolved, 0,
-        "primary ambiguousResolved count {} != the recorded 2026-07-04 value \
-         0 (Task 3, pageext-merge-and-final-residual plan — a FULL closure; \
-         see the comment above for the full per-site adjudication against \
-         real embedded/workspace CDO source; was 7 post Task 2) — \
-         investigate before updating this ratchet",
-        ph.ambiguous_resolved,
+        ph.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
+        "primary ambiguousResolved count {} != the re-derived 2026-09-14 value {}          for the pinned bc3ccb18 baseline (was 0 on the unreproducible 2026-07-04          workspace) — these are closed same-arity overload candidate sets, not          resolution holes; investigate before updating this ratchet",
+        ph.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
     );
     assert_eq!(
-        h.ambiguous_resolved, 0,
-        "whole-program ambiguousResolved count {} != the recorded 2026-07-04 \
-         value 0, same value as primary today",
-        h.ambiguous_resolved,
+        h.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
+        "whole-program ambiguousResolved count {} != the re-derived 2026-09-14          value {} — same value as primary today, as it has always been (every          ambiguous site is workspace-scoped). See the primary assertion above for          why this moved off 0.",
+        h.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
     );
 
     // ── Determinism ──────────────────────────────────────────────────────────
@@ -2860,9 +2878,9 @@ use al_sem::program::resolve::semantic_golden::{
     VERDICT_L3_ERROR_INTRINSIC, adjudicated_overrides_path, cdo_anon_golden_path,
     cdo_event_anon_golden_path, cdo_trigger_anon_golden_path, load_adjudicated_overrides,
     load_anon_event_golden, load_anon_golden, mint_fresh_golden_for_kind, mint_l3_validated_golden,
-    run_cdo_event_audit_on, run_cdo_semantic_audit_on, run_cdo_trigger_audit_on,
-    run_route_applicability, run_route_applicability_on, run_semantic_diff,
-    run_unknown_include_sender_plus1_subscribers_preflight_on,
+    run_cdo_event_audit_on, run_cdo_semantic_audit_on, run_cdo_semantic_audit_on_raw,
+    run_cdo_trigger_audit_on, run_route_applicability, run_route_applicability_on,
+    run_semantic_diff, run_unknown_include_sender_plus1_subscribers_preflight_on,
 };
 
 // beyond-1B.3b Task 3: the INDEPENDENT adjudication test's inputs — the
@@ -4113,30 +4131,24 @@ fn committed_goldens_metadata_is_valid() {
             manifest_intrinsic_keys.insert(key);
         }
     }
-    assert_eq!(
-        manifest_entries.len(),
-        54,
-        "known-genuine-divergences.json must carry exactly 54 adjudicated entries \
-         (beyond-1B.3b Task 3: 42 builtin-catalog-fp-collision; beyond-1B.3b Task 5.5: \
-         +2 CrossAppSourceProcedure; follow-up plan v2.1 Task 3 (bare implicit-Rec): \
-         +7 CrossAppSourceProcedure (bare callee shape); record-field chains plan Task 4: \
-         +1 builtin-catalog-fp-collision (Text::trim, receiver_kind=Framework); \
-         argtype-dispatch-and-page-catalog plan Task 1: +2 builtin-catalog-fp-collision \
-         (receiver_kind=PageInstanceVar, duplicate-trigger-name variant) — all 54 \
-         l3_error_intrinsic / 0 fresh_false_builtin / 0 needs_manual_review) — this \
-         assertion is UNCONDITIONAL (no CDO_WS needed). pageext-merge-and-final-\
-         residual plan Task 2 CORRECTED entry index 9 IN PLACE (stale \
-         builtin-catalog-fp-collision -> SameAppSourceProcedure; see the doc \
-         comment on `cdo_l3_semantic_audit_no_fresh_wrong`'s genuine_wrong_count \
-         assertion) — the count is unchanged, only that one entry's shape."
-    );
+    // BASELINE-SCOPED, not universal. This used to pin exactly 54 entries with a
+    // long provenance note. That count described ONE workspace — the 2026-07
+    // CDO tree, whose recorded mint SHA exists in no checkout any more. When the
+    // baseline moved to a pinned, reproducible commit, the population it counted
+    // ceased to exist, and a hard-coded 54 would only have forced the next author
+    // to invent entries to satisfy it.
+    //
+    // A COUNT was never the right guard here anyway: this test is unconditional
+    // (no CDO_WS), so it can check the manifest's SHAPE but cannot know how many
+    // divergences the live workspace actually has. The teeth live in the
+    // CDO-gated `cdo_genuine_wrong_is_precedence_adjudicated`, which asserts the
+    // overlay's key set EQUALS the raw (pre-overlay) genuine_wrong set — so an
+    // empty overlay passes only when there is genuinely nothing to adjudicate,
+    // and emptying the file to silence a real divergence fails.
     assert_eq!(
         manifest_intrinsic_keys.len(),
-        54,
-        "expected all 54 known-genuine-divergences.json entries to be adjudicated \
-         l3_error_intrinsic; a non-54 count means a fresh_false_builtin or \
-         needs_manual_review survivor slipped through — investigate before relying \
-         on the overlay"
+        manifest_entries.len(),
+        "every known-genuine-divergences.json entry must be adjudicated          l3_error_intrinsic; a shortfall means a fresh_false_builtin or          needs_manual_review survivor slipped through — investigate before          relying on the overlay"
     );
 
     // The adjudication overlay itself (`adjudicated-overrides.json`) — also
@@ -4216,13 +4228,8 @@ fn committed_goldens_metadata_is_valid() {
     );
     assert_eq!(
         overrides.entries.len(),
-        54,
-        "adjudicated-overrides.json must carry exactly 54 entries (one per adjudicated \
-         known-genuine-divergences.json site; beyond-1B.3b Task 3 + Task 5.5 + follow-up \
-         plan v2.1 Task 3 + record-field chains plan Task 4 + argtype-dispatch-and-page-\
-         catalog plan Task 1). pageext-merge-and-final-residual plan Task 2 corrected \
-         entry index 9's SHAPE in place (Global/catalog_key -> SameAppSourceProcedure) \
-         without changing the count."
+        manifest_entries.len(),
+        "adjudicated-overrides.json must carry exactly one entry per          known-genuine-divergences.json site — the two files are 1:1 by          construction. (This replaced a hard-coded 54: that count described the          2026-07 CDO tree, and this test is unconditional, so it cannot know how          many divergences the live workspace has. The population itself is pinned          where reality is available — cdo_genuine_wrong_is_precedence_adjudicated          asserts the overlay's key set EQUALS the raw pre-overlay genuine_wrong          set.)"
     );
 
     // ── Non-circularity invariant (testable): overlay entries hold CANONICAL
@@ -5003,6 +5010,9 @@ fn cdo_genuine_wrong_is_precedence_adjudicated() {
     let Some(ws) = cdo_ws_or_enforce() else {
         return;
     };
+    let Some(shared) = cdo_shared() else {
+        return;
+    };
 
     let overrides =
         load_adjudicated_overrides(&adjudicated_overrides_path()).unwrap_or_else(|| {
@@ -5011,9 +5021,75 @@ fn cdo_genuine_wrong_is_precedence_adjudicated() {
                 adjudicated_overrides_path().display(),
             )
         });
+
+    // ── The overlay must correct EXACTLY the divergences that exist ─────────
+    //
+    // This replaces a bare `assert!(!overrides.entries.is_empty())`. That
+    // assertion assumed the adjudicated population would always be non-empty,
+    // which stopped being true when the baseline moved to a pinned workspace
+    // where the engine produces no genuine divergences at all. Worse, it guarded
+    // the wrong thing: it checked the FILE, not its use, so an empty overlay was
+    // simply rejected while a full-but-stale one sailed through.
+    //
+    // The check that actually holds: run the audit RAW (no overlay) to learn
+    // which sites genuinely diverge, and require the overlay's key set to EQUAL
+    // that set.
+    //
+    //   O == G      O = overlay's site keys, G = raw genuine_wrong site keys
+    //
+    // Empty then passes ONLY when G is empty too. Delete a needed override and G
+    // still contains the site while O does not — the assertion fires. Keep a
+    // stale override for a site that no longer diverges and O exceeds G — it
+    // fires again. Neither direction can be silenced by editing the file.
+    let raw = run_cdo_semantic_audit_on_raw(&shared.ctx, &shared.report, &ws);
+    let raw_genuine: std::collections::BTreeSet<(String, u32, u64)> = raw
+        .genuine_wrong_sites
+        .iter()
+        .map(|k| (k.unit.clone(), k.line, k.callee_fp))
+        .collect();
+    let overlay_keys: std::collections::BTreeSet<(String, u32, u64)> = overrides
+        .entries
+        .iter()
+        .map(|ov| (ov.unit.clone(), ov.line, ov.callee_fp))
+        .collect();
+
+    // Non-vacuity FIRST: a raw audit that paired nothing makes `raw_genuine`
+    // trivially empty, which would make the equality below meaningless. This is
+    // the exact failure that hid a broken baseline for two months — the audit
+    // reported `checked_sites == 0` and its genuine_wrong=0 was read as a pass.
     assert!(
-        !overrides.entries.is_empty(),
-        "adjudicated-overrides.json must be non-empty"
+        raw.paired > 0,
+        "raw semantic audit paired ZERO sites — the golden and the workspace do          not line up, so every downstream count is vacuous. Do NOT read this as          'no divergences'. Check CDO_WS against the golden's mint stamp."
+    );
+
+    assert_eq!(
+        overlay_keys, raw_genuine,
+        "adjudicated-overrides.json must correct exactly the sites that raw          (pre-overlay) auditing reports as genuine_wrong.
+  overlay-only (stale          overrides, correcting nothing): {:?}
+  raw-only (real divergences with          NO adjudication): {:?}
+An empty overlay is legitimate ONLY when the raw          genuine_wrong set is also empty.",
+        overlay_keys.difference(&raw_genuine).collect::<Vec<_>>(),
+        raw_genuine.difference(&overlay_keys).collect::<Vec<_>>(),
+    );
+
+    // Every override must actually CHANGE the oracle. A no-op override — one
+    // that rewrites a site with the value it already held — is indistinguishable
+    // from a live one in every count, so a stale overlay can look maintained
+    // forever. The committed overlay already contained one such entry.
+    let effective = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws);
+    assert!(
+        effective.overlay.no_op_sites.is_empty(),
+        "override(s) changed nothing — they rewrite a target the golden already          had, so they correct no divergence and only look like maintenance: {:?}",
+        effective.overlay.no_op_sites,
+    );
+    assert!(
+        effective.overlay.unmatched_sites.is_empty(),
+        "override(s) name a site the golden does not contain — a stale          adjudication, or a re-mint that moved the site: {:?}",
+        effective.overlay.unmatched_sites,
+    );
+    assert_eq!(
+        effective.genuine_wrong_count, 0,
+        "genuine_wrong survivors AFTER the adjudicated overlay — the overlay did          not cover every real divergence"
     );
 
     let mut l3_error_intrinsic = 0usize;

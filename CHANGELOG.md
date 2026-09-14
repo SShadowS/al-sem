@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The CDO baseline was unreproducible, and that had silently disabled the semantic
+  audit.** The committed goldens recorded `workspace_git_sha: 64643a2f`,
+  `workspace_dirty: true` — a commit present in NO checkout on the machine. The tree they
+  were minted from was copied out of its git repo afterwards, losing `.git`, so nobody
+  could reconstruct the input. When a CDO test failed there was no way to tell "the engine
+  regressed" from "the input changed".
+  - **The concrete cost:** `cdo_l3_semantic_audit_no_fresh_wrong` was pairing ZERO sites
+    against that golden and still reporting a pass. `genuine_wrong == 0` over an empty
+    population is vacuous, and it read as a green correctness gate for two months.
+  - **New baseline:** `U:\Git\DO-cdo-baseline\Cloud`, a git worktree of the DO repo
+    parked detached at `bc3ccb18` with a clean tree. Re-minted from it: `dirty=false`, so
+    drift warnings mean something again. The audit now pairs **15272** sites with
+    `fresh_missing = 0`, and `realUnknownRate` stays 0.0000%.
+  - **`.alpackages` is now pinned too.** git state covers only TRACKED files, and the
+    symbol closure is gitignored — so a workspace could report `dirty: false` while the
+    dependency symbols the resolver reads were swapped wholesale. `MintMetadata` gained
+    `dependency_closure_sha256` (SHA-256 over each `.alpackages` file's name and bytes,
+    sorted). Proven: perturbing the closure while git SHA and dirty state stay IDENTICAL
+    now fails; the old guard saw nothing.
+  - **Drift FAILS under `ENFORCE_CDO_WS=1`** instead of only warning. Warning-only is how
+    this rotted — every run printed the message and nobody acted. Ungated developer runs
+    still warn, because drift there is ordinary and claims nothing.
+
+### Changed
+
+- **`cdo_genuine_wrong_is_precedence_adjudicated` now checks the overlay against reality
+  rather than against a hard-coded count.** It asserted `!overrides.entries.is_empty()` —
+  a check on the FILE, not its use: an empty overlay was rejected outright while a
+  full-but-stale one sailed through. On the new baseline the engine produces no genuine
+  divergences at all, so the old assertion demanded entries that could only be invented.
+  - The audit can now run RAW (`run_cdo_semantic_audit_on_raw`, no overlay), and the test
+    asserts the overlay's site-key set EQUALS the raw pre-overlay `genuine_wrong` set. An
+    empty overlay passes ONLY when there is genuinely nothing to adjudicate; delete a
+    needed override and the raw site remains while the overlay does not. Emptiness became a
+    CHECKED claim instead of an accepted one.
+  - `paired > 0` is asserted FIRST, so the vacuous-pass failure above cannot recur.
+  - Overrides must now actually CHANGE a target (`OverlayOutcome::no_op_sites`) and must
+    match a real golden site (`unmatched_sites`). The committed overlay already contained
+    one no-op — a `Run()` entry rewriting the target the golden already had.
+  - Discrimination proof, all three directions with real output recorded: stale 54-entry
+    overlay -> FAILS naming all 54 as correcting nothing; empty overlay with no
+    divergences -> PASSES; empty overlay with 20 manufactured divergences -> FAILS naming
+    them. The third is the one that matters: emptying the file cannot hide a real bug.
+  - Three hard-coded `54`s removed from the unconditional metadata test. A count was never
+    checkable there — that test cannot see the workspace. It now asserts shape and the
+    manifest/overlay 1:1 invariant, which hold at any population including zero.
+- **`ambiguousResolved` ratchet re-derived 0 -> 67** for the pinned baseline, with the
+  reasoning recorded at the assertion site. NOT a regression: 67 measures identically on
+  pre-grammar-bump master (`4f20f2c5`) built against the v4.0.1 grammar. These are CLOSED
+  same-arity overload candidate sets (66 with 2 candidates, 1 with 3), separable only by
+  parameter types, several in dependency ABI — not resolution holes. Driving them down is
+  tracked separately.
+- The two frozen l4 digests rebaselined for the new workspace. Cross-checked: the
+  whole-program digest computed against the pinned worktree is byte-identical to the value
+  the same engine produced against a separate checkout of the same commit.
+
 - **`Query` object variables had no instance-method catalog, so every member call
   on one resolved as `Unknown(MemberNotFound)`.** `object_instance_framework_kind`
   mapped only `Page`/`Report` to a framework kind; a `V: Query "Name"` receiver
