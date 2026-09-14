@@ -112,35 +112,6 @@
       },
       {
         "affectedObjects": [
-          "11111111-0000-0000-0000-00000000d80a/Codeunit/50108"
-        ],
-        "affectedTables": [],
-        "confidence": {
-          "level": "likely"
-        },
-        "detector": "d19-unused-parameter",
-        "fingerprint": "8d01fd506e102f00",
-        "fixHint": {
-          "description": "Remove the parameter, or wire it into the procedure body. If callers must keep the existing signature, leave it and silence with an `_` prefix on the name.",
-          "safety": "low"
-        },
-        "id": "d19/323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20/p0",
-        "pathCount": 1,
-        "primaryLocation": {
-          "column": 5,
-          "file": "ws:src/posting.al",
-          "line": 19,
-          "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108",
-          "objectName": "D8PostingChain",
-          "routineId": "323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20",
-          "routineName": "OnAfterPostSalesDoc"
-        },
-        "rootCause": "OnAfterPostSalesDoc declares parameter 'Header' (Record \"Sales Header\") at position 0 but the body never references it.",
-        "severity": "info",
-        "title": "Procedure parameter is never used"
-      },
-      {
-        "affectedObjects": [
           "11111111-0000-0000-0000-00000000d80a/Codeunit/50109"
         ],
         "affectedTables": [],
@@ -200,7 +171,6 @@
     ],
     "summary": {
       "byDetector": {
-        "d19-unused-parameter": 1,
         "d3-missing-setloadfields": 1,
         "d35-commit-in-event-subscriber": 1,
         "d45-event-transitive-table-exposure": 1,
@@ -209,7 +179,7 @@
       },
       "bySeverity": {
         "high": 2,
-        "info": 3,
+        "info": 2,
         "medium": 1
       },
       "detectorStats": [
@@ -322,10 +292,11 @@
           "skipped": {}
         },
         {
-          "candidatesConsidered": 1,
+          "candidatesConsidered": 0,
           "detector": "d19-unused-parameter",
-          "findingsEmitted": 1,
+          "findingsEmitted": 0,
           "skipped": {
+            "eventPublisher": 1,
             "eventSubscriber": 1
           }
         },
@@ -447,7 +418,7 @@
       "opaqueApps": [],
       "routinesAnalyzed": 3,
       "sourceUnitsParsed": 2,
-      "totalFindings": 6
+      "totalFindings": 5
     }
   },
   "schemaVersion": "1.0.0"

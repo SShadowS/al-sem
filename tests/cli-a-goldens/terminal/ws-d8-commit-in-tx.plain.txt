@@ -16,11 +16,7 @@ MEDIUM (1):
     confidence: likely
     fix (high): Add SetLoadFields(no.) before the retrieval.
 
-INFO (3):
-  [d19-unused-parameter] Procedure parameter is never used — OnAfterPostSalesDoc declares parameter 'Header' (Record "Sales Header") at position 0 but the body never references it.
-    ws:src/posting.al:19:5 in D8PostingChain :: OnAfterPostSalesDoc
-    confidence: likely
-    fix (low): Remove the parameter, or wire it into the procedure body. If callers must keep the existing signature, leave it and silence with an `_` prefix on the name.
+INFO (2):
   [d45-event-transitive-table-exposure] Event subscribers expose table transitively from publisher — Publisher 323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete
     ws:src/posting.al:19:5 in D8PostingChain :: OnAfterPostSalesDoc
     confidence: likely

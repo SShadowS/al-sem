@@ -7,6 +7,7 @@ mod gap_audit_d2_guards;
 mod gap_audit_d37_modifyall;
 mod gap_audit_d4;
 mod gap_audit_e_filter_load;
+mod gap_d19_event_publisher_skip;
 mod gap_detector_substrate_parity;
 mod gap_g10_load_wrappers;
 mod gap_g11_d20_position;
