@@ -63,6 +63,33 @@ if ! cargo test --release --test l4_summary_differential; then
     status=1
 fi
 
+# ⟨2026-09-14⟩ The SAME defect as the l4 digest above, found the same way and
+# twice in one day: CDO-gated tests also live in `--lib`, and this script ran
+# only integration targets, so they were on NO runner here either.
+#
+# Two real failures hid behind that gap on 2026-09-14:
+#   - `cache_version_grammar_tracks_the_linked_grammar` (src/engine/gate/
+#     cache_prune.rs) during the tree-sitter-al v4.4.0 bump — a stale cache key
+#     that would have let caches minted under the old grammar be reused under the
+#     new one;
+#   - `cdo_dedup_names_the_real_dropped_duplicates` (src/snapshot/snapshot.rs)
+#     during the CDO baseline pin — a duplicate-GUID count describing the OLD
+#     workspace's layout.
+# Both arcs ran cdo-gate AND check-goldens, both went green, both merged, and
+# both left `master` red for `cargo test` on any machine with CDO_WS set, while
+# GitHub CI stayed green because CI has no CDO_WS at all. Neither runner runs
+# `--lib`: `check-goldens` drives the nine golden-bearing integration targets,
+# and this script drove three more.
+#
+# The whole lib is run, not a `cdo_`-filtered subset: the grammar cache-key test
+# is not CDO-gated at all, and filtering to the tests we already know about is
+# how a gate ends up blind to the next one. ENFORCE_CDO_WS=1 applies here too,
+# so a CDO-gated lib test cannot silently skip.
+echo "cdo-gate: running the library test suite (--lib)..."
+if ! cargo test --release -p al-sem --lib; then
+    status=1
+fi
+
 if [[ "$status" -eq 0 ]]; then
     echo "cdo-gate: PASS"
 else
