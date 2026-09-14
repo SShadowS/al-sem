@@ -26,6 +26,23 @@ tests/**/*.md text eol=lf
 tests/r0-corpus/**/*.al text eol=lf
 tests/**/*.snapshot text eol=lf
 
+# Everything `cargo run -p xtask -- gen-syntax` WRITES. The four .rs files were
+# already covered by `*.rs text eol=lf` above; `node-types.sha256` was not, and
+# that gap cost a merge.
+#
+# With core.autocrlf=true and no attribute, git auto-detects the sidecar as text
+# and wants CRLF in the working tree, while the generator writes LF. Byte-identical
+# content, and `git diff` shows nothing -- but `git status` reports it modified
+# after every regeneration, forever. On 2026-09-14 that made `post-merge`'s
+# tree-dirty-after-gates check fail on a merge whose three real gates had all
+# passed, and it AUTOMATICALLY REVERTED a fully attested, CI-green commit.
+#
+# Scoped to the generator's whole output directory rather than to `*.sha256`, so a
+# new file emitted there is covered on the day it appears instead of the day it
+# reverts something.
+
+crates/al-syntax/src/raw/generated/** text eol=lf
+
 # Vendored fixture TREES (Task 3.3) are historical byte-for-byte copies of AL
 # source from the frozen al-sem archive; their SHA-256 is verified against the
 # witness listing at vendor time, so nothing here may rewrite their bytes
