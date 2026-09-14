@@ -108,10 +108,11 @@
     "skipped": {}
   },
   {
-    "candidatesConsidered": 1,
+    "candidatesConsidered": 0,
     "detector": "d19-unused-parameter",
-    "findingsEmitted": 1,
+    "findingsEmitted": 0,
     "skipped": {
+      "eventPublisher": 1,
       "eventSubscriber": 1
     }
   },

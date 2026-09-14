@@ -3,7 +3,17 @@
 //!
 //! Restricted to `procedure` (NOT triggers, NOT event subscribers — the latter's
 //! signature is dictated by the publisher and must keep every parameter declared,
-//! even unused). bodyAvailable + !parseIncomplete; skip when there are 0 params.
+//! even unused — and NOT event publishers). bodyAvailable + !parseIncomplete; skip
+//! when there are 0 params.
+//!
+//! The event-publisher exclusion (issue 25) is a CONSTRUCTION argument, not a
+//! heuristic: an `[IntegrationEvent]`/`[BusinessEvent]` body is empty by language
+//! definition — the compiler generates the dispatch — so a publisher parameter is
+//! unreferenced in its own body *always*. Its readers are the SUBSCRIBERS, which
+//! this body-local predicate cannot see, making d19 100% false-positive on that
+//! population. This is NOT a claim that a publisher parameter can never deserve
+//! removal; that question needs subscriber-use evidence and belongs to the
+//! event-graph detectors (d12 already covers the dead-event case).
 //!
 //! `refs = set(routine.identifier_references)` (the L2 lowercased / sorted /
 //! deduped set). A parameter whose lowercased name is absent from that set is
@@ -32,6 +42,7 @@ pub fn detect_d19(
     let mut candidates_considered = 0usize;
     let mut skipped_trigger = 0u64;
     let mut skipped_event_subscriber = 0u64;
+    let mut skipped_event_publisher = 0u64;
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -42,13 +53,26 @@ pub fn detect_d19(
         if routine.parse_incomplete {
             continue;
         }
-        // procedure only — skip triggers + event subscribers.
+        // procedure only — skip triggers, event subscribers + event publishers.
         if routine.kind == "trigger" {
             skipped_trigger += 1;
             continue;
         }
         if routine.kind == "event-subscriber" {
             skipped_event_subscriber += 1;
+            continue;
+        }
+        // A routine carrying BOTH a subscriber and a publisher attribute is booked
+        // as a SUBSCRIBER — but that precedence is decided upstream, in
+        // `ir_walk::ir_routine_kind`, not here: by the time d19 runs, `routine.kind`
+        // is already one single string. These three checks are mutually-exclusive
+        // equality tests on that one scalar, so REORDERING THEM CHANGES NOTHING —
+        // measured, by swapping them and watching every test stay green (issue 25).
+        // The guard that actually matters is `ir_routine_kind`'s branch order, and
+        // `gap_d19_event_publisher_skip::dual_attribute_routine_books_the_subscriber_counter`
+        // is what pins it (inverting that branch order fails the test).
+        if routine.kind == "event-publisher" {
+            skipped_event_publisher += 1;
             continue;
         }
         if routine.parameters.is_empty() {
@@ -135,6 +159,7 @@ pub fn detect_d19(
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("trigger", skipped_trigger);
     stats.add_skip("eventSubscriber", skipped_event_subscriber);
+    stats.add_skip("eventPublisher", skipped_event_publisher);
     Ok(DetectorOutput {
         findings,
         stats,

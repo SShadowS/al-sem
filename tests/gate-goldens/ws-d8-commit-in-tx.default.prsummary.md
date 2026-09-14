@@ -1,4 +1,4 @@
-### ⛔ Transaction integrity — 2 high, 1 medium, 3 info
+### ⛔ Transaction integrity — 2 high, 1 medium, 2 info
 
 **HIGH**  [d35-commit-in-event-subscriber] Commit reachable from event subscriber
   App: PT/D8 Tx Span 1.0.0.0  —  "D8BadSubscriber".HandlePosted()
@@ -18,11 +18,6 @@
   ws:src/posting.al:9  accesses Header.Status Posted
   ws:src/posting.al:11  accesses Header.No.
   ws:src/posting.al:14  accesses Header.Last Posting Date
-  coverage: complete
-
-**INFO**  [d19-unused-parameter] Procedure parameter is never used
-  App: PT/D8 Tx Span 1.0.0.0  —  "D8PostingChain".OnAfterPostSalesDoc()
-  ws:src/posting.al:19  parameter 'Header: Record "Sales Header"' declared but never referenced
   coverage: complete
 
 **INFO**  [d9-transaction-span-summary] Transaction span summary

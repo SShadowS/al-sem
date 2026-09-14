@@ -97,8 +97,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
     2/2 source units parsed ·
     0 opaque app(s)
   </div>
-  <div class="tally"><span style="flex:2;background:oklch(0.62 0.18 45);color:oklch(0.99 0 0)" title="high">2</span><span style="flex:1;background:oklch(0.74 0.14 80);color:oklch(0.26 0.04 80)" title="medium">1</span><span style="flex:3;background:oklch(0.62 0.02 255);color:oklch(0.99 0 0)" title="info">3</span></div>
-  <div class="tally-legend"><span><i style="background:oklch(0.52 0.20 25)"></i>critical 0</span><span><i style="background:oklch(0.62 0.18 45)"></i>high 2</span><span><i style="background:oklch(0.74 0.14 80)"></i>medium 1</span><span><i style="background:oklch(0.62 0.11 240)"></i>low 0</span><span><i style="background:oklch(0.62 0.02 255)"></i>info 3</span></div>
+  <div class="tally"><span style="flex:2;background:oklch(0.62 0.18 45);color:oklch(0.99 0 0)" title="high">2</span><span style="flex:1;background:oklch(0.74 0.14 80);color:oklch(0.26 0.04 80)" title="medium">1</span><span style="flex:2;background:oklch(0.62 0.02 255);color:oklch(0.99 0 0)" title="info">2</span></div>
+  <div class="tally-legend"><span><i style="background:oklch(0.52 0.20 25)"></i>critical 0</span><span><i style="background:oklch(0.62 0.18 45)"></i>high 2</span><span><i style="background:oklch(0.74 0.14 80)"></i>medium 1</span><span><i style="background:oklch(0.62 0.11 240)"></i>low 0</span><span><i style="background:oklch(0.62 0.02 255)"></i>info 2</span></div>
   <section class="sev-group"><h2>high (2)</h2>
   <article class="finding" data-sev="high" style="--sev:oklch(0.62 0.18 45)">
     <header class="finding-head">
@@ -202,7 +202,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
     <div class="tables"><span class="lbl">writes</span><span class="chip">Sales Header</span></div>
     <details class="fix"><summary>Fix options</summary><ul><li><span class="safety safety-high">high</span> Add SetLoadFields(no.) before the retrieval.</li></ul></details>
     
-  </article></section><section class="sev-group"><h2>info (3)</h2>
+  </article></section><section class="sev-group"><h2>info (2)</h2>
   <article class="finding" data-sev="info" style="--sev:oklch(0.62 0.02 255)">
     <header class="finding-head">
       <span class="sev-dot"></span>
@@ -227,27 +227,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
   <article class="finding" data-sev="info" style="--sev:oklch(0.62 0.02 255)">
     <header class="finding-head">
       <span class="sev-dot"></span>
-      <code class="detector">d19-unused-parameter</code>
-      <h3>Procedure parameter is never used</h3>
-      <span class="conf" style="--conf:oklch(0.60 0.11 240)">likely</span>
-    </header>
-    <p class="root-cause">OnAfterPostSalesDoc declares parameter &#39;Header&#39; (Record &quot;Sales Header&quot;) at position 0 but the body never references it.</p>
-    <ol class="flow">
-      <li class="flow-step is-terminal">
-        <span class="flow-rail"><span class="flow-dot"></span></span>
-        <span class="flow-body">
-          <span class="flow-head">D8PostingChain :: OnAfterPostSalesDoc <span class="badge badge-op">db op</span></span>
-          <span class="flow-note">parameter &#39;Header: Record &quot;Sales Header&quot;&#39; declared but never referenced</span>
-          <span class="flow-loc">src/posting.al:19</span>
-        </span>
-      </li></ol>
-    
-    <details class="fix"><summary>Fix options</summary><ul><li><span class="safety safety-low">low</span> Remove the parameter, or wire it into the procedure body. If callers must keep the existing signature, leave it and silence with an `_` prefix on the name.</li></ul></details>
-    <div class="co">co-located: <code>d45-event-transitive-table-exposure</code></div>
-  </article>
-  <article class="finding" data-sev="info" style="--sev:oklch(0.62 0.02 255)">
-    <header class="finding-head">
-      <span class="sev-dot"></span>
       <code class="detector">d45-event-transitive-table-exposure</code>
       <h3>Event subscribers expose table transitively from publisher</h3>
       <span class="conf" style="--conf:oklch(0.60 0.11 240)">likely</span>
@@ -264,7 +243,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
       </li></ol>
     <div class="tables"><span class="lbl">writes</span><span class="chip">Audit Entry</span></div>
     <details class="fix"><summary>Fix options</summary><ul><li><span class="safety safety-high">high</span> Treat 11111111-0000-0000-0000-00000000d80a/table/50100 as part of this event&#39;s effect surface for permission/transaction reasoning.</li></ul></details>
-    <div class="co">co-located: <code>d19-unused-parameter</code></div>
+    
   </article></section>
   
   <section class="graph-wrap">
@@ -282,7 +261,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
       <g class="g-node"><title>D8BadSubscriber :: HandlePosted</title><rect x="760" y="40" width="264" height="30" rx="7" fill="oklch(0.98 0.01 240)" stroke="oklch(0.7 0.08 240)" stroke-width="1.5"/><text x="772" y="59" class="g-label">D8BadSubscriber :: HandlePosted</text></g>
     </svg>
   </section>
-  <footer>Generated by al-sem · static semantic analysis for AL · 6 finding(s)</footer>
+  <footer>Generated by al-sem · static semantic analysis for AL · 5 finding(s)</footer>
 </div>
 </body>
 </html>

@@ -387,60 +387,6 @@
           ]
         },
         {
-          "ruleId": "d19-unused-parameter",
-          "level": "note",
-          "message": {
-            "text": "Procedure parameter is never used — OnAfterPostSalesDoc declares parameter 'Header' (Record \"Sales Header\") at position 0 but the body never references it."
-          },
-          "fingerprints": {
-            "al-sem/v1": "8d01fd506e102f00"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "ws:src/posting.al"
-                },
-                "region": {
-                  "startLine": 19,
-                  "startColumn": 5
-                }
-              },
-              "logicalLocations": [
-                {
-                  "name": "D8PostingChain :: OnAfterPostSalesDoc"
-                }
-              ]
-            }
-          ],
-          "codeFlows": [
-            {
-              "threadFlows": [
-                {
-                  "locations": [
-                    {
-                      "location": {
-                        "physicalLocation": {
-                          "artifactLocation": {
-                            "uri": "ws:src/posting.al"
-                          },
-                          "region": {
-                            "startLine": 19,
-                            "startColumn": 5
-                          }
-                        },
-                        "message": {
-                          "text": "parameter 'Header: Record \"Sales Header\"' declared but never referenced"
-                        }
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
           "ruleId": "d35-commit-in-event-subscriber",
           "level": "error",
           "message": {
