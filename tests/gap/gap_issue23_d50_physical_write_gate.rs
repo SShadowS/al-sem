@@ -38,12 +38,26 @@
 //! with a common AL driver, `span_of` still returns the unique span despite its
 //! contaminated membership. A9 rejects that membership; A2 and A7 also reject
 //! contamination of their respective writers' spans, at `:339` and `:383`,
-//! before either runs the detector. Without those checks, a driver calling two
-//! writers would inherit
-//! `StageRows`' three
-//! PHYSICAL writes through its forward capability cone, appear in `BufferRows`'
-//! BACKWARD span as an accepted manager, and keep d50 reporting at `BufferRows`'
-//! callsite after the fix — an A2 failure with nothing to do with the change.
+//! before either runs the detector.
+//!
+//! WHAT IS ASSERTED, and deliberately nothing more: the four writers are
+//! mutually independent — no writer calls another, and no driver calls more
+//! than one — and the three membership assertions above reject a span that
+//! contains anything else. A common caller is in its callees' backward spans by
+//! construction (`transaction_spans.rs:92-114`), so contamination is certain
+//! and the assertions catch it.
+//!
+//! What this header does NOT claim is what such a driver's own capability cone
+//! would contain, or whether it would qualify as a manager. Earlier drafts
+//! asserted it would inherit `StageRows`' three PHYSICAL writes; that is not
+//! guaranteed. `BufferRows` and `StageRows` write the SAME three tables, the
+//! inherited dedup key excludes temp state
+//! (`capability_cone.rs:1202-1212`), and the equal-distance tie-break is the
+//! first-hop edge sort key rather than a preference for physical writes
+//! (`:1537-1557`) — so the driver may inherit the TEMPORARY representatives and
+//! carry a physical count of 0. That is issue #33, and predicting around it in
+//! a comment is how three successive versions of this paragraph came to be
+//! false.
 
 use std::path::{Path, PathBuf};
 
@@ -283,10 +297,13 @@ fn a5_count_path_is_reached_and_counts_three_distinct_tables() {
 
 /// Each writer owns its OWN checked `Codeunit.Run`, and its span contains
 /// EXACTLY that writer. No writer calls another, and no common AL driver calls
-/// more than one — if one did, it would inherit `StageRows`' three PHYSICAL
-/// writes through its forward capability cone and be accepted as a manager in
-/// `BufferRows`' backward span, so A2 would fail for a reason unrelated to the
-/// gate under test.
+/// more than one.
+///
+/// A driver would land in its callees' backward spans by construction
+/// (`transaction_spans.rs:92-114`), which is what this test rejects. Whether it
+/// would then also qualify as a MANAGER is a separate question this test does
+/// not answer and this comment does not predict — see the module header on
+/// issue #33.
 #[test]
 fn a9_each_checked_span_holds_exactly_its_own_writer() {
     let resolved = resolve_fixture();

@@ -17,10 +17,10 @@
 // `if Codeunit.Run(...) then;`, so each is its own CheckedRunImplicit seed.
 // That alone is not enough: the four writers are also mutually independent —
 // NO writer calls another, and there is NO common AL driver that calls more
-// than one. A shared driver would inherit StageRows' three PHYSICAL writes
-// through its own forward capability cone, land in BufferRows' BACKWARD span
-// as a transaction manager, and d50 would still report at BufferRows' callsite
-// after the fix — failing for a reason that has nothing to do with the change.
+// than one. A shared driver would land in its callees' BACKWARD spans by
+// construction, which is what the membership assertions in the gap test reject.
+// Whether such a driver would also QUALIFY as a transaction manager is a
+// separate question and is deliberately not predicted here -- see issue #33.
 // The writers are therefore UNCALLED public procedures; transaction-span seed
 // discovery scans routines without requiring root reachability. The shared
 // worker's OnRun is empty and never calls back into a writer.
