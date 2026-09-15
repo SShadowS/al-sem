@@ -1008,10 +1008,12 @@ mod tests {
         ctx
     }
 
-    /// Assert the preconditions that make a COUNT-branch case non-vacuous, and
-    /// return the ctx: the summary EXISTS (so the gate reaches the count rather
-    /// than returning false at `d50.rs:68-70`) and the derived row carries
-    /// exactly `inclusive` temp-inclusive / `physical` physical writes.
+    /// Assert the preconditions that make a COUNT-branch case non-vacuous: the
+    /// summary EXISTS (so the gate reaches the count rather than returning
+    /// false at `d50.rs:68-70`) and the derived row carries exactly
+    /// `inclusive` temp-inclusive / `physical` physical writes.
+    ///
+    /// Asserts only; it returns `()`. Callers keep their own `ctx`.
     fn assert_counts(
         ctx: &DetectorContext<'_>,
         routine_id: &str,
