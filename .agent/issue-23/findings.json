@@ -1,0 +1,434 @@
+[
+  {
+    "id": "S-01",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 65,
+    "severity": "important",
+    "text": "A2 over-promises. `is_transaction_managing` short-circuits on `posting_name_matches` BEFORE the count, and this change does not touch that branch -- so a POSTING-NAMED routine writing only temporary tables still fires after the fix. A2 as written reads as a general claim that temp-only routines stop reporting. Qualify A1/A2 to the COUNT branch, and pin the unchanged name branch with its own test so the exception is executable rather than implied.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:61-74: `if posting_name_matches(&r.name) { return true; }` precedes the count. Regex is case-sensitive Post|Apply|Release + uppercase (d50.rs:46-57). || FIXED: A2 qualified to the count branch; A6 added to pin the unchanged name branch executably.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-02",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "tests/r4/r4_differential.rs",
+    "line": 115,
+    "severity": "important",
+    "text": "A new corpus fixture is NOT picked up by R4 just by existing on disk with a seed golden. R4 drives an explicit named Smoke list; the fixture must be registered there or the test runner never executes it -- the seed sits unused and R4 stays green while testing nothing. Found independently by both reviewers.",
+    "disposition": "fixed",
+    "evidence": "r4_differential.rs:111-128 declares the ws-d50-pos/ws-d50-neg entries by name and :1670-1682 iterates that list; run_smoke_entry validates the golden exists before regen (:1474-1501). VERIFIED INDEPENDENTLY by the conductor: `fixture: \"ws-d50-pos\"` at :115, `\"ws-d50-neg\"` at :123. || FIXED: Design 'Harness registration' + A8, whose discrimination proof is removing the Smoke entry and confirming the assertions stop running.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-03",
+    "source": "astra",
+    "round": 1,
+    "file": "tests/r0-corpus",
+    "line": 0,
+    "severity": "important",
+    "text": "FIXTURE ISOLATION. If both routines call ONE shared checked-Run helper, that helper's backward span contains BOTH callers, so the physical routine keeps the shared callsite flagged after the fix and the temp routine merely stops being the selected manager. The test would then read a WITNESS change as suppression. Each writer needs its OWN `if Codeunit.Run(...) then;` callsite. Sharing the empty worker TARGET is fine; sharing the callsite-containing helper is not. Also assert three DISTINCT resolved table ids -- the accessors count deduplicated ids, so three writes to two tables is 2.",
+    "disposition": "fixed",
+    "evidence": "transaction_spans.rs:92-114 backward walk includes the seed routine; cone_derived.rs:420-452 counts deduped ids. || FIXED: Design: each writer owns its checked-run callsite (shared worker target is fine); three DISTINCT resolved ids asserted. || ROUND 2 RE-RAISED (astra): own callsites do not exclude a common CALLER. RunCases -> {BufferRows, StageRows} puts RunCases in BufferRows' backward span (transaction_spans.rs:92-114) while RunCases inherits StageRows' physical writes through its forward cone (capability_cone.rs:1511-1559), so d50 accepts it as a manager and still reports at BufferRows' callsite after the fix. || FIXED IN v3: the isolation contract -- four mutually independent, UNCALLED public writers, no common driver, worker must not call back; plus A9 asserting each span's routine membership is exactly its writer.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-04",
+    "source": "astra",
+    "round": 1,
+    "file": "(ledger P6)",
+    "line": 0,
+    "severity": "important",
+    "text": "P6's wording is too strong. d50 evaluates EVERY routine in the span, including the non-posting `RunWorkerChecked` helper, so the count path does execute today -- with a zero-table count. What is actually absent is a threshold-POSITIVE count case. The finding stands; the claim 'not exercised at all' does not.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:199-205 iterates span routines; ws-d50-pos/src/Posting.al:22-25 is the non-posting helper. || FIXED: P6 restated: the count path executes today at a zero-table count; what is absent is a threshold-POSITIVE case.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-05",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "(briefing premise)",
+    "line": 0,
+    "severity": "important",
+    "text": "d50 is OPT-IN in this checkout, not DEFAULT -- the briefing's premise was wrong. The doctrine's triage-wave rule targets a NEW advisory detector shipping DEFAULT, so a full wave is not warranted. The proportionate measurement is a focused before/after delta that EXPLICITLY SELECTS d50 (a default-only run measures nothing because d50 never runs), compares stable callsite identities and full payloads rather than counts, and says 'unmeasured' honestly if no real workspace was available.",
+    "disposition": "fixed",
+    "evidence": "presets.rs:64-75 OPT_IN_DETECTOR_NAMES. VERIFIED INDEPENDENTLY: `d50-checked-run-implicit-commit` at presets.rs:70. || FIXED: Measurement plan: d50 explicitly selected (a default run measures nothing), payloads compared, 'unmeasured' reported honestly.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-06",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "(ledger P7)",
+    "line": 0,
+    "severity": "minor",
+    "text": "P7's golden blast radius is over-broad in one direction. An EVENT-FREE fixture does not require an r2c/l3eg golden: the differential skips a new fixture whose event graph is empty rather than demanding a golden. The ir-l2 snapshot does grow, and R4 needs the seed AND the registration in S-02.",
+    "disposition": "fixed",
+    "evidence": "differential.rs:2135-2142 skip rule; event_graph.rs:258-283 -- plain writers and an ordinary OnRun are not publishers/subscribers. || FIXED: P7 split into P7/P7b; an event-free fixture needs no r2c/l3eg golden.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-07",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 59,
+    "severity": "minor",
+    "text": "The helper's doc comment still describes the gate as `writesTablesOf(summary).length >= TRANSACTION_THRESHOLD_TABLES`. After the swap that sentence is false and must name the physical accessor.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:59-60. || FIXED: Design: d50.rs:59-60 doc corrected in the same commit as the swap.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-08",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 342,
+    "severity": "minor",
+    "text": "`affected_tables` stays the TEMP-INCLUSIVE span footprint (d50 copies `span.writes_tables`, aggregated through the inclusive accessor). That is NOT a second transaction-manager gate and this bounded change should not touch shared span aggregation -- but the ledger must not describe the result as 'proven dirty physical tables', which would overstate both the count's conservative semantics and affectedTables.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:342; transaction_spans.rs:153-165; cone_derived.rs:474-489. || FIXED: Design: affected_tables stays the temp-inclusive span footprint, stated and deliberately unchanged.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-09",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 212,
+    "severity": "minor",
+    "text": "A narrowing gate can change a RETAINED finding's explanation without changing its id or the count. d50 picks `managers[0]`, which supplies evidence, root-cause text and affected objects, while the finding id keys on the checked callsite and the fingerprint excludes the chosen manager. So a count-or-fingerprint-only comparison can report 'no change' while users see a different manager explanation. The delta inspection must look at payloads.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:212, :246-287, :306-327; fingerprint.rs:133-175. || FIXED: Measurement plan compares stable callsite identities and full payloads, not counts or fingerprints.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-10",
+    "source": "flash",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "CLAUDE.md makes a CHANGELOG entry mandatory for a bug fix; the design does not list it.",
+    "disposition": "fixed",
+    "evidence": "CLAUDE.md Development Guidelines. || FIXED: Measurement plan: CHANGELOG entry, scoped to the count branch with the name heuristic unchanged.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-11",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 395,
+    "severity": "minor",
+    "text": "A1 ('a temp-only routine is not transaction-managing') is best pinned as a direct unit test beside d50's existing native tests, not only through the fixture, so the gate itself is covered independently of the corpus.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:395+ already hosts native unit tests. || FIXED: A1 pinned as a direct unit test beside d50's native tests.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "S-12",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 74,
+    "severity": "important",
+    "text": "The narrowing is NOT limited to temp-only routines, and the ledger's framing implies it is. A non-posting routine writing TWO physical tables plus one temporary drops from 3 to 2 and falls below the threshold too. That is the correct outcome, but it is a wider affected population than the issue describes and the measurement plan must expect it.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:74 with TRANSACTION_THRESHOLD_TABLES = 3 (d50.rs:43). || FIXED: Design 'Scope, stated precisely' + A7 (two physical + one temp falls below threshold).",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "R2-A8",
+    "source": "astra",
+    "round": 2,
+    "file": "(design)",
+    "line": 0,
+    "severity": "important",
+    "text": "A8's proof is a tautology: removing the Smoke entry removes BOTH the fixture's execution AND its checks, so a green run is the original failure mode rather than protection against it.",
+    "disposition": "fixed",
+    "evidence": "r4_differential.rs:1670-1675 records only entries it executes; :1713-1723 iterates those records. || FIXED IN v3: A8 rewritten as an unconditional end-of-test assertion that the fixture appears exactly once in completed ported results -- removing the entry must fail THAT assertion -- plus a golden-payload mutation that must fail the byte comparison at :1499-1521.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "R2-A1",
+    "source": "astra",
+    "round": 2,
+    "file": "(design)",
+    "line": 0,
+    "severity": "important",
+    "text": "A1 risks being vacuous: d50's existing `minimal_ctx` has empty summaries and a default cone store, so an unmodified one returns false at the missing-summary branch BEFORE the fix, and the test would pass for the wrong reason.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:556-558 (minimal_ctx), :68-70 (missing-summary early return). || FIXED IN v3: A1 must populate a real three-temp-table summary and store and assert the 3/0 precondition first.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "R2-SUBJ",
+    "source": "astra",
+    "round": 2,
+    "file": "(design)",
+    "line": 0,
+    "severity": "important",
+    "text": "Finding subjects must be asserted by the PRIMARY CHECKED-CALLSITE location, not by absence from manager evidence -- otherwise a manager/witness change reads as suppression, the same confusion S-03 guards against elsewhere.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:217-235 primary location identifies the seed routine independently of the selected manager. || FIXED IN v3: A2/A3 state the subject-assertion rule explicitly.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "R2-A7",
+    "source": "astra",
+    "round": 2,
+    "file": "(design)",
+    "line": 0,
+    "severity": "minor",
+    "text": "A7 required only an after-fix ABSENCE, so it would pass even if the mixed routine's Run were unchecked or missing -- testing nothing about the mixed threshold.",
+    "disposition": "fixed",
+    "evidence": "Threshold is 3 (d50.rs:30); the mixed routine must qualify before and not after. || FIXED IN v3: A7 makes StageMixedRows a same-shape clone differing only in the third declaration, pins counts at 3/2, and A4 requires it to REPORT under the restored inclusive accessor.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CR-01",
+    "source": "code-reviewer",
+    "round": 4,
+    "file": "(diff)",
+    "line": 0,
+    "severity": "minor",
+    "text": "CHANGELOG stated a false history: 'the accessor d8 has always used'. d8 shipped temp-INCLUSIVE and was converted by 40c5300a, a sweep over d8/d43/d44/d45 that d50 was not in.",
+    "disposition": "fixed",
+    "evidence": "VERIFIED by the conductor: 40c5300a is 'temp-gate capability-cone table writes (d8/d43/d44/d45)'; d50 absent from that list; d8 introduced in 45dce8d1. || FIXED: CHANGELOG now says 'has used since 40c5300a' and adds a paragraph naming the missed sweep, plus the note that d2.rs:425 was checked and is correct because it builds a witness set, not a gate.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CR-02",
+    "source": "code-reviewer",
+    "round": 4,
+    "file": "(diff)",
+    "line": 0,
+    "severity": "minor",
+    "text": "The gap test file's header described the PRE-fix behaviour in the present tense - the same defect already fixed in the twin comment at d50.rs:962, not applied to the file that comment describes. Plus three over-claims: 'every test drives the REGISTERED detector' (2 of 7 do not), 'The A1 unit test' singular (there are 3), and a 'STRONGER structural property' claim that is actually weaker (the round-trip returns the same literal).",
+    "disposition": "fixed",
+    "evidence": "gap_issue23_d50_physical_write_gate.rs:1-15, :188-196. || FIXED: Header rewritten to past tense with an explicit 'read the past tense as describing the bug'; the five-of-seven split stated; 'THREE A1 unit tests'; the prefix claim restated honestly as a check on the WRITERS literal that still has teeth because routine_id panics first.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CR-03",
+    "source": "code-reviewer",
+    "round": 4,
+    "file": "(diff)",
+    "line": 0,
+    "severity": "minor",
+    "text": "cone_derived.rs documented a caller that no longer exists: after this change writes_tables_count_of has ZERO production call sites, yet its doc still read 'For callers (d50) that only need the count'.",
+    "disposition": "fixed",
+    "evidence": "VERIFIED: the only remaining references are its own definition, doc, unit tests and d50's test module. || FIXED: Doc updated to record that no production caller remains, plus the invariant this establishes: GATES read the physical count, WITNESS sets read the inclusive one.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CR-04",
+    "source": "code-reviewer",
+    "round": 4,
+    "file": "(diff)",
+    "line": 0,
+    "severity": "minor",
+    "text": "CHANGELOG's 'the count stays deliberately conservative' does not hold end-to-end for INHERITED facts: the cone dedups on a key excluding temp state, so a temp representative can win and a genuinely physical write is lost - a false NEGATIVE, the opposite direction.",
+    "disposition": "fixed",
+    "evidence": "capability_cone.rs:1204-1212; recorded in this ledger as the issue #33 dependency but absent from the durable record. || FIXED: CHANGELOG now carries the LIMIT explicitly and names #33 as pre-dating this change and neither caused nor fixed by it.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "CR-05",
+    "source": "code-reviewer",
+    "round": 4,
+    "file": "(diff)",
+    "line": 0,
+    "severity": "minor",
+    "text": "Three Measurement-plan items had no recorded outcome: ci-steps all, cdo-gate, and the real-code d50 delta that closes S-09.",
+    "disposition": "fixed",
+    "evidence": "ledger Measurement plan vs the Task 1/2 records. || FIXED: All four gate results now recorded with exit codes and logs, and the real-code delta MEASURED rather than exempted: byte-identical output, 3 findings before and after, 0 removed / 0 added / 0 payload changes.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-01",
+    "source": "astra",
+    "round": 5,
+    "file": "(record)",
+    "line": 0,
+    "severity": "minor",
+    "text": "A8's SECOND promised experiment had no recorded outcome. The acceptance matrix required both registration-removal AND a golden-payload mutation; only the first was run. The execution-count assertion alone would accept a run that executed the fixture but had stopped checking its payload.",
+    "disposition": "fixed",
+    "evidence": "ledger acceptance matrix A8 vs the recorded proof. || FIXED: Run and recorded: mutating `used in StageRows performs...` in the golden (occurrence asserted == 1, no regeneration) fails the byte comparison at r4_differential.rs:1524 with 27 passed / 1 failed; restored, sha256 532d4fac204a8cd404dc matched, r4 green at 28.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-02",
+    "source": "astra",
+    "round": 5,
+    "file": "(record)",
+    "line": 0,
+    "severity": "minor",
+    "text": "LEDGER OVER-CLAIM: 'the temp-only / mixed-below-threshold shape does not occur in CDO's posting code' does not follow from unchanged output. A mixed writer can stop qualifying while a POSTING-named ancestor remains managers[0], leaving the emitted payload byte-identical.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:208-221. NOTE: the round-1 panel SPLIT here -- flash endorsed the absence claim as 'honest and scoped'; astra refuted it with this mechanism. The mechanism was taken over the assertion. || FIXED: Claim narrowed to exactly what the data supports: 'no emitted d50 finding or payload changed on this pinned workspace', with the counterexample and the reviewer split both recorded.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-03",
+    "source": "astra",
+    "round": 5,
+    "file": "(record)",
+    "line": 0,
+    "severity": "minor",
+    "text": "LEDGER OVER-CLAIM: `evidencePath` described as 'the only place an S-09 witness change can surface'. False -- d50.rs:320 embeds manager.name in rootCause and d50.rs:333 embeds manager.object_id in affectedObjects, so a manager swap moves those too.",
+    "disposition": "fixed",
+    "evidence": "VERIFIED by the conductor at both line ranges. || FIXED: Corrected in the ledger: full-payload comparison remains the right method (and is what was done); the justification written for it was wrong.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-04",
+    "source": "astra",
+    "round": 5,
+    "file": "(record)",
+    "line": 0,
+    "severity": "minor",
+    "text": "The tense correction in 76f6f693 was ITSELF incomplete -- four further places still described the old inclusive gate in the present tense, inside the files that commit touched. One carried a second error: three tables is AT a `>=` threshold of three, not ABOVE it.",
+    "disposition": "fixed",
+    "evidence": "d50.rs:1029, :1038, :1063; gap test :387. These are assertion-message strings, so a stale one prints a wrong explanation exactly when someone is debugging a failure. || FIXED: All four corrected in dd0c3d02; `grep` for the stale phrasings now returns nothing.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-05",
+    "source": "astra",
+    "round": 6,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 1012,
+    "severity": "minor",
+    "text": "SIXTH conductor over-claim: assert_counts' doc said it asserts the preconditions 'and return the ctx'. It returns (). The usage the phrasing implies would not type-check, since the binding would be () rather than a DetectorContext. Not a runtime or detector defect -- every caller ignores the return -- but a false statement in a comment written by this arc.",
+    "disposition": "fixed",
+    "evidence": "VERIFIED by the conductor: the fn has no return type and every call site discards it. || FIXED: phrasing replaced with 'Asserts only; it returns (). Callers keep their own ctx.' d50 lib tests green at 15/15 after the change.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP-06",
+    "source": "astra",
+    "round": 7,
+    "file": "tests/gap/gap_issue23_d50_physical_write_gate.rs",
+    "line": 34,
+    "severity": "minor",
+    "text": "SEVENTH conductor over-claim: the gap test header credited `span_of` with asserting that each writer's span contains EXACTLY that writer. It asserts only that exactly ONE CheckedRunImplicit span is seeded in the routine and never reads `routines_in_span`. The membership half is A9's, with A2/A7 checking their own. With a common caller, span_of still returns exactly one -- contaminated -- span and only A9 fails.",
+    "disposition": "fixed",
+    "evidence": "VERIFIED by the conductor at :170-184 (filter, assert_eq len == 1, return) against the header at :34-35. The PROTECTION was never missing -- A9 is real and catches the common-caller case, so S-03 stands -- only the sentence saying where it lives was wrong. || FIXED in 769a9b64 with astra's own suggested split of responsibilities; gap tests green at 7/7. || ATTEMPT 2: the first fix (769a9b64) contained the EIGHTH over-claim ('Only A9 fails' -- A2 at :339 and A7 at :383 also assert membership), corrected in 7cdbb268; the surviving explanation then contained the NINTH (a common driver 'would inherit StageRows' three PHYSICAL writes' -- not guaranteed, since both writers touch the same three tables, the dedup key excludes temp state and the tie-break is edge sort order, so the driver may inherit TEMP representatives with physical count 0). 30e7f5fe REMOVED the speculation in all four places rather than restating it. ACCEPTED by both reviewers; astra found no tenth.",
+    "hash": "dc7bbb12b2bff0d9",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  }
+]
