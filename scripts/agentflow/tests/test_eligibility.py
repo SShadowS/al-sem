@@ -24,6 +24,21 @@ def test_author_and_labels_exclude():
     assert ok == [] and {e.reason for e in ex} == {"author", "label:agent-blocked", "label:epic"}
 
 
+def test_an_issue_still_carrying_an_incident_label_is_never_picked_up():
+    """`agent-revert-blocked` means MASTER MAY STILL BE RED. A human who
+    reopens an issue carrying it has not said the loop may resume, and
+    `agent-gates-green-unverified` means nothing ever verified the merge.
+    PINS THE USE: `eligible`, not the `EXCLUDE_LABELS` constant -- a test that
+    read the constant would pass even if `eligible` stopped consulting it."""
+    issues = [mk(1, labels={"agent-revert-blocked"}), mk(2, labels={"agent-gates-green-unverified"}),
+              mk(3, labels={"agent-revert-landed"}), mk(4)]
+    ok, ex = eligible(issues, {"SShadowS"})
+    assert [i.number for i in ok] == [4]
+    assert {e.reason for e in ex} == {"label:agent-revert-blocked",
+                                      "label:agent-gates-green-unverified",
+                                      "label:agent-revert-landed"}
+
+
 def test_open_dependency_excludes_but_closed_one_does_not():
     ok, ex = eligible([mk(1, body="## Acceptance\nx\nDepends-on: #2"), mk(2), mk(3, body="## Acceptance\nDepends-on: #99")],
                       {"SShadowS"})

@@ -36,6 +36,10 @@ class Paths:
         return self.agent / "HALT"
 
     @property
+    def audit(self) -> Path:
+        return self.agent / "audit.jsonl"
+
+    @property
     def runs(self) -> Path:
         return self.agent / "runs"
 
@@ -50,6 +54,10 @@ class Paths:
     @property
     def attempts(self) -> Path:
         return self.agent / "attempts.json"
+
+    @property
+    def incidents(self) -> Path:
+        return self.agent / "incidents.json"
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs / run_id
@@ -91,6 +99,27 @@ def write_json(ctx: Ctx, path: Path, data: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def append_audit(ctx: Ctx, record: dict) -> None:
+    """Append one JSON line to `.agent/audit.jsonl`.
+
+    APPEND-ONLY, and never read back by the executor: nothing in this package
+    may branch on its contents. It exists for the human reconstructing an
+    incident afterwards -- who set HALT, who cleared it, who resolved which
+    merge -- which is precisely the history a single overwritten `.agent/HALT`
+    file cannot carry. A consumer that started reading it would turn an
+    evidence log into a control input, and a truncated or hand-edited line
+    would then change what the flow DOES rather than only what it reports.
+
+    Goes through `write_guard` like every other write, so `--dry-run` stays
+    provably write-free.
+    """
+    ctx.write_guard("append audit record")
+    ctx.paths.agent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({"at": ctx.now(), "run_id": ctx.run_id, **record}, sort_keys=True)
+    with open(ctx.paths.audit, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 def tree_snapshot(root: Path) -> dict[str, str]:

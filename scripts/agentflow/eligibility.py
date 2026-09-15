@@ -13,6 +13,12 @@ from .gh import Issue
 
 EXCLUDE_LABELS = frozenset({
     "agent-blocked", "agent-working", "agent-answered", "agent-regressed", "manual-only", "epic", "meta",
+    # The two-axis incident vocabulary (see `recovery.incident_labels`). Today
+    # only the fully-reverted path reopens an issue, and that one also carries
+    # `agent-regressed`, so these change nothing yet -- they fail CLOSED. A
+    # human who reopens an issue still carrying `agent-revert-blocked` is
+    # saying master MAY STILL BE RED; the loop must not pick that up.
+    "agent-gates-green-unverified", "agent-revert-landed", "agent-revert-blocked",
 })
 _DEP_LINE = re.compile(r"^\s*depends-on:\s*(.+)$", re.I | re.M)
 _DEP_SECTION = re.compile(r"^#+\s*Dependencies\b[^\n]*\n(.*?)(?=^#+\s|\Z)", re.I | re.M | re.S)

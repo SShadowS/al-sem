@@ -4,7 +4,8 @@ Refreshes the lock heartbeat every `beat_every` seconds while the child runs,
 enforces a timeout by killing the whole process tree, and writes stdout+stderr
 to a log file whose path is returned with the exit code. The environment is
 sanitized: REGEN_TEMP_GOLDENS is removed (a verification must never
-regenerate), ALSEM_NO_PREFLIGHT_CACHE=1, TREE_SITTER_AL_PATH set.
+regenerate), ALSEM_NO_PREFLIGHT_CACHE=1, TREE_SITTER_AL_PATH set, and
+CARGO_TARGET_DIR set when the caller names one.
 """
 from __future__ import annotations
 
@@ -30,11 +31,14 @@ class Result:
     seconds: float
 
 
-def sanitized_env(base: dict, tree_sitter_path: str | None) -> dict:
+def sanitized_env(base: dict, tree_sitter_path: str | None,
+                  cargo_target_dir: str | None = None) -> dict:
     env = {k: v for k, v in base.items() if k not in DROP_ENV}
     env["ALSEM_NO_PREFLIGHT_CACHE"] = "1"
     if tree_sitter_path:
         env["TREE_SITTER_AL_PATH"] = tree_sitter_path
+    if cargo_target_dir:
+        env["CARGO_TARGET_DIR"] = cargo_target_dir
     return env
 
 

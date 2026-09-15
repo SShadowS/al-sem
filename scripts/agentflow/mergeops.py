@@ -63,6 +63,46 @@ def read_attestation(ctx: Ctx) -> Attestation:
     return Attestation(**data)
 
 
+@dataclass(frozen=True)
+class MergeRecord:
+    """What THIS run merged -- the only thing allowed to aim `post-merge`.
+
+    `merge` writes one the moment GitHub reports the squash commit. The
+    stale-run recovery writes the equivalent for a merge GitHub performed on
+    the stale run's behalf, so the recovered follow-through stays supported
+    without loosening the check for anyone else. `source` records which of the
+    two minted it; it is forensic and is never compared.
+    """
+    issue: int
+    pr: int
+    merge_sha: str
+    run_id: str
+    source: str
+
+
+def write_merge_record(ctx: Ctx, rec: MergeRecord) -> Path:
+    p = ctx.run_dir / "merge.json"
+    write_json(ctx, p, asdict(rec))
+    return p
+
+
+def read_merge_record(ctx: Ctx) -> MergeRecord | None:
+    """This run's merge record, or None when there is no USABLE one: absent,
+    not a JSON object, or carrying a different field set. Malformed reads as
+    absent ON PURPOSE -- both mean "this run cannot prove it merged anything",
+    and both must refuse. A record written before this field set existed (the
+    bare `{pr, merge_sha}` this file used to hold) therefore refuses too,
+    rather than being half-trusted on the two fields it happens to have.
+    """
+    data = read_json(ctx.run_dir / "merge.json")
+    if not isinstance(data, dict):
+        return None
+    try:
+        return MergeRecord(**data)
+    except TypeError:
+        return None
+
+
 def ci_green(checks: list[dict], required_workflow: str | None = None) -> bool:
     """All checks completed with SUCCESS. Empty, skipped, cancelled, or pending is
     not green. When `required_workflow` is given, at least one check run from that

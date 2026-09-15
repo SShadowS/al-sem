@@ -116,10 +116,27 @@ class Gh:
                          "--limit", "500", "--json", ISSUE_FIELDS])
         return [_issue_from_cli(d) for d in json.loads(out or "[]")]
 
-    def pr_for_branch_prefix(self, prefix: str) -> dict | None:
+    def pr_for_branch_prefix(self, prefix: str, suffix: str | None = None) -> dict | None:
+        """The best-ranked PR whose `headRefName` starts with `prefix` and --
+        when given -- ends with `suffix`. MERGED outranks OPEN.
+
+        `suffix` is not a convenience. The branch names this flow mints are
+        `issue/<n>-<slug>-a<attempt>`, so a PREFIX alone matches every attempt
+        the issue ever had, and the MERGED-first ranking then prefers a
+        previous attempt's long-merged PR over THIS attempt's open one.
+        `recovery.recover_stale` turns that answer into a trusted merge record
+        (see `cli.cmd_post_merge`'s provenance check), so the wrong answer here
+        aims a full gate re-run -- and, if master has not moved, a REVERT --
+        at a months-old commit this run established nothing about.
+
+        The filter belongs here rather than in the caller because this method
+        returns ONE PR: post-filtering a single ranked answer would silently
+        drop the right PR whenever a wrong one outranked it."""
         out = self._raw(["pr", "list", "--repo", self.repo, "--state", "all", "--limit", "50",
                          "--json", "number,state,headRefName,headRefOid,mergeCommit,mergedAt"])
-        matches = [pr for pr in json.loads(out or "[]") if pr["headRefName"].startswith(prefix)]
+        matches = [pr for pr in json.loads(out or "[]")
+                   if pr["headRefName"].startswith(prefix)
+                   and (suffix is None or pr["headRefName"].endswith(suffix))]
         if not matches:
             return None
         rank = {"MERGED": 0, "OPEN": 1}
