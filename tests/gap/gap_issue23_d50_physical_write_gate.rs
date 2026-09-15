@@ -34,10 +34,12 @@
 //! `span_of` asserts only that EXACTLY ONE `CheckedRunImplicit` span is seeded
 //! in the routine; it never reads `routines_in_span`. The MEMBERSHIP half of the
 //! contract -- that the span contains exactly that writer -- is
-//! `a9_each_checked_span_holds_exactly_its_own_writer`, with A2 and A7 checking
-//! their own membership too. The distinction matters: with a common AL driver,
-//! `span_of` still finds exactly one span and returns it, contaminated. Only A9
-//! fails. Without that check, a driver calling two writers would inherit
+//! `a9_each_checked_span_holds_exactly_its_own_writer`. The distinction matters:
+//! with a common AL driver, `span_of` still returns the unique span despite its
+//! contaminated membership. A9 rejects that membership; A2 and A7 also reject
+//! contamination of their respective writers' spans, at `:339` and `:383`,
+//! before either runs the detector. Without those checks, a driver calling two
+//! writers would inherit
 //! `StageRows`' three
 //! PHYSICAL writes through its forward capability cone, appear in `BufferRows`'
 //! BACKWARD span as an accepted manager, and keep d50 reporting at `BufferRows`'
