@@ -164,9 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a routine whose only writes were to `temporary` records was treated as
   managing a transaction** (`src/engine/l5/detectors/d50.rs`). The gate now reads
   `writes_physical_tables_count_of` where it read `writes_tables_count_of`, which
-  is the accessor d8 has always used (`d8.rs:40-42`) — a write to a `temporary`
+  is the accessor d8 has used since `40c5300a` (`d8.rs:40-42`) — a write to a `temporary`
   record never dirties the transaction, so it can never be the thing an implicit
-  commit splits. The scope of the narrowing, precisely:
+  commit splits.
+
+  d50 was not uniquely wrong from birth. It shipped in `95e17c0a` and d8 shipped
+  four days earlier in `45dce8d1`, BOTH reading the temp-inclusive count;
+  `40c5300a` ("temp-gate capability-cone table writes (d8/d43/d44/d45)") then
+  converted an ENUMERATED set of four detectors and d50 was not among them. This
+  is that sweep finishing. Worth knowing because the same question applies to
+  every remaining inclusive consumer — `d2.rs:425` was checked and is correct,
+  because it builds a witness SET rather than a gate.
+
+  The scope of the narrowing, precisely:
   - **Only the COUNT branch moves.** The NAME heuristic
     (`^(Post|Apply|Release)[A-Z]`) is unchanged, so a posting-named routine whose
     every write is to a temporary record still qualifies as transaction-managing.
@@ -175,9 +185,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TRANSACTION_THRESHOLD_TABLES`, so that routine drops out as well.
   - **"Physical" means EXCLUDING writes KNOWN to be temporary — not "proven to
     dirty a physical table".** Unknown, parameter-dependent and absent temp states
-    all still count toward the physical total. The count stays deliberately
-    conservative; this change aligns which facts it excludes, it does not promise
-    the remainder reach SQL.
+    all still count toward the physical total. This change aligns which facts the
+    count excludes; it does not promise the remainder reach SQL.
+    One LIMIT, because "conservative" is not true end-to-end: for INHERITED facts
+    the cone keeps one representative per
+    `op|resource_kind|resource_id|confidence` (`capability_cone.rs:1204-1212`) and
+    temp state is not part of that key, so where a subject reaches one table both
+    temporarily and physically the temp representative can win and the physical
+    write is lost from the count. That direction is a false NEGATIVE, not a
+    conservative one. It is issue #33, it pre-dates this change, and this change
+    neither causes nor fixes it.
   - **`affectedTables` is deliberately unchanged** and remains the temp-INCLUSIVE
     footprint of the span. It is the finding's witness, not a second gate.
 

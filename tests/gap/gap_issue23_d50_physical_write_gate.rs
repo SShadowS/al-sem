@@ -1,18 +1,24 @@
-//! Issue 23 — d50's transaction-managing COUNT branch counts TEMP-INCLUSIVE
-//! table writes; it must count PHYSICAL ones, as d8 already does.
+//! Issue 23 — d50's transaction-managing COUNT branch USED TO count
+//! TEMP-INCLUSIVE table writes; it now counts PHYSICAL ones, as d8 does. These
+//! tests are what pin that, so they are written against the defect they fixed —
+//! read the past tense below as describing the bug, not the current code.
 //!
 //! `d50.rs`'s `is_transaction_managing` has two branches. The NAME branch
-//! (`^(Post|Apply|Release)[A-Z]`) is correct and stays. The COUNT branch calls
-//! `ConeDerivedStore::writes_tables_count_of`, which is documented
+//! (`^(Post|Apply|Release)[A-Z]`) is correct and stays. The COUNT branch USED TO
+//! call `ConeDerivedStore::writes_tables_count_of`, which is documented
 //! temp-INCLUSIVE (`cone_derived.rs:23-24`); d8 calls
 //! `writes_physical_tables_count_of` (`cone_derived.rs:25-27`), which excludes
 //! `fact_is_known_temp` facts. A routine whose only "writes" are to `temporary`
 //! records dirties nothing an implicit commit could split, so counting it as a
 //! transaction manager is a false positive by construction.
 //!
-//! Every test here drives the REAL assembled `ws-d50-temp-gate` workspace and
-//! the REGISTERED detector, never a helper function. The A1 unit test lives
-//! beside d50's own native oracles (`src/engine/l5/detectors/d50.rs`).
+//! Every test here drives the REAL assembled `ws-d50-temp-gate` workspace. Five
+//! of the seven also drive the REGISTERED detector; `a5_...` and `a9_...`
+//! deliberately do not — they assert the substrate preconditions (per-writer
+//! counts, and span membership) that the other five rest on, by reading
+//! `ctx.cone_derived` and `ctx.transaction_spans` directly. The THREE A1 unit
+//! tests live beside d50's own native oracles
+//! (`src/engine/l5/detectors/d50.rs`).
 //!
 //! ## Reading a finding's SUBJECT
 //!
@@ -185,9 +191,12 @@ fn span_of<'c>(ctx: &'c DetectorContext<'_>, routine_id: &str) -> &'c Transactio
 /// Neither non-posting writer's name can match d50's `POSTING_NAME_RE`
 /// (`^(Post|Apply|Release)[A-Z]`), so the NAME branch cannot short-circuit and
 /// the COUNT branch is what decides them. `posting_name_matches` is private to
-/// `d50.rs`, so this pins the STRONGER structural property the fixture actually
-/// holds — the names do not begin with any of the three prefixes at all —
-/// against the names as ASSEMBLED, not against string literals typed here.
+/// `d50.rs`, so this asserts the property directly: the names do not begin with
+/// any of the three prefixes. Stated honestly, it is a check on the `WRITERS`
+/// literal — `name_of(routine_id(name))` round-trips to the same string by
+/// construction, so this is not an independent read of the assembled name. It
+/// still has teeth: rename the AL procedure and `routine_id` panics before the
+/// prefix assertion is ever reached.
 ///
 /// And the counting path must be able to reach a POSITIVE result: each writer's
 /// three resolved table ids are DISTINCT (both accessors return sorted,
