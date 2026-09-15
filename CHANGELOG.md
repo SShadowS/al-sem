@@ -7,7 +7,400 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Post-merge verification for the autonomous issue flow: disposable worktrees,
+  a durable per-merge incident record, merge-record provenance, and a two-axis
+  incident label vocabulary** (`scripts/agentflow/`). All four exist because of
+  one incident, written down here because the class is easy to reintroduce: on
+  2026-09-14 `post-merge` ran on merge `19f654e1`; its three real gates returned
+  0, 0 and 0; a stat-only line-ending difference on a BYTE-IDENTICAL tracked file
+  then made the tree look dirty, and the harness entered the REVERT path on a
+  fully-attested, CI-green commit. Only an unrelated `master-not-ff` guard
+  stopped the push. The rule every change below applies: **COULD NOT VERIFY is
+  not PROVEN BAD.**
+  - **Disposable verification worktrees** (`scripts/agentflow/worktrees.py`). The
+    merge commit is materialised in `../al-sem-verify-merge-<sha12>` and the
+    gates run there; the shared checkout stays on `master` for the whole command.
+    The revert gets a second such tree, created only after the first is
+    destroyed, so peak extra disk is one tree rather than two. Without this,
+    everything the failing run left behind — a regenerated golden, a touched
+    `Cargo.lock`, a line-ending materialisation — is inherited by the run that
+    decides whether to PUSH the revert, so a revert that is red from a clean
+    checkout can be green-lit by the leavings of the run it is reverting.
+    Teardown is `rm -rf` plus `git worktree prune`, never `git worktree remove`
+    (which refuses outright in a repository with a submodule, and this one has
+    `tree-sitter-al/`); the directory-name prefix is the ownership proof on that
+    `rm -rf`. Gates compile in a submodule-less worktree because the gate runner
+    derives `TREE_SITTER_AL_PATH` from the repo ROOT rather than from the gate's
+    cwd — a real dependency on `scripts/ci-steps`'s own fallback order, so the
+    suite pins it. The build CACHE is deliberately still shared: measured,
+    `target/` is 65G here against 55G free with the issue worktree still on disk,
+    so a per-worktree cache does not merely cost time, it does not fit.
+  - **A durable per-merge incident record** (`scripts/agentflow/incidents.py`,
+    `.agent/incidents.json`), the append-only `.agent/audit.jsonl`, and three
+    operator subcommands — `clear-halt`, `resolve-incident`, `incidents`. HALT is
+    ONE global file, so clearing it erases the obligation it stood for. The
+    record is keyed by merge SHA and `preflight` refuses on it INDEPENDENTLY of
+    HALT, so a careless clear cannot resume the loop over a commit nothing
+    verified. `clear-halt` and `resolve-incident` are operator-only, enforced by
+    `lock.require_operator` — a run id in the context is refused, and every
+    conductor call carries one — rather than by a line in the command prompt.
+    `clear-halt` additionally refuses when nothing is halted, and refuses unless
+    the CURRENT halt text is the text the operator quoted, so a HALT that a newer
+    incident overwrote is not cleared with the old incident's reason; its audit
+    line lands BEFORE the unlink, because a clear with no record is the one
+    outcome that must be impossible. `.agent/audit.jsonl` is never read back by
+    the executor — a consumer that started branching on it would turn an evidence
+    log into a control input — and an `incident-open` line carries the record's
+    `state`, so the trail that survives a wiped `incidents.json` says whether
+    anything had been decided yet.
+  - **Merge-record provenance.** `merge` writes `{issue, pr, merge_sha, run_id,
+    source}` (the issue taken from the attestation, never from argv) and
+    `post-merge` refuses unless a record exists for THIS run and its issue, SHA
+    and run id ALL match argv. `--issue`/`--merge-sha` are argv and the lock
+    fence proves only that the LOCK names this run, so together they could aim
+    the revert path at any commit — a human's sitting at the tip included. A
+    record in the older bare `{pr, merge_sha}` shape reads as ABSENT and refuses
+    too, rather than being half-trusted on the two fields it happens to carry.
+  - **A two-axis incident label vocabulary** (`recovery.incident_labels`).
+    EVIDENCE: `agent-regressed` when a gate actually returned a red verdict,
+    `agent-gates-green-unverified` when none did. ACTION, only when a revert was
+    attempted: `agent-revert-landed`, or `agent-revert-blocked`, which means
+    MASTER MAY STILL BE RED. The old code stamped `agent-regressed`
+    unconditionally, which is how a merge whose every gate passed was labelled a
+    regression on the strength of the other axis alone. The naive inverse — label
+    only when a revert lands — is wrong the other way: a red gate IS a regression
+    whether or not the revert could be pushed, which is exactly when a human most
+    needs to know. All three new names are in `eligibility.EXCLUDE_LABELS`, so a
+    reopened issue carrying one is never re-picked by the loop.
+
+### Changed
+
+- **`post-merge` runs its gates on the MERGE COMMIT in a disposable worktree**
+  instead of checking that SHA out in the shared checkout, and the shared
+  checkout is on `master` when the command returns — no `reset`, no revert and
+  no detached HEAD there any more. What it still does there, stated precisely
+  because an earlier draft of this bullet claimed it did nothing: `git checkout
+  master`, `git fetch`, and a `--ff-only` fast-forward of local `master` to
+  `origin/master` (`Git.ff` is `git merge -q --ff-only`, so the shared ref and
+  working tree really do move — the suite asserts they did), plus one more
+  `checkout master` in the restoring `finally`. The stronger sentence — "`fetch`,
+  read-only queries and one `push` are all it does there" — belongs to
+  `recovery.post_merge_failure`, the revert path, where it is true and where
+  that function's own docstring scopes it; it was never true of the whole
+  command. Its payload gained `timeouts` (the gates the supervisor killed),
+  `verify_worktree_removed`, `tree_anomaly` / `tree_anomaly_total`,
+  `halt.dirty_total` and `halt.retained_worktree`.
+- **The revert push is two-sided and SHA-pinned**:
+  `<revert-sha>:refs/heads/master`, through a `push_master` helper that refuses
+  anything but a full 40-hex commit id and never forces. A one-sided `git push
+  origin master` sends whatever the local ref points at AT PUSH TIME — after a
+  gate re-run lasting tens of minutes — and re-resolves the name through rules
+  that prefer `refs/tags/master` over `refs/heads/master` (measured: with such a
+  tag present, `git push origin master` fails outright with "src refspec master
+  matches more than one", while the two-sided form is unaffected). The low-level
+  `Git.push` survives for test setup only, and the suite pins that no production
+  module calls it.
+- **One content-aware tree probe, on every caller** (`Git.tree_state`). It asks
+  two INDEPENDENT questions: which tracked paths' CONTENT differs from HEAD
+  (staged and unstaged in one comparison), and what porcelain still calls dirt
+  after that comparison came back clean. Only the first is ever a verdict; the
+  second is reported as an anomaly — `post-merge` and `preflight` both emit
+  `tree_anomaly` / `tree_anomaly_total`, neither of which is ever a verdict.
+  `post-merge`, `preflight`, `remove_worktree` and `remove_spike_worktree` all
+  use it now. Submodule worktree dirt is ignored while a MOVED submodule pointer
+  is not, because the gitlink SHA recorded in the superproject is this repo's
+  content and the submodule's own working tree is not. The probe's optional
+  `git update-index --refresh` step is skipped under `--dry-run`, since it writes
+  `.git/index`'s stat cache and that command must stay provably write-free; it
+  is an optimisation either way, because the content comparison decides the
+  verdict on its own.
+- **Incident records have three states, not two.** `verifying` — a `post-merge`
+  that opened its obligation and has not reached a verdict — is shown by
+  `preflight` and `status` and is a failure row in neither, while `open` is the
+  terminal obligation `preflight` refuses on. A post-merge killed mid-gates, the
+  longest window in a tick, therefore stays recoverable by `recover` with no
+  operator action; a terminal row there would gate the very recovery that
+  discharges it, and the operator's only exit would be to record on the audit
+  trail that a merge nothing verified is closed, purely to be allowed to go
+  verify it.
+- **Stale-run adoption is scoped to the stale lock's OWN attempt**, on two
+  independent axes: the PR's branch must end `-a<attempt>`, and a `mergedAt` that
+  parses and predates the lock's `started` is refused — `started` being the date
+  the WORK was claimed, which is why `recover`'s follow-through lock carries the
+  stale lock's own (see the Fixed entry below). A prefix match alone
+  adopted any attempt the issue ever had, and merged PRs outrank open ones, so a
+  previous attempt's long-merged PR could be minted as this run's trusted merge
+  record and today's gates would then run against a months-old tree. An absent or
+  unparseable `mergedAt` deliberately does NOT refuse — refusing a self-heal
+  because a timestamp did not parse is this arc's own error in a smaller form,
+  and the attempt match is what carries the guarantee.
+- Docs updated with the executor: `.claude/commands/orchestrate.md` (three
+  post-merge stops rather than two; what `preflight`'s informational fields mean
+  and which single field stops a tick; the branch-refusal reassurance narrowed to
+  the two commands it is actually true of) and
+  `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md` (a new
+  "Post-merge verification" section written against the shipped executor, and the
+  passages that had gone false — the eligibility exclusions, the locally-built
+  revert, the unconditional `agent-regressed`, the label-creation list and
+  acceptance scenario 5 — corrected). A later pass corrected what the code had
+  since made false again, in both files and in this one: the retained
+  verification worktree and its `cleanup` exit (orchestrate.md steps 9 and 11,
+  the spec's three-stop table and isolation section, and acceptance scenario 6,
+  which stated "the dirty file left exactly as found" as a proving expectation
+  and could not have passed as written); that a crash AFTER the gates start
+  leaves a `verifying` incident row, where the conductor had been told only
+  about the refusals that precede it; `cleanup does not match this run's claim`
+  as a new refusal; the eligibility parenthetical, which said "the last three of
+  that set" and so pointed at `manual-only`/`epic`/`meta` instead of naming
+  `recovery.INCIDENT_LABELS` (which is FOUR labels — `agent-regressed` plus the
+  three this arc added, not three); and the operator-facing refusal codes
+  `resolve-incident` can return.
+
 ### Fixed
+
+- **A stat-only line-ending difference routed a CI-green merge into the revert
+  path** — the 2026-09-14 incident above. `post-merge` now compares tracked
+  CONTENT against the merge commit, in the tree the gates ACTUALLY RAN IN, and a
+  tree that comes back modified there HALTS and is never auto-reverted: a
+  modified tracked file is evidence about the working tree, not about the merged
+  commit. The dirt is left exactly as found — the old path's `reset --hard` would
+  have wiped the very CRLF clue that root-caused the incident — and on that one
+  stop the verification worktree is KEPT rather than torn down. That half was
+  missing for two rounds: the HALT was written and the tree holding the dirt was
+  `rm -rf`'d one `finally` later, so only the path NAMES survived, cut at 20,
+  while this entry and three other texts told the operator to go and inspect a
+  checkout that never had it. A path list is not the dirt: the 2026-09-14 root
+  cause was found by comparing a file's on-disk BYTES against the committed
+  blob. The retained path now rides out in `halt.retained_worktree`, in the HALT
+  reason and in the GitHub comment (which spells out the `git -C <path> status`
+  vs `git -C <path> diff` comparison that root-caused the incident),
+  `verify_worktree_removed` reports `false` honestly, and `agentflow cleanup
+  --worktree <path>` is its supported exit — a directory with no way to remove
+  it is how an obligation nobody can discharge gets created. `--branch` is no
+  longer `required=True` on the parser, because a verification worktree is
+  detached and has none; `cmd_cleanup` is what requires it, for every other
+  worktree, so nothing was made optional in practice. It checks `is None`, not
+  truthiness, so `--branch ""` still reaches the shape check and is still
+  refused there rather than becoming an argparse usage error. Only the tree-dirty stop retains: a gate killed at its timeout
+  leaves a partial build, not evidence about a file, and its tree is still
+  destroyed. A path whose content MATCHES and whose porcelain merely disagrees
+  is reported as `tree_anomaly` and stops nothing.
+  - The same raw-porcelain probe was still live in two OTHER places, pointed the
+    other way. `preflight` called that same checkout `tree-dirty` and stopped
+    EVERY tick; `remove_worktree` raised "is not clean" and stranded the worktree
+    permanently, while its own spike sibling had already been migrated and its
+    comment read as if the asymmetry were a decision about spikes. Both are on
+    the content probe now. Both also stop counting an UNTRACKED file as dirt,
+    which is intended rather than incidental: a stray scratch file or a gate log
+    is the caller's own tooling, never evidence about the work, while a modified
+    TRACKED file still refuses.
+- **A gate the supervisor KILLED at its timeout was indistinguishable from a gate
+  that said no**, at the one decision point where that distinction is the entire
+  rule. `supervise.run` folds a kill into `exit_code or 124` and the gate loop
+  read only the exit code, so a clock running out routed a fully-attested commit
+  into the revert path — and if the revert's own re-run then finished in time, a
+  revert of a good commit would have been validated and pushed. A killed gate now
+  takes the HALT-only path under its own reason (`gate-timed-out`), names the
+  gate in the payload's `timeouts` list, and never claims the tree was dirty.
+  Materially reachable rather than exotic: verification runs in a worktree cargo
+  has never built at, so a cold `ci-steps all` crossing its 45-minute cap is a
+  normal outcome.
+- **A `--merge-sha` that is not reachable from `origin/master` is refused**,
+  after the fetch and before any record is written. Provenance proves only that
+  SOME merge record in this run's directory names the SHA; gating a commit
+  `master` does not carry is not a verification of anything, and the revert path
+  would have gone on to try to revert it. Both sides of the comparison are fully
+  qualified, and the check is fail-closed on an unknown or unfetched id.
+- **`cleanup --branch` reached `git branch -D` unvalidated.** It was the one
+  branch argument in the CLI with no shape check, `remove_worktree`'s "is this
+  branch merged?" proof (`git diff --quiet <branch> <merge-sha>`) passes trivially
+  for `master`, and the already-gone early return deleted the branch with no
+  proof at all. `cleanup` now refuses by SHAPE and then by casefolded IDENTITY
+  (against both the name given and what `rev-parse --abbrev-ref` resolves it to),
+  and `remove_worktree` / `remove_spike_worktree` carry an independent refusal of
+  their own that also covers the currently checked-out branch.
+- **The one exit that had already rewritten `origin/master` was the one exit that
+  recorded itself AFTER a fallible GitHub call.** `gh issue reopen` ran before
+  the durable record, so a GitHub 500 or rate limit there left `incidents.json`
+  reading `revert_landed: null, labels: []` for a merge whose revert was live on
+  `master`, while the emitted payload said `{"ok": false, "revert": null, "halt":
+  null}` — the system had rewritten `origin/master` and recorded nothing about
+  it. The record and the notification now land before the first remote write, as
+  they already did on the halt path. The GitHub error is deliberately still not
+  swallowed: an issue left closed with nobody told is a different lie.
+- **The incident record could be argued out of its own evidence.**
+  `open_incident` overwrote `gate_red` and the terminal reason on every call, so
+  an operator re-running `post-merge` under the same lock erased the record that a
+  gate had ever gone red — unconditionally, even when the retry then crashed —
+  and `mark_verified` closed it, checking only that a record existed. `gate_red`
+  is now monotonic False -> True, a terminal reason is never overwritten by the
+  in-progress one, and `mark_verified` REFUSES a record carrying `gate_red: True`
+  or `revert_landed: False`; those need an operator's `resolve-incident`.
+  Separately, re-opening a RESOLVED record now clears the human's close and
+  appends an `incident-reopen` audit line naming who it superseded, so no record
+  reads `state: open` and `resolved_by: <a human>` at the same time.
+- **The verification worktree leaked on its own postcondition failure.**
+  `worktrees.create` raised after `git worktree add` had already checked a
+  directory out, so that directory survived on a path whose entire contract is
+  that nothing survives it, and `post-merge` reported `verify_worktree_removed:
+  true` off an initialiser it had never reassigned. `create` now tears down after
+  any failure of its own, and the call site was additionally moved inside the
+  block that tears it down.
+- **The halt message understated the dirt.** The caller cut the modified-path
+  list at 50 before handing it over, and the HALT reason, the notification, the
+  GitHub comment and the comment's "and N more" tail all counted the CUT list — a
+  200-file dirty tree was announced to a human as 50, with the tail understating
+  by 150. The list is cut exactly once now, at the reporting end, with the real
+  total carried beside it as `dirty_total`. Reporting a number the system cannot
+  vouch for as though it were established is this arc's own error in miniature.
+- **The gate-environment test failed on exactly the machine configuration its own
+  production code documents as supported.** A developer who exports
+  `CARGO_TARGET_DIR` (the reason the precedence chain exists at all) got a red
+  agentflow suite that had nothing to do with their change, and the failure read
+  as a harness regression. Reproduced first, then fixed by clearing both
+  variables in the test; all three rungs of the precedence chain now have a case
+  of their own.
+- **A lock minted by `recover` could never be recovered a second time.** The
+  recency axis above asks "did GitHub date this merge BEFORE the work was
+  claimed?", and `cmd_recover`'s follow-through lock was stamped `now` — always
+  later than the merge it had just adopted — so on every recovery-minted lock
+  that axis refused its own work by construction. A post-merge killed mid-gates
+  inside a follow-through then degraded to `blocked-crashed`: `agent-blocked` on
+  the issue, the lock freed, the conductor told to continue the tick, and
+  `master` left carrying a merge nothing verified, behind a `verifying` row that
+  fails nothing. `lock.acquire` now takes a keyword-only `started` (forwarded
+  through its own lost-race retry, the one path no fixture drove) and
+  `cmd_recover` passes the STALE lock's `started`, so the claim keeps its
+  original date and the axis keeps measuring against the work's own claim. The
+  HEARTBEAT is deliberately not carried back: `is_stale` reads the heartbeat
+  alone, so a lock minted with an old one would be born stale and a concurrent
+  tick could steal a follow-through that is still running. The suite now chains
+  `recover` -> a post-merge that dies mid-gates -> `recover`, three cycles deep,
+  with ordered real timestamps; the older fixtures on that path all carried the
+  literal `"mergedAt": "x"`, which the guard treats as unparseable, so the
+  recency axis was inert in every test that reached it.
+- **The retained verification worktree had no reachable exit.** `post-merge`'s
+  `tree-dirty-after-gates` stop KEEPS the tree the gates ran in — on that stop
+  the dirt is the evidence a human has to look at — and HALTs without releasing
+  the lock. So the operator who arrives to remove it meets a FOREIGN, STALE
+  lock and holds no run id of their own, and `cmd_cleanup`'s fence refused any
+  foreign lock at all, above the detached route. The one invocation the HALT
+  reason, this file and `orchestrate.md` all name as the exit was the one
+  invocation refused: a directory the system retains, documents an exit for,
+  and cannot remove — the same defect shape as an incident row nothing can
+  close. The fence now carves out exactly that case: a STALE foreign lock
+  passes for the verification-worktree route only. A LIVE foreign lock still
+  refuses everything, because another run is acting on the checkout and its own
+  post-merge may own that very tree, and staleness opens nothing for an issue
+  worktree. This mirrors `lock.require_operator` and `cmd_preflight`, which
+  both fail on a live lock and deliberately let a stale one through.
+
+- **The one argv-aimed recursive delete still standing on a single conjunct.**
+  `worktrees._guard` proves the NAME prefix, and for every caller that passes a
+  path `worktrees.verify_path` built, location is guaranteed by construction.
+  `cleanup --worktree` is the exception: its path comes from argv, so the name
+  prefix was the only thing between it and an arbitrary directory, and any
+  directory anywhere on disk carrying that prefix was one command away from
+  deletion. It now also requires the path to sit in the checkout's own parent —
+  the two-conjunct rule `recovery._refuse_unowned_path` already states for its
+  own removers, for the reason stated there: `U:/Git` holds ~230 sibling
+  directories, nearly all of them git repositories, so neither a location nor a
+  name is ownership on its own.
+
+- **`cleanup`'s `rm -rf` was aimed by argv with no ownership proof.** Its only
+  path guard was "is a direct child of the repo root's parent" — on this machine
+  `U:/Git`, which holds 230 sibling directories, essentially all of them git
+  repositories, the pinned `DO-cdo-baseline` among them. Neither of the other
+  two checks covers the path: the cleanliness probe asks about the tree's
+  CONTENT, which a clean sibling checkout passes, and `git diff --quiet <branch>
+  <merge-sha>` runs in the MAIN repo and is satisfiable by its own argument. One
+  wrong `--worktree`, with the other two arguments correct, was a deletion.
+  `recovery._refuse_unowned_path` now holds two conjuncts — location AND name
+  (`al-sem-issue-<issue>-a<attempt>`, the only shape `claim` and `recover` ever
+  hand out) — and runs FIRST in both removers, above the already-gone early
+  return, which is the path with the least standing between an argument and a
+  delete. Independently, `cleanup` refuses a `--worktree`/`--branch` that
+  disagrees with `.agent/runs/<run-id>/claim.json`: the same "a record this run
+  wrote, not argv" discipline `post-merge` applies to `--issue`/`--merge-sha`.
+  An absent run id or claim file is deliberately still allowed, so an operator
+  cleaning up by hand after a crash keeps working; that makes it a narrowing of
+  the claimed path, never a new way for cleanup to be unavailable.
+- **The `verifying` incident state had no exit.** `resolve` refused any record
+  whose state was not exactly `open`, and told the operator "`<sha12>` was closed
+  by `None`" — about a merge nobody verified and nobody closed. Nothing else
+  could discharge the row either: `mark_verified` needs a post-merge run, and
+  post-merge needs a merge record plus a fence that no operator invocation can
+  satisfy once the lock is gone, so the only remaining action was hand-editing a
+  gitignored JSON file. That is this arc's own error (COULD NOT VERIFY reported
+  as ESTABLISHED) in the operator-facing surface. `resolve` now closes a
+  `verifying` row — an unverified merge is an obligation, and discharging one is
+  what an operator is for; the record keeps `resolved_by` and the audit line, so
+  an operator's close stays distinguishable from `mark_verified`'s
+  `post-merge:<run>` form. A genuinely resolved record is still refused as
+  `already-resolved`, naming the real closer, and any other state — reachable
+  only through a hand-edited `incidents.json` — is reported as `unknown-state`
+  naming the state it found, rather than described as a close.
+- **Nothing executable tied either document of record to the executor**, which
+  is why each of the three rounds ended with a doc sentence a human had to find
+  by re-reading prose while the suite stayed green. `tests/test_docs_drift.py`
+  now reads `.claude/commands/orchestrate.md` and the design spec and asks the
+  CODE about what they name: every `agent-…` label must be one the executor
+  defines, every `halt.<field>` must be a real `HaltOutcome` field, and both
+  halt reason codes must appear verbatim, driven from `recovery.TREE_DIRTY` /
+  `GATE_TIMED_OUT` rather than from literals. Stated as what it is: this
+  catches STRING DRIFT — a rename with the docs left behind — and cannot check
+  a sentence, because "the tree is retained" is a claim about control flow.
+  That is the half a rename breaks silently and no reviewer re-checks. Writing
+  it also found a real hole, and only because the discrimination proof came
+  back GREEN: renaming `recovery.UNVERIFIED` left the doc test passing, because
+  `cli.LABELS` splices `INCIDENT_LABELS` while `eligibility.EXCLUDE_LABELS`
+  spells all ten labels as LITERALS — two independent spellings of one
+  vocabulary, compared by nothing. The subset invariant this entry already
+  claims ("all three new names are in `EXCLUDE_LABELS`, so a reopened issue
+  carrying one is never re-picked") is now pinned by a test of its own; break
+  it and the loop re-picks an issue reopened while still carrying
+  `agent-revert-blocked`, which means master may still be red.
+- **How the above was verified, and what that does and does not mean.** The
+  executor's own suite went 151 -> 206 -> 238 -> 256 over three hardening
+  rounds. 151 and 256 were re-counted against the tree for this entry (151 by
+  counting `^def test_` across `scripts/agentflow/tests/` at HEAD, where no
+  `parametrize` exists, so the definition count IS the collected count); 206 and
+  238 are the figures of record from the earlier reviews. Every behavioural
+  change listed above is paired with a test, and each was measured by applying a
+  break under an asserted
+  occurrence count, running the full suite to a file, naming the test that failed,
+  restoring the file by byte copy with its sha256 re-verified, and re-running
+  green. A third gap, carried in an earlier draft of this bullet as unnamed and
+  then named as open, is now CLOSED: the revert re-run's `cargo_target_dir` is
+  asserted at BOTH of `rerun_all`'s call sites, individually and jointly, by a
+  test that records every gate child's name, cwd and environment. The hole it
+  closes is real but CONDITIONAL, and saying so is the point: `_run_gate` copies
+  `os.environ` and `CARGO_TARGET_DIR` is not in `supervise.DROP_ENV`, so a
+  developer who exports one would have had it reach the child anyway. It bites
+  when the variable is UNSET — the normal case here — because the child then
+  gets nothing at all and cargo defaults to the revert worktree's own `target/`,
+  a cache it has never built at; a cold build that exhausts the disk or crosses
+  the 45-minute cap returns non-zero, `post_merge_failure` exits
+  `revert-failed-gates`, and a CORRECT revert is never pushed while master stays
+  red. That is this entry's own rule failing in the one path that decides
+  whether master gets fixed, which is why the pin is worth its fixture. Two gaps
+  remain named rather than glossed: moving the worktree creation inside the
+  teardown block has no INDEPENDENT proof, because with `create`'s own teardown
+  in place there is nothing left for it to catch (the two are pinned as a pair);
+  and three assertions on the worktree-creation-failure path would need a
+  production change to discriminate, so they are carried as assertions rather
+  than as pinned guards. Two further LIMITS, measured rather than assumed: the
+  flag that retains the verification worktree and `halt is not None` currently
+  hold the same value inside that `finally` (it runs before the killed and
+  failed stops assign `halt`), so no test can tell them apart — the explicit
+  flag is kept anyway, because it stays correct if the timeout routing ever
+  moves above the `finally`; and the revert-rerun environment test stubs
+  `supervise.run`, so it pins the environment the CLI HANDS the supervisor,
+  while the `env=` -> `Popen(env=...)` handoff is pinned only at helper level.
+  The package still has no linter and no CI workflow runs this suite, so "green"
+  here means the pytest suite passes and nothing more.
 
 - **`d19-unused-parameter` flagged EVENT PUBLISHER parameters, which it cannot
   evaluate** (issue #25). An `[IntegrationEvent]`/`[BusinessEvent]` procedure has an

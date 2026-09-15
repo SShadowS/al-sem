@@ -1,8 +1,14 @@
 # Issue orchestrator — design
 
 Date: 2026-09-13
-Status: revision 4 — three review rounds with gpt-6-astra + gemini-3.8-flash (the cap); round 3: gemini READY, astra NOT READY with three blockers, all addressed here without a fourth round
+Status: revision 5 (2026-09-15) — the post-merge design was rewritten against the SHIPPED executor after the 2026-09-14 incident; see "Post-merge verification". A correction of record, not a new review round.
+Previously: revision 4 — three review rounds with gpt-6-astra + gemini-3.8-flash (the cap); round 3: gemini READY, astra NOT READY with three blockers, all addressed there without a fourth round
 Owner: SShadowS
+
+**Reading this document.** Everything outside "Post-merge verification" is the
+design as reviewed on 2026-09-13 and is a statement of INTENT. That one section
+is a statement of what the code does today, written by reading it. Where the two
+disagree, the code is what shipped.
 
 ## Goal
 
@@ -84,7 +90,17 @@ instructions to the flow. Concretely:
 - **Eligibility** (executor, deterministic, before any model sees the issue): author is
   the repo owner or a collaborator with write access; none of the labels
   `agent-blocked`, `agent-working`, `agent-answered`, `agent-regressed`,
-  `manual-only`, `epic`, `meta`; body has an `## Acceptance` section (or the issue is
+  `agent-gates-green-unverified`, `agent-revert-landed`, `agent-revert-blocked`,
+  `manual-only`, `epic`, `meta` (the incident vocabulary of "Post-merge
+  verification" below is `recovery.INCIDENT_LABELS`: `agent-regressed`, which
+  predates that section, plus the three it added —
+  `agent-gates-green-unverified`, `agent-revert-landed` and
+  `agent-revert-blocked`. Named rather than counted: an earlier draft said "the
+  last three of that set", which points at `manual-only`/`epic`/`meta` instead,
+  and a maintainer trimming this list against the spec would have been told the
+  wrong three entries were the load-bearing ones. They fail CLOSED — a human who
+  reopens an issue still carrying `agent-revert-blocked` is saying master may
+  still be red, and the loop must not pick it up); body has an `## Acceptance` section (or the issue is
   a question, which can only be a spike); no open dependency. Dependencies are parsed
   by the executor from `Depends-on: #N` lines and `#N` references under a
   `Dependencies` heading; an issue in a dependency cycle is ineligible and gets one
@@ -123,8 +139,19 @@ instructions to the flow. Concretely:
   the issue is labeled `agent-blocked` with reason `halted`. Resume: the human removes
   the file and runs `python scripts/agentflow unblock N`, which removes `agent-blocked` and lets
   the issue re-enter eligibility (as a fresh attempt, see Locking).
-- **Regression halts.** An `agent-regressed` outcome writes `.agent/HALT` itself
-  with the reason, so no later tick or second session resumes until a human looks.
+- **Post-merge halts.** EVERY post-merge stop writes `.agent/HALT` itself with the
+  reason, so no later tick or second session resumes until a human looks — not
+  only the one that reverts. A stop where no gate returned a red verdict is not
+  an `agent-regressed` outcome and never claims to be; it halts all the same,
+  because the merge is unverified either way. See "Post-merge verification".
+- **HALT is not the whole obligation.** HALT is one global file, so clearing it
+  erases the thing it stood for. Each post-merge stop therefore also writes a
+  durable incident record keyed by the MERGE SHA, and `preflight` refuses on
+  that record independently of HALT. Clearing HALT alone does not resume the
+  loop. Both `clear-halt` and `resolve-incident` are OPERATOR-ONLY, enforced in
+  code (`lock.require_operator` refuses any call carrying a run id, which every
+  conductor call does) rather than by a line in the command prompt, and both
+  append to `.agent/audit.jsonl` before they act.
 - **Notification.** On `agent-regressed`, `blocked` with reason `halted`, `sanitize-failed`,
   or `gh-unavailable`, the executor emits a push notification through the harness
   when that tool is available, and always posts the GitHub comment and prints to
@@ -186,7 +213,14 @@ Labels are a mirror for humans, not a lock. The lock is local:
   If the PR was already merged, recovery finishes the run instead of blocking it,
   under a lock the recovering run re-acquires for the crashed issue: post-merge
   check on the merge SHA, discoveries filed from the crashed run's ledger, cleanup,
-  then `agent-done`. If that follow-through fails partway, the issue is labeled
+  then `agent-done`. That follow-through lock carries the STALE lock's `started`
+  rather than `now` — it holds the same work, not a new claim — because the
+  adoption check below dates a merge against when the work was CLAIMED, and a
+  lock stamped `now` is always later than the merge it just adopted. Its
+  `heartbeat` is `now`: staleness is read from the heartbeat alone, so carrying
+  that back would mint a lock that is born stale and let a concurrent tick steal
+  a follow-through that is still running.
+  If that follow-through fails partway, the issue is labeled
   `agent-blocked` with reason `recovery-followthrough-failed` and the tick stops.
   Otherwise: comment on the issue with what was found, rename the worktree to
   `../al-sem-issue-N.crashed-<ts>`, label `agent-blocked` with reason `crashed`,
@@ -220,37 +254,39 @@ Labels are a mirror for humans, not a lock. The lock is local:
    loop. Take the lock; record the issue body hash; label `agent-working`; comment
    with the session link, classification hint, run id, and attempt number.
 6. **Run `/issue N`.** Returns `merged`, `blocked`, or `spike-answered`.
-7. **Post-merge check** (executor). On `merged`: `git fetch` and fast-forward the
-   main checkout's `master` to `origin/master` (it must fast-forward; anything else
-   is a preflight failure next tick), then check out the **merge SHA** itself
-   (detached, so a moving `master` is not what gets tested), then `scripts/ci-steps
-   all`, `scripts/check-goldens`, and `scripts/cdo-gate` unless the diff was docs-only.
-   Red means, in this order: write `.agent/HALT` with the reason first (durable
-   before any fallible remote action); if the main checkout's local `master` has
-   diverged from `origin/master` (unpushed human work sitting on it), leave
-   `master` untouched, comment with the reason (`master-not-ff`), and stop the loop
-   without reverting — HALT is already set; otherwise create the revert commit
-   locally (`git revert --no-edit <merge-sha>`); rerun on it the gate that failed plus
-   `scripts/ci-steps test`; push it to `master` only if those pass and
-   `origin/master` still equals the merge SHA (a push rejected because `master`
-   advanced is reported, not forced); reopen the issue; label it `agent-regressed`;
-   comment with the failing gate and the path of its retained log, plus the revert
-   SHA; notify; stop the loop. Nothing is FILED on this path: HALT is set by now
-   and issue filing is refused under HALT, so that comment is the record and a
-   human files any follow-up. A revert that conflicts, fails its own gates, or
-   cannot be pushed leaves `master` as is, posts exactly that, notifies, and stops
-   the loop; HALT is already set. This check always runs after a merge, HALT or
-   not — it is one of the two writes HALT permits, because a HALT pressed between
-   the merge and the check must not leave an unverified commit on `master`
-   unexamined. The tick then runs `finish --outcome regressed`, which changes no
-   label (the revert path already set `agent-regressed`) and only retains the run
-   directory and releases the lock.
+7. **Post-merge check** (executor). On `merged`: `post-merge --issue N
+   --merge-sha <sha>`. It refuses an invocation it cannot vouch for, fast-forwards
+   the main checkout's `master` to `origin/master` (it must fast-forward; anything
+   else is a preflight failure next tick), materialises the **merge SHA** in a
+   DISPOSABLE detached worktree — the shared checkout stays on `master` throughout
+   — and runs `scripts/ci-steps all`, `scripts/check-goldens`, and
+   `scripts/cdo-gate` (unless the diff was docs-only) in that worktree, which is
+   deleted afterwards. There are three distinct stops, only one of which may
+   revert, and the full rules live in "Post-merge verification" below.
+
+   This check always runs after a merge, HALT or not — it is one of the two
+   writes HALT permits, because a HALT pressed between the merge and the check
+   must not leave an unverified commit on `master` unexamined. Nothing is FILED
+   on any stop: HALT is set by then and issue filing is refused under HALT, so
+   the comment `post-merge` leaves is the record and a human files any follow-up.
+   The tick then runs `finish --outcome regressed`, which changes NO label —
+   `post-merge` has already made the issue's label transition, on whichever axes
+   applied — and only retains the run directory and releases the lock.
 8. **Cleanup, then finish** (executor). File discoveries (see below). Cleanup runs
    **before** finish: `cleanup` refuses to act if `lock.json` names a different
    run (the same fencing as every mutating command). On `merged` it removes the
-   worktree after verifying the path is under the expected parent, the tree is
-   clean, and the branch is merged into `master` (`rm -rf` with two retries for
-   Windows file locks, then `git worktree prune`, then delete the local branch);
+   worktree after four independent proofs: the path is a direct child of the
+   expected parent AND carries the `al-sem-issue-` name this flow hands out (the
+   location check alone is "is a sibling of the checkout", and the checkout has
+   230 siblings, essentially all of them repositories); `--worktree`/`--branch`
+   agree with `.agent/runs/<run-id>/claim.json`, the record THIS RUN wrote, so a
+   conductor juggling two worktrees in one tick cannot aim it with the wrong one;
+   the tree has no modified tracked file; and the branch's tree equals the merge
+   commit's. An absent run id or claim file is deliberately still accepted — an
+   operator cleaning up by hand after a crash must keep working — which is why
+   the name check, not the claim check, is the guard that covers that case. Then
+   `rm -rf` with two retries for Windows file locks, `git worktree prune`, and
+   delete the local branch;
    on `blocked` the worktree stays; on `spike-answered` (the branch never carries
    a commit of its own) `cleanup --spike` removes the worktree and branch outright.
    Finish then relabels `agent-done` / `agent-blocked` / `agent-answered`, copies
@@ -260,7 +296,13 @@ Labels are a mirror for humans, not a lock. The lock is local:
    `agent-regressed` ends the loop.
 
 Labels `agent-working`, `agent-done`, `agent-blocked`, `agent-answered`,
-`agent-regressed`, `agent-filed` are created on first run if missing.
+`agent-filed`, `agent-regressed`, `agent-gates-green-unverified`,
+`agent-revert-landed` and `agent-revert-blocked` are created on first run if
+missing. The incident path re-runs that create-if-missing pass before it stamps
+anything: `gh issue edit --add-label X` hard-FAILS when X does not exist on the
+repo, and a run claimed before the two-axis names shipped did its claim-time
+pass against the old list — the incident path is the worst possible place to
+discover that.
 
 ### Ranking rubric
 
@@ -269,6 +311,290 @@ spike / bounded / architectural, one-line reason. Sort by value desc, effort asc
 createdAt asc. The ranking is advisory: dependency and eligibility filtering already
 happened deterministically, and the model cannot introduce an issue that was not in
 its input.
+
+## Post-merge verification
+
+This section is the design of record for `post-merge`, rewritten on 2026-09-15
+against the shipped executor. It supersedes the single paragraph step 7 used to
+carry, which described a revert built in the shared checkout and one
+unconditional `agent-regressed` label. The rewrite is a CORRECTION, not a fourth
+review round: what changed is the code, over two hardening arcs that followed the
+2026-09-14 incident below.
+
+**The incident this section exists because of.** On 2026-09-14 `post-merge` ran
+on merge `19f654e1`. Its three real gates returned 0, 0 and 0. One tracked file
+then reported modified — `crates/al-syntax/src/raw/generated/node-types.sha256`,
+whose content was BYTE-IDENTICAL: it carried no line-ending attribute, so with
+`core.autocrlf=true` git materialised CRLF while the generator writes LF. The
+harness read that as proof the commit was bad and entered the REVERT path on a
+fully-attested, CI-green merge. It failed to push the revert only because it
+happened to hit an unrelated `master-not-ff` guard. The rule every paragraph
+below is an application of: **COULD NOT VERIFY is not PROVEN BAD.**
+
+### Aiming: only a merge record may point this command at a commit
+
+`--issue` and `--merge-sha` are argv, and the lock fence proves only that the
+LOCK names this run — not that this run merged that SHA. Together they could aim
+the revert path at any commit, a human's sitting at the tip included.
+
+- `merge` writes `.agent/runs/<run-id>/merge.json`: `{issue, pr, merge_sha,
+  run_id, source}`. The issue comes from the ATTESTATION, never from argv —
+  `merge` has no `--issue` of its own to be wrong about.
+- The stale-run recovery writes the equivalent (`source: "recover"`) for a merge
+  GitHub performed on the stale run's behalf, so that path stays supported
+  without loosening the check for anyone else.
+- `post-merge` refuses unless a record exists for this run and its `issue`,
+  `merge_sha` and `run_id` ALL match argv. A record in an older field set (the
+  bare `{pr, merge_sha}` this file used to hold) reads as ABSENT and refuses too,
+  rather than being half-trusted on the two fields it happens to carry.
+- Provenance alone proves only that SOME record names this SHA, so a second,
+  independent check follows the fetch: the merge SHA must be reachable from
+  `refs/remotes/origin/master`. Both sides fully qualified, because `git
+  rev-parse master` prefers `refs/tags/master` over `refs/heads/master`; the
+  check runs through git's own exit code, so an unknown or unfetched SHA is
+  fail-closed.
+- Stale-run adoption is scoped to the stale lock's OWN attempt on two
+  independent axes: the PR's `headRefName` must end `-a<attempt>` (a prefix
+  match alone adopts any attempt the issue ever had, and merged PRs outrank open
+  ones), and a `mergedAt` that parses and predates the lock's `started` is
+  refused. An absent or unparseable `mergedAt` does NOT refuse — that axis is
+  defence in depth, and refusing a self-heal because a timestamp did not parse
+  would be this section's own rule broken in a smaller form. `started` is the
+  date the WORK was claimed, which is the whole reason `recover` mints its
+  follow-through lock with the stale lock's own (see "Locking, supervision, and
+  crash recovery"): a follow-through lock stamped `now` would make this axis
+  refuse its own work by construction, so a post-merge killed mid-gates inside a
+  recovery could never be recovered a second time.
+
+All of those refusals happen BEFORE anything is written *by this flow*: no HALT,
+no incident, no label, no comment, and nothing reaches GitHub. Be precise about
+the one thing that is NOT true of the last of them: the fetch and the `--ff-only`
+fast-forward of local `master` run before the reachability check, so by the time
+that refusal fires the shared checkout's ref, index and working tree have already
+moved. The tick stops and the lock is deliberately left to go
+stale, so the next tick's `recover` re-mints the record from GitHub's own answer
+and runs the check properly. A HALT here would close that self-heal and demand a
+human for what the flow can finish itself.
+
+### Isolation: the gates never run in the shared checkout
+
+The shared checkout stays on `master` for the whole command. The merge SHA is
+materialised in a disposable detached worktree (`../al-sem-verify-merge-<sha12>`,
+a sibling of the repo root, deliberately outside the glob that finds issue
+worktrees), and that directory is torn down in a `finally`.
+
+Why it must be disposable: when the verification run and the revert's validation
+run share a tree, everything the first left behind — a regenerated golden, a
+touched `Cargo.lock`, a `gen-syntax` rewrite, a line-ending materialisation — is
+inherited by the run that decides whether to PUSH. A revert that is red from a
+clean checkout can be green-lit by the leavings of the run it is reverting. The
+revert therefore gets its own second disposable worktree, created only after the
+first is destroyed, so peak extra disk is one tree rather than two.
+
+Three consequences worth writing down, because each is a real dependency between
+two files rather than an implementation detail:
+
+- Teardown is `rm -rf` plus `git worktree prune`, never `git worktree remove` —
+  that command refuses outright in a repository with a submodule, and this one
+  has `tree-sitter-al/`.
+- A worktree gets no submodule checkout of its own, so gates would not compile
+  there. They do because the gate runner derives `TREE_SITTER_AL_PATH` from the
+  repo ROOT, not from the gate's cwd, and `scripts/ci-steps` honours that env var
+  over its own `rev-parse --show-toplevel` fallback.
+- The SOURCE tree is isolated; the build CACHE deliberately is not
+  (`AGENTFLOW_VERIFY_TARGET_DIR`, else an inherited `CARGO_TARGET_DIR`, else the
+  root's `target/`). Measured: `target/` is 65G here and the drive has 55G free
+  while the issue worktree is still on disk. A per-worktree cache does not merely
+  cost time, it does not fit — and the dirt that can green-light a bad revert is
+  SOURCE dirt, which a fresh checkout already eliminates.
+
+Teardown is best effort and is REPORTED, never promoted to a verdict:
+`verify_worktree_removed: false` in the payload means either that Windows still
+held a file lock or that this stop RETAINED the tree on purpose (below), and it
+does not change what the gates said.
+
+Teardown is also SKIPPED on exactly one stop — `tree-dirty-after-gates`, where
+the dirt is the evidence. The flag that skips it is set inside that one branch,
+never derived from "a halt was written": the gate-timed-out stop also writes a
+halt and must keep destroying its tree, because a killed gate leaves a partial
+build rather than evidence about a file. The retained tree is NOT permanent:
+the verification path is a pure function of the repo root and the merge SHA, and
+worktree creation destroys whatever sits there before checking out, so a second
+`post-merge` of the SAME SHA reclaims it. That can only follow an operator clearing HALT — someone who has
+been told the tree is there.
+
+### Three stops, and only one of them may revert
+
+| What happened | Route | Payload |
+|---------------|-------|---------|
+| A gate RETURNED non-zero | validated revert | `revert` |
+| A gate was KILLED at its timeout | HALT only | `halt`, `reason: gate-timed-out`, gate named in `timeouts` |
+| Every gate returned 0, tracked CONTENT differs | HALT only | `halt`, `reason: tree-dirty-after-gates`, `dirty_total`, `retained_worktree`, and `verify_worktree_removed: false` |
+
+The second row is not a refinement of the first. The supervisor folds a kill into
+`exit_code or 124`, so reading the exit code alone makes a clock running out
+indistinguishable from a verdict at the one decision point where that distinction
+IS the rule. A gate that never finished returned no verdict at all, and any gate
+after it never ran. It is materially reachable rather than exotic: verification
+runs in a worktree cargo has never built at, so a cold `ci-steps all` crossing 45
+minutes is a normal outcome.
+
+The third row is the 2026-09-14 class, and the probe that decides it asks the
+tree the gates ACTUALLY RAN IN, comparing tracked CONTENT against the commit
+rather than reading `git status`. A path whose content MATCHES and whose
+porcelain merely disagrees is a fourth outcome, not a stop: it is reported as
+`tree_anomaly` / `tree_anomaly_total`, notified, and changes no verdict. The same
+content-aware probe is what `preflight` and worktree cleanup now use, so the
+incident's own checkout no longer fails every tick or strands its worktree.
+
+Both halt-only stops leave `master`, the remote, and whatever the working trees
+hold exactly as found. On the third row the dirt IS the evidence: the old revert
+path's `reset --hard` would have wiped the very CRLF clue that root-caused the
+incident. So that row KEEPS the worktree the gates ran in, and says where it is
+— `halt.retained_worktree`, the HALT reason, and the issue comment, which spells
+out the `git -C <path> status` against `git -C <path> diff` comparison that
+root-caused 2026-09-14. This is stated as a behaviour rather than an intention
+because for two rounds it was neither: the HALT was written and the tree was
+`rm -rf`'d one `finally` later, so the operator was sent to the shared checkout,
+which no gate ran in and which is clean, with only a path list cut at 20 to work
+from. A path list is not the dirt — the root cause was found by comparing a
+file's on-disk BYTES against the committed blob.
+
+`agentflow cleanup --worktree <retained path>` is that tree's supported exit and
+the only one: the tree is detached, so it has no branch and no merge SHA to prove
+anything about, and the two issue-worktree removers refuse its name outright. The
+command routes it to the module that owns the `al-sem-verify-` prefix instead,
+and refuses `--branch`, `--merge-sha` and `--spike` for it rather than ignoring
+them. A retained directory with no supported way to remove it would be an
+obligation nobody can discharge — the same shape as the `verifying` row below.
+
+The function that handles both stops takes no `Git` at all — it has no way to
+revert, reset or push, and that is the point; `retained` reaches it as a STRING
+it reports, never as something it can touch.
+
+### The revert path
+
+Reached only on an actual non-zero gate result. In order:
+
+1. HALT first, with a SHA-only reason, before any git call that can raise; the
+   durable incident is opened immediately after, before the fetch.
+2. Refuse if local `master` is not an ancestor of `origin/master` (read-only, and
+   fully qualified on both sides — the old form answered "can this fast-forward?"
+   by PERFORMING the fast-forward). Local `master` is never discarded.
+3. Build the revert in its own disposable worktree at the merge commit. A
+   conflict stops here.
+4. Re-run EVERY gate, not only the one that failed, plus `scripts/ci-steps test`,
+   in that worktree. The closure that runs them is handed the tree and never
+   chooses one, because a closure that chose its own tree is exactly how the
+   validation ends up in a contaminated one.
+5. Refuse if `origin/master` no longer equals the merge SHA.
+6. Push `<revert-sha>:refs/heads/master` — an explicit two-sided refspec, pinned
+   to a full 40-hex id captured before the re-run, never a name and never forced.
+   A one-sided `git push origin master` would send whatever the local ref points
+   at after tens of minutes of gate time, and would re-resolve the name through
+   rules that prefer `refs/tags/master`.
+
+The issue is reopened on exactly ONE exit: the one where the revert actually
+landed. `master-not-ff`, `revert-conflict`, `revert-failed-gates`,
+`master-advanced` and `push-rejected` all leave `master` red, set HALT, label,
+comment and stop — without reopening, because the work did not come off master.
+On the exit that did push, the durable record is written BEFORE the reopen and
+the comment, so a GitHub outage can cost the labels but never the record that
+`origin/master` was rewritten.
+
+### Labels: two independent axes
+
+`incident_labels` is the one place that decides them, and it answers two
+questions that are not the same question:
+
+- **EVIDENCE — did a gate actually go RED?** `agent-regressed` when yes;
+  `agent-gates-green-unverified` when no gate returned a red verdict, which
+  covers both halt-only stops. This axis is the 2026-09-14 correction: the old
+  code stamped `agent-regressed` unconditionally, so a merge whose every gate
+  passed was labelled a regression on the strength of the other axis alone.
+- **ACTION — did a validated revert land?** `agent-revert-landed`, or
+  `agent-revert-blocked`, which means MASTER MAY STILL BE RED. Absent entirely
+  when no revert was attempted, because there is then nothing true to say.
+
+The naive inverse — label only when a revert lands — is wrong in the other
+direction: a red gate IS a regression whether or not the revert could be pushed,
+which is exactly when a human most needs to know. `agent-blocked` is deliberately
+not reused for any of this; it already means "the work never landed", which on a
+closed issue whose code is sitting on `master` reads as a contradiction.
+
+### The durable incident record
+
+HALT is one global file, and clearing it erases the obligation it stood for. So
+each stop also writes `.agent/incidents.json`, keyed by the FULL merge SHA, and
+`preflight` refuses on that record INDEPENDENTLY of HALT.
+
+THREE states, because "nothing recorded" and "terminal obligation" are not the
+only things that can be true:
+
+- `verifying` — a `post-merge` that opened its obligation and has not reached a
+  verdict. Shown by `preflight` and `status`, a failure row in neither. A
+  post-merge killed mid-gates — the longest window in the tick — must stay
+  recoverable by `recover` with no operator action; a terminal row here would
+  gate the very recovery that discharges it, and the operator's only exit would
+  be to record on the audit trail that a merge nothing verified is closed,
+  purely to be allowed to go verify it.
+- `open` — a verdict was reached. `preflight` refuses on these and only these,
+  as an `incident:<sha12>` failure row.
+- `resolved` — closed, by the one automation path or by an operator.
+
+Re-opening the same SHA is the SAME incident, and the record is MONOTONIC on the
+evidence axis: `gate_red` moves False → True and never back, and a terminal
+reason is never overwritten by the in-progress one. Without that, an operator
+re-running `post-merge` under the same lock erased the record that a gate had
+ever gone red. Re-opening a RESOLVED record clears the human's close and appends
+an `incident-reopen` line naming who it superseded, so no record ever reads
+`state: open` and `resolved_by: <a human>` at once.
+
+Two ways to close one, kept as two functions with no shared bypass flag:
+
+- **`mark_verified`** — the only automation close, on a pass where every gate
+  returned 0 and the tree came back clean. It REFUSES a record carrying
+  `gate_red: True` or `revert_landed: False`: a later green pass proves something
+  about a later run, not about either of those.
+- **`resolve-incident --merge-sha S --by <name>`** — an operator asserting it by
+  hand, through the operator gate. It closes an `open` row and a `verifying` one,
+  and the second is not a loosening: it is the only exit that state has. A
+  `verifying` row is what a post-merge killed mid-gates leaves, `mark_verified`
+  needs a post-merge run, and post-merge needs a merge record plus a fence no
+  operator invocation can satisfy once the lock is gone — so the row sat on the
+  dashboard forever while this command told the operator "`<sha12>` was closed by
+  `None`", about a merge nobody verified and nobody closed. An unverified merge
+  is an obligation, and discharging an obligation is what an operator is for; the
+  record keeps `resolved_by` and the audit line, so an operator's close stays
+  distinguishable from `mark_verified`'s `post-merge:<run>` form. Its refusals
+  each name only what they can vouch for: `unknown-merge-sha` (no record),
+  `already-resolved` (naming the REAL closer), and `unknown-state` — reachable
+  only through a hand-edited `incidents.json` — which reports the state it found
+  rather than describing it as a close.
+
+An `automated=True` argument on one function would have been shorter and is
+exactly the shape that rots.
+
+`clear-halt` and `resolve-incident` are OPERATOR-ONLY, enforced by
+`lock.require_operator`: a run id in the context is refused, and every conductor
+call carries one. A live lock is refused too; a STALE lock is deliberately let
+through, or the operator would be deadlocked for 30 minutes. Both append to
+`.agent/audit.jsonl` — append-only, and never read back by the executor, because
+a consumer that started branching on it would turn an evidence log into a control
+input. `unblock` is the stated exception: it sets its own run id, so the gate
+cannot apply to it and the command prompt really is the only guard.
+
+**Stated limit.** `.agent/incidents.json` is local per-checkout state. An
+operator working from a different clone, or one who wipes `.agent/`, loses the
+obligation silently. HALT has exactly the same property, so this is not a
+regression — but it does mean the incident record is a stronger backstop against
+a careless CLEAR than against a careless DELETE, and `.agent/audit.jsonl` helps
+reconstruction rather than enforcement.
+
+**Historical note.** `docs/superpowers/plans/2026-09-13-issue-orchestrator.md`
+still shows `merge.json` being written in its original bare `{pr, merge_sha}`
+shape. That is harmless as history, and worth knowing: a record in that shape is
+now read as ABSENT and refuses, deliberately.
 
 ## `/issue N` — the pipeline
 
@@ -494,8 +820,20 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
   permitted force form, used only on the issue branch, never on `master`; the
   merge requires `origin/master == B` and `--match-head-commit`, so neither a
   stale base nor a stale head can merge.
-- Red `master` after merge: validated revert, reopen, `agent-regressed`, HALT,
-  notify, loop stops.
+- Red `master` after merge (a gate RETURNED non-zero): validated revert in a
+  disposable worktree, `agent-regressed` plus the action label the revert earned,
+  HALT, a durable incident, notify, loop stops. The issue is reopened only when
+  the revert actually landed.
+- Merge NOT VERIFIED after merge (a gate was killed at its timeout, or every gate
+  returned 0 and the tree came back with tracked content modified): HALT, a
+  durable incident, `agent-gates-green-unverified`, notify, loop stops — and
+  **nothing reverted, nothing pushed, the evidence left as found**. See
+  "Post-merge verification"; this is the 2026-09-14 class, and treating it like
+  the row above is the defect that section exists to prevent.
+- A `post-merge` that cannot be aimed (no merge record, a record that disagrees
+  with argv, a merge SHA not reachable from `origin/master`): refuse before
+  anything is written, stop the tick, and let the lock go stale so the next
+  tick's `recover` can re-mint the record and try again.
 - HALT: terminal bookkeeping only, ledger written, `blocked` with reason `halted`.
 
 ## Repo changes
@@ -504,7 +842,14 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
   injection before and after every side effect, dry-run write-free assertion, lock
   races, stale recovery preserving the tree, sanitizer rejection, protected-path
   detection, freeze-boundary assertion, pending-discovery reconciliation, gitignore
-  exception).
+  exception). The post-merge hardening added two modules to that package:
+  `worktrees.py` (disposable verification worktrees, with the name prefix as the
+  ownership proof on an `rm -rf`) and `incidents.py` (the durable per-merge
+  obligation and its three states), plus `.agent/incidents.json` and the
+  append-only `.agent/audit.jsonl` alongside the existing `.agent/` state.
+- Executor subcommands added for the operator, not for the flow: `clear-halt`,
+  `resolve-incident`, `incidents`. The first two are gated in code; see
+  "Post-merge verification".
 - `.claude/commands/orchestrate.md`, `.claude/commands/issue.md`.
 - `.claude/commands/README.md` (new): one entry per command, plus `/triage-wave`.
 - `.gitignore`: `.agent/*` with per-directory re-includes for the two evidence
@@ -538,6 +883,24 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
    `agent-working` → `agent-done`.
 4. A deliberately unsatisfiable issue. Expected: `agent-blocked`, a ledger comment,
    branch left in place, and the next tick skips it.
-5. A seeded issue whose fix breaks a test only visible on `master` after merge.
-   Expected: revert, reopen, `agent-regressed`, HALT present, notification sent,
-   loop stops, `master` green again.
+5. A seeded issue whose fix breaks a test only visible on `master` after merge —
+   i.e. a gate that RETURNS non-zero. Expected: the revert built and validated in
+   its own disposable worktree and pushed under a sha-pinned two-sided refspec,
+   the issue reopened, `agent-regressed` plus `agent-revert-landed`, HALT
+   present, an `open` incident keyed to the merge SHA, notification sent, loop
+   stops, `master` green again. Then: `preflight` still refuses on the incident
+   after `clear-halt`, and only `resolve-incident` clears it.
+6. The same seeded merge, but with a gate arranged to leave a tracked file
+   modified while every gate returns 0 — the 2026-09-14 shape. Expected:
+   **nothing reverted and nothing pushed**, `origin/master` unmoved, HALT
+   present, `agent-gates-green-unverified` and NO `agent-regressed`, an `open`
+   incident, loop stops — and the dirty file left exactly as found IN THE
+   RETAINED VERIFICATION WORKTREE, whose path the payload names in
+   `halt.retained_worktree` and whose existence `verify_worktree_removed: false`
+   reports. Check it there, not in the shared checkout: the gates never ran in
+   the shared checkout, and this scenario could not pass as written while that
+   tree was still being torn down. Then `cleanup --worktree <that path>` removes
+   it, with no `--branch` (it is detached). The same expectation with a gate
+   killed at its timeout instead, whose halt reason is `gate-timed-out`, whose
+   gate is named in `timeouts`, and whose tree IS destroyed — a killed gate
+   leaves a partial build, not evidence about a file.
