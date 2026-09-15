@@ -384,8 +384,9 @@ fn a7_mixed_writer_below_physical_threshold_produces_no_finding() {
     assert_eq!(
         ctx.cone_derived.writes_tables_count_of(&id),
         3,
-        "precondition: StageMixedRows writes 3 tables temp-INCLUSIVE — it is ABOVE the \
-         threshold on the current definition, which is why it reports today"
+        "precondition: StageMixedRows writes 3 tables temp-INCLUSIVE — that is AT the \
+         threshold (>= 3) on the OLD inclusive definition, which is why it reported \
+         before this change"
     );
     assert_eq!(
         ctx.cone_derived.writes_physical_tables_count_of(&id),

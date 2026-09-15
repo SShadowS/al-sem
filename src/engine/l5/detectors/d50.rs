@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(
             ctx.cone_derived.writes_tables_count_of(routine_id),
             inclusive,
-            "{routine_id}: temp-INCLUSIVE written-table count (what the gate reads TODAY)"
+            "{routine_id}: temp-INCLUSIVE written-table count (what the OLD gate read)"
         );
         assert_eq!(
             ctx.cone_derived.writes_physical_tables_count_of(routine_id),
@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     /// A1 — three writes, ALL to `temporary` records: temp-inclusive 3 (AT the
-    /// threshold, which is why the current gate answers true), physical 0. The
+    /// threshold, which is why the OLD inclusive gate answered true), physical 0. The
     /// routine must NOT be transaction-managing.
     #[test]
     fn a1_temp_only_writes_are_not_transaction_managing() {
@@ -1061,7 +1061,7 @@ mod tests {
         assert!(
             ctx.cone_derived.writes_tables_count_of(ID) >= TRANSACTION_THRESHOLD_TABLES,
             "precondition: the temp-INCLUSIVE count is at/over the threshold, so the \
-             CURRENT gate answers true — that is what makes this case discriminating"
+             OLD inclusive gate answered true — that is what makes this case discriminating"
         );
 
         assert!(
