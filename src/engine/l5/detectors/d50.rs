@@ -57,7 +57,7 @@ fn posting_name_matches(name: &str) -> bool {
 }
 
 /// `isTransactionManaging(routineId)` — routine name matches POSTING_NAME_RE, OR
-/// writesTablesOf(summary).length >= TRANSACTION_THRESHOLD_TABLES.
+/// `writes_physical_tables_count_of(summary) >= TRANSACTION_THRESHOLD_TABLES`.
 fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
     let Some(r) = ctx.routine_by_id.get(routine_id) else {
         return false;
@@ -71,7 +71,16 @@ fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
     // ⟨C1 Task 2 fix M2⟩ The count alone — avoids resolving and allocating one
     // `String` per table just to discard it. `is_transaction_managing` runs
     // per routine, so this matters at scale.
-    ctx.cone_derived.writes_tables_count_of(&summary.routine_id) >= TRANSACTION_THRESHOLD_TABLES
+    //
+    // ⟨issue 23⟩ The PHYSICAL count, not the temp-inclusive one: a write to a
+    // `temporary` record never dirties the transaction, so counting temp writes
+    // toward "this routine manages a transaction" admits routines that manage
+    // none. d8 already gates on the physical count (`d8.rs:40-42`); this aligns
+    // d50 with it. "Physical" means EXCLUDING known-temp facts — unknown,
+    // parameter-dependent and absent temp states still count.
+    ctx.cone_derived
+        .writes_physical_tables_count_of(&summary.routine_id)
+        >= TRANSACTION_THRESHOLD_TABLES
 }
 
 /// Returns true when the routine containing an explicit Commit() is eligible for the
@@ -398,11 +407,13 @@ mod tests {
     use super::*;
     use crate::engine::l3::al_attributes::{AttributeArg, AttributeInfo};
     use crate::engine::l3::event_graph::EventGraph;
-    use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Workspace};
+    use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Workspace};
+    use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
     use crate::engine::l4::combined_graph::CombinedGraph;
     use crate::engine::l5::detector_context::DetectorContext;
     use crate::engine::l5::event_flow::EventFlowIndexes;
-    use crate::engine::l5::test_support::routine;
+    use crate::engine::l5::full_summary::FullRoutineSummary;
+    use crate::engine::l5::test_support::{cone_store_of, fact, routine, summary, ts_known};
     use crate::engine::root_classification::RootClassification;
 
     // -----------------------------------------------------------------------
@@ -940,6 +951,179 @@ mod tests {
         assert!(
             is_explicit_commit_proven_effective("r_fix1b", &ctx, &objects),
             "miscased [Commitbehavior(Ignore)] + no object ICB must return TRUE (case-sensitive miss)"
+        );
+    }
+
+    // =======================================================================
+    // A1 (issue 23) — `is_transaction_managing`'s COUNT branch must count
+    // PHYSICAL table writes, not temp-inclusive ones.
+    //
+    // d8 already gates on `writes_physical_tables_count_of`
+    // (`d8.rs:40-42`); d50 USED TO gate on `writes_tables_count_of`, which the
+    // `cone_derived` module doc (`:23-24`) states is temp-INCLUSIVE -- that is
+    // the defect these tests pin, fixed for the count branch by issue 23. A routine
+    // whose only writes are to `temporary` records dirties nothing an implicit
+    // commit could split.
+    //
+    // THE VACUITY TRAP these tests are built to avoid: `minimal_ctx` has EMPTY
+    // `summaries` and a DEFAULT (row-less) cone store, so
+    // `is_transaction_managing` on one returns false at the missing-summary
+    // early return (`d50.rs:68-70`) BEFORE the count is ever consulted — a test
+    // built on an unmodified `minimal_ctx` would pass identically before and
+    // after the fix, for the wrong reason. Every case below therefore populates
+    // a REAL summary and a REAL derived cone row, and ASSERTS the
+    // inclusive/physical precondition explicitly before asserting the gate.
+    // =======================================================================
+
+    /// One `insert` on `table_id`, tagged `temp_state: known(is_temp)`.
+    /// `fact_is_known_temp` (`cone_derived.rs:149-155`) reads exactly this
+    /// shape, and it is what splits `table_writes_all` from
+    /// `physical_table_writes` in the fold (`cone_derived.rs:621-639`).
+    fn table_insert_fact(table_id: &str, is_temp: bool) -> CapabilityFact {
+        let mut f = fact("insert", "table", Some(table_id));
+        f.extra = Some(CapabilityExtra::Table {
+            record_variable_id: None,
+            temp_state: Some(ts_known(is_temp)),
+            op_subtype: None,
+        });
+        f
+    }
+
+    /// A `DetectorContext` whose `summaries` AND `cone_derived` are REALLY
+    /// populated for `routine_id` — `cone_store_of` folds the store FROM the
+    /// summary, so the two can never silently disagree.
+    fn ctx_with_write_summary<'a>(
+        routines: &'a [L3Routine],
+        routine_id: &str,
+        facts: Vec<CapabilityFact>,
+    ) -> DetectorContext<'a> {
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            routine_id.to_string(),
+            summary(routine_id, facts, vec![], None),
+        );
+        let mut ctx = minimal_ctx(routines, vec![]);
+        ctx.cone_derived = cone_store_of(&summaries);
+        ctx.summaries = summaries;
+        ctx
+    }
+
+    /// Assert the preconditions that make a COUNT-branch case non-vacuous, and
+    /// return the ctx: the summary EXISTS (so the gate reaches the count rather
+    /// than returning false at `d50.rs:68-70`) and the derived row carries
+    /// exactly `inclusive` temp-inclusive / `physical` physical writes.
+    fn assert_counts(
+        ctx: &DetectorContext<'_>,
+        routine_id: &str,
+        inclusive: usize,
+        physical: usize,
+    ) {
+        assert!(
+            ctx.summaries.contains_key(routine_id),
+            "{routine_id} must HAVE a summary, or `is_transaction_managing` returns false \
+             at the missing-summary early return and the case proves nothing"
+        );
+        assert_eq!(
+            ctx.cone_derived.writes_tables_count_of(routine_id),
+            inclusive,
+            "{routine_id}: temp-INCLUSIVE written-table count (what the gate reads TODAY)"
+        );
+        assert_eq!(
+            ctx.cone_derived.writes_physical_tables_count_of(routine_id),
+            physical,
+            "{routine_id}: PHYSICAL written-table count (what the gate MUST read)"
+        );
+    }
+
+    /// A1 — three writes, ALL to `temporary` records: temp-inclusive 3 (AT the
+    /// threshold, which is why the current gate answers true), physical 0. The
+    /// routine must NOT be transaction-managing.
+    #[test]
+    fn a1_temp_only_writes_are_not_transaction_managing() {
+        const ID: &str = "BufferRowsTemp";
+        let r = routine(ID, "procedure");
+        assert!(
+            !posting_name_matches(&r.name),
+            "the fixture routine must NOT match POSTING_NAME_RE, or the NAME branch \
+             short-circuits and the COUNT branch under test is never consulted"
+        );
+        let routines = vec![r];
+        let ctx = ctx_with_write_summary(
+            &routines,
+            ID,
+            vec![
+                table_insert_fact("t1", true),
+                table_insert_fact("t2", true),
+                table_insert_fact("t3", true),
+            ],
+        );
+        assert_counts(&ctx, ID, 3, 0);
+        assert!(
+            ctx.cone_derived.writes_tables_count_of(ID) >= TRANSACTION_THRESHOLD_TABLES,
+            "precondition: the temp-INCLUSIVE count is at/over the threshold, so the \
+             CURRENT gate answers true — that is what makes this case discriminating"
+        );
+
+        assert!(
+            !is_transaction_managing(ID, &ctx),
+            "3 writes to TEMPORARY records and 0 physical ones: a temporary record never \
+             dirties the transaction, so the gate must count PHYSICAL writes (as d8 does) \
+             and answer false"
+        );
+    }
+
+    /// A1 — the mixed case: two physical writes plus one temporary is
+    /// temp-inclusive 3 but physical 2, below the threshold. The narrowing is
+    /// not limited to temp-ONLY routines.
+    #[test]
+    fn a1_mixed_writes_below_the_physical_threshold_are_not_transaction_managing() {
+        const ID: &str = "StageMixedRowsTemp";
+        let r = routine(ID, "procedure");
+        assert!(!posting_name_matches(&r.name));
+        let routines = vec![r];
+        let ctx = ctx_with_write_summary(
+            &routines,
+            ID,
+            vec![
+                table_insert_fact("t1", false),
+                table_insert_fact("t2", false),
+                table_insert_fact("t3", true),
+            ],
+        );
+        assert_counts(&ctx, ID, 3, 2);
+
+        assert!(
+            !is_transaction_managing(ID, &ctx),
+            "2 PHYSICAL writes is below TRANSACTION_THRESHOLD_TABLES ({TRANSACTION_THRESHOLD_TABLES}) \
+             even though the temp-inclusive count is 3"
+        );
+    }
+
+    /// A1 CONTROL (suppression-direction guard) — three PHYSICAL writes still
+    /// make a transaction manager through the COUNT branch. Without this,
+    /// "always answer false" would pass both cases above, and the two would not
+    /// prove the count path is live at all.
+    #[test]
+    fn a1_control_three_physical_writes_are_transaction_managing() {
+        const ID: &str = "StageRowsPhysical";
+        let r = routine(ID, "procedure");
+        assert!(!posting_name_matches(&r.name));
+        let routines = vec![r];
+        let ctx = ctx_with_write_summary(
+            &routines,
+            ID,
+            vec![
+                table_insert_fact("t1", false),
+                table_insert_fact("t2", false),
+                table_insert_fact("t3", false),
+            ],
+        );
+        assert_counts(&ctx, ID, 3, 3);
+
+        assert!(
+            is_transaction_managing(ID, &ctx),
+            "3 PHYSICAL writes must STILL clear the gate — the change narrows the COUNT \
+             branch, it does not disable it"
         );
     }
 }

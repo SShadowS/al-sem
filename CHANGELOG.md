@@ -160,6 +160,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **d50's transaction-managing COUNT branch counted temp-inclusive table writes,
+  so a routine whose only writes were to `temporary` records was treated as
+  managing a transaction** (`src/engine/l5/detectors/d50.rs`). The gate now reads
+  `writes_physical_tables_count_of` where it read `writes_tables_count_of`, which
+  is the accessor d8 has always used (`d8.rs:40-42`) — a write to a `temporary`
+  record never dirties the transaction, so it can never be the thing an implicit
+  commit splits. The scope of the narrowing, precisely:
+  - **Only the COUNT branch moves.** The NAME heuristic
+    (`^(Post|Apply|Release)[A-Z]`) is unchanged, so a posting-named routine whose
+    every write is to a temporary record still qualifies as transaction-managing.
+  - **It is not limited to temp-ONLY routines.** Two physical writes plus one
+    temporary is a temp-inclusive count of 3 but a physical count of 2, below
+    `TRANSACTION_THRESHOLD_TABLES`, so that routine drops out as well.
+  - **"Physical" means EXCLUDING writes KNOWN to be temporary — not "proven to
+    dirty a physical table".** Unknown, parameter-dependent and absent temp states
+    all still count toward the physical total. The count stays deliberately
+    conservative; this change aligns which facts it excludes, it does not promise
+    the remainder reach SQL.
+  - **`affectedTables` is deliberately unchanged** and remains the temp-INCLUSIVE
+    footprint of the span. It is the finding's witness, not a second gate.
+
 - **A stat-only line-ending difference routed a CI-green merge into the revert
   path** — the 2026-09-14 incident above. `post-merge` now compares tracked
   CONTENT against the merge commit, in the tree the gates ACTUALLY RAN IN, and a

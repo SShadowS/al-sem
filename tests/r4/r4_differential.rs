@@ -111,13 +111,29 @@ const SMOKE: &[Smoke] = &[
 /// R4-H per-detector fixtures (d50 checked-run-implicit-commit). d50 is OPT-IN
 /// (advisory, info/medium). ws-d50-pos → ≥1 finding (byte-matched); ws-d50-neg → 0
 /// findings (byte-matched, EXEMPT from anti-degenerate ≥1 check).
-const WAVE_H_POSITIVE: &[Smoke] = &[Smoke {
-    fixture: "ws-d50-pos",
-    wave: "R4-H",
-    detectors: &["d50-checked-run-implicit-commit"],
-    ported: true,
-    corpus_dir: None,
-}];
+const WAVE_H_POSITIVE: &[Smoke] = &[
+    Smoke {
+        fixture: "ws-d50-pos",
+        wave: "R4-H",
+        detectors: &["d50-checked-run-implicit-commit"],
+        ported: true,
+        corpus_dir: None,
+    },
+    // Issue 23 — d50's transaction-managing COUNT branch must count PHYSICAL
+    // table writes, not temp-inclusive ones. FOUR mutually-independent writers
+    // over the same three tables: `BufferRows` (3 temp / 0 physical) and
+    // `StageMixedRows` (3 / 2) must STOP reporting; `StageRows` (3 / 3) and
+    // `PostBuffers` (3 / 0, retained by the NAME branch) must keep reporting.
+    // ONE combined fixture: it produces >= 1 finding, so it satisfies the
+    // anti-degenerate check below without needing the negatives list.
+    Smoke {
+        fixture: "ws-d50-temp-gate",
+        wave: "R4-H",
+        detectors: &["d50-checked-run-implicit-commit"],
+        ported: true,
+        corpus_dir: None,
+    },
+];
 
 const WAVE_H_NEGATIVES: &[Smoke] = &[Smoke {
     fixture: "ws-d50-neg",
@@ -1778,6 +1794,28 @@ fn differential_r4_findings_match_goldens() {
     assert!(
         failure.is_empty(),
         "R4 findings differential FAILED:{failure}"
+    );
+
+    // --- A8 (issue 23): the ws-d50-temp-gate fixture is GENUINELY executed ----
+    // R4 drives an EXPLICIT named Smoke list, so a fixture that exists on disk
+    // with a seed golden but no entry is never run at all, and this test stays
+    // green while testing nothing. This assertion is what removing the
+    // `ws-d50-temp-gate` entry from `WAVE_H_POSITIVE` must fail — deleting the
+    // entry AND the per-fixture checks together is exactly why "remove it and
+    // watch the silence" proves nothing.
+    let temp_gate_runs = ported_results
+        .iter()
+        .filter(|(fixture, _, _)| *fixture == "ws-d50-temp-gate")
+        .count();
+    assert_eq!(
+        temp_gate_runs,
+        1,
+        "ws-d50-temp-gate must appear EXACTLY ONCE in the completed ported results; \
+         found {temp_gate_runs}. Ported fixtures: {:?}",
+        ported_results
+            .iter()
+            .map(|(f, _, _)| *f)
+            .collect::<Vec<_>>()
     );
 
     eprintln!(
