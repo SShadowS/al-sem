@@ -31,9 +31,14 @@
 //!
 //! ## The isolation contract, executably (A9)
 //!
-//! `span_of` and `a9_each_checked_span_holds_exactly_its_own_writer` assert that
-//! each writer's CheckedRunImplicit span contains EXACTLY that writer. Without
-//! it, a common AL driver calling two writers would inherit `StageRows`' three
+//! `span_of` asserts only that EXACTLY ONE `CheckedRunImplicit` span is seeded
+//! in the routine; it never reads `routines_in_span`. The MEMBERSHIP half of the
+//! contract -- that the span contains exactly that writer -- is
+//! `a9_each_checked_span_holds_exactly_its_own_writer`, with A2 and A7 checking
+//! their own membership too. The distinction matters: with a common AL driver,
+//! `span_of` still finds exactly one span and returns it, contaminated. Only A9
+//! fails. Without that check, a driver calling two writers would inherit
+//! `StageRows`' three
 //! PHYSICAL writes through its forward capability cone, appear in `BufferRows`'
 //! BACKWARD span as an accepted manager, and keep d50 reporting at `BufferRows`'
 //! callsite after the fix — an A2 failure with nothing to do with the change.
