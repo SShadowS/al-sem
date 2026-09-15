@@ -34,7 +34,16 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 
 1. **Preflight.** `preflight` (per Invocation, include the tick's `--dry-run`
    flag if this tick is one). If `ok` is false, print `failures` and STOP the
-   tick. Also call `mcp__pi__pi_models` (load it with ToolSearch) and confirm
+   tick. `failures` is the ONLY field that stops a tick. The payload also
+   carries `incidents` and, when the checkout's porcelain disagrees with its own
+   content, `tree_anomaly` / `tree_anomaly_total`; both are informational —
+   print them, do not stop on them. An `incidents` row whose `state` is
+   `verifying` is a `post-merge` that opened its obligation and was killed
+   before it reached a verdict: visible so it cannot be forgotten, never a
+   `failures` row, because a row that stopped the tick here would gate the
+   `recover` below that is the only autonomous way to discharge it. Only a
+   `state: open` row reaches `failures`, as `incident:<sha12>`.
+   Also call `mcp__pi__pi_models` (load it with ToolSearch) and confirm
    both `gpt-6-astra` and `gemini-3.8-flash` are listed; if not, call the
    push-notification tool directly with kind `reviewer-unavailable` — if that
    tool does not load, append `NOTIFY: reviewer-unavailable: <models missing>`
@@ -52,9 +61,15 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    that run is not finished until its own follow-through completes. If ANY of
    the following three calls fails (non-zero exit, or a top-level `error`), do
    not attempt the remaining ones: instead run `finish --issue <recovered
-   issue> --outcome blocked --reason recovery-followthrough-failed` (this
-   releases the lock so a future recovery can retry) and STOP the tick
-   entirely, without continuing to step 2.
+   issue> --outcome blocked --reason recovery-followthrough-failed` and STOP
+   the tick entirely, without continuing to step 2. Be clear about what that
+   costs: `finish` RELEASES the lock, and `recover` refuses outright when no
+   stale lock is present ("no stale lock"), so releasing it does NOT let a
+   future recovery retry — it ends the recovery path for this merge and hands
+   the issue to a human. It is terminal bookkeeping for THIS follow-through,
+   not a retry. The one exception is a failure of call 1 below (`post-merge`),
+   which owns its own terminal `finish` — see step 9's closing paragraph; run
+   that one, not this one.
    1. Run step 9's `post-merge` for that issue and merge SHA.
    2. Before cleanup (next) removes the worktree, read `<recovered
       worktree>/.agent/issue-N/ledger.md`'s `## Discoveries` section — if the
@@ -119,25 +134,119 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 8. **Run `/issue <N>`** with the claim JSON. It returns one of `merged <merge_sha>`,
    `blocked <reason>`, `spike-answered`.
 9. **Post-merge check** (only on `merged`): `post-merge --issue N --merge-sha
-   <sha>`. It checks out the merge SHA, runs `ci-steps all`, `check-goldens`, and
-   `cdo-gate` (unless docs-only), and on red performs the validated revert,
-   labels `agent-regressed`, and writes HALT. **This call always runs after a
-   merge, HALT or no HALT** — it is the emergency-rollback carve-out, and
-   skipping it because a human pressed HALT in the window between the merge and
-   this check would leave `master` carrying a commit that nothing verified and
-   nothing will revert.
+   <sha>`. It materialises the merge SHA in a disposable worktree, runs
+   `ci-steps all`, `check-goldens`, and `cdo-gate` (unless docs-only) there,
+   and writes HALT on any stop. **This call always runs after a merge, HALT or
+   no HALT** — it is the emergency-rollback carve-out, and skipping it because
+   a human pressed HALT in the window between the merge and this check would
+   leave `master` carrying a commit that nothing verified and nothing will
+   revert.
+
+   Before it runs anything, it refuses an invocation it cannot vouch for: no
+   merge record for this run, a record naming a different issue / SHA / run id,
+   or a `--merge-sha` that is not reachable from `origin/master`. Those
+   refusals exit 1 with a top-level `error` and no `ok` field at all, and they
+   deliberately set no HALT and open no incident — nothing was verified, and
+   nothing claimed it had been. Print the `error` and STOP the tick; do NOT run
+   the numbered sequence below, which exists for a post-merge that reached a
+   verdict. Leaving the lock behind is the intended outcome, not an oversight:
+   it goes stale, and the next tick's `recover` re-mints the merge record from
+   GitHub's own answer about the merged PR and runs this check properly.
+
+   That "no HALT, no incident" sentence is about THOSE refusals only, and all of
+   them happen before the obligation is opened. Once the gates start the
+   obligation exists, as a `verifying` row. Each of the three stops below then
+   PROMOTES it to a terminal `open` row — that is the `incident:<sha12>` a later
+   `preflight` refuses on. A stop that reaches no verdict at all, though — a
+   crash, a killed session, a verification worktree that could not be created —
+   leaves the row at `verifying`: visible in the next `preflight` and stopping
+   nothing (step 1), because the next tick's `recover` is the autonomous way it
+   gets discharged. An operator's `resolve-incident` can close one too, which is
+   a human's call and never the conductor's.
+
+   THREE different stops after the gates start, and they are not
+   interchangeable:
+   - a gate actually RETURNED non-zero → the validated revert path (`revert`
+     in the JSON);
+   - a gate the supervisor KILLED at its timeout → HALT only (`halt` in the
+     JSON, `reason: gate-timed-out`, and the gate named in the payload's
+     `timeouts` list), **nothing reverted and nothing pushed**. A killed gate
+     returned no verdict at all — a clock running out is not evidence about
+     the commit — and any gate after it never ran;
+   - every gate returned 0 but the tree the gates ran in came back with a
+     tracked file whose CONTENT differs from the commit → HALT only (`halt`,
+     `reason: tree-dirty-after-gates`, with `dirty_total` carrying how many
+     paths there really are rather than how many were listed), **nothing
+     reverted and nothing pushed**. A modified tracked file is evidence about
+     the working tree, not about the merged commit. A path whose content
+     MATCHES and whose porcelain merely disagrees is NOT this case: it is
+     reported separately as `tree_anomaly` and stops nothing. On THIS stop only,
+     the worktree the gates ran in is kept rather than torn down — the dirt is
+     the evidence, and a list of path names is not the dirt — so the payload
+     also carries `halt.retained_worktree` (where those bytes are) and
+     `verify_worktree_removed: false` (saying so honestly, not reporting a
+     failure). The other two stops destroy their tree as usual.
+
+   The issue is labelled on TWO independent axes (see the executor's
+   `incident_labels`): EVIDENCE — `agent-regressed` when a gate went red,
+   `agent-gates-green-unverified` when none did; and ACTION, only when a revert
+   was attempted — `agent-revert-landed`, or `agent-revert-blocked`, which
+   means MASTER MAY STILL BE RED.
+
+   Each of those three stops also records a durable incident keyed by the merge
+   SHA. `preflight` refuses on it INDEPENDENTLY of HALT, so clearing HALT alone
+   does not resume the loop; only an operator's `resolve-incident`, or a later
+   clean `post-merge` pass, closes one — and a later pass may NOT close a record
+   that says a gate went red or that a revert could not be pushed. Those two
+   need an operator, because a green pass proves something about a later run
+   and nothing about either of them.
 
    If `ok` is false, OR the JSON carries a `restore_failed` field (the main
    checkout could not be restored to `master` and is left detached or dirty):
-   1. Print the `revert` outcome (and `restore_failed` if present) and call the
-      push-notification tool with it.
+   1. Print whichever of `revert` / `halt` is non-null (and `restore_failed` if
+      present) and call the push-notification tool with it. If `halt` carries
+      `retained_worktree`, print that path too and say plainly that the evidence
+      is THERE and not in the main checkout — comparing `git -C <path> status`
+      against `git -C <path> diff` in that tree is how the 2026-09-14 incident
+      was root-caused. Removing it is a human's step once they have looked
+      (`cleanup --worktree <that path>`, no `--branch`); do not remove it
+      yourself, and do not treat its continued existence as a failure.
    2. Do NOT run step 10. Filing is refused under the HALT `post-merge` has just
       set, and the regression comment `post-merge` already left on the issue is
       the record a human needs.
    3. Run `finish --issue N --outcome regressed` (no `--reason`). That outcome
-      changes no label — `post-merge` has already set `agent-regressed` — and
+      changes no label — `post-merge` has already labelled the issue:
+      `agent-regressed` (plus a revert-axis label) after a revert,
+      `agent-gates-green-unverified` after a halt-only stop — and
       only does the local half: retain the run directory and release the lock,
       so the next tick is stopped by HALT alone rather than by a stranded lock.
+
+      KNOWN GAP, recorded rather than papered over, because this sequence fires
+      on two different things. "`post-merge` has already labelled the issue" is
+      true of a RED-GATE stop and of a halt-only stop. It is NOT true of every
+      `ok: false` payload: a crash inside the gate block whose final `checkout
+      master` ALSO failed emits `ok: false` with `halt: null` and NO top-level
+      `error` key, so the "a top-level `error` is a stop" rule does not catch
+      it and nothing was labelled. Treat that shape (`ok: false` AND `halt`
+      absent or null AND no top-level `error`) the way step 9's opening treats
+      an errored `post-merge`: print it, STOP the loop, and LEAVE THE LOCK so
+      the next tick's `recover` discharges the merge. Do NOT run `finish` on
+      it — `finish` releases the lock, and a released lock is exactly what
+      makes the merge unrecoverable (see step 1).
+
+      Nor is it true of the OTHER trigger: a run
+      where every gate returned 0, the tree was clean, the incident was
+      auto-resolved — and only the final `checkout master` failed. That payload
+      is `ok: true` with a `restore_failed` field and exit 1, and it labelled
+      nothing, so `--outcome regressed` also labels nothing and the issue is
+      left carrying `agent-working`. That label is in the executor's exclusion
+      list, so the loop skips the issue from then on, and `unblock` removes only
+      `agent-blocked` and cannot free it. Print this plainly when you see that
+      shape (`ok: true` AND `restore_failed`): the merge WAS verified, the
+      checkout was not restored, and a human must clear `agent-working` by hand
+      before that issue is eligible again. Do not invent a different `finish`
+      outcome to work around it — closing the gap properly is a change to the
+      executor, not to this prompt.
    4. STOP the loop. A `restore_failed` additionally means a human must look at
       the main checkout before any further tick runs.
 
@@ -145,7 +254,7 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    too, and the `finish` above is then the ONLY terminal bookkeeping: step 1's
    `--outcome blocked --reason recovery-followthrough-failed` fallback covers
    its OTHER two calls, not this one. Running both would try to relabel an
-   issue `post-merge` has already marked `agent-regressed`, and the second
+   issue `post-merge` has already labelled on its two axes, and the second
    `finish` would fail anyway because the first released the lock.
 10. **Discoveries.** Write the issue's `## Discoveries` entries from the ledger to
     `.agent/runs/$AGENTFLOW_RUN_ID/discoveries.json` as a JSON array of
@@ -158,7 +267,15 @@ the recovered run's just-retained evidence directory — see step 1. Never set
     refuses outright if the lock it finds names a different run, so running it
     first while this run still holds the lock is what keeps it safe, not (as it
     might look) anything about lock absence — then `finish --issue N --outcome
-    merged`. On `spike-answered`, first `cleanup --spike --worktree <path>
+    merged`. `cleanup` also refuses, with `cleanup does not match this run's
+    claim`, when `--worktree` or `--branch` disagrees with the `worktree` and
+    `branch` this run's own `.agent/runs/<run-id>/claim.json` records — argv does
+    not aim an `rm -rf`. Pass the values step 7's `claim` reply gave you, or the
+    ones `recover` wrote into `claim.json` for a follow-through in step 1 — not a
+    path you recomputed. A disagreement means the two worktrees of a recovery
+    tick have been crossed; print the refusal and STOP rather than retrying with
+    the other path.
+    On `spike-answered`, first `cleanup --spike --worktree <path>
     --branch <branch>` (no `--merge-sha` for a spike — it never commits code;
     cleanup goes first for the same fencing reason as the merged path above),
     then post the answer from a FILE, never as an argv argument: write the full
@@ -186,9 +303,34 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 - Never `--force` on any branch. The one exception is `push-branch
   --force-with-lease` in `/issue` step 13, only on the issue branch, only right
   after a re-rebase. Never issue a `git push` yourself: `push-branch` is the
-  only path, and it refuses any branch that is — or resolves to — `master`.
+  only path.
+- The two subcommands that take a `--branch` argument both refuse `master`, and
+  they are the only two: `push-branch` (before any push) and `cleanup` (before
+  either worktree-removal path, both of which end in `git branch -D`). Each
+  checks SHAPE first — anything that is not a plain branch name is refused
+  outright, because a refspec-shaped argument can reach `master` without ever
+  containing a string that compares equal to it — and then IDENTITY, casefolded,
+  against both the name given and what `git rev-parse --abbrev-ref` resolves it
+  to. `recovery.remove_worktree` / `remove_spike_worktree` carry a second,
+  independent refusal of their own, which also covers the currently checked-out
+  branch. This is a statement about those two commands; it is not a general
+  property of the executor, and no other command takes a branch to delete.
+  `cleanup`'s `--worktree` is guarded separately and on its own terms, because a
+  branch proof says nothing about a PATH: the directory must be a direct child of
+  the checkout's parent AND carry the `al-sem-issue-` name this flow hands out,
+  and it must match what this run's `claim.json` recorded. `--branch` is not
+  required by the parser — a retained verification worktree is detached and has
+  none — but `cleanup` requires it for every other worktree, so omitting it on an
+  issue worktree is a refusal, not a shortcut.
 - Never edit `.agent/HALT` except through `set-halt`, never touch `scripts/`,
   `.claude/`, `.github/`, `CLAUDE.md`.
+- `clear-halt`, `resolve-incident` and `unblock` are OPERATOR-ONLY. Never call
+  them. For the first two, writing that here is not what stops the flow using
+  them — `lock.require_operator` is: every conductor call carries a run id
+  (`--run-id` or `AGENTFLOW_RUN_ID`), and a run id in the context is refused.
+  `unblock` is the exception: it sets its own run id, so nothing enforces this
+  rule for it and the prompt really is the only guard. The read-only
+  `incidents` and `status` are fine to call.
 - An executor call that exits non-zero, or whose JSON has a TOP-LEVEL `error` key,
   is a stop for this tick; print it. A per-item `error` field inside a list (e.g.
   `file-discoveries`'s `filed[]`, where a per-discovery `error` is `null` on
