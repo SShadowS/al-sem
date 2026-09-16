@@ -155,9 +155,13 @@ pub struct RootClassification {
 /// `RequestpageSection`), so this predicate WOULD accept the anchor -- but it is
 /// never asked: [`kinds_for`] branches on the OBJECT type first, and a `Report`
 /// takes the `report-trigger` arm and never reaches the Page arm. Such a trigger
-/// classifies as `report-trigger`. No consumer is worse off (`report-trigger` is
-/// in both untrusted-root lists exactly as `trigger-page` is); the only cost is
-/// that `alsem fingerprint --roots page-action` will not surface it.
+/// classifies as `report-trigger`. The two untrusted-root consumers are
+/// unaffected (`report-trigger` is in both lists exactly as `trigger-page` is),
+/// but "no consumer is worse off" would be too strong: EVERY `page-action`-based
+/// selection misses these triggers, which includes `alsem fingerprint --roots
+/// page-action` AND policy rules scoped by `root.kinds: [page-action]` -- both
+/// applicability, which would skip the routine, and an `except:` clause, which
+/// would fail to suppress.
 ///
 /// That object-type arm list is a PRE-EXISTING vocabulary boundary and widening
 /// it is not this predicate's business: the same list drops `ReportExtension`
@@ -995,8 +999,11 @@ mod tests {
     // -- A8 -----------------------------------------------------------------
 
     /// Witnesses covering all ten derivable kinds, INCLUDING a real action
-    /// trigger — without one, an equality test against `DERIVABLE_KINDS` would
-    /// stay green with the `page-action` insertion deleted.
+    /// trigger. Note what that witness does and does not buy, since an earlier
+    /// version of this comment overstated it: because `DERIVABLE_KINDS` now
+    /// LISTS `page-action`, omitting the action witness makes A8 fail
+    /// immediately, not silently pass after a deletion. The witness is required
+    /// for A8 to pass at all; it is not what makes the deletion detectable.
     fn ten_kind_witness_workspace() -> L3Workspace {
         let mut objects = Vec::new();
         let mut routines = Vec::new();
@@ -1087,11 +1094,17 @@ mod tests {
     }
 
     /// The kind vocabulary is declared TWICE -- here and in `fingerprint_cli`,
-    /// which validates `alsem fingerprint --roots`. Each had its own pin (A9
-    /// above; `cli_b_fingerprint_oracles.rs:188` for the other), so a
-    /// thirteenth kind added to EITHER list alone passed both: add it here only
-    /// and the CLI rejects a value the classifier emits; add it there only and
-    /// the CLI accepts one nothing can produce.
+    /// which validates `alsem fingerprint --roots`. Each already has its own
+    /// pin, and to be accurate about what this test adds: a thirteenth kind
+    /// added to EITHER list alone is ALREADY caught -- adding it here changes
+    /// A9's complement, and adding it to the CLI list changes `validate_roots`'
+    /// error string, which `cli_b_fingerprint_oracles.rs:188` asserts literally.
+    ///
+    /// What neither existing pin catches, and what this test is actually for, is
+    /// updating one vocabulary TOGETHER WITH ITS OWN ORACLE while leaving the
+    /// other list behind. Then both pins pass and the two vocabularies have
+    /// silently diverged: the CLI would reject a value the classifier emits, or
+    /// accept one nothing can produce.
     ///
     /// Pre-existing -- both lists already carry `page-action`, so there is no
     /// drift today. Pinned now because the doc on `ROOT_KIND_VALUES` calls

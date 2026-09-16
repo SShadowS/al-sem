@@ -56,8 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     so a `roots.config.json` that asserts only `["trigger-page"]` on an action — silent
     until now — begins emitting `[roots-config/kinds-mismatch]` with
     `ast-only=["page-action"]`. A config asserting both stops warning; one asserting only
-    `page-action` keeps warning with the operands swapped. All three transitions are
-    tested.
+    `page-action` keeps warning, with `ast-only` unchanged at `["trigger-page"]` and
+    `config-only` emptying to `[]` -- not, as an earlier draft of this note said, with
+    the operands swapped. All three transitions are tested against their exact literal
+    diagnostics.
   - **Stated limit: action-extension modifications are NOT covered.** A pageextension's
     `modify(SomeAction) { trigger OnAfterAction() }` gains no `page-action`, and could not
     be fixed by adding a fifth string to the matcher: `modify_action_modification` carries
