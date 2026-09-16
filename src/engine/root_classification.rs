@@ -902,18 +902,20 @@ mod tests {
     fn page_extension_action_trigger_is_page_action() {
         // The discriminating field is the OWNING OBJECT's `object_type`:
         // `classify_roots` looks the object up and `kinds_for` branches on the
-        // OBJECT's type. The routine's own similarly-named `object_type` is left
-        // at "Page" ON PURPOSE — moving that field instead would leave a test that
-        // passes while testing nothing.
+        // OBJECT's type. The routine's own similarly-named `object_type` is set
+        // to "Report" ON PURPOSE, and the choice is load-bearing: `"Page" |
+        // "PageExtension"` is ONE match arm, so a routine field of "Page" would
+        // take the SAME branch and the test would pass whichever field were read.
+        // "Report" takes a DIFFERENT arm, so a `kinds_for` that read
+        // `routine.object_type` would yield `["report-trigger"]` and fail here.
+        //
+        // An earlier revision used "Page" and asserted it had stayed "Page",
+        // which proved nothing at all (astra, final panel, finding 5).
         let mut obj = object("app/PageExtension/50101", "Page");
         obj.object_type = "PageExtension".to_string();
 
         let mut r = routine("r1", "app/PageExtension/50101", "trigger");
-        assert_eq!(
-            r.object_type, "Page",
-            "the routine's own object_type must stay 'Page' so this test proves \
-             kinds_for reads the OBJECT's field"
-        );
+        r.object_type = "Report".to_string();
         r.enclosing_member_range = Some(anchor("action_declaration"));
 
         let ws = workspace(vec![obj], vec![r]);

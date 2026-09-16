@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     documented shape is a client-invoked Power Automate flow with no AL routine to
     classify, so a test for it pins a parser shape, not real-AL behaviour. Matching only
     `action_declaration` would have been a silent false NEGATIVE on three forms that no
-    corpus fixture contains.
+    corpus fixture contains -- two of them documented trigger-bearing forms, the third a
+    defensive grammar-shape match claiming no coverage. ("Three real forms" would
+    re-assert exactly the coverage the previous sentence disclaims.)
   - **`separator_action` and `actionref_declaration` are excluded deliberately.** A
     separator is not invokable; an `actionref` promotes an action declared elsewhere whose
     own trigger is already the root, so classifying it would double-count one action. The
