@@ -361,6 +361,11 @@ ws-d50-neg/src/Posting.al::1::OnRun	436335408df78a9c
 ws-d50-pos/src/Posting.al::0::PostDocument	340ecf23e87b8b3c
 ws-d50-pos/src/Posting.al::0::RunWorkerChecked	ca014a25065f08e2
 ws-d50-pos/src/Posting.al::1::OnRun	6e72b8d9b296d662
+ws-d50-temp-gate/src/TempGate.al::0::BufferRows	7b0ab7572c25eebc
+ws-d50-temp-gate/src/TempGate.al::0::StageRows	ef80bac5f571ccc1
+ws-d50-temp-gate/src/TempGate.al::0::StageMixedRows	91d213bc521a8acb
+ws-d50-temp-gate/src/TempGate.al::0::PostBuffers	fc52c13176e73cf2
+ws-d50-temp-gate/src/TempGate.al::1::OnRun	874fe30b4591009e
 ws-d51-jobqueue/src/Sender.Codeunit.al::0::PostThenError	c0dcefb45dc00605
 ws-d51-neg/src/Sender.Codeunit.al::0::GetThenError	24a4076adf44bbd9
 ws-d51-pos/src/Sender.Codeunit.al::0::PostThenError	5f5958c3d92fc599

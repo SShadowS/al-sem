@@ -1,0 +1,161 @@
+{
+  "fixtureName": "ws-d50-temp-gate",
+  "detectors": [
+    "d50-checked-run-implicit-commit"
+  ],
+  "findingCount": 2,
+  "findings": [
+    {
+      "detector": "d50-checked-run-implicit-commit",
+      "id": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
+      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
+      "title": "Codeunit.Run implicit commit within a posting span",
+      "rootCause": "A Codeunit.Run whose Boolean return value is used in StageRows performs an implicit commit on successful return while StageRows (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/TempGate.al",
+        "range": {
+          "startLine": 59,
+          "startColumn": 11,
+          "endLine": 59,
+          "endColumn": 50
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/TempGate.al",
+            "range": {
+              "startLine": 47,
+              "startColumn": 4,
+              "endLine": 60,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
+            "syntaxKind": "procedure"
+          },
+          "note": "transaction-managing routine StageRows contains the implicit-commit callsite"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/TempGate.al",
+            "range": {
+              "startLine": 59,
+              "startColumn": 11,
+              "endLine": 59,
+              "endColumn": 50
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Codeunit.Run implicit commit (on success) — return value consumed"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220",
+        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d50c:Table:50220",
+        "11111111-0000-0000-0000-00000000d50c:Table:50221",
+        "11111111-0000-0000-0000-00000000d50c:Table:50222"
+      ],
+      "fixOptions": [
+        {
+          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "bb0256b72e41fc3a"
+    },
+    {
+      "detector": "d50-checked-run-implicit-commit",
+      "id": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601/cs0",
+      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601/cs0",
+      "title": "Codeunit.Run implicit commit within a posting span",
+      "rootCause": "A Codeunit.Run whose Boolean return value is used in PostBuffers performs an implicit commit on successful return while PostBuffers (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/TempGate.al",
+        "range": {
+          "startLine": 96,
+          "startColumn": 11,
+          "endLine": 96,
+          "endColumn": 50
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/TempGate.al",
+            "range": {
+              "startLine": 84,
+              "startColumn": 4,
+              "endLine": 97,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+            "syntaxKind": "procedure"
+          },
+          "note": "transaction-managing routine PostBuffers contains the implicit-commit callsite"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/TempGate.al",
+            "range": {
+              "startLine": 96,
+              "startColumn": 11,
+              "endLine": 96,
+              "endColumn": 50
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Codeunit.Run implicit commit (on success) — return value consumed"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220",
+        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d50c:Table:50220",
+        "11111111-0000-0000-0000-00000000d50c:Table:50221",
+        "11111111-0000-0000-0000-00000000d50c:Table:50222"
+      ],
+      "fixOptions": [
+        {
+          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "84d973f6ec97e1ff"
+    }
+  ]
+}

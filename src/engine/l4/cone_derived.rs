@@ -420,7 +420,13 @@ impl ConeDerivedStore {
     /// `writes_tables_of(routine_id).len()` without resolving or allocating a
     /// single `String` — the window is already sorted-and-deduped by
     /// `freeze_ids`, so its length IS the distinct-table count.
-    /// ⟨C1 Task 2 fix M2⟩ For callers (d50) that only need the count.
+    /// ⟨C1 Task 2 fix M2⟩ For callers that only need the count.
+    ///
+    /// ⟨issue 23⟩ NO production caller remains: d50 was the last one and now
+    /// reads `writes_physical_tables_count_of`, like d8. The invariant that
+    /// replaced it — GATES read the PHYSICAL count (`d8.rs:41`, `d50.rs:82`),
+    /// WITNESS sets read the INCLUSIVE one (`d2.rs:425`, and `transaction_spans`
+    /// :160, which backs d50's `affectedTables`).
     pub fn writes_tables_count_of(&self, routine_id: &str) -> usize {
         let r = &self.row(routine_id).table_writes_all;
         (r.end - r.start) as usize
