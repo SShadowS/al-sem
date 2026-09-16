@@ -31,6 +31,26 @@ const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 
 /// RootKind values that make a commit-chain root UNTRUSTED for D50's medium tier.
 /// Mirrors al-sem's `D50_UNTRUSTED_ROOT_KINDS`.
+///
+/// `page-action` is DELIBERATELY absent, and the omission is load-bearing. The
+/// invariant is stated NARROWLY because the broad version is false: every
+/// routine that gains AST-DERIVED `page-action` also carries `trigger-page`
+/// (`root_classification.rs`'s Page arm inserts both), `trigger-page` IS
+/// listed, and the check below is ANY-quantified -- so this gate already
+/// rejects every such routine.
+///
+/// It does NOT hold for CONFIG-ONLY roots. `overlay_config_roots` builds a
+/// classification from the configured kinds alone when a routine has no AST
+/// root, so a `roots.config.json` asserting `["page-action"]` on some codeunit
+/// procedure yields `page-action` with NO `trigger-page`, and this gate does
+/// not reject it. That predates the derived kind and is not changed by it --
+/// adding `page-action` here would alter existing config-only behaviour and
+/// needs its own decision and tests, not a drive-by edit.
+///
+/// The derived-kind half of the argument breaks if `page-action` ever becomes
+/// AST-emittable WITHOUT `trigger-page` (an exclusive rule, or a new arm on
+/// another object type). That would flip this gate from reject to accept
+/// silently: no golden projects d50 output for an action-bearing fixture.
 const D50_UNTRUSTED_ROOT_KINDS: &[&str] = &[
     "event-subscriber",
     "install-codeunit",
