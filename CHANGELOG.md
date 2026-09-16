@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`page-action` is now DERIVED by the AST root classifier, not supplied only by the
+  config overlay** (`src/engine/root_classification.rs`). A trigger inside a page action
+  declaration keeps `trigger-page` and additionally gains `page-action`; the classifier
+  reads the enclosing member wrapper's grammar kind from
+  `L3Routine.enclosing_member_range.syntax_kind`, which has carried it all along.
+  Nine of the twelve `ROOT_KIND_VALUES` were emitted before this change; ten are now.
+  - **Four action wrappers are matched, with different strengths of evidence, and the
+    code says which is which.** `action_declaration` is exercised by the corpus;
+    `systemaction_declaration` and `fileuploadaction_declaration` are real AL forms with
+    Microsoft-documented `OnAction` triggers (the file-upload one takes
+    `Files: List of [FileUpload]`, not the parameterless signature);
+    `customaction_declaration` is matched **defensively with no coverage claimed** — its
+    documented shape is a client-invoked Power Automate flow with no AL routine to
+    classify, so a test for it pins a parser shape, not real-AL behaviour. Matching only
+    `action_declaration` would have been a silent false NEGATIVE on three forms that no
+    corpus fixture contains.
+  - **`separator_action` and `actionref_declaration` are excluded deliberately.** A
+    separator is not invokable; an `actionref` promotes an action declared elsewhere whose
+    own trigger is already the root, so classifying it would double-count one action. The
+    two exclusions are not equivalent: a named `separator(X)` IS reachable as an enclosing
+    member, while `actionref` never is — it has `promoted_name`/`action_name` and no `name`
+    field, so the lowerer's member gate cannot capture it. Both are pinned by tests, the
+    second explicitly as a contract rather than a reachable path.
+  - **Additive, not exclusive, and that choice has a consumer behind it.**
+    `fingerprint_query` filters on ANY intersection with the requested kinds and emits one
+    block per classification, so `--roots trigger-page` keeps selecting these actions and
+    requesting both kinds does not double-emit. Replacing `trigger-page` would have removed
+    a kind from existing output for no gain the issue asked for.
+  - **One new infrastructure warning is expected, and it is not a regression.**
+    `overlay_config_roots` computes its AST-vs-config symmetric difference BEFORE unioning,
+    so a `roots.config.json` that asserts only `["trigger-page"]` on an action — silent
+    until now — begins emitting `[roots-config/kinds-mismatch]` with
+    `ast-only=["page-action"]`. A config asserting both stops warning; one asserting only
+    `page-action` keeps warning with the operands swapped. All three transitions are
+    tested.
+  - **Stated limit: action-extension modifications are NOT covered.** A pageextension's
+    `modify(SomeAction) { trigger OnAfterAction() }` gains no `page-action`, and could not
+    be fixed by adding a fifth string to the matcher: `modify_action_modification` carries
+    `target` and no `name`, so the lowerer never captures the wrapper and the trigger has
+    no enclosing member at all. Fixing it needs both wrapper capture and target-name
+    extraction, and enclosing-member names participate in stable routine identity — so it
+    carries identity consequences and is filed separately rather than folded in here.
+
 - **Post-merge verification for the autonomous issue flow: disposable worktrees,
   a durable per-merge incident record, merge-record provenance, and a two-axis
   incident label vocabulary** (`scripts/agentflow/`). All four exist because of
