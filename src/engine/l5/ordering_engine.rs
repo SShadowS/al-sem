@@ -83,6 +83,12 @@ fn is_ui_window_sink(t: &str) -> bool {
 // isTrustedCommitRoot (UNTRUSTED_ROOT_KINDS)
 // ---------------------------------------------------------------------------
 
+/// `page-action` is DELIBERATELY absent -- see the same note on
+/// `D50_UNTRUSTED_ROOT_KINDS`. The AST pass only ever emits it alongside
+/// `trigger-page`, which IS listed, and [`is_trusted_commit_root`] below is
+/// ANY-quantified, so an unlisted extra kind cannot change the verdict. Were
+/// `page-action` ever emitted on its own, this would flip `false` -> `true`
+/// with no golden watching.
 fn is_untrusted_root_kind(kind: &str) -> bool {
     matches!(
         kind,

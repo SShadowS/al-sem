@@ -36,9 +36,16 @@ use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
 /// config-only root carries `confidence: "user-asserted"`, see
 /// [`overlay_config_roots`]).
 ///
-/// That split is asserted executably, not just described here — see
-/// `ast_pass_emits_exactly_the_ten_derivable_kinds` and
-/// `declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two`.
+/// Half of that split is asserted executably, and the honest half is worth
+/// naming: `ast_pass_emits_exactly_the_ten_derivable_kinds` proves the ten ARE
+/// emitted, over one hand-built witness set, and
+/// `declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two`
+/// bounds the complement over the CONSTANTS.
+///
+/// Neither proves the other direction -- that the remaining two are NEVER
+/// emitted. An eleventh insertion added in a branch no witness exercises (a
+/// `Query` arm, say) would leave both tests green. Saying "asserted executably"
+/// flat would be the over-claim CLAUDE.md legislates against.
 pub const ROOT_KIND_VALUES: [&str; 12] = [
     "trigger-table",
     "trigger-page",
@@ -130,6 +137,33 @@ pub struct RootClassification {
 ///   an enclosing member: it carries `promoted_name` / `action_name` and no
 ///   `name` field, so the lowerer's name gate never captures it. Its test pins
 ///   intent, not a reachable path.
+///
+/// COVERED, and worth saying so because the gap below invites the opposite
+/// assumption: a `PageExtension`'s `addlast(area) { action(X) { trigger
+/// OnAction() } }` DOES get `page-action`. `addlast_action_modification`
+/// carries `target` and no `name` so it is not captured itself, but its body is
+/// `action_body`, which ends in `_body` and therefore INHERITS, so the walk
+/// descends to the real inner `action_declaration` and captures that
+/// (`grammar.js:2458-2466,2315-2320`). The same holds for the other `add*`
+/// forms. The difference from the gap below is structural, not incidental:
+/// `add*` introduces a new action node, `modify` alters an existing one, so
+/// there is no `action_declaration` to find.
+///
+/// NOT A GAP either, but easily mistaken for one: a REPORT request-page action.
+/// `requestpage { actions { area(x) { action(Y) { trigger OnAction() } } } }`
+/// parses all the way down (`lower/mod.rs:619-628` keeps walking through
+/// `RequestpageSection`), so this predicate WOULD accept the anchor -- but it is
+/// never asked: [`kinds_for`] branches on the OBJECT type first, and a `Report`
+/// takes the `report-trigger` arm and never reaches the Page arm. Such a trigger
+/// classifies as `report-trigger`. No consumer is worse off (`report-trigger` is
+/// in both untrusted-root lists exactly as `trigger-page` is); the only cost is
+/// that `alsem fingerprint --roots page-action` will not surface it.
+///
+/// That object-type arm list is a PRE-EXISTING vocabulary boundary and widening
+/// it is not this predicate's business: the same list drops `ReportExtension`
+/// entirely, and an XmlPort request-page action trigger gets no kind at all and
+/// is skipped from the output. Fixing only Report would leave the arm list just
+/// as arbitrary as it is now.
 ///
 /// KNOWN GAP: action MODIFICATIONS (`modify(SomeAction) { trigger OnAfterAction()
 /// … }`) do not gain `page-action`, and could not be fixed by adding a fifth
@@ -675,11 +709,19 @@ pub fn project_r4f_root_classifications(
 // ---------------------------------------------------------------------------
 // Tests — the acceptance matrix for the derived `page-action` root kind.
 //
-// Every case runs through `classify_roots` (or `compute_root_classifications`
-// for the overlay rows), NEVER through `is_page_action_wrapper` or `kinds_for`
-// alone: a helper-only test leaves the production call site deletable while the
-// whole suite stays green, which is the exact failure CLAUDE.md records five
-// instances of. Every precondition is hand-stated by ASSIGNMENT — no production
+// Every case that exercises CLASSIFICATION runs through `classify_roots` (or
+// `compute_root_classifications` for the overlay rows), NEVER through
+// `is_page_action_wrapper` or `kinds_for` alone: a helper-only test leaves the
+// production call site deletable while the whole suite stays green, which is
+// the exact failure CLAUDE.md records five instances of.
+//
+// The one deliberate exception is
+// `declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two`,
+// which runs through NEITHER -- it is a pure assertion over two constants, and
+// so it also passes under the discrimination break. That is correct for what it
+// guards (a newly declared kind nobody emits) and is why
+// `ast_pass_emits_exactly_the_ten_derivable_kinds` exists to cover the other
+// direction. The two are complementary; neither alone covers both. Every precondition is hand-stated by ASSIGNMENT — no production
 // code is asked to produce a shape for the test.
 // ---------------------------------------------------------------------------
 
@@ -1039,6 +1081,27 @@ mod tests {
         assert_eq!(
             unemitted,
             vec!["web-service-exposed", "job-queue-entrypoint"]
+        );
+    }
+
+    /// The kind vocabulary is declared TWICE -- here and in `fingerprint_cli`,
+    /// which validates `alsem fingerprint --roots`. Each had its own pin (A9
+    /// above; `cli_b_fingerprint_oracles.rs:188` for the other), so a
+    /// thirteenth kind added to EITHER list alone passed both: add it here only
+    /// and the CLI rejects a value the classifier emits; add it there only and
+    /// the CLI accepts one nothing can produce.
+    ///
+    /// Pre-existing -- both lists already carry `page-action`, so there is no
+    /// drift today. Pinned now because the doc on `ROOT_KIND_VALUES` calls
+    /// itself "the single source of truth", and that should be true rather than
+    /// aspirational.
+    #[test]
+    fn the_two_root_kind_vocabularies_are_identical() {
+        assert_eq!(
+            ROOT_KIND_VALUES.as_slice(),
+            crate::engine::l5::fingerprint_cli::ROOT_KIND_VALUES,
+            "root_classification and fingerprint_cli declare the kind vocabulary \
+             independently; they must not drift"
         );
     }
 

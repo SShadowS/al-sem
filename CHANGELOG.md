@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     block per classification, so `--roots trigger-page` keeps selecting these actions and
     requesting both kinds does not double-emit. Replacing `trigger-page` would have removed
     a kind from existing output for no gain the issue asked for.
+
+    There is a second and stronger reason, found only by checking the OTHER consumers: the
+    additive choice is what keeps two detectors inert. `d50`'s `D50_UNTRUSTED_ROOT_KINDS`
+    and `ordering_engine`'s `is_untrusted_root_kind` both list `trigger-page` and neither
+    lists `page-action`, and both are ANY-quantified over a routine's kinds. Because the
+    rule is additive, every routine that gains `page-action` still carries `trigger-page`
+    and was already untrusted, so neither gate can move. Under the exclusive reading an
+    action trigger on a NON-API page would carry `page-action` alone -- a kind in neither
+    list -- and `is_trusted_commit_root` would flip `false` to `true` with `d50`'s Cap 2
+    ceasing to reject it. No golden would have caught that: none projects detector output
+    for an action-bearing fixture. Both lists now carry a comment saying why the omission
+    is safe and what would break it.
   - **One new infrastructure warning is expected, and it is not a regression.**
     `overlay_config_roots` computes its AST-vs-config symmetric difference BEFORE unioning,
     so a `roots.config.json` that asserts only `["trigger-page"]` on an action — silent

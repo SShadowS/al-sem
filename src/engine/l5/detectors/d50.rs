@@ -31,6 +31,18 @@ const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 
 /// RootKind values that make a commit-chain root UNTRUSTED for D50's medium tier.
 /// Mirrors al-sem's `D50_UNTRUSTED_ROOT_KINDS`.
+///
+/// `page-action` is DELIBERATELY absent, and the omission is load-bearing rather
+/// than an oversight: the AST pass only ever emits it ALONGSIDE `trigger-page`
+/// (`root_classification.rs`'s Page arm inserts both), and `trigger-page` is
+/// listed, so every routine carrying `page-action` is already untrusted here.
+/// The check below is ANY-quantified, so adding an unlisted kind cannot change
+/// its answer.
+///
+/// That argument breaks if `page-action` ever becomes emittable WITHOUT
+/// `trigger-page` -- an exclusive rule, or a new arm on another object type.
+/// It would flip this gate from reject to accept silently: no golden projects
+/// d50 output for an action-bearing fixture. Add it here if that day comes.
 const D50_UNTRUSTED_ROOT_KINDS: &[&str] = &[
     "event-subscriber",
     "install-codeunit",
