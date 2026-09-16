@@ -1,0 +1,434 @@
+[
+  {
+    "id": "F1",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 26,
+    "severity": "critical",
+    "text": "P4 is false. The enclosing member's kind already reaches kinds_for through L3Routine.enclosing_member_range.syntax_kind; no cross-layer field is required. The design's rejection of option (a) is unsupported.",
+    "disposition": "fixed",
+    "evidence": "Verified independently against the source, not accepted on the reviewer's word. anchor_from_origin (l3_workspace.rs:625-638) sets syntax_kind: origin.kind_text.to_string(); the call site (l3_workspace.rs:1260-1266) passes the member WRAPPER's origin; PAnchor.syntax_kind is public (l2/features.rs:44-45). Design v2/v3 invert accordingly. Both reviewers confirmed the route in round 2.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l3/l3_workspace.rs",
+    "line": 1260,
+    "severity": "critical",
+    "text": "Flash's round-1 finding 1, rated Critical with 'confidence certain': P4 HOLDS; enclosing_member_range 'carries only the wrapper's source position anchor'; 'Origin.kind_text is completely discarded at the L3 boundary'; deriving page-action locally is 'structurally impossible'.",
+    "disposition": "refuted",
+    "evidence": "FALSE, refuted by direct source read (same citations as F1). The two reviewers reached opposite conclusions on this one decisive fact; the tie was broken by reading the code. In round 2 flash re-read the same lines and retracted the finding itself: 'I was wrong. Astra was correct.'",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F3",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 45,
+    "severity": "important",
+    "text": "'Not derivable from AL source at all, by their nature' over-claims for web-service-exposed and job-queue-entrypoint. AL source declares the CAPABILITY; what it cannot supply is the DEPLOYMENT fact.",
+    "disposition": "fixed",
+    "evidence": "Design v3 adopts astra's round-2 wording verbatim, which also closes the second half of the over-claim it flagged: the overlay does not VERIFY deployment either, since config-only roots carry confidence: 'user-asserted' (root_classification.rs:407-435). Final wording: 'Currently supplied only by the config overlay. Source may indicate capability; the overlay supplies user-asserted publication or scheduling information.' A10 carries it -- and A10 is a DOCUMENTATION row, not an executable pin: no test reads that comment. An earlier revision of this entry said 'Pinned by A10', which claimed an assertion that does not exist. Corrected after the final code review caught it. This is the SECOND time this register claimed a documentation row was executable -- astra's N5 caught the first (F5/A7) and that one was fixed by promoting it to a real assertion (A9). This one is not: there is no sensible executable form of 'the comment says the right thing', and pretending otherwise would be worse than admitting the row is documentation.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F4",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 69,
+    "severity": "important",
+    "text": "The kind-count test's input matrix is unspecified. Exact set equality alone does not establish the negative: a witness set covering every kind but containing NO action would stay green after a tenth kind is added under the action-specific condition.",
+    "disposition": "fixed",
+    "evidence": "A8 requires witnesses for all ten INCLUDING a real action trigger, the unfiltered union, and the REAL action-specific insertion as the mutation. A1-A6 hand-state the precondition at unit level, immune to witness omission. Execution is pending implementation. FINAL: astra re-raised this once more in round 3 because the ledger's A8 proof cell still carried the stale rationale after the source comment was fixed -- explicitly marked NON-BLOCKING. Now corrected in the ledger too, so the code and the record agree.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F5",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 69,
+    "severity": "critical",
+    "text": "Flash's round-1 finding 4: the kind-count test risks a vacuous pass (subset check) or a false failure (exact equality against a witness set missing a kind). Recommends unit-testing on synthetic routines plus an invariant asserting which ROOT_KIND_VALUES are NOT derivable.",
+    "disposition": "fixed",
+    "evidence": "RE-RAISED by astra in round 2 (N5): the register claimed A7 carried the complement invariant, but A7 only required documentation, so a thirteenth declared-but-unemitted kind would leave the equality test green. SETTLED by promoting it to its own executable row: A9 asserts ROOT_KIND_VALUES minus the derivable ten == ['web-service-exposed', 'job-queue-entrypoint']. The register no longer claims an assertion the matrix does not make.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F6",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 72,
+    "severity": "minor",
+    "text": "Zero golden movement is conditional on fixture placement: adding a new tests/r0-corpus/ directory to support the test would move multiple golden families despite no production change (CLAUDE.md:612-621).",
+    "disposition": "fixed",
+    "evidence": "Design v3 adds NO corpus fixture: unit tests hand-state the precondition, and the existing ws-sibling-member-triggers fixture is the end-to-end witness. The exhaustive-blast-radius claim that originally supported this entry was separately wrong and is corrected under N2.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F7",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 16,
+    "severity": "minor",
+    "text": "The rejection of option (b) conflates current behaviour with design intent. As a description of today's implementation the three kinds ARE overlay-only; what is false is the explanation, not the description.",
+    "disposition": "fixed",
+    "evidence": "RE-RAISED by astra in round 2 (N6): the design body had been corrected but the Classification section still asserted that option (a) 'is NOT bounded' and option (b) 'would be false'. SETTLED by rewriting that section to state the inversion, so a reader who stops there does not reject the implementation the design demonstrates.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F8",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/root_classification.rs",
+    "line": 98,
+    "severity": "important",
+    "text": "The design must decide explicitly whether a page-action routine ALSO keeps trigger-page or REPLACES it; the issue's acceptance wording does not settle it.",
+    "disposition": "fixed",
+    "evidence": "Design v3 decides ADDITIVE, and astra verified it against a real consumer: fingerprint_query.rs:705-735 filters on ANY intersection and emits one block per classification, so --roots trigger-page keeps selecting these actions and selecting both kinds does not double-emit. One consumer checked, not all; stated as such.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F9",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/root_classification.rs",
+    "line": 447,
+    "severity": "important",
+    "text": "Users can ALREADY assert page-action through roots.config.json, since validate_roots_config accepts every ROOT_KIND_VALUES entry. The interaction with a newly-emitting AST pass is undocumented.",
+    "disposition": "fixed",
+    "evidence": "RE-RAISED by astra in round 2 (N3), and astra was right: my blanket claim that the kinds-mismatch warning DISAPPEARS is false. The symmetric difference is computed BEFORE the union (root_classification.rs:447-458), verified by reading it, so warnings move in BOTH directions -- config ['trigger-page'], previously silent, gains a NEW ast-only=['page-action'] warning. SETTLED by replacing the blanket claim with the three-case matrix in the design and pinning each row executably in A11. The union itself is still benign BTreeSet dedup (:477-479).",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F10",
+    "source": "self",
+    "round": 1,
+    "file": "src/engine/root_classification.rs",
+    "line": 98,
+    "severity": "important",
+    "text": "Self-found, missed by both reviewers in round 1: the grammar has FOUR action-declaration rules, not one. A discriminator matching only 'action_declaration' silently misses systemaction, fileuploadaction and customaction -- a false NEGATIVE no corpus fixture would catch.",
+    "disposition": "fixed",
+    "evidence": "RE-RAISED by astra in round 2 (N1): four GRAMMAR wrappers were verified, but four real trigger-bearing AL forms were not, and presenting grammar acceptance as real coverage is itself an over-claim. SETTLED by recording the evidence strength per wrapper: action (corpus-exercised) and systemaction/fileuploadaction (Microsoft-documented triggers) are real; customaction is matched DEFENSIVELY with no coverage claimed, since its documented shape is a Power Automate flow with no AL routine. Its test is labelled a parser-shape contract. Excluding a real form costs more than dead code, so it is matched rather than dropped -- but nothing claims it is covered.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F11",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 72,
+    "severity": "minor",
+    "text": "Flash's round-1 finding 5: 'no R4-F vectors, CLI snapshots, or L2/L3 goldens can move; check-goldens will remain 100% byte-clean.'",
+    "disposition": "refuted",
+    "evidence": "Premised on F2's false claim that no classification logic could change. Design v3 DOES change kinds_for, so goldens move. CORRECTION to this entry's earlier evidence, per astra r2: I had called flash's findings 5 and 6.1 self-contradictory; astra pointed out that 5 was explicitly conditional on no classification change while 6.1 described a future change, so those two paragraphs alone are not contradictory. Withdrawn. That does not rescue flash's independently false F2. The replacement enumeration is corrected under N2.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N1",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 80,
+    "severity": "important",
+    "text": "Synthetic grammar coverage is presented as real AL coverage. All six action-ish wrappers share the same optional declaration_body, so 'the grammar accepts a trigger here' does not prove real AL permits or executes one. customaction in particular is documented as a client-invoked Power Automate flow (CustomActionType = Flow, FlowId) with no AL routine to classify. Failure: A2 passes on a hand-constructed customaction anchor and the project claims custom-action coverage it does not have.",
+    "disposition": "fixed",
+    "evidence": "Verified: grammar.js:2379-2445 gives all six the same optional declaration_body. Design v3 replaces the flat 'four wrappers' claim with a per-wrapper evidence table stating what is PROVEN about each, marks customaction defensive-only with no coverage claimed, and requires its test to be labelled a parser-shape contract. astra's own limit is recorded too: it did not compile a customaction trigger and does not assert a compiler prohibition from the absence of an example.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N2",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 155,
+    "severity": "important",
+    "text": "The blast-radius enumeration names the wrong fourth file and gives a wrong hash-change explanation. cli_b_snapshot_differential byte-compares FOUR serializations including .cbor.gz; cli_b_fingerprint_oracles.rs's trigger-page is in a valid-kind error message that already lists page-action, so it does not move; workspaceFingerprint hashes input triples plus driver version, not classification payloads. Failure: regenerate three files, needlessly edit the oracle, leave the gzip golden stale -- or accept an unexpected identity change because the ledger pre-authorized 'id-shaped' movement.",
+    "disposition": "fixed",
+    "evidence": "All three halves verified myself. ws-sibling-member-triggers.cbor.gz exists on disk alongside the other three; the fixture is SNAPSHOT_CORPUS member cli_b_snapshot_differential.rs:136. cli_b_fingerprint_oracles.rs's only trigger-page occurrence is :188, inside the 'unknown root kind' valid-list which already contains page-action. Design v3 names the four serializations, drops the oracle, replaces the hash explanation with 'the envelope and CBOR CONTAIN the changed classifications; the gzip compresses the changed CBOR', and states that NO identity or fingerprint should change -- so one that does is an unexplained line, not pre-authorized movement. A12 REQUIRES that triage and the recorded triage satisfies it -- but A12 is NOT an executable pin, and an earlier revision of this entry said 'A12 pins this'. The snapshot tests compare against the CURRENT golden, never the base revision, so an accidental identity change that was regenerated in would pass them. This is the THIRD time this register called a documentation or process row executable (after F5/A7 and F3/A10), and it was found only because the final panel was told to assume a third existed.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N3",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/findings.json",
+    "line": 113,
+    "severity": "important",
+    "text": "The overlay warning claim is wrong. overlay_config_roots checks the symmetric difference BEFORE unioning, so dedup does not suppress a mismatch: warnings do not generally disappear and some newly APPEAR. A config asserting only ['trigger-page'] on an action is silent today and gains a new ast-only=['page-action'] warning after the change.",
+    "disposition": "fixed",
+    "evidence": "Verified by reading root_classification.rs:447-458: only_ast and only_cfg are computed from ast_kind_set vs the config set, and the diagnostic is pushed, all before the union at :477-479. astra's three-case matrix is exactly right. Design v3 replaces the blanket claim with that matrix and A11 pins each row's exact diagnostic and deduped kind list. The equality-based policy itself is left unchanged.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N4",
+    "source": "astra",
+    "round": 2,
+    "file": "src/engine/root_classification.rs",
+    "line": 98,
+    "severity": "important",
+    "text": "Action-extension modification triggers are an unstated exclusion. A page extension can add OnAfterAction() to an existing action via modify(SomeAction) { ... }; that routine gains no page-action under the proposed rule, and adding a fifth string would not fix it because the wrapper is never captured.",
+    "disposition": "fixed",
+    "evidence": "Verified: modify_action_modification (grammar.js:2488-2496) carries field('target'), not 'name', so the lowerer's generic member gate (child.field(FieldName::Name).is_some(), lower/mod.rs:644-648) never captures it, and the lowerer's special case covers RawKind::ModifyModification only (:628-637). Design v3 scopes this issue explicitly to action DECLARATIONS and records the gap in its own section, so it reads as a boundary rather than an oversight. Filed as a discovery for the flow.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N5",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/findings.json",
+    "line": 61,
+    "severity": "minor",
+    "text": "The register claimed an acceptance invariant absent from the ledger: F5's evidence said A7 asserts the ROOT_KIND_VALUES complement, but A7 only required documentation. Failure: a thirteenth declared-but-unemitted kind is added, the ten-kind union is unchanged and passes, and the supposedly adopted invariant is never checked.",
+    "disposition": "fixed",
+    "evidence": "Correct as stated; verified against my own matrix. Promoted to its own executable row A9 rather than left as a register claim. See F5.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N6",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 16,
+    "severity": "minor",
+    "text": "The classification summary still states the rejected design -- that option (a) is not bounded and option (b) would be false. Failure: someone reads it and rejects the local implementation the revised design demonstrates.",
+    "disposition": "fixed",
+    "evidence": "Correct; the design body had been inverted while the summary above it had not. Rewritten to state the inversion and why it is recorded rather than silently replaced. See F7.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "N7",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 170,
+    "severity": "minor",
+    "text": "Test-placement qualification: the unit tests must exercise kinds_for through its production use, not is_page_action_wrapper alone; the existing snapshot witness carries no negative case (both its triggers are actions) and proves only the plain-action route; and the unit matrix should include PageExtension and non-trigger gating cases.",
+    "disposition": "fixed",
+    "evidence": "Adopted in full. Design v3 requires the unit tests to run through classify_roots and names the helper-only shortcut as the exact CLAUDE.md failure mode it would be. A3 adds PageExtension, A5 adds the non-trigger gate, A4 supplies three negatives the snapshot witness cannot. The witness's limits are stated in the design rather than implied.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP1",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The Report request-page exclusion costs more than the stated 'fingerprint --roots page-action misses them'. Policy is another page-action-based consumer: predicate_fields exposes root kinds, predicate_compiler compiles the membership predicate, and policy_engine skips a routine when applicability is false. A policy scoped by root.kinds:[page-action] would skip a Report request-page action. Separately, the ledger's 'an added kind can only add matches' is false for an except: clause, which can newly become TRUE and SUPPRESS findings.",
+    "disposition": "fixed",
+    "evidence": "Both halves verified. Fixed in commit 0c03d065: the doc note now says ANY page-action-based selection is affected, policy applicability and exceptions included; and the ledger states the narrow claim (shipped policies unaffected because none names the kind) plus the explicit warning that for arbitrary user policies findings can move in BOTH directions. The Report exclusion itself is kept -- it is a pre-existing object-type boundary that also drops ReportExtension and gives XmlPort request-page triggers no kind at all.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP2",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The untrusted-kind comments overstate the invariant. They conclude every routine carrying page-action is already untrusted; in fact overlay_config_roots builds a config-only classification from the configured kinds ALONE when there is no AST root, so a roots.config.json asserting ['page-action'] on a codeunit procedure yields page-action with no trigger-page and neither gate rejects it.",
+    "disposition": "fixed",
+    "evidence": "Verified by reading the config-only arm: `let kinds = canonical_kinds(&cfg_kind_set)` with no trigger-page. Fixed in 0c03d065: both comments now state the narrow invariant (every routine gaining AST-DERIVED page-action also carries trigger-page) and name the config-only exception explicitly. page-action is deliberately NOT added to either list -- astra's own recommendation -- because that would alter existing config-only behaviour and needs its own decision and tests.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP3",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "THIRD register pin-overclaim: N2's evidence ended 'A12 pins this', but A12 prescribes a manual before/after triage. The snapshot tests compare against the CURRENT golden, never the base revision, so an accidental identity change that was regenerated in would pass them.",
+    "disposition": "fixed",
+    "evidence": "Correct. Fixed: N2's evidence now says A12 REQUIRES the triage and the recorded triage satisfies it, but A12 is not an executable pin. This is the third instance of the same category error in one register (after F5/A7 and F3/A10) and it was found only because the final panel was explicitly told to assume a third existed.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP4",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "A8's ledger row claims 'the AST pass emits exactly TEN kinds', which is broader than the test: equality is established only over the witness workspace. Adding emission of an already-declared kind in a Query branch no witness exercises leaves A8 and A9 green.",
+    "disposition": "fixed",
+    "evidence": "Correct, and the production comment already said so while the acceptance row did not. Fixed: A8's row now reads 'These witnesses emit exactly the ten derivable kinds -- NOT the pass can never emit more, which no test establishes'.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP5",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "A3 did not prove which object_type field is read. Its owning object is PageExtension and its routine says Page, but both take the SAME match arm, so kinds_for reading routine.object_type produces an identical result and A3 still passes. Its comment claimed the opposite.",
+    "disposition": "fixed",
+    "evidence": "Verified and it is a real test defect -- and one I had earlier praised in exactly the terms astra refuted. Fixed in 0c03d065 by setting the routine's object_type to 'Report', which takes a DIFFERENT arm. Proven: mutating kinds_for to read routine.object_type now FAILS this test where it previously passed; break asserted, byte-restored under sha256. Recorded in the ledger's Discrimination proofs section as a second proof.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP6",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The vocabulary-drift test is sound but its justification is false: a thirteenth kind added to either list ALONE would not pass both existing pins. Adding it to the classifier list changes A9's complement; adding it to the CLI list changes validate_roots' error string, which the oracle asserts literally.",
+    "disposition": "fixed",
+    "evidence": "Correct. The test is kept -- its real value is preventing someone from updating a vocabulary AND its own oracle together while leaving the other behind, which neither existing pin catches. The doc comment's 'passed both pins' claim is the part that was wrong.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP7",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The CHANGELOG reintroduces the customaction coverage over-claim: after disclaiming coverage it says matching only action_declaration would be a false negative on 'three forms'. Only two are evidenced trigger-bearing; the third is deliberately unverified.",
+    "disposition": "fixed",
+    "evidence": "Correct -- the N1 mistake re-asserted two paragraphs after being disclaimed. Fixed in 0c03d065: 'two of them documented trigger-bearing forms, the third a defensive grammar-shape match claiming no coverage'.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP8",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The coverage-gap discovery wrongly requires seed files, importing the r4 family's restriction. For the snapshot family, regeneration CAN mint: check_or_regen creates the parent directory and writes before any read, and the CBOR/gzip branches do the same.",
+    "disposition": "fixed",
+    "evidence": "Verified by reading check_or_regen. Fixed: the discovery's acceptance now says no seed file is needed for this family and explains why, so the follow-up author does not manufacture placeholder files for no reason.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "FP9",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-11/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The ledger's discrimination-proof table states 9 failed / 6 passed and 15 passed on restore. There are now sixteen tests.",
+    "disposition": "fixed",
+    "evidence": "Correct and stale -- accurate when written, invalidated when the final panel added the sixteenth test. Re-RUN rather than re-derived on paper: 9 failed / 7 passed, 16 passed clean, byte-restore sha256 MATCH. The new test asserts over constants and so survives the break, like A9. A proof table carrying numbers nobody re-measured is exactly the artifact this repo distrusts.",
+    "hash": "7bd2d1b22a5b0639f24b0b153280bfd1652cb294005baf2f4c4324357d2cc14d",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  }
+]
