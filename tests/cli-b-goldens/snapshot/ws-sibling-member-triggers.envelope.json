@@ -83,7 +83,8 @@
         "confidence": "static",
         "externallyReachable": true,
         "kinds": [
-          "trigger-page"
+          "trigger-page",
+          "page-action"
         ],
         "routineId": "88888888-0000-0000-0000-000000005816:Page:50920#38bc8c9b92b2aa8c2ae13e5b7e253cf5e461fa861ea872b21dd34330b904c1bf",
         "source": "ast",
@@ -103,7 +104,8 @@
         "confidence": "static",
         "externallyReachable": true,
         "kinds": [
-          "trigger-page"
+          "trigger-page",
+          "page-action"
         ],
         "routineId": "88888888-0000-0000-0000-000000005816:Page:50920#d1d921fd1b581c598f3b37479e383da7012e6cf8dec466cf49d206097822d688",
         "source": "ast",
