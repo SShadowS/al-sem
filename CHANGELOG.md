@@ -219,6 +219,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **d5 and d60 no longer advise a set-based rewrite for loops that do not visit the whole set**
+  (`src/engine/l2/record_op.rs`, `src/engine/l5/detectors/{mod,d5,d60}.rs`; issue #21).
+  Both detectors judged companion operations by NAME. `Next(1)` and `Next(2)` share one, and a
+  `SetRange` on a literal differs from one on the current row — so a loop that advances two rows
+  at a time, or re-filters, or re-keys mid-iteration, was reported as a `ModifyAll`/`DataTransfer`
+  opportunity. Measured on a purpose-built fixture before the fix: all four shapes reported, in a
+  plain codeunit and again in an `Upgrade` one.
+  - **`Next`'s argument now reaches L5 at all.** `"Next"` was absent from `FIELD_ARGS_OPS`, so
+    every `Next` arrived with `field_arguments: None` and the detectors could not have told the
+    difference. Adding it is an L2 feature-contract change, deliberately taken in preference to a
+    private side channel, which would have needed its own literal classification.
+  - **A traversal veto, layered on the existing gate rather than replacing it.** `whole_set_break`
+    rejects, on the loop's driver: `SetRange`/`SetFilter`/`Reset`/`Copy` (change the selected
+    set), `SetCurrentKey` (changes the order), `Find`/`FindFirst`/`FindLast`/`FindSet`/`Get`
+    (reposition the cursor), and any advance that is not a unit step in this loop's own
+    terminator. d5's `ALLOWED_OTHER_OPS` STAYS: it is what
+    rejects `Delete`/`Insert`/`Validate`/`Get`, and replacing it would have started accepting
+    them — trading three false positives for a new class of them.
+  - **Cardinality, not just arguments.** Two individually unit-step advances still skip every
+    other row, and no argument predicate catches that. Exactly one advance is required, and it
+    must be the candidate loop's own terminator — a nested loop's terminator does not count.
+    `is_terminator_next` is reused UNCHANGED, because d1/d2 ask a different question of it.
+  - **d60 gains a driver-variable body pass it never had.** Its existing gates check calls, other
+    records and if/case; ops on the loop's own driver were uninspected, so it reached the same
+    wrong answer by a different route. The new suppression is counted in `DetectorStats`.
+  - **Known limits, stated rather than implied fixed.** Two, in opposite directions.
+    A terminator that is not a plain `Next() = 0` — `until (R.Next() = 0) or StopNow`, or a
+    reversed comparison — still passes and is still reported, because establishing exhaustion
+    needs the terminator's expression and no detector-facing projection carries it. And in the
+    other direction, a loop that advances via an intermediate — `Done := R.Next() = 0; until Done`
+    — is now SILENCED: it has exactly one advance, so cardinality is satisfied; it is the
+    TERMINATOR-OWNERSHIP rule alone that rejects it, because the advance sits in the body. That is a real false
+    negative introduced here, accepted because this change's job is to stop unsound ADVICE and a
+    missed opportunity costs nothing. Both are recorded in the issue ledger and are to be
+    filed as follow-up issues.
+
 - **d50's transaction-managing COUNT branch counted temp-inclusive table writes,
   so a routine whose only writes were to `temporary` records was treated as
   managing a transaction** (`src/engine/l5/detectors/d50.rs`). The gate now reads

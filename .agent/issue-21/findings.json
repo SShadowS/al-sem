@@ -1,0 +1,281 @@
+[
+  {
+    "id": "B1",
+    "source": "both",
+    "round": 1,
+    "file": ".agent/issue-21/ledger.md",
+    "line": 93,
+    "severity": "critical",
+    "text": "The redundancy carve-out compared field_arguments TEXT. Byte-identical argument text does not prove equal evaluated values (SetRange(Code, FilterVal) with FilterVal reassigned in-loop) nor the effective filter at loop entry (SetRange(Amt,0); SetRange(Amt,1); FindSet()).",
+    "disposition": "fixed",
+    "evidence": "A6 DROPPED. In-loop SetRange/SetFilter/SetCurrentKey disqualify unconditionally -- a deliberate conservative choice, stated as such rather than as proof that every repeated filter changes the set.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B2",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d5.rs",
+    "line": 108,
+    "severity": "critical",
+    "text": "Deleting ALLOWED_OTHER_OPS removes an existing safety boundary: all_allowed requires EVERY non-Modify op to be on the list, so Delete/Insert/Validate/Get disqualify today. A predicate returning None for unmentioned ops would newly ACCEPT them, ADDING false positives.",
+    "disposition": "fixed",
+    "evidence": "Verified at d5.rs:108-114. The allow-list STAYS as the eligibility gate; the new predicate is a VETO layered on top and can only remove findings. A9 pins the previously-rejected companions as regression tests.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B3",
+    "source": "both",
+    "round": 1,
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 827,
+    "severity": "critical",
+    "text": "Terminator vs body Next must be distinguished: two individually unit-step advances still skip rows (repeat ... R.Next(); until R.Next() = 0). No argument predicate catches it.",
+    "disposition": "fixed",
+    "evidence": "Verified: is_terminator_next exists at mod.rs:827-829 and is used by d1/d2/d1_graph. REUSED UNCHANGED (strengthening it would move d1/d2, which ask a different question). Rule: exactly one eligible advance, is_terminator_next true, loop_stack.last() == the candidate loop id. Measured as P7 -- d5 reports the body-Next shape today.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B4",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d60.rs",
+    "line": 145,
+    "severity": "important",
+    "text": "d60 does not inspect ops on the DRIVER var at all -- its guard is record_variable_name != var_lc, i.e. only OTHER vars. The design said replace the list in both, but d60 has no list to replace.",
+    "disposition": "fixed",
+    "evidence": "Verified at d60.rs:145-151. d60 gains a NEW body pass over driver-var ops applying the same veto, with its own DetectorStats skip counter so the suppression is countable (A13).",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B5",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/runs/.../Probe.al",
+    "line": 50,
+    "severity": "important",
+    "text": "The shape-2 fixture does not semantically narrow the set: SetRange(Amt, R.Amt) runs BEFORE R.Amt := 1, so R.Amt is still 0 and the setter reapplies the existing filter. It covers the row-dependent syntax, not a traversal change.",
+    "disposition": "fixed",
+    "evidence": "Shape 2 becomes SetRange(\"Entry No.\", R.\"Entry No.\") with no entry-number filter before retrieval, which genuinely narrows to the current row. A SetFilter case is added. The original is KEPT as a distinct syntax-shape case.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B6",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-21/ledger.md",
+    "line": 110,
+    "severity": "important",
+    "text": "The Next literal rule must be exact: Next(+1), Next(-1), Next(0), Next(Step) and any expression must all disqualify, and None (unavailable) must never be read as an empty argument list.",
+    "disposition": "fixed",
+    "evidence": "kind is \"integer\" with value = RAW text (ir_walk.rs:399-402), so +1/-1 lower to unary expressions and are rejected. Three states separated in the acceptance: Some([]) eligible, Some([integer \"1\"]) eligible, everything else including None not eligible. A4 and A11 pin them.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B7",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-21/ledger.md",
+    "line": 45,
+    "severity": "minor",
+    "text": "The claim that the fix MUST move the serialized L2 contract is overstated: run_trigger is serde-skipped and still forwarded to L3, so an internal channel is technically viable.",
+    "disposition": "fixed",
+    "evidence": "Corrected to a deliberate CHOICE with its reason: an arity-only channel cannot separate Next(1)/Next(2)/Next(N), so it would need literal classification anyway -- a second private copy of what L2 already represents. Round 2 re-raised (WORDING ONLY): Classification and the What-P5-means section still called the contract move necessary. Both rewritten in v3 to state it as a chosen route with the alternative named.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B8",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l2/features.rs",
+    "line": 235,
+    "severity": "minor",
+    "text": "Argument fields are OMITTED when None and in_until_condition is serde-skipped entirely; a query returning null for a missing key is not evidence the dump serialized a null field.",
+    "disposition": "fixed",
+    "evidence": "Wording tightened; the substantive conclusion (Next carries no argument info) stands on FIELD_ARGS_OPS excluding Next at record_op.rs:39-54, which is a source fact rather than a dump artifact. Round 2 re-raised (WORDING ONLY): P5 still said ops carry fieldArgumentInfos: null. Rewritten -- the field is OMITTED when None (features.rs:237 skip_serializing_if), so it is an absent key, and the conclusion rests on FIELD_ARGS_OPS excluding Next.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B9",
+    "source": "astra",
+    "round": 2,
+    "file": "src/engine/l5/detectors/d5.rs",
+    "line": 108,
+    "severity": "important",
+    "text": "The terminator rule does not establish EXHAUSTION. until (R.Next() = 0) or StopNow modifies only the first row, and until R.Next() <> 0 has wrong polarity -- both have exactly one unit-step advance in the candidate loop own until and pass every v2 rule.",
+    "disposition": "refuted",
+    "evidence": "MEASURED: both counterexamples added to the fixture (CompoundTerminator, WrongPolarityTerminator) and both are REPORTED by d5 today, so the hole is live. But the fix is not available at this layer: PLoop (features.rs:292-298) carries only id, loop_type and source_anchor, and no terminator EXPRESSION is carried anywhere -- the only signal is the per-op boolean in_until_condition, which cannot separate a simple terminator from a compound one because the operator was never kept. The check is therefore a SECOND L2 feature on top of the one this issue needs, answering a different question. Scoped out, the traversal rules restated as necessary-not-sufficient, and filed as a discovery with both measured counterexamples as the reproducer. ROUND 3 RULING (astra): legitimately out of scope for #21 -- it requires separate knowledge of the enclosing termination expression, which neither PLoop nor is_terminator_next provides; both counterexamples are PRE-EXISTING false positives that adding only vetoes does not newly admit; and the design expressly disclaims exhaustion. Retained as the discovery reproducers.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "B10",
+    "source": "astra",
+    "round": 2,
+    "file": "src/engine/l5/detectors/d60.rs",
+    "line": 145,
+    "severity": "minor",
+    "text": "A9 cannot promise the previously-rejected-companion baseline for BOTH detectors: d60 has no allow-list, so same-driver Delete/Insert/Validate/Get are rejected by neither its gates nor the new veto.",
+    "disposition": "fixed",
+    "evidence": "Accepted. A9 is scoped to d5 only, and d60 gap recorded as pre-existing rather than introduced here. Cardinality moved to a loop-level helper (the per-op predicate cannot count), and A4 gains Next(+1) and an expression case.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": "tests/r0-corpus/ws-d5-modifyall/src/codeunit.al",
+    "line": 1,
+    "severity": "critical",
+    "text": "d60's new traversal pass has ZERO committed coverage: the acceptance fixture is a plain codeunit and d60 returns before its loop without an Upgrade/Install object (d60.rs:88-91), so every 'no finding from d60' row is pinned by nothing, and A13's skip counter is asserted nowhere.",
+    "disposition": "fixed",
+    "evidence": "Seven routines added to tests/r0-corpus/ws-d60 inside codeunit 50934 (Subtype = Upgrade). Discrimination: with the d60 pass removed, 6 of 6 unsound shapes return; OnUpgradePerCompany and UpgradeUnitStepAdvance stay reported. Byte-restored, sha 97a03d731c54. NOTE: the first attempt at this fix put the routines in the file's SECOND codeunit (50935 'D60 Normal'), outside d60's scope, and passed while pinning nothing.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 860,
+    "severity": "important",
+    "text": "A11's 'direct unit assertion on the predicate' does not exist, and it is the only way to pin the tri-state: now that L2 always captures, None occurs in no fixture, so an edit making it eligible would move no golden.",
+    "disposition": "fixed",
+    "evidence": "Three #[cfg(test)] tests added in detectors/mod.rs covering the tri-state (including None), every veto arm, and terminator ownership including the nested-loop case.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F3",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 896,
+    "severity": "important",
+    "text": "'Everything else is the caller's gate' is false for d60, which has no gate. Reset/Copy (replace the filter set) and Find/FindSet/FindFirst/FindLast/Get (move the cursor) returned None and were reported -- traversal breaks in this issue's own category.",
+    "disposition": "fixed",
+    "evidence": "Those arms added: Reset/Copy -> ChangesSet, Find*/Get -> SkipsRows. d5 name-rejects all of them so d5 does not move. Write-class ops on the driver remain the separate pre-existing gap (B10).",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F4",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": ".agent/golden-triage.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The triage receipt's MOVED inventory omitted ~2,000 of ~7,500 moved lines (r2a, r2d, r3a2, r3a3, r4) and mislabelled r2a/r2d as 'tests/r0-goldens/'.",
+    "disposition": "fixed",
+    "evidence": "Inventory corrected and itemized. The reviewer independently checked the omitted files and the 'zero pre-existing routine changed' claim held: r3a3's deletions are a pre-existing block re-emitted at a new position, r4's is findingCount, r2d's is a count.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F5",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": "tests/r0-corpus/ws-d5-modifyall/src/codeunit.al",
+    "line": 142,
+    "severity": "minor",
+    "text": "InLoopDelete declares an unused `Other: Record Customer` -- dead fixture text.",
+    "disposition": "fixed",
+    "evidence": "Removed.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F6",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": "tests/l2_ir/l2_vectors.rs",
+    "line": 7,
+    "severity": "minor",
+    "text": "The hand-edit of l2-vectors.json is defensible under the retired-oracle doctrine, but the stale 'never fix the vector' module doc is a one-line edit belonging in this change, not a filed discovery.",
+    "disposition": "fixed",
+    "evidence": "Module doc rewritten in place to state that these are Rust-owned baselines with no regen path, and what issue #21 changed in them. The discovery is not filed.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  },
+  {
+    "id": "F7",
+    "source": "fable (substitute reviewer)",
+    "round": 1,
+    "file": ".agent/issue-21/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "A16's proof column was written as 'check-goldens explained-and-green, cdo-gate green' before any gate log existed; the receipt's 'all green in the same run' described a regen run, not the gate.",
+    "disposition": "fixed",
+    "evidence": "A16 is not claimed until the gate exit codes exist. The earlier wording ('Gates re-run after every review fix') asserted a run that had not happened -- the same over-claim shape as the finding itself -- and is withdrawn. Gate results are recorded in the ledger's Gate results section from the logs, and from one run only: the final quiesced run, because an earlier run overlapped a reviewer's discrimination patches on the same worktree and proves nothing.",
+    "hash": "bdc36c4309cc6dbacff53f83c7a1356d615f8ef26a0d4ad4e28e76315913e985",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "unreviewed"
+    }
+  }
+]
