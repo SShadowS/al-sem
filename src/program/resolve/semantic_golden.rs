@@ -208,10 +208,11 @@ pub const ANON_GOLDEN_SCHEMA_VERSION: u32 = 2;
 /// Mint-time provenance metadata stamped into every committed golden (1B.3b
 /// Task 1 fix, Fix 4): the CDO workspace's git HEAD SHA and dirty state at
 /// mint time, captured by [`workspace_git_info`]. Audit time re-probes the
-/// CURRENT workspace and warns on a mismatch -- or PANICS under
-/// `ENFORCE_CDO_WS=1`; see the drift check, and
-/// `run_cdo_semantic_audit`/`run_cdo_trigger_audit`/`run_cdo_event_audit`'s
-/// drift-warning step. `#[serde(default)]` on both fields so a golden minted
+/// CURRENT workspace and, on a mismatch, hands the drift message to the
+/// [`DriftHandler`] its caller supplied -- it does not decide what a mismatch
+/// means. The gated-test handler (`drift_handler` in
+/// `tests/program_resolve_harness.rs`) warns ungated and fails under
+/// `ENFORCE_CDO_WS=1`. `#[serde(default)]` on both fields so a golden minted
 /// before this field existed (or from a non-git workspace export) still
 /// deserializes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,16 +307,28 @@ pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool
     (sha, dirty)
 }
 
-/// Emit a `WARNING` on stderr when the CURRENT `workspace_root`'s git SHA/
-/// dirty state differs from `stamped` (the golden's mint-time
-/// **Ungated: warns. Under `ENFORCE_CDO_WS=1`: PANICS.** The old never-fails
-/// behaviour is exactly how the previous baseline rotted -- every run printed a
-/// drift warning for two months while the audit it guarded paired ZERO sites and
-/// still reported a pass. A gated run is the one place an unreproducible baseline
-/// must stop the build; ungated developer runs keep the warning, because drift
-/// there is ordinary and asserts nothing.
-/// last mint), not a resolver regression; see [`MintMetadata`]'s doc comment.
-fn warn_on_workspace_drift(stamped: &MintMetadata, workspace_root: &Path) {
+/// What to do when the current workspace has drifted from a golden's mint
+/// stamp. The library calls this and nothing else on drift: it neither reads
+/// process state to choose a handler nor expresses failure itself, so a
+/// handler that panics does so as the CALLER's choice, in the caller's code.
+///
+/// The gated-test handler is `drift_handler` in
+/// `tests/program_resolve_harness.rs`, beside that file's own `ENFORCE_CDO_WS`
+/// read (`enforce_audit_ran`) and the audit call sites it serves. It is not in
+/// `tests/common/cdo.rs` next to `cdo_ws_or_enforce`, where it would sit more
+/// naturally, because that file is `#[path]`-included verbatim by three test
+/// binaries and only one of them runs these audits.
+pub type DriftHandler = fn(&str);
+
+/// Returns the drift message when the CURRENT `workspace_root`'s git SHA,
+/// dirty state or `.alpackages` closure differs from `stamped` (the golden's
+/// mint-time stamp), and `None` when they match.
+///
+/// Decides NOTHING about what to do with it -- no `std::env`, no `assert!`,
+/// no stderr. (It still shells out to git and reads `.alpackages`, so it is
+/// policy-free rather than pure.) Drift means an audit diff may reflect a moved
+/// workspace rather than a resolver regression; see [`MintMetadata`]'s doc.
+fn workspace_drift(stamped: &MintMetadata, workspace_root: &Path) -> Option<String> {
     let (current_sha, current_dirty) = workspace_git_info(workspace_root);
     let current_closure = dependency_closure_digest(workspace_root);
     // A stamp of `None` predates this field — do not report drift against a
@@ -328,10 +341,10 @@ fn warn_on_workspace_drift(stamped: &MintMetadata, workspace_root: &Path) {
     let git_drifted =
         current_sha != stamped.workspace_git_sha || current_dirty != stamped.workspace_dirty;
     if !git_drifted && !closure_drifted {
-        return;
+        return None;
     }
 
-    let msg = format!(
+    Some(format!(
         "CDO workspace drifted from the golden mint stamp.\n  \
          git SHA: stamped {:?} (dirty={:?}), current {:?} (dirty={:?})\n  \
          .alpackages closure: stamped {:?}, current {:?}\n  \
@@ -343,22 +356,7 @@ fn warn_on_workspace_drift(stamped: &MintMetadata, workspace_root: &Path) {
         current_dirty,
         stamped.dependency_closure_sha256.as_deref(),
         current_closure.as_deref(),
-    );
-
-    // Under ENFORCE_CDO_WS=1 this is a HARD FAILURE, not a warning.
-    //
-    // Warning-only is exactly how the previous baseline rotted: the goldens were
-    // minted from a tree whose SHA later existed in no checkout at all, every run
-    // printed this message, and nobody acted on it for two months -- while the
-    // audits it guards silently paired ZERO sites and still reported a pass. A
-    // gated run (`scripts/cdo-gate`) is the one context where an unreproducible
-    // baseline must stop the build rather than narrate at it. Ungated developer
-    // runs keep the warning, because drift there is ordinary and claims nothing.
-    assert!(
-        std::env::var("ENFORCE_CDO_WS").as_deref() != Ok("1"),
-        "{msg}"
-    );
-    eprintln!("WARNING: {msg}");
+    ))
 }
 
 /// Anonymized, serde-able mirror of [`GoldenSiteKey`]. The four identifying
@@ -2352,7 +2350,10 @@ pub fn run_unknown_include_sender_plus1_subscribers_preflight_on(
 /// `cdo-anon.json` is missing/invalid (the `ENFORCE_CDO_WS` guard in
 /// `tests/program_resolve_harness.rs` hard-fails on this).
 #[must_use]
-pub fn run_cdo_semantic_audit(workspace_root: &Path) -> CdoSemanticAuditReport {
+pub fn run_cdo_semantic_audit(
+    workspace_root: &Path,
+    on_drift: DriftHandler,
+) -> CdoSemanticAuditReport {
     use crate::program::resolve::full::{build_context, resolve_full_program_with};
 
     let Some(ctx) = build_context(workspace_root) else {
@@ -2369,7 +2370,7 @@ pub fn run_cdo_semantic_audit(workspace_root: &Path) -> CdoSemanticAuditReport {
         };
     };
     let report = resolve_full_program_with(&ctx);
-    run_cdo_semantic_audit_on(&ctx, &report, workspace_root)
+    run_cdo_semantic_audit_on(&ctx, &report, workspace_root, on_drift)
 }
 
 /// Substrate-taking core of [`run_cdo_semantic_audit`] — reads the program
@@ -2381,8 +2382,9 @@ pub fn run_cdo_semantic_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,
     report: &crate::program::resolve::full::ProgramReport,
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> CdoSemanticAuditReport {
-    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, true)
+    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, on_drift, true)
 }
 
 /// The audit WITHOUT the adjudication overlay — fresh against the raw,
@@ -2401,14 +2403,16 @@ pub fn run_cdo_semantic_audit_on_raw(
     ctx: &crate::program::resolve::full::ProgramContext,
     report: &crate::program::resolve::full::ProgramReport,
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> CdoSemanticAuditReport {
-    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, false)
+    run_cdo_semantic_audit_on_with(ctx, report, workspace_root, on_drift, false)
 }
 
 fn run_cdo_semantic_audit_on_with(
     ctx: &crate::program::resolve::full::ProgramContext,
     report: &crate::program::resolve::full::ProgramReport,
     workspace_root: &Path,
+    on_drift: DriftHandler,
     apply_overlay: bool,
 ) -> CdoSemanticAuditReport {
     // ── Load the committed, anonymized golden (NO project_l3 call here) ──────
@@ -2418,8 +2422,8 @@ fn run_cdo_semantic_audit_on_with(
     let l3_total = golden.entries.len();
     // 1B.3b Task 1 fix (Fix 4): warn (never fail) when CDO_WS has drifted
     // from the golden's mint-time stamp.
-    if golden_loaded {
-        warn_on_workspace_drift(&golden.metadata, workspace_root);
+    if golden_loaded && let Some(msg) = workspace_drift(&golden.metadata, workspace_root) {
+        on_drift(&msg);
     }
 
     // ── beyond-1B.3b Task 3: overlay the source-adjudicated corrections ──────
@@ -2572,7 +2576,10 @@ fn run_cdo_semantic_audit_on_with(
 /// baseline + fixture + the ported applicability teeth, see
 /// [`AnonTriggerAuditReport`]).
 #[must_use]
-pub fn run_cdo_trigger_audit(workspace_root: &Path) -> AnonTriggerAuditReport {
+pub fn run_cdo_trigger_audit(
+    workspace_root: &Path,
+    on_drift: DriftHandler,
+) -> AnonTriggerAuditReport {
     use crate::program::resolve::full::{build_context, resolve_full_program_with};
 
     let fresh_golden = match build_context(workspace_root) {
@@ -2587,7 +2594,7 @@ pub fn run_cdo_trigger_audit(workspace_root: &Path) -> AnonTriggerAuditReport {
         // warning, deanon merge).
         None => SemanticGolden::default(),
     };
-    trigger_audit_from_fresh(&fresh_golden, workspace_root)
+    trigger_audit_from_fresh(&fresh_golden, workspace_root, on_drift)
 }
 
 /// Substrate-taking core of [`run_cdo_trigger_audit`] — mints the fresh
@@ -2598,9 +2605,10 @@ pub fn run_cdo_trigger_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,
     report: &crate::program::resolve::full::ProgramReport,
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> AnonTriggerAuditReport {
     let fresh_golden = mint_fresh_golden_for_kind_on(ctx, report, EdgeKind::ImplicitTrigger);
-    trigger_audit_from_fresh(&fresh_golden, workspace_root)
+    trigger_audit_from_fresh(&fresh_golden, workspace_root, on_drift)
 }
 
 /// Shared audit body of [`run_cdo_trigger_audit`]/[`run_cdo_trigger_audit_on`]:
@@ -2611,13 +2619,14 @@ pub fn run_cdo_trigger_audit_on(
 fn trigger_audit_from_fresh(
     fresh_golden: &SemanticGolden,
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> AnonTriggerAuditReport {
     let golden = load_anon_golden(&cdo_trigger_anon_golden_path());
     let golden_loaded = golden.is_some();
     let golden = golden.unwrap_or_default();
     let l3_total = golden.entries.len();
-    if golden_loaded {
-        warn_on_workspace_drift(&golden.metadata, workspace_root);
+    if golden_loaded && let Some(msg) = workspace_drift(&golden.metadata, workspace_root) {
+        on_drift(&msg);
     }
 
     let fresh_total = fresh_golden.entries.len();
@@ -2675,7 +2684,7 @@ fn trigger_audit_from_fresh(
 /// verdict (`cdo-event-anon.json`). Arity-agnostic pair-set comparison only —
 /// see [`AnonEventAuditReport`]'s doc comment for scope.
 #[must_use]
-pub fn run_cdo_event_audit(workspace_root: &Path) -> AnonEventAuditReport {
+pub fn run_cdo_event_audit(workspace_root: &Path, on_drift: DriftHandler) -> AnonEventAuditReport {
     use crate::program::resolve::full::build_context;
 
     let fresh_rows = match build_context(workspace_root) {
@@ -2686,7 +2695,7 @@ pub fn run_cdo_event_audit(workspace_root: &Path) -> AnonEventAuditReport {
         // digest over the golden pairs, drift warning, deanon merge).
         None => Vec::new(),
     };
-    event_audit_from_fresh(&fresh_rows, workspace_root)
+    event_audit_from_fresh(&fresh_rows, workspace_root, on_drift)
 }
 
 /// Substrate-taking core of [`run_cdo_event_audit`] — projects the fresh
@@ -2698,9 +2707,10 @@ pub fn run_cdo_event_audit(workspace_root: &Path) -> AnonEventAuditReport {
 pub fn run_cdo_event_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> AnonEventAuditReport {
     let fresh_rows = crate::program::resolve::differential::project_fresh_event_rows_on(ctx);
-    event_audit_from_fresh(&fresh_rows, workspace_root)
+    event_audit_from_fresh(&fresh_rows, workspace_root, on_drift)
 }
 
 /// Shared audit body of [`run_cdo_event_audit`]/[`run_cdo_event_audit_on`]:
@@ -2712,13 +2722,14 @@ pub fn run_cdo_event_audit_on(
 fn event_audit_from_fresh(
     fresh_rows: &[crate::program::resolve::differential::CanonicalEventRow],
     workspace_root: &Path,
+    on_drift: DriftHandler,
 ) -> AnonEventAuditReport {
     let golden = load_anon_event_golden(&cdo_event_anon_golden_path());
     let golden_loaded = golden.is_some();
     let golden = golden.unwrap_or_default();
     let l3_total = golden.entries.len();
-    if golden_loaded {
-        warn_on_workspace_drift(&golden.metadata, workspace_root);
+    if golden_loaded && let Some(msg) = workspace_drift(&golden.metadata, workspace_root) {
+        on_drift(&msg);
     }
 
     let fresh_total = fresh_rows.len();
@@ -3830,5 +3841,103 @@ codeunit 50808 "EvSub4"
         assert_eq!(report.event_routes_checked, 0);
 
         assert!(report.is_clean());
+    }
+
+    // ── issue #30: the drift-enforcement boundary ───────────────────────────
+    //
+    // The defect: `warn_on_workspace_drift` read `ENFORCE_CDO_WS` from inside
+    // the library and expressed failure with `assert!`.
+    //
+    // These two tests need NO environment variable, and deliberately do not
+    // touch one: `std::env::set_var` is `unsafe` because it races every other
+    // thread in the process, and a mutex shared by two tests does not serialize
+    // libtest's thread pool. The half that genuinely needs `ENFORCE_CDO_WS=1`
+    // set -- proving the library ignores it -- runs in a CHILD PROCESS from
+    // `tests/program_resolve_harness.rs` instead, where the variable can be set
+    // with `Command::env` and affects nothing else.
+
+    /// Records every drift message a check point hands it. A `DriftHandler` is
+    /// a plain `fn` pointer and cannot capture, so the recorder is static.
+    static DRIFT_MSGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    fn recording_handler(msg: &str) {
+        DRIFT_MSGS.lock().unwrap().push(msg.to_string());
+    }
+
+    /// A1 + A6: the helper REPORTS drift and decides nothing -- a value either
+    /// way, never a panic and never a print.
+    #[test]
+    fn issue30_workspace_drift_reports_without_deciding() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Hand-stated precondition: a bare temp directory is not a git checkout
+        // and has no `.alpackages`, so its CURRENT probe is (None, None)/None.
+        assert_eq!(
+            workspace_git_info(tmp.path()),
+            (None, None),
+            "precondition: the temp dir must not be a git checkout"
+        );
+        assert_eq!(dependency_closure_digest(tmp.path()), None);
+
+        // A6: a default stamp is EXACTLY that probe, so stamped == current.
+        assert_eq!(
+            workspace_drift(&MintMetadata::default(), tmp.path()),
+            None,
+            "a matching stamp is not drift"
+        );
+
+        // A1: a stamp naming a SHA differs, so this is drift -- and the call
+        // returns it rather than acting on it.
+        let stamped = MintMetadata {
+            workspace_git_sha: Some("bc3ccb18".to_string()),
+            workspace_dirty: Some(false),
+            dependency_closure_sha256: None,
+        };
+        let msg = workspace_drift(&stamped, tmp.path()).expect("a stamped SHA is drift here");
+        assert!(
+            msg.contains("CDO workspace drifted from the golden mint stamp."),
+            "drift message text changed: {msg}"
+        );
+        assert!(
+            msg.contains("bc3ccb18"),
+            "the message must carry the stamped state: {msg}"
+        );
+    }
+
+    /// A2 + A8 at a REAL check point: the committed trigger golden loads, the
+    /// check point runs, and it calls the handler it was GIVEN -- unaltered --
+    /// rather than deciding anything itself.
+    #[test]
+    fn issue30_check_point_forwards_to_the_supplied_handler() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        DRIFT_MSGS.lock().unwrap().clear();
+        let report =
+            trigger_audit_from_fresh(&SemanticGolden::default(), tmp.path(), recording_handler);
+        let seen = DRIFT_MSGS.lock().unwrap().clone();
+
+        assert!(
+            report.golden_loaded,
+            "precondition: the committed trigger golden must load, or the check \
+             point is never reached and this test proves nothing"
+        );
+        assert_eq!(
+            seen.len(),
+            1,
+            "the check point must invoke the supplied handler exactly once"
+        );
+
+        // The check point reads the COMMITTED golden's own stamp, so it reports
+        // a different (real) drift than any hand-built one. What is pinned is
+        // PASS-THROUGH: the handler receives the helper's output verbatim.
+        let golden_stamp = load_anon_golden(&cdo_trigger_anon_golden_path())
+            .expect("the committed trigger golden must parse")
+            .metadata;
+        let expected =
+            workspace_drift(&golden_stamp, tmp.path()).expect("the pinned CDO stamp is drift here");
+        assert_eq!(
+            seen[0], expected,
+            "the check point must pass the helper's message through unaltered"
+        );
     }
 }
