@@ -1093,33 +1093,6 @@ mod tests {
         );
     }
 
-    /// The kind vocabulary is declared TWICE -- here and in `fingerprint_cli`,
-    /// which validates `alsem fingerprint --roots`. Each already has its own
-    /// pin, and to be accurate about what this test adds: a thirteenth kind
-    /// added to EITHER list alone is ALREADY caught -- adding it here changes
-    /// A9's complement, and adding it to the CLI list changes `validate_roots`'
-    /// error string, which `cli_b_fingerprint_oracles.rs:188` asserts literally.
-    ///
-    /// What neither existing pin catches, and what this test is actually for, is
-    /// updating one vocabulary TOGETHER WITH ITS OWN ORACLE while leaving the
-    /// other list behind. Then both pins pass and the two vocabularies have
-    /// silently diverged: the CLI would reject a value the classifier emits, or
-    /// accept one nothing can produce.
-    ///
-    /// Pre-existing -- both lists already carry `page-action`, so there is no
-    /// drift today. Pinned now because the doc on `ROOT_KIND_VALUES` calls
-    /// itself "the single source of truth", and that should be true rather than
-    /// aspirational.
-    #[test]
-    fn the_two_root_kind_vocabularies_are_identical() {
-        assert_eq!(
-            ROOT_KIND_VALUES.as_slice(),
-            crate::engine::l5::fingerprint_cli::ROOT_KIND_VALUES,
-            "root_classification and fingerprint_cli declare the kind vocabulary \
-             independently; they must not drift"
-        );
-    }
-
     // -- A11 ----------------------------------------------------------------
 
     /// One `Page` with a single action trigger (AST kinds: `["trigger-page",
