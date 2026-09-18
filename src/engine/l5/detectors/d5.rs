@@ -12,6 +12,7 @@ use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
+use crate::engine::l5::detectors::{advance_discipline_holds, whole_set_break};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -43,6 +44,7 @@ pub fn detect_d5(
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
     let mut skipped_other = 0u64;
+    let mut skipped_traversal = 0u64;
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -105,11 +107,37 @@ pub fn detect_d5(
             let modify = modify_ops[0];
 
             // All other ops must be filter/load-state setters or Next.
+            //
+            // This gate is by op NAME and stays exactly as it was: it is what
+            // rejects `Delete`/`Insert`/`Validate`/`Get`, and its scope is ALL
+            // ops in the loop, not only the driver's.
             let all_allowed = ops_in_loop
                 .iter()
                 .filter(|op| op.id != modify.id)
                 .all(|op| ALLOWED_OTHER_OPS.contains(&op.op.as_str()));
             if !all_allowed {
+                continue;
+            }
+
+            // issue #21: a name is not enough. `Next(1)` and `Next(2)` share
+            // one, and a `SetRange` on a literal differs from one on the
+            // current row — so the ops that PASSED the list above still have
+            // to be judged by what they do to the traversal. These checks only
+            // ever remove candidates.
+            //
+            // Scoped to the DRIVER's ops: a filter on some other record
+            // variable does not change this loop's selected set.
+            if !advance_discipline_holds(&ops_in_loop, &driver, &loop_info.id) {
+                skipped_traversal += 1;
+                continue;
+            }
+            let traversal_broken = ops_in_loop.iter().any(|op| {
+                op.id != modify.id
+                    && op.record_variable_name.to_lowercase() == driver
+                    && whole_set_break(op, &loop_info.id).is_some()
+            });
+            if traversal_broken {
+                skipped_traversal += 1;
                 continue;
             }
 
@@ -219,6 +247,7 @@ pub fn detect_d5(
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("other", skipped_other);
+    stats.add_skip("traversal", skipped_traversal);
     Ok(DetectorOutput {
         findings,
         stats,

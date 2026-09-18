@@ -167,6 +167,8 @@
               "kind": "known",
               "value": false
             },
+            "fieldArguments": [],
+            "fieldArgumentInfos": [],
             "loopStack": [
               "r0/119282c0acba03444896fb40cb7ee2e57a298f77ceb48a71a4e0f5f93c21c2e4/loop0"
             ],
@@ -614,6 +616,8 @@
               "kind": "known",
               "value": false
             },
+            "fieldArguments": [],
+            "fieldArgumentInfos": [],
             "loopStack": [
               "r0/e1ce44892a000e331746290c24604d4055839874bbfadf3424a5f6f2d310d343/loop0"
             ],

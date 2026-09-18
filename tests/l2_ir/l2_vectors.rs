@@ -4,8 +4,17 @@
 //! real al-sem L2 over inline single-file workspaces) and asserts the Rust body
 //! walker reproduces each vector family's `expectedFeatures` EXACTLY.
 //!
-//! The vectors are the oracle: a failure means the Rust port diverged from
-//! al-sem, and the fix is in the Rust code (never the vector).
+//! **These vectors were minted from al-sem, and al-sem is RETIRED.** They are
+//! now Rust-owned baselines like every other golden here: when this engine is
+//! intentionally more accurate than al-sem was, the correct move is to
+//! rebaseline the vector, NOT to chase al-sem (CLAUDE.md, "Testing Philosophy
+//! & Goldens"). A failure is still a defect until proven otherwise — read the
+//! diff and establish WHY it moved before touching this file.
+//!
+//! Unlike its sibling families this file has NO regen path, so a legitimate
+//! rebaseline is edited by hand. Issue #21 did exactly that: `Next` gained an
+//! argument list at L2, and two vectors gained an empty `fieldArguments`/
+//! `fieldArgumentInfos` pair each.
 //!
 //! Reproduction context (from `scripts/gen-l2-vectors.ts`):
 //!   - app.json id  = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"  (appGuid)

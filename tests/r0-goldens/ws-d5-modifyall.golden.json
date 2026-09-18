@@ -15,12 +15,108 @@
   ],
   "routines": [
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#0361a6d5ca610be7b51b8506a69d6e511dc24ff00b8615fe5577ed094daefa35",
+      "name": "BodyAdvanceSkipsRows",
+      "kind": "procedure",
+      "signatureFingerprint": "0361a6d5ca610be7b51b8506a69d6e511dc24ff00b8615fe5577ed094daefa35",
+      "normalizedSignatureHash": "0361a6d5ca610be7b51b8506a69d6e511dc24ff00b8615fe5577ed094daefa35",
+      "canonicalSignatureText": "bodyadvanceskipsrows():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#076f7ca13be87bc900b64d1e87b4d166923b454cad7697fbd3a6294446b62060",
+      "name": "MultiStepAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "076f7ca13be87bc900b64d1e87b4d166923b454cad7697fbd3a6294446b62060",
+      "normalizedSignatureHash": "076f7ca13be87bc900b64d1e87b4d166923b454cad7697fbd3a6294446b62060",
+      "canonicalSignatureText": "multistepadvance():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#0ec41adbdfaa67e314934df9514fd67f61a7c9f99f495c2aeab83728667b655a",
+      "name": "InLoopSetCurrentKey",
+      "kind": "procedure",
+      "signatureFingerprint": "0ec41adbdfaa67e314934df9514fd67f61a7c9f99f495c2aeab83728667b655a",
+      "normalizedSignatureHash": "0ec41adbdfaa67e314934df9514fd67f61a7c9f99f495c2aeab83728667b655a",
+      "canonicalSignatureText": "inloopsetcurrentkey():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#11b92797a9e67dc9b65bd0221a32a89b7b9021e128450b70c861838631d63fd6",
+      "name": "InLoopLoadFields",
+      "kind": "procedure",
+      "signatureFingerprint": "11b92797a9e67dc9b65bd0221a32a89b7b9021e128450b70c861838631d63fd6",
+      "normalizedSignatureHash": "11b92797a9e67dc9b65bd0221a32a89b7b9021e128450b70c861838631d63fd6",
+      "canonicalSignatureText": "inlooploadfields():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#446047540725c7f4d5a15369b7e74ae7db1e59a7827c54b85fb9364501172bc3",
+      "name": "InLoopSetRange",
+      "kind": "procedure",
+      "signatureFingerprint": "446047540725c7f4d5a15369b7e74ae7db1e59a7827c54b85fb9364501172bc3",
+      "normalizedSignatureHash": "446047540725c7f4d5a15369b7e74ae7db1e59a7827c54b85fb9364501172bc3",
+      "canonicalSignatureText": "inloopsetrange():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#552c96766629514154f359f9dd48c85c019a075a316c0e167d760c3156a90953",
+      "name": "ZeroStepAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "552c96766629514154f359f9dd48c85c019a075a316c0e167d760c3156a90953",
+      "normalizedSignatureHash": "552c96766629514154f359f9dd48c85c019a075a316c0e167d760c3156a90953",
+      "canonicalSignatureText": "zerostepadvance():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
+      "name": "InLoopSetFilter",
+      "kind": "procedure",
+      "signatureFingerprint": "787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
+      "normalizedSignatureHash": "787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
+      "canonicalSignatureText": "inloopsetfilter():"
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#8eede75440d2ac0e0a639ec4c4b9fea900368574a32a8c0a623b77c406ee274c",
       "name": "SafeLoop",
       "kind": "procedure",
       "signatureFingerprint": "8eede75440d2ac0e0a639ec4c4b9fea900368574a32a8c0a623b77c406ee274c",
       "normalizedSignatureHash": "8eede75440d2ac0e0a639ec4c4b9fea900368574a32a8c0a623b77c406ee274c",
       "canonicalSignatureText": "safeloop():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#9022c4c0b9554ba9e15dfad0477644c072d2bab65a9f5939548410c93875b80b",
+      "name": "VariableStepAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "9022c4c0b9554ba9e15dfad0477644c072d2bab65a9f5939548410c93875b80b",
+      "normalizedSignatureHash": "9022c4c0b9554ba9e15dfad0477644c072d2bab65a9f5939548410c93875b80b",
+      "canonicalSignatureText": "variablestepadvance(integer):"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#c75c47073a5d4aaa7f85748b12910b363a50487d965f20033d54a25e0bacc64f",
+      "name": "SignedStepAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "c75c47073a5d4aaa7f85748b12910b363a50487d965f20033d54a25e0bacc64f",
+      "normalizedSignatureHash": "c75c47073a5d4aaa7f85748b12910b363a50487d965f20033d54a25e0bacc64f",
+      "canonicalSignatureText": "signedstepadvance():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#c7e8f60a7a2a6a89c27325d8638a4dc0bad649779fd5187924b344d9b50caba1",
+      "name": "InLoopDelete",
+      "kind": "procedure",
+      "signatureFingerprint": "c7e8f60a7a2a6a89c27325d8638a4dc0bad649779fd5187924b344d9b50caba1",
+      "normalizedSignatureHash": "c7e8f60a7a2a6a89c27325d8638a4dc0bad649779fd5187924b344d9b50caba1",
+      "canonicalSignatureText": "inloopdelete():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#d6f7ad324a24d0e7fa99684d5d6575ffa99bb61f4d05c83a6b925a6fc91a382e",
+      "name": "UnitStepAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "d6f7ad324a24d0e7fa99684d5d6575ffa99bb61f4d05c83a6b925a6fc91a382e",
+      "normalizedSignatureHash": "d6f7ad324a24d0e7fa99684d5d6575ffa99bb61f4d05c83a6b925a6fc91a382e",
+      "canonicalSignatureText": "unitstepadvance():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d",
+      "name": "InLoopValidate",
+      "kind": "procedure",
+      "signatureFingerprint": "f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d",
+      "normalizedSignatureHash": "f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d",
+      "canonicalSignatureText": "inloopvalidate():"
     },
     {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#fb7a8c745a9c558d5e375fbda79681bcc79c2beb5548e44eb977a6839fe1f5e1",

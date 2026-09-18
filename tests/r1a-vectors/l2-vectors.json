@@ -2590,6 +2590,8 @@
             "id": "r0/eff9ee982afb5d8c6233a4f6850b85176bf03b84576ff435bf5bb73010ff85ad/op2",
             "op": "Next",
             "recordVariableName": "Cust",
+          "fieldArguments": [],
+          "fieldArgumentInfos": [],
             "tempState": {
               "kind": "parameter-dependent",
               "parameterIndex": 0
@@ -3175,6 +3177,8 @@
             "id": "r0/39c148af80fc7d551f1d039a2a9464cae205e09c30b4ba55e8db13f15f4bf845/op6",
             "op": "Next",
             "recordVariableName": "Cust",
+          "fieldArguments": [],
+          "fieldArgumentInfos": [],
             "tempState": {
               "kind": "parameter-dependent",
               "parameterIndex": 0

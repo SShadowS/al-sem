@@ -458,6 +458,8 @@
               "kind": "known",
               "value": false
             },
+            "fieldArguments": [],
+            "fieldArgumentInfos": [],
             "loopStack": [
               "r0/914cf7c14f020bd17957dc1073102cac70c639f846f09ac731cf71376ddaa9cc/loop0"
             ],

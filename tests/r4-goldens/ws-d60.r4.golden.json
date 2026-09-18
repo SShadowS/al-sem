@@ -3,7 +3,7 @@
   "detectors": [
     "d60-upgrade-loop-should-be-datatransfer"
   ],
-  "findingCount": 1,
+  "findingCount": 2,
   "findings": [
     {
       "detector": "d60-upgrade-loop-should-be-datatransfer",
@@ -80,6 +80,82 @@
         }
       ],
       "fingerprint": "74796668bfdd6711"
+    },
+    {
+      "detector": "d60-upgrade-loop-should-be-datatransfer",
+      "id": "d60/11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/loop0/11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/op1",
+      "rootCauseKey": "d60/11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/loop0/item",
+      "title": "Row-by-row upgrade loop (use DataTransfer)",
+      "rootCause": "UpgradeUnitStepAdvance (upgrade/install codeunit) rewrites D60 Item row-by-row in a repeat loop — DataTransfer performs the same bulk init/copy set-based, without per-row trigger cost.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 185,
+          "startColumn": 16,
+          "endLine": 185,
+          "endColumn": 29
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 183,
+              "startColumn": 12,
+              "endLine": 186,
+              "endColumn": 34
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop over D60 Item",
+          "loopId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 185,
+              "startColumn": 16,
+              "endLine": 185,
+              "endColumn": 29
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7",
+            "syntaxKind": "call_expression"
+          },
+          "note": "per-row Modify",
+          "operationId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/op1",
+          "loopId": "11111111-0000-0000-0000-00000000d600:Codeunit:50934#fd378c79c71eb3c4902157d095a2d8a49c47e8132f5ea90e5e69647b8c8288a7/loop0"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d600:Codeunit:50934"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d600:Table:50934"
+      ],
+      "fixOptions": [
+        {
+          "description": "Replace the loop with a DataTransfer (SourceTable/DestinationTable + CopyFields/ConstantValue), or ModifyAll when a single field gets a constant.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "e087e8e80bc21b77"
     }
   ]
 }

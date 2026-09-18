@@ -828,6 +828,111 @@ pub(crate) fn is_terminator_next(op: &L3RecordOperation) -> bool {
     op.op == "Next" && op.in_until_condition
 }
 
+/// Why an in-loop companion op defeats a whole-set claim. `None` = no veto.
+///
+/// **This is NOT an eligibility test.** d5 keeps its own `ALLOWED_OTHER_OPS`
+/// gate, which rejects `Delete`/`Insert`/`Validate`/`Get` and everything else
+/// off that list; this predicate only ever VETOES ops that already passed it.
+/// Making it the sole gate would newly ACCEPT those ops — it returns `None`
+/// for anything it does not name — which would trade three false positives for
+/// a new class of them (issue #21 spec panel, B2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WholeSetBreak {
+    /// The loop does not visit every row (`Next(2)`, or an extra body advance).
+    SkipsRows,
+    /// The selected set is changed mid-iteration (`SetRange`/`SetFilter`).
+    ChangesSet,
+    /// The traversal order is changed mid-iteration (`SetCurrentKey`).
+    ChangesOrder,
+}
+
+/// `true` when this `Next` is an ordinary one-row advance.
+///
+/// Three states, deliberately distinct (issue #21, B6):
+/// * `Some([])` — captured, and there genuinely are no arguments → eligible.
+/// * `Some([one integer literal "1"])` → eligible.
+/// * anything else, **including `None`** → not eligible. `None` means the
+///   argument information is unavailable, which must never be read as "no
+///   arguments": before #21 every `Next` carried `None`, and reading that as
+///   an empty list is exactly the bug.
+///
+/// `value` is the literal's RAW source text (`l2::ir_walk`'s
+/// `ir_expression_info`), so `Next(+1)` and `Next(-1)` lower to unary
+/// expressions rather than `Literal::Int` and are correctly rejected, as are
+/// `Next(0)`, `Next(Step)` and any other expression.
+pub(crate) fn is_unit_advance(op: &L3RecordOperation) -> bool {
+    match op.field_argument_infos.as_deref() {
+        Some([]) => true,
+        Some([only]) => only.kind == "integer" && only.value.as_deref() == Some("1"),
+        _ => false,
+    }
+}
+
+/// The traversal veto for one in-loop companion op on the loop's driver.
+///
+/// `Next` is judged by [`is_unit_advance`] plus placement: an advance that is
+/// not the candidate loop's own terminator is an EXTRA advance, so the loop
+/// skips rows even when every advance is unit-step. Cardinality ("exactly one")
+/// is the caller's job — see [`advance_discipline_holds`] — because a
+/// per-op predicate cannot count.
+pub(crate) fn whole_set_break(
+    op: &L3RecordOperation,
+    candidate_loop: &str,
+) -> Option<WholeSetBreak> {
+    match op.op.as_str() {
+        "Next" => {
+            let owns_terminator =
+                is_terminator_next(op) && op.loop_stack.last().is_some_and(|l| l == candidate_loop);
+            if owns_terminator && is_unit_advance(op) {
+                None
+            } else {
+                Some(WholeSetBreak::SkipsRows)
+            }
+        }
+        "SetRange" | "SetFilter" => Some(WholeSetBreak::ChangesSet),
+        "SetCurrentKey" => Some(WholeSetBreak::ChangesOrder),
+        // `Reset` clears the filters AND the key; `Copy` replaces the record's
+        // whole state including both. Either mid-iteration and the "rest of
+        // the set" is a different set.
+        "Reset" | "Copy" => Some(WholeSetBreak::ChangesSet),
+        // A second retrieval on the DRIVER repositions the cursor, so the loop
+        // stops visiting the rows it was going to visit.
+        "Find" | "FindFirst" | "FindLast" | "FindSet" | "Get" => Some(WholeSetBreak::SkipsRows),
+        // SetLoadFields/AddLoadFields change which COLUMNS are fetched, not
+        // which rows or in what order.
+        //
+        // Everything else returns no veto, which is safe for d5 because its
+        // `ALLOWED_OTHER_OPS` gate rejects it first. d60 has NO such gate, so
+        // the arms above are the only thing standing between it and a driver
+        // op that breaks traversal — which is why `Reset`/`Copy`/`Find*`/`Get`
+        // are named here rather than left to a caller that does not check.
+        // Write-class ops on the driver (`Delete`, `Insert`, `ModifyAll`,
+        // `DeleteAll`, `Validate`) are a DIFFERENT gap: d5 name-rejects them
+        // and d60 does not gate them at all. That is pre-existing and is
+        // recorded as such (issue #21 spec panel, B10) rather than widened
+        // here under cover of a traversal fix.
+        _ => None,
+    }
+}
+
+/// Exactly one advance on `driver` inside `candidate_loop`, and it is that
+/// loop's own unit-step terminator.
+///
+/// Counting is separate from [`whole_set_break`] because a per-op predicate
+/// cannot see the other ops (issue #21, B10). Zero advances is also a failure:
+/// a loop with no advance on the driver is not a whole-set traversal.
+pub(crate) fn advance_discipline_holds(
+    ops_in_loop: &[&L3RecordOperation],
+    driver: &str,
+    candidate_loop: &str,
+) -> bool {
+    let advances: Vec<_> = ops_in_loop
+        .iter()
+        .filter(|op| op.op == "Next" && op.record_variable_name.to_lowercase() == driver)
+        .collect();
+    advances.len() == 1 && whole_set_break(advances[0], candidate_loop).is_none()
+}
+
 /// `temp_state.kind === "known" && value === true`. A `None` temp_state (al-sem
 /// always sets `{kind:"unknown"}`) is NOT a known-temp. Shared by d1 and d2
 /// (and mirrors d33's inline gate): an op provably on a temporary record does no
@@ -1249,4 +1354,142 @@ pub fn registered_detectors() -> Vec<Detector> {
             requires: 0,
         },
     ]
+}
+
+#[cfg(test)]
+mod issue21_predicate_tests {
+    use super::*;
+    use crate::engine::l2::features::{PAnchor, PExpressionInfo};
+
+    /// Hand-stated: an op is built literally, never asked of production code.
+    /// The `None` case below is the reason this test has to exist at all --
+    /// see the module test's doc.
+    fn next_op(args: Option<Vec<PExpressionInfo>>) -> L3RecordOperation {
+        L3RecordOperation {
+            id: "op0".to_string(),
+            op: "Next".to_string(),
+            record_variable_name: "R".to_string(),
+            record_variable_id: None,
+            table_id: None,
+            temp_state: None,
+            field_arguments: args
+                .as_ref()
+                .map(|v| v.iter().map(|i| i.text.clone()).collect()),
+            field_argument_infos: args,
+            source_anchor: PAnchor {
+                source_unit_id: "ws:probe.al".to_string(),
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 9,
+                syntax_kind: "call_expression".to_string(),
+            },
+            loop_stack: vec!["loop0".to_string()],
+            in_until_condition: true,
+            run_trigger: None,
+        }
+    }
+
+    fn info(kind: &str, value: &str) -> PExpressionInfo {
+        PExpressionInfo {
+            kind: kind.to_string(),
+            text: value.to_string(),
+            value: Some(value.to_string()),
+            qualifier: None,
+            member: None,
+        }
+    }
+
+    /// B6's tri-state, pinned directly.
+    ///
+    /// **This is the only place the `None` arm can be pinned.** End-to-end it
+    /// is no longer reachable: adding `"Next"` to `FIELD_ARGS_OPS` means L2
+    /// now ALWAYS captures, so `None` never occurs in any fixture and a future
+    /// edit making it eligible -- the actual bug direction -- would move no
+    /// golden at all. Before that change every `Next` carried `None`, and
+    /// reading it as "no arguments" is precisely the defect issue #21 fixes.
+    #[test]
+    fn issue21_unit_advance_is_a_tri_state_and_none_is_not_empty() {
+        // captured, genuinely no arguments -> an ordinary advance
+        assert!(is_unit_advance(&next_op(Some(vec![]))));
+
+        // captured, exactly the integer literal 1 -> an ordinary advance
+        assert!(is_unit_advance(&next_op(Some(vec![info("integer", "1")]))));
+
+        // UNAVAILABLE -- must never be read as "no arguments"
+        assert!(
+            !is_unit_advance(&next_op(None)),
+            "None means the argument info is unavailable, not that there are no arguments"
+        );
+
+        // every other shape
+        assert!(!is_unit_advance(&next_op(Some(vec![info("integer", "2")]))));
+        assert!(!is_unit_advance(&next_op(Some(vec![info("integer", "0")]))));
+        assert!(!is_unit_advance(&next_op(Some(vec![info(
+            "integer", "01"
+        )]))));
+        assert!(!is_unit_advance(&next_op(Some(vec![info(
+            "unary_expression",
+            "-1"
+        )]))));
+        assert!(!is_unit_advance(&next_op(Some(vec![info(
+            "identifier",
+            "Step"
+        )]))));
+        assert!(!is_unit_advance(&next_op(Some(vec![
+            info("integer", "1"),
+            info("integer", "1"),
+        ]))));
+    }
+
+    /// The veto's traversal arms, including the ones d60 has no other gate for.
+    #[test]
+    fn issue21_traversal_veto_names_every_op_d60_has_no_gate_for() {
+        let mut op = next_op(Some(vec![]));
+        for (name, expected) in [
+            ("SetRange", Some(WholeSetBreak::ChangesSet)),
+            ("SetFilter", Some(WholeSetBreak::ChangesSet)),
+            ("Reset", Some(WholeSetBreak::ChangesSet)),
+            ("Copy", Some(WholeSetBreak::ChangesSet)),
+            ("SetCurrentKey", Some(WholeSetBreak::ChangesOrder)),
+            ("Find", Some(WholeSetBreak::SkipsRows)),
+            ("FindFirst", Some(WholeSetBreak::SkipsRows)),
+            ("FindLast", Some(WholeSetBreak::SkipsRows)),
+            ("FindSet", Some(WholeSetBreak::SkipsRows)),
+            ("Get", Some(WholeSetBreak::SkipsRows)),
+            ("SetLoadFields", None),
+            ("AddLoadFields", None),
+        ] {
+            op.op = name.to_string();
+            assert_eq!(
+                whole_set_break(&op, "loop0"),
+                expected,
+                "{name} classified wrongly"
+            );
+        }
+    }
+
+    /// An advance that is not THIS loop's terminator skips rows even at unit
+    /// step -- the property no argument predicate can establish.
+    #[test]
+    fn issue21_an_advance_outside_this_loops_terminator_skips_rows() {
+        let mut op = next_op(Some(vec![]));
+
+        // the candidate loop's own terminator: fine
+        assert_eq!(whole_set_break(&op, "loop0"), None);
+
+        // same op, but the candidate is a DIFFERENT loop -- a nested loop's
+        // terminator is not its parent's
+        assert_eq!(
+            whole_set_break(&op, "outer"),
+            Some(WholeSetBreak::SkipsRows)
+        );
+
+        // in the body rather than the terminator
+        op.in_until_condition = false;
+        assert_eq!(
+            whole_set_break(&op, "loop0"),
+            Some(WholeSetBreak::SkipsRows)
+        );
+    }
 }
