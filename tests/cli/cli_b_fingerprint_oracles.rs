@@ -199,6 +199,25 @@ fn item3_valid_root_kinds_pass() {
     assert_eq!(ok, vec!["public-procedure", "event-subscriber"]);
 }
 
+/// #10: the CLI validator and the classifier share ONE vocabulary, so every kind the
+/// classifier can emit must be accepted by `--roots`.
+///
+/// This is the test that a divergence would break, and the shape matters: it asserts
+/// every canonical value is ACCEPTED. A stale CLI copy MISSING a value fails here. A
+/// stale copy with an EXTRA value would not — that direction is covered by
+/// `item3_unknown_root_kind_errors_exit1`, which pins the exact valid-list text.
+#[test]
+fn item3_every_classifier_root_kind_is_accepted_by_the_cli() {
+    let all: Vec<String> = al_sem::engine::root_classification::ROOT_KIND_VALUES
+        .iter()
+        .map(|k| (*k).to_string())
+        .collect();
+    let ok = validate_roots(&all).unwrap_or_else(|e| {
+        panic!("classifier emits a kind the CLI validator rejects: {e}");
+    });
+    assert_eq!(ok, all);
+}
+
 // ===========================================================================
 // Item 4 — --witness range (normalizeWitness, fingerprint.ts:86).
 // ===========================================================================

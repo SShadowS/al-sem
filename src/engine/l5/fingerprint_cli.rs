@@ -71,22 +71,16 @@ impl FingerprintFormat {
 // `alsem.rs` delegates to them so the exact exit codes + stderr strings match.
 // ===========================================================================
 
-/// `ROOT_KIND_VALUES` (model/root-classification.ts) — the valid `--roots` values,
-/// in declaration order (used verbatim in the `validateRoots` error message).
-pub const ROOT_KIND_VALUES: &[&str] = &[
-    "trigger-table",
-    "trigger-page",
-    "page-action",
-    "report-trigger",
-    "event-subscriber",
-    "install-codeunit",
-    "upgrade-codeunit",
-    "api-page",
-    "web-service-exposed",
-    "job-queue-entrypoint",
-    "public-procedure",
-    "test-procedure",
-];
+/// The valid `--roots` values, in declaration order (used verbatim in the
+/// `validateRoots` error message).
+///
+/// SINGLE DEFINITION, deliberately. This module used to restate the twelve values
+/// verbatim, so adding a kind to the classifier made the engine emit something the
+/// shipped `alsem fingerprint --roots <kind>` refused as "unknown root kind". The
+/// lists never actually diverged, but nothing prevented it -- and a test can only
+/// observe that they currently agree, never that they must. Importing the one
+/// definition makes divergence unrepresentable instead of detectable (#10).
+use crate::engine::root_classification::ROOT_KIND_VALUES;
 
 /// `validateRoots` (fingerprint.ts:67). Each value must be in `ROOT_KIND_VALUES`,
 /// else exit-1 with `unknown root kind '<v>'; valid: <a, b, ...>`.
