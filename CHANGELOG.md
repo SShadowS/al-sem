@@ -175,9 +175,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Three of the seven entry points — the `&Path`-taking wrappers — had NO callers anywhere
     in the tree and were referenced only from doc comments. They were threaded like the rest
     rather than deleted, because deleting public API is not this issue's scope; filed as a
-    discovery instead. `run_cdo_trigger_audit` now has one real caller, the enforcement probe
-    in `tests/program_resolve_harness.rs`; `run_cdo_semantic_audit` and `run_cdo_event_audit`
-    still have none and are checked by the compiler alone.
+    discovery instead. `run_cdo_trigger_audit` and `run_cdo_event_audit` now each have one real
+    caller, the enforcement probe in `tests/program_resolve_harness.rs`, which drives both of
+    their drift check points and counts the handler calls. `run_cdo_semantic_audit` returns
+    before its check point on an empty directory, so it still has no caller and its check point
+    is reached only by the CDO-gated tests, where the stamp matches. That is a stated gap, not a
+    pinned one.
+  - **The handler is tested in all three environment states**: unset (every developer's shell),
+    `"0"`, and `"1"`. Testing only two let a wrongly-written handler through twice during review
+    -- once one that panicked when the variable was absent, once one that panicked whenever it
+    was present. Seven ways around these assertions were found in review; each is now a recorded
+    mutation that fails the suite.
 
 - **`post-merge` runs its gates on the MERGE COMMIT in a disposable worktree**
   instead of checking that SHA out in the shared checkout, and the shared

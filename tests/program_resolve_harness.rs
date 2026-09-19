@@ -2971,7 +2971,10 @@ const PROBE_DONE: &str = "issue30-probe-completed";
 
 /// Set by the library probe's drift handler. A probe that never reached its
 /// check point must not report success.
-static PROBE_SAW_DRIFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Counts handler calls, so each library check point the probe drives is
+/// pinned on its own: a check point that silently stopped calling the handler
+/// would leave the count one short.
+static PROBE_DRIFT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Child entry point: emit the handler's output so a driver can capture it.
 /// A no-op unless this process was spawned as a probe child.
@@ -2995,7 +2998,7 @@ fn child_probe_library_under_enforcement() {
     }
 
     fn record(_msg: &str) {
-        PROBE_SAW_DRIFT.store(true, Ordering::SeqCst);
+        PROBE_DRIFT_CALLS.fetch_add(1, Ordering::SeqCst);
     }
 
     // If the driver did not actually set enforcement, this probe proves nothing
@@ -3015,9 +3018,25 @@ fn child_probe_library_under_enforcement() {
         "precondition: the committed trigger golden must load, or the drift check \
          point is never reached"
     );
+    assert_eq!(
+        PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
+        1,
+        "the trigger audit's drift check point must have fired against a temp dir"
+    );
+
+    // The EVENT audit's check point too. Its path wrapper falls through to the
+    // check point on an empty directory, so it can be driven here; the semantic
+    // audit's returns before its check point and would need a real fixture.
+    let report = al_sem::program::resolve::semantic_golden::run_cdo_event_audit(tmp.path(), record);
     assert!(
-        PROBE_SAW_DRIFT.load(Ordering::SeqCst),
-        "precondition: the drift check point must have fired against a temp dir"
+        report.golden_loaded,
+        "precondition: the committed event golden must load, or its drift check \
+         point is never reached"
+    );
+    assert_eq!(
+        PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
+        2,
+        "the event audit's drift check point must have fired as well"
     );
     println!("{PROBE_DONE}");
 }
@@ -3073,17 +3092,27 @@ fn run_probe_with_enforcement(probe: &str, enforce: Option<&str>) -> (bool, Stri
 fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
     let warning = format!("WARNING: {DRIFT_SENTINEL}");
 
-    // A3: ungated, the handler warns ON STDERR and execution continues.
-    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", None);
-    assert!(ok, "ungated, drift must warn and continue:\n{err}");
-    assert!(
-        out.contains(PROBE_DONE),
-        "the ungated child never reported completing the probe:\n{out}\n{err}"
-    );
-    assert!(
-        err.contains(&warning),
-        "ungated, the WARNING line must be emitted on STDERR (stdout was:\n{out}\nstderr was:\n{err})"
-    );
+    // A3: ungated, the handler warns ON STDERR and execution continues -- in
+    // BOTH ungated states. Unset is what every developer runs; "0" is set but
+    // not "1". Testing only one of them lets a handler that checks the wrong
+    // thing pass: one that panics when the variable is ABSENT passes a "0"-only
+    // test, and one that panics whenever it is PRESENT passes an unset-only test.
+    for (label, enforce) in [("unset", None), ("\"0\"", Some("0"))] {
+        let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", enforce);
+        assert!(
+            ok,
+            "ungated ({label}), drift must warn and continue:\n{err}"
+        );
+        assert!(
+            out.contains(PROBE_DONE),
+            "the ungated ({label}) child never reported completing the probe:\n{out}\n{err}"
+        );
+        assert!(
+            err.contains(&warning),
+            "ungated ({label}), the WARNING line must be emitted on STDERR \
+             (stdout was:\n{out}\nstderr was:\n{err})"
+        );
+    }
 
     // A4 + A5: gated, the run fails carrying the message, and the WARNING line
     // is emitted on NEITHER stream.
@@ -3105,6 +3134,16 @@ fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
         !err.contains(WARNING_PREFIX) && !out.contains(WARNING_PREFIX),
         "under enforcement NO `WARNING:` line may be emitted, but one was \
          (stdout:\n{out}\nstderr:\n{err})"
+    );
+    // A differently-worded duplicate -- `eprintln!("warning: {msg}")` -- dodges a
+    // prefix check. The one thing every duplicate shares is the message itself,
+    // so under enforcement it must appear exactly ONCE across both streams: in
+    // the panic, and nowhere else.
+    let occurrences = out.matches(DRIFT_SENTINEL).count() + err.matches(DRIFT_SENTINEL).count();
+    assert_eq!(
+        occurrences, 1,
+        "under enforcement the drift message must appear exactly once (in the \
+         failure), but it appeared {occurrences} times (stdout:\n{out}\nstderr:\n{err})"
     );
     assert!(
         !out.contains(PROBE_DONE),
@@ -3130,6 +3169,15 @@ fn library_ignores_enforcement_env() {
         "the child exited 0 but never reported completing the probe -- libtest also \
          exits 0 when a filter matches nothing, so this assertion is what separates \
          'the library returned' from 'nothing ran':\n{out}\n{err}"
+    );
+    // The handler in this probe records and prints nothing, so any `WARNING:`
+    // here can only have come from the library. A1 is "the library decides
+    // nothing", and printing is deciding: a check point that went back to
+    // `eprintln!` would pass every other assertion.
+    assert!(
+        !err.contains(WARNING_PREFIX) && !out.contains(WARNING_PREFIX),
+        "the library itself printed a warning; only the caller's handler may \
+         (stdout:\n{out}\nstderr:\n{err})"
     );
 }
 

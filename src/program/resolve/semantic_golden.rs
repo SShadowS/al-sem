@@ -2376,7 +2376,7 @@ pub fn run_cdo_semantic_audit(
 /// Substrate-taking core of [`run_cdo_semantic_audit`] — reads the program
 /// graph from `ctx` and the resolved edges from `report` instead of
 /// rebuilding the snapshot/graph/resolve pass internally. `workspace_root`
-/// is still needed for the golden-drift warning stamp.
+/// is still needed to check the golden's mint stamp for drift.
 #[must_use]
 pub fn run_cdo_semantic_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -2612,7 +2612,7 @@ pub fn run_cdo_trigger_audit_on(
 }
 
 /// Shared audit body of [`run_cdo_trigger_audit`]/[`run_cdo_trigger_audit_on`]:
-/// everything downstream of minting the fresh golden (golden load, drift warn,
+/// everything downstream of minting the fresh golden (golden load, drift check,
 /// anonymize, diff, deanon merge, digest). Taking the fresh side as a
 /// parameter keeps the path wrapper's build-failure arm behavior-identical to
 /// the pre-split body (empty fresh side, audit still runs).
@@ -2692,7 +2692,7 @@ pub fn run_cdo_event_audit(workspace_root: &Path, on_drift: DriftHandler) -> Ano
         // Build failure: proceed with an EMPTY fresh side, exactly as the
         // pre-split body did (its `project_fresh_event_rows` returned an
         // empty vec on snapshot failure and the audit still ran — non-empty
-        // digest over the golden pairs, drift warning, deanon merge).
+        // digest over the golden pairs, drift check, deanon merge).
         None => Vec::new(),
     };
     event_audit_from_fresh(&fresh_rows, workspace_root, on_drift)
@@ -2715,7 +2715,7 @@ pub fn run_cdo_event_audit_on(
 
 /// Shared audit body of [`run_cdo_event_audit`]/[`run_cdo_event_audit_on`]:
 /// everything downstream of projecting the fresh EventFlow rows (golden load,
-/// drift warn, anonymize, deanon merge, pair-set diff, digest). Taking the
+/// drift check, anonymize, deanon merge, pair-set diff, digest). Taking the
 /// fresh side as a parameter keeps the path wrapper's build-failure arm
 /// behavior-identical to the pre-split body (empty fresh side, audit still
 /// runs).
