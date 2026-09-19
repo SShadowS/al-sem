@@ -181,11 +181,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before its check point on an empty directory, so it still has no caller and its check point
     is reached only by the CDO-gated tests, where the stamp matches. That is a stated gap, not a
     pinned one.
-  - **The handler is tested in all three environment states**: unset (every developer's shell),
-    `"0"`, and `"1"`. Testing only two let a wrongly-written handler through twice during review
-    -- once one that panicked when the variable was absent, once one that panicked whenever it
-    was present. Seven ways around these assertions were found in review; each is now a recorded
-    mutation that fails the suite.
+  - **The handler is tested with the variable unset, `"0"`, `"true"` and `"1"`.** The rule is
+    `== "1"`, so every state but the last must warn and continue. Each state catches a different
+    wrongly-written handler that got through review at some point: one that panicked when the
+    variable was absent, one that checked presence, and one that enforced on any value but `"0"`.
+    Ten ways around these assertions were found in review; each is now a recorded mutation that
+    fails the suite.
 
 - **`post-merge` runs its gates on the MERGE COMMIT in a disposable worktree**
   instead of checking that SHA out in the shared checkout, and the shared

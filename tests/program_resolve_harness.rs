@@ -2969,9 +2969,7 @@ const PROBE_ENV: &str = "ISSUE30_CHILD_PROBE";
 /// supposed to perform. See `probe_driver_rejects_a_child_that_ran_nothing`.
 const PROBE_DONE: &str = "issue30-probe-completed";
 
-/// Set by the library probe's drift handler. A probe that never reached its
-/// check point must not report success.
-/// Counts handler calls, so each library check point the probe drives is
+/// Counts the library probe's handler calls, so each library check point it drives is
 /// pinned on its own: a check point that silently stopped calling the handler
 /// would leave the count one short.
 static PROBE_DRIFT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -3051,12 +3049,12 @@ fn child_probe_library_under_enforcement() {
 /// nothing here calls the `unsafe` `std::env::set_var`, which would race every
 /// other test thread in this process.
 ///
-/// `enforce: None` REMOVES the variable rather than setting some other value.
-/// That is the real ungated state -- no developer's shell sets
-/// `ENFORCE_CDO_WS=0`, and `scripts/cdo-gate` only ever exports `=1`. An
-/// earlier version passed `"0"`, which let a handler that panics whenever the
-/// variable is ABSENT pass every assertion here while breaking every
-/// developer's drifted run.
+/// `enforce: None` REMOVES the variable rather than setting it to anything.
+/// Unset is the state every developer's shell is in, so it must be tested as
+/// itself: an earlier version used `"0"` in its place, which let a handler that
+/// panics whenever the variable is ABSENT pass every assertion here. `"0"` and
+/// other set-but-not-`"1"` values are tested too, alongside it, not instead of
+/// it.
 fn run_probe_with_enforcement(probe: &str, enforce: Option<&str>) -> (bool, String, String) {
     let exe = std::env::current_exe().expect("current_exe");
     let mut cmd = std::process::Command::new(exe);
@@ -3085,19 +3083,27 @@ fn run_probe_with_enforcement(probe: &str, enforce: Option<&str>) -> (bool, Stri
 /// keeping it green too. A later version merged stdout and stderr, which let a
 /// `println!` masquerade as the stderr warning. A third checked only the exact
 /// sentinel-bearing line, which let `eprintln!("WARNING: {msg:?}")` through on a
-/// quotation mark. A fourth tested the "ungated" arm with `ENFORCE_CDO_WS=0`,
-/// a value nothing ever sets, so a handler that panics when the variable is
-/// merely ABSENT passed it. All five mutations fail this version.
+/// quotation mark. Later versions tested the ungated arm in too few states:
+/// `"0"` alone let a handler that panics when the variable is ABSENT pass; unset
+/// alone let one that panics whenever it is PRESENT pass; and unset plus `"0"`
+/// let one that enforces on anything but `"0"` pass. Every mutation named here
+/// fails this version.
 #[test]
 fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
     let warning = format!("WARNING: {DRIFT_SENTINEL}");
 
     // A3: ungated, the handler warns ON STDERR and execution continues -- in
-    // BOTH ungated states. Unset is what every developer runs; "0" is set but
-    // not "1". Testing only one of them lets a handler that checks the wrong
-    // thing pass: one that panics when the variable is ABSENT passes a "0"-only
-    // test, and one that panics whenever it is PRESENT passes an unset-only test.
-    for (label, enforce) in [("unset", None), ("\"0\"", Some("0"))] {
+    // every ungated state. The rule is `== "1"`, so "ungated" is unset AND every
+    // set value other than "1". Each state below catches a different wrong
+    // handler: unset catches one that panics when the variable is absent; "0"
+    // catches one that checks presence; "true" catches one that enforces on any
+    // set value except "0". No finite list is exhaustive, but each of these is a
+    // shape a real regression has taken.
+    for (label, enforce) in [
+        ("unset", None),
+        ("\"0\"", Some("0")),
+        ("\"true\"", Some("true")),
+    ] {
         let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", enforce);
         assert!(
             ok,
@@ -3137,8 +3143,9 @@ fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
     );
     // A differently-worded duplicate -- `eprintln!("warning: {msg}")` -- dodges a
     // prefix check. The one thing every duplicate shares is the message itself,
-    // so under enforcement it must appear exactly ONCE across both streams: in
-    // the panic, and nowhere else.
+    // so under enforcement it must appear exactly ONCE across both streams. This
+    // checks the COUNT, not where the one copy is: a handler that printed the
+    // message and then panicked with some other text would still pass it.
     let occurrences = out.matches(DRIFT_SENTINEL).count() + err.matches(DRIFT_SENTINEL).count();
     assert_eq!(
         occurrences, 1,
@@ -3178,6 +3185,14 @@ fn library_ignores_enforcement_env() {
         !err.contains(WARNING_PREFIX) && !out.contains(WARNING_PREFIX),
         "the library itself printed a warning; only the caller's handler may \
          (stdout:\n{out}\nstderr:\n{err})"
+    );
+    // ...and in any other wording. The drift message always opens with this
+    // text, so the library printing it -- however it is prefixed or cased --
+    // shows up here.
+    assert!(
+        !err.contains("CDO workspace drifted") && !out.contains("CDO workspace drifted"),
+        "the library itself printed the drift message; only the caller's handler \
+         may (stdout:\n{out}\nstderr:\n{err})"
     );
 }
 
