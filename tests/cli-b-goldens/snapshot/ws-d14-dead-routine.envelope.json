@@ -123,7 +123,28 @@
     ],
     "operationIndex": [],
     "permissionFacts": [],
-    "rootClassifications": [],
+    "rootClassifications": [
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "onrun-codeunit"
+        ],
+        "routineId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
+          "range": {
+            "endColumn": 5,
+            "endLine": 5,
+            "startColumn": 1,
+            "startLine": 2
+          },
+          "sourceUnitId": "ws:src/codeunit.al",
+          "syntaxKind": "trigger_declaration"
+        }
+      }
+    ],
     "routineOrderFrames": {
       "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7753483aea24994460cd48f690bd81e349e60e667a799b1cffc587c66d9f9a90": [
         {
