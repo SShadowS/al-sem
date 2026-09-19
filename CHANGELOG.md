@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A declared reviewer stand-in for `agentflow attest`** (`scripts/agentflow/{cli,mergeops}.py`).
+  `attest` required every findings-register entry to be `accepted` by `astra` and `flash`, read
+  by name. On 2026-09-18 pi's single provider returned `429 quota exceeded` for every model it
+  offers, so neither reviewer could be reached and the only way to merge issue #21 was without an
+  attestation at all — the first such merge from this flow (`8405bd7d`).
+  - `attest --substitute SLOT=REVIEWER` (e.g. `astra=fable`) fills a review slot with a named
+    stand-in. The stand-in's marks REPLACE the slot's own, so an original reviewer's acceptance
+    cannot paper over a stand-in's re-raise.
+  - It cannot weaken the two-reviewer rule: an unknown slot, a slot substituted twice, and one
+    reviewer holding both slots are all refused as `bad-substitute`.
+  - The attestation records `reviewers` (slot -> who actually signed), and it is posted verbatim
+    as the PR comment, so a stand-in-signed merge is visibly different from an ordinary one.
+    Attestations written before this change load with the named roster, which is what signed them.
+  - Using a stand-in is the operator's decision; `.claude/commands/issue.md` says the conductor may
+    pass it only when told to.
+
 - **`page-action` is now DERIVED by the AST root classifier, not supplied only by the
   config overlay** (`src/engine/root_classification.rs`). A trigger inside a page action
   declaration keeps `trigger-page` and additionally gains `page-action`; the classifier

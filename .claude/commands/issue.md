@@ -186,6 +186,16 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
       (`severity` `critical` or `important`, or `blocking: true`) left
       `deferred`.
 
+    **A reviewer stand-in is the operator's decision, never yours.** When a
+    rostered reviewer is unreachable, `attest --substitute SLOT=REVIEWER`
+    (e.g. `astra=fable`) lets a named stand-in's marks fill that slot. Pass it
+    ONLY when the operator has told you to; an unreachable reviewer is otherwise
+    `blocked reviewer-unavailable`. The stand-in's verdict replaces the slot's
+    own (the original reviewer's marks stop counting), each slot can be
+    substituted once, and one reviewer may not hold both slots
+    (`bad-substitute`). The substitution is written into the attestation as
+    `reviewers`, so the public PR comment says who actually signed.
+
     `attest` also records the register's path — relative to the claim's
     worktree, because the attestation is posted verbatim as a public PR comment
     and must not carry a local absolute path — and `merge` joins it back onto

@@ -483,7 +483,7 @@ SEVERITIES = ("critical", "important", "minor")
 BLOCKING_SEVERITIES = ("critical", "important")
 
 
-def _register_failures(entries) -> list[str]:
+def _register_failures(entries, roster=mergeops.ROSTER) -> list[str]:
     """Ids of findings-register entries that block a merge: a `severity` or a
     `disposition` outside its closed vocabulary (missing included), an entry
     still `open`, one not `accepted` by BOTH reviewers, or a blocking finding
@@ -510,7 +510,7 @@ def _register_failures(entries) -> list[str]:
             continue
         eid = str(e.get("id", f"#{i}"))
         reviews = e.get("reviews")
-        marks = [reviews.get("astra"), reviews.get("flash")] if isinstance(reviews, dict) else [None, None]
+        marks = [reviews.get(r) for r in roster] if isinstance(reviews, dict) else [None] * len(roster)
         disposition = e.get("disposition")
         severity = str(e.get("severity", "")).strip().lower()
         blocking = e.get("blocking") is True or severity in BLOCKING_SEVERITIES
@@ -520,11 +520,37 @@ def _register_failures(entries) -> list[str]:
             bad.append(eid)  # missing or unknown: a malformed register, not a pass
         elif disposition == "open":
             bad.append(eid)
-        elif marks != ["accepted", "accepted"]:
+        elif marks != ["accepted"] * len(roster):
             bad.append(eid)
         elif blocking and disposition == "deferred":
             bad.append(eid)
     return bad
+
+
+def _substituted_roster(substitutes) -> tuple[dict | None, str | None]:
+    """Apply `--substitute SLOT=REVIEWER` to the review roster. Returns the
+    slot -> reviewer map, or an error naming what was wrong.
+
+    A stand-in may only fill a slot that exists, each slot at most once, and
+    never with a reviewer who already holds the other slot: that would sign a
+    register with ONE reviewer's marks twice, which is exactly the
+    single-perspective review the two-reviewer rule exists to prevent."""
+    slots = {r: r for r in mergeops.ROSTER}
+    replaced = set()
+    for spec in substitutes or ():
+        slot, sep, reviewer = spec.partition("=")
+        slot, reviewer = slot.strip(), reviewer.strip()
+        if not sep or not slot or not reviewer:
+            return None, f"malformed --substitute {spec!r}: expected SLOT=REVIEWER"
+        if slot not in slots:
+            return None, f"unknown review slot {slot!r}: the roster is {list(mergeops.ROSTER)}"
+        if slot in replaced:
+            return None, f"slot {slot!r} substituted twice"
+        replaced.add(slot)
+        slots[slot] = reviewer
+    if len(set(slots.values())) != len(slots):
+        return None, f"a reviewer may fill only one slot: {slots}"
+    return slots, None
 
 
 def cmd_attest(args, ctx, gh, git):
@@ -556,13 +582,17 @@ def cmd_attest(args, ctx, gh, git):
         rel = register.relative_to(Path(worktree).resolve())
     except ValueError:
         return _emit({"error": "register-outside-worktree", "register": str(register)}, 1)
-    bad_entries = _register_failures(read_json(register))
+    reviewers, problem = _substituted_roster(args.substitute)
+    if problem:
+        return _emit({"error": "bad-substitute", "detail": problem}, 1)
+    bad_entries = _register_failures(read_json(register), tuple(reviewers.values()))
     if bad_entries:
-        return _emit({"error": "register-not-converged", "entries": bad_entries}, 1)
+        return _emit({"error": "register-not-converged", "entries": bad_entries,
+                      "reviewers": reviewers}, 1)
     att = mergeops.Attestation(issue=args.issue, B=args.B, H=args.H, final_head=args.final_head,
                                register_hash=mergeops.register_hash(register),
                                gates=json.loads(args.gates), body_hash=args.body_hash,
-                               register_path=rel.as_posix())
+                               register_path=rel.as_posix(), reviewers=reviewers)
     return _emit({"path": str(mergeops.write_attestation(ctx, att))})
 
 
@@ -1284,6 +1314,8 @@ def build_parser() -> argparse.ArgumentParser:
     for a in ("--B", "--H", "--final-head", "--register", "--gates", "--body-hash"):
         s.add_argument(a, required=True)
     s.add_argument("--issue", type=int, required=True); s.add_argument("--docs-only", action="store_true")
+    s.add_argument("--substitute", action="append", default=[], metavar="SLOT=REVIEWER",
+                   help="fill a review slot with a named stand-in (e.g. astra=fable); recorded in the attestation")
     s = add("body-hash", cmd_body_hash); s.add_argument("issue", type=int)
     s = add("merge-gate", cmd_merge_gate); s.add_argument("--pr", type=int, required=True)
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)

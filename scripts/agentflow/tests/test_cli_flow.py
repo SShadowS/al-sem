@@ -393,6 +393,64 @@ def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path
         assert out["entries"] == [offender], entries
 
 
+def test_attest_accepts_a_declared_substitute_and_records_it(capsys, root, tmp_path):
+    # A rostered reviewer is unreachable; a named stand-in reviewed instead. The
+    # stand-in's marks fill that slot, and the attestation -- which is posted
+    # verbatim as the PR comment -- says who actually signed.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    signed = json.dumps([{"id": "F1", "severity": "important", "disposition": "fixed",
+                          "reviews": {"fable": "accepted", "flash": "accepted"}}])
+    register = claimed_register(ctx, tmp_path, contents=signed)
+
+    # Without the declaration the astra slot is empty, so this must not pass:
+    # a stand-in's marks never count by accident.
+    code, out = attest(capsys, root, register)
+    assert code == 1 and out["error"] == "register-not-converged"
+
+    code, out = attest(capsys, root, register, extra=("--substitute", "astra=fable"))
+    assert code == 0, out
+    att = json.loads(Path(out["path"]).read_text())
+    assert att["reviewers"] == {"astra": "fable", "flash": "flash"}
+
+
+def test_attest_ignores_the_replaced_reviewers_marks(capsys, root, tmp_path):
+    # Once a slot is substituted it is the stand-in's verdict that counts; the
+    # original reviewer's acceptance cannot paper over a stand-in's re-raise.
+    signed = json.dumps([{"id": "F1", "severity": "minor", "disposition": "fixed",
+                          "reviews": {"astra": "accepted", "fable": "re-raised",
+                                      "flash": "accepted"}}])
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=signed)
+    code, out = attest(capsys, root, register, extra=("--substitute", "astra=fable"))
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["F1"]
+
+
+def test_attest_refuses_malformed_or_collapsing_substitutes(capsys, root, tmp_path):
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
+    for extra in (
+        ("--substitute", "fable"),                                   # no SLOT=
+        ("--substitute", "astra="),                                  # no reviewer
+        ("--substitute", "bob=fable"),                               # no such slot
+        ("--substitute", "astra=fable", "--substitute", "astra=x"),  # slot twice
+        # One reviewer holding both slots would sign the register with a single
+        # perspective, which is what the two-reviewer rule exists to prevent.
+        ("--substitute", "astra=flash"),
+        ("--substitute", "astra=fable", "--substitute", "flash=fable"),
+    ):
+        code, out = attest(capsys, root, register, extra=extra)
+        assert code == 1 and out["error"] == "bad-substitute", extra
+
+
+def test_an_attestation_written_before_substitution_existed_still_loads(root):
+    # `read_attestation` rebuilds from JSON; an older file has no `reviewers`
+    # key and was, by construction, signed by the named roster.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    ctx.run_dir.mkdir(parents=True, exist_ok=True)
+    legacy = {"issue": 8, "B": "B", "H": "H", "final_head": "F", "register_hash": "r",
+              "gates": {}, "body_hash": "b", "register_path": "x"}
+    write_json(ctx, ctx.run_dir / "attestation.json", legacy)
+    assert mergeops.read_attestation(ctx).reviewers == {"astra": "astra", "flash": "flash"}
+
+
 def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(capsys, repo_pair, tmp_path):
     # I6: hashing the register at attest time only helps if something re-checks
     # it. A register edited between the attestation and the merge -- a
