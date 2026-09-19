@@ -571,3 +571,47 @@ All four run on H through the executor, `"supervised": true`, none timed out. Lo
 The merge is attested with `--substitute astra=fable --substitute flash=opus` (#51): pi's only
 provider returned `429 quota exceeded` for every model, and the operator directed stand-ins run
 through the Agent tool. The attestation records which reviewer filled which slot.
+
+## The issue's own discrimination pair, end to end on H
+
+The issue asks that "the existing pair -- perturb `.alpackages` and confirm gated fails / ungated
+warns -- must still hold after the move." The proofs above test the handler in a child process;
+they do not run that pair on the real workspace. So it was run on H (`3a4a869c`), against the
+pinned baseline (`CDO_WS` = the DO-cdo-baseline worktree at `bc3ccb18`), over the three audits
+that reach a drift check point: `cdo_trigger_audit_frozen_load`, `cdo_event_audit_frozen_load`,
+`cdo_l3_semantic_audit_no_fresh_wrong`.
+
+**The first attempt proved less than it looked like.** A junk `.txt` in `.alpackages` moved the
+closure digest, but the DO repo ignores only `*.app` there, so the same file also flipped the
+workspace's `dirty` flag. The drift message named BOTH, so that run did not show that the closure
+alone trips the gate. The original proof in `5c11627c` was specifically closure-only ("git SHA and
+dirty state stayed IDENTICAL"). The re-run used a `.bak` file: ignored by the DO repo
+(`.gitignore:42`), and never read by the resolver, which loads only `.app` (`src/dependencies.rs`).
+The script aborts if the perturbation is visible to git.
+
+| run | `ENFORCE_CDO_WS` | result | drift text | `WARNING:` lines |
+|---|---|---|---|---|
+| clean | `1` | 3 passed | 0 | 0 |
+| perturbed | `1` | **3 FAILED**, exit 101 | 3 (one per test, in the failure) | **0** |
+| perturbed | unset | 3 passed, exit 0 | 6 | **6** (two audits per test) |
+| restored | `1` | 3 passed | 0 | 0 |
+
+The gated failure's message: `git SHA: stamped bc3ccb18 (dirty=false), current bc3ccb18
+(dirty=false)`, `.alpackages closure: stamped 48bccdc3..., current 5724b3d3...`. Only the closure
+moved. Digest before and after: `48bccdc345f6619b50f7459461d50801add54fe10069f5fa585a77920456ae78`,
+byte-identical; baseline `git status --porcelain` empty before, during and after. Logs:
+`.agent/runs/20260919-161751-7b0259/perturb-closure-only/`.
+
+### The issue's Acceptance, against its own words
+
+- "No library function panics on process-global state": met (A1, A2, D2).
+- "The decision to fail belongs to the test/gate boundary": met in substance. The handler is in
+  `tests/program_resolve_harness.rs`, not `tests/common/cdo.rs` (the issue names that file or
+  `scripts/cdo-gate` as examples). Why is under "One deviation from the ratified design".
+- "The audit returns drift as DATA (a field on the report, or a `Result`)": met by a third shape
+  the spec panel ratified in round 2. `workspace_drift` returns `Option<String>`, and the audits
+  hand it to the caller's `DriftHandler` rather than carrying it on the report. That keeps the
+  report types unchanged and keeps early termination under enforcement.
+- "Existing behaviour is preserved exactly: ungated runs warn, gated runs fail": met, end to end,
+  by the table above.
+- "Related: minting should FAIL ... (see #29)": that is #29's scope and is not claimed here.
