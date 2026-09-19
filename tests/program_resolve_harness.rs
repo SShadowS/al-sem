@@ -2908,6 +2908,339 @@ use sha2::{Digest, Sha256};
 // to the shared `tests/common/cdo.rs` (imported near the top of this file as
 // `cdo::cdo_ws_or_enforce`) — see that file's doc comment for the contract.
 
+// ── The CDO drift handler ───────────────────────────────────────────────────
+//
+// The engine's audit helpers DETECT workspace drift and decide nothing about
+// it — they call whichever `DriftHandler` they were given
+// (`semantic_golden::DriftHandler`). This is that handler, and it is here, in
+// test code beside `enforce_audit_ran`'s read of the same variable and the
+// eight audit call sites it serves, rather than ambiently inside a library
+// function.
+//
+// It belongs conceptually beside `cdo_ws_or_enforce` in `tests/common/cdo.rs`,
+// which gates workspace PRESENCE on the same variable. It is NOT there because
+// that file is `#[path]`-included verbatim by three test binaries and only this
+// one runs the golden audits, so a handler defined there is dead code in the
+// other two. `tests/common/regen.rs:36` carries an `allow(dead_code)`
+// attribute for exactly that reason; this file reaches the same end by
+// defining the item where it is actually used.
+//
+// Warning-only is exactly how the previous baseline rotted: the goldens were
+// minted from a tree whose SHA later existed in no checkout at all, every run
+// printed this message, and nobody acted on it for two months — while the
+// audits it guards silently paired ZERO sites and still reported a pass. A
+// gated run (`scripts/cdo-gate`) is the one context where an unreproducible
+// baseline must stop the build rather than narrate at it. Ungated developer
+// runs keep the warning, because drift there is ordinary and claims nothing.
+//
+// The `assert!` PREEMPTS the `eprintln!`: under enforcement the warning never
+// prints, and the panic message carries the text instead.
+fn drift_handler(msg: &str) {
+    assert!(
+        std::env::var("ENFORCE_CDO_WS").as_deref() != Ok("1"),
+        "{msg}"
+    );
+    eprintln!("WARNING: {msg}");
+}
+
+/// The sentinel the probes below emit. Distinctive so a captured stderr search
+/// cannot match anything else the test binary prints.
+const DRIFT_SENTINEL: &str = "issue30-sentinel-drift-text";
+
+/// The prefix the handler's ungated warning carries. A5's contract is the
+/// ABSENCE of this under enforcement -- any `WARNING:` line, however formatted,
+/// not merely one containing [`DRIFT_SENTINEL`] verbatim.
+const WARNING_PREFIX: &str = "WARNING:";
+
+/// Set by a driver on the CHILD process it spawns. The two probes below are
+/// entry points for those children, not tests in their own right, so in an
+/// ordinary run -- where this is unset -- they do nothing and pass.
+///
+/// They are gated this way rather than marked as ignored tests because the
+/// autonomous flow's `check-diff` rejects that attribute outright, and because
+/// an env gate keeps the driver's `--exact` filter as the ONLY selection
+/// mechanism. The hazard that creates is real and is guarded: see `PROBE_DONE`.
+const PROBE_ENV: &str = "ISSUE30_CHILD_PROBE";
+
+/// Printed by a probe as its LAST statement. Every driver requires it, because
+/// libtest exits SUCCESSFULLY both when a filter matches zero tests and when a
+/// probe returns early -- so "the child exited 0" alone would let a stale probe
+/// name, or a driver that forgot `PROBE_ENV`, silently disable the check it is
+/// supposed to perform. See `probe_driver_rejects_a_child_that_ran_nothing`.
+const PROBE_DONE: &str = "issue30-probe-completed";
+
+/// Counts the library probe's handler calls, so each library check point it drives is
+/// pinned on its own: a check point that silently stopped calling the handler
+/// would leave the count one short.
+static PROBE_DRIFT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Child entry point: emit the handler's output so a driver can capture it.
+/// A no-op unless this process was spawned as a probe child.
+#[test]
+fn child_probe_drift_handler() {
+    if std::env::var_os(PROBE_ENV).is_none() {
+        return;
+    }
+    drift_handler(DRIFT_SENTINEL);
+    println!("{PROBE_DONE}");
+}
+
+/// Child entry point: call a PUBLIC library entry point with a handler that
+/// cannot fail. Whatever `ENFORCE_CDO_WS` says, the library must return.
+#[test]
+fn child_probe_library_under_enforcement() {
+    use std::sync::atomic::Ordering;
+
+    if std::env::var_os(PROBE_ENV).is_none() {
+        return;
+    }
+
+    fn record(_msg: &str) {
+        PROBE_DRIFT_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    // If the driver did not actually set enforcement, this probe proves nothing
+    // about the library ignoring it.
+    assert_eq!(
+        std::env::var("ENFORCE_CDO_WS").as_deref(),
+        Ok("1"),
+        "precondition: the driver must set ENFORCE_CDO_WS=1 for this probe to mean anything"
+    );
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let report =
+        al_sem::program::resolve::semantic_golden::run_cdo_trigger_audit(tmp.path(), record);
+
+    assert!(
+        report.golden_loaded,
+        "precondition: the committed trigger golden must load, or the drift check \
+         point is never reached"
+    );
+    assert_eq!(
+        PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
+        1,
+        "the trigger audit's drift check point must have fired against a temp dir"
+    );
+
+    // The EVENT audit's check point too. Its path wrapper falls through to the
+    // check point on an empty directory, so it can be driven here; the semantic
+    // audit's returns before its check point on an empty directory, and driving
+    // it on the real `semantic-golden` fixture would merge that fixture's sites
+    // into the developer's local `cdo-deanon-map.json`, so it is not driven.
+    let report = al_sem::program::resolve::semantic_golden::run_cdo_event_audit(tmp.path(), record);
+    assert!(
+        report.golden_loaded,
+        "precondition: the committed event golden must load, or its drift check \
+         point is never reached"
+    );
+    assert_eq!(
+        PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
+        2,
+        "the event audit's drift check point must have fired as well"
+    );
+    println!("{PROBE_DONE}");
+}
+
+/// Re-run this same test binary for exactly one probe, with `ENFORCE_CDO_WS`
+/// set to `enforce`. Returns (succeeded, stdout, stderr) -- kept SEPARATE,
+/// because merging them would let a `println!` satisfy an assertion about
+/// `eprintln!`.
+///
+/// A child process is what makes the stderr assertions possible at all --
+/// libtest captures stderr but never hands it to the test -- and it is also why
+/// nothing here calls the `unsafe` `std::env::set_var`, which would race every
+/// other test thread in this process.
+///
+/// `enforce: None` REMOVES the variable rather than setting it to anything.
+/// Unset is the state every developer's shell is in, so it must be tested as
+/// itself: an earlier version used `"0"` in its place, which let a handler that
+/// panics whenever the variable is ABSENT pass every assertion here. `"0"` and
+/// other set-but-not-`"1"` values are tested too, alongside it, not instead of
+/// it.
+fn run_probe_with_enforcement(probe: &str, enforce: Option<&str>) -> (bool, String, String) {
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([probe, "--exact", "--nocapture", "--test-threads", "1"])
+        .env(PROBE_ENV, "1");
+    match enforce {
+        Some(v) => cmd.env("ENFORCE_CDO_WS", v),
+        None => cmd.env_remove("ENFORCE_CDO_WS"),
+    };
+    let out = cmd.output().expect("re-exec this test binary");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A3 + A4 + A5, against CAPTURED STDERR rather than an inference about
+/// statement order.
+///
+/// An earlier version asserted only that `catch_unwind` returned `Err` and
+/// argued the `eprintln!` after the `assert!` was therefore unreachable. That is
+/// true of the body as written and proves nothing about a regression: moving the
+/// `eprintln!` ABOVE the `assert!` breaks the suppression while keeping that
+/// test green, and deleting the `eprintln!` breaks the ungated warning while
+/// keeping it green too. A later version merged stdout and stderr, which let a
+/// `println!` masquerade as the stderr warning. A third checked only the exact
+/// sentinel-bearing line, which let `eprintln!("WARNING: {msg:?}")` through on a
+/// quotation mark. Later versions tested the ungated arm in too few states:
+/// `"0"` alone let a handler that panics when the variable is ABSENT pass; unset
+/// alone let one that panics whenever it is PRESENT pass; and unset plus `"0"`
+/// let one that enforces on anything but `"0"` pass. Every mutation named here
+/// fails this version.
+#[test]
+fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
+    let warning = format!("WARNING: {DRIFT_SENTINEL}");
+
+    // A3: ungated, the handler warns ON STDERR and execution continues -- in
+    // every ungated state. The rule is `== "1"`, so "ungated" is unset AND every
+    // set value other than "1". Each state below catches a different wrong
+    // handler: unset catches one that panics when the variable is absent; "0"
+    // catches one that checks presence; "true" catches one that enforces on any
+    // set value except "0". No finite list is exhaustive, but each of these is a
+    // shape a real regression has taken.
+    for (label, enforce) in [
+        ("unset", None),
+        ("\"0\"", Some("0")),
+        ("\"true\"", Some("true")),
+    ] {
+        let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", enforce);
+        assert!(
+            ok,
+            "ungated ({label}), drift must warn and continue:\n{err}"
+        );
+        assert!(
+            out.contains(PROBE_DONE),
+            "the ungated ({label}) child never reported completing the probe:\n{out}\n{err}"
+        );
+        assert!(
+            err.contains(&warning),
+            "ungated ({label}), the WARNING line must be emitted on STDERR \
+             (stdout was:\n{out}\nstderr was:\n{err})"
+        );
+    }
+
+    // A4 + A5: gated, the run fails carrying the message, and the WARNING line
+    // is emitted on NEITHER stream.
+    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", Some("1"));
+    assert!(
+        !ok,
+        "under ENFORCE_CDO_WS=1 drift must FAIL the run, not narrate at it:\n{err}"
+    );
+    assert!(
+        err.contains(DRIFT_SENTINEL) || out.contains(DRIFT_SENTINEL),
+        "the failure must carry the drift message:\n{out}\n{err}"
+    );
+    // A5 is "no `WARNING:` line", not "not this exact string". Asserting only
+    // the sentinel-bearing form let a fourth counterexample through:
+    // `eprintln!("WARNING: {msg:?}")` prints the message QUOTED, breaking the
+    // suppression while dodging an exact-substring check. Reject the PREFIX on
+    // both streams, which is the contract as written.
+    assert!(
+        !err.contains(WARNING_PREFIX) && !out.contains(WARNING_PREFIX),
+        "under enforcement NO `WARNING:` line may be emitted, but one was \
+         (stdout:\n{out}\nstderr:\n{err})"
+    );
+    // A differently-worded duplicate -- `eprintln!("warning: {msg}")` -- dodges a
+    // prefix check. The one thing every duplicate shares is the message itself,
+    // so under enforcement it must appear exactly ONCE across both streams. This
+    // checks the COUNT, not where the one copy is: a handler that printed the
+    // message and then panicked with some other text would still pass it.
+    let occurrences = out.matches(DRIFT_SENTINEL).count() + err.matches(DRIFT_SENTINEL).count();
+    assert_eq!(
+        occurrences, 1,
+        "under enforcement the drift message must appear exactly once across both \
+         streams, but it appeared {occurrences} times (stdout:\n{out}\nstderr:\n{err})"
+    );
+    assert!(
+        !out.contains(PROBE_DONE),
+        "the gated child must have failed INSIDE the handler, before completing:\n{out}"
+    );
+}
+
+/// A1 + A2 through PUBLIC API: with `ENFORCE_CDO_WS=1` genuinely ambient, a
+/// library audit entry point that finds drift must still RETURN. Before this
+/// change it panicked from inside `warn_on_workspace_drift`, which is the whole
+/// of issue #30.
+#[test]
+fn library_ignores_enforcement_env() {
+    let (ok, out, err) =
+        run_probe_with_enforcement("child_probe_library_under_enforcement", Some("1"));
+    assert!(
+        ok,
+        "the library must not act on ENFORCE_CDO_WS -- only the handler its caller \
+         supplied may:\n{err}"
+    );
+    assert!(
+        out.contains(PROBE_DONE),
+        "the child exited 0 but never reported completing the probe -- libtest also \
+         exits 0 when a filter matches nothing, so this assertion is what separates \
+         'the library returned' from 'nothing ran':\n{out}\n{err}"
+    );
+    // The handler in this probe records and prints nothing, so any `WARNING:`
+    // here can only have come from the library. A1 is "the library decides
+    // nothing", and printing is deciding: a check point that went back to
+    // `eprintln!` would pass every other assertion.
+    assert!(
+        !err.contains(WARNING_PREFIX) && !out.contains(WARNING_PREFIX),
+        "the library itself printed a warning; only the caller's handler may \
+         (stdout:\n{out}\nstderr:\n{err})"
+    );
+    // ...and with any other prefix. The drift message always opens with this
+    // text, so the library printing it -- `WARNING:`, `warning:`, or no prefix
+    // at all -- shows up here. The match is case-sensitive, so a library that
+    // lower-cased the message itself would not be caught.
+    assert!(
+        !err.contains("CDO workspace drifted") && !out.contains("CDO workspace drifted"),
+        "the library itself printed the drift message; only the caller's handler \
+         may (stdout:\n{out}\nstderr:\n{err})"
+    );
+}
+
+/// Pins the hazard the completion marker exists for: libtest reports SUCCESS
+/// both for a filter that matches no test and for a probe that returned early
+/// because its env gate was unset. Without the marker check, either would turn
+/// the drivers above into tests that pass while checking nothing.
+#[test]
+fn probe_driver_rejects_a_child_that_ran_nothing() {
+    // (a) a name that matches no test at all
+    let (ok, out, _err) = run_probe_with_enforcement("issue30_no_such_probe_exists", Some("1"));
+    assert!(
+        ok,
+        "libtest is expected to exit 0 on a filter that matches nothing -- that is \
+         precisely why exit status alone cannot be trusted here"
+    );
+    assert!(
+        !out.contains(PROBE_DONE),
+        "a child that ran nothing must not emit the completion marker"
+    );
+
+    // (b) a real probe whose env gate was never set: it runs, returns early,
+    //     and libtest reports success. The marker is the only difference.
+    let exe = std::env::current_exe().expect("current_exe");
+    let ungated = std::process::Command::new(exe)
+        .args([
+            "child_probe_library_under_enforcement",
+            "--exact",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
+        .env_remove(PROBE_ENV)
+        .output()
+        .expect("re-exec this test binary");
+    assert!(
+        ungated.status.success(),
+        "a probe with its env gate unset must be a silent no-op, not a failure"
+    );
+    assert!(
+        !String::from_utf8_lossy(&ungated.stdout).contains(PROBE_DONE),
+        "a probe that returned early must not emit the completion marker"
+    );
+}
+
 /// 1B.3b Task 1 ENFORCE_CDO_WS guard (part 2 — the audit-ran-and-checked-something
 /// check).
 ///
@@ -3509,7 +3842,7 @@ fn cdo_l3_semantic_audit_no_fresh_wrong() {
         return;
     };
 
-    let audit = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws);
+    let audit = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
     enforce_audit_ran(audit.golden_loaded, audit.paired);
     assert!(
         audit.golden_loaded,
@@ -3836,7 +4169,7 @@ fn cdo_l3_semantic_audit_no_fresh_wrong() {
     );
 
     // ── Determinism: two consecutive runs produce the same digest ─────────────
-    let audit2 = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws);
+    let audit2 = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
     assert_eq!(
         audit.digest, audit2.digest,
         "CDO semantic audit must be deterministic (digest differs between runs)"
@@ -3867,7 +4200,7 @@ fn cdo_trigger_audit_frozen_load() {
         return;
     };
 
-    let audit = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws);
+    let audit = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
     enforce_audit_ran(audit.golden_loaded, audit.total_paired);
     assert!(
         audit.golden_loaded,
@@ -3929,7 +4262,7 @@ fn cdo_trigger_audit_frozen_load() {
     );
 
     // Determinism.
-    let audit2 = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws);
+    let audit2 = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
     assert_eq!(
         audit.digest, audit2.digest,
         "CDO trigger audit must be deterministic (digest differs between runs)"
@@ -3956,7 +4289,7 @@ fn cdo_event_audit_frozen_load() {
         return;
     };
 
-    let audit = run_cdo_event_audit_on(&shared.ctx, &ws);
+    let audit = run_cdo_event_audit_on(&shared.ctx, &ws, drift_handler);
     enforce_audit_ran(audit.golden_loaded, audit.matched_pairs);
     assert!(
         audit.golden_loaded,
@@ -3994,7 +4327,7 @@ fn cdo_event_audit_frozen_load() {
     );
 
     // Determinism.
-    let audit2 = run_cdo_event_audit_on(&shared.ctx, &ws);
+    let audit2 = run_cdo_event_audit_on(&shared.ctx, &ws, drift_handler);
     assert_eq!(
         audit.digest, audit2.digest,
         "CDO event audit must be deterministic (digest differs between runs)"
@@ -5070,7 +5403,7 @@ fn cdo_genuine_wrong_is_precedence_adjudicated() {
     // still contains the site while O does not — the assertion fires. Keep a
     // stale override for a site that no longer diverges and O exceeds G — it
     // fires again. Neither direction can be silenced by editing the file.
-    let raw = run_cdo_semantic_audit_on_raw(&shared.ctx, &shared.report, &ws);
+    let raw = run_cdo_semantic_audit_on_raw(&shared.ctx, &shared.report, &ws, drift_handler);
     let raw_genuine: std::collections::BTreeSet<(String, u32, u64)> = raw
         .genuine_wrong_sites
         .iter()
@@ -5123,7 +5456,7 @@ An empty overlay is legitimate ONLY when the raw          genuine_wrong set is a
     // that rewrites a site with the value it already held — is indistinguishable
     // from a live one in every count, so a stale overlay can look maintained
     // forever. The committed overlay already contained one such entry.
-    let effective = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws);
+    let effective = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
     assert!(
         effective.overlay.no_op_sites.is_empty(),
         "override(s) changed nothing — they rewrite a target the golden already          had, so they correct no divergence and only look like maintenance: {:?}",

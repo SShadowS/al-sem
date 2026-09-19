@@ -1,0 +1,434 @@
+[
+  {
+    "id": "A1",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The proposed boundary fixes only half the stated defect. The ledger identifies BOTH ambient-state access and library panicking as wrong, but v1 explicitly retained the panic in the library; making workspace_drift nonpanicking merely moves that responsibility into its callers. Preferred shape: thread a drift handler such as fn(&str), implemented in tests/common/cdo.rs and invoked at the three check points, so the test-owned handler selects warning versus panic. That preserves return types, early termination and warning suppression without the library owning either decision. If the real requirement is only 'no ambiently selected panic', say so explicitly rather than claiming failure moved out of the library.",
+    "disposition": "fixed",
+    "evidence": "Correct, and adopted in full -- the handler is also smaller than the DriftPolicy enum I proposed (a function pointer, no enum, no match). The design now states the requirement explicitly as BOTH halves, because round 1's point was precisely that v1 met one while the ledger claimed two.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Three direct callers, but SEVEN public entry points: three path-based wrappers, three _on wrappers, and run_cdo_semantic_audit_on_raw (:2355-2408, :2570-2721), which has a real test caller at tests/program_resolve_harness.rs:5073. 'Three entry points' understates the signature changes.",
+    "disposition": "fixed",
+    "evidence": "Verified and corrected. A8 now enumerates all seven and names the raw wrapper's test caller. My pre-claim scope check counted CALL SITES correctly and then wrote 'entry points', which is a different thing -- the measurement was right and the wording was not.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A3",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "No inspected test expects the drift panic or captures the warning suppression, and the library has no direct drift unit test. A7 asserts only the panic; add an explicit negative assertion that no WARNING: line is emitted under enforcement.",
+    "disposition": "fixed",
+    "evidence": "Adopted as A5 and folded into A9's discrimination. The suppression is real -- the assert! at :356 preempts the eprintln! at :361 -- and it is exactly the kind of behaviour that survives a refactor by accident and breaks silently later.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "re-raised",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A THIRD ENFORCE_CDO_WS reader exists: tests/program_resolve_harness.rs:2914 enforce_audit_ran(), gating committed-golden load failure. The briefing claimed the drift check and workspace-presence check were the only readers. It does not collide with this change, but the two-reader claim is inaccurate.",
+    "disposition": "fixed",
+    "evidence": "Verified and corrected in the design. It guards golden PRESENCE rather than drift, so the boundary choice stands, but the claim as written was wrong. Astra independently noted a fourth read at :2931 guarding the same concern. RE-RAISED in round 2 (evidence only) and the re-raise is correct: :2914 is inside a DOC COMMENT, not a read, so there are THREE readers rather than four. Verified by grepping env::var(\"ENFORCE_CDO_WS\"): semantic_golden.rs:358, tests/common/cdo.rs:35, tests/program_resolve_harness.rs:2931 (fn enforce_audit_ran at :2930). The finding's SUBSTANCE -- that a third reader exists and my two-reader claim was wrong -- stands; only its citation and count were off. Corrected in the ledger.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Caller line numbers are off by one: the later two call sites are :2621 and :2722, not :2620 and :2721.",
+    "disposition": "fixed",
+    "evidence": "Corrected. Small, but these are the coordinates the implementer works from. RE-RAISED in round 2 (coordinates only), and the re-raise is correct: the round-1 correction was itself wrong. Grep shows the calls at :2422, :2620, :2721 -- my ORIGINAL numbers -- and :2621/:2722 are closing braces. The raw entry is :2400, not the :2355 I wrote nor the :2395 offered. Reverted. I accepted a reviewer's correction to correct data without checking it, which is the failure here and it is mine, not the reviewer's. Round 3 re-raised it once more for a single stale citation (P3 still said :2355); that is fixed and astra confirmed F2 accepted at spec level.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FF1",
+    "source": "astra",
+    "round": 1,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 2956,
+    "severity": "important",
+    "text": "A5 asserted only that catch_unwind returned Err and inferred the eprintln! was unreachable. That proves the current body, not a regression: moving the print above the assert, or deleting it, both keep the test green while breaking the behaviour.",
+    "disposition": "fixed",
+    "evidence": "Reproduced both counterexamples as D3 and D4. Replaced the inference with captured stderr from a child process (Command::env). D3 now fails 101 on print-before-assert; D4 fails 101 on a deleted print; both byte-restored under sha256 ac551ed9fca3f141. Round 2 re-raised it: stdout and stderr were merged, so a println! passed the stderr assertion. Streams now separate; D5 fails 101 on that mutation. Round 3 re-raised it a second time: the gated assertion matched only the exact sentinel-bearing line, so eprintln!(\"WARNING: {msg:?}\") broke suppression while dodging it. Fixed by rejecting the WARNING: PREFIX on both streams; D7 confirms (exit 101, byte-restored). astra has not re-reviewed that fix -- final_rounds is spent.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "re-raised",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FF2",
+    "source": "astra",
+    "round": 1,
+    "file": "src/program/resolve/semantic_golden.rs",
+    "line": 3890,
+    "severity": "important",
+    "text": "unsafe std::env::set_var in the lib tests is not made safe by a mutex shared between two tests: it does not serialize libtest thread pool, it clears an inherited value instead of restoring it, and cleanup is skipped if the call under test panics.",
+    "disposition": "fixed",
+    "evidence": "The lib tests no longer touch the environment at all; the half that needs ENFORCE_CDO_WS=1 set runs in a child process via Command::env from the harness. Zero unsafe blocks remain in the diff.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FF3",
+    "source": "astra",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 143,
+    "severity": "minor",
+    "text": "PURE overstates the helper: it still probes git and reads the filesystem. Also: returning under enforcement proves nonfailure not absence of an env read; contains pins fragments not byte-for-byte text; A10 pointed at gate results that did not exist yet.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG and the source doc now say POLICY-FREE and state the git/fs probes. Ledger A1 cites the grep for absence and the test for non-action separately; A8 says contains pins fragments; A10 is not claimed green until exit codes are recorded. Round 2 re-raised it for four stale passages (ledger 'is pure', the withdrawn 'stronger than a string search' row, 'three entry points' vs five-exercised, and CHANGELOG 'NO callers anywhere'). All four corrected.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FF4",
+    "source": "astra",
+    "round": 2,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 3044,
+    "severity": "important",
+    "text": "library_ignores_enforcement_env asserted only that the child exited 0. libtest exits 0 when a filter matches zero tests, so a stale or misspelled probe name would disable the enforcement regression check without turning it red.",
+    "disposition": "fixed",
+    "evidence": "The probe now prints a completion marker as its last statement and the driver requires it, and asserts inside the child that ENFORCE_CDO_WS is genuinely '1' and that the drift check point fired. probe_driver_rejects_a_child_that_ran_nothing pins the libtest zero-match behaviour executably. D6 confirms: the misspelled filter now fails 101, with the child reporting '0 passed; 0 failed; 198 filtered out'.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FF5",
+    "source": "astra",
+    "round": 3,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 3083,
+    "severity": "important",
+    "text": "The gated suppression assertion rejected only the exact string 'WARNING: <sentinel>'. A5's contract is the absence of any WARNING: line, so eprintln!(\"WARNING: {msg:?}\") -- the message quoted -- violates suppression while satisfying every assertion in the driver.",
+    "disposition": "fixed",
+    "evidence": "Assertion widened to reject the WARNING: prefix on both captured streams, via a named WARNING_PREFIX constant. D7 executes astra's counterexample: fails exit 101 with 'under enforcement NO `WARNING:` line may be emitted, but one was', byte-restored under sha256 24c7a5a59a4225d8. flash accepted the fixed state; astra has not seen it. CORRECTION (fable N2): the flash mark on this entry was inferred from flash's round-3 prose, which discussed the D7 fix; FF5 did not exist as an entry when flash reviewed, and flash never dispositioned it. Reset to unreviewed.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "re-raised",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FS1",
+    "source": "fable (stand-in for astra)",
+    "round": 1,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 3034,
+    "severity": "important",
+    "text": "The ungated arm set ENFORCE_CDO_WS=\"0\", a value nothing ever sets; the real ungated state (unset) was never exercised, so a handler that panics whenever the variable is ABSENT passed every assertion.",
+    "disposition": "fixed",
+    "evidence": "run_probe_with_enforcement takes Option<&str>; None removes the variable and the ungated arm passes None. D8: fable's M6 mutation (.is_ok_and(|v| v != \"1\")) now FAILS exit 101; fix green without it; byte-restored sha a4d2887c33a3. ROUND 2 (opus O1): the fix swapped the \"0\" arm for the unset arm instead of adding one, so a presence-checking handler (M7) passed. The ungated arm now runs BOTH unset and \"0\". D9: M7 fails exit 101.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FS2",
+    "source": "fable (stand-in for astra)",
+    "round": 2,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "library_ignores_enforcement_env asserted only success and completion, never the streams, so a library check point that went back to eprintln!(\"WARNING: ...\") passed every test.",
+    "disposition": "fixed",
+    "evidence": "The library driver now asserts no WARNING: on either stream; the probe's handler prints nothing, so any warning can only come from the library. D10: an eprintln! at the trigger check point fails it, exit 101.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus (stand-in for flash)",
+    "round": 2,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "A differently-cased duplicate, eprintln!(\"warning: {msg}\"), dodged the WARNING: prefix check under enforcement.",
+    "disposition": "fixed",
+    "evidence": "Under enforcement the drift message must appear exactly once across both streams (in the panic). D11: the lowercase duplicate fails it, exit 101.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus (stand-in for flash)",
+    "round": 2,
+    "file": "src/program/resolve/semantic_golden.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "Only the trigger audit's check point was ever driven with drift; the semantic and event check points are reached only by CDO-gated tests where the stamp matches, so deleting on_drift there, or re-adding an env assert there, would stay green.",
+    "disposition": "deferred",
+    "evidence": "PARTIALLY fixed: the probe also calls run_cdo_event_audit and counts handler calls (1, then 2); D12: removing the event check point's on_drift fails it, exit 101. DEFERRED: the semantic check point. CORRECTED REASON (both stand-ins, round 3): a fixture DOES exist (tests/fixtures/semantic-golden, harness:1178). The real obstacle is that driving the semantic audit on a real fixture calls merge_deanon_map, merging that fixture's sites into the developer's local, gitignored cdo-deanon-map.json. Mitigated: all three goldens share one stamp, so the pinned trigger and event check points still trip the gate on drift.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus (stand-in for flash)",
+    "round": 2,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "No gate run was recorded for the head under review; every log predated it.",
+    "disposition": "fixed",
+    "evidence": "Gates are re-run on this branch's final head before attest and cited from that run only.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus (stand-in for flash)",
+    "round": 2,
+    "file": "src/program/resolve/semantic_golden.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "Stale 'drift warning' / 'pure' wording beside the changed code.",
+    "disposition": "fixed",
+    "evidence": "Four source comments and two ledger rows corrected.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "ON1",
+    "source": "opus (stand-in)",
+    "round": 3,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "\"0\" is a biased stand-in for set-but-not-\"1\": a handler enforcing on any value except \"0\" (M8a) passed the driver but fails ENFORCE_CDO_WS=true.",
+    "disposition": "fixed",
+    "evidence": "The ungated loop adds \"true\". D14: M8a fails on the \"true\" arm, exit 101, restored sha 6d7c26821a39. Scope accepted by both stand-ins: the value list is curated regression shapes, not exhaustive, as the test comment states.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "ON2",
+    "source": "opus (stand-in)",
+    "round": 3,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "The exactly-once comment claimed the single copy is 'in the panic', but the code checks only the count.",
+    "disposition": "fixed",
+    "evidence": "Comment corrected to say it checks the count, not the location.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "ON3",
+    "source": "opus (stand-in)",
+    "round": 3,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "The library driver checked only the uppercase WARNING: prefix, so the lowercase gap from O2 also existed there.",
+    "disposition": "fixed",
+    "evidence": "It now also asserts the drift text itself never appears, in any wording. D15: a library eprintln!(\"warning: {msg}\") fails, exit 101, restored sha 22ec8327a656.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "ON4",
+    "source": "opus (stand-in)",
+    "round": 3,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "Three comments left stale by the O1 fix (driver doc, test history doc, counter doc).",
+    "disposition": "fixed",
+    "evidence": "All three rewritten to describe the current code.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "ON5",
+    "source": "opus + fable (N6) (stand-in)",
+    "round": 3,
+    "file": ".agent/issue-30/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Ledger and CHANGELOG counts lagged the code: five of seven entry points, no event caller, seven counterexamples, D9-D13 without recorded hashes.",
+    "disposition": "fixed",
+    "evidence": "Six of seven entry points; event audit has a caller; ten counterexamples; D9/D14/D15 printed with restore hashes.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "OL1",
+    "source": "opus (stand-in for flash)",
+    "round": 4,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "The exactly-once assert message still claimed the single copy is '(in the failure)', a location the code does not check.",
+    "disposition": "fixed",
+    "evidence": "Message now says 'exactly once across both streams'. Wording only, commit 3a4a869c; drift tests green.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "OL2",
+    "source": "opus (stand-in for flash)",
+    "round": 4,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "A comment said the library check catches the message 'however it is prefixed or cased', but the match is case-sensitive.",
+    "disposition": "fixed",
+    "evidence": "Comment now names the prefixes it catches and states the match is case-sensitive. Wording only, commit 3a4a869c; drift tests green.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "OL3",
+    "source": "opus (stand-in for flash)",
+    "round": 4,
+    "file": "tests/program_resolve_harness.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "A probe comment still gave O3's superseded reason, 'would need a real fixture'.",
+    "disposition": "fixed",
+    "evidence": "Comment now gives the real reason: driving the semantic audit on the fixture would write into the developer's local cdo-deanon-map.json. Wording only, commit 3a4a869c; drift tests green.",
+    "hash": "d027ab095abcc915e7db462e4ea02aa941950995ef4850918c6f5e6519583954",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  }
+]

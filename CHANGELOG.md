@@ -152,6 +152,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Workspace-drift enforcement moved out of the library and to the gate boundary**
+  (`src/program/resolve/semantic_golden.rs`, `tests/program_resolve_harness.rs`; issue #30).
+  `warn_on_workspace_drift` read `std::env::var("ENFORCE_CDO_WS")` and expressed failure
+  with `assert!` — a library helper deciding, from process-global state, that the whole
+  run should die. The policy was right; its location was not.
+  - `workspace_drift(stamped, workspace_root) -> Option<String>` replaces it and is
+    POLICY-FREE: no `std::env`, no `assert!`, no `eprintln!`. It still probes git and reads
+    `.alpackages` — it is not a pure function in the mathematical sense — but it reports
+    drift and decides nothing about what a mismatch means.
+  - A `pub type DriftHandler = fn(&str)` is threaded to the three check points and
+    through all seven entry points (`run_cdo_semantic_audit{,_on,_on_raw}`,
+    `run_cdo_trigger_audit{,_on}`, `run_cdo_event_audit{,_on}`). A handler that panics
+    now does so as the CALLER's choice, in the caller's code.
+  - The handler is `drift_handler` in `tests/program_resolve_harness.rs`, beside that
+    file's existing `ENFORCE_CDO_WS` read and the eight audit call sites it serves.
+    `== "1"` semantics, the message text and the warning-vs-fail policy are preserved
+    byte-for-byte; ungated runs still warn and continue, `scripts/cdo-gate` still fails.
+  - **Behaviour is unchanged. What changed is who decides.** The latent hazard the issue
+    filed — a `mint-goldens` run acquiring a panic it never asked for, should minting ever
+    start calling the audits — is closed at the root rather than at each caller.
+  - Three of the seven entry points — the `&Path`-taking wrappers — had NO callers anywhere
+    in the tree and were referenced only from doc comments. They were threaded like the rest
+    rather than deleted, because deleting public API is not this issue's scope; filed as a
+    discovery instead. `run_cdo_trigger_audit` and `run_cdo_event_audit` now each have one real
+    caller, the enforcement probe in `tests/program_resolve_harness.rs`, which drives both of
+    their drift check points and counts the handler calls. `run_cdo_semantic_audit` returns
+    before its check point on an empty directory, so it still has no caller and its check point
+    is reached only by the CDO-gated tests, where the stamp matches. That is a stated gap, not a
+    pinned one.
+  - **The handler is tested with the variable unset, `"0"`, `"true"` and `"1"`.** The rule is
+    `== "1"`, so every state but the last must warn and continue. Each state catches a different
+    wrongly-written handler that got through review at some point: one that panicked when the
+    variable was absent, one that checked presence, and one that enforced on any value but `"0"`.
+    Ten ways around these assertions were found in review; each is now a recorded mutation that
+    fails the suite.
+
 - **`post-merge` runs its gates on the MERGE COMMIT in a disposable worktree**
   instead of checking that SHA out in the shared checkout, and the shared
   checkout is on `master` when the command returns — no `reset`, no revert and
