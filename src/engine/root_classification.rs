@@ -23,13 +23,13 @@ use std::path::Path;
 use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
 
 // ---------------------------------------------------------------------------
-// RootKind — the 12-value union, declaration order is ROOT_KIND_VALUES.
+// RootKind — the 13-value union, declaration order is ROOT_KIND_VALUES.
 // ---------------------------------------------------------------------------
 
 /// Canonical RootKind values in declaration order (al-sem `ROOT_KIND_VALUES`).
 /// The single source of truth for valid kinds + the canonical sort order.
 ///
-/// TEN of the twelve are DERIVED by the AST pass ([`kinds_for`]). The remaining
+/// ELEVEN of the thirteen are DERIVED by the AST pass ([`kinds_for`]). The remaining
 /// two — `web-service-exposed` and `job-queue-entrypoint` — are currently
 /// supplied only by the config overlay. Source may indicate capability; the
 /// overlay supplies user-asserted publication or scheduling information (a
@@ -37,16 +37,16 @@ use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
 /// [`overlay_config_roots`]).
 ///
 /// Half of that split is asserted executably, and the honest half is worth
-/// naming: `ast_pass_emits_exactly_the_ten_derivable_kinds` proves the ten ARE
+/// naming: `ast_pass_emits_exactly_the_eleven_derivable_kinds` proves the eleven ARE
 /// emitted, over one hand-built witness set, and
-/// `declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two`
+/// `declared_kinds_minus_the_derivable_eleven_are_exactly_the_overlay_only_two`
 /// bounds the complement over the CONSTANTS.
 ///
 /// Neither proves the other direction -- that the remaining two are NEVER
-/// emitted. An eleventh insertion added in a branch no witness exercises (a
+/// emitted. A twelfth insertion added in a branch no witness exercises (a
 /// `Query` arm, say) would leave both tests green. Saying "asserted executably"
 /// flat would be the over-claim CLAUDE.md legislates against.
-pub const ROOT_KIND_VALUES: [&str; 12] = [
+pub const ROOT_KIND_VALUES: [&str; 13] = [
     "trigger-table",
     "trigger-page",
     // Derived: a Page / PageExtension trigger whose enclosing member is an action
@@ -65,6 +65,10 @@ pub const ROOT_KIND_VALUES: [&str; 12] = [
     "job-queue-entrypoint",
     "public-procedure",
     "test-procedure",
+    // Appended (never inserted): `canonical_kinds` filters this array in
+    // declaration order, so appending leaves every existing kind's relative
+    // order — and therefore every existing golden — unchanged.
+    "onrun-codeunit",
 ];
 
 /// All current kinds are externally reachable (al-sem `isExternallyReachableKind`).
@@ -213,6 +217,16 @@ fn kinds_for(routine: &L3Routine, object: &L3Object) -> Vec<String> {
             }
             _ => {}
         }
+    }
+
+    // Codeunit OnRun — the entry point `Codeunit.Run(id)` and the job-queue
+    // runner reach. Keyed on routine.kind == "trigger" (NOT the name alone), so a
+    // plain procedure that happens to be called OnRun is not a root.
+    if routine.kind == "trigger"
+        && object.object_type == "Codeunit"
+        && routine.name.eq_ignore_ascii_case("OnRun")
+    {
+        set.insert("onrun-codeunit".to_string());
     }
 
     // Event-subscriber — direct from routine.kind.
@@ -720,11 +734,11 @@ pub fn project_r4f_root_classifications(
 // the exact failure CLAUDE.md records five instances of.
 //
 // The one deliberate exception is
-// `declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two`,
+// `declared_kinds_minus_the_derivable_eleven_are_exactly_the_overlay_only_two`,
 // which runs through NEITHER -- it is a pure assertion over two constants, and
 // so it also passes under the discrimination break. That is correct for what it
 // guards (a newly declared kind nobody emits) and is why
-// `ast_pass_emits_exactly_the_ten_derivable_kinds` exists to cover the other
+// `ast_pass_emits_exactly_the_eleven_derivable_kinds` exists to cover the other
 // direction. The two are complementary; neither alone covers both. Every precondition is hand-stated by ASSIGNMENT — no production
 // code is asked to produce a shape for the test.
 // ---------------------------------------------------------------------------
@@ -736,10 +750,10 @@ mod tests {
     use crate::engine::l3::al_attributes::AttributeInfo;
     use crate::engine::l3::l3_workspace::RoutineVariables;
 
-    /// The ten kinds the AST pass derives. A8 asserts the union of `classify_roots`
+    /// The eleven kinds the AST pass derives. A8 asserts the union of `classify_roots`
     /// over the witness workspace EQUALS this; A9 asserts `ROOT_KIND_VALUES` minus
     /// this is exactly the two overlay-only kinds.
-    const DERIVABLE_KINDS: [&str; 10] = [
+    const DERIVABLE_KINDS: [&str; 11] = [
         "trigger-table",
         "trigger-page",
         "page-action",
@@ -750,6 +764,7 @@ mod tests {
         "api-page",
         "public-procedure",
         "test-procedure",
+        "onrun-codeunit",
     ];
 
     // -- hand-state constructors -------------------------------------------
@@ -998,13 +1013,13 @@ mod tests {
 
     // -- A8 -----------------------------------------------------------------
 
-    /// Witnesses covering all ten derivable kinds, INCLUDING a real action
+    /// Witnesses covering all eleven derivable kinds, INCLUDING a real action
     /// trigger. Note what that witness does and does not buy, since an earlier
     /// version of this comment overstated it: because `DERIVABLE_KINDS` now
     /// LISTS `page-action`, omitting the action witness makes A8 fail
     /// immediately, not silently pass after a deletion. The witness is required
     /// for A8 to pass at all; it is not what makes the deletion detectable.
-    fn ten_kind_witness_workspace() -> L3Workspace {
+    fn eleven_kind_witness_workspace() -> L3Workspace {
         let mut objects = Vec::new();
         let mut routines = Vec::new();
 
@@ -1058,12 +1073,18 @@ mod tests {
         }];
         routines.push(test_proc);
 
+        // onrun-codeunit
+        objects.push(object("app/Codeunit/9", "Codeunit"));
+        let mut onrun = routine("r11", "app/Codeunit/9", "trigger");
+        onrun.name = "OnRun".to_string();
+        routines.push(onrun);
+
         workspace(objects, routines)
     }
 
     #[test]
-    fn ast_pass_emits_exactly_the_ten_derivable_kinds() {
-        let ws = ten_kind_witness_workspace();
+    fn ast_pass_emits_exactly_the_eleven_derivable_kinds() {
+        let ws = eleven_kind_witness_workspace();
         // UNFILTERED union — every kind any witness produces, nothing dropped.
         let emitted: BTreeSet<String> = classify_roots(&ws)
             .iter()
@@ -1072,15 +1093,15 @@ mod tests {
         let expected: BTreeSet<String> = DERIVABLE_KINDS.iter().map(|k| (*k).to_string()).collect();
         assert_eq!(
             emitted, expected,
-            "the AST pass must emit exactly the ten derivable kinds"
+            "the AST pass must emit exactly the eleven derivable kinds"
         );
     }
 
     // -- A9 -----------------------------------------------------------------
 
     #[test]
-    fn declared_kinds_minus_the_derivable_ten_are_exactly_the_overlay_only_two() {
-        // Asserted, not merely documented: without this a THIRTEENTH declared-but-
+    fn declared_kinds_minus_the_derivable_eleven_are_exactly_the_overlay_only_two() {
+        // Asserted, not merely documented: without this a FOURTEENTH declared-but-
         // unemitted kind would leave A8 green.
         let unemitted: Vec<&str> = ROOT_KIND_VALUES
             .iter()
@@ -1090,6 +1111,93 @@ mod tests {
         assert_eq!(
             unemitted,
             vec!["web-service-exposed", "job-queue-entrypoint"]
+        );
+    }
+
+    // -- A10: the onrun-codeunit predicate, one row per conjunct ------------
+    //
+    // A8's witness union proves the kind IS emitted, but it cannot pin WHICH of
+    // the three conjuncts earns it: in that workspace `r11` is the only
+    // Codeunit-owned trigger AND the only routine named OnRun, so deleting any
+    // single conjunct still leaves exactly `r11` qualifying and A8 green. These
+    // rows state each precondition literally by ASSIGNMENT and run through
+    // `classify_roots`, so each conjunct has its own failing witness. The
+    // CHANGELOG and the predicate's own comment ADVERTISE the second row's
+    // guard; before A10 it was asserted nowhere.
+
+    /// One object of `object_type`, one routine of `kind` named `name`, run
+    /// through `classify_roots`. Returns its `kinds` (empty when unclassified).
+    fn codeunit_row(object_type: &str, kind: &str, name: &str) -> Vec<String> {
+        let obj = object("app/Codeunit/50100", object_type);
+        let mut r = routine("r1", "app/Codeunit/50100", kind);
+        r.name = name.to_string();
+        let ws = workspace(vec![obj], vec![r]);
+        match classify_roots(&ws).first() {
+            Some(rc) => rc.kinds.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn codeunit_onrun_trigger_is_onrun_codeunit() {
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "OnRun"),
+            vec!["onrun-codeunit".to_string()]
+        );
+        // Case-insensitively, per `eq_ignore_ascii_case`.
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "ONRUN"),
+            vec!["onrun-codeunit".to_string()]
+        );
+    }
+
+    #[test]
+    fn codeunit_procedure_named_onrun_is_only_public_procedure() {
+        // The guard the CHANGELOG advertises: the predicate keys on
+        // `kind == "trigger"`, never the name, so a default-access procedure that
+        // happens to be called OnRun must NOT gain the trigger-derived kind.
+        assert_eq!(
+            codeunit_row("Codeunit", "procedure", "OnRun"),
+            vec!["public-procedure".to_string()]
+        );
+    }
+
+    #[test]
+    fn codeunit_trigger_not_named_onrun_is_unclassified() {
+        // Pins the name conjunct. A Codeunit has no object-level trigger other
+        // than OnRun in real AL, so this is a contract on the predicate, not a
+        // reachable shape -- stated literally for exactly that reason.
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "OnSomethingElse"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn non_codeunit_trigger_named_onrun_is_not_onrun_codeunit() {
+        // Pins the object_type conjunct. A Table trigger named OnRun keeps its
+        // own kind and must not acquire the codeunit one.
+        assert_eq!(
+            codeunit_row("Table", "trigger", "OnRun"),
+            vec!["trigger-table".to_string()]
+        );
+    }
+
+    #[test]
+    fn install_codeunit_onrun_carries_both_kinds() {
+        // The subtype rule applies to every routine in the object, triggers
+        // included, so an Install codeunit's OnRun legitimately carries two
+        // kinds -- in ROOT_KIND_VALUES declaration order, install first.
+        let mut obj = object("app/Codeunit/50100", "Codeunit");
+        obj.object_subtype = Some("Install".to_string());
+        let mut r = routine("r1", "app/Codeunit/50100", "trigger");
+        r.name = "OnRun".to_string();
+        let ws = workspace(vec![obj], vec![r]);
+        let roots = classify_roots(&ws);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            roots[0].kinds,
+            vec!["install-codeunit".to_string(), "onrun-codeunit".to_string()]
         );
     }
 

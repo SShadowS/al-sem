@@ -51,6 +51,22 @@ const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 /// AST-emittable WITHOUT `trigger-page` (an exclusive rule, or a new arm on
 /// another object type). That would flip this gate from reject to accept
 /// silently: no golden projects d50 output for an action-bearing fixture.
+///
+/// `onrun-codeunit` IS listed, and the reason is the whole point of the kind.
+/// `Codeunit.Run(id)` can be called from ARBITRARY code, including from inside a
+/// caller that already has an open write transaction -- AL has no nested
+/// transactions, so the callee joins the caller's. An `OnRun` therefore is NOT
+/// provably at the top of its own transaction, and a `Commit()` inside it may be
+/// committing the caller's uncommitted work. That is the same argument that puts
+/// `public-procedure` on this list. The job-queue path DOES enter an `OnRun` at
+/// top-of-transaction, but that case has its own kind (`job-queue-entrypoint`,
+/// overlay-supplied) which is deliberately absent here; when both apply the
+/// ANY-quantified check below takes the untrusted verdict, which is the
+/// fail-closed direction.
+///
+/// Before #12 an `OnRun` reached this gate UNCLASSIFIED, and an absent slot is
+/// treated as trusted, so it passed by accident. Listing the kind makes that an
+/// explicit, tested decision rather than a side effect of a missing arm.
 const D50_UNTRUSTED_ROOT_KINDS: &[&str] = &[
     "event-subscriber",
     "install-codeunit",
@@ -61,6 +77,7 @@ const D50_UNTRUSTED_ROOT_KINDS: &[&str] = &[
     "trigger-table",
     "trigger-page",
     "report-trigger",
+    "onrun-codeunit",
 ];
 
 /// Hand-rolled `^(Post|Apply|Release)[A-Z]` check — mirrors al-sem's `POSTING_NAME_RE`.
@@ -842,6 +859,47 @@ mod tests {
         let ctx = minimal_ctx(&routines, vec![rc]);
         let objects: HashMap<&str, &L3Object> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2b", &ctx, &objects));
+    }
+
+    #[test]
+    fn cap2_untrusted_root_onrun_codeunit_returns_false() {
+        // #12: `Codeunit.Run(id)` is callable from arbitrary code, so an OnRun can
+        // run inside a caller's already-open write transaction (AL has no nested
+        // transactions) -- its Commit() is therefore not provably effective at
+        // top-of-transaction. Before #12 an OnRun reached cap 2 with NO slot and
+        // passed by accident, so this row is the kind's trust verdict made
+        // explicit. Preconditions hand-stated by ASSIGNMENT.
+        let r = routine("r2c", "trigger");
+        let routines = vec![r];
+        let rc = mk_root_class("r2c", &["onrun-codeunit"]);
+        let ctx = minimal_ctx(&routines, vec![rc]);
+        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        assert!(!is_explicit_commit_proven_effective("r2c", &ctx, &objects));
+    }
+
+    #[test]
+    fn cap2_onrun_codeunit_beats_a_trusted_job_queue_kind() {
+        // The cap is ANY-quantified: one untrusted kind decides even when a
+        // trusted overlay kind is present. Fail-closed, and asserted rather than
+        // assumed -- a job-queue-ONLY root still passes (next row).
+        let r = routine("r2d", "trigger");
+        let routines = vec![r];
+        let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
+        let ctx = minimal_ctx(&routines, vec![rc]);
+        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        assert!(!is_explicit_commit_proven_effective("r2d", &ctx, &objects));
+    }
+
+    #[test]
+    fn cap2_job_queue_entrypoint_alone_still_passes() {
+        // Guards against over-correction: adding onrun-codeunit must not make the
+        // overlay-only job-queue kind untrusted.
+        let r = routine("r2e", "trigger");
+        let routines = vec![r];
+        let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
+        let ctx = minimal_ctx(&routines, vec![rc]);
+        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        assert!(is_explicit_commit_proven_effective("r2e", &ctx, &objects));
     }
 
     // -----------------------------------------------------------------------

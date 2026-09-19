@@ -185,7 +185,7 @@ fn item3_unknown_root_kind_errors_exit1() {
     let err = validate_roots(&["not-a-root".to_string()]).unwrap_err();
     assert_eq!(
         err,
-        "unknown root kind 'not-a-root'; valid: trigger-table, trigger-page, page-action, report-trigger, event-subscriber, install-codeunit, upgrade-codeunit, api-page, web-service-exposed, job-queue-entrypoint, public-procedure, test-procedure"
+        "unknown root kind 'not-a-root'; valid: trigger-table, trigger-page, page-action, report-trigger, event-subscriber, install-codeunit, upgrade-codeunit, api-page, web-service-exposed, job-queue-entrypoint, public-procedure, test-procedure, onrun-codeunit"
     );
 }
 

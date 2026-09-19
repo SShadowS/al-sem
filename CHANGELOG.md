@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A codeunit `OnRun` is now a classified root (#12).** `kinds_for` matched `kind ==
+  "trigger"` only for Table/TableExtension/Page/PageExtension/Report, so a Codeunit `OnRun` —
+  the routine `Codeunit.Run(id)` and the job-queue runner reach — received **no** classification
+  and was skipped by `classify_roots` entirely. A thirteenth root kind `onrun-codeunit` is
+  appended to `ROOT_KIND_VALUES` (appended, never inserted: `canonical_kinds` filters that array
+  in declaration order, so no existing kind's position in that order changes)
+  and emitted for a Codeunit trigger named `OnRun`. The predicate keys on `kind == "trigger"`,
+  never the name, so a default-access procedure called `OnRun` still classifies only as
+  `public-procedure`.
+
+  Goldens: 13 files move across two families, each a new `onrun-codeunit` classification or its
+  anchor -- `tests/cli-b-goldens/*/ws-d14-dead-routine.*` (11) and
+  `tests/r4f-goldens/ws-d50-{neg,pos}.rootclass.golden.json` (2, the `Codeunit.Run` workers).
+  No CDO-gated result moves.
+
+  Scope correction worth stating: this does **not** fix a general reachability blind spot.
+  `engine::l5::entry_points::find_entry_points` already selects any `trigger` routine
+  independently of `RootClassification`. What was missing is the root-classification-driven
+  surfaces — the r4f projection, `policy`'s `root.kinds` predicate, and `fingerprint --roots`
+  filtering.
+
+### Changed
+
+- **A codeunit `OnRun` commit root is UNTRUSTED for d50 and the ordering engine (#12).** The new
+  kind is listed in `D50_UNTRUSTED_ROOT_KINDS` (`src/engine/l5/detectors/d50.rs`) and
+  `is_untrusted_root_kind` (`src/engine/l5/ordering_engine.rs`). Reason: `Codeunit.Run(id)` is
+  callable from arbitrary code, and AL has no nested transactions, so an `OnRun` can execute
+  inside a caller's already-open write transaction -- its `Commit()` is therefore NOT provably
+  effective at top-of-transaction. That is the same argument that lists `public-procedure`. The
+  job-queue path does enter an `OnRun` at top-of-transaction, but that case carries its own
+  overlay kind (`job-queue-entrypoint`, deliberately trusted); when both apply the ANY-quantified
+  check takes the untrusted verdict, which is the fail-closed direction.
+
+  This is a DELIBERATE behaviour change, not a side effect. Before #12 an `OnRun` reached both
+  gates with no classification at all, and an absent slot is treated as trusted (`None => true`),
+  so it passed by accident; naming the kind without listing it here would have frozen that
+  accident as an explicit decision. Both gates carry their own discriminating tests (removing the
+  kind from either list fails that list's rows and no others).
+
+  MEASURED on the pinned CDO baseline (`U:/Git/DO-cdo-baseline/Cloud`, detached `bc3ccb18`) --
+  the issue's "measured on a real workspace, not assumed" acceptance item: d50/d51 output is
+  BYTE-IDENTICAL before and after, in both `--scope primary` and `--scope all` (3 d50 findings
+  -- 2 medium, 1 info -- and 0 d51, over 5479 routines). The full default detector run is
+  byte-identical too (2069 findings, 24 detectors firing). Read that honestly: the trust change
+  is DORMANT on this workspace, not exercised there -- none of the three d50 chains roots at an
+  `OnRun`. What proves the new verdict is the unit rows above, not the workspace run.
+
+  One further surface, verified rather than assumed: in cross-app mode `build_cross_app_l3_r4`
+  extends `ws.routines` with dependency routines BEFORE `compute_root_classifications` runs
+  (`src/engine/deps/cross_app_l3.rs:503-508`), so a DEPENDENCY codeunit's `OnRun` now also
+  classifies. Additive; no golden projects cross-app root classifications, and the
+  byte-identical full CDO run above covers it.
+
+
+- **Published output: the digest and prove `routine.anchor` for a codeunit `OnRun` now points at
+  the declaration rather than at the first call site in its body (#12).** This is not a new rule
+  — `digest_cli.rs`'s three-tier precedence has always preferred a root classification's
+  `source_anchor`, falling through to the operation and call-site indexes only when absent. The
+  OnRun was the single unclassified outlier; in the pre-change goldens 35 of 35 classified
+  routines already anchored at tier 1. Consumers pinning that field will see it move.
+
 - **A declared reviewer stand-in for `agentflow attest`** (`scripts/agentflow/{cli,mergeops}.py`).
   `attest` required every findings-register entry to be `accepted` by `astra` and `flash`, read
   by name. On 2026-09-18 pi's single provider returned `429 quota exceeded` for every model it

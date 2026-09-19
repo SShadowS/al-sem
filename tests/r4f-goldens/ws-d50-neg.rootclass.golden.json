@@ -1,11 +1,20 @@
 {
   "fixtureName": "ws-d50-neg",
-  "classificationCount": 1,
+  "classificationCount": 2,
   "classifications": [
     {
       "routineId": "11111111-0000-0000-0000-00000000d50b:Codeunit:50210#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359",
       "kinds": [
         "public-procedure"
+      ],
+      "externallyReachable": true,
+      "source": "ast",
+      "confidence": "static"
+    },
+    {
+      "routineId": "11111111-0000-0000-0000-00000000d50b:Codeunit:50211#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+      "kinds": [
+        "onrun-codeunit"
       ],
       "externallyReachable": true,
       "source": "ast",

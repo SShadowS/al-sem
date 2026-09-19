@@ -5,16 +5,44 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "fingerprint-query",
   "payload": {
-    "blocks": [],
+    "blocks": [
+      {
+        "classificationSource": "ast",
+        "coverage": {
+          "directStatus": "complete",
+          "inheritedStatus": "complete",
+          "reasons": [],
+          "status": "complete",
+          "unknownTargets": []
+        },
+        "dispatch": {
+          "resolved": [],
+          "unresolved": []
+        },
+        "families": [],
+        "mayCommit": {
+          "presence": "no"
+        },
+        "requiredPermissions": [],
+        "rootKinds": [
+          "onrun-codeunit"
+        ],
+        "routine": {
+          "display": "OnRun",
+          "objectDisplay": "",
+          "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+        }
+      }
+    ],
     "diagnostics": [],
     "filters": {
       "includeInherited": true,
       "witnessLimit": 3
     },
     "summary": {
-      "renderedBlocks": 0,
+      "renderedBlocks": 1,
       "rootsConfigIgnored": false,
-      "totalClassifications": 0
+      "totalClassifications": 1
     },
     "workspaceFingerprint": "27982e562e0f7d50b80b3135bd69215672059411d7f470a27618b9037ee83d05"
   },

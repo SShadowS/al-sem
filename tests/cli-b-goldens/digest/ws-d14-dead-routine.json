@@ -22,9 +22,9 @@
         "entryDiagnostics": [],
         "routine": {
           "anchor": {
-            "column": 2,
+            "column": 1,
             "file": "ws:src/codeunit.al",
-            "line": 4,
+            "line": 2,
             "sourceKind": "source"
           },
           "display": "OnRun",
