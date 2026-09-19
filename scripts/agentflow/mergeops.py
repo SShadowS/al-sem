@@ -10,13 +10,19 @@ all of base, head, and body are re-checked; the merge itself uses
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .gh import Gh
 from .gitops import Git
 from .protect import evidence_files
 from .state import Ctx, read_json, write_json
+
+
+# The two review slots every register entry must be `accepted` in. A slot is
+# normally filled by the reviewer it is named after; `attest --substitute`
+# lets a named stand-in fill it when that reviewer is unreachable.
+ROSTER = ("astra", "flash")
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,12 @@ class Attestation:
     # hand-built one: `attest` always sets it) has nothing to re-check and is
     # left to the other four bindings.
     register_path: str = ""
+    # Review slot -> the reviewer whose marks actually filled it. Published with
+    # the rest of the attestation, so a merge signed by a stand-in says so in
+    # its public PR comment instead of looking like an ordinary one. Absent from
+    # attestations written before substitution existed, which were all signed
+    # by the named roster.
+    reviewers: dict = field(default_factory=lambda: {r: r for r in ROSTER})
 
 
 def body_hash(text: str) -> str:
