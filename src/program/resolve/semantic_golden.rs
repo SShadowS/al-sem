@@ -278,7 +278,7 @@ pub fn dependency_closure_digest(workspace_root: &Path) -> Option<String> {
 /// command fails — this is provenance metadata, not a hard requirement. Used
 /// by the dev-mint tool (to STAMP [`MintMetadata`] at mint time) and by the
 /// `run_cdo_*_audit` functions (to compare the CURRENT workspace against the
-/// loaded golden's stamp and warn on drift).
+/// loaded golden's stamp and report drift to the caller's `DriftHandler`).
 #[must_use]
 pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool>) {
     let sha = std::process::Command::new("git")
@@ -2420,8 +2420,8 @@ fn run_cdo_semantic_audit_on_with(
     let golden_loaded = golden.is_some();
     let mut golden = golden.unwrap_or_default();
     let l3_total = golden.entries.len();
-    // 1B.3b Task 1 fix (Fix 4): warn (never fail) when CDO_WS has drifted
-    // from the golden's mint-time stamp.
+    // 1B.3b Task 1 fix (Fix 4): report drift from the golden's mint-time
+    // stamp to the caller's handler; what drift MEANS is the caller's call.
     if golden_loaded && let Some(msg) = workspace_drift(&golden.metadata, workspace_root) {
         on_drift(&msg);
     }

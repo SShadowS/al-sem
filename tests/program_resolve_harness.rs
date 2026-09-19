@@ -3031,14 +3031,23 @@ fn child_probe_library_under_enforcement() {
 /// libtest captures stderr but never hands it to the test -- and it is also why
 /// nothing here calls the `unsafe` `std::env::set_var`, which would race every
 /// other test thread in this process.
-fn run_probe_with_enforcement(probe: &str, enforce: &str) -> (bool, String, String) {
+///
+/// `enforce: None` REMOVES the variable rather than setting some other value.
+/// That is the real ungated state -- no developer's shell sets
+/// `ENFORCE_CDO_WS=0`, and `scripts/cdo-gate` only ever exports `=1`. An
+/// earlier version passed `"0"`, which let a handler that panics whenever the
+/// variable is ABSENT pass every assertion here while breaking every
+/// developer's drifted run.
+fn run_probe_with_enforcement(probe: &str, enforce: Option<&str>) -> (bool, String, String) {
     let exe = std::env::current_exe().expect("current_exe");
-    let out = std::process::Command::new(exe)
-        .args([probe, "--exact", "--nocapture", "--test-threads", "1"])
-        .env(PROBE_ENV, "1")
-        .env("ENFORCE_CDO_WS", enforce)
-        .output()
-        .expect("re-exec this test binary");
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([probe, "--exact", "--nocapture", "--test-threads", "1"])
+        .env(PROBE_ENV, "1");
+    match enforce {
+        Some(v) => cmd.env("ENFORCE_CDO_WS", v),
+        None => cmd.env_remove("ENFORCE_CDO_WS"),
+    };
+    let out = cmd.output().expect("re-exec this test binary");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -3057,13 +3066,15 @@ fn run_probe_with_enforcement(probe: &str, enforce: &str) -> (bool, String, Stri
 /// keeping it green too. A later version merged stdout and stderr, which let a
 /// `println!` masquerade as the stderr warning. A third checked only the exact
 /// sentinel-bearing line, which let `eprintln!("WARNING: {msg:?}")` through on a
-/// quotation mark. All four mutations fail this version.
+/// quotation mark. A fourth tested the "ungated" arm with `ENFORCE_CDO_WS=0`,
+/// a value nothing ever sets, so a handler that panics when the variable is
+/// merely ABSENT passed it. All five mutations fail this version.
 #[test]
 fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
     let warning = format!("WARNING: {DRIFT_SENTINEL}");
 
     // A3: ungated, the handler warns ON STDERR and execution continues.
-    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", "0");
+    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", None);
     assert!(ok, "ungated, drift must warn and continue:\n{err}");
     assert!(
         out.contains(PROBE_DONE),
@@ -3076,7 +3087,7 @@ fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
 
     // A4 + A5: gated, the run fails carrying the message, and the WARNING line
     // is emitted on NEITHER stream.
-    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", "1");
+    let (ok, out, err) = run_probe_with_enforcement("child_probe_drift_handler", Some("1"));
     assert!(
         !ok,
         "under ENFORCE_CDO_WS=1 drift must FAIL the run, not narrate at it:\n{err}"
@@ -3107,7 +3118,8 @@ fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
 /// of issue #30.
 #[test]
 fn library_ignores_enforcement_env() {
-    let (ok, out, err) = run_probe_with_enforcement("child_probe_library_under_enforcement", "1");
+    let (ok, out, err) =
+        run_probe_with_enforcement("child_probe_library_under_enforcement", Some("1"));
     assert!(
         ok,
         "the library must not act on ENFORCE_CDO_WS -- only the handler its caller \
@@ -3128,7 +3140,7 @@ fn library_ignores_enforcement_env() {
 #[test]
 fn probe_driver_rejects_a_child_that_ran_nothing() {
     // (a) a name that matches no test at all
-    let (ok, out, _err) = run_probe_with_enforcement("issue30_no_such_probe_exists", "1");
+    let (ok, out, _err) = run_probe_with_enforcement("issue30_no_such_probe_exists", Some("1"));
     assert!(
         ok,
         "libtest is expected to exit 0 on a filter that matches nothing -- that is \
