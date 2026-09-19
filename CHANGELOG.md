@@ -32,6 +32,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A codeunit `OnRun` commit root is UNTRUSTED for d50 and the ordering engine (#12).** The new
+  kind is listed in `D50_UNTRUSTED_ROOT_KINDS` (`src/engine/l5/detectors/d50.rs`) and
+  `is_untrusted_root_kind` (`src/engine/l5/ordering_engine.rs`). Reason: `Codeunit.Run(id)` is
+  callable from arbitrary code, and AL has no nested transactions, so an `OnRun` can execute
+  inside a caller's already-open write transaction -- its `Commit()` is therefore NOT provably
+  effective at top-of-transaction. That is the same argument that lists `public-procedure`. The
+  job-queue path does enter an `OnRun` at top-of-transaction, but that case carries its own
+  overlay kind (`job-queue-entrypoint`, deliberately trusted); when both apply the ANY-quantified
+  check takes the untrusted verdict, which is the fail-closed direction.
+
+  This is a DELIBERATE behaviour change, not a side effect. Before #12 an `OnRun` reached both
+  gates with no classification at all, and an absent slot is treated as trusted (`None => true`),
+  so it passed by accident; naming the kind without listing it here would have frozen that
+  accident as an explicit decision. Both gates carry their own discriminating tests (removing the
+  kind from either list fails that list's rows and no others).
+
+  MEASURED on the pinned CDO baseline (`U:/Git/DO-cdo-baseline/Cloud`, detached `bc3ccb18`) --
+  the issue's "measured on a real workspace, not assumed" acceptance item: d50/d51 output is
+  BYTE-IDENTICAL before and after, in both `--scope primary` and `--scope all` (3 d50 findings
+  -- 2 medium, 1 info -- and 0 d51, over 5479 routines). The full default detector run is
+  byte-identical too (2069 findings, 24 detectors firing). Read that honestly: the trust change
+  is DORMANT on this workspace, not exercised there -- none of the three d50 chains roots at an
+  `OnRun`. What proves the new verdict is the unit rows above, not the workspace run.
+
+  One further surface, verified rather than assumed: in cross-app mode `build_cross_app_l3_r4`
+  extends `ws.routines` with dependency routines BEFORE `compute_root_classifications` runs
+  (`src/engine/deps/cross_app_l3.rs:503-508`), so a DEPENDENCY codeunit's `OnRun` now also
+  classifies. Additive; no golden projects cross-app root classifications, and the
+  byte-identical full CDO run above covers it.
+
+
 - **Published output: the digest and prove `routine.anchor` for a codeunit `OnRun` now points at
   the declaration rather than at the first call site in its body (#12).** This is not a new rule
   — `digest_cli.rs`'s three-tier precedence has always preferred a root classification's

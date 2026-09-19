@@ -92,6 +92,22 @@ fn is_ui_window_sink(t: &str) -> bool {
 /// A CONFIG-ONLY root asserting `["page-action"]` alone is the exception: it
 /// carries no `trigger-page` and IS treated as trusted here. That predates the
 /// derived kind and is unchanged by it.
+///
+/// `onrun-codeunit` IS listed, and the reason is the whole point of the kind.
+/// `Codeunit.Run(id)` can be called from ARBITRARY code, including from inside a
+/// caller that already has an open write transaction -- AL has no nested
+/// transactions, so the callee joins the caller's. An `OnRun` therefore is NOT
+/// provably at the top of its own transaction, and a `Commit()` inside it may be
+/// committing the caller's uncommitted work. That is the same argument that puts
+/// `public-procedure` on this list. The job-queue path DOES enter an `OnRun` at
+/// top-of-transaction, but that case has its own kind (`job-queue-entrypoint`,
+/// overlay-supplied) which is deliberately absent here; when both apply the
+/// ANY-quantified check below takes the untrusted verdict, which is the
+/// fail-closed direction.
+///
+/// Before #12 an `OnRun` reached this gate UNCLASSIFIED, and an absent slot is
+/// treated as trusted, so it passed by accident. Listing the kind makes that an
+/// explicit, tested decision rather than a side effect of a missing arm.
 fn is_untrusted_root_kind(kind: &str) -> bool {
     matches!(
         kind,
@@ -104,6 +120,7 @@ fn is_untrusted_root_kind(kind: &str) -> bool {
             | "trigger-table"
             | "trigger-page"
             | "report-trigger"
+            | "onrun-codeunit"
     )
 }
 
@@ -1518,6 +1535,42 @@ mod tests {
         assert!(!is_trusted_commit_root("r1", &snap));
         // unknown routine (no slot) → trusted.
         assert!(is_trusted_commit_root("r2", &snap));
+    }
+
+    #[test]
+    fn is_trusted_commit_root_onrun_codeunit_is_untrusted() {
+        // #12: a Codeunit OnRun is reachable via `Codeunit.Run(id)` from
+        // arbitrary code, so it can execute inside a caller's open write
+        // transaction and its Commit() is NOT provably top-of-transaction.
+        // Before #12 an OnRun arrived here with NO slot at all and took the
+        // `None => true` trusted path by accident; the kind is now listed, so
+        // the verdict is explicit. Both rows are hand-stated by ASSIGNMENT.
+        use crate::engine::l5::snapshot::SnapshotRootClassificationSlot;
+        let slot = |id: &str, kinds: Vec<&str>| SnapshotRootClassificationSlot {
+            routine_id: id.to_string(),
+            kinds: kinds.into_iter().map(|k| k.to_string()).collect(),
+            externally_reachable: true,
+            source: "ast".to_string(),
+            confidence: "high".to_string(),
+            source_anchor: None,
+            config_entry_id: None,
+            resolution_status: None,
+        };
+        let mut snap = empty_snap();
+        snap.root_classifications
+            .push(slot("r1", vec!["onrun-codeunit"]));
+        // The job-queue path DOES enter an OnRun at top-of-transaction, but the
+        // check is ANY-quantified, so the untrusted kind still decides. That is
+        // the fail-closed direction and is asserted, not assumed.
+        snap.root_classifications
+            .push(slot("r2", vec!["job-queue-entrypoint", "onrun-codeunit"]));
+        // A purely overlay-supplied job-queue root stays trusted.
+        snap.root_classifications
+            .push(slot("r3", vec!["job-queue-entrypoint"]));
+
+        assert!(!is_trusted_commit_root("r1", &snap));
+        assert!(!is_trusted_commit_root("r2", &snap));
+        assert!(is_trusted_commit_root("r3", &snap));
     }
 
     #[test]

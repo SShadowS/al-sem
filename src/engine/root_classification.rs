@@ -23,7 +23,7 @@ use std::path::Path;
 use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
 
 // ---------------------------------------------------------------------------
-// RootKind — the 12-value union, declaration order is ROOT_KIND_VALUES.
+// RootKind — the 13-value union, declaration order is ROOT_KIND_VALUES.
 // ---------------------------------------------------------------------------
 
 /// Canonical RootKind values in declaration order (al-sem `ROOT_KIND_VALUES`).
@@ -43,7 +43,7 @@ use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
 /// bounds the complement over the CONSTANTS.
 ///
 /// Neither proves the other direction -- that the remaining two are NEVER
-/// emitted. An eleventh insertion added in a branch no witness exercises (a
+/// emitted. A twelfth insertion added in a branch no witness exercises (a
 /// `Query` arm, say) would leave both tests green. Saying "asserted executably"
 /// flat would be the over-claim CLAUDE.md legislates against.
 pub const ROOT_KIND_VALUES: [&str; 13] = [
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[test]
     fn declared_kinds_minus_the_derivable_eleven_are_exactly_the_overlay_only_two() {
-        // Asserted, not merely documented: without this a THIRTEENTH declared-but-
+        // Asserted, not merely documented: without this a FOURTEENTH declared-but-
         // unemitted kind would leave A8 green.
         let unemitted: Vec<&str> = ROOT_KIND_VALUES
             .iter()
@@ -1111,6 +1111,93 @@ mod tests {
         assert_eq!(
             unemitted,
             vec!["web-service-exposed", "job-queue-entrypoint"]
+        );
+    }
+
+    // -- A10: the onrun-codeunit predicate, one row per conjunct ------------
+    //
+    // A8's witness union proves the kind IS emitted, but it cannot pin WHICH of
+    // the three conjuncts earns it: in that workspace `r11` is the only
+    // Codeunit-owned trigger AND the only routine named OnRun, so deleting any
+    // single conjunct still leaves exactly `r11` qualifying and A8 green. These
+    // rows state each precondition literally by ASSIGNMENT and run through
+    // `classify_roots`, so each conjunct has its own failing witness. The
+    // CHANGELOG and the predicate's own comment ADVERTISE the second row's
+    // guard; before A10 it was asserted nowhere.
+
+    /// One object of `object_type`, one routine of `kind` named `name`, run
+    /// through `classify_roots`. Returns its `kinds` (empty when unclassified).
+    fn codeunit_row(object_type: &str, kind: &str, name: &str) -> Vec<String> {
+        let obj = object("app/Codeunit/50100", object_type);
+        let mut r = routine("r1", "app/Codeunit/50100", kind);
+        r.name = name.to_string();
+        let ws = workspace(vec![obj], vec![r]);
+        match classify_roots(&ws).first() {
+            Some(rc) => rc.kinds.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn codeunit_onrun_trigger_is_onrun_codeunit() {
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "OnRun"),
+            vec!["onrun-codeunit".to_string()]
+        );
+        // Case-insensitively, per `eq_ignore_ascii_case`.
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "ONRUN"),
+            vec!["onrun-codeunit".to_string()]
+        );
+    }
+
+    #[test]
+    fn codeunit_procedure_named_onrun_is_only_public_procedure() {
+        // The guard the CHANGELOG advertises: the predicate keys on
+        // `kind == "trigger"`, never the name, so a default-access procedure that
+        // happens to be called OnRun must NOT gain the trigger-derived kind.
+        assert_eq!(
+            codeunit_row("Codeunit", "procedure", "OnRun"),
+            vec!["public-procedure".to_string()]
+        );
+    }
+
+    #[test]
+    fn codeunit_trigger_not_named_onrun_is_unclassified() {
+        // Pins the name conjunct. A Codeunit has no object-level trigger other
+        // than OnRun in real AL, so this is a contract on the predicate, not a
+        // reachable shape -- stated literally for exactly that reason.
+        assert_eq!(
+            codeunit_row("Codeunit", "trigger", "OnSomethingElse"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn non_codeunit_trigger_named_onrun_is_not_onrun_codeunit() {
+        // Pins the object_type conjunct. A Table trigger named OnRun keeps its
+        // own kind and must not acquire the codeunit one.
+        assert_eq!(
+            codeunit_row("Table", "trigger", "OnRun"),
+            vec!["trigger-table".to_string()]
+        );
+    }
+
+    #[test]
+    fn install_codeunit_onrun_carries_both_kinds() {
+        // The subtype rule applies to every routine in the object, triggers
+        // included, so an Install codeunit's OnRun legitimately carries two
+        // kinds -- in ROOT_KIND_VALUES declaration order, install first.
+        let mut obj = object("app/Codeunit/50100", "Codeunit");
+        obj.object_subtype = Some("Install".to_string());
+        let mut r = routine("r1", "app/Codeunit/50100", "trigger");
+        r.name = "OnRun".to_string();
+        let ws = workspace(vec![obj], vec![r]);
+        let roots = classify_roots(&ws);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            roots[0].kinds,
+            vec!["install-codeunit".to_string(), "onrun-codeunit".to_string()]
         );
     }
 
