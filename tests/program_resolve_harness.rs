@@ -3024,7 +3024,9 @@ fn child_probe_library_under_enforcement() {
 
     // The EVENT audit's check point too. Its path wrapper falls through to the
     // check point on an empty directory, so it can be driven here; the semantic
-    // audit's returns before its check point and would need a real fixture.
+    // audit's returns before its check point on an empty directory, and driving
+    // it on the real `semantic-golden` fixture would merge that fixture's sites
+    // into the developer's local `cdo-deanon-map.json`, so it is not driven.
     let report = al_sem::program::resolve::semantic_golden::run_cdo_event_audit(tmp.path(), record);
     assert!(
         report.golden_loaded,
@@ -3149,8 +3151,8 @@ fn drift_handler_warning_is_emitted_ungated_and_suppressed_gated() {
     let occurrences = out.matches(DRIFT_SENTINEL).count() + err.matches(DRIFT_SENTINEL).count();
     assert_eq!(
         occurrences, 1,
-        "under enforcement the drift message must appear exactly once (in the \
-         failure), but it appeared {occurrences} times (stdout:\n{out}\nstderr:\n{err})"
+        "under enforcement the drift message must appear exactly once across both \
+         streams, but it appeared {occurrences} times (stdout:\n{out}\nstderr:\n{err})"
     );
     assert!(
         !out.contains(PROBE_DONE),
@@ -3186,9 +3188,10 @@ fn library_ignores_enforcement_env() {
         "the library itself printed a warning; only the caller's handler may \
          (stdout:\n{out}\nstderr:\n{err})"
     );
-    // ...and in any other wording. The drift message always opens with this
-    // text, so the library printing it -- however it is prefixed or cased --
-    // shows up here.
+    // ...and with any other prefix. The drift message always opens with this
+    // text, so the library printing it -- `WARNING:`, `warning:`, or no prefix
+    // at all -- shows up here. The match is case-sensitive, so a library that
+    // lower-cased the message itself would not be caught.
     assert!(
         !err.contains("CDO workspace drifted") && !out.contains("CDO workspace drifted"),
         "the library itself printed the drift message; only the caller's handler \
