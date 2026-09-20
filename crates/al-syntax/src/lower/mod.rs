@@ -2584,7 +2584,8 @@ page 50116 P
         assert_eq!(routines.len(), 1, "the trigger must still be lowered");
         assert_eq!(
             routines[0].enclosing_member, None,
-            "a zero-width `name` must degrade to None, never Some(\"\") -- the filter \n             must stay on the whole enclosing_member, not inside the target fallback"
+            "a zero-width `name` must degrade to None, never Some(\"\") -- the filter must \
+             stay on the whole enclosing_member, not inside the target fallback"
         );
     }
 
