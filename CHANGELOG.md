@@ -354,8 +354,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A zero-width `target` now degrades to no member, for both kinds.** A malformed
     `modify()` parses with a PRESENT, empty `target`; `Some("")` took the discriminated arm of
     the id hash and minted a different, meaningless id. One shared filter on the whole
-    `enclosing_member` covers the `target` path and the `name` path, both of which
-    tree-sitter recovery can leave zero-width. Pre-existing for `modify_modification`.
+    `enclosing_member` covers the `target` path and the `name` path, both of which the
+    grammar can leave zero-width in a REQUIRED field -- with no `ERROR`, no `MISSING` and
+    no `ParseStatus` signal, so nothing else catches it. Pre-existing for
+    `modify_modification`.
 
 - **d5 and d60 no longer advise a set-based rewrite for loops that do not visit the whole set**
   (`src/engine/l2/record_op.rs`, `src/engine/l5/detectors/{mod,d5,d60}.rs`; issue #21).

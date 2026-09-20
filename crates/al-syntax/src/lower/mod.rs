@@ -2477,6 +2477,13 @@ report 50114 T
     /// The enclosing-member assert also pins the (correct) behaviour change
     /// this shape saw: before the action wrapper was captured, the trigger
     /// inherited `modify(Cust)`; now it is the action it is really in.
+    ///
+    /// PARSE-SHAPE CONTRACT: grammar-admitted, not compilable AL (a plain
+    /// `report` has no dataset `modify()`, and a dataset modify has no actions
+    /// section). Keep the nesting — it IS the test. Changing `report` to
+    /// `reportextension` would preserve the discrimination; removing the
+    /// `actions` nesting would contradict the test's own name and quietly
+    /// delete the guard.
     #[test]
     fn action_modify_nested_in_a_dataset_modify_is_not_dataset_context() {
         let src = r#"
@@ -2486,6 +2493,10 @@ report 50115 T
     {
         modify(Cust)
         {
+            trigger OnPreDataItem()
+            begin
+            end;
+
             actions
             {
                 modify(SomeAction)
@@ -2500,13 +2511,28 @@ report 50115 T
 }
 "#;
         let af = parse(src);
-        let routines: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
-        assert_eq!(
-            routines.len(),
-            1,
-            "the nested trigger must still be lowered"
+        let all: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
+        assert_eq!(all.len(), 2, "both triggers must be lowered");
+
+        // PRECONDITION, asserted rather than assumed: the sibling trigger sits
+        // directly in the DATASET modify, so dataset context is genuinely true
+        // at this depth. Without it, a future change that forced the flag off
+        // at `actions_section` would make the assertion below vacuous and this
+        // guard would stop guarding while staying green.
+        let sibling = all
+            .iter()
+            .find(|r| r.name.eq_ignore_ascii_case("OnPreDataItem"))
+            .expect("the dataset modify()'s own trigger must be lowered");
+        assert!(
+            sibling.in_dataset_modify_context,
+            "precondition: a trigger directly in a dataset modify() IS dataset context"
         );
-        let (member_name, _origin) = routines[0]
+
+        let nested = all
+            .iter()
+            .find(|r| r.name.eq_ignore_ascii_case("OnAfterGetRecord"))
+            .expect("the nested action trigger must be lowered");
+        let (member_name, _origin) = nested
             .enclosing_member
             .as_ref()
             .expect("the INNER action modify is the enclosing member");
@@ -2515,8 +2541,10 @@ report 50115 T
             "the innermost member wrapper wins, not the outer dataset modify()"
         );
         assert!(
-            !routines[0].in_dataset_modify_context,
-            "an ACTIONS-section modify is never report-dataset context, however              it is nested -- if this fails, the `in_dataset_modify_context` gate              has been widened to both modify kinds"
+            !nested.in_dataset_modify_context,
+            "an ACTIONS-section modify is never report-dataset context, however it is \
+             nested -- if this fails, the `in_dataset_modify_context` gate has been \
+             widened to both modify kinds"
         );
     }
 
@@ -2556,7 +2584,7 @@ page 50116 P
         assert_eq!(routines.len(), 1, "the trigger must still be lowered");
         assert_eq!(
             routines[0].enclosing_member, None,
-            "a zero-width `name` must degrade to None, never Some(\"\") -- the              filter must stay on the whole enclosing_member, not inside the              target fallback"
+            "a zero-width `name` must degrade to None, never Some(\"\") -- the filter \n             must stay on the whole enclosing_member, not inside the target fallback"
         );
     }
 
