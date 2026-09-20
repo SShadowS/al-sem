@@ -137,13 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `config-only` emptying to `[]` -- not, as an earlier draft of this note said, with
     the operands swapped. All three transitions are tested against their exact literal
     diagnostics.
-  - **Stated limit: action-extension modifications are NOT covered.** A pageextension's
-    `modify(SomeAction) { trigger OnAfterAction() }` gains no `page-action`, and could not
-    be fixed by adding a fifth string to the matcher: `modify_action_modification` carries
-    `target` and no `name`, so the lowerer never captures the wrapper and the trigger has
-    no enclosing member at all. Fixing it needs both wrapper capture and target-name
-    extraction, and enclosing-member names participate in stable routine identity — so it
-    carries identity consequences and is filed separately rather than folded in here.
+  - **Stated limit at the time, since CLOSED by #41 (see Fixed, below): action-extension
+    modifications were NOT covered.** A pageextension's `modify(SomeAction) { trigger
+    OnAfterAction() }` gained no `page-action`, because `modify_action_modification`
+    carries `target` and no `name` and the lowerer did not capture the wrapper, so the
+    trigger had no enclosing member for the matcher to read. Closing it needed both
+    wrapper capture and target-name extraction in the lowerer, and enclosing-member names
+    participate in stable routine identity — so it carried identity consequences and was
+    filed separately rather than folded in here.
 
 - **Post-merge verification for the autonomous issue flow: disposable worktrees,
   a durable per-merge incident record, merge-record provenance, and a two-axis
@@ -331,6 +332,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve-incident` can return.
 
 ### Fixed
+
+- **An action-extension trigger now carries its enclosing member, and classifies as
+  `page-action`** (`crates/al-syntax/src/lower/mod.rs`, `src/engine/root_classification.rs`;
+  issue #41). A pageextension's `actions { modify(SomeAction) { trigger OnAfterAction() … } }`
+  used to produce a trigger with no enclosing member at all: `modify_action_modification`
+  carries its member's name in `target` and has no `name` field, and the lowerer's member
+  wrapper arm named only the sibling `modify_modification`. Both kinds now take that arm and
+  both use the `target` fallback; `modify_action_modification` joins `is_page_action_wrapper`,
+  which closes the "stated limit" recorded under the `page-action` note above.
+  - **This RE-FINGERPRINTS affected routines, which is the point.** Enclosing-member names
+    participate in stable routine identity (`to_stable_routine_id_from_parts`) and in the
+    program engine's `RoutineNodeId`. Two sibling action `modify()` blocks each declaring
+    `OnAfterAction()` used to mint the SAME id, and run-collapse dropped one of them; they are
+    now distinct. A committed `alsem` baseline covering that shape must be re-minted.
+  - **No golden family moves and the CDO gate is dormant for this change.** Scanned: no `.al`
+    or `.rs` under the repo contains an action modification of any kind, and the pinned CDO
+    baseline's 113 action-`modify` blocks contain zero triggers or procedures. The dependency
+    ABI paths cannot be affected at all — `deps/projection.rs` and `deps/cross_app_l3.rs`
+    hardcode `enclosing_member: None` and never run the lowerer.
+  - **A zero-width `target` now degrades to no member, for both kinds.** A malformed
+    `modify()` parses with a PRESENT, empty `target`; `Some("")` took the discriminated arm of
+    the id hash and minted a different, meaningless id. One shared filter on the whole
+    `enclosing_member` covers the `target` path and the `name` path, both of which
+    tree-sitter recovery can leave zero-width. Pre-existing for `modify_modification`.
 
 - **d5 and d60 no longer advise a set-based rewrite for loops that do not visit the whole set**
   (`src/engine/l2/record_op.rs`, `src/engine/l5/detectors/{mod,d5,d60}.rs`; issue #21).

@@ -590,6 +590,12 @@ fn collect_routines<'t>(
                 // block already threads its own table via `dataitem_table` above — this
                 // flag exists purely for the resolve-time fallback that case doesn't
                 // need). See `RoutineDecl::in_dataset_modify_context`'s doc.
+                //
+                // DELIBERATELY `ModifyModification`-only, and it must NOT be folded into
+                // a shared "is a modify wrapper" helper alongside the arm below: a
+                // `modify_action_modification` is an ACTIONS-section modify and is never
+                // report-dataset context, so widening this gate would hand the resolver's
+                // dataitem-map fallback a context that does not exist.
                 let in_dataset_modify_context =
                     dataset_ctx && member.is_some_and(|m| m.kind() == RawKind::ModifyModification);
                 out.push((
@@ -627,12 +633,16 @@ fn collect_routines<'t>(
                 pending.clear();
                 collect_routines(child, dataitem_table, member, false, source, out);
             }
-            RawKind::ModifyModification => {
+            RawKind::ModifyModification | RawKind::ModifyActionModification => {
                 pending.clear();
-                // `modify_modification` carries the modified member's name in its
-                // `target` field, not `name` — always treated as a named member wrapper
-                // (unlike the generic gate below, no `Name`-field probe needed). See
-                // `lower_routine`'s enclosing-member fallback for the name extraction.
+                // Both `modify_modification` (fields/dataset/layout) and
+                // `modify_action_modification` (an `actions` section) carry the modified
+                // member's name in their `target` field, not `name` — always treated as
+                // a named member wrapper (unlike the generic gate below, no `Name`-field
+                // probe needed). See `lower_routine`'s enclosing-member fallback for the
+                // name extraction. THIS arm is the load-bearing gate: without it the
+                // generic arm below inherits the outer member and the fallback never
+                // sees the wrapper at all.
                 collect_routines(child, dataitem_table, Some(child), dataset_ctx, source, out);
             }
             _ => {
@@ -701,23 +711,45 @@ fn lower_routine<'t>(
     // Enclosing-member capture (E1): a member wrapper with a `name` → its (stripped)
     // name + the wrapper's origin (range). The engine unescapes the name + anchors.
     //
-    // `modify_modification` carries the modified member's name in its `target` field,
-    // not `name` (`RawModifyModification` has no `name()` accessor at all — Task 1,
-    // dataitem-receivers plan), so it needs a fallback. Deliberately scoped to THIS node
-    // kind only: sibling `addafter`/`addbefore`/`moveafter`/`movebefore` modification
-    // nodes also carry a `target` field, but theirs is an INSERTION ANCHOR (a reference
-    // to a different, already-existing member), never the identity of the member being
-    // declared — extending this fallback to them would be semantically wrong.
-    let enclosing_member = member.and_then(|m| {
-        let name_node = m.field(FieldName::Name).or_else(|| {
-            if m.kind() == RawKind::ModifyModification {
-                m.field(FieldName::Target)
-            } else {
-                None
-            }
-        });
-        name_node.map(|n| (ident_text(n, source), origin_of(m)))
-    });
+    // The two `modify_*` wrappers carry the modified member's name in their `target`
+    // field, not `name` (neither `RawModifyModification` nor
+    // `RawModifyActionModification` has a `name()` accessor at all), so they need a
+    // fallback. Deliberately scoped to THOSE kinds only: the sibling `add*`/`move*`
+    // modification nodes also carry a `target`, but a wrapper of that family's target is
+    // never the declaring member of a routine in its body — either the body declares
+    // that member itself (`addlast(area) { action(X) { trigger … } }`, where the ordinary
+    // name gate finds `action(X)`) or the routine sits directly in the body and has no
+    // declaring member at all (`None`, pinned by
+    // `addlast_action_modification_target_is_not_an_enclosing_member`). `modify` is the
+    // only form whose target IS the member the body belongs to. (`add`/`addfirst`/
+    // `addlast` name a CONTAINER and `addfirst_views`/`addlast_views` have no target at
+    // all, so "an anchor naming a different member" — what this comment used to say —
+    // was not even true of the family.)
+    //
+    // The kind match here is belt-and-braces: the `collect_routines` arm above is what
+    // decides these nodes are members, so the fallback only ever sees a node that arm
+    // passed. The empty filter is NOT belt-and-braces: a malformed `modify()` parses with
+    // a PRESENT, zero-width `target`, and `action_declaration.name` is a required field
+    // so tree-sitter recovery inserts a zero-width node there by the same mechanism.
+    // `Some("")` takes the discriminated arm of `to_stable_routine_id_from_parts` and
+    // mints a different, meaningless stable id, so it must degrade to `None`. Filtering
+    // the whole `enclosing_member` covers both paths with one expression (mirroring
+    // `dataitem_table_name`, which filters for exactly this reason).
+    let enclosing_member = member
+        .and_then(|m| {
+            let name_node = m.field(FieldName::Name).or_else(|| {
+                if matches!(
+                    m.kind(),
+                    RawKind::ModifyModification | RawKind::ModifyActionModification
+                ) {
+                    m.field(FieldName::Target)
+                } else {
+                    None
+                }
+            });
+            name_node.map(|n| (ident_text(n, source), origin_of(m)))
+        })
+        .filter(|(t, _)| !t.is_empty());
     let kind = if node.kind() == RawKind::TriggerDeclaration {
         RoutineKind::Trigger
     } else {
@@ -2207,6 +2239,207 @@ report 50102 T
         assert!(
             !routine.in_dataset_modify_context,
             "a real dataitem(...) trigger is not a modify() member — the flag stays false"
+        );
+    }
+
+    /// Issue #41, T1: an ACTION modification (`actions { modify(X) { trigger
+    /// … } }`) is the second member wrapper whose name lives in `target`
+    /// rather than `name`. Pre-fix the trigger had no `enclosing_member` at
+    /// all, so two sibling action `modify()` blocks each declaring
+    /// `OnAfterAction()` minted the SAME stable routine id.
+    ///
+    /// The `origin.kind_text` assert is the ONE executable join between this
+    /// lowerer test and the hand-stated `is_page_action_wrapper` test in
+    /// `src/engine/root_classification.rs`: the classifier reads exactly this
+    /// string (via `enclosing_member_range.syntax_kind`) to derive
+    /// `page-action`. Without it, pointing `origin_of` at the trigger's own
+    /// node instead of the wrapper would silently revert the classify half
+    /// while every other assert here still passed.
+    #[test]
+    fn modify_action_modification_target_becomes_enclosing_member() {
+        let src = r#"
+pageextension 50110 "P Ext" extends "Customer Card"
+{
+    actions
+    {
+        modify(MyAction)
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routine = af
+            .objects
+            .iter()
+            .flat_map(|o| &o.routines)
+            .find(|r| r.name.eq_ignore_ascii_case("OnAfterAction"))
+            .expect("the trigger nested in the action modify() must still be lowered");
+        let (member_name, origin) = routine
+            .enclosing_member
+            .as_ref()
+            .expect("an action modify()'s Target must populate enclosing_member");
+        assert_eq!(member_name, "MyAction");
+        assert_eq!(
+            origin.kind_text, "modify_action_modification",
+            "the origin must be the WRAPPER's node — this string is what \
+             root_classification::is_page_action_wrapper matches on"
+        );
+        // Cheap regression catch, NOT a pin of the ModifyModification-only kind
+        // gate: `dataset_ctx` is false throughout a pageextension by
+        // construction, so this would hold whatever that gate said.
+        assert!(
+            !routine.in_dataset_modify_context,
+            "an actions-section modify() is never report-dataset context"
+        );
+    }
+
+    /// Issue #41, T2: the IR layer strips only the OUTER quote pair
+    /// (`ident_text`). Doubled-quote unescaping (`""` → `"`) happens later, in
+    /// `ir_walk::ir_enclosing_member`. This test pins that boundary rather
+    /// than blurring it — asserting the fully unescaped name here would move
+    /// the contract one layer down and make the engine's own unescape a no-op
+    /// nobody notices losing.
+    #[test]
+    fn modify_action_modification_quoted_target_keeps_inner_escapes() {
+        let src = r#"
+pageextension 50111 "P Ext" extends "Customer Card"
+{
+    actions
+    {
+        modify("My ""Q"" Action")
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routine = af
+            .objects
+            .iter()
+            .flat_map(|o| &o.routines)
+            .find(|r| r.name.eq_ignore_ascii_case("OnAfterAction"))
+            .expect("the trigger nested in the quoted action modify() must be lowered");
+        let (member_name, _origin) = routine
+            .enclosing_member
+            .as_ref()
+            .expect("a quoted Target must populate enclosing_member");
+        assert_eq!(
+            member_name, r#"My ""Q"" Action"#,
+            "outer quotes stripped, inner doubled quotes still escaped at the IR layer"
+        );
+    }
+
+    /// Issue #41, T3 — the CONTROL that keeps the `target` fallback scoped to
+    /// the two `modify_*` kinds. An `add*`/`move*` wrapper's `target` is an
+    /// anchor or a container, never the declaring member of a routine in its
+    /// body, so widening the fallback to that family would invent a member
+    /// here.
+    ///
+    /// PARSE-SHAPE CONTRACT, deliberately not compilable AL: a real
+    /// `addlast(X)` body declares `action(Y)` blocks and the trigger lives in
+    /// one of those. Do NOT "correct" this fixture into
+    /// `addlast(X) { action(Y) { trigger … } }` — the inner
+    /// `action_declaration` has a `name` field, so the ordinary name gate
+    /// makes IT the member and the test passes under the very widening it is
+    /// supposed to catch. The grammar admits a `trigger_declaration` as a
+    /// DIRECT child of `addlast_action_modification`'s body (verified with a
+    /// real `tree-sitter parse`, v4.4.0), and only that un-shadowed shape can
+    /// fail.
+    #[test]
+    fn addlast_action_modification_target_is_not_an_enclosing_member() {
+        let src = r#"
+pageextension 50112 "P Ext" extends "Customer Card"
+{
+    actions
+    {
+        addlast(Processing)
+        {
+            trigger OnDirect()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routine = af
+            .objects
+            .iter()
+            .flat_map(|o| &o.routines)
+            .find(|r| r.name.eq_ignore_ascii_case("OnDirect"))
+            .expect("the trigger directly in the addlast() body must be lowered");
+        assert_eq!(
+            routine.enclosing_member, None,
+            "an add*/move* target is an anchor or a container — never the \
+             declaring member of a routine in its body"
+        );
+    }
+
+    /// Issue #41, T4: a malformed `modify()` still parses, with a PRESENT,
+    /// zero-width `target` node. Taking its text verbatim would mint
+    /// `Some("")`, which takes the discriminated arm of
+    /// `to_stable_routine_id_from_parts` and gives the routine a different,
+    /// meaningless stable id from the same routine with no member at all. The
+    /// `routines.len()` assert keeps the test non-vacuous: a future parse
+    /// change that dropped the routine entirely would otherwise satisfy the
+    /// `None` on its own.
+    #[test]
+    fn empty_action_modify_target_degrades_to_no_member() {
+        let src = r#"
+pageextension 50113 "P Ext" extends "Customer Card"
+{
+    actions
+    {
+        modify()
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routines: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
+        assert_eq!(routines.len(), 1, "the trigger must still be lowered");
+        assert_eq!(
+            routines[0].enclosing_member, None,
+            "a zero-width target must degrade to None, never Some(\"\")"
+        );
+    }
+
+    /// Issue #41, T5: the twin of T4 for the OTHER wrapper kind. One shared
+    /// guard covers both, so both are pinned — a per-kind copy of the filter
+    /// would pass T4 alone.
+    #[test]
+    fn empty_dataset_modify_target_degrades_to_no_member() {
+        let src = r#"
+report 50114 T
+{
+    dataset
+    {
+        modify()
+        {
+            trigger OnAfterGetRecord()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routines: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
+        assert_eq!(routines.len(), 1, "the trigger must still be lowered");
+        assert_eq!(
+            routines[0].enclosing_member, None,
+            "a zero-width target must degrade to None, never Some(\"\")"
         );
     }
 
