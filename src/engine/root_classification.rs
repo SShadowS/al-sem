@@ -173,11 +173,19 @@ pub struct RootClassification {
 /// is skipped from the output. Fixing only Report would leave the arm list just
 /// as arbitrary as it is now.
 ///
-/// KNOWN GAP: action MODIFICATIONS (`modify(SomeAction) { trigger OnAfterAction()
-/// … }`) do not gain `page-action`, and could not be fixed by adding a fifth
-/// string here. The wrapper is `modify_action_modification`, which carries
-/// `target` and no `name`, so the lowerer never captures it as an enclosing
-/// member at all. Closing it is a cross-layer lowerer change, filed separately.
+/// CLOSED (#41), and it used to be the known gap here: an action MODIFICATION
+/// (`actions { modify(SomeAction) { trigger OnAfterAction() … } }`) now gains
+/// `page-action`. `modify_action_modification` carries `target` and no `name`,
+/// so the lowerer needed a wrapper arm plus a target-name fallback before this
+/// string could match anything (`crates/al-syntax/src/lower/mod.rs`); with
+/// those in place the fifth string below is all this predicate needs.
+///
+/// The RESIDUAL, and it is the intended answer rather than a leftover: a
+/// trigger declared DIRECTLY in an `add*` body — `addlast(Processing) { trigger
+/// OnDirect() … }`, a shape the grammar admits — has no declaring member, so it
+/// gets no enclosing-member anchor and no `page-action`. Real AL puts such a
+/// trigger inside an `action(X)` the `add*` body declares, which IS captured
+/// (see the COVERED note above).
 fn is_page_action_wrapper(syntax_kind: &str) -> bool {
     matches!(
         syntax_kind,
@@ -185,6 +193,7 @@ fn is_page_action_wrapper(syntax_kind: &str) -> bool {
             | "systemaction_declaration"
             | "fileuploadaction_declaration"
             | "customaction_declaration"
+            | "modify_action_modification"
     )
 }
 
@@ -911,6 +920,20 @@ mod tests {
         // because a false negative on a real form would cost more than dead code.
         assert_eq!(
             page_trigger_kinds(Some("customaction_declaration")),
+            vec!["trigger-page".to_string(), "page-action".to_string()]
+        );
+    }
+
+    #[test]
+    fn action_modification_trigger_is_page_action() {
+        // Issue #41: a pageextension's `actions { modify(X) { trigger
+        // OnAfterAction() } }`. The wrapper is `modify_action_modification`,
+        // which carries `target` and no `name`; the lowerer captures it as an
+        // enclosing member (see `lower/mod.rs`'s
+        // `modify_action_modification_target_becomes_enclosing_member`, whose
+        // `origin.kind_text` assert is the executable join to this literal).
+        assert_eq!(
+            page_trigger_kinds(Some("modify_action_modification")),
             vec!["trigger-page".to_string(), "page-action".to_string()]
         );
     }

@@ -172,7 +172,7 @@ pub fn source_routine_node_id(object: ObjectNodeId, decl: &RoutineDecl) -> Routi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use al_syntax::ir::{Origin, Point};
+    use al_syntax::ir::{Origin, Point, RoutineDecl};
 
     fn test_origin() -> Origin {
         Origin {
@@ -236,6 +236,67 @@ mod tests {
         assert_ne!(
             a, b,
             "ID-vs-Name synonyms must NOT be unified without compiler backing"
+        );
+    }
+
+    /// Issue #41 final panel (NF3): the de-collision this issue exists for is
+    /// a claim about `RoutineNodeId`, and `RoutineNodeId` gets its member from
+    /// HERE — a different function from `engine::ids`'s stable-id path that the
+    /// `cli_p1_enclosing_member` tests cover. Nothing pinned this end.
+    ///
+    /// The precondition is hand-stated rather than asked of production code:
+    /// two decls that agree on name, arity and param types and differ ONLY in
+    /// `enclosing_member`. Asserted explicitly below, so the test cannot pass
+    /// because the two happened to differ for some other reason. Drop
+    /// `enclosing_member` from `source_routine_node_id` — the harmonisation the
+    /// ABI side's hardcoded `enclosing_member_lc: None` invites — and two
+    /// sibling action `modify()` triggers re-collide into one node, which
+    /// `program::build`'s run-collapse then folds to a single entry, dropping
+    /// one trigger's edges. That is exactly the defect #41 closed.
+    #[test]
+    fn enclosing_member_discriminates_the_program_routine_node_id() {
+        let object = ObjectNodeId {
+            app: crate::program::node::AppRef(0),
+            kind: al_syntax::ir::ObjectKind::PageExtension,
+            key: crate::program::node::ObjKey::Id(50104),
+        };
+        let decl = |member: Option<&str>| RoutineDecl {
+            kind: al_syntax::ir::RoutineKind::Trigger,
+            name: "OnAfterAction".into(),
+            name_origin: test_origin(),
+            params: Vec::new(),
+            return_type: None,
+            return_name: None,
+            locals: Vec::new(),
+            attributes: Vec::new(),
+            attributes_parsed: Vec::new(),
+            access_modifier: None,
+            parse_incomplete: false,
+            dataitem_source_table: None,
+            enclosing_member: member.map(|m| (m.to_string(), test_origin())),
+            in_dataset_modify_context: false,
+            body: None,
+            origin: test_origin(),
+        };
+
+        let a = source_routine_node_id(object.clone(), &decl(Some("ActionOne")));
+        let b = source_routine_node_id(object.clone(), &decl(Some("ActionTwo")));
+        let none = source_routine_node_id(object, &decl(None));
+
+        // Precondition, stated rather than assumed: everything BUT the member
+        // is identical, so the member is the only thing that can separate them.
+        assert_eq!(a.name_lc, b.name_lc);
+        assert_eq!(a.params_count, b.params_count);
+        assert_eq!(a.sig_fp, b.sig_fp);
+        assert_eq!(a.object, b.object);
+
+        assert_ne!(
+            a, b,
+            "two routines differing only in enclosing member must be DISTINCT program nodes"
+        );
+        assert_ne!(
+            a, none,
+            "a member-less routine must not collide with a member-bearing one"
         );
     }
 

@@ -9,8 +9,10 @@
 //!   (a) RE-9 — routine set/order INVARIANT: the `(id, source_anchor.start_line)`
 //!       sequence on a multi-trigger fixture matches a frozen expectation, proving the
 //!       `collect_routine_nodes` `(parent, routine)` change did not perturb traversal.
-//!   (b) RE-1/RE-2 — a two-field-`OnValidate` table → two routines with the SAME
-//!       `stable_routine_id` but DISTINCT `enclosing_member` + DISTINCT wrapper ranges.
+//!   (b) RE-1/RE-2 — a two-field-`OnValidate` table → two routines with DISTINCT
+//!       `stable_routine_id` (since task 4 folded the member into the hash),
+//!       DISTINCT `enclosing_member` and DISTINCT wrapper ranges.
+//!   (b2) #41 — the same, for two action `modify()` blocks in one pageextension.
 //!   (c) RE-3 — a `report_dataitem` `OnAfterGetRecord` → member = the dataitem name.
 //!   (d) RE-4 — an escaped-quote / mixed-case field name → the unescaped logical name.
 //!   (e) a true object-level trigger (`OnRun`) → `enclosing_member` is `None`.
@@ -167,6 +169,90 @@ fn two_field_on_validate_distinct_member_and_stable_id() {
         validates[0].originating_object, validates[1].originating_object,
         "originating_object is the declaring object (same table)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// (b2) Two action `modify()` blocks in one pageextension (issue #41).
+// ---------------------------------------------------------------------------
+
+const TWO_ACTION_MODIFIES: &str = r#"
+pageextension 50104 "Cust Card Ext" extends "Customer Card"
+{
+    actions
+    {
+        modify(FirstAction)
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+        modify(SecondAction)
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+    }
+}
+"#;
+
+/// Issue #41 — the de-collision this fix exists for. Before it, an action
+/// modification's trigger had NO enclosing member, so two sibling
+/// `modify()` blocks each declaring `OnAfterAction()` minted one shared
+/// `stable_routine_id` and one of them was lost to run-collapse.
+///
+/// The `syntax_kind` assert is deliberate, not decoration: it is the
+/// executable join to `root_classification`'s hand-stated
+/// `action_modification_trigger_is_page_action`, which matches on exactly
+/// this string. Anchoring the origin at the trigger instead of the wrapper
+/// would keep the ids distinct and silently break classification.
+#[test]
+fn two_action_modifies_distinct_member_and_stable_id() {
+    let ws = assemble(&[("pext.al", TWO_ACTION_MODIFIES)]);
+
+    let actions = find(&ws, "OnAfterAction");
+    assert_eq!(actions.len(), 2, "two OnAfterAction triggers expected");
+
+    assert_ne!(
+        actions[0].stable_routine_id, actions[1].stable_routine_id,
+        "two action modify() triggers must NOT share a stable_routine_id"
+    );
+    // …and the member is what separates them: re-minting both without the
+    // discriminator collides, so this cannot pass for an unrelated reason.
+    let legacy: Vec<String> = actions
+        .iter()
+        .map(|r| {
+            al_sem::engine::ids::to_stable_routine_id_from_parts(
+                &al_sem::engine::ids::to_stable_object_id(&r.object_id),
+                &r.normalized_signature_hash,
+                None,
+            )
+        })
+        .collect();
+    assert_eq!(
+        legacy[0], legacy[1],
+        "precondition: without the member discriminator both collapse to one stable id"
+    );
+
+    let members: Vec<&str> = actions
+        .iter()
+        .map(|r| r.enclosing_member.as_deref().expect("member present"))
+        .collect();
+    assert!(
+        members.contains(&"FirstAction") && members.contains(&"SecondAction"),
+        "members must be the two action names, got {members:?}"
+    );
+
+    for r in &actions {
+        assert_eq!(
+            r.enclosing_member_range
+                .as_ref()
+                .expect("wrapper range present")
+                .syntax_kind,
+            "modify_action_modification",
+            "the anchor must be the modify wrapper — the string is_page_action_wrapper matches"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
