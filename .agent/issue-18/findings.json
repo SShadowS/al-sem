@@ -1,0 +1,182 @@
+[
+  {
+    "id": "K1",
+    "source": "opus CRITICAL 1 (stand-in, flash slot)",
+    "round": 1,
+    "file": ".agent/issue-18/ledger.md",
+    "line": 43,
+    "severity": "critical",
+    "text": "The fix reproduces the defect it fixes. MEASURED: delete the Commit() from B's OnRun and B still emits info, same finding, count unchanged. B's golden line is byte-indistinguishable from 'there is no escalation witness in this span at all' -- exactly why ws-d50-pos is worthless as a guard today. The control C does not catch it either: with C's OnRun Commit() deleted, C stays medium because its helper carries the escalation alone. And A is not a differential for B: they differ in FOUR ways at once (committer position, committer form, manager identity, manager branch).",
+    "disposition": "fixed",
+    "evidence": "Design v2 makes A and B ONE-TOKEN TWINS: identical chain, identical bodies, the only delta being `local procedure RunAll()` versus `trigger OnRun()`. opus measured that pair directly: A = medium, B = info. A cap break then flips B to medium and a span/commit-machinery break flips A to info, so neither can rot silently behind the other. Plus opus's belt, taken: a gap test asserting B's OnRun id IS in the seed span's routines_in_span AND is the SeedKind::ExplicitCommit commit_routine_id -- pinning the precondition directly instead of inferring it from a severity value that also means 'nothing happened'. ROUND 2 (opus, MEASURED): the twins alone do NOT close it \u2014 with B's Commit() removed line-count-preservingly, B's finding is BYTE-IDENTICAL (same id, same fingerprint, still info, same line). Only the gap test closes K1, and calling it a 'belt' licenses dropping it. So the gap test is now REQUIRED, not optional: it is the only assertion that distinguishes 'capped' from 'nothing happened'. The twins stay, because they are what makes the OTHER direction (a span/commit break flipping A from medium to info) observable.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "K2",
+    "source": "fable C2 (stand-in, astra slot)",
+    "round": 1,
+    "file": ".agent/issue-18/ledger.md",
+    "line": 45,
+    "severity": "critical",
+    "text": "The C control has a one-edit vacuity mode that yields ZERO findings rather than a wrong severity. backward_cone visits a committing caller but never expands it, so if C is written as a CHAIN (OnRun commits -> Helper commits -> seed) the walk stops at Helper, the OnRun never enters the span, there is no transaction-managing routine, and the seed is skipped silently. Measured: a chain fixture produces count 0. The r4 anti-degenerate check is >= 1 per FIXTURE, so A alone would satisfy it while B or C vanish unnoticed.",
+    "disposition": "fixed",
+    "evidence": "Design v2 states the constraint the table left implicit: C's two committers must be INDEPENDENT callers of the seed, never a chain. And the matrix now pins findingCount EXPLICITLY at 3 rather than relying on the per-fixture >= 1 anti-degenerate check, which cannot see a case disappearing. ROUND 2 (opus, MEASURED): my wording WAS the vacuity mode \u2014 'independent callers of the SEED' measures count=0. Corrected: C's two committers must be independent callers of a shared TRANSACTION-MANAGING routine that calls the seed (or the seed must itself be transaction-managing).",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "K3",
+    "source": "fable C1 (stand-in, astra slot)",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 80,
+    "severity": "important",
+    "text": "The worktree's build artifacts were POISONED by the probe's break: d50.rs was restored at 16:22:39 but target/debug/aldump.exe had been built at 16:21:11, inside the break window. Any manual alsem/aldump run there measures the BROKEN list while `git status` reports a clean tree. fable lost a full loop chasing a 'cap 2 is dead for onrun-codeunit' defect that does not exist, and only a rebuild from restored source flipped B back to info.",
+    "disposition": "fixed",
+    "evidence": "Recorded as a protocol, not just a note: every break experiment in this issue ends with a rebuild so the ARTIFACTS are restored too, not only the source, and any manual measurement records the binary mtime against the source mtime. cargo test is mtime-driven and safe; manual binary runs and any target/-reusing tooling are not. The silver lining is kept as evidence: fable's stale/fresh pair is A4's experiment run end to end on the real pipeline -- info <-> medium with the id and fingerprint byte-stable, only severity and the rootCause suffix moving.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "K4",
+    "source": "fable I4 + opus (stand-ins)",
+    "round": 1,
+    "file": ".agent/issue-18/ledger.md",
+    "line": 60,
+    "severity": "important",
+    "text": "The acceptance matrix relies on the r4 family's per-fixture anti-degenerate check (>= 1 finding), which cannot detect one of the three cases disappearing, and does not pin the finding count.",
+    "disposition": "fixed",
+    "evidence": "A1-A3 now pin findingCount == 3 for the fixture explicitly, and each case is asserted by id, severity and fingerprint rather than by presence alone.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "K5",
+    "source": "opus (stand-in, flash slot)",
+    "round": 1,
+    "file": ".agent/issue-18/ledger.md",
+    "line": 66,
+    "severity": "important",
+    "text": "The issue's second ask -- 'once the fixture exists, revisit whether onrun-codeunit belongs in the list' -- needs to say what evidence would settle it, not merely promise to revisit.",
+    "disposition": "fixed",
+    "evidence": "A6 states the decision procedure: with the twins in place, removing onrun-codeunit from the list flips B medium<->info observably, so the question becomes 'is an OnRun's Commit() provably at the top of its own transaction?'. d50's own doc already answers no (Codeunit.Run can be called from arbitrary code and AL has no nested transactions, so the callee joins the caller's open transaction). The kind therefore STAYS, and the fixture is what makes that answer falsifiable rather than asserted. ROUND 2 (fable): the stated reason argued the OnRun's Commit() is MORE consequential, which is the opposite of what cap 2 tests. The conclusion (onrun-codeunit STAYS) is right for the public-procedure reason: cap 2 asks whether the committer is provably at the top of its own transaction, and an entry point reachable from arbitrary callers is not \u2014 the same reason public-procedure is listed. Reworded on that ground.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "code-review F1 (important)",
+    "round": 2,
+    "file": "tests/r0-corpus/ws-d50-medium/src/MediumTier.al",
+    "line": 111,
+    "severity": "important",
+    "text": "C's role as the MIXED-committer control was itself unfalsifiable -- the same rot mode K1 raised for B, left open for C. Comment out C's OnRun Commit() line-count-preservingly and C stays medium on HelperC alone, the r4 golden is BYTE-IDENTICAL, and both gap tests stay green. C silently degenerates into a second copy of A and the ANY-quantifier claim it exists to make becomes false with zero signal.",
+    "disposition": "fixed",
+    "evidence": "The gap test now asserts C's span is EXACTLY {OnRun, HelperC, PostDocC, RunCheckedC} and that BOTH C's OnRun AND C's HelperC appear as SeedKind::ExplicitCommit commit_routine_ids -- the mixed set, stated executably. Proven: commenting out C's OnRun Commit() makes `--test gap` FAIL (exit 101) while `--test r4` stays EXIT=0 with the golden byte-identical, which is precisely the invisible direction. Restored by hash (git checkout -- cannot restore an untracked file) and rebuilt.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G2",
+    "source": "code-review F2/F3/F5 (minor)",
+    "round": 2,
+    "file": "tests/r0-corpus/ws-d50-medium/src/MediumTier.al",
+    "line": 27,
+    "severity": "minor",
+    "text": "Three doc defects: 'the fixture measures ZERO findings' is false and self-contradicting (under the chain shape only C's finding vanishes -- D4 measured 3->2, and if the fixture measured zero then 'A alone satisfies the anti-degenerate check' could not be true); 'ONE-TOKEN twins' overstates (it is one LINE, plus the object number and name) and the 'machine-checkable' claim rests on hashes over name/params/returnType, which prove the SIGNATURES match, not the bodies; three line citations are off.",
+    "disposition": "fixed",
+    "evidence": "All corrected: 'C measures zero findings' with the fixture-level reason; 'ONE-LINE twins' in all five places with the hash claim scoped to signatures and body identity stated as the prose assertion it is; two citations fixed and one correctly REJECTED after checking (the reviewer's proposed range would have swallowed a comment line and dropped a brace).",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G3",
+    "source": "code-review F4 (stated limit)",
+    "round": 2,
+    "file": "tests/gap/gap_issue18_d50_medium_demotion.rs",
+    "line": 54,
+    "severity": "minor",
+    "text": "The tests pin 'capped', not 'cap 2 capped'. A regression that made cap 1 or cap 3 fire ONLY for triggers would keep both tests green with cap 2 dead.",
+    "disposition": "deferred",
+    "evidence": "Recorded as a stated limit in the gap test header rather than built around. Caps 1/3/4 are excluded by A being B's twin on every relevant property, so an ordinary cap-1/3/4 regression flips A too and is caught; D1 is the live evidence that cap 2 is today's active rejector. The residual is a trigger-only cap-1/3 regression, which no test here covers and which would need a fourth codeunit to catch.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G4",
+    "source": "opus N1 + fable N1 (stand-ins, both independently)",
+    "round": 2,
+    "file": "tests/r0-corpus/ws-d50-medium/src/MediumTier.al",
+    "line": 86,
+    "severity": "important",
+    "text": "NOTHING pinned that `onrun-codeunit` is the kind that caps B. One line-count-preserving edit -- `trigger OnRun()` -> `procedure OnRun()` -- drops that kind and re-caps B under `public-procedure`, which is ALSO in D50_UNTRUSTED_ROOT_KINDS. B stays info, the r4 golden is byte-identical (the stable id hashes name/params/returnType, not kind), the l2 snapshot does not move (PFeatures carries no kind; source_range is row/col), no r4f golden covers this fixture, and both gap tests stay green. Removing \"onrun-codeunit\" from the list -- this issue's entire point -- would then be a no-op AGAIN.",
+    "disposition": "fixed",
+    "evidence": "The severity test now asserts B's root classification is EXACTLY [\"onrun-codeunit\"] (exact-set compare, not contains -- contains would pass on a set that had silently gained public-procedure). PROVEN by the conductor: applying that very edit to B's declaration, line-count preserving, makes `--test gap` FAIL with the new message while `--test r4` stays EXIT=0, 30/30, golden byte-identical. The fixture was restored byte-exactly (sha256 edede74fd7c2783a, matching the implementer's recorded baseline -- an intermediate write had flipped LF to CRLF and the hash check caught it) and the worktree rebuilt.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G5",
+    "source": "fable N2/N3 (minor)",
+    "round": 2,
+    "file": "CHANGELOG.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The CHANGELOG records F5 as '1 rejected' without saying which citation was rejected or why, and one citation nit remains.",
+    "disposition": "fixed",
+    "evidence": "The rejection is now named with its reason (the proposed range would have swallowed a comment line and dropped the closing brace), and the nit is corrected.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
