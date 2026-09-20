@@ -28,4 +28,5 @@ mod gap_g6_virtual_tables;
 mod gap_g7_dead_routine;
 mod gap_g8_residual_temp;
 mod gap_g9_trigger_rec;
+mod gap_issue18_d50_medium_demotion;
 mod gap_issue23_d50_physical_write_gate;

@@ -133,6 +133,22 @@ const WAVE_H_POSITIVE: &[Smoke] = &[
         ported: true,
         corpus_dir: None,
     },
+    // Issue 18 — d50's MEDIUM tier and its medium→info DEMOTION. Three
+    // independent codeunits: a `local procedure` committer (no root
+    // classification → UNCAPPED → medium), its ONE-LINE TWIN whose committer is
+    // a `trigger OnRun()` (`onrun-codeunit` is in `D50_UNTRUSTED_ROOT_KINDS` →
+    // CAPPED → info), and a control carrying BOTH kinds of committer on one span
+    // (the ANY quantifier short-circuits on the uncapped one → medium). Before
+    // this fixture no corpus fixture put an explicit `Commit()` anywhere near a
+    // checked-Run span, so `has_proven_effective_explicit_commit` was false by
+    // vacuity and that list could be edited without moving a single golden.
+    Smoke {
+        fixture: "ws-d50-medium",
+        wave: "R4-H",
+        detectors: &["d50-checked-run-implicit-commit"],
+        ported: true,
+        corpus_dir: None,
+    },
 ];
 
 const WAVE_H_NEGATIVES: &[Smoke] = &[Smoke {

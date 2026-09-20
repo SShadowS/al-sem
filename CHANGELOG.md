@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Corpus coverage for d50's medium→info demotion (#18).** Test-only; no production behaviour
+  changes and `D50_UNTRUSTED_ROOT_KINDS` is byte-untouched. d50 escalates a checked-Run finding to
+  `medium` when a routine on the span holds an explicit `Commit()` that passes all four caps of
+  `is_explicit_commit_proven_effective`; cap 2 rejects a committer whose root classification
+  carries an untrusted kind. **No committed fixture had an explicit `Commit()` anywhere near a
+  checked-Run span**, so `has_proven_effective_explicit_commit` was false by vacuity, the cap-2
+  list was never consulted, and deleting `"onrun-codeunit"` from it (added by #12) moved ZERO
+  goldens — measured: `--test r4` 30/30 green with the kind removed.
+
+  New fixture `tests/r0-corpus/ws-d50-medium/`, three mutually independent codeunits, 3 findings:
+
+  | codeunit | committer | root kind | severity |
+  |---|---|---|---|
+  | 50230 A | `local procedure RunAll()` | *(none)* → UNCAPPED | `medium` |
+  | 50231 B | `trigger OnRun()` | `onrun-codeunit` → CAPPED | `info` |
+  | 50232 C | both, on one span | mixed → `any` short-circuits | `medium` |
+
+  **A and B are one-line twins** — `PostDoc` and `RunChecked` are byte-identical in both objects
+  (their shared signature hashes `b8c7e48f…`/`c46296213e…` pin the SIGNATURES; body identity is a
+  diffed prose claim, not a hashed one) and, below the object header, the only delta is one line
+  of three tokens: the committer's declaration. That is what makes each direction observable on
+  its own: a cap-2 break flips B `info`→`medium`, a span-machinery break flips A `medium`→`info`.
+  **C is not a chain** — `backward_cone` visits a committing caller without expanding it, so
+  `OnRun → Helper → seed` truncates and C measures ZERO findings silently (the other two rows
+  still emit, so the fixture-level ≥1 anti-degenerate check does not notice); C's committers are
+  independent callers of a shared transaction-managing `PostDocC`. The fixture is deliberately
+  table-free, so every manager qualifies by the NAME branch and no cone or temp-state change can
+  move these rows for an unrelated reason.
+
+  **A severity value alone cannot pin this, so `tests/gap/gap_issue18_d50_medium_demotion.rs`
+  pins the precondition directly.** MEASURED during the spec panel: with B's `Commit()` removed
+  line-count-preservingly, B's r4 golden line is BYTE-IDENTICAL — `info` means both "the witness
+  was capped" and "there was no witness at all", which is verbatim the rot mode this fixture
+  exists to close. The gap test asserts, by object-qualified routine id (the fixture holds THREE
+  `OnRun` triggers, so a name match would pass on C's rows), that B's `OnRun` is in
+  `routines_in_span` of the `CheckedRunImplicit` span seeded at B's `RunChecked`, and that a
+  separate `SeedKind::ExplicitCommit` span is seeded in B's `OnRun`. **C carries the identical
+  hole, so it is pinned the same way**: C's span is asserted to hold exactly
+  `{OnRun, HelperC, PostDocC, RunCheckedC}` and BOTH `OnRun` and `HelperC` to seed an
+  `ExplicitCommit` span. Losing either one leaves C `medium` on the survivor, the r4 golden
+  byte-identical, and C quietly reduced to a second copy of A with nothing left to hold the
+  `any` quantifier honest.
+
+  **And the kind itself is pinned, because that hole was open too.** Both stand-in reviewers
+  found it independently: nothing asserted that `onrun-codeunit` is what caps B. One
+  line-count-preserving edit — `trigger OnRun()` → `procedure OnRun()` — drops that kind and
+  re-caps B under `public-procedure`, which is ALSO on the list. B stays `info`, the r4 golden is
+  byte-identical (the stable routine id hashes name/params/returnType, not kind), the l2 snapshot
+  does not move (`PFeatures` carries no kind and `source_range` is row/col), no `r4f` golden
+  covers this fixture — and deleting `"onrun-codeunit"` from the list becomes a no-op AGAIN,
+  which is this issue's whole defect one level up. The severity test now asserts B's root
+  classification is EXACTLY `["onrun-codeunit"]`; the exact-set compare is deliberate, since
+  `contains` would pass on a set that had silently gained `public-procedure`. Measured: that edit
+  makes `--test gap` fail and leaves `--test r4` green at 30/30 with the golden byte-identical.
+
+  Goldens: 2 files, both accounted for — `tests/r4-goldens/ws-d50-medium.r4.golden.json` (new,
+  seeded then regen-filled; `run_smoke_entry` asserts the file exists before the regen, which
+  rewrites but cannot mint) and `tests/ir-l2-goldens/l2_features.snapshot` (+11 routines, the
+  fixture's exact routine count; the drift report names no pre-existing routine). No existing
+  golden line moved. Decided on the new evidence: **`onrun-codeunit` STAYS in the list** — cap 2
+  asks whether the committer is provably at the top of its OWN transaction, and an entry point
+  reachable from arbitrary callers is not, the same reason `public-procedure` is listed. What
+  changes is that the answer is now falsifiable.
+
+  Review citations: two corrected, one REJECTED after checking — the proposed
+  `root_classification.rs:233-238` would have swallowed a comment line and dropped the arm's
+  closing brace, so the original `:234-239` stands.
+
 - **A codeunit `OnRun` is now a classified root (#12).** `kinds_for` matched `kind ==
   "trigger"` only for Table/TableExtension/Page/PageExtension/Report, so a Codeunit `OnRun` —
   the routine `Codeunit.Run(id)` and the job-queue runner reach — received **no** classification
