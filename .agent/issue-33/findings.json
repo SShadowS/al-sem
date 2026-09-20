@@ -1,0 +1,362 @@
+[
+  {
+    "id": "S1",
+    "source": "opus C3 (stand-in, flash slot)",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1204,
+    "severity": "critical",
+    "text": "The design never evaluates the root-cause alternative: WIDEN inherited_fact_key by temp class so both facts survive, instead of keeping the lossy collapse and choosing a better winner. L5 already implements the conservative rule twice (digest.rs merge_temp_state, ordering_engine.rs known_temp_only) and both are starved by the collapse. opus asked for the fork to be decided by measurement, not argument.",
+    "disposition": "fixed",
+    "evidence": "MEASURED on the pinned CDO baseline (.agent/runs/20260920-110144-f4ce12/measure-33.md): widening costs +3,343 cone entries cross-app (+2.0%; +5.2% source-only) and is INSIDE the run-to-run noise band on both wall time (median 40.04s vs 40.02s) and peak RSS (1959MB vs 1993MB) across three paired runs. The memory objection does not survive. Design v2 takes the widened key. The comparator route is REJECTED for opus's own reason: at the 1,588 keys where the non-temp fact already wins, a comparator permanently discards the temp fact that the L5 merges are written to consume.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "fable + opus C1 (stand-ins)",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1672,
+    "severity": "critical",
+    "text": "Site 5's 'replace the already-emitted representative' is impossible: emit() folds into ConeDerivedBuilder immediately and fold_fact is an append-only union with no retraction (cone_derived.rs:636-643). A naive raw-side replace also leaves two facts sharing one inherited_fact_key in `out`, which trips oracle_r3a3_inherited_factkey_dedup (tests/r3/r3a3_oracles.rs:155-172).",
+    "disposition": "fixed",
+    "evidence": "Moot under design v2 for the mixed case: with the key widened the two classes never collide at any site, so no site needs a new preference. Recorded as a standing fact about site 5 so the comparator route is not retried later without it. ROUND 2 (opus): the PREFERENCE half is moot, but the ORACLE half is not \u2014 under v2 two facts really do share one BASE inherited_fact_key in `out`, so oracle_r3a3_inherited_factkey_dedup (tests/r3/r3a3_oracles.rs:156) would genuinely trip; it is handled by widening the oracle's mirror (design point 3), i.e. FIXED, not mooted. Bookkeeping corrected here.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "opus C2 (stand-in, flash slot)",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1687,
+    "severity": "critical",
+    "text": "Pre-reducing site 5 with a (class, rep_key) tie-break would change the winner for SAME-class keys reachable from two SCCs, which BFS arrival order currently arbitrates. That moves witness_callsite_id -> the digest BFS seed -> via_paths -> occurrence_id/fingerprint bytes. P5 measured only MIXED-class keys, so 'zero goldens move' was never predicted for that population.",
+    "disposition": "fixed",
+    "evidence": "Design v2 changes no tie-break at any site: the key gains a component and every existing comparison stays byte-identical. The same-class population opus names is untouched by construction, which is stronger than the measurement P5 did not take. ROUND 2 (fable, independently verified): within one widened key both entries share the widened key as the FIRST component of rep_key (capability_cone.rs:1347-1357), so the rep_key comparisons at sites 1/2/3 see a shared prefix and order exactly as today; site 4's edge.sort_key and site 5's BFS first-wins are untouched. opus closed the remaining channel: the key STRING order cannot move either.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "fable (stand-in, astra slot)",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 999,
+    "severity": "critical",
+    "text": "The #32 guard as designed does not type-check: fact_is_known_temp (cone_derived.rs:149) takes &CapabilityFact, but the digest site holds a SnapshotCapabilityFact with SnapTempState. The spelling that exists there is fact_temp_state_of (digest.rs:2144) plus a matches! on SnapTempState::Known{value:true} -- already written twice in that file and once in ordering_engine.rs.",
+    "disposition": "fixed",
+    "evidence": "Design v2 adds one is_known_temp_snap(&Fact) in digest.rs and folds the two existing copies into it rather than minting a fourth. cone_derived.rs:147's 'this is the ONE implementation' comment is corrected in the same change, since it is already false. ROUND 2 (opus, evidence corrected): the count and the type were wrong. digest.rs holds ONE matches! copy (:2164, inside merge_temp_state, over Option<SnapTempState> \u2014 not &Fact); the second lives in ordering_engine.rs:227 over effects[i].temp_state. One is_known_temp_snap(&Fact) folds NEITHER without an Option<SnapTempState> inner. The implementation therefore writes both layers: is_known_temp_state(Option<&SnapTempState>) as the inner, is_known_temp_snap(&Fact) over it, and merge_temp_state's copy folded into the inner one.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "opus I4 (stand-in, flash slot)",
+    "round": 1,
+    "file": "src/engine/l5/detectors/d44.rs",
+    "line": 212,
+    "severity": "important",
+    "text": "'Conservative for permissions' is FALSE at the finding level. writes_physical_tables_of is monotone, but detector output is not: d44 SUBTRACTS writers from distinct_readers and deletes the finding when that set empties; d43 flips no-other-writers to candidate-coverage (a severity DOWNGRADE) and shrinks `missing`. Real hazards can disappear.",
+    "disposition": "fixed",
+    "evidence": "The claim written into the code and the CHANGELOG is 'conservative for the physical-write SET', never 'for permissions'. The acceptance matrix gains a row for the losing direction, and the triage obligation covers both directions.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "opus I5 (stand-in, flash slot)",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1347,
+    "severity": "important",
+    "text": "The design's honest-framing sentence ('an unknown candidate outranks a known-false one within the preferred class') describes a rule the comparator would not implement: within-class order is rep_key at site 3, edge.sort_key at site 4 and BFS arrival at site 5 -- three different rules, none about evidence quality. Writing it into the code would add a false doc claim.",
+    "disposition": "fixed",
+    "evidence": "Under design v2 there is no preferred class and no new within-class rule, so the sentence is written nowhere. What is documented is what the widened key does: both classes survive as separate facts and the existing L5 merges decide.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "opus I7 (stand-in, flash slot)",
+    "round": 1,
+    "file": ".agent/issue-33/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "The acceptance matrix names d8/d44/d47 but not d43, d45 or d50, and has no row for the LOSING direction (findings that vanish or downgrade). Triaging only new findings would miss exactly the direction that removes a real hazard.",
+    "disposition": "fixed",
+    "evidence": "A7 rewritten to cover d8, d43, d44, d45, d47 and d50 in both directions, every moved finding against source. The CDO measurement sizes that obligation honestly: 292 hidden physical writes across 222 routines surface, so the moved set is expected to be large.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "fable + opus I6/I9 (stand-ins)",
+    "round": 1,
+    "file": ".agent/issue-33/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "Three acceptance rows cannot fail as written: A4 is a process statement; A6 ('no golden moves') cannot pass once new fixtures are added, since a new r0-corpus fixture mints new r4/r2c/l2_features lines by construction; A5 can pass for the wrong reason, because with the guard in place reverting the fix ALSO yields no finding, so the fixture cannot tell 'guard works' from 'fix absent'.",
+    "disposition": "fixed",
+    "evidence": "A4 now names its executable proof (fold the sibling's RAW Vec instead of the deduped map and the test must fail). A6 reworded to 'no EXISTING golden line moves; every new line belongs to a new fixture'. A5 additionally asserts, on the same fixture, that the representative IS physical and the witness is complete, and the control is verified to fire on master before it counts. ROUND 2: BOTH stand-ins RE-RAISED, and both were right. A4's replacement proof comes back GREEN under v2 \u2014 the sibling fixture's two facts are of DIFFERENT temp classes, so under the widened key both survive the deduped map and folding the raw Vec gives the same answer; that is CLAUDE.md's 'a discrimination proof that PASSES is evidence about the TEST', the third instance in this arc. And A3 could not fail at all: discover_fixtures enumerates the r3a3 corpus, which has ZERO mixed keys (P5, plus opus's own 834-file scan), so the oracle re-asserted an invariant over a population that cannot exercise the change. Matrix v3 below replaces both rows.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "fable (stand-in, astra slot)",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 947,
+    "severity": "minor",
+    "text": "The reverse-BFS prune seed uses the same unguarded fact_equivalent, so it over-includes nodes that reach only temp carriers. Safe (prune only skips) but costs states, and a BFS that stops today at a near temp carrier can now walk past it into MAX_STATES/MAX_DEPTH.",
+    "disposition": "fixed",
+    "evidence": "The same class guard is applied at the seed. The tolerance worry does not apply: the guard compares a boolean CLASS (absent temp_state reads as non-known-temp), so it is total.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "fable (stand-in, astra slot)",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1359,
+    "severity": "minor",
+    "text": "Caching is_known_temp on ConeFactEntry buys nothing -- the predicate is a matches! on an enum, unlike rep_key whose caching paid for JSON building -- and grows a struct cloned millions of times per run. Also, with class-first ordering `dist` would stop meaning 'nearest same-key fact' and its doc would go stale.",
+    "disposition": "refuted",
+    "evidence": "NOT WRONG \u2014 INAPPLICABLE to design v2, which adds no cache and no class-first ordering, so neither the struct nor the `dist` doc changes at all. The register vocabulary is closed (open|fixed|refuted|deferred) and has no `moot`/`superseded`, which both stand-ins objected to: `refuted` reads as 'the reviewer was wrong', and they were not \u2014 the finding was true of design A. Recorded here in words since the label cannot say it. It is the right objection to the comparator route if that is ever revisited.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "opus (stand-in, flash slot), round 2",
+    "round": 2,
+    "file": "src/engine/l4/cone_derived.rs",
+    "line": 848,
+    "severity": "important",
+    "text": "Both named tests should be RETIRED rather than re-triaged: their subject (a mixed key collapsing to one representative) no longer exists under v2, and the lost coverage is better replaced by an oracle v2 newly makes provable \u2014 writes_physical_tables_of(r) equals the naive union over the routine's reachable direct facts, for every routine in every fixture.",
+    "disposition": "fixed",
+    "evidence": "Adopted. That oracle FAILS on master (the trap test's own construction is the counterexample) and passes under v2, so it is a real guard with a real discrimination proof, replacing two tests whose subject the change removes.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "opus (stand-in, flash slot), round 2",
+    "round": 2,
+    "file": ".agent/issue-33/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "The matrix has no ADDITIVITY row, which is the cheapest global falsifier and is provable: v2's candidate group per widened key is a SUBSET of today's, and each site's selection rule applied to a subset returns the same winner for the winner's own class \u2014 so no existing fact can change or disappear, only new ones appear.",
+    "disposition": "fixed",
+    "evidence": "Added as A8, asserted at fixture level and confirmed on CDO by a per-table fold-count comparison (no count decreased); a byte-identical join over the whole fact sets was never run: every fact present today must still be present, byte-identical, afterwards.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S13",
+    "source": "opus (stand-in, flash slot), round 2",
+    "round": 2,
+    "file": "src/engine/l5/digest.rs",
+    "line": 947,
+    "severity": "minor",
+    "text": "The seed guard is safe because it is PAIRED with the terminal guard, not because the predicate is total; unpaired it opens a degradation vector the register did not record.",
+    "disposition": "fixed",
+    "evidence": "Recorded: the two guards land together in the same change, and the ledger states the pairing as the reason rather than the totality of the predicate. FINAL PANEL: opus RE-RAISED \u2014 the pairing landed but the recorded REASON was backwards, and the implementer's own D4 null result contradicted it. Corrected at both guard sites: an unpaired seed can only add dead-end states, never paths, which is what D4 measured.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T1",
+    "source": "code-review F1 (MAJOR)",
+    "round": 3,
+    "file": "CHANGELOG.md",
+    "line": 0,
+    "severity": "important",
+    "text": "The CHANGELOG and digest.rs claimed issue #32 was UNREACHABLE before #33. That is false: fact_equivalent is strictly WEAKER than inherited_fact_key (it ignores confidence and treats resource_id: None as a wildcard), snap.capability_facts sorts a None-rid fact first, and the terminal find is first-match-wins \u2014 so a None-rid known-temp direct can already be picked as the terminal for a physical fact on master. The claim matters because the 'no golden moves' evidence rested on it.",
+    "disposition": "fixed",
+    "evidence": "Both places corrected with the reachability argument and the concrete TempRec.Insert()/Rec.Insert() shape: the guard fixes a LIVE bug and #33 merely widens its reach. The consequence is stated too \u2014 the guard is NOT inert on existing output (it can move evidence_operation_id -> dedupe_key -> occurrence_id), and a 'no golden moved' result cannot rule that out because the golden corpus has zero mixed keys by measurement. A7's triage joined on finding id and reported CONTENT changes as well as appeared/vanished, which is the anchor-movement check this finding asks for: 2 content-only changes, both triaged, 0% false positives. ROUND 2 of the final panel RE-RAISED this and both were right: T1's false 'unreachable' claim survived in a THIRD place the fix report did not name (the r4 test's module doc), and T5's own evidence said the claims were narrowed 'in the CHANGELOG, the comments AND this ledger' while two ledger sentences were still broader than measured. Both corrected here, including the copy of the overstatement inside S12's evidence. ROUND 3: fable accepted; opus RE-RAISED and was right about its own earlier claim \u2014 the ordering leg ('a None-rid fact sorts FIRST') is false in all three places it had reached, including the shipped CHANGELOG: capability_fact_sort_key joins with `|` = 0x7C, which outranks every byte a real rid begins with, so an empty rid field sorts LAST. The wildcard leg needs no ordering argument and carries the conclusion alone. opus prescribed the exact remedy ('do exactly this, nothing more': delete the clause in all three places and rewrite the worked example to a three-routine shape) and stated its acceptance condition in writing: 'mergeable immediately after the doc correction plus ci-steps clippy'. The remedy is applied verbatim and clippy is clean on the final tree (exit 0, zero warning/error lines). ROUND 4 (operator-authorized, T1 only): opus verified the remedy against the tree and ACCEPTED \u2014 the live argument rests on the wildcard leg alone and the false ordering claim survives only inside an explicit retraction, which is what it asked for.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T2",
+    "source": "code-review F2 (MAJOR) + opus N1 (important)",
+    "round": 3,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1003,
+    "severity": "important",
+    "text": "The guard's soundness precondition was written down nowhere near it, and its executable pin was mislabelled: the oracle comment called the widening 'inert' for oracle_r3a3_inherited_keys_trace_to_a_direct_producer when the widening makes that oracle assert exactly the precondition (every inherited fact has a same-class DIRECT producer). Separately, the shipped pairing comment stated the failure mode backwards.",
+    "disposition": "fixed",
+    "evidence": "The precondition (retag copies extra, so every inherited fact has a same-class direct producer, and the seed guard admits exactly the routines the terminal accepts) is now stated at the guard and points at the oracle; the oracle's comment no longer calls the widening inert; the pairing comment matches D4's measurement. Residual limit recorded: the oracle covers the source-only fixture corpus, so a cross-app scope mismatch could still degrade witnesses undetected.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T3",
+    "source": "code-review F3/F4 + opus N7/N8",
+    "round": 3,
+    "file": "src/engine/l4/cone_derived.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "Stale or false doc claims left by the change: 'the dedup asymmetry is load-bearing' (asserted in three places), a 'one'/'four' implementation count that was wrong in both directions, two stale references, and a mechanism claim that was at best partial.",
+    "disposition": "fixed",
+    "evidence": "All corrected in the doc-fix batch; the implementation count now names all three spellings honestly.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T4",
+    "source": "code-review F5 (MEDIUM)",
+    "round": 3,
+    "file": "CHANGELOG.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The stated blast radius omitted its larger half: the physical READ set grows too, about 5x more than the write set.",
+    "disposition": "fixed",
+    "evidence": "Stated in the CHANGELOG and the module doc.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T5",
+    "source": "code-review F6 + opus N3/N4/N5",
+    "round": 3,
+    "file": ".agent/issue-33/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Measurement claims stated more broadly than they were measured: the additivity argument rested on a false premise, a cross-app number was paired with a source-only null result, 'proven-physical counts byte-identical' was stated globally but measured over three tables, and Run A's strongest-looking evidence came from a different substrate.",
+    "disposition": "fixed",
+    "evidence": "Each claim narrowed to what was actually measured, in the CHANGELOG, the comments and this ledger. Additivity is now argued structurally (each site's winner is min/first over a superset, hence min/first over its own class's subset) and both stand-ins re-derived that independently. ROUND 2 of the final panel RE-RAISED this and both were right: T1's false 'unreachable' claim survived in a THIRD place the fix report did not name (the r4 test's module doc), and T5's own evidence said the claims were narrowed 'in the CHANGELOG, the comments AND this ledger' while two ledger sentences were still broader than measured. Both corrected here, including the copy of the overstatement inside S12's evidence.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T6",
+    "source": "code-review F7/F8 + opus N6/N9",
+    "round": 3,
+    "file": "tests/r4/r4f_issue33_unmasked_physical_write.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "Four honest limits with no home: A4b is delivered narrower than the register claimed; the ordering test can pass vacuously; the fixture name collides with the ws-d<NN> DETECTOR convention (ws-d33 is detector d33's own fixture); and the guard's one real regression vector (a terminal pushed deeper could cross MAX_DEPTH/MAX_STATES and degrade silently) is unmeasured.",
+    "disposition": "deferred",
+    "evidence": "All four recorded as stated limits in the code where they belong, not silently dropped. The fixture RENAME was deliberately not performed \u2014 it moves a directory, a golden filename and l2_features.snapshot lines, which is churn disproportionate to a naming nit and would need its own golden triage. The unmeasured regression vector needs before/after incomplete/terminal-not-found counts on a real workspace, which no CDO ratchet covers today; that is a follow-up, not a blocker, because the paired seed keeps the producer reachable.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "T7",
+    "source": "opus N2 (important)",
+    "round": 3,
+    "file": ".agent/runs/20260920-110144-f4ce12/triage-33.md",
+    "line": 0,
+    "severity": "important",
+    "text": "A7's 'zero findings moved' is weaker than it reads: four of the six named detectors produce ZERO findings on CDO before AND after, so the obligation was really discharged against d8 and d50 only, and the larger half of the unmasked population (the physical READ set) has essentially one consumer, which could not run.",
+    "disposition": "fixed",
+    "evidence": "FIXED by doing exactly what the reviewer prescribed, which was documentation plus a follow-up rather than a code change: opus's own words are that it is 'not a defect in the implementation' and 'not fixable by trying harder on this workspace' (alsem analyze's substrate is source-only by design, so the cross-app population the event detectors need is unreachable through the shipped CLI), and that the right disposition is a stated LIMIT on A7 in the ledger AND the PR body plus a follow-up issue. All three done: the limit is written into A7's row and the PR body, and the follow-up is filed as issue #57. What IS established stands unchanged -- across the full 41-detector default set, 2069 findings, nothing appeared, vanished or changed severity, and the two content-only d8 changes triaged clean at 0% false positives. What is NOT established is named: d43's DOWNGRADE and d44's DELETE paths have zero population on this workspace, so they were not exercised.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
