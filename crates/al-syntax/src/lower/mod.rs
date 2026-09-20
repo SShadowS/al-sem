@@ -720,7 +720,8 @@ fn lower_routine<'t>(
     // that member itself (`addlast(area) { action(X) { trigger … } }`, where the ordinary
     // name gate finds `action(X)`) or the routine sits directly in the body and has no
     // declaring member at all (`None`, pinned by
-    // `addlast_action_modification_target_is_not_an_enclosing_member`). `modify` is the
+    // `addlast_action_modification_target_is_not_an_enclosing_member` — which pins the
+    // ARM list above, since this fallback is never reached for an `add*` node). `modify` is the
     // only form whose target IS the member the body belongs to. (`add`/`addfirst`/
     // `addlast` name a CONTAINER and `addfirst_views`/`addlast_views` have no target at
     // all, so "an anchor naming a different member" — what this comment used to say —
@@ -729,12 +730,20 @@ fn lower_routine<'t>(
     // The kind match here is belt-and-braces: the `collect_routines` arm above is what
     // decides these nodes are members, so the fallback only ever sees a node that arm
     // passed. The empty filter is NOT belt-and-braces: a malformed `modify()` parses with
-    // a PRESENT, zero-width `target`, and `action_declaration.name` is a required field
-    // so tree-sitter recovery inserts a zero-width node there by the same mechanism.
-    // `Some("")` takes the discriminated arm of `to_stable_routine_id_from_parts` and
-    // mints a different, meaningless stable id, so it must degrade to `None`. Filtering
-    // the whole `enclosing_member` covers both paths with one expression (mirroring
-    // `dataitem_table_name`, which filters for exactly this reason).
+    // a PRESENT, zero-width `target`, and a nameless `action()` does the same on the
+    // `name` path. NOT tree-sitter error recovery, though it looks like it: both files
+    // parse CLEAN — no `ERROR`, no `MISSING`, `has_error()` false — so `ParseStatus`
+    // stays `Clean`, `parse_incomplete` stays false, and NOTHING downstream flags them.
+    // (The grammar accepting a zero-width `identifier` in a required field looks like a
+    // `tree-sitter-al` defect; not this layer's to fix, and the guard is needed either
+    // way.) `Some("")` takes the discriminated arm of `to_stable_routine_id_from_parts`
+    // and mints a different, meaningless stable id, so it must degrade to `None`.
+    // Filtering the whole `enclosing_member` covers both paths with one expression
+    // (mirroring `dataitem_table_name`, which filters for exactly this reason). Dropping
+    // the member also drops its RANGE, so such a routine loses `enclosing_member_range`
+    // and `originating_object` too: it keeps `trigger-page` (inserted unconditionally)
+    // but loses `page-action` and its evidence containment range. That is the intended
+    // trade — a meaningless id is worse than a missing anchor.
     let enclosing_member = member
         .and_then(|m| {
             let name_node = m.field(FieldName::Name).or_else(|| {
@@ -2299,7 +2308,9 @@ pageextension 50110 "P Ext" extends "Customer Card"
 
     /// Issue #41, T2: the IR layer strips only the OUTER quote pair
     /// (`ident_text`). Doubled-quote unescaping (`""` → `"`) happens later, in
-    /// `ir_walk::ir_enclosing_member`. This test pins that boundary rather
+    /// `ir_walk::ir_enclosing_member` (that is the L3/analyzer path; the program
+    /// engine's `source_routine_node_id` folds the RAW, still-escaped text into
+    /// `RoutineNodeId` — pre-existing for every quoted wrapper, not this issue's). This test pins that boundary rather
     /// than blurring it — asserting the fully unescaped name here would move
     /// the contract one layer down and make the engine's own unescape a no-op
     /// nobody notices losing.
@@ -2339,8 +2350,13 @@ pageextension 50111 "P Ext" extends "Customer Card"
     /// Issue #41, T3 — the CONTROL that keeps the `target` fallback scoped to
     /// the two `modify_*` kinds. An `add*`/`move*` wrapper's `target` is an
     /// anchor or a container, never the declaring member of a routine in its
-    /// body, so widening the fallback to that family would invent a member
-    /// here.
+    /// body, so widening BOTH the wrapper arm and this fallback to that family
+    /// would invent a member here. Widening the FALLBACK alone invents nothing
+    /// and leaves this test green: `collect_routines` never passes an `add*`
+    /// node as `member` (the generic arm needs a `name` field, which that
+    /// family has not), so the fallback is unreachable for them. What this
+    /// control pins is the PAIR — which is why the proof for it had to patch
+    /// both sites.
     ///
     /// PARSE-SHAPE CONTRACT, deliberately not compilable AL: a real
     /// `addlast(X)` body declares `action(Y)` blocks and the trigger lives in
@@ -2440,6 +2456,107 @@ report 50114 T
         assert_eq!(
             routines[0].enclosing_member, None,
             "a zero-width target must degrade to None, never Some(\"\")"
+        );
+    }
+
+    /// Issue #41 final panel (I1): the `in_dataset_modify_context` gate at the
+    /// top of this file says, in a COMMENT, that it is deliberately
+    /// `ModifyModification`-only and must not be folded into a shared
+    /// modify-wrapper predicate. This test is what makes that executable.
+    ///
+    /// The shape is grammar-reachable and parses CLEAN (verified with
+    /// `tree-sitter parse`: no `ERROR`, no `MISSING`): a `modify_modification`
+    /// body is a `declaration_body`, which admits an `actions_section`. So
+    /// `dataset_ctx` is `true` all the way down to the inner action modify.
+    /// Fold the two kinds into one predicate and the flag flips to `true`,
+    /// and the resolver's dataitem-map fallback starts looking an ACTION name
+    /// up among dataitems -- binding the trigger's implicit `Rec` to whatever
+    /// dataitem happens to share that name. Silent when it fires, so a test
+    /// rather than a comment.
+    ///
+    /// The enclosing-member assert also pins the (correct) behaviour change
+    /// this shape saw: before the action wrapper was captured, the trigger
+    /// inherited `modify(Cust)`; now it is the action it is really in.
+    #[test]
+    fn action_modify_nested_in_a_dataset_modify_is_not_dataset_context() {
+        let src = r#"
+report 50115 T
+{
+    dataset
+    {
+        modify(Cust)
+        {
+            actions
+            {
+                modify(SomeAction)
+                {
+                    trigger OnAfterGetRecord()
+                    begin
+                    end;
+                }
+            }
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routines: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
+        assert_eq!(
+            routines.len(),
+            1,
+            "the nested trigger must still be lowered"
+        );
+        let (member_name, _origin) = routines[0]
+            .enclosing_member
+            .as_ref()
+            .expect("the INNER action modify is the enclosing member");
+        assert_eq!(
+            member_name, "SomeAction",
+            "the innermost member wrapper wins, not the outer dataset modify()"
+        );
+        assert!(
+            !routines[0].in_dataset_modify_context,
+            "an ACTIONS-section modify is never report-dataset context, however              it is nested -- if this fails, the `in_dataset_modify_context` gate              has been widened to both modify kinds"
+        );
+    }
+
+    /// Issue #41 final panel (N1): the empty-name guard is a `.filter` on the
+    /// WHOLE `enclosing_member`, so it covers the `name` path as well as the
+    /// `target` path. T4/T5 only reach it through `target`; this reaches it
+    /// through `name`, so moving the filter back inside the `target`
+    /// `or_else` fails here and nowhere else.
+    ///
+    /// `action()` with no name parses CLEAN -- `name: (identifier [r,c]-[r,c])`,
+    /// zero width, no `ERROR` and no `MISSING`, so `has_error()` is false and
+    /// NOTHING downstream flags this file. That is why the degrade to `None`
+    /// has to happen here: `Some("")` would take the discriminated arm of
+    /// `to_stable_routine_id_from_parts` and mint a meaningless id for a
+    /// routine the engine otherwise considers perfectly parsed.
+    #[test]
+    fn empty_action_declaration_name_degrades_to_no_member() {
+        let src = r#"
+page 50116 P
+{
+    actions
+    {
+        area(Processing)
+        {
+            action()
+            {
+                trigger OnAction()
+                begin
+                end;
+            }
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let routines: Vec<_> = af.objects.iter().flat_map(|o| &o.routines).collect();
+        assert_eq!(routines.len(), 1, "the trigger must still be lowered");
+        assert_eq!(
+            routines[0].enclosing_member, None,
+            "a zero-width `name` must degrade to None, never Some(\"\") -- the              filter must stay on the whole enclosing_member, not inside the              target fallback"
         );
     }
 
