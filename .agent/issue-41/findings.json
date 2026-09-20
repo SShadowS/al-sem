@@ -1,0 +1,524 @@
+[
+  {
+    "id": "A1",
+    "source": "opus C1 (stand-in, flash slot) + fable I-3 (stand-in, astra slot)",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 63,
+    "severity": "critical",
+    "text": "The proposed CONTROL test cannot fail. In `addlast(actions) { action(NewAction) { trigger OnAction() } }` the inner `action_declaration` has a `name` field, so the generic arm makes IT the member and shadows whatever the anchor wrapper contributed. The test passes on master today and also passes under the exact mutation it claims to guard (widening the arm/fallback to the whole *_modification family).",
+    "disposition": "fixed",
+    "evidence": "Verified by a real `tree-sitter parse` (v4.4.0): an `addlast_action_modification` body admits a `trigger_declaration` as a DIRECT child, alongside `action_declaration`. The control now uses that un-shadowed shape and asserts `enclosing_member` is None.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2",
+    "source": "opus C2 (stand-in, flash slot) + fable I-1 (stand-in, astra slot)",
+    "round": 1,
+    "file": "src/engine/root_classification.rs",
+    "line": 176,
+    "severity": "critical",
+    "text": "The design delivers only the `identify` half of the issue's Capability line and leaves a doc comment that its own commit makes FALSE. `root_classification.rs:176-180` states action modifications 'could not be fixed by adding a fifth string here' BECAUSE 'the lowerer never captures it as an enclosing member at all' -- true today, false the moment the lowerer change lands. Meanwhile `is_page_action_wrapper` (:181-189) still rejects `modify_action_modification`, so the trigger gains a member for identity but still no `page-action` kind.",
+    "disposition": "fixed",
+    "evidence": "Read at source: the four-string match and the KNOWN GAP paragraph are exactly as quoted. Resolution (a) taken: `modify_action_modification` joins the match, a hand-stated unit test pins the classification, and the KNOWN GAP paragraph is rewritten as closed in the same commit.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A3",
+    "source": "fable I-2 + opus I2 (stand-ins)",
+    "round": 1,
+    "file": "src/program/sig_fp.rs",
+    "line": 155,
+    "severity": "important",
+    "text": "The blast radius was scoped to L3 stable ids only. The IR field also feeds the program engine's `RoutineNodeId` (`source_routine_node_id`, enclosing_member_lc). Today two sibling action `modify()` blocks each declaring `OnAfterAction()` mint the SAME node id and one is dropped by run-collapse; after the fix they are distinct. That de-collision is the real product value and nothing in the proposed test set observes it.",
+    "disposition": "fixed",
+    "evidence": "`sig_fp.rs:155-166` reads `decl.enclosing_member` verbatim; `ids.rs:314-330` discriminates the stable id on the member. A new test beside `tests/cli/cli_p1_enclosing_member.rs`'s two-field case pins two distinct ids for two action modifies. No golden directory involved. FINAL PANEL: the program-engine half is no longer only transitive -- C3 pins source_routine_node_id directly (D10).",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A4",
+    "source": "opus I1 (stand-in, flash slot)",
+    "round": 1,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 705,
+    "severity": "important",
+    "text": "P3's justification (copied from the existing source comment) is factually wrong about AL: an `addfirst`/`addlast`/`add` target is the CONTAINER the new members go inside, not an anchor naming a different member, and `addfirst_views_modification`/`addlast_views_modification` have no required target at all. The scope conclusion survives, but on different grounds.",
+    "disposition": "fixed",
+    "evidence": "node-types.json re-read: `addfirst_views_modification fields={'body': ['views_mod_body']}` -- no target. Corrected reason, in the ledger and in the source comment: an `add*` body DECLARES its own named members, so any routine inside finds its declaring member through the ordinary name gate; the wrapper's target -- anchor or container -- is never that routine's declaring member. ROUND 2: opus re-raised the REPLACEMENT wording, and fable's N1 said the same independently -- 'an add* body declares its own named members' is falsified by v2's OWN control fixture, where a trigger sits directly in the body and no member is declared at all. Final wording, in the ledger and in lower/mod.rs: an add*/move* wrapper's target is never the declaring member of a routine in its body -- either the body declares that member itself (the ordinary name gate finds it) or the routine sits directly in the body and has no declaring member (None, pinned by the control test). modify is the only form whose target IS the member the body belongs to.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A5",
+    "source": "opus I3 + fable P4-extension (stand-ins); count corrected by the conductor",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 33,
+    "severity": "important",
+    "text": "P4's scan covered only `tests/**/*.al`, missing inline AL inside Rust tests and saying nothing about the CDO baseline the merge gate runs. The 'no golden moves' claim needed a wider basis.",
+    "disposition": "fixed",
+    "evidence": "Re-scanned: every `.al` and `.rs` under the worktree (no action modification anywhere; the `modify(` hits are all `Rec.Modify()` calls) and the pinned CDO baseline, brace-matched and comment/string-stripped: 246 actions sections, 113 action-`modify` blocks, ZERO containing a trigger or procedure. fable reported 128 blocks and opus 113; the conductor's own scan says 113, so fable's number is not adopted. Dependency ABI paths cannot be affected at all: `deps/projection.rs:215` and `deps/cross_app_l3.rs:303` hardcode `enclosing_member: None` and never run the lowerer. FINAL PANEL: the row's sub-clause 'all 52 modify( hits are Rec.Modify() calls' was false (tests/r0-corpus/ws-report-dataitem/RDExt.ReportExtension.al:16 is a real dataset modify(Cust) block); corrected in the ledger (C7). The conclusion is untouched -- that target is non-empty, so neither the arm nor the filter changes it.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A6",
+    "source": "opus M1 (stand-in, flash slot)",
+    "round": 1,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 711,
+    "severity": "minor",
+    "text": "A malformed `modify() { trigger ... }` parses with a PRESENT, zero-width `target`, so the fallback mints `enclosing_member: Some((\"\", origin))`. `Some(\"\")` takes the discriminated arm in `to_stable_routine_id_from_parts`, giving the routine a different, meaningless stable id than the same routine with no member. Pre-existing for `modify_modification`.",
+    "disposition": "fixed",
+    "evidence": "Real parse confirms `target: (identifier [10,15]-[10,15])` on `modify()`. Fixed at the shared fallback with an is-empty filter, mirroring `dataitem_table_name` (`lower/mod.rs:668-672`), which already filters for exactly this reason -- so both kinds are covered by one guard. ROUND 2: the guard is raised one rung (a .filter on the whole enclosing_member) so it also covers the Name path -- action_declaration.name is a REQUIRED field, so tree-sitter recovery inserts a present zero-width node there by the same mechanism (opus B3). Twin empty-target test for modify_modification as well (fable M3), and the empty tests assert the routine was still found (routines.len() == 1) so a future parse collapse cannot make them vacuous (opus B5).",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A7",
+    "source": "opus M2 (stand-in, flash slot)",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 58,
+    "severity": "minor",
+    "text": "Test 1 used `trigger OnAction()` on a MODIFIED action; a modify carries OnBeforeAction/OnAfterAction. The lowerer does not validate, so it would pass, but an uncompilable fixture misleads the next reader.",
+    "disposition": "fixed",
+    "evidence": "Fixture uses `OnAfterAction`, matching the issue's own reproducer.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A8",
+    "source": "opus M3 + fable m-3 (stand-ins)",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 59,
+    "severity": "minor",
+    "text": "'the unescaped name' names the wrong boundary: at the IR layer `ident_text` strips only the outer quote pair; doubled-quote unescaping happens later in `ir_walk::ir_enclosing_member`.",
+    "disposition": "fixed",
+    "evidence": "Test 2 uses a doubled-quote target and asserts the IR holds the outer-stripped, still-escaped text, pinning the boundary rather than blurring it.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A9",
+    "source": "fable m-1 (stand-in, astra slot)",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 57,
+    "severity": "minor",
+    "text": "Test 1's `in_dataset_modify_context == false` assertion is vacuous in a pageextension (dataset_ctx is false there regardless of the kind gate), so it must not be described as pinning probe P5.",
+    "disposition": "fixed",
+    "evidence": "The assertion stays as a cheap regression catch but its doc says 'false by construction here, not a pin of the kind gate'.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A10",
+    "source": "fable m-2 (stand-in, astra slot)",
+    "round": 1,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 711,
+    "severity": "minor",
+    "text": "The fallback's kind gate is belt-and-braces over the `collect_routines` arm (the fallback only ever sees nodes that arm passed as `member`), which the comment does not say.",
+    "disposition": "fixed",
+    "evidence": "Comment now states which of the two is load-bearing.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A11",
+    "source": "opus M4 (stand-in, flash slot)",
+    "round": 1,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 63,
+    "severity": "minor",
+    "text": "`addlast(actions)` names the anchor with a section keyword, testing the lexer rather than the fallback.",
+    "disposition": "fixed",
+    "evidence": "Control uses `addlast(Processing)`.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A12",
+    "source": "fable m-4 (stand-in, astra slot)",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "No CHANGELOG entry was planned, and the de-collision (A3) plus the baseline-refingerprint consequence belong in it.",
+    "disposition": "fixed",
+    "evidence": "Entry added under [Unreleased] / Fixed at step 9.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B1",
+    "source": "opus (stand-in, flash slot) + fable N3",
+    "round": 2,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 719,
+    "severity": "important",
+    "text": "Nothing pins the seam between the lowerer and the classifier. Changing the fallback's origin_of(m) to origin_of(node) -- a plausible 'make the range point at the action' tidy-up -- passes every v2 test, because test 1 asserts only the NAME and the classifier test hand-states PAnchor{syntax_kind}. The consequence is the whole classify half silently reverting with a green suite.",
+    "disposition": "fixed",
+    "evidence": "Lowerer test 1 also asserts origin.kind_text == \"modify_action_modification\", and the cli_p1 test asserts enclosing_member_range.syntax_kind is the same string. One assert each; they are the executable join between the two hand-stated ends.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B2",
+    "source": "opus (stand-in, flash slot)",
+    "round": 2,
+    "file": "CHANGELOG.md",
+    "line": 140,
+    "severity": "important",
+    "text": "The resolution of A2 was one file short: the [Unreleased] CHANGELOG bullet repeats the same claim the commit falsifies -- 'could not be fixed by adding a fifth string to the matcher: modify_action_modification carries target and no name, so the lowerer never captures the wrapper'. That is an unreleased note, so it would ship as a false statement in the next release.",
+    "disposition": "fixed",
+    "evidence": "Verified at CHANGELOG.md:140-146. Corrected in the same commit. The dated plan record under docs/superpowers/plans/ keeps its original text as history.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B3",
+    "source": "opus (stand-in, flash slot)",
+    "round": 2,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 711,
+    "severity": "minor",
+    "text": "A6's filter as designed sits in the target-only or_else, but the same zero-width-recovery defect exists on the Name path (action_declaration.name is required, so recovery inserts a present empty node).",
+    "disposition": "fixed",
+    "evidence": "Guard raised to cover both paths; folded into A6. If check-goldens moves anything, the narrow placement is restored and the reason recorded.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B4",
+    "source": "opus (stand-in, flash slot)",
+    "round": 2,
+    "file": "tests/cli/cli_p1_enclosing_member.rs",
+    "line": 12,
+    "severity": "minor",
+    "text": "The module header still describes clause (b) as 'two routines with the SAME stable_routine_id', which the test itself has asserted the opposite of since task 4.",
+    "disposition": "fixed",
+    "evidence": "Verified: header :12-13 vs the test at :108-136. Corrected while adding A3's sibling test to the same file.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B5",
+    "source": "opus (stand-in, flash slot) + fable M4",
+    "round": 2,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 630,
+    "severity": "minor",
+    "text": "Documentation/robustness residue: the control fixture is grammar-admitted but not compilable AL and could be 'corrected' back into the shadowed form; the rewritten KNOWN GAP block should state the residual it leaves (a trigger directly in an add* body has no declaring member, gets no page-action, and that is intended); and the in_dataset_modify_context gate should say it must not be folded into a shared modify-wrapper helper.",
+    "disposition": "fixed",
+    "evidence": "All three written into the code as comments. fable's M4 (a missing pending.clear() in the new arm would leak queued attributes) is unreachable in compilable AL and is prevented by copying the sibling arm verbatim -- recorded as a stated limit, not a test.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C1",
+    "source": "code-review agent I1, co-signed by both stand-ins",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 594,
+    "severity": "important",
+    "text": "The new comment saying the in_dataset_modify_context gate must NOT be folded into a shared modify-wrapper predicate is enforced by nothing, and the shape it warns about is grammar-reachable: dataset { modify(Cust) { actions { modify(A) { trigger ... } } } } parses clean, and folding the two kinds would flip the flag to true and make the resolver look an ACTION name up in the dataitem map -- silently binding the trigger's implicit Rec to the wrong table.",
+    "disposition": "fixed",
+    "evidence": "Reachability re-verified by the conductor with a real tree-sitter parse (exit 0, no ERROR, no MISSING). Test `action_modify_nested_in_a_dataset_modify_is_not_dataset_context` added; it also pins the correct behaviour change on that shape (the member is now the inner action, not the outer dataset modify). D8: folding the gate to both kinds fails it, exit 101, restored sha 24cfdbca0eb9.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C2",
+    "source": "fable N1 (stand-in, astra slot)",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 752,
+    "severity": "minor",
+    "text": "B3 raised the empty guard to cover the `name` path, but both empty tests reach it through `target`. Moving the filter back inside the target fallback -- B3's own stated contingency -- would keep them green and silently un-guard the half B3 was raised for.",
+    "disposition": "fixed",
+    "evidence": "Test `empty_action_declaration_name_degrades_to_no_member` added (a nameless `action()`, which parses CLEAN with a zero-width name). D9: narrowing the filter to the target path fails THAT test and only that test (2 passed, 1 failed), exit 101, restored sha 24cfdbca0eb9.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C3",
+    "source": "opus NF3 (stand-in, flash slot)",
+    "round": 3,
+    "file": "src/program/sig_fp.rs",
+    "line": 155,
+    "severity": "important",
+    "text": "The CHANGELOG's headline claim -- two sibling action modify() triggers used to mint the same RoutineNodeId and run-collapse dropped one -- was pinned nowhere. The only de-collision test covers engine::ids' stable-id path, a different function. Harmonising source_routine_node_id to stop folding the member (which the ABI side's hardcoded enclosing_member_lc: None invites) would re-collide them with a fully green suite.",
+    "disposition": "fixed",
+    "evidence": "Test `enclosing_member_discriminates_the_program_routine_node_id` added, with the precondition hand-stated (same name_lc, params_count, sig_fp, object -- asserted, not assumed). D10: dropping enclosing_member from source_routine_node_id fails it, exit 101, restored sha 4e98166deaca.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C4",
+    "source": "code-review M2, co-signed by both stand-ins",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 2340,
+    "severity": "minor",
+    "text": "The control test's doc and the fallback comment both claim the control pins the FALLBACK's scope. It cannot: collect_routines never passes an add* node as member, so the fallback is unreachable for that family and widening it alone leaves the control green. What the control pins is the PAIR of sites.",
+    "disposition": "fixed",
+    "evidence": "Both wordings corrected; the D3 record (two scripted edits) is what shows the pair is the real unit.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C5",
+    "source": "opus NF1 (stand-in, flash slot)",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 733,
+    "severity": "minor",
+    "text": "The empty-guard comment blamed 'tree-sitter recovery' for the zero-width node. There is no recovery: both shapes parse CLEAN (no ERROR, no MISSING, has_error() false), so ParseStatus stays Clean and nothing downstream flags them. A reader taking the comment at face value could conclude the diagnostics already cover it and revert the filter as redundant.",
+    "disposition": "fixed",
+    "evidence": "Re-verified by the conductor: `tree-sitter parse` exits 0 with zero ERROR/MISSING nodes for both `modify()` and a nameless `action()`. Comment rewritten to say what actually happens. The grammar accepting a zero-width identifier in a required field is filed as a discovery -- we own tree-sitter-al. ROUND 2: opus RE-RAISED -- the fix was one file short. The [Unreleased] CHANGELOG bullet still said the two paths are 'both of which tree-sitter recovery can leave zero-width', the very claim C5 falsified, in exactly the shape B2 was raised for. Corrected: the grammar can leave a REQUIRED field zero-width with no ERROR, no MISSING and no ParseStatus signal, so nothing else catches it.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C6",
+    "source": "code-review M1, consequence corrected by opus NF2",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 752,
+    "severity": "minor",
+    "text": "The filter drops the whole (name, origin) tuple, so a zero-width-name wrapper also loses enclosing_member_range and originating_object; the comment justified only the id half.",
+    "disposition": "fixed",
+    "evidence": "Comment now states the trade. NF2's correction adopted over the code review's wording: such a routine does NOT stop being a root -- kinds_for inserts trigger-page unconditionally -- it loses page-action, the evidence containment range and the inventory tie-break. Verified at root_classification.rs:206-212.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C7",
+    "source": "code-review M4, co-signed by both stand-ins",
+    "round": 3,
+    "file": ".agent/issue-41/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The blast-radius row's sub-clause 'all 52 modify( hits are Rec.Modify() calls' is false.",
+    "disposition": "fixed",
+    "evidence": "Corrected in the ledger; the shipped CHANGELOG wording was already accurate.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C8",
+    "source": "code-review M5, co-signed by both stand-ins",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 2322,
+    "severity": "minor",
+    "text": "T2's doc states the unescape boundary universally, but only the L3 path unescapes; the program engine's source_routine_node_id folds the raw, still-escaped text into RoutineNodeId. Pre-existing for every quoted wrapper.",
+    "disposition": "fixed",
+    "evidence": "Qualifier added to the test doc naming the L3 path and the pre-existing asymmetry. Out of scope to change here.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "C9",
+    "source": "code-review M3",
+    "round": 3,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 636,
+    "severity": "minor",
+    "text": "Proposed extracting a shared `is_modify_member_wrapper` helper for the two-kind predicate written at two sites.",
+    "disposition": "refuted",
+    "evidence": "REFUTED, and both stand-ins independently said drop it: the helper must NOT be used at the third site (the in_dataset_modify_context gate), so a named predicate whose correct use excludes one of the three look-alike sites advertises the fold risk rather than removing it. A third modify_* kind cannot appear without a grammar bump that trips kind_policy.rs's exhaustive match, and C1's test now enforces the third site executably.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "D1n",
+    "source": "opus nit 1 (stand-in, flash slot)",
+    "round": 4,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 2519,
+    "severity": "minor",
+    "text": "Two new assert messages carried literal 14-space runs mid-sentence: a `\\`-continued string lost its backslashes but kept the indentation. rustfmt does not reflow string literals, so nothing would ever catch it -- and it is what a developer reads when the guard fires.",
+    "disposition": "fixed",
+    "evidence": "The ACTIONS message was rewritten with a real backslash-continuation. ROUND 3: BOTH stand-ins re-raised, and they were right -- the second message had been 'fixed' with a literal backslash-n ESCAPE plus 13 spaces, so it still printed a hard line break mid-sentence, and this entry's earlier evidence claimed both were done AND verified by D11. False twice over: D11 prints the D3n precondition message, not this one, so it verified nothing about it. That over-claim is the exact shape this repo's testing rule warns about and is recorded rather than quietly amended. Both messages now use real continuations, and the text is read back from the RUNNING test (the D9 break makes this assert fire) rather than eyeballed -- see the ledger's proof table.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "D2n",
+    "source": "opus nit 2 (stand-in, flash slot)",
+    "round": 4,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 2462,
+    "severity": "minor",
+    "text": "The C1 fixture is grammar-admitted but not compilable AL (a plain report has no dataset modify(), and a dataset modify has no actions section) and said so nowhere -- the same property B5 required labelling on the control test.",
+    "disposition": "fixed",
+    "evidence": "PARSE-SHAPE CONTRACT paragraph added, naming which correction would preserve the discrimination (report -> reportextension) and which would silently delete the guard (removing the actions nesting).",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "D3n",
+    "source": "opus nit 3 (stand-in, flash slot)",
+    "round": 4,
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 2502,
+    "severity": "minor",
+    "text": "C1's test observed the gate's OUTPUT but could not see that dataset_ctx was genuinely true at that depth. If a future change forced dataset context off at actions_section -- defensible, and the file already has that precedent for RequestpageSection -- the assertion would go vacuous and the guard would stop guarding while staying green.",
+    "disposition": "fixed",
+    "evidence": "A sibling trigger declared directly in the dataset modify() is now asserted to BE dataset context, as a stated precondition. D11: forcing in_dataset_modify_context permanently false fails that precondition assert (exit 101, message 'precondition: a trigger directly in a dataset modify() IS dataset context'), restored sha c8feaf96c2e0.",
+    "hash": "",
+    "reviews": {
+      "astra": "unreviewed",
+      "flash": "unreviewed",
+      "fable": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
