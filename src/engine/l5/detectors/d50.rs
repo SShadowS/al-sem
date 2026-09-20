@@ -1054,9 +1054,10 @@ mod tests {
     // =======================================================================
 
     /// One `insert` on `table_id`, tagged `temp_state: known(is_temp)`.
-    /// `fact_is_known_temp` (`cone_derived.rs:149-155`) reads exactly this
-    /// shape, and it is what splits `table_writes_all` from
-    /// `physical_table_writes` in the fold (`cone_derived.rs:621-639`).
+    /// `cone_derived::fact_is_known_temp` reads exactly this shape, and it is
+    /// what splits `table_writes_all` from `physical_table_writes` in
+    /// `ConeDerivedBuilder::fold_fact`. (Cited by NAME, not by line: both line
+    /// ranges that used to stand here had already rotted.)
     fn table_insert_fact(table_id: &str, is_temp: bool) -> CapabilityFact {
         let mut f = fact("insert", "table", Some(table_id));
         f.extra = Some(CapabilityExtra::Table {

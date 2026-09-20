@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use super::combined_graph::{CombinedGraph, TypedEdge, build_combined_graph};
 use super::cone_census;
-use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput};
+use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact_is_known_temp};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
@@ -1199,15 +1199,54 @@ fn build_typed_edge_graph(graph: &CombinedGraph, nodes: &[String]) -> TypedEdgeG
     }
 }
 
-/// Dedup key for inherited facts — `op|resourceKind|resourceId|confidence`.
-/// Mirrors `inheritedFactKey`.
+/// Dedup key for inherited facts —
+/// `op|resourceKind|resourceId|confidence|tempClass`.
+///
+/// ⟨issue 33⟩ The last component is the BINARY temp class
+/// ([`fact_is_known_temp`]) — `kt` for a provably-temporary record operation,
+/// `nt` for everything else. Without it, a known-temp and a non-known-temp fact
+/// about the SAME table collide, one of the two is discarded at every reduction
+/// site, and which one survives is decided by distance / `rep_key` / BFS arrival
+/// — none of which is about evidence quality. On the pinned CDO baseline
+/// (CROSS-APP scope) that hid a physical obligation behind a temp one at 1,755
+/// keys: 292 of them WRITES across 222 routines, and **1,463 of them READS** —
+/// the read set is the bigger mover, by roughly 5x. Source-only scope: 820
+/// hidden, 89 writes and 731 reads.
+///
+/// Splitting the classes is what makes the fix ADDITIVE: no reduction site
+/// changes its comparison, the widened key's candidate group is a SUBSET of the
+/// old one, and the fact that used to win still wins within its own class. The
+/// extra entry costs at most one per key (measured on CDO: +2.0% cone entries
+/// cross-app, inside the run-to-run noise band on both wall time and peak RSS).
+///
+/// ORDERING SAFETY, and for the RIGHT reason. `ConeFacts` is a `BTreeMap` keyed
+/// by this string, so appending a suffix flips iteration order if one base key
+/// is a proper string PREFIX of another (`'k' < '|'`). This is NOT safe because
+/// `confidence` is always `"static"` — that premise is false: `confidence_from_
+/// source` yields `static` / `userDynamic` / `configDynamic` / `unresolved`, and
+/// the r3a3 manifest records both `unresolved` and `configDynamic`. It is safe
+/// because **no one of those four values is a prefix of another, and
+/// `resource_id` is only ever a table id or an event id, neither of which can
+/// contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
+/// can carry a `|`, and this breaks.
+///
+/// What this buys is CONSERVATIVE FOR THE PHYSICAL-WRITE AND PHYSICAL-READ SETS
+/// — never "conservative for permissions". `writes_physical_tables_of` and
+/// `physical_table_reads_of` can only grow, but the detectors built on them are
+/// not monotone in the same direction: d44 needs non-empty `writers` AND a
+/// non-empty `readers \ writers`, so both sets growing moves its findings in
+/// both directions independently and can DELETE one; d43 can DOWNGRADE one. All
+/// of it needs triage on a real workspace, the READ half included — and note
+/// that `physical_table_reads_of` has exactly ONE consumer anywhere (d44), so
+/// the larger half of what this unmasks is also the hardest half to observe.
 fn inherited_fact_key(f: &CapabilityFact) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         f.op,
         f.resource_kind,
         f.resource_id.as_deref().unwrap_or(""),
-        f.confidence
+        f.confidence,
+        if fact_is_known_temp(f) { "kt" } else { "nt" }
     )
 }
 
@@ -1630,11 +1669,15 @@ fn inherited_facts_for_singleton<'g>(
 /// `inheritedFactsByBfs`.
 ///
 /// ⟨C1⟩ The `seen`-deduped representatives this walk visits are the derived
-/// fold's inherited source. Note the asymmetry R3 pins: a SIBLING member's facts
-/// come from the key-deduped `direct` map (not its raw Vec), while a downstream
-/// SCC contributes its cone entries. Under [`ConeOutput::DerivedOnly`] the
-/// `retag` clones and `sort_inherited` are skipped; the walk (and therefore the
-/// fold) is unchanged.
+/// fold's inherited source. Note the asymmetry: a SIBLING member's facts come
+/// from the key-deduped `direct` map (not its raw Vec), while a downstream SCC
+/// contributes its cone entries. ⟨issue 33⟩ R3 used to *pin* that asymmetry
+/// because the two inputs gave different answers; with the temp class in
+/// [`inherited_fact_key`] the derived fold is dedup-invariant and they agree, so
+/// this is now a cost choice rather than a correctness one (see
+/// `cone_derived`'s module docs). Under [`ConeOutput::DerivedOnly`] the `retag`
+/// clones and `sort_inherited` are skipped; the walk (and therefore the fold) is
+/// unchanged.
 fn inherited_facts_by_bfs<'g>(
     subject: &str,
     g: &'g TypedEdgeGraph,

@@ -333,6 +333,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A known-temp write no longer hides a physical write of the same table (#33).**
+  `capability_cone::inherited_fact_key` was `op|resourceKind|resourceId|confidence` —
+  `extra`, and therefore `temp_state`, was not in it. A provably-temporary record operation
+  and a real database write of the SAME table shared one key and collapsed to ONE
+  representative at every one of the cone's **five** reduction sites
+  (`compose_cone_over_graph`'s direct dedup, its byte-identical copy inside `project_r3a3`,
+  `merge_cone`, `inherited_facts_for_singleton`'s `best` map, and `inherited_facts_by_bfs`'s
+  `seen` first-wins). Which of the two survived was decided by hop distance, by `rep_key`, or
+  by BFS arrival order — never by evidence quality — so `writes_physical_tables_of` could
+  answer EMPTY for a routine that provably writes the table.
+
+  The key now carries the binary temp class (`fact_is_known_temp` → `kt`/`nt`) as a fifth
+  component. **No reduction site's comparison changes**: the two classes simply stop
+  colliding, so nothing has to arbitrate between them. That is what makes the change
+  ADDITIVE **at the cone** — the widened key's candidate group is a subset of the old one,
+  and the fact that used to win still wins within its own class. It is NOT additive at the
+  digest's occurrence level, and that is by design: see the #32 entry below.
+  `tests/r3/r3a3_oracles.rs`'s mirror of the key widens with it, and it is load-bearing for
+  BOTH oracles that use it — without the widening `oracle_r3a3_inherited_factkey_dedup`
+  reads two legitimately distinct facts as a broken dedup, and
+  `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` silently stops pinning #32's
+  soundness precondition (every inherited fact has a SAME-CLASS direct producer).
+
+  Measured on the pinned CDO baseline before implementing, **cross-app scope**: 3,343 mixed
+  keys on 1,779 routines, of which **1,755 had the known-temp fact winning and a physical one
+  hidden — 292 of those WRITES across 222 routines, and 1,463 of them READS**. The read set
+  is the bigger mover, by roughly 5x. **Source-only scope** (the scope `alsem analyze` runs
+  in): 1,833 mixed keys, 820 hidden, 89 writes and 731 reads. Cost: +2.0% cone entries
+  cross-app (+5.2% source-only), inside the run-to-run noise band on both wall time and peak
+  RSS across three paired runs. (`.agent/runs/20260920-110144-f4ce12/measure-33.md`.)
+
+  **The honest framing: this is conservative for the physical-write AND physical-read SETS,
+  never "conservative for permissions."** `writes_physical_tables_of` and
+  `physical_table_reads_of` can only grow, but the detectors on top of them are not monotone
+  in the same direction — d44 needs non-empty `writers` AND a non-empty `distinct_readers =
+  readers \ writers`, so BOTH sets growing moves its findings in both directions and can
+  DELETE one; d43 can flip `no-other-writers` to `candidate-coverage` and DOWNGRADE one.
+  d8/d45/d50 can gain findings.
+
+  **Real-workspace triage: partially discharged, and the limits matter.** On the pinned CDO
+  baseline (source-only, 41 default detectors, 2069 findings) **0 findings appeared, 0
+  vanished and 0 changed severity**; 2 d8 findings changed content only, both triaged against
+  source and both correct (0% FP). But d43/d44/d45 had a ZERO candidate population there —
+  CDO's publishers and subscribers live in sibling apps and `alsem analyze` does not ingest
+  dependencies — so the two hazard directions above are **untested, not clean**. And
+  `physical_table_reads_of` has exactly one consumer anywhere (d44), so the LARGER half of
+  what this unmasks was not observable in that run at all. A cross-app triage is still owed.
+  (`.agent/runs/20260920-110144-f4ce12/triage-33.md`.)
+
+- **A physical write no longer anchors its witness at a temporary one (#32).** Two layers
+  disagreed about which object they read: the ordering engine grades an occurrence
+  physical-or-not from the FACT's `temp_state`, while the witness terminal is chosen by
+  `digest::fact_equivalent`, which compares op / resourceKind / resourceId /
+  resourceArgSource / objectType and **never** temp state. A physical fact could therefore
+  terminate on a routine's known-temp write of the same table, producing an occurrence graded
+  physical and anchored at an in-memory operation — d47 reporting
+  `WRITE_PENDING_AT_EXTERNAL_IO` at CRITICAL for a `Temp.Insert(); Http.Get(); PhysWriter()`
+  body.
+
+  **This was already reachable before #33 — the guard fixes a LIVE bug, and #33 only widens
+  its reach.** It is tempting to say the cone's key collapse masked it entirely, but
+  `fact_equivalent` is strictly WEAKER than `inherited_fact_key`: it ignores `confidence`
+  and treats `resource_id: None` as a WILDCARD, so a direct fact can be a terminal candidate
+  for a fact it never shared a cone key with. That wildcard is sufficient on its own;
+  an earlier draft of this note added a second, FALSE argument about sort order (it claimed
+  a `None`-rid fact sorts first; the sort key joins its parts with `|`, which outranks every
+  byte a real rid starts with, so an empty rid sorts LAST). The wildcard alone is enough: a
+  routine whose ONLY direct fact is a temp write with an unresolvable table (rid `None`,
+  confidence `unresolved`) already mis-anchors a physical write of a real table today. Consequence for anyone reading
+  the "no golden moved" evidence: the guard is **not inert on existing output** — it can move
+  `evidence_operation_id` → `dedupe_key` → `occurrence_id`, and the paired seed guard shrinks
+  `valid_nodes`, which can drop `via_paths` and so change `build_canonical_key`'s link
+  signature. The golden corpus cannot rule that out, because it contains zero mixed keys by
+  measurement.
+
+  The terminal `find` in `reconstruct_witness_paths` and its reverse-BFS prune seed now both
+  require the temp class to match, via a new
+  `digest::is_known_temp_state`/`is_known_temp_snap` pair that also absorbs
+  `merge_temp_state`'s own copy of the predicate. **The two guards are PAIRED, and the two
+  mispairings are not symmetric.** A seed BROADER than the terminal is a strict superset of
+  valid nodes: it costs explored states, never answers — measured, by dropping the seed guard
+  alone and watching nothing move. The dangerous direction is the mirror image, a guarded
+  seed with a RELAXED terminal: then a node whose only carrier is the other class is never
+  marked valid, the forward BFS never reaches it, and a terminal the matcher would have
+  accepted is never found. That failure is silent — the digest path never stores the
+  resulting `incomplete` flag, so the occurrence simply contributes no ordering fact and a
+  d45/d47-class finding vanishes instead of the run failing.
+
+- **Doc correction:** `cone_derived::fact_is_known_temp` no longer claims to be "the ONE
+  implementation". It is the one implementation over an L4 `CapabilityFact`, and the doc now
+  says plainly that it is one of **at least a dozen** copies of the `known/true` test across
+  four carrier types — `digest`'s `SnapTempState` pair, `ordering_engine`'s `matches!`,
+  `detectors::is_known_temp`/`is_known_temp_rv` over an operation site's `PTempState`, inline
+  re-spellings in d10/d18/d33/d36/d37/d39/d40, and two in `l3_workspace` — and points at the
+  two greps that find them all rather than promising a complete list.
+
 - **An action-extension trigger now carries its enclosing member, and classifies as
   `page-action`** (`crates/al-syntax/src/lower/mod.rs`, `src/engine/root_classification.rs`;
   issue #41). A pageextension's `actions { modify(SomeAction) { trigger OnAfterAction() … } }`

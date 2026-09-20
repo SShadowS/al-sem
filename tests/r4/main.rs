@@ -6,6 +6,7 @@ mod regen;
 
 mod r4_differential;
 mod r4f_digest_effects;
+mod r4f_issue33_unmasked_physical_write;
 mod r4f_ordering_facts;
 mod r4f_return_summaries;
 mod r4f_root_classifications;
