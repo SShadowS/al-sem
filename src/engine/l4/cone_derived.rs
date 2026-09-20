@@ -39,17 +39,44 @@
 //! representatives (the singleton path's key-winner `best.values()`, the BFS
 //! path's `seen`-deduped reps), plus the routine's own RAW direct facts.
 //!
-//! **The dedup asymmetry is load-bearing.** The cone dedups inherited facts by
-//! `inherited_fact_key = op|resource_kind|resource_id|confidence` — `extra` (and
-//! so `temp_state`) is NOT in that key, while the `rep_key` tie-break IS
-//! extra-aware. Two facts writing table T with identical `(op, kind, rid,
-//! confidence)` but different `temp_state` collapse to ONE representative, and
-//! `writes_physical_tables_of` today decides temp-vs-physical on the *winning*
-//! representative — not on "any physical fact exists". Folding raw reachable
-//! facts instead of the key-winners would flip that whenever a temp fact wins a
-//! key. The self half is the mirror image: `capability_facts_direct` is stored
+//! **The dedup asymmetry.** The cone dedups inherited facts by
+//! `inherited_fact_key = op|resource_kind|resource_id|confidence|tempClass`, so
+//! the fold runs over ONE representative per key, not over every reachable
+//! fact. The self half is the mirror image: `capability_facts_direct` is stored
 //! RAW (un-deduped) and the reachable sequence scans every one of them, so the
-//! self half must fold the raw Vec, not the key-deduped `direct` map.
+//! self half folds the raw Vec, not the key-deduped `direct` map.
+//!
+//! ⟨issue 33⟩ **That asymmetry is NO LONGER load-bearing, and this doc used to
+//! claim it was.** It said so for a real reason: before the temp class went into
+//! the key, two facts writing table T with identical `(op, kind, rid,
+//! confidence)` but different `temp_state` became ONE representative; whichever
+//! won decided whether the ancestor "writes a physical table"; so a nearer — or
+//! lexicographically smaller — temp fact could hide a physical one outright, and
+//! folding raw facts instead of key-winners would have given a DIFFERENT answer
+//! from the cone's own.
+//!
+//! With the class in the key that is over. [`ConeDerivedBuilder::fold_fact`]
+//! discriminates only on `(resource_kind, resource_id, op,
+//! fact_is_known_temp)`, and all four are now IN the key — so two facts sharing
+//! a key contribute identically, the fold is dedup-INVARIANT on both halves, and
+//! folding the raw Vec or the deduped map gives the same derived row either way.
+//! The asymmetry is now purely a COST choice (one representative is cheaper than
+//! every reachable fact), not a correctness one, and nothing guards it because
+//! nothing can go wrong there any more. `writes_physical_tables_of` is exactly
+//! the union over the reachable non-known-temp writes, pinned by the
+//! `assert_physical_writes_equal_naive_union` oracle in this module's tests.
+//!
+//! Downstream, the two classes survive as two DISTINCT obligations and are
+//! graded separately — the outcome the r4 fixture asserts. That is NOT quite
+//! "the conservative merges finally see both facts": `digest::merge_temp_state`
+//! fires only for facts sharing a `dedupe_key`, and `dedupe_key` is anchored on
+//! the witness TERMINAL's operation id, so with issue 32's paired terminal guard
+//! the two classes terminate at DIFFERENT operations and never meet there;
+//! `ordering_engine`'s `known_temp_only` likewise keys on `occurrence_id` and
+//! grades them apart. Those merges are the FALLBACK for the case where the two
+//! DO share an anchor (the synthetic-anchor path, when no terminal was found),
+//! where they conservatively degrade to non-temp — graded physical, which is the
+//! right answer when a physical fact is present.
 //!
 //! ## Storage (pooled, not per-routine trees)
 //!
@@ -144,8 +171,25 @@ pub fn decode_op_mask(mask: u8) -> Vec<&'static str> {
 /// the exact `known/true` signal qualifies; `Unknown` / parameter-dependent /
 /// absent temp_state keep counting.
 ///
-/// This is the ONE implementation — `l5::capability_query::fact_is_known_temp`
-/// re-exports it so the fold and the raw helpers cannot drift apart.
+/// This is the ONE implementation **over an L4 [`CapabilityFact`]** —
+/// `l5::capability_query::fact_is_known_temp` re-exports it, and
+/// `capability_cone::inherited_fact_key` calls it, so the key, the fold and the
+/// raw helpers cannot drift apart.
+///
+/// ⟨issue 33⟩ It is NOT the only implementation of the `known/true` predicate
+/// in the repo, and the old "this is the ONE implementation" claim is why that
+/// was easy to miss. Do not read the list below as exhaustive either — there are
+/// **at least a dozen** copies, over four different carrier types. The L5
+/// snapshot layer has `digest::is_known_temp_state` over
+/// `Option<&SnapTempState>` and `digest::is_known_temp_snap` over a snapshot
+/// `Fact`, plus `ordering_engine`'s own `matches!` over an effect's temp state;
+/// the L5 detectors have `detectors::is_known_temp` /
+/// `detectors::is_known_temp_rv` over an OPERATION SITE's `PTempState` and
+/// inline re-spellings of the same test in d10 / d18 / d33 / d36 / d37 / d39 /
+/// d40; and `l3_workspace` tests `kind == "known"` in two more places. If this
+/// rule ever changes, find them with `grep -rn 'kind == "known"' src/` plus
+/// `grep -rn 'Known { value: true }' src/` — do not trust this paragraph to
+/// still be complete.
 pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
     matches!(
         &f.extra,
@@ -691,17 +735,21 @@ impl ConeDerivedBuilder {
     /// Fold ONE routine's complete reachable sequence in a single call
     /// (begin → fold each → finish).
     ///
-    /// The production cone does NOT use this: its inherited half must fold
+    /// The production cone does NOT use this: its inherited half folds
     /// key-deduped representatives, not a flat reachable list (see the module
     /// docs' dedup-asymmetry note). It exists for callers that already hold the
     /// literal reachable sequence — hand-built fixture summaries, whose inherited
     /// facts ARE the input rather than a cone output.
     ///
-    /// ⟨fix M3⟩ `#[cfg(test)]` + `pub(crate)` make that a STRUCTURAL guarantee
-    /// rather than just a doc warning: the misuse this guards against (folding a
-    /// flat reachable list in the production cone) is exactly the R3 dedup
-    /// hazard this whole arc exists to prevent. Its only caller
-    /// (`l5::test_support::cone_store_of`) is itself `#[cfg(test)]`-only.
+    /// ⟨fix M3⟩ `#[cfg(test)]` + `pub(crate)` keep that a STRUCTURAL guarantee
+    /// rather than just a doc warning. ⟨issue 33⟩ Its original justification —
+    /// that folding a flat reachable list in the production cone would reproduce
+    /// the R3 dedup hazard — no longer holds: with the temp class in
+    /// `inherited_fact_key` the fold is dedup-invariant, so raw and deduped
+    /// inputs now agree. The confinement stays as a cost and clarity boundary
+    /// (the production path must not pay for a flat reachable list), not as a
+    /// correctness guard. Its only caller (`l5::test_support::cone_store_of`) is
+    /// itself `#[cfg(test)]`-only.
     #[cfg(test)]
     pub(crate) fn fold_routine<'f>(
         &mut self,
@@ -828,31 +876,102 @@ mod tests {
         }
     }
 
-    /// Raw-path `writes_physical_tables_of` over `direct ∪ inherited`, replicating
-    /// `capability_query`'s exact filter — the oracle side of these fixtures.
-    fn raw_physical_writes(direct: &[CapabilityFact], inherited: &[CapabilityFact]) -> Vec<String> {
-        let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for f in direct.iter().chain(inherited.iter()) {
-            if f.resource_kind != "table" || write_op_bit(f.op).is_none() || fact_is_known_temp(f) {
-                continue;
-            }
-            if let Some(rid) = &f.resource_id {
-                ids.insert(rid.clone());
+    // -- ⟨issue 33⟩ mixed temp/physical keys ----------------------------------
+
+    /// Every node reachable from `start` over `graph.typed_edges`, including
+    /// `start` itself.
+    fn reachable_from(graph: &CombinedGraph, start: &str) -> std::collections::BTreeSet<String> {
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        seen.insert(start.to_string());
+        queue.push_back(start.to_string());
+        while let Some(cur) = queue.pop_front() {
+            for e in &graph.typed_edges {
+                if e.from != cur {
+                    continue;
+                }
+                if let Some(to) = &e.to
+                    && seen.insert(to.clone())
+                {
+                    queue.push_back(to.clone());
+                }
             }
         }
-        ids.into_iter().collect()
+        seen
     }
 
-    // -- R3 source rule 1: the temp/physical dedup trap ------------------------
+    /// ⟨issue 33 — A4b⟩ The oracle that replaces the two retired dedup-trap tests:
+    /// for every routine in the graph handed to it, `writes_physical_tables_of` must
+    /// equal the NAIVE union of physical (non-known-temp) table-write ids over the
+    /// routine's whole reachable set — itself plus everything it can call,
+    /// transitively.
+    ///
+    /// Before issue 33 this was FALSE by construction: `inherited_fact_key` omitted
+    /// the temp class, so a known-temp representative could win a key outright and
+    /// the physical fact hiding behind it never reached the fold. The derived answer
+    /// was then a strict SUBSET of the naive union (the retired
+    /// `temp_physical_dedup_trap_follows_the_winning_representative` pinned exactly
+    /// that subsetting as intended behaviour). With the temp class in the key the two
+    /// classes no longer collide, and the two answers coincide.
+    ///
+    /// **Stated limit on its reach.** The acceptance row this discharges is worded
+    /// "for every routine in every fixture"; the delivery is narrower. It is called
+    /// from THREE hand-built unit graphs in this module and never over
+    /// `tests/r0-corpus/`. It is a genuine guard — all three fail on the un-widened
+    /// key — but it is not a corpus-wide invariant. Widening it into the r3a3
+    /// differential (compose with `ConeOutput::Both`, compare `out.derived` against
+    /// the reachable-direct union) is cheap and is the honest way to earn that
+    /// wording.
+    ///
+    /// It also cannot detect a raw↔key-deduped input swap any more, because after
+    /// the key widening the two answers coincide by construction (see this module's
+    /// docs). That is acceptable — it is coverage of something that can no longer go
+    /// wrong — but it is not coverage the two retired tests used to provide.
+    fn assert_physical_writes_equal_naive_union(
+        label: &str,
+        graph: &CombinedGraph,
+        nodes: &[String],
+        direct_in: &HashMap<String, Vec<CapabilityFact>>,
+        derived: &ConeDerivedStore,
+    ) {
+        for n in nodes {
+            let mut naive: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for r in reachable_from(graph, n) {
+                for f in direct_in.get(&r).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if f.resource_kind != "table"
+                        || write_op_bit(f.op).is_none()
+                        || fact_is_known_temp(f)
+                    {
+                        continue;
+                    }
+                    if let Some(rid) = &f.resource_id {
+                        naive.insert(rid.clone());
+                    }
+                }
+            }
+            let naive: Vec<String> = naive.into_iter().collect();
+            assert_eq!(
+                derived.writes_physical_tables_of(n),
+                naive,
+                "[{label}] writes_physical_tables_of({n}) != the naive union over {n}'s \
+                 reachable direct facts — a physical obligation is being hidden by the \
+                 cone's key collapse"
+            );
+        }
+    }
 
-    /// Two callees write table T with IDENTICAL `(op, resource_kind, resource_id,
-    /// confidence)` — one known-temp, one physical. They collapse to ONE cone
-    /// representative (`extra` is not in `inherited_fact_key`), and the WINNER
-    /// decides whether the ancestor "writes a physical table". The fold must run
-    /// over that winner, not over the raw reachable facts: an "any physical"
-    /// union would diverge whenever the temp fact wins the key.
+    /// ⟨issue 33 — A1 + A8⟩ Two callees write table T with the same `(op,
+    /// resource_kind, resource_id, confidence)` — one known-temp, one physical. The
+    /// temp class is part of `inherited_fact_key`, so they no longer collide: BOTH
+    /// survive as separate inherited facts and the ancestor's physical-write set
+    /// contains T.
+    ///
+    /// A8 (additivity) is asserted here too: the representative the PRE-issue-33
+    /// engine produced — the known-temp fact retagged through `cs/1`, which won the
+    /// singleton path's `edge_sort_key` tie-break — is still present, field for
+    /// field. The change only ADDS the physical fact beside it.
     #[test]
-    fn temp_physical_dedup_trap_follows_the_winning_representative() {
+    fn a_mixed_temp_key_keeps_both_facts() {
         let graph = graph_of(vec![
             call_edge("r/root", "r/tempWriter", "cs/1"),
             call_edge("r/root", "r/physWriter", "cs/2"),
@@ -889,51 +1008,140 @@ mod tests {
         let out =
             compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
 
-        // The two facts share an `inherited_fact_key`, so the root inherits ONE.
         let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
         assert_eq!(
             root_inherited.len(),
-            1,
-            "the two same-key facts must collapse to one representative"
+            2,
+            "a known-temp and a physical write of the same table are DIFFERENT \
+             obligations and must both survive the key collapse, got {root_inherited:#?}"
         );
-        // The singleton path's equal-distance tie-break is `edge_sort_key`, and
-        // `cs/1` (the TEMP callee) sorts first — so the TEMP fact is the winner.
-        assert!(
-            fact_is_known_temp(&root_inherited[0]),
-            "fixture precondition: the temp fact must win the key"
+        let temps: Vec<&CapabilityFact> = root_inherited
+            .iter()
+            .filter(|f| fact_is_known_temp(f))
+            .collect();
+        let phys: Vec<&CapabilityFact> = root_inherited
+            .iter()
+            .filter(|f| !fact_is_known_temp(f))
+            .collect();
+        assert_eq!(temps.len(), 1, "exactly one known-temp survivor");
+        assert_eq!(phys.len(), 1, "exactly one physical survivor");
+
+        // A8 — the PRE-change winner is unchanged, field for field. (`cs/1` is the
+        // edge_sort_key winner, so this is the fact the old engine emitted alone.)
+        let kept = temps[0];
+        assert_eq!(kept.subject, "r/root");
+        assert_eq!(kept.op, "insert");
+        assert_eq!(kept.resource_kind, "table");
+        assert_eq!(kept.resource_id.as_deref(), Some("t/T"));
+        assert_eq!(kept.resource_arg_source, None);
+        assert_eq!(kept.confidence, "static");
+        assert_eq!(kept.provenance, "inherited");
+        assert_eq!(kept.via, "call");
+        assert_eq!(kept.witness_operation_id, None);
+        assert_eq!(kept.witness_callsite_id.as_deref(), Some("cs/1"));
+        assert_eq!(
+            kept.extra,
+            Some(CapabilityExtra::Table {
+                record_variable_id: None,
+                temp_state: Some(PTempState {
+                    kind: "known".to_string(),
+                    value: Some(true),
+                    parameter_index: None,
+                }),
+                op_subtype: None,
+            })
         );
 
-        // The discriminating assertion: the root writes NO physical table, because
-        // the surviving representative is the temp one. A fold over the raw
-        // reachable facts ("any physical fact exists") would answer `["t/T"]`.
-        let raw = raw_physical_writes(&[], root_inherited);
-        assert!(raw.is_empty(), "the raw path drops the temp winner");
-        assert_eq!(
-            out.derived.writes_physical_tables_of("r/root"),
-            raw,
-            "the fold must decide temp-vs-physical on the winning representative"
-        );
-        // ...while temp-INCLUSIVE writes still contain the table.
+        // The physical obligation is no longer hidden.
+        assert_eq!(out.derived.writes_physical_tables_of("r/root"), vec!["t/T"]);
+        // ...and temp-INCLUSIVE writes are untouched.
         assert_eq!(out.derived.writes_tables_of("r/root"), vec!["t/T"]);
+
+        assert_physical_writes_equal_naive_union(
+            "mixed-key",
+            &graph,
+            &nodes,
+            &direct_in,
+            &out.derived,
+        );
     }
 
-    // -- R3 source rule 2: BFS sibling facts come from the key-deduped map -----
-
-    /// In a recursive SCC the BFS path emits a sibling MEMBER's facts from the
-    /// KEY-DEDUPED `direct` map, while the subject's own half comes from its RAW,
-    /// un-deduped `direct_full` Vec. Both halves are pinned here, and both pairs
-    /// are built so the KNOWN-TEMP fact wins the `rep_key` tie-break (its
-    /// `extra_json` sorts before the `unknown`-temp-state one, which is NOT
-    /// known-temp and therefore counts as physical):
+    /// ⟨issue 33 — A2⟩ The preference is NOT a distance tie-break. A known-temp
+    /// write at distance 1 and a physical write of the same table at distance 2 are
+    /// different keys, so the nearer temp fact cannot hide the farther physical one:
+    /// `writes_physical_tables_of(root)` contains the table.
     ///
-    ///   - `t/Sib` (sibling, key-deduped) ⇒ the temp winner survives ⇒ NOT a
-    ///     physical write. Folding the sibling's RAW Vec instead would wrongly
-    ///     add it.
-    ///   - `t/Own` (subject, RAW) ⇒ both facts are scanned ⇒ the non-temp one
-    ///     keeps it a physical write. Folding the subject's KEY-DEDUPED map
-    ///     instead would wrongly drop it.
+    /// Pre-issue-33 the shared key resolved by MIN DISTANCE, the temp fact at
+    /// distance 1 won outright, and the root's physical-write set was EMPTY.
     #[test]
-    fn bfs_sibling_facts_use_the_key_deduped_direct_map() {
+    fn a_physical_write_at_distance_2_survives_a_temp_write_at_distance_1() {
+        let graph = graph_of(vec![
+            call_edge("r/root", "r/tempWriter", "cs/1"),
+            call_edge("r/root", "r/mid", "cs/2"),
+            call_edge("r/mid", "r/physWriter", "cs/3"),
+        ]);
+        let nodes: Vec<String> = ["r/root", "r/tempWriter", "r/mid", "r/physWriter"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut direct_in: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
+        direct_in.insert("r/root".to_string(), Vec::new());
+        direct_in.insert("r/mid".to_string(), Vec::new());
+        direct_in.insert(
+            "r/tempWriter".to_string(),
+            vec![temp_fact(
+                "r/tempWriter",
+                "insert",
+                "t/T",
+                "known",
+                Some(true),
+            )],
+        );
+        direct_in.insert(
+            "r/physWriter".to_string(),
+            vec![temp_fact(
+                "r/physWriter",
+                "insert",
+                "t/T",
+                "known",
+                Some(false),
+            )],
+        );
+        let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
+
+        let out =
+            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+
+        let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
+        assert_eq!(
+            root_inherited.len(),
+            2,
+            "the nearer temp fact must not displace the farther physical one, \
+             got {root_inherited:#?}"
+        );
+        assert_eq!(
+            out.derived.writes_physical_tables_of("r/root"),
+            vec!["t/T"],
+            "the physical write at distance 2 must reach the root's physical-write set"
+        );
+
+        assert_physical_writes_equal_naive_union(
+            "distance",
+            &graph,
+            &nodes,
+            &direct_in,
+            &out.derived,
+        );
+    }
+
+    /// ⟨issue 33 — A4b⟩ The same oracle over a RECURSIVE SCC, which reaches the BFS
+    /// reduction site (`inherited_facts_by_bfs`) rather than the singleton one. This
+    /// is the fixture the retired `bfs_sibling_facts_use_the_key_deduped_direct_map`
+    /// used; under the widened key both of each pair's classes survive, so the
+    /// sibling half and the subject's own half agree with the naive union.
+    #[test]
+    fn a_mixed_temp_keys_in_a_recursive_scc_keep_both_classes() {
         let graph = graph_of(vec![
             call_edge("r/a", "r/b", "cs/ab"),
             call_edge("r/b", "r/a", "cs/ba"),
@@ -961,28 +1169,35 @@ mod tests {
             compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
 
         let a_inherited = &out.cones.get("r/a").expect("a cone").inherited;
-        // The sibling's two same-key facts arrive as ONE deduped representative —
-        // the known-temp one.
         assert_eq!(
             a_inherited.len(),
-            1,
-            "sibling facts must arrive key-deduped, not raw"
+            2,
+            "the sibling's known-temp and unknown-temp facts are different keys and \
+             must both arrive, got {a_inherited:#?}"
         );
-        assert!(
-            fact_is_known_temp(&a_inherited[0]),
-            "fixture precondition: the temp fact must win the sibling's key"
+        assert_eq!(
+            a_inherited.iter().filter(|f| fact_is_known_temp(f)).count(),
+            1
+        );
+        assert_eq!(
+            out.derived.writes_physical_tables_of("r/a"),
+            vec!["t/Own", "t/Sib"],
+            "the sibling's non-known-temp write must no longer be hidden by its \
+             known-temp twin"
+        );
+        assert_eq!(
+            out.derived.writes_tables_of("r/a"),
+            vec!["t/Own", "t/Sib"],
+            "temp-INCLUSIVE writes are unaffected by the key widening"
         );
 
-        let raw = raw_physical_writes(direct_in.get("r/a").unwrap(), a_inherited);
-        assert_eq!(
-            raw,
-            vec!["t/Own"],
-            "raw path: the sibling's temp winner is dropped, the subject's own \
-             un-deduped physical fact is kept"
+        assert_physical_writes_equal_naive_union(
+            "recursive-scc",
+            &graph,
+            &nodes,
+            &direct_in,
+            &out.derived,
         );
-        assert_eq!(out.derived.writes_physical_tables_of("r/a"), raw);
-        // Temp-inclusive writes span both halves.
-        assert_eq!(out.derived.writes_tables_of("r/a"), vec!["t/Own", "t/Sib"]);
     }
 
     // -- R7: d44's op order is lexical ----------------------------------------

@@ -14,7 +14,9 @@
 //!      AND a `witnessCallsiteId` (the first-hop callsite from subject); every
 //!      DIRECT fact carries `provenance == "direct"` AND `via == "self"`;
 //!   2. every inherited fact traces to a callee carrying a DIRECT (or inherited)
-//!      fact with the SAME inheritedFactKey (op|resourceKind|resourceId|confidence)
+//!      fact with the SAME inheritedFactKey
+//!      (op|resourceKind|resourceId|confidence|tempClass — the last component
+//!      ⟨issue 33⟩)
 //!      at the recorded MINIMUM call-distance — no shorter path exists (cross-check
 //!      against the independent BFS matrix: `genuine >1-hop count ≤ total inherited`,
 //!      `routines_with_inherited` agrees);
@@ -69,15 +71,59 @@ fn discover_fixtures() -> Vec<String> {
     out
 }
 
-/// The inheritedFactKey (op|resourceKind|resourceId|confidence) — mirrors the cone.
+/// The inheritedFactKey (op|resourceKind|resourceId|confidence|tempClass) —
+/// mirrors `capability_cone::inherited_fact_key` over the PROJECTED fact, whose
+/// `extra` is already JSON.
+///
+/// ⟨issue 33⟩ The temp class is load-bearing for BOTH oracles that use this
+/// mirror, and for different reasons — do NOT un-widen it for either of them.
+///
+///   - `oracle_r3a3_inherited_factkey_dedup`: the cone now keeps a known-temp
+///     and a non-known-temp fact about one table as two SEPARATE inherited
+///     facts, which share a base key and would read as a broken dedup through
+///     the old 4-part mirror.
+///   - `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`: NOT inert here,
+///     despite what an earlier draft of this comment said. With the class in the
+///     key, that oracle now asserts "every inherited fact traces to a SAME-CLASS
+///     direct producer" — which is exactly the soundness precondition issue 32's
+///     temp-class guards in `digest::reconstruct_witness_paths` rest on, made
+///     executable for free. It holds because `retag` copies `extra` through
+///     untouched; un-widen this mirror and the pin silently disappears while the
+///     oracle keeps passing. Stated limit: it runs over the source-only fixture
+///     corpus, so a cross-app scope mismatch between the cone's node set and
+///     `snap.capability_facts` would still degrade witnesses undetected.
 fn inherited_fact_key(f: &PCapabilityFact) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         f.op,
         f.resource_kind,
         f.resource_id.as_deref().unwrap_or(""),
-        f.confidence
+        f.confidence,
+        if projected_fact_is_known_temp(f) {
+            "kt"
+        } else {
+            "nt"
+        }
     )
+}
+
+/// `l4::cone_derived::fact_is_known_temp` over the PROJECTED fact — only the
+/// exact `tempState: {kind: "known", value: true}` signal qualifies.
+///
+/// Known gap, faithful TODAY: the production predicate matches
+/// `CapabilityExtra::Table` specifically, while this reads `extra.tempState`
+/// without checking `extra.kind == "table"`. The two agree because the `Table`
+/// arm is the only one that emits `tempState` — so if another `extra` variant
+/// ever gains one, this mirror silently stops mirroring.
+fn projected_fact_is_known_temp(f: &PCapabilityFact) -> bool {
+    f.extra
+        .as_ref()
+        .and_then(|e| e.get("tempState"))
+        .map(|ts| {
+            ts.get("kind").and_then(|k| k.as_str()) == Some("known")
+                && ts.get("value").and_then(|v| v.as_bool()) == Some(true)
+        })
+        .unwrap_or(false)
 }
 
 /// Load the Rust R3a-3 projection for one fixture (source-only).

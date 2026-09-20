@@ -942,12 +942,49 @@ fn reconstruct_witness_paths(
         // `op` and `resource_kind` equal, so only the `(op, kind)`-bucket can hold a
         // carrier — look up that bucket instead of scanning every routine's direct
         // facts per call (the previous O(all-direct-facts)/call hot-spot).
+        //
+        // ⟨issue 32⟩ The temp-class check must match the TERMINAL check below.
+        // The two mispairings are NOT symmetric, and it is worth being exact about
+        // which one is dangerous, because the cheap-looking edit is the fatal one:
+        //
+        //   - Seed BROADER than the terminal (e.g. dropping this check alone):
+        //     `valid_nodes` is a strict SUPERSET, the forward BFS explores more
+        //     nodes, and every terminal it would have found it still finds. Costs
+        //     states, never answers — measured, not argued: dropping this guard
+        //     moved nothing (both r4 tests and all 76 `cli_b_*` goldens green).
+        //     So this guard is a COST optimisation resting on a soundness
+        //     precondition, not a correctness guard in its own right.
+        //   - Seed NARROWER than the terminal (guarding here while relaxing the
+        //     terminal below): a node whose only carrier is the other class is
+        //     never marked valid, the forward BFS never reaches it or anything
+        //     behind it, and a terminal the matcher WOULD have accepted is never
+        //     found — the witness degrades to `terminal-not-found` silently (see
+        //     the terminal guard's own note on how that failure is swallowed).
+        //     This is the direction to protect: never tighten here without
+        //     tightening there.
+        //
+        // The soundness precondition the pairing rests on: `retag`
+        // (`capability_cone.rs`) copies `extra` through untouched, so every
+        // INHERITED fact has a same-class DIRECT producer somewhere in its cone,
+        // and the guarded seed therefore admits exactly the routines the guarded
+        // terminal can stop at. That precondition is pinned executably by
+        // `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`
+        // (`tests/r3/r3a3_oracles.rs`) — with the temp class in
+        // `inherited_fact_key`, that oracle now asserts precisely "every inherited
+        // fact traces to a SAME-CLASS direct producer". Stated limit: the oracle
+        // runs over the source-only fixture corpus, so a cross-app scope mismatch
+        // between the cone's node set and `snap.capability_facts` would still
+        // degrade witnesses undetected.
         if let Some(cands) = idx
             .direct_facts_by_op_kind
             .get(&(fact.op.clone(), fact.resource_kind.clone()))
         {
+            let fact_kt = is_known_temp_snap(fact);
             for d in cands {
-                if fact_equivalent(d, fact) && visited.insert(d.subject.as_str()) {
+                if is_known_temp_snap(d) == fact_kt
+                    && fact_equivalent(d, fact)
+                    && visited.insert(d.subject.as_str())
+                {
                     rev_queue.push_back(d.subject.as_str());
                 }
             }
@@ -991,12 +1028,59 @@ fn reconstruct_witness_paths(
         let routine = arena[ni].routine.clone();
 
         // Terminal check: FIRST matching direct fact in insertion order.
+        //
+        // ⟨issue 32⟩ ...of the SAME temp class. `fact_equivalent` compares op,
+        // resourceKind, resourceId, resourceArgSource and (for dispatch) objectType
+        // — never temp state — so without this a physical fact would happily
+        // terminate on a routine's known-temp write of the same table. The
+        // occurrence would then be GRADED physical (from the fact) and ANCHORED at
+        // an in-memory operation (from the terminal), which is how d47 comes to
+        // report `WRITE_PENDING_AT_EXTERNAL_IO` for a `Temp.Insert(); Http.Get();
+        // PhysWriter()` body. The class is total (absent temp state = not
+        // known-temp), so this narrows the match without ever leaving it undefined,
+        // and the reverse-BFS prune seed above applies the identical test.
+        //
+        // The guard lives HERE, not inside `fact_equivalent`: that predicate is
+        // deliberately undefined-tolerant on `resource_id`/`resourceArgSource`, and
+        // it is also used for the prune seed, where widening it would change which
+        // nodes are walked for every fact rather than only the ones that can
+        // mis-terminate.
+        //
+        // SOUNDNESS PRECONDITION, and why narrowing the match cannot lose a
+        // terminal: `retag` (`capability_cone.rs`) copies `extra` through
+        // untouched, so every INHERITED fact has a same-class DIRECT producer
+        // somewhere in its cone. Pinned executably by
+        // `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`
+        // (`tests/r3/r3a3_oracles.rs`), which — now that the temp class is in
+        // `inherited_fact_key` — asserts exactly that. Stated limit: that oracle
+        // runs over the source-only fixture corpus only.
+        //
+        // WHEN IT DOES FAIL, IT FAILS SILENTLY. `reconstruct_witness_paths` sets
+        // `incomplete = true` and pushes `terminal-not-found`, but the digest path
+        // never stores `WitnessOutcomeExt.incomplete` on `AccumulatedEffect` (only
+        // `reconstruct_witness_paths_pub` forwards it). The occurrence then carries
+        // no `evidence_operation_id`/`evidence_callsite_id`, `compute_ordering`
+        // leaves `ordered_op = None`, and the effect contributes NO ordering fact —
+        // so a d45/d47-class finding vanishes rather than the run failing loudly.
+        //
+        // UNMEASURED REGRESSION VECTOR ⟨review N9⟩: this guard can only push a
+        // terminal DEEPER (the nearest equivalent direct fact may now be the wrong
+        // class). A witness that used to terminate shallow and now terminates deep
+        // could in principle cross `MAX_DEPTH` / `MAX_STATES` / `HARD_PATH_CAP` and
+        // degrade exactly as above. The fixture corpus shows none, and the paired
+        // seed means the producer is always reachable, but the `incomplete` /
+        // `terminal-not-found` counts on a real workspace were never compared
+        // before and after, and no CDO-gated ratchet covers the witness layer.
         let directs: &[&Fact] = idx
             .direct_facts_by_routine
             .get(&routine)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        if let Some(equivalent) = directs.iter().find(|d| fact_equivalent(d, fact)) {
+        let fact_kt = is_known_temp_snap(fact);
+        if let Some(equivalent) = directs
+            .iter()
+            .find(|d| is_known_temp_snap(d) == fact_kt && fact_equivalent(d, fact))
+        {
             let terminal = terminal_hop_from_fact(equivalent, idx);
             let mut hops = reconstruct_hops(&arena, ni);
             hops.push(terminal);
@@ -2148,6 +2232,60 @@ fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
     }
 }
 
+/// The snapshot-layer twin of `l4::cone_derived::fact_is_known_temp`, over a
+/// `SnapTempState` rather than an L4 `PTempState`: true only for the exact
+/// `known/true` signal. Absent, `Unknown` and parameter-dependent temp state all
+/// read as NOT known-temp, exactly as the L4 predicate treats them — so the
+/// class is TOTAL, never undefined.
+fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
+    matches!(ts, Some(SnapTempState::Known { value: true }))
+}
+
+/// `is_known_temp_state` over a whole snapshot fact.
+///
+/// ⟨issue 32 / issue 33⟩ The witness terminal matcher `fact_equivalent` does not
+/// compare temp state at all, while the ordering engine grades an occurrence
+/// physical-or-not from the FACT's temp state. Those are two different objects,
+/// so a physical fact can terminate on a temp operation and produce an
+/// occurrence that is graded physical while anchored at an in-memory write.
+///
+/// **This was already reachable before issue 33 — the guard fixes a LIVE bug and
+/// issue 33 only widens its reach.** It is tempting to say the cone's key
+/// collapse masked it (a physical representative that shares a temp one's key
+/// was discarded, so the pairing never arose), but `fact_equivalent` is strictly
+/// WEAKER than `inherited_fact_key`: it ignores `confidence` entirely and treats
+/// `resource_id: None` as a WILDCARD, comparing rids only when both are `Some`.
+/// So a direct fact can be a terminal candidate for a fact it never shared a
+/// cone key with. That wildcard is sufficient on its own — no ordering argument
+/// is needed, and an earlier draft of this comment gave one that was FALSE (it
+/// claimed a `None`-rid fact sorts FIRST; `capability_fact_sort_key` joins the
+/// parts with `|` = 0x7C, which is above every byte a real rid starts with, so
+/// an empty rid field sorts LAST). Shape on master, with no mixed cone key
+/// anywhere:
+///
+/// ```text
+/// Y:  TempRec.Insert()   // table unresolvable -> rid None, confidence
+///                        //   "unresolved", temp_state known/true
+///     Z()
+/// Z:  Rec.Insert()       // table T, confidence "static", known/false
+/// R:  Y()
+/// ```
+///
+/// `R` inherits the physical `insert` of `T`; the BFS reaches `Y` first; `Y`'s
+/// ONLY direct fact is the `None`-rid known-temp one, so there is nothing for
+/// the scan to prefer; `fact_equivalent` returns true because the rid is
+/// unconstrained, and the occurrence is graded physical from the FACT while
+/// anchored at the in-memory op. Consequence for review and triage: the
+/// guard is NOT inert on existing output — it can move `evidence` /
+/// `evidence_operation_id` → `dedupe_key` → `canonical_key` → `occurrence_id`
+/// for facts that exist today, and the paired seed guard shrinks `valid_nodes`,
+/// which can drop `via_paths` and so change `build_canonical_key`'s link
+/// signature. A "no golden moved" result cannot rule that out, because the
+/// golden corpus contains zero mixed keys by measurement.
+fn is_known_temp_snap(fact: &Fact) -> bool {
+    is_known_temp_state(fact_temp_state_of(fact).as_ref())
+}
+
 /// The MERGE branch's tempState combination rule, extracted so the identity-duplicate
 /// normalization path (see `digest_one_root`) can re-apply it exactly. Conservative:
 /// stays known-temp only if BOTH sides are known-temp; otherwise degrades to the new
@@ -2160,8 +2298,7 @@ fn merge_temp_state(
     existing: &Option<SnapTempState>,
     new: &Option<SnapTempState>,
 ) -> Option<SnapTempState> {
-    let is_known_temp =
-        |t: &Option<SnapTempState>| matches!(t, Some(SnapTempState::Known { value: true }));
+    let is_known_temp = |t: &Option<SnapTempState>| is_known_temp_state(t.as_ref());
     if is_known_temp(existing) && is_known_temp(new) {
         existing.clone()
     } else if is_known_temp(existing) {

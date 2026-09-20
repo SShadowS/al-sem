@@ -292,6 +292,11 @@ ws-d33/src/Codeunit.al::0::NarrowedDelete	8124f9926f1a833d
 ws-d33/src/Codeunit.al::0::FilterThenResetThenDelete	dca939dff08c5559
 ws-d33/src/Codeunit.al::0::WithVarParam	3db312e1ee9ebe49
 ws-d33/src/Codeunit.al::0::TrulyTemporary	fcdc2fdc7031eae5
+ws-d33-mixed-temp-key/src/Sender.Codeunit.al::0::Run	4213b667e0581ff4
+ws-d33-mixed-temp-key/src/Sender.Codeunit.al::0::Inner	3c6aa7e30058004f
+ws-d33-mixed-temp-key/src/Sender.Codeunit.al::0::PhysWriter	84e89c3b8c98f2fd
+ws-d33-mixed-temp-key/src/Sender.Codeunit.al::0::ControlRun	c15fa240e62eed63
+ws-d33-mixed-temp-key/src/Sender.Codeunit.al::0::ControlInner	7553e8311d1fce64
 ws-d34/src/Codeunit.al::0::DirectCommitInLoop	bacaee98e86a19ad
 ws-d34/src/Codeunit.al::0::NestedCommit	345c24db8efcd20d
 ws-d34/src/Codeunit.al::0::TransitiveCommit	0852626bf97fec8c

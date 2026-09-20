@@ -19,20 +19,20 @@
 		"depOrderIndex",
 		"intraAppCallEdges"
 	],
-	"fixtureCount": 159,
+	"fixtureCount": 160,
 	"matrix": {
-		"routineCount": 585,
-		"routinesWithInheritedFacts": 142,
+		"routineCount": 590,
+		"routinesWithInheritedFacts": 145,
 		"factsWithMoreThan1HopWitness": 246,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 22,
 		"provenanceDistribution": {
-			"direct": 595,
-			"inherited": 246
+			"direct": 600,
+			"inherited": 252
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 747,
+			"static": 758,
 			"unresolved": 93
 		},
 		"opDistribution": {
@@ -40,11 +40,11 @@
 			"delete": 7,
 			"error-throw": 16,
 			"execute": 15,
-			"insert": 71,
+			"insert": 78,
 			"modify": 129,
 			"publish": 95,
 			"read": 200,
-			"send": 38,
+			"send": 42,
 			"store-write": 1,
 			"subscribe": 122,
 			"ui-confirm": 1,
@@ -54,17 +54,17 @@
 			"write-blob": 2
 		},
 		"viaDistribution": {
-			"call": 192,
+			"call": 198,
 			"event-dispatch": 54,
-			"self": 595
+			"self": 600
 		},
 		"directStatusDistribution": {
-			"complete": 572,
+			"complete": 577,
 			"partial": 12,
 			"unknown": 1
 		},
 		"inheritedStatusDistribution": {
-			"complete": 563,
+			"complete": 568,
 			"partial": 22
 		}
 	},
