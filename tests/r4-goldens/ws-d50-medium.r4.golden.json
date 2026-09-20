@@ -1,0 +1,225 @@
+{
+  "fixtureName": "ws-d50-medium",
+  "detectors": [
+    "d50-checked-run-implicit-commit"
+  ],
+  "findingCount": 3,
+  "findings": [
+    {
+      "detector": "d50-checked-run-implicit-commit",
+      "id": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50232#7885fb939d72f6d47714624469f2842096ec2498a135d3f02fef7f843ce62142/cs0",
+      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50232#7885fb939d72f6d47714624469f2842096ec2498a135d3f02fef7f843ce62142/cs0",
+      "title": "Codeunit.Run implicit commit within a posting span",
+      "rootCause": "A Codeunit.Run whose Boolean return value is used in RunCheckedC performs an implicit commit on successful return while PostDocC (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction. A proven-effective explicit Commit() is also on the span — committed writes may persist partial state before the implicit-commit boundary.",
+      "severity": "medium",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/MediumTier.al",
+        "range": {
+          "startLine": 128,
+          "startColumn": 11,
+          "endLine": 128,
+          "endColumn": 51
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50232#7885fb939d72f6d47714624469f2842096ec2498a135d3f02fef7f843ce62142",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50232#fb593a589ed4ac9e8f3ac33503fa9c6e1b7d4b89f05b7561092fc3dfc3232fa3",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 120,
+              "startColumn": 4,
+              "endLine": 123,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50232#fb593a589ed4ac9e8f3ac33503fa9c6e1b7d4b89f05b7561092fc3dfc3232fa3",
+            "syntaxKind": "procedure"
+          },
+          "note": "transaction-managing routine: PostDocC"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50232#7885fb939d72f6d47714624469f2842096ec2498a135d3f02fef7f843ce62142",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 128,
+              "startColumn": 11,
+              "endLine": 128,
+              "endColumn": 51
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50232#7885fb939d72f6d47714624469f2842096ec2498a135d3f02fef7f843ce62142",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Codeunit.Run implicit commit (on success) in RunCheckedC — return value consumed"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50232",
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50232"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "008b4d66bd1a74af"
+    },
+    {
+      "detector": "d50-checked-run-implicit-commit",
+      "id": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50230#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31/cs0",
+      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50230#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31/cs0",
+      "title": "Codeunit.Run implicit commit within a posting span",
+      "rootCause": "A Codeunit.Run whose Boolean return value is used in RunChecked performs an implicit commit on successful return while PostDoc (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction. A proven-effective explicit Commit() is also on the span — committed writes may persist partial state before the implicit-commit boundary.",
+      "severity": "medium",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/MediumTier.al",
+        "range": {
+          "startLine": 75,
+          "startColumn": 11,
+          "endLine": 75,
+          "endColumn": 51
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50230#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50230#c46296213e78c41bb39b16a08b4f5e03062f9f3a5dbe055b899a2fc0abc8be93",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 67,
+              "startColumn": 4,
+              "endLine": 70,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50230#c46296213e78c41bb39b16a08b4f5e03062f9f3a5dbe055b899a2fc0abc8be93",
+            "syntaxKind": "procedure"
+          },
+          "note": "transaction-managing routine: PostDoc"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50230#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 75,
+              "startColumn": 11,
+              "endLine": 75,
+              "endColumn": 51
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50230#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Codeunit.Run implicit commit (on success) in RunChecked — return value consumed"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50230",
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50230"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "3f04831a97973605"
+    },
+    {
+      "detector": "d50-checked-run-implicit-commit",
+      "id": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50231#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31/cs0",
+      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50d:Codeunit:50231#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31/cs0",
+      "title": "Codeunit.Run implicit commit within a posting span",
+      "rootCause": "A Codeunit.Run whose Boolean return value is used in RunChecked performs an implicit commit on successful return while PostDoc (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/MediumTier.al",
+        "range": {
+          "startLine": 99,
+          "startColumn": 11,
+          "endLine": 99,
+          "endColumn": 51
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50231#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50231#c46296213e78c41bb39b16a08b4f5e03062f9f3a5dbe055b899a2fc0abc8be93",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 91,
+              "startColumn": 4,
+              "endLine": 94,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50231#c46296213e78c41bb39b16a08b4f5e03062f9f3a5dbe055b899a2fc0abc8be93",
+            "syntaxKind": "procedure"
+          },
+          "note": "transaction-managing routine: PostDoc"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50231#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/MediumTier.al",
+            "range": {
+              "startLine": 99,
+              "startColumn": 11,
+              "endLine": 99,
+              "endColumn": 51
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50d:Codeunit:50231#b8c7e48f3e214ba4db16343e2d6e9af818bafc28c8336de3b6cbd6354d3ffe31",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Codeunit.Run implicit commit (on success) in RunChecked — return value consumed"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50231",
+        "11111111-0000-0000-0000-00000000d50d:Codeunit:50231"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "0e563dbb03982e2a"
+    }
+  ]
+}
