@@ -732,6 +732,7 @@ mod tests {
         assert!(
             s.incoming.iter().any(|(t, refs)| {
                 t.object.app != AppRef(0)
+                    && t.object.key == crate::program::node::ObjKey::Id(80) // "Sales-Post"
                     && t.name_lc == "post"
                     && refs.iter().any(|r| {
                         s.edge(r).edge.routes.iter().any(|route| {
