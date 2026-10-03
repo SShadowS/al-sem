@@ -51,7 +51,7 @@ phf = { version = "0.11", features = ["macros"] }
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 
 # YAML — policy file loader (cli-c/c2). serde_yaml is the battle-tested, widely
 # vendored YAML data format for serde. We deserialize into `serde_yaml::Value`
@@ -117,7 +117,7 @@ anyhow = "1"
 salsa = "=0.27.0"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Telemetry pipeline (only pulled in when the `telemetry` feature is on).
 # Versions pinned to match opentelemetry-application-insights 0.36, which

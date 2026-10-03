@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--dependency-source embedded|symbols`** (also `AL_SEM_DEPENDENCY_SOURCE`) for the LSP
+  server and CLI index mode. `embedded` (the default, unchanged) indexes the source a
+  dependency ships, so calls can be followed into it. `symbols` reads only each
+  dependency's `SymbolReference.json`: calls from the workspace still resolve to the right
+  dependency routine, but nothing inside the dependency is indexed. It drops the embedded
+  rung of the snapshot's provider chain only; an explicitly configured local checkout is
+  still used. The updater's full rebuild reuses the same setting. For memory-capped hosts:
+  on a BC 28.4 workspace the sidecar peaks at **222 MB** with `symbols` vs 1,361 MB with
+  `embedded`. Asked for by a harness that runs the server in a 3 GB container next to the
+  AL Language Server.
+
+### Fixed
+
+- **Parsing a dependency's `SymbolReference.json` no longer builds a whole JSON tree.**
+  `parse_symbol_reference` parsed the file into a `serde_json::Value` tree, then cloned
+  each section's subtree to convert it. For Base Application (58 MB of JSON) that peaked
+  around 1 GB of transient memory, though the finished ABI is a small fraction of that. It
+  now reads the top level (and each `Namespaces[]` node) as raw JSON text borrowed from
+  the input and converts each section straight to the typed `RawObject`s it already used.
+  Same leniency as before: a section that fails to convert is skipped, a non-object file
+  gives an empty ABI, invalid JSON gives the same error. Measured on BC 28.4 symbols-only:
+  1,102 MB → 222 MB peak. All 50 existing symbol-reference/ABI tests unchanged; goldens and
+  the CDO gate byte-identical.
+
 ## [1.3.1] - 2026-10-03
 
 ### Fixed

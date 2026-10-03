@@ -64,6 +64,22 @@ pub struct AppSetSnapshot {
     pub world: World,
 }
 
+/// Where dependency apps' code comes from.
+///
+/// `Embedded` (the default) indexes a dependency's embedded `.al` source when
+/// it ships some, so calls can be followed INTO the dependency. `Symbols`
+/// reads only its `SymbolReference.json`: calls from the workspace still
+/// resolve to the right dependency routine, but nothing inside the
+/// dependency is indexed. That is the memory lever — Base Application's
+/// source alone costs ~1.4 GB peak to index (BC 28.4, 2026-10), its symbols
+/// a small fraction of that.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum DependencySource {
+    #[default]
+    Embedded,
+    Symbols,
+}
+
 /// Builds an `AppSetSnapshot` from a workspace root + optional local checkouts.
 #[derive(Debug)]
 pub struct SnapshotBuilder {
@@ -90,6 +106,17 @@ impl SnapshotBuilder {
     /// folders) and only the highest-version survivor became an `AppUnit`.
     pub fn build_with_diagnostics(
         &self,
+    ) -> Result<(
+        AppSetSnapshot,
+        Vec<crate::dependencies::DroppedDuplicateDependency>,
+    )> {
+        self.build_with_options(DependencySource::default())
+    }
+
+    /// [`Self::build_with_diagnostics`] with an explicit [`DependencySource`].
+    pub fn build_with_options(
+        &self,
+        dependency_source: DependencySource,
     ) -> Result<(
         AppSetSnapshot,
         Vec<crate::dependencies::DroppedDuplicateDependency>,
@@ -213,9 +240,14 @@ impl SnapshotBuilder {
             }
 
             // Build provider chain: EmbeddedAppProvider → LocalRepoProvider (if matched) → SymbolOnlyProvider.
-            let mut providers: Vec<Box<dyn SourceProvider>> = vec![Box::new(EmbeddedAppProvider {
-                app_path: rd.app_path.clone(),
-            })];
+            // `DependencySource::Symbols` drops the embedded rung only: an
+            // explicitly configured local checkout is still honoured.
+            let mut providers: Vec<Box<dyn SourceProvider>> = Vec::new();
+            if dependency_source == DependencySource::Embedded {
+                providers.push(Box::new(EmbeddedAppProvider {
+                    app_path: rd.app_path.clone(),
+                }));
+            }
             // Match a configured local provider by GUID when known (the unique
             // identity), else by name (case-insensitive) + version.
             if let Some((id, path)) = self.local_providers.iter().find(|(id, _)| {
@@ -392,6 +424,56 @@ mod tests {
         let base: Vec<_> = snap.apps.iter().filter(|u| u.id.guid == guid).collect();
         assert_eq!(base.len(), 1, "the Ready-to-Run Base Application must load");
         assert_eq!(base[0].id.version, "28.4.53241.53758");
+    }
+
+    /// `DependencySource::Symbols` keeps a dependency that SHIPS source in
+    /// the snapshot — symbols and identity intact — but loads none of its
+    /// source; `Embedded` loads it. This is the memory lever the LSP server's
+    /// `--dependency-source symbols` relies on.
+    #[test]
+    fn symbols_only_keeps_the_dependency_but_skips_its_source() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_app_json(dir.path());
+        let alpackages = dir.path().join(".alpackages");
+        std::fs::create_dir_all(&alpackages).unwrap();
+        let guid = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+        let manifest = test_apps::manifest_xml(guid, "Base Application");
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            (
+                "SymbolReference.json",
+                br#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#,
+            ),
+            ("src/SalesPost.Codeunit.al", b"codeunit 80 \"Sales-Post\" { procedure Run() begin end; }"),
+        ]);
+        std::fs::write(alpackages.join("Microsoft_Base Application_28.4.app"), app).unwrap();
+        let builder = SnapshotBuilder {
+            workspace_root: dir.path().to_path_buf(),
+            local_providers: vec![],
+        };
+
+        let base = |source: DependencySource| {
+            let (snap, _) = builder.build_with_options(source).expect("snapshot build");
+            let unit = snap
+                .apps
+                .into_iter()
+                .find(|u| u.id.guid == guid)
+                .expect("dep loaded");
+            (
+                unit.source.is_some(),
+                unit.provenance.tier,
+                unit.abi.is_some(),
+            )
+        };
+        assert_eq!(
+            base(DependencySource::Embedded),
+            (true, TrustTier::EmbeddedSource, true)
+        );
+        assert_eq!(
+            base(DependencySource::Symbols),
+            (false, TrustTier::SymbolOnly, true)
+        );
     }
 
     /// "Stale wins" reproduction: two `.app` files sharing one GUID at

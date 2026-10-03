@@ -15,4 +15,4 @@ pub mod verify;
 
 pub use identity::{AppId, Provenance, TrustTier};
 pub use parse::{ParsedFile, ParsedUnit, parse_snapshot};
-pub use snapshot::{AppSetSnapshot, AppUnit, SnapshotBuilder, World};
+pub use snapshot::{AppSetSnapshot, AppUnit, DependencySource, SnapshotBuilder, World};

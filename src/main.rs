@@ -15,11 +15,12 @@ mod watcher;
 // on that module). Re-export here so binary modules (server, watcher, etc.)
 // can keep referring to `crate::lsp::*` / ... without churn.
 pub use al_sem::{
-    analysis, app_package, big_stack, config, dependencies, lsp, protocol, telemetry,
+    analysis, app_package, big_stack, config, dependencies, lsp, protocol, snapshot, telemetry,
 };
 
 use lsp::snapshot::LspSnapshot;
 use server::run_server;
+use snapshot::DependencySource;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum OutputFormat {
@@ -64,6 +65,19 @@ struct Args {
     #[arg(long)]
     no_diagnostics: bool,
 
+    /// Where dependency apps' code comes from. `embedded` indexes the source
+    /// a dependency ships, so calls can be followed into it. `symbols` reads
+    /// only its symbols: calls into it still resolve, nothing inside it is
+    /// indexed, and memory drops sharply (Base Application's source alone
+    /// costs ~1.4 GB). Also read from AL_SEM_DEPENDENCY_SOURCE.
+    #[arg(
+        long,
+        value_enum,
+        env = "AL_SEM_DEPENDENCY_SOURCE",
+        default_value = "embedded"
+    )]
+    dependency_source: DependencySource,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -97,7 +111,12 @@ fn main() -> Result<()> {
         // asked for. Give it real, unconditional effect (highest precedence): it
         // always starts the LSP server, regardless of --project/--analyze.
         info!("Starting AL Call Hierarchy LSP server (--lsp)");
-        run_server(args.no_watcher, args.no_telemetry, args.no_diagnostics)?;
+        run_server(
+            args.no_watcher,
+            args.no_telemetry,
+            args.no_diagnostics,
+            args.dependency_source,
+        )?;
     } else if let Some(project) = args.project {
         if args.analyze {
             // Analysis mode
@@ -106,12 +125,17 @@ fn main() -> Result<()> {
             // CLI mode for testing/indexing (T3 Task 15: re-pointed at the
             // program-engine snapshot — see this block's own doc below).
             info!("Indexing project: {}", project.display());
-            report_index_stats(&project)?;
+            report_index_stats(&project, args.dependency_source)?;
         }
     } else {
         // LSP server mode (default)
         info!("Starting AL Call Hierarchy LSP server");
-        run_server(args.no_watcher, args.no_telemetry, args.no_diagnostics)?;
+        run_server(
+            args.no_watcher,
+            args.no_telemetry,
+            args.no_diagnostics,
+            args.dependency_source,
+        )?;
     }
 
     Ok(())
@@ -133,8 +157,8 @@ fn main() -> Result<()> {
 /// replaced by a count of dependency routines with EMBEDDED source
 /// (`dep_meta` — real per-routine identities, unlike a `.app`'s
 /// symbol-only ABI catalog, which has no equivalent "definition" to count).
-fn report_index_stats(project: &Path) -> Result<()> {
-    let Some(snap) = LspSnapshot::build_full(project) else {
+fn report_index_stats(project: &Path, dependency_source: DependencySource) -> Result<()> {
+    let Some(snap) = LspSnapshot::build_full_with(project, dependency_source) else {
         anyhow::bail!(
             "Failed to build the program snapshot for {} — is this a valid AL app \
              workspace (a readable app.json at its root)?",

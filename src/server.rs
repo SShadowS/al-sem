@@ -107,6 +107,7 @@ use crate::lsp::lens::code_lenses;
 use crate::lsp::snapshot::LspSnapshot;
 use crate::lsp::updater::{ChangeEvent, Rung1Delta, SharedSnapshot, SwapScope, spawn_updater};
 use crate::protocol::uri_to_path;
+use crate::snapshot::DependencySource;
 use crate::watcher::{AlFileWatcher, FileChange};
 
 /// Everything the server needs once a valid workspace snapshot exists for
@@ -157,6 +158,9 @@ struct RootBuild {
     /// `--no-diagnostics`: force every detector off for this root, whatever
     /// its `.al-sem.json` says.
     no_diagnostics: bool,
+    /// `--dependency-source`: index dependencies' embedded source, or only
+    /// their symbols (the memory lever — see [`DependencySource`]).
+    dependency_source: DependencySource,
 }
 
 /// One configured workspace root plus — once anything actually asks for it
@@ -210,8 +214,13 @@ impl RootState {
                 if self.build.no_diagnostics {
                     config.disable_all();
                 }
-                let built =
-                    build_server_state(&self.root, self.build.encoding, config, &self.build.sink);
+                let built = build_server_state(
+                    &self.root,
+                    self.build.encoding,
+                    config,
+                    &self.build.sink,
+                    self.build.dependency_source,
+                );
                 match &built {
                     Some(st) => {
                         info!("Built program snapshot for workspace root {}", self.root.display());
@@ -263,7 +272,12 @@ impl Workspace {
 }
 
 /// Run the LSP server
-pub fn run_server(no_watcher: bool, no_telemetry: bool, no_diagnostics: bool) -> Result<()> {
+pub fn run_server(
+    no_watcher: bool,
+    no_telemetry: bool,
+    no_diagnostics: bool,
+    dependency_source: DependencySource,
+) -> Result<()> {
     info!("Starting AL Call Hierarchy LSP server (program-engine backend)");
 
     let (connection, io_threads) = Connection::stdio();
@@ -349,7 +363,11 @@ pub fn run_server(no_watcher: bool, no_telemetry: bool, no_diagnostics: bool) ->
         &connection,
         !no_watcher,
         no_diagnostics,
+        dependency_source,
     );
+    if dependency_source == DependencySource::Symbols {
+        info!("Dependencies indexed from symbols only (--dependency-source symbols)");
+    }
 
     // The old eager "start a watcher for every built root" loop is gone:
     // `RootState::state` starts a root's watcher at the moment that root is
@@ -530,8 +548,10 @@ fn build_server_state(
     encoding: PositionEncoding,
     config: DiagnosticConfig,
     sink: &MessageSink,
+    dependency_source: DependencySource,
 ) -> Option<ServerState> {
-    let (initial, workspace) = LspSnapshot::build_full_with_parsed(workspace_root)?;
+    let (initial, workspace) =
+        LspSnapshot::build_full_with_parsed_with(workspace_root, dependency_source)?;
     let initial = Arc::new(initial);
     let shared = Arc::new(SharedSnapshot::new(Arc::clone(&initial)));
 
@@ -570,6 +590,7 @@ fn build_server_state(
         rx,
         workspace_root.to_path_buf(),
         workspace,
+        dependency_source,
         move |new, scope| {
             if !config_bg.any_enabled() {
                 return;
@@ -625,6 +646,7 @@ fn build_workspace(
     connection: &Connection,
     start_watchers: bool,
     no_diagnostics: bool,
+    dependency_source: DependencySource,
 ) -> Workspace {
     if roots.is_empty() {
         warn!(
@@ -642,6 +664,7 @@ fn build_workspace(
                 sink: Arc::clone(&sink),
                 start_watcher: start_watchers,
                 no_diagnostics,
+                dependency_source,
             },
         })
         .collect();
@@ -1342,6 +1365,7 @@ mod tests {
             PositionEncoding::Utf8,
             DiagnosticConfig::default(),
             &sink,
+            DependencySource::default(),
         )
         .expect("build_server_state must succeed for a valid fixture workspace");
         let root = state.shared.get().workspace_root.as_path().to_path_buf();
@@ -1363,6 +1387,7 @@ mod tests {
                     sink: Arc::clone(&sink),
                     start_watcher: false,
                     no_diagnostics: false,
+                    dependency_source: DependencySource::default(),
                 },
             )],
         };
@@ -1590,6 +1615,7 @@ mod tests {
             &server_conn,
             false,
             false,
+            DependencySource::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
         assert!(workspace.roots[0].state().is_some(), "root A must build");
@@ -1771,6 +1797,7 @@ mod tests {
             &server_conn,
             false,
             false,
+            DependencySource::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
 
@@ -1843,6 +1870,7 @@ mod tests {
             &server_conn,
             false,
             false,
+            DependencySource::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
         assert!(
@@ -2009,6 +2037,7 @@ mod tests {
             &server_conn,
             false,
             false,
+            DependencySource::default(),
         );
 
         assert_eq!(workspace.roots.len(), 2);
@@ -2064,8 +2093,14 @@ mod tests {
 
         let (server_conn, client_conn) = Connection::memory();
         let sink = message_sink(&server_conn);
-        let state = build_server_state(dir.path(), PositionEncoding::Utf8, cfg, &sink)
-            .expect("build must still succeed with diagnostics disabled");
+        let state = build_server_state(
+            dir.path(),
+            PositionEncoding::Utf8,
+            cfg,
+            &sink,
+            DependencySource::default(),
+        )
+        .expect("build must still succeed with diagnostics disabled");
 
         // The fixture's `Extra()` would otherwise raise an unused-procedure
         // hint on the initial publish (see `write_fixture_workspace`).

@@ -67,7 +67,8 @@ use crate::program::resolve::resolver::{
 };
 use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::{
-    AppSetSnapshot, AppUnit, ParsedFile, ParsedUnit, SnapshotBuilder, parse_snapshot,
+    AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
+    parse_snapshot,
 };
 
 // ---------------------------------------------------------------------------
@@ -1065,6 +1066,23 @@ impl ProgramContext {
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
     build_context_from_snapshot(build_snapshot_res(workspace_root)?)
+}
+
+/// [`build_context`] with an explicit [`DependencySource`] — the LSP server
+/// and CLI index path, which let the user trade dependency depth for memory.
+#[must_use]
+pub fn build_context_with(
+    workspace_root: &Path,
+    dependency_source: DependencySource,
+) -> Option<ProgramContext> {
+    let snap = (SnapshotBuilder {
+        workspace_root: workspace_root.to_path_buf(),
+        local_providers: vec![],
+    })
+    .build_with_options(dependency_source)
+    .map(|(snap, _dropped)| snap)
+    .ok()?;
+    build_context_from_snapshot(snap).ok()
 }
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the

@@ -1034,23 +1034,72 @@ fn collect_page_controls(controls: &[RawControl], out: &mut Vec<(String, String,
 /// object set — without namespace recursion ~99% of a modern Base Application's
 /// objects (and every routine/table they carry) are silently dropped, which is the
 /// dominant cross-app resolution hole.
-fn raw_objects(map: &serde_json::Map<String, Value>, key: &str) -> Vec<RawObject> {
+fn raw_objects(sections: &Sections<'_>, key: &str) -> Vec<RawObject> {
     let mut out = Vec::new();
-    collect_raw_objects(map, key, &mut out);
+    collect_raw_objects(sections, key, &mut out);
     out
 }
 
-fn collect_raw_objects(map: &serde_json::Map<String, Value>, key: &str, out: &mut Vec<RawObject>) {
-    if let Some(v) = map.get(key)
-        && let Ok(objs) = serde_json::from_value::<Vec<RawObject>>(v.clone())
+fn collect_raw_objects(sections: &Sections<'_>, key: &str, out: &mut Vec<RawObject>) {
+    if let Some(raw) = sections.members.get(key)
+        && let Ok(objs) = serde_json::from_str::<Vec<RawObject>>(raw.get())
     {
         out.extend(objs);
     }
-    if let Some(Value::Array(namespaces)) = map.get("Namespaces") {
-        for ns in namespaces {
-            if let Value::Object(ns_map) = ns {
-                collect_raw_objects(ns_map, key, out);
-            }
+    for ns in &sections.namespaces {
+        collect_raw_objects(ns, key, out);
+    }
+}
+
+/// One JSON object of a `SymbolReference.json` — the root or a `Namespaces[]`
+/// node — with every member kept as raw JSON text BORROWED from the input,
+/// plus its namespace children, parsed the same way.
+///
+/// Never a `serde_json::Value` tree: Base Application's file is ~58 MB, and
+/// as a `Value` tree (plus the per-section `clone` the conversion needed) it
+/// peaked at ~1 GB transient while the finished ABI is a small fraction of
+/// that (BC 28.4, 2026-10). Each section is converted to `Vec<RawObject>`
+/// straight from its text, so only the typed objects are ever allocated.
+struct Sections<'a> {
+    members: std::collections::HashMap<String, &'a serde_json::value::RawValue>,
+    namespaces: Vec<Sections<'a>>,
+}
+
+impl<'a> Sections<'a> {
+    fn from_members(
+        members: std::collections::HashMap<String, &'a serde_json::value::RawValue>,
+    ) -> Self {
+        // Same leniency as the `Value` walk this replaces: a `Namespaces`
+        // that is not an array, or an entry that is not an object, is skipped.
+        let namespaces = members
+            .get("Namespaces")
+            .and_then(|raw| {
+                serde_json::from_str::<Vec<&'a serde_json::value::RawValue>>(raw.get()).ok()
+            })
+            .map(|nodes| {
+                nodes
+                    .into_iter()
+                    .filter_map(|node| serde_json::from_str(node.get()).ok())
+                    .map(Sections::from_members)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Sections {
+            members,
+            namespaces,
+        }
+    }
+
+    /// A top-level string property, rendered exactly as the `Value` walk
+    /// did: the string itself, `""` for null/absent, else compact JSON.
+    fn str_prop(&self, key: &str) -> String {
+        let Some(raw) = self.members.get(key) else {
+            return String::new();
+        };
+        match serde_json::from_str::<Value>(raw.get()) {
+            Ok(Value::String(s)) => s,
+            Ok(Value::Null) | Err(_) => String::new(),
+            Ok(other) => other.to_string(),
         }
     }
 }
@@ -1065,22 +1114,31 @@ fn collect_raw_objects(map: &serde_json::Map<String, Value>, key: &str, out: &mu
 /// previously made a genuinely well-formed dependency silently ingest as an
 /// EMPTY ABI (see `app_package::parse_first_json_value`'s doc).
 pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
+    // First JSON value only (NUL-tolerant, like `parse_first_json_value`),
+    // as an object of borrowed raw members — see [`Sections`].
+    let members = serde_json::Deserializer::from_str(json)
+        .into_iter::<std::collections::HashMap<String, &serde_json::value::RawValue>>()
+        .next();
+    if let Some(Ok(members)) = members {
+        return abi_from_sections(&Sections::from_members(members));
+    }
+    // Not an object, or not valid JSON: decide which exactly as before. Only
+    // malformed input reaches this, so building a `Value` here costs nothing
+    // on any real dependency.
     let parsed: Result<Value, _> = crate::app_package::parse_first_json_value(json);
-    let root = match parsed {
-        Ok(Value::Object(m)) => m,
-        Ok(_) => {
-            // Non-object JSON: TS would treat property access as undefined and emit
-            // empty collections with empty identity (no error). Reproduce that.
-            return SymbolReferenceAbi::default();
-        }
-        Err(e) => {
-            return SymbolReferenceAbi {
-                error: Some(format!("SymbolReference.json parse failed: {e}")),
-                ..Default::default()
-            };
-        }
-    };
+    match parsed {
+        // Non-object JSON: TS would treat property access as undefined and emit
+        // empty collections with empty identity (no error). Reproduce that.
+        Ok(_) => SymbolReferenceAbi::default(),
+        Err(e) => SymbolReferenceAbi {
+            error: Some(format!("SymbolReference.json parse failed: {e}")),
+            ..Default::default()
+        },
+    }
+}
 
+/// Project a parsed `SymbolReference.json` object into the neutral ABI DTO.
+fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
     let mut objects: Vec<AbiObject> = Vec::new();
     let mut tables: Vec<AbiTable> = Vec::new();
 
@@ -1094,7 +1152,7 @@ pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
         ("Interfaces", "Interface"),
     ];
     for (key, object_type) in ROUTINE_BEARING {
-        for o in raw_objects(&root, key) {
+        for o in raw_objects(root, key) {
             let mut abi_object = AbiObject {
                 object_type: object_type.to_string(),
                 object_number: o.id.unwrap_or(0),
@@ -1152,7 +1210,7 @@ pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
         ("PageExtensions", "PageExtension"),
     ];
     for (key, object_type) in EXTENSION_ROUTINE_BEARING {
-        for o in raw_objects(&root, key) {
+        for o in raw_objects(root, key) {
             let mut abi_object = AbiObject {
                 object_type: object_type.to_string(),
                 object_number: o.id.unwrap_or(0),
@@ -1197,7 +1255,7 @@ pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
     }
 
     // Tables → both an AbiTable and an AbiObject.
-    for t in raw_objects(&root, "Tables") {
+    for t in raw_objects(root, "Tables") {
         let object_number = t.id.unwrap_or(0);
         tables.push(AbiTable {
             object_number,
@@ -1253,7 +1311,7 @@ pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
         ("DotNetPackages", "DotNetPackage"),
     ];
     for (key, object_type) in BARE {
-        for o in raw_objects(&root, key) {
+        for o in raw_objects(root, key) {
             let mut abi_object = AbiObject {
                 object_type: object_type.to_string(),
                 object_number: o.id.unwrap_or(0),
@@ -1269,19 +1327,11 @@ pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
         }
     }
 
-    let str_prop = |k: &str| -> String {
-        match root.get(k) {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Null) | None => String::new(),
-            Some(other) => other.to_string(),
-        }
-    };
-
     SymbolReferenceAbi {
-        app_guid: str_prop("AppId"),
-        name: str_prop("Name"),
-        publisher: str_prop("Publisher"),
-        version: str_prop("Version"),
+        app_guid: root.str_prop("AppId"),
+        name: root.str_prop("Name"),
+        publisher: root.str_prop("Publisher"),
+        version: root.str_prop("Version"),
         objects,
         tables,
         error: None,

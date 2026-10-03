@@ -134,7 +134,7 @@ use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::{ClassifiedEdge, ObligationId};
 use crate::program::resolve::index::ResolveIndex;
-use crate::snapshot::{ParsedFile, ParsedUnit, Provenance, TrustTier};
+use crate::snapshot::{DependencySource, ParsedFile, ParsedUnit, Provenance, TrustTier};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -236,6 +236,10 @@ pub struct Updater {
     /// `decl_by_id` at every rung-2/3 rebuild (`apply_rung2`/`apply_rung3`),
     /// so it never goes stale across a workspace-layer rebuild.
     decl_multiplicity: Option<HashMap<RoutineNodeId, u32>>,
+    /// The [`DependencySource`] the published snapshot was built with. A
+    /// rung-3 full rebuild must reuse it, or it would silently swap a
+    /// symbols-only server back to indexing every dependency's source.
+    dependency_source: DependencySource,
 }
 
 /// The classification outcome for one coalesced batch — shared by
@@ -260,7 +264,15 @@ impl Updater {
             workspace,
             pending: HashMap::new(),
             decl_multiplicity: None,
+            dependency_source: DependencySource::default(),
         }
+    }
+
+    /// Rebuild with `dependency_source` — must match the initial build's.
+    #[must_use]
+    pub fn with_dependency_source(mut self, dependency_source: DependencySource) -> Self {
+        self.dependency_source = dependency_source;
+        self
     }
 
     /// The brief's pure/testable synchronous core. Flushes any accumulated
@@ -626,7 +638,7 @@ impl Updater {
     /// there is nothing in `pending` a disk re-read wouldn't already pick up.
     fn apply_rung3(&mut self, cur: &LspSnapshot) -> Option<(LspSnapshot, Rung)> {
         let Some((mut snapshot, workspace)) =
-            LspSnapshot::build_full_with_parsed(&self.workspace_root)
+            LspSnapshot::build_full_with_parsed_with(&self.workspace_root, self.dependency_source)
         else {
             // Fail-closed (unchanged): `cur` stays published, `self.workspace`
             // stays untouched. But a silently-dropped rung-3 rebuild (e.g. a
@@ -1149,10 +1161,12 @@ pub fn spawn_updater(
     rx: Receiver<ChangeEvent>,
     workspace_root: PathBuf,
     initial_workspace: ParsedUnit,
+    dependency_source: DependencySource,
     on_swap: impl Fn(&LspSnapshot, &SwapScope) + Send + 'static,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut updater = Updater::new(workspace_root, initial_workspace);
+        let mut updater = Updater::new(workspace_root, initial_workspace)
+            .with_dependency_source(dependency_source);
         let mut cur = shared.get();
 
         loop {
@@ -1991,6 +2005,7 @@ mod tests {
             rx,
             dir.path().to_path_buf(),
             parsed,
+            DependencySource::default(),
             move |_new, _scope| {
                 counter2.fetch_add(1, Ordering::SeqCst);
             },
@@ -2054,6 +2069,7 @@ mod tests {
             rx,
             dir.path().to_path_buf(),
             parsed,
+            DependencySource::default(),
             move |new, scope| {
                 let mut prev_guard = prev2.lock().unwrap();
                 let (old_graph, old_dep_layer) = &*prev_guard;

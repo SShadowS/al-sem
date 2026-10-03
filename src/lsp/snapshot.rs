@@ -60,10 +60,13 @@ use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
 use crate::program::resolve::edge::{Edge, RouteTarget};
 use crate::program::resolve::emit_event_flow_edges;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramContext, build_context};
+use crate::program::resolve::full::{
+    ClassifiedEdge, ObligationId, ProgramContext, build_context_with,
+};
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::sig_fp::source_routine_node_id;
 use crate::program::{DepLayer, ProgramGraph};
+use crate::snapshot::DependencySource;
 use crate::snapshot::{AppSetSnapshot, ParsedFile, ParsedUnit};
 
 /// Reference to one edge: (virtual_path, index into `edges_by_file[path]`).
@@ -367,7 +370,16 @@ impl LspSnapshot {
     /// [`crate::program::resolve::full::resolve_full_program`]).
     #[must_use]
     pub fn build_full(workspace_root: &Path) -> Option<LspSnapshot> {
-        let ctx = build_context(workspace_root)?;
+        Self::build_full_with(workspace_root, DependencySource::default())
+    }
+
+    /// [`Self::build_full`] with an explicit [`DependencySource`].
+    #[must_use]
+    pub fn build_full_with(
+        workspace_root: &Path,
+        dependency_source: DependencySource,
+    ) -> Option<LspSnapshot> {
+        let ctx = build_context_with(workspace_root, dependency_source)?;
         Some(Self::from_context(ctx, workspace_root).0)
     }
 
@@ -401,7 +413,17 @@ impl LspSnapshot {
     /// server-construction surface, not test-only scaffolding.
     #[must_use]
     pub fn build_full_with_parsed(workspace_root: &Path) -> Option<(LspSnapshot, ParsedUnit)> {
-        let ctx = build_context(workspace_root)?;
+        Self::build_full_with_parsed_with(workspace_root, DependencySource::default())
+    }
+
+    /// [`Self::build_full_with_parsed`] with an explicit [`DependencySource`]
+    /// — what the server's first build and the updater's full rebuild use.
+    #[must_use]
+    pub fn build_full_with_parsed_with(
+        workspace_root: &Path,
+        dependency_source: DependencySource,
+    ) -> Option<(LspSnapshot, ParsedUnit)> {
+        let ctx = build_context_with(workspace_root, dependency_source)?;
         Some(Self::from_context(ctx, workspace_root))
     }
 
