@@ -1063,6 +1063,11 @@ impl ProgramContext {
     }
 
     /// The parsed units backing `graph` (shared-substrate consumers only).
+    ///
+    /// Built with a shared [`DepCache`] that hit, this holds ONLY the
+    /// workspace unit: the dependencies were not parsed again. A caller that
+    /// needs dependency bodies must build with a throwaway
+    /// `DepCache::default()`.
     #[must_use]
     pub fn parsed(&self) -> &[ParsedUnit] {
         &self.parsed
@@ -1075,6 +1080,10 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 
 /// [`build_context`] with an explicit [`DependencySource`] — the LSP server
 /// and CLI index path, which let the user trade dependency depth for memory.
+///
+/// When `dep_cache` hits, the result's [`ProgramContext::parsed`] holds only
+/// the workspace unit. Pass a throwaway `DepCache::default()` when the
+/// dependency bodies are needed.
 #[must_use]
 pub fn build_context_with(
     workspace_root: &Path,

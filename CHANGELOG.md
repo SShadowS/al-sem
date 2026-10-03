@@ -11,21 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **In `embedded` mode, workspace roots with the same dependency set now share the whole
   dependency tier, so a second root no longer re-reads or re-parses the dependencies.**
-  Three things are shared, as long as the roots have the same dependency set, the same
-  `.app` file stamps and the same `--dependency-source`: the extracted dependency source
-  (one copy per `.app` file), the dependency routine tables and source text kept for the
-  editor, and the parsed dependency nodes. A root that finds the shared tier parses only
-  its own workspace, and builds its answers over the shared tables the same way an
+  v1.3.2 already shared the dependency nodes between roots. Now, as long as the roots have
+  the same dependency set, the same `.app` file stamps and the same `--dependency-source`,
+  they also share the extracted dependency source (one copy per `.app` file) and the
+  dependency routine tables and source text kept for the editor (`dep_meta`,
+  `dep_texts`). A root that finds the shared tier skips the dependency parse: it parses
+  only its own workspace, and builds its answers over the shared tables the same way an
   incremental update does. Its answers are the same as a build without sharing (a parity
-  test checks this). CLI, `aldump` and `alsem` are unchanged. On a BC 28.4 workspace with
-  seven roots in `embedded` mode (one run per cell): peak process memory fell from
-  **2,900 MB to 1,284 MB**, and the last root finished after **8.2 s instead of 13.7 s**.
-  Three roots: 1,826 MB to 1,287 MB. One root: 1,282 MB to 1,290 MB (no change, wall time within noise; sharing
-  pays across roots). `symbols` mode is unchanged (465 MB to 474 MB at seven roots, within
-  noise). What stays per root: the event edges (about 15.5 MiB in a one-root census). The
-  first root of a dependency set still parses it, with the same transient peak as before.
-  A one-root census of retained memory is unchanged at 252.3 MiB; the "before" census was
-  recorded earlier with the same probe.
+  test checks this). The shared source is freed when the last root using it drops it. CLI,
+  `aldump` and `alsem` are unchanged. On a BC 28.4 workspace with seven roots in
+  `embedded` mode (one run per cell): peak process memory fell from **2,900 MB to
+  1,284 MB**, and the last root finished after **8.2 s instead of 13.7 s**. Three roots:
+  1,826 MB to 1,287 MB. One root: 1,282 MB to 1,290 MB (no change; wall time 2.5 s to
+  3.2 s, one run, not repeated; sharing pays across roots). `symbols` mode is unchanged
+  (465 MB to 474 MB at seven roots, within noise). What stays per root: the event edges
+  (about 15.5 MiB in a one-root census). The first root of a dependency set still parses
+  it, with the same transient peak as before. A one-root census of retained memory is
+  unchanged at 252.3 MiB; the "before" census was recorded earlier with the same probe.
 
 ## [1.3.2] - 2026-10-03
 
