@@ -1042,12 +1042,74 @@ fn raw_objects(sections: &Sections<'_>, key: &str) -> Vec<RawObject> {
 
 fn collect_raw_objects(sections: &Sections<'_>, key: &str, out: &mut Vec<RawObject>) {
     if let Some(raw) = sections.members.get(key)
-        && let Ok(objs) = serde_json::from_str::<Vec<RawObject>>(raw.get())
+        && let Some(objs) = section_objects(raw.get())
     {
         out.extend(objs);
     }
     for ns in &sections.namespaces {
         collect_raw_objects(ns, key, out);
+    }
+}
+
+/// One section's objects, read straight from its text. A section the direct
+/// read rejects is retried the old way (`Value`, then `from_value`), because
+/// the two differ: a duplicate key inside an object fails the direct read
+/// ("duplicate field") but a `Value` keeps the last one. Only a section that
+/// fails both is skipped, as before. Valid sections never pay for the retry.
+fn section_objects(text: &str) -> Option<Vec<RawObject>> {
+    serde_json::from_str::<Vec<RawObject>>(text)
+        .ok()
+        .or_else(|| {
+            serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|v| serde_json::from_value(v).ok())
+        })
+}
+
+/// A JSON value checked as strictly as a `Value` parse checks it (string
+/// escapes, number range, nesting depth), without building anything.
+/// `IgnoredAny` is not enough: it skips over a lone surrogate or `1e400`
+/// without complaint, where a `Value` parse fails.
+struct Validated;
+
+impl<'de> Deserialize<'de> for Validated {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(ValidatedVisitor)
+    }
+}
+
+struct ValidatedVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ValidatedVisitor {
+    type Value = Validated;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_str<E>(self, _: &str) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_unit<E>(self) -> Result<Validated, E> {
+        Ok(Validated)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Validated, A::Error> {
+        while seq.next_element::<Validated>()?.is_some() {}
+        Ok(Validated)
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Validated, A::Error> {
+        while map.next_entry::<Validated, Validated>()?.is_some() {}
+        Ok(Validated)
     }
 }
 
@@ -1114,12 +1176,23 @@ impl<'a> Sections<'a> {
 /// previously made a genuinely well-formed dependency silently ingest as an
 /// EMPTY ABI (see `app_package::parse_first_json_value`'s doc).
 pub fn parse_symbol_reference(json: &str) -> SymbolReferenceAbi {
+    // The old path parsed the whole first value into a `Value`, so invalid
+    // JSON ANYWHERE in it (even inside a member nothing reads) made the file
+    // an error. The borrowed-section read below only checks what it touches,
+    // so check the whole value first, allocation-free.
+    let valid = matches!(
+        serde_json::Deserializer::from_str(json)
+            .into_iter::<Validated>()
+            .next(),
+        Some(Ok(_))
+    );
     // First JSON value only (NUL-tolerant, like `parse_first_json_value`),
     // as an object of borrowed raw members — see [`Sections`].
-    let members = serde_json::Deserializer::from_str(json)
-        .into_iter::<std::collections::HashMap<String, &serde_json::value::RawValue>>()
-        .next();
-    if let Some(Ok(members)) = members {
+    if valid
+        && let Some(Ok(members)) = serde_json::Deserializer::from_str(json)
+            .into_iter::<std::collections::HashMap<String, &serde_json::value::RawValue>>()
+            .next()
+    {
         return abi_from_sections(&Sections::from_members(members));
     }
     // Not an object, or not valid JSON: decide which exactly as before. Only
@@ -1392,6 +1465,64 @@ mod tests {
         let abi = parse_symbol_reference("{ not json");
         assert!(abi.error.is_some());
         assert!(abi.objects.is_empty());
+    }
+
+    /// The error the old whole-file `Value` parse produced for `json`.
+    fn old_parse_error(json: &str) -> String {
+        let e = crate::app_package::parse_first_json_value::<Value>(json).unwrap_err();
+        format!("SymbolReference.json parse failed: {e}")
+    }
+
+    /// Invalid JSON inside a member nothing reads (a lone surrogate, an
+    /// out-of-range number) still makes the whole file an error, exactly as
+    /// the old whole-file `Value` parse did.
+    #[test]
+    fn invalid_json_anywhere_is_an_error_like_the_old_parse() {
+        for json in [
+            r#"{"Codeunits":[{"Id":1,"Name":"A"}],"Other":"\ud800"}"#,
+            r#"{"Codeunits":[{"Id":1,"Name":"A"}],"Other":[1e400]}"#,
+            r#"{"Codeunits":[{"Id":1,"Name":"A"}],"\ud800":1}"#,
+        ] {
+            let abi = parse_symbol_reference(json);
+            assert_eq!(abi.error, Some(old_parse_error(json)), "{json}");
+            assert!(abi.objects.is_empty(), "{json}");
+        }
+    }
+
+    #[test]
+    fn non_object_root_is_an_empty_abi_without_error() {
+        for json in ["[1,2]", "42", "\"x\"", "null"] {
+            assert_eq!(
+                parse_symbol_reference(json),
+                SymbolReferenceAbi::default(),
+                "{json}"
+            );
+        }
+    }
+
+    /// A duplicate key inside an object keeps the LAST value, as the old
+    /// `Value` walk did; it does not drop the section.
+    #[test]
+    fn duplicate_key_in_an_object_keeps_the_last_value() {
+        let abi = parse_symbol_reference(r#"{"Codeunits":[{"Id":1,"Name":"A","Name":"B"}]}"#);
+        assert_eq!(abi.error, None);
+        let names: Vec<&str> = abi.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, ["B"]);
+    }
+
+    /// Malformed namespace shapes are skipped exactly as the old walk did;
+    /// objects outside them are still ingested.
+    #[test]
+    fn malformed_namespaces_are_skipped() {
+        let not_array = r#"{"Codeunits":[{"Id":1,"Name":"Root"}],"Namespaces":{"Codeunits":[{"Id":2,"Name":"In"}]}}"#;
+        let bad_entry = r#"{"Codeunits":[{"Id":1,"Name":"Root"}],"Namespaces":[7,"x",{"Codeunits":[{"Id":2,"Name":"In"}]}]}"#;
+        let names = |json: &str| -> Vec<String> {
+            let abi = parse_symbol_reference(json);
+            assert_eq!(abi.error, None, "{json}");
+            abi.objects.into_iter().map(|o| o.name).collect()
+        };
+        assert_eq!(names(not_array), ["Root"]);
+        assert_eq!(names(bad_entry), ["Root", "In"]);
     }
 
     /// H-3 (Tier-1 remediation, Task T1.2): some `.app` emitters pad

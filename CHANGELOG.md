@@ -54,10 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   around 1 GB of transient memory, though the finished ABI is a small fraction of that. It
   now reads the top level (and each `Namespaces[]` node) as raw JSON text borrowed from
   the input and converts each section straight to the typed `RawObject`s it already used.
-  Same leniency as before: a section that fails to convert is skipped, a non-object file
-  gives an empty ABI, invalid JSON gives the same error. Measured on BC 28.4 symbols-only:
-  1,102 MB → 222 MB peak. All 50 existing symbol-reference/ABI tests unchanged; goldens and
-  the CDO gate byte-identical.
+  The result is the same as before in every case we know of:
+  - Invalid JSON anywhere in the file (for example a lone `\ud800` escape or the number
+    `1e400`, even in a member nothing reads) gives the same error. The whole file is
+    checked first by a pass that allocates nothing.
+  - A duplicate key inside an object keeps the last value. A section that the direct
+    read rejects is retried the old way, through a `Value`.
+  - A section that still fails is skipped. A `Namespaces` that is not an array, or an
+    entry in it that is not an object, is skipped. A non-object file gives an empty ABI.
+  On all 11 dependency `.app`s of the CDO workspace the new and the old parser give equal
+  results. Measured on BC 28.4 symbols-only: 1,102 MB → 222 MB peak (taken before the
+  check pass was added; that pass allocates nothing, but it reads the file once more).
+  All 50 existing symbol-reference/ABI tests unchanged; goldens and the CDO gate
+  byte-identical.
 
 ## [1.3.1] - 2026-10-03
 
