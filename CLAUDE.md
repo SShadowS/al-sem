@@ -72,22 +72,23 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al **v4.4.0** grammar (included as a git submodule at `tree-sitter-al/`,
-  pinned in the superproject's index; CI instead checks out the grammar repo's `main`
-  branch unpinned — see the Grammar section below)
-  - **Standing policy: track the newest grammar.** We own `SShadowS/tree-sitter-al`, so
-    the pin exists for reproducibility, NOT to hold a version back. When `main` moves,
-    bump the pin — do not let it drift (it sat 3 releases behind for 4 days and left CI
-    red the whole time). See "Upgrading the grammar" below for the exact steps.
-  - Clone with `git clone --recurse-submodules`, or run `git submodule update --init` after clone
-  - **Git worktrees do not get their own submodule checkout.** From a worktree, either
-    run `git submodule update --init` there too, or set `TREE_SITTER_AL_PATH` to point
-    at an already-checked-out `tree-sitter-al/` (e.g. the main checkout's copy) — the
-    `al-syntax` build script falls back to `../../tree-sitter-al` (relative to
-    `crates/al-syntax`) when the env var is unset, which resolves correctly only for a
-    normal (non-worktree) checkout.
-  - Removing a worktree: `git worktree remove` FAILS here ("working trees containing
-    submodules cannot be moved or removed") — verify the tree is clean/merged, then
+- tree-sitter-al grammar (currently **v4.4.1**): a plain, gitignored clone of
+  `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
+  and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
+  against `main`, so they always use the same grammar.
+  - Set it up once: `git clone https://github.com/SShadowS/tree-sitter-al` at the repo root.
+    Update it with `git -C tree-sitter-al pull`.
+  - **When `main` moves, the build stops on purpose, locally and in CI alike**:
+    `crates/al-syntax/build.rs` compares `node-types.json` with the committed
+    `node-types.sha256` and panics on a mismatch. Do the "Upgrading the grammar" steps below
+    (it sat 3 releases behind for 4 days once and left CI red the whole time).
+  - **Git worktrees have no grammar clone** (it is gitignored). Set `TREE_SITTER_AL_PATH`
+    to the main checkout's `tree-sitter-al/` — the `al-syntax` build script falls back to
+    `../../tree-sitter-al` (relative to `crates/al-syntax`) when the env var is unset,
+    which resolves only in the main checkout.
+  - Removing a worktree: worktrees created while the grammar was a submodule make
+    `git worktree remove` FAIL ("working trees containing submodules cannot be moved or
+    removed") — verify the tree is clean/merged, then
     `rm -rf <worktree-dir> && git worktree prune`.
   - `.claude/` is gitignored EXCEPT `.claude/commands/` (project slash commands are
     versioned — they encode project doctrine, e.g. `/triage-wave`). Skills still exist
@@ -300,10 +301,11 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.4.0)
+## Grammar (tree-sitter-al v4.4.1)
 
-**Current reality:** the grammar is **v4.4.0** (`tree-sitter-al/package.json`; the pin
-sits at the grammar repo's `main` tip, matching what unpinned CI checks out). v4.0.0
+**Current reality:** the grammar is **v4.4.1** (`tree-sitter-al/package.json`; the
+committed `node-types.sha256` matches the grammar repo's `main` tip, which local builds
+and CI both use). v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
 fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
 variable names. v4.1.0/v4.2.0/v4.3.0 (all 2026-09-09) are three parse-SHAPE corrections:
@@ -319,6 +321,10 @@ DANGLES at the end of the line before the directive and the branch opens with an
 the already-existing `preproc_conditional_expression_tail` covered only the operator-first
 form; (b) a block opened inside a preproc branch and closed after `#endif`, which errored
 across the whole enclosing procedure. All 5 Base Application files parse clean on v4.4.0.
+
+**v4.4.1 (2026-10) moved no named kinds (still 473)** but changed shapes: `asserterror` takes
+a STATEMENT, not an expression (grammar issues #26/#28; the lowerer already lowered its body
+as a branch), and contextual keywords lex as names at the start of a property value (#27).
 
 **v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
 v4.3.0, which moved none.** The six additions are all preproc-split shapes
@@ -336,10 +342,9 @@ goldens (all 9 targets green), because the golden corpus contains none of the pr
 shapes it fixes. A future release can do either. Run the full suite on the old grammar and
 the new one and diff the per-test outcomes; that is the only way to attribute a moved golden
 to the grammar rather than to whatever else is in your diff.
-The submodule pointer in this repo's git index is pinned to a specific
-commit (reproducible local/dev builds); CI instead checks out `SShadowS/tree-sitter-al`
-`main` **unpinned** (`.github/workflows/ci.yml`) so a breaking grammar change surfaces
-on the next PR rather than silently drifting. `crates/al-syntax` is the **only** crate
+Nothing pins the grammar commit: local builds and CI (`.github/workflows/ci.yml`) both use
+`SShadowS/tree-sitter-al` `main`, so a grammar change surfaces on the next build rather than
+silently drifting. `crates/al-syntax` is the **only** crate
 that links tree-sitter or walks its raw CST — every other consumer (`src/lsp/snapshot.rs`,
 `src/engine/l2` and everything layered on it, `src/program/resolve`) reads the owned
 AL syntax IR that `al-syntax`'s lowerer (`crates/al-syntax/src/lower/mod.rs`) produces.
@@ -349,9 +354,9 @@ all — the IR's `Block`/`Stmt` items are already flattened once, at the lowerin
 boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
 wrapper node.
 
-**Upgrading the grammar (the checklist the v4.3.0 and v4.4.0 bumps followed):**
+**Upgrading the grammar (the checklist the v4.3.0, v4.4.0 and v4.4.1 bumps followed):**
 
-1. `cd tree-sitter-al && git fetch origin && git checkout <new tip>` — the submodule.
+1. `git -C tree-sitter-al pull` — moves the local clone to the new `main` tip.
 2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
    `node-types.sha256` sidecar. Skipping this is not an option: `crates/al-syntax/build.rs`
    sha256s the grammar's `node-types.json` and PANICS on mismatch, so the build refuses
@@ -372,7 +377,7 @@ wrapper node.
 5. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
    the per-test outcomes; that is the only way to attribute a moved golden to the grammar
    rather than to whatever else is in your diff. `gen-syntax` makes the revert cheap: check
-   the submodule back out, re-run it, and the vocabulary returns to the committed bytes —
+   the old grammar commit out in `tree-sitter-al/`, re-run it, and the vocabulary returns to the committed bytes —
    no `git checkout --` of generated files needed.
 6. Update this section's version numbers and the Prerequisites line.
 
@@ -703,6 +708,6 @@ not by assertion.
   `--force-with-lease` on the flow's own issue branch is the only permitted force
   form. The flow never touches
   `.github/`, `scripts/`, `.claude/`, this file, `.gitignore`, `Cargo.toml` version
-  fields, or the `tree-sitter-al` pointer; a diff that does is blocked. `master`
+  fields, or the `tree-sitter-al` path; a diff that does is blocked. `master`
   carries no branch protection; adding it is a spec change for the flow. Kill
   switch: `.agent/HALT`.

@@ -50,9 +50,9 @@ fn main() -> ExitCode {
 
     let ws = workspace_root();
     // Mirrors al-syntax/build.rs: TREE_SITTER_AL_PATH overrides the default
-    // workspace-relative submodule path. xtask used to ignore this var even
-    // though every other tool that touches the grammar honours it — a git
-    // worktree gets no submodule checkout, so that was the ONLY way to point
+    // workspace-relative grammar clone. xtask used to ignore this var even
+    // though every other tool that touches the grammar honours it — the clone
+    // is gitignored, so a git worktree has none, and this is the ONLY way to point
     // gen-syntax at an already-checked-out grammar (e.g. the main checkout's).
     let grammar_dir = match std::env::var_os("TREE_SITTER_AL_PATH") {
         Some(p) => PathBuf::from(p),
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
             eprintln!("Fix the path and try again.");
         } else {
             eprintln!("This usually means gen-syntax is running from a git WORKTREE:");
-            eprintln!("worktrees get no submodule checkout, so tree-sitter-al/ is absent.");
+            eprintln!("the tree-sitter-al/ clone is gitignored, so a worktree has none.");
             eprintln!("Run it in the MAIN checkout instead, or set TREE_SITTER_AL_PATH to an");
             eprintln!("already-checked-out grammar (e.g. the main checkout's tree-sitter-al/).");
             eprintln!("Note gen-syntax always WRITES generated files into THIS checkout's");

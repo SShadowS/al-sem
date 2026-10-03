@@ -37,7 +37,7 @@ use crate::engine::ids::sha256_hex;
 // ---------------------------------------------------------------------------
 
 /// Grammar version tag (mirrors `GRAMMAR_VERSION` in al-sem `discover.ts`).
-pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v4.4.0-native";
+pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v4.4.1-native";
 
 /// Symbol-reader schema version (al-sem `cache-versions.ts` `symbolReader`).
 /// Bumped 17→18 for the temp-state-tracking epoch (Task 16): the symbol-reader
@@ -573,8 +573,8 @@ mod tests {
     /// This is the executable form of that doc claim. A version literal that can be
     /// compared against its source should die as an assert, not be hunted as prose.
     ///
-    /// Path resolution: `TREE_SITTER_AL_PATH` first (worktrees get no submodule
-    /// checkout — see CLAUDE.md's Prerequisites section), falling back to
+    /// Path resolution: `TREE_SITTER_AL_PATH` first (the grammar clone is
+    /// gitignored, so worktrees have none — see CLAUDE.md's Prerequisites), falling back to
     /// `CARGO_MANIFEST_DIR`/tree-sitter-al for a normal checkout. `ci.yml` exports
     /// `TREE_SITTER_AL_PATH` for the test step, so both paths are covered.
     ///
@@ -588,7 +588,7 @@ mod tests {
         let root = std::env::var("TREE_SITTER_AL_PATH")
             .unwrap_or_else(|_| format!("{}/tree-sitter-al", env!("CARGO_MANIFEST_DIR")));
         let pkg = std::fs::read_to_string(format!("{root}/package.json")).expect(
-            "tree-sitter-al/package.json must be readable (set TREE_SITTER_AL_PATH or check out the submodule)",
+            "tree-sitter-al/package.json must be readable (set TREE_SITTER_AL_PATH or clone SShadowS/tree-sitter-al at the repo root)",
         );
         let v: serde_json::Value = serde_json::from_str(&pkg).expect("package.json parses");
         let grammar_version = v["version"].as_str().expect("package.json has a version");

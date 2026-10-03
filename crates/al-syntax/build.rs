@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// crate that links the grammar; the rest of the workspace reaches it through
 /// `al_syntax::language::language()`.
 fn main() {
-    // Default to the repo-root submodule (build.rs CWD is this crate dir).
+    // Default to the repo-root grammar clone (build.rs CWD is this crate dir).
     let tree_sitter_al = PathBuf::from(
         std::env::var("TREE_SITTER_AL_PATH").unwrap_or_else(|_| "../../tree-sitter-al".to_string()),
     );

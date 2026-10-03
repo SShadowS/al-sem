@@ -59,3 +59,7 @@ tests/goldens/semantic-edges/cdo-deanon-map.json
 # ignores these.
 __pycache__/
 .pytest_cache/
+
+# The AL grammar: a plain clone of SShadowS/tree-sitter-al, tracking `main`
+# (NOT a submodule, not pinned) so local builds use the same grammar CI does.
+/tree-sitter-al/

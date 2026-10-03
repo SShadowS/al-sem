@@ -5,6 +5,8 @@ on:
     branches: [master]
     paths:
       - 'src/**'
+      - 'crates/**'
+      - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'

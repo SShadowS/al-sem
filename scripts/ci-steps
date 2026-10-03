@@ -11,9 +11,10 @@
 # ⟨final-review.md I-4⟩ "The exact commands" is true of argv, not of the
 # environment: every step except `fmt` needs `TREE_SITTER_AL_PATH` — CI
 # supplies it via a per-step `env:` block (`ci.yml:44,57,62,67,72`); locally
-# it defaults to the submodule at the repo root, same as `al-syntax`'s
-# `build.rs` and `xtask gen-syntax`. A git worktree has no submodule checkout
-# (CLAUDE.md Prerequisites), so that default resolves to nothing there.
+# it defaults to the `tree-sitter-al/` clone at the repo root, same as
+# `al-syntax`'s `build.rs` and `xtask gen-syntax`. That clone is gitignored, so
+# a git worktree has none (CLAUDE.md Prerequisites) and the default resolves to
+# nothing there.
 # `require_grammar` below checks the effective path before compiling anything,
 # so the failure is this script's own message, not a `cc` build error over a
 # missing `parser.c`.
@@ -26,7 +27,7 @@ step="${1:-}"
 
 # Effective grammar dir: TREE_SITTER_AL_PATH if set (CI always sets it; a
 # worktree session usually points it at the main checkout's copy), else the
-# repo-root submodule default — mirrors `build.rs`'s own fallback exactly.
+# repo-root clone default — mirrors `build.rs`'s own fallback exactly.
 grammar_dir() {
     if [ -n "${TREE_SITTER_AL_PATH:-}" ]; then
         printf '%s' "$TREE_SITTER_AL_PATH"
@@ -43,8 +44,8 @@ require_grammar() {
     if [ ! -f "$dir/src/node-types.json" ]; then
         echo "ci-steps: no tree-sitter-al grammar checkout at $dir/src/node-types.json" >&2
         echo "  Set TREE_SITTER_AL_PATH to an already-checked-out tree-sitter-al/ (e.g. the" >&2
-        echo "  main checkout's), or run from a checkout with the submodule initialized" >&2
-        echo "  (git submodule update --init). See CLAUDE.md Prerequisites." >&2
+        echo "  main checkout's), or clone it at the repo root:" >&2
+        echo "  git clone https://github.com/SShadowS/tree-sitter-al. See CLAUDE.md Prerequisites." >&2
         return 1
     fi
 }
@@ -53,8 +54,8 @@ run_fmt() { cargo fmt --check; }
 
 run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets --all-features -- -D warnings; }
 
-# NOTE: cannot run from a git worktree with no grammar checkout — worktrees have
-# no submodule checkout by default, so `tree-sitter-al/src/node-types.json` is
+# NOTE: cannot run from a git worktree with no grammar checkout — the grammar
+# clone is gitignored, so a worktree has none and `tree-sitter-al/src/node-types.json` is
 # absent. Run it in the main checkout, or point TREE_SITTER_AL_PATH at an
 # already-checked-out grammar (e.g. the main checkout's) — see CLAUDE.md
 # Prerequisites.

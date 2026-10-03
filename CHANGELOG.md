@@ -100,6 +100,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **tree-sitter-al v4.4.0 -> v4.4.1, and the grammar is no longer pinned.** `tree-sitter-al/`
+  stopped being a git submodule: it is now a plain, gitignored clone on `main`, the same
+  grammar CI has always checked out. Before, the submodule recorded one commit while CI used
+  `main`, so they drifted apart; v4.4.1 landing on `main` failed every CI build at
+  `al-syntax/build.rs`'s `node-types.json` hash check. Set it up with
+  `git clone https://github.com/SShadowS/tree-sitter-al` at the repo root (README, CLAUDE.md).
+  v4.4.1 moves no named kinds (still 473): `asserterror` now takes a statement, not an
+  expression (grammar #26/#28; the lowerer already lowered its body as a branch), and
+  contextual keywords lex as names at the start of a property value (#27). Measured on both
+  grammars: `cargo test --workspace` gives identical per-test outcomes (2,907 tests, 0 failed).
+  `CACHE_VERSION_GRAMMAR`, its test mirror and both current fixture-cache stamps move to
+  v4.4.1; the `cafecafe…` Kept fixture's `artifactContentHash` is recomputed.
+- **`build-and-deploy.yml` now also runs on changes to `crates/**` and `.cargo/**`.** A change
+  to `al-syntax` or to the build config (such as the static C runtime below) never deployed
+  a new binary before.
+
 - **A codeunit `OnRun` commit root is UNTRUSTED for d50 and the ordering engine (#12).** The new
   kind is listed in `D50_UNTRUSTED_ROOT_KINDS` (`src/engine/l5/detectors/d50.rs`) and
   `is_untrusted_root_kind` (`src/engine/l5/ordering_engine.rs`). Reason: `Codeunit.Run(id)` is

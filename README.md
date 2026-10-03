@@ -70,13 +70,14 @@ Prebuilt binaries for each release are on the
 From source (Rust 1.85 or newer — the crates use edition 2024):
 
 ```bash
-git clone --recurse-submodules https://github.com/SShadowS/al-sem
+git clone https://github.com/SShadowS/al-sem
 cd al-sem
+git clone https://github.com/SShadowS/tree-sitter-al
 cargo build --release
 ```
 
-The `--recurse-submodules` matters: the AL grammar is a submodule. If you already cloned
-without it, run `git submodule update --init`.
+The second clone is the AL grammar. It is not pinned: the build uses whatever is on its
+`main` branch, the same as CI. Run `git -C tree-sitter-al pull` to update it.
 
 Point any command at the directory containing `app.json`. Dependencies are read from
 `.alpackages/` — embedded source is used when a dependency ships it, and the
