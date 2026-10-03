@@ -18,7 +18,9 @@ pub struct ObjectIndex {
 }
 
 impl ObjectIndex {
-    /// Build the index from an already-sorted `objects` slice.
+    /// Build the index from `objects`, in sorted order. Each entry's position
+    /// is its index in that iteration order, so the caller must iterate in the
+    /// same order it later indexes by (`ProgramGraph::objects`' merged order).
     /// On a duplicate `(app, kind, name_lc)` key the first (lowest-`NodeId`) entry wins.
     pub fn build<'a>(objects: impl IntoIterator<Item = &'a ObjectNode>) -> Self {
         let mut idx = ObjectIndex::default();

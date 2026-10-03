@@ -69,7 +69,8 @@ struct Args {
     /// a dependency ships, so calls can be followed into it. `symbols` reads
     /// only its symbols: calls into it still resolve, nothing inside it is
     /// indexed, and memory drops sharply (Base Application's source alone
-    /// costs ~1.4 GB). Also read from AL_SEM_DEPENDENCY_SOURCE.
+    /// costs ~1.4 GB). Also read from AL_SEM_DEPENDENCY_SOURCE. Ignored with
+    /// --analyze.
     #[arg(
         long,
         value_enum,

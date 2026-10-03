@@ -35,7 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same size and modified time, read before the build) and the same `--dependency-source`
   choice. The cache holds weak references, so a copy is freed when the last root using it
   closes. If an `.app` changes while a build is reading it, the result is not cached under
-  the new stamp. Measured on BC 28.4 (`symbols`, release-fast, process peak private memory in
+  the new stamp. If an `.app` cannot be stat'ed, neither cache shares anything built from
+  it. A lookup by id in the shared node lists returns the same node as the old single
+  list, also when two nodes have the same id. Measured on BC 28.4 (`symbols`, release-fast, process peak private memory in
   MB; one run per cell, so expect a few percent of noise): 1 root 213 → 216 (no change),
   3 roots 535 → 267, **7 roots 1,234 → about 500** (468 and 504 in two runs). One root, live
   heap after build (census, MiB; "before" recorded earlier with the same probe): 106.6 →

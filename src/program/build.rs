@@ -45,9 +45,9 @@ pub struct DepLayer {
     pub friends: HashMap<AppRef, BTreeSet<AppRef>>,
     /// Object nodes from every NON-primary app (parsed source + ABI-ingested
     /// SymbolOnly deps), already sorted + deduped exactly as the original
-    /// monolithic Step 4 — scoped to just this population. Cloned into each
-    /// assembled `ProgramGraph` by `assemble_program_graph` (shared, never
-    /// cloned into a graph).
+    /// monolithic Step 4 — scoped to just this population. Every assembled
+    /// `ProgramGraph` shares it as its `NodeSet`'s shared part
+    /// (`assemble_program_graph`); it is never cloned.
     pub dep_objects: Arc<Vec<ObjectNode>>,
     /// Routine nodes, same population/ordering/dedup contract as
     /// `dep_objects`.
@@ -192,19 +192,15 @@ fn build_dep_nodes(
 /// [`ParsedUnit`] into a full [`ProgramGraph`] — the assembly half of the
 /// layered split.
 ///
-/// Re-sorts + re-dedups the merged population (catches any
-/// workspace-internal duplicate, e.g. a `#if`/`#else` union-read producing
-/// two textually-identical `RoutineDecl`s for the same procedure — see
-/// `dedup_routines_preserving_genuine_overloads`'s doc) rather than trusting
-/// a plain concatenation. This is a correctness NO-OP for the already-sorted-
-/// and-deduped dep-layer entries: `ObjectNodeId`/`RoutineNodeId` are
-/// namespaced by `AppRef`, and the primary app's `AppRef` is disjoint from
-/// every dependency's, so a dep-layer entry can never collide with a
-/// workspace one — the re-dedup only ever does new work on the workspace
-/// side, and its "already marked" collision flags
-/// (`abi_overload_collapsed`/`source_overload_aliased`) survive unchanged
-/// through a second pass (see `dedup_routines_preserving_genuine_overloads`'s
-/// doc: both flags are only ever SET, never cleared, by that function).
+/// Sorts + dedups only the WORKSPACE nodes (catches any workspace-internal
+/// duplicate, e.g. a `#if`/`#else` union-read producing two
+/// textually-identical `RoutineDecl`s for the same procedure — see
+/// `dedup_routines_preserving_genuine_overloads`'s doc), then layers them
+/// over the dep layer's already-sorted-and-deduped part as a `NodeSet`
+/// (shared, not copied). No cross-part dedup is needed:
+/// `ObjectNodeId`/`RoutineNodeId` are namespaced by `AppRef`, and the
+/// primary app's `AppRef` is disjoint from every dependency's, so a
+/// dep-layer entry can never collide with a workspace one.
 pub fn assemble_program_graph(
     dep: &DepLayer,
     ws_unit: &ParsedUnit,
