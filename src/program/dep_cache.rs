@@ -36,8 +36,13 @@ impl DepCache {
     /// The live entry for `key`, or `build()`'s result (now cached). The lock
     /// is held only for lookup/insert, never while building: two roots
     /// building the same key at once both build, and the second insert keeps
-    /// the first live `Arc`.
+    /// the first live `Arc`. A dependency without a stamp (its file could not
+    /// be stat'ed) makes the key unsafe to share: it is built fresh and not
+    /// cached, like [`Self::package`].
     pub fn get_or_build(&self, key: DepKey, build: impl FnOnce() -> DepNodes) -> Arc<DepNodes> {
+        if key.apps.iter().any(|a| a.stamp.is_none()) {
+            return Arc::new(build());
+        }
         if let Some(live) = self.lock().get(&key).and_then(Weak::upgrade) {
             return live;
         }
@@ -376,6 +381,64 @@ mod tests {
             new.graph.objects.iter().any(|o| o.name == "Extra"),
             "the rewritten .app's new codeunit must be in the graph"
         );
+    }
+
+    /// Same path, new stamp: the package map must not serve the old parse.
+    #[test]
+    fn a_replaced_app_gets_a_fresh_parsed_package() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let abi = |s: &LspSnapshot| {
+            s.snap
+                .apps
+                .iter()
+                .find(|u| u.id.guid == DEP_GUID)
+                .and_then(|u| u.abi.clone())
+                .expect("dependency unit carries its package")
+        };
+        let old = build(&fx.root_a, DependencySource::Symbols, &cache);
+        write_dep_app(
+            &fx.alpackages,
+            r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
+        );
+        let new = build(&fx.root_a, DependencySource::Symbols, &cache);
+        assert!(!Arc::ptr_eq(&abi(&old), &abi(&new)));
+    }
+
+    /// A dependency with no stamp is never shared: each build makes its own
+    /// tier and nothing is cached.
+    #[test]
+    fn a_dependency_without_a_stamp_is_not_shared() {
+        use crate::program::resolve::full::build_context_from_snapshot_cached;
+        use crate::snapshot::SnapshotBuilder;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let snap = || {
+            let (mut snap, _) = (SnapshotBuilder {
+                workspace_root: fx.root_a.clone(),
+                local_providers: vec![],
+            })
+            .build_with_options(DependencySource::Symbols, &cache)
+            .expect("snapshot build");
+            let dep = snap
+                .apps
+                .iter_mut()
+                .find(|u| u.id.guid == DEP_GUID)
+                .expect("precondition: the dependency loads");
+            dep.app_stamp = None;
+            snap
+        };
+        let one = build_context_from_snapshot_cached(snap(), &cache).expect("context");
+        let two = build_context_from_snapshot_cached(snap(), &cache).expect("context");
+        assert!(
+            !one.graph().routines.shared().is_empty(),
+            "precondition: the dependency tier is built"
+        );
+        assert!(!Arc::ptr_eq(
+            one.graph().routines.shared(),
+            two.graph().routines.shared()
+        ));
+        assert_eq!(cache.live_entries(), 0);
     }
 
     #[test]

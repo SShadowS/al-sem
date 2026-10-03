@@ -1776,6 +1776,75 @@ mod tests {
         );
     }
 
+    /// A rung-3 rebuild keeps the server's `--dependency-source`. The
+    /// dependency below SHIPS embedded source, so a rebuild that fell back to
+    /// the default (`Embedded`) would index it and flip its tier.
+    #[test]
+    fn rung3_rebuild_stays_in_symbols_mode() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        use crate::snapshot::{DependencySource, TrustTier};
+        let dir = fixture_dir();
+        let alpackages = dir.path().join(".alpackages");
+        std::fs::create_dir_all(&alpackages).unwrap();
+        let guid = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+        let manifest = test_apps::manifest_xml(guid, "Base Application");
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            (
+                "SymbolReference.json",
+                br#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#,
+            ),
+            (
+                "src/SalesPost.Codeunit.al",
+                b"codeunit 80 \"Sales-Post\" { procedure Run() begin end; }",
+            ),
+        ]);
+        std::fs::write(alpackages.join("Microsoft_Base Application_28.4.app"), app).unwrap();
+
+        let cache = Arc::new(DepCache::default());
+        let dep = |s: &LspSnapshot| {
+            let unit = s
+                .snap
+                .apps
+                .iter()
+                .find(|u| u.id.guid == guid)
+                .expect("dependency loaded");
+            (unit.source.is_none(), unit.provenance.tier)
+        };
+        let (base, parsed) = LspSnapshot::build_full_with_parsed_with_cache(
+            dir.path(),
+            DependencySource::Symbols,
+            &cache,
+        )
+        .expect("initial build");
+        assert_eq!(dep(&base), (true, TrustTier::SymbolOnly), "precondition");
+
+        // Through the real server path: `spawn_updater` builds the `Updater`.
+        let base_generation = base.generation;
+        let shared = Arc::new(SharedSnapshot::new(Arc::new(base)));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_updater(
+            Arc::clone(&shared),
+            rx,
+            dir.path().to_path_buf(),
+            parsed,
+            DependencySource::Symbols,
+            cache,
+            |_new, _scope| {},
+        );
+        tx.send(ChangeEvent::DepsChanged).expect("send");
+        std::thread::sleep(Duration::from_millis(400));
+        drop(tx);
+        handle.join().expect("updater thread must exit cleanly");
+
+        let rebuilt = shared.get();
+        assert!(
+            rebuilt.generation > base_generation,
+            "precondition: the rung-3 rebuild was published"
+        );
+        assert_eq!(dep(&rebuilt), (true, TrustTier::SymbolOnly));
+    }
+
     // ── (e) FileSaved outside the workspace source set → escalates to rung 3 ──
 
     #[test]
