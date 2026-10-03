@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::SystemTime;
 
+use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
 use crate::snapshot::{AppId, AppSetSnapshot};
@@ -74,8 +74,10 @@ pub struct DepKey {
 struct DepAppKey {
     id: AppId,
     path: Option<PathBuf>,
-    len: u64,
-    modified: Option<SystemTime>,
+    /// Taken by `load_all_apps` BEFORE the file's bytes were read — never
+    /// re-read here. Stat'ing now could pair a newer file's stamp with nodes
+    /// built from the older bytes, and that stale entry would never heal.
+    stamp: Option<AppFileStamp>,
     /// Encodes `--dependency-source`: the same `.app` indexed with and
     /// without its embedded source yields different nodes.
     has_source: bool,
@@ -87,18 +89,11 @@ impl DepKey {
             .apps
             .iter()
             .skip(1)
-            .map(|unit| {
-                let meta = unit
-                    .app_path
-                    .as_ref()
-                    .and_then(|p| std::fs::metadata(p).ok());
-                DepAppKey {
-                    id: unit.id.clone(),
-                    path: unit.app_path.clone(),
-                    len: meta.as_ref().map_or(0, |m| m.len()),
-                    modified: meta.and_then(|m| m.modified().ok()),
-                    has_source: unit.source.is_some(),
-                }
+            .map(|unit| DepAppKey {
+                id: unit.id.clone(),
+                path: unit.app_path.clone(),
+                stamp: unit.app_stamp,
+                has_source: unit.source.is_some(),
             })
             .collect();
         DepKey { apps }
@@ -126,19 +121,28 @@ mod tests {
 
     /// Writes the dependency `.app`: codeunit 80 "Sales-Post" (symbols AND
     /// embedded source), plus any `extra` codeunits as symbols only.
+    /// A non-empty `extra` (symbols) also ships codeunit 81 "Extra" as
+    /// embedded source, so the extra codeunit shows up in both modes.
     fn write_dep_app(alpackages: &Path, extra: &str) {
         let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
         let symbols = format!(
             r#"{{"Codeunits":[{{"Id":80,"Name":"Sales-Post","Methods":[{{"Name":"Run","Id":1}}]}}{extra}]}}"#
         );
-        let app = test_apps::build_app(&[
+        let mut entries: Vec<(&str, &[u8])> = vec![
             ("NavxManifest.xml", manifest.as_bytes()),
             ("SymbolReference.json", symbols.as_bytes()),
             (
                 "src/SalesPost.Codeunit.al",
                 b"codeunit 80 \"Sales-Post\" { procedure Run() begin end; }",
             ),
-        ]);
+        ];
+        if !extra.is_empty() {
+            entries.push((
+                "src/Extra.Codeunit.al",
+                b"codeunit 81 \"Extra\" { procedure Run() begin end; }",
+            ));
+        }
+        let app = test_apps::build_app(&entries);
         std::fs::write(alpackages.join("Microsoft_Base Application_28.4.app"), app).unwrap();
     }
 
@@ -262,6 +266,49 @@ mod tests {
             assert_eq!(objects(shared), objects(&fresh), "{}", root.display());
             assert_eq!(edges(shared), edges(&fresh), "{}", root.display());
         }
+    }
+
+    /// The `.app` is replaced AFTER the snapshot read it but BEFORE the dep
+    /// tier is built from it. The entry must be keyed on the stamp taken
+    /// before the read (the OLD file), so the next full build — which stamps
+    /// the NEW file — misses and sees the new codeunit.
+    ///
+    /// Embedded mode on purpose: the dependency's source is read into the
+    /// snapshot at build time, so the first context really holds OLD nodes.
+    /// (In symbols mode the ABI is re-read from disk while the tier is built,
+    /// so those nodes come out NEW under the old stamp — harmless: the next
+    /// build misses and rebuilds.)
+    #[test]
+    fn an_app_replaced_mid_build_is_not_cached_under_the_new_stamp() {
+        use crate::program::resolve::full::build_context_from_snapshot_cached;
+        use crate::snapshot::SnapshotBuilder;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let (snap, _) = (SnapshotBuilder {
+            workspace_root: fx.root_a.clone(),
+            local_providers: vec![],
+        })
+        .build_with_options(DependencySource::Embedded)
+        .expect("snapshot build");
+        write_dep_app(
+            &fx.alpackages,
+            r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
+        );
+        let old = build_context_from_snapshot_cached(snap, &cache).expect("context");
+        assert!(
+            !old.graph().objects.iter().any(|o| o.name == "Extra"),
+            "precondition: the first context was built from the OLD bytes"
+        );
+
+        let new = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert!(
+            new.graph.objects.iter().any(|o| o.name == "Extra"),
+            "the replaced .app's new codeunit must be in the fresh graph"
+        );
+        assert!(!Arc::ptr_eq(
+            old.graph().routines.shared(),
+            new.graph.routines.shared()
+        ));
     }
 
     #[test]

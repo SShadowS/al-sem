@@ -37,6 +37,29 @@ pub struct ResolvedDependency {
     pub dependency: AppDependency,
     pub app_path: PathBuf,
     pub package: ParsedAppPackage,
+    /// `app_path`'s stamp, taken BEFORE any of its bytes were read.
+    pub stamp: Option<AppFileStamp>,
+}
+
+/// An `.app` file's size and modification time, taken BEFORE its bytes are
+/// read. Keys the shared dependency tier (`program::dep_cache::DepKey`): a
+/// file replaced after the stamp but before the read is cached under the OLD
+/// stamp, so the next rebuild (which stamps the new file) misses and rebuilds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AppFileStamp {
+    pub len: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+impl AppFileStamp {
+    /// `None` when the file cannot be stat'ed.
+    pub fn of(path: &Path) -> Option<AppFileStamp> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(AppFileStamp {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
+    }
 }
 
 /// One `.app` file dropped during GUID-level dependency dedup (Tier-1
@@ -64,6 +87,8 @@ pub struct DroppedDuplicateDependency {
 struct DiscoveredApp {
     app_path: PathBuf,
     meta: crate::app_package::AppMetadata,
+    /// Taken before the manifest read — see [`AppFileStamp`].
+    stamp: Option<AppFileStamp>,
 }
 
 /// Collapse `deps` down to one entry per non-empty GUID, keeping the
@@ -460,6 +485,8 @@ pub fn load_all_apps(
                 continue;
             }
 
+            // Stamp BEFORE the first read of this file's bytes (see `AppFileStamp`).
+            let stamp = AppFileStamp::of(&path);
             // Phase 1: manifest-only discovery — never touches SymbolReference.json.
             match crate::app_package::extract_app_metadata(&path) {
                 Ok(meta) => {
@@ -472,6 +499,7 @@ pub fn load_all_apps(
                     discovered.push(DiscoveredApp {
                         app_path: path,
                         meta,
+                        stamp,
                     });
                 }
                 Err(e) => {
@@ -527,6 +555,7 @@ pub fn load_all_apps(
                             metadata: candidate.meta.clone(),
                             objects,
                         },
+                        stamp: candidate.stamp,
                     });
                     winner_idx = Some(i);
                     break;
@@ -636,6 +665,7 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                     app_path.display()
                 );
 
+                let stamp = AppFileStamp::of(&app_path);
                 match extract_app_package(&app_path) {
                     Ok(package) => {
                         info!(
@@ -648,6 +678,7 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                             dependency: dep,
                             app_path,
                             package,
+                            stamp,
                         });
                     }
                     Err(e) => {
@@ -841,6 +872,7 @@ mod tests {
 
     fn discovered(guid: &str, name: &str, version: &str, path: &str) -> DiscoveredApp {
         DiscoveredApp {
+            stamp: None,
             app_path: PathBuf::from(path),
             meta: crate::app_package::AppMetadata {
                 app_id: guid.to_string(),

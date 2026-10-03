@@ -52,6 +52,9 @@ pub struct AppUnit {
     pub abi: Option<ParsedAppPackage>,
     /// Path to the `.app` file (None for the workspace unit).
     pub app_path: Option<PathBuf>,
+    /// `app_path`'s size + mtime, taken before its bytes were read (None for
+    /// the workspace unit) — keys the shared dependency tier.
+    pub app_stamp: Option<crate::dependencies::AppFileStamp>,
 }
 
 /// The full set of apps visible in a workspace, keyed by identity.
@@ -194,6 +197,7 @@ impl SnapshotBuilder {
             internals_visible_to: Vec::new(),
             abi: None,
             app_path: None,
+            app_stamp: None,
         };
 
         // ------------------------------------------------------------------
@@ -303,6 +307,7 @@ impl SnapshotBuilder {
                 internals_visible_to: dep_friends,
                 abi: Some(rd.package),
                 app_path: Some(rd.app_path.clone()),
+                app_stamp: rd.stamp,
             });
         }
 

@@ -1079,6 +1079,9 @@ pub fn build_context_with(
 ) -> Option<ProgramContext> {
     let snap = (SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
+        // Local providers are NOT part of `DepKey`: a caller that sets them
+        // must extend the key (provenance tier + content hash), or a local
+        // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
     })
     .build_with_options(dependency_source)

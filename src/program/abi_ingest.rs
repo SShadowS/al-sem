@@ -782,6 +782,7 @@ mod tests {
             internals_visible_to: vec![],
             abi: None,
             app_path: None,
+            app_stamp: None,
         }
     }
 
@@ -799,6 +800,7 @@ mod tests {
             internals_visible_to: vec![],
             abi: None,
             app_path: None,
+            app_stamp: None,
         }
     }
 

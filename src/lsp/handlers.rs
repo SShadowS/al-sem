@@ -1125,6 +1125,7 @@ mod tests {
             internals_visible_to: vec![],
             abi: None,
             app_path: None,
+            app_stamp: None,
         };
 
         let mut ws_unit = make_unit(&ws_id, TrustTier::Workspace, "Ws.al", ws_src);

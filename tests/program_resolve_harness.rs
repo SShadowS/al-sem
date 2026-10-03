@@ -7148,6 +7148,7 @@ codeunit 50971 "Compound Overload Subscriber"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
     let dep_unit = AppUnit {
         id: app_id.clone(),
@@ -7162,6 +7163,7 @@ codeunit 50971 "Compound Overload Subscriber"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
 
     AppSetSnapshot {
@@ -7353,6 +7355,7 @@ codeunit 50980 "Alias Target"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
 
     AppSetSnapshot {
@@ -7486,6 +7489,7 @@ codeunit 50981 "Dup Target"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
     let dep_unit = AppUnit {
         id: app_id.clone(),
@@ -7500,6 +7504,7 @@ codeunit 50981 "Dup Target"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
 
     AppSetSnapshot {
@@ -7591,6 +7596,7 @@ codeunit 50982 "Dual Publisher Target"
         internals_visible_to: vec![],
         abi: None,
         app_path: None,
+        app_stamp: None,
     };
 
     AppSetSnapshot {

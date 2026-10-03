@@ -938,6 +938,7 @@ mod tests {
             internals_visible_to: vec![],
             abi: None,
             app_path: None,
+            app_stamp: None,
         };
         ws_unit.declared_deps = vec![crate::dependencies::AppDependency {
             app_id: String::new(),
@@ -999,6 +1000,7 @@ mod tests {
             internals_visible_to: vec![],
             abi: Some(dep_package),
             app_path: None,
+            app_stamp: None,
         };
 
         let snap = AppSetSnapshot {
