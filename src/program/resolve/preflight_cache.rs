@@ -185,7 +185,7 @@ fn source_identity(unit: &AppUnit) -> Option<String> {
         Some(src) if src.tier == TrustTier::EmbeddedSource => Some(src.content_hash.clone()),
         Some(src) => {
             let mut h = blake3::Hasher::new();
-            for f in &src.files {
+            for f in src.files.iter() {
                 put(&mut h, f.virtual_path.as_bytes());
                 put(&mut h, f.text.as_bytes());
             }

@@ -1116,7 +1116,8 @@ mod tests {
                 files: vec![SourceFile {
                     virtual_path: name.to_string(),
                     text: src.into(),
-                }],
+                }]
+                .into(),
                 tier,
                 content_hash: String::new(),
             }),

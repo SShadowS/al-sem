@@ -28,9 +28,9 @@ pub struct DepCache {
     sources: Mutex<HashMap<(PathBuf, AppFileStamp), WeakSource>>,
 }
 
-/// A `SourceRoot` whose file texts are held weakly (see [`DepCache::source`]).
+/// A `SourceRoot` whose file list is held weakly (see [`DepCache::source`]).
 struct WeakSource {
-    files: Vec<(String, Weak<str>)>,
+    files: Weak<Vec<SourceFile>>,
     tier: TrustTier,
     content_hash: String,
 }
@@ -38,34 +38,19 @@ struct WeakSource {
 impl WeakSource {
     fn of(root: &SourceRoot) -> Self {
         WeakSource {
-            files: root
-                .files
-                .iter()
-                .map(|f| (f.virtual_path.clone(), Arc::downgrade(&f.text)))
-                .collect(),
+            files: Arc::downgrade(&root.files),
             tier: root.tier,
             content_hash: root.content_hash.clone(),
         }
     }
 
     fn is_live(&self) -> bool {
-        self.files.iter().any(|(_, w)| w.strong_count() > 0)
+        self.files.strong_count() > 0
     }
 
-    /// `Some` only when EVERY text is still alive.
     fn upgrade(&self) -> Option<SourceRoot> {
-        let files = self
-            .files
-            .iter()
-            .map(|(p, w)| {
-                Some(SourceFile {
-                    virtual_path: p.clone(),
-                    text: w.upgrade()?,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
         Some(SourceRoot {
-            files,
+            files: self.files.upgrade()?,
             tier: self.tier,
             content_hash: self.content_hash.clone(),
         })
@@ -163,11 +148,13 @@ impl DepCache {
     /// without one nothing is cached. A failed or empty (`None`) load caches
     /// nothing.
     ///
-    /// Representation: the map holds each text as a `Weak<str>`, so
-    /// `AppUnit.source` stays an owned `SourceRoot` (no reader changes). A
-    /// hit rebuilds the `SourceRoot` from the live texts; if any text is
-    /// gone the entry is a miss. The texts live exactly as long as a
-    /// snapshot holds them.
+    /// Representation: the map holds a `Weak` to the source's file list
+    /// (`SourceRoot.files: Arc<Vec<SourceFile>>`), never a `Weak` into a
+    /// text. A hit shares that same list. When the last `SourceRoot` holding
+    /// the list is dropped, the list and every text it owns are freed; the
+    /// dead map entry then pins only the list's small `Arc` header until a
+    /// later miss purges it. (A `Weak<str>` would pin the whole text: an
+    /// `Arc<str>` stores its bytes in the same allocation as its counts.)
     pub fn source(
         &self,
         path: &Path,
@@ -559,8 +546,10 @@ mod tests {
         assert_eq!(cache.live_entries(), 0);
     }
 
-    /// The dependency's embedded source texts as a snapshot holds them.
-    fn dep_texts(cache: &DepCache, root: &Path) -> Vec<Arc<str>> {
+    /// The dependency's embedded source as a snapshot holds it. Returning the
+    /// shared file list (not just its texts) keeps it alive, as a live
+    /// snapshot would: the cache shares only a list some root still holds.
+    fn dep_texts(cache: &DepCache, root: &Path) -> Arc<Vec<SourceFile>> {
         use crate::snapshot::SnapshotBuilder;
         let (snap, _) = (SnapshotBuilder {
             workspace_root: root.to_path_buf(),
@@ -575,11 +564,11 @@ mod tests {
             .and_then(|u| u.source.as_ref())
             .expect("precondition: the dependency ships embedded source");
         assert!(!dep.files.is_empty());
-        dep.files.iter().map(|f| f.text.clone()).collect()
+        Arc::clone(&dep.files)
     }
 
-    fn same_allocations(a: &[Arc<str>], b: &[Arc<str>]) -> bool {
-        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y))
+    fn same_allocations(a: &[SourceFile], b: &[SourceFile]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(&x.text, &y.text))
     }
 
     /// Two roots, one cache: the extracted source is held once, but only for
@@ -603,6 +592,47 @@ mod tests {
         let c = dep_texts(&cache, &fx.root_a);
         assert!(!same_allocations(&a, &c), "new stamp: not served stale");
         assert!(c.len() > a.len(), "the new file's source is the new one");
+    }
+
+    /// Dropping the last root frees the dependency's texts: the cache keeps
+    /// no `Weak` into a text (an `Arc<str>`'s bytes share the allocation with
+    /// its counts, so such a `Weak` would pin the whole text).
+    #[test]
+    fn dependency_texts_are_freed_with_their_last_root() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let text = a
+            .snap
+            .apps
+            .iter()
+            .find(|u| u.id.guid == DEP_GUID)
+            .and_then(|u| u.source.as_ref())
+            .and_then(|s| s.files.first())
+            .map(|f| Arc::downgrade(&f.text))
+            .expect("precondition: the dependency ships embedded source");
+        let live = text.upgrade().expect("held by the snapshot");
+        assert!(
+            a.dep_texts.values().any(|t| Arc::ptr_eq(t, &live)),
+            "precondition: the text is the one the LSP surface serves"
+        );
+        drop(live);
+        // Checked while the text is alive: `Weak::weak_count` reads 0 once
+        // the strong count is 0, whoever still holds a `Weak`.
+        assert_eq!(
+            text.weak_count(),
+            1,
+            "the cache holds no Weak into the text (only this test does)"
+        );
+        drop(a);
+        // `LspSnapshot::from_context` drops the dependency parse units on a
+        // background thread, so the last strong holder goes away shortly
+        // after `drop(a)`, not during it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while text.strong_count() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(text.upgrade().is_none(), "no strong holder is left");
     }
 
     #[test]
@@ -633,7 +663,7 @@ mod tests {
         assert!(
             a.dep_texts
                 .values()
-                .all(|t| src.iter().any(|s| Arc::ptr_eq(s, t))),
+                .all(|t| src.iter().any(|s| Arc::ptr_eq(&s.text, t))),
             "dep_texts values are the shared extracted-source Arcs"
         );
     }

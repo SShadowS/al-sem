@@ -929,7 +929,8 @@ mod tests {
                 files: vec![SourceFile {
                     virtual_path: "Ws.al".to_string(),
                     text: WS_SRC.into(),
-                }],
+                }]
+                .into(),
                 tier: TrustTier::Workspace,
                 content_hash: String::new(),
             }),

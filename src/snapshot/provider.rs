@@ -8,12 +8,15 @@ use crate::snapshot::identity::{AppId, TrustTier};
 use crate::snapshot::verify::{IdentityCheck, verify_local_source};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 /// A resolved set of source files for one app, with its trust tier + hash.
 #[derive(Clone, Debug)]
 pub struct SourceRoot {
-    pub files: Vec<SourceFile>,
+    /// Behind one `Arc` so roots can share the texts and a cache can hold
+    /// them weakly through this small owner (see `DepCache::source`).
+    pub files: Arc<Vec<SourceFile>>,
     pub tier: TrustTier,
     pub content_hash: String,
 }
@@ -65,7 +68,7 @@ fn walk_al_source(root: &std::path::Path, tier: TrustTier) -> Result<Option<Sour
     }
     let content_hash = hasher.finalize().to_hex().to_string();
     Ok(Some(SourceRoot {
-        files,
+        files: Arc::new(files),
         tier,
         content_hash,
     }))
@@ -99,7 +102,7 @@ impl SourceProvider for EmbeddedAppProvider<'_> {
                 return Ok(None); // symbol-only app
             }
             Ok(Some(SourceRoot {
-                files,
+                files: Arc::new(files),
                 tier: TrustTier::EmbeddedSource,
                 content_hash,
             }))

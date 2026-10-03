@@ -695,7 +695,8 @@ mod tests {
                         virtual_path: path.to_string(),
                         text: text.into(),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
                 tier,
                 content_hash: String::new(),
             }),

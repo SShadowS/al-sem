@@ -55,7 +55,7 @@ mod tests {
     }
     fn root() -> SourceRoot {
         SourceRoot {
-            files: vec![],
+            files: Default::default(),
             tier: TrustTier::LocalSourceApproximate,
             content_hash: "h".into(),
         }

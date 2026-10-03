@@ -773,7 +773,7 @@ mod tests {
                 content_hash: String::new(),
             },
             source: Some(SourceRoot {
-                files: vec![],
+                files: Default::default(),
                 tier: TrustTier::Workspace,
                 content_hash: String::new(),
             }),
@@ -1128,7 +1128,8 @@ codeunit 50900 "Subscriber CU"
             files: vec![SourceFile {
                 virtual_path: "Subscriber.al".into(),
                 text: sub_src.into(),
-            }],
+            }]
+            .into(),
             tier: TrustTier::Workspace,
             content_hash: String::new(),
         });

@@ -7119,7 +7119,8 @@ codeunit 50971 "Compound Overload Subscriber"
                 virtual_path: "CompoundSubscriber.al".into(),
                 text: subscriber_src.into(),
             },
-        ],
+        ]
+        .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
     };
@@ -7130,7 +7131,8 @@ codeunit 50971 "Compound Overload Subscriber"
         files: vec![SourceFile {
             virtual_path: "CompoundTarget.al".into(),
             text: target_src.into(),
-        }],
+        }]
+        .into(),
         tier: TrustTier::EmbeddedSource,
         content_hash: "dep-hash".into(),
     };
@@ -7337,7 +7339,8 @@ codeunit 50980 "Alias Target"
         files: vec![SourceFile {
             virtual_path: "AliasTarget.al".into(),
             text: src.into(),
-        }],
+        }]
+        .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
     };
@@ -7463,7 +7466,8 @@ codeunit 50981 "Dup Target"
         files: vec![SourceFile {
             virtual_path: "DupTarget.al".into(),
             text: src.clone().into(),
-        }],
+        }]
+        .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
     };
@@ -7471,7 +7475,8 @@ codeunit 50981 "Dup Target"
         files: vec![SourceFile {
             virtual_path: "DupTarget.al".into(),
             text: src.into(),
-        }],
+        }]
+        .into(),
         tier: TrustTier::EmbeddedSource,
         content_hash: "dep-hash".into(),
     };
@@ -7578,7 +7583,8 @@ codeunit 50982 "Dual Publisher Target"
         files: vec![SourceFile {
             virtual_path: "DualPublisherTarget.al".into(),
             text: src.into(),
-        }],
+        }]
+        .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
     };
