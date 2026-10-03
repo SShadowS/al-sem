@@ -522,16 +522,31 @@ impl LspSnapshot {
             // to the old always-local `BodyMap`-style build for every
             // consumer below (`recompute_file`/`emit_event_flow_edges`/
             // `build_dep_texts`).
-            let (surface, dep_meta_arc) =
-                DeclSurface::build_split(&graph, &parsed, primary_app_ref);
+            //
             // Roots sharing a dependency tier share its LSP products too; the
-            // first root to get here publishes them.
-            let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
-                Arc::new(DepLspTier {
-                    dep_meta: dep_meta_arc,
-                    dep_texts: Arc::new(build_dep_texts(&graph, &parsed, primary_app_ref)),
-                })
-            });
+            // first root to get here publishes them. Once published, the
+            // dependency units may not even have been parsed (see
+            // `build_context_from_snapshot_cached`), so the surface is the
+            // rung-1 construction: workspace decls over the published tier.
+            let (surface, tier) = match dep_layer.dep_nodes.lsp.get() {
+                Some(tier) => {
+                    let ws = primary_unit_idx.map_or(&[][..], |i| std::slice::from_ref(&parsed[i]));
+                    let surface =
+                        DeclSurface::build(&graph, ws).with_frozen(Arc::clone(&tier.dep_meta));
+                    (surface, tier)
+                }
+                None => {
+                    let (surface, dep_meta_arc) =
+                        DeclSurface::build_split(&graph, &parsed, primary_app_ref);
+                    let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
+                        Arc::new(DepLspTier {
+                            dep_meta: dep_meta_arc,
+                            dep_texts: Arc::new(build_dep_texts(&graph, &parsed, primary_app_ref)),
+                        })
+                    });
+                    (surface, tier)
+                }
+            };
             dep_meta = Arc::clone(&tier.dep_meta);
             dep_texts = Arc::clone(&tier.dep_texts);
 

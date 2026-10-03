@@ -118,6 +118,17 @@ impl DepCache {
         built
     }
 
+    /// The live entry for `key`, only if its LSP products (`lsp`) are already
+    /// published. Never builds. An entry without them (built by a CLI-style
+    /// build, or by a root still inside `from_context`) is a miss: whoever
+    /// fills the slot needs the dependency parse trees.
+    pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
+        self.lock()
+            .get(key)
+            .and_then(Weak::upgrade)
+            .filter(|nodes| nodes.lsp.get().is_some())
+    }
+
     /// The live parsed package for the `.app` at `path`, or `load()`'s result
     /// (now cached). `stamp` must be the one taken before the file was read;
     /// without one (file could not be stat'ed) nothing is cached. Same lock
@@ -253,6 +264,10 @@ mod tests {
         root_b: PathBuf,
     }
 
+    /// The dependency's embedded source: `Post` (called by the workspace)
+    /// raises the `OnAfterRun` event (subscribed to by the workspace).
+    const SALES_POST_SRC: &str = "codeunit 80 \"Sales-Post\"\n{\n    procedure Run()\n    begin\n    end;\n\n    procedure Post()\n    begin\n        OnAfterRun();\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterRun()\n    begin\n    end;\n}\n";
+
     /// Writes the dependency `.app`: codeunit 80 "Sales-Post" (symbols AND
     /// embedded source), plus any `extra` codeunits as symbols only.
     /// A non-empty `extra` (symbols) also ships codeunit 81 "Extra" as
@@ -265,10 +280,7 @@ mod tests {
         let mut entries: Vec<(&str, &[u8])> = vec![
             ("NavxManifest.xml", manifest.as_bytes()),
             ("SymbolReference.json", symbols.as_bytes()),
-            (
-                "src/SalesPost.Codeunit.al",
-                b"codeunit 80 \"Sales-Post\" { procedure Run() begin end; }",
-            ),
+            ("src/SalesPost.Codeunit.al", SALES_POST_SRC.as_bytes()),
         ];
         if !extra.is_empty() {
             entries.push((
@@ -284,12 +296,19 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("app.json"),
-            format!(r#"{{"id":"{guid}","name":"{name}","publisher":"probe","version":"1.0.0.0"}}"#),
+            format!(
+                r#"{{"id":"{guid}","name":"{name}","publisher":"probe","version":"1.0.0.0","dependencies":[{{"id":"{DEP_GUID}","name":"Base Application","publisher":"Microsoft","version":"28.0.0.0"}}]}}"#
+            ),
         )
         .unwrap();
         std::fs::write(
             root.join("src/X.Codeunit.al"),
-            "codeunit 50100 \"X\"\n{\n    procedure Go()\n    var\n        SalesPost: Codeunit \"Sales-Post\";\n    begin\n        SalesPost.Run();\n    end;\n}\n",
+            "codeunit 50100 \"X\"\n{\n    procedure Go()\n    var\n        SalesPost: Codeunit \"Sales-Post\";\n    begin\n        SalesPost.Post();\n    end;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/Sub.Codeunit.al"),
+            "codeunit 50101 \"Sub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Sales-Post\", 'OnAfterRun', '', false, false)]\n    local procedure HandleAfterRun()\n    begin\n    end;\n}\n",
         )
         .unwrap();
     }
@@ -607,6 +626,7 @@ mod tests {
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(!a.dep_meta.is_empty(), "precondition: dependency decls");
         assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
         assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
         let src = dep_texts(&cache, &fx.root_a);
@@ -641,5 +661,166 @@ mod tests {
             k
         };
         assert_eq!(keys(&b), keys(&solo));
+    }
+
+    /// Every LSP answer of a snapshot, order-independent, as text.
+    fn answers(s: &LspSnapshot) -> String {
+        use std::collections::BTreeMap;
+        let sorted = |v: &[crate::program::resolve::full::ClassifiedEdge]| {
+            let mut v: Vec<_> = v
+                .iter()
+                .map(|c| (c.obligation_id.clone(), c.edge.clone()))
+                .collect();
+            v.sort();
+            v
+        };
+        let decls: BTreeMap<_, _> = s
+            .decls_by_file
+            .iter()
+            .map(|(f, d)| (f.clone(), format!("{d:?}")))
+            .collect();
+        let edges: BTreeMap<_, _> = s
+            .edges_by_file
+            .iter()
+            .map(|(f, e)| (f.clone(), sorted(e)))
+            .collect();
+        let incoming: BTreeMap<_, _> = s
+            .incoming
+            .iter()
+            .map(|(t, refs)| {
+                let mut o: Vec<_> = refs
+                    .iter()
+                    .map(|r| s.edge(r).obligation_id.clone())
+                    .collect();
+                o.sort();
+                (t.clone(), o)
+            })
+            .collect();
+        let fanout: BTreeMap<_, _> = s.publisher_fanout.iter().collect();
+        let by_id: BTreeMap<_, _> = s
+            .decl_by_id
+            .iter()
+            .map(|(k, d)| (k.clone(), format!("{d:?}")))
+            .collect();
+        let dep_meta: BTreeMap<_, _> = s.dep_meta.iter().collect();
+        let mut dep_texts: Vec<_> = s.dep_texts.keys().collect();
+        dep_texts.sort();
+        format!(
+            "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_texts:#?}",
+            sorted(&s.event_edges)
+        )
+    }
+
+    /// The fixture really exercises the dependency tier: a call into it, an
+    /// event raised in it and subscribed to by the workspace.
+    fn assert_non_trivial(s: &LspSnapshot) {
+        assert!(!s.dep_meta.is_empty(), "precondition: dependency decls");
+        assert!(!s.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(!s.event_edges.is_empty(), "precondition: event edges");
+        assert!(
+            s.event_edges.iter().any(|e| !e.edge.routes.is_empty()),
+            "precondition: the workspace subscriber is wired {:#?}",
+            s.event_edges.iter().map(|e| &e.edge).collect::<Vec<_>>()
+        );
+        assert!(
+            !s.publisher_fanout.is_empty(),
+            "precondition: publisher fan-out"
+        );
+        assert!(
+            s.incoming.keys().any(|t| t.object.app != AppRef(0)),
+            "precondition: the workspace calls into the dependency {:#?}",
+            s.edges_by_file
+                .values()
+                .flat_map(|v| v.iter().map(|c| &c.edge))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Root B built while root A holds the shared tier (a hit) answers
+    /// exactly like a cache-less build of root B.
+    #[test]
+    fn a_shared_tier_hit_answers_like_a_cache_less_build() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(
+            Arc::ptr_eq(&a.dep_meta, &b.dep_meta),
+            "precondition: B was built on the shared tier"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// On a hit only the workspace unit is parsed; the dependency's source is
+    /// not parsed again.
+    #[test]
+    fn a_shared_tier_hit_parses_only_the_workspace() {
+        use crate::program::resolve::full::build_context_with;
+        use crate::snapshot::parse::parse_log::parses_under;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let _a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert_eq!(
+            parses_under(fx._dir.path()),
+            1,
+            "precondition: root A parsed the dependency once"
+        );
+        let ctx =
+            build_context_with(&fx.root_b, DependencySource::Embedded, &cache).expect("context");
+        assert_eq!(parses_under(fx._dir.path()), 1, "B parsed the dependency");
+        let apps: Vec<_> = ctx.parsed().iter().map(|u| u.app.guid.clone()).collect();
+        assert_eq!(apps, vec![GUID_B.to_string()]);
+    }
+
+    /// A rung-3 rebuild of a root whose dependency set did not change is a
+    /// hit, and answers like a cache-less build.
+    #[test]
+    fn a_rung3_rebuild_on_a_shared_tier_is_a_hit() {
+        use crate::lsp::updater::{ChangeEvent, SharedSnapshot, spawn_updater};
+        use crate::snapshot::parse::parse_log::parses_under;
+        use std::time::{Duration, Instant};
+        let fx = two_roots_one_alpackages();
+        let cache = Arc::new(DepCache::default());
+        let _a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let (base, parsed) = LspSnapshot::build_full_with_parsed_with_cache(
+            &fx.root_b,
+            DependencySource::Embedded,
+            &cache,
+        )
+        .expect("initial build");
+        let base_generation = base.generation;
+        let shared = Arc::new(SharedSnapshot::new(Arc::new(base)));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = spawn_updater(
+            Arc::clone(&shared),
+            rx,
+            fx.root_b.clone(),
+            parsed,
+            DependencySource::Embedded,
+            Arc::clone(&cache),
+            |_new, _scope| {},
+        );
+        tx.send(ChangeEvent::DepsChanged).expect("send");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while shared.get().generation == base_generation && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(tx);
+        handle.join().expect("updater thread must exit cleanly");
+        let rebuilt = shared.get();
+        assert!(
+            rebuilt.generation > base_generation,
+            "precondition: the rung-3 rebuild was published"
+        );
+        assert_eq!(
+            parses_under(fx._dir.path()),
+            1,
+            "only root A ever parsed the dependency"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&rebuilt), answers(&solo));
     }
 }

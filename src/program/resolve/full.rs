@@ -39,7 +39,7 @@ use rayon::prelude::*;
 
 use crate::engine::perf_trace as pt;
 use crate::program::build::{DepLayer, assemble_program_graph, build_dep_layer_cached};
-use crate::program::dep_cache::DepCache;
+use crate::program::dep_cache::{DepCache, DepKey};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
@@ -71,6 +71,7 @@ use crate::snapshot::{
     AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
     parse_snapshot,
 };
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1041,6 +1042,9 @@ pub fn resolve_full_program_for_export(
 pub struct ProgramContext {
     pub(crate) snap: AppSetSnapshot,
     pub(crate) graph: ProgramGraph,
+    /// Every source-bearing unit — except on a shared-tier hit (LSP only,
+    /// see [`build_context_from_snapshot_cached`]), where it holds the
+    /// workspace unit alone.
     pub(crate) parsed: Vec<ParsedUnit>,
     pub(crate) primary_app_ref: AppRef,
     pub(crate) ws_file_set: HashSet<String>,
@@ -1144,9 +1148,24 @@ pub fn build_context_from_snapshot_cached(
     // same order (see that function's own doc, and the
     // `assemble_program_graph_matches_build_program_graph_field_by_field`
     // characterization test in `program::build`).
+    //
+    // A shared dependency tier whose LSP products are already published
+    // answers everything the LSP needs from the dependencies, so on such a
+    // hit only the workspace is parsed and `parsed` holds the workspace unit
+    // alone. Only the LSP passes a shared cache; every other caller passes a
+    // throwaway one, never hits, and still gets every unit.
+    let shared_tier = dep_cache.get(&DepKey::of(&snap));
     let parsed = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
-        parse_snapshot(&snap)
+        if shared_tier.is_some() {
+            snap.apps
+                .iter()
+                .filter(|u| u.id == snap.workspace_app)
+                .filter_map(crate::snapshot::parse::parse_unit)
+                .collect()
+        } else {
+            parse_snapshot(&snap)
+        }
     };
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
@@ -1157,6 +1176,14 @@ pub fn build_context_from_snapshot_cached(
             dep_cache,
         )
     };
+    // `shared_tier` kept the entry alive, so the layer is built on it and the
+    // dependency nodes never came from the workspace-only `parsed`.
+    debug_assert!(
+        shared_tier
+            .as_ref()
+            .is_none_or(|t| Arc::ptr_eq(t, &dep_layer.dep_nodes))
+    );
+    drop(shared_tier);
 
     // `snap.apps` is GUID-deduped upstream (H-2), so at most one parsed unit
     // can match the workspace identity.

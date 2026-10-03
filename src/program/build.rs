@@ -85,6 +85,8 @@ pub fn build_dep_layer(
 
 /// [`build_dep_layer`], taking the dependency nodes from `dep_cache` when
 /// another root already built the same dependency set (see [`DepKey`]).
+/// `parsed` is read only on a miss, so a caller that already holds the live
+/// entry may pass the workspace unit alone.
 pub fn build_dep_layer_cached(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,

@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use std::sync::Arc;
 
 use crate::snapshot::identity::{AppId, Provenance};
-use crate::snapshot::snapshot::AppSetSnapshot;
+use crate::snapshot::snapshot::{AppSetSnapshot, AppUnit};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -84,28 +84,60 @@ pub fn recovered_file_paths(units: &[ParsedUnit]) -> Vec<String> {
 #[must_use]
 pub fn parse_snapshot(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
     let pool = crate::big_stack::big_stack_pool();
-    pool.install(|| {
-        snap.apps
-            .iter()
-            .filter_map(|unit| {
-                let source = unit.source.as_ref()?;
-                let files: Vec<ParsedFile> = source
-                    .files
-                    .par_iter()
-                    .map(|f| ParsedFile {
-                        virtual_path: f.virtual_path.clone(),
-                        file: Arc::new(al_syntax::parse(&f.text)),
-                        provenance: unit.provenance.clone(),
-                        text: Arc::clone(&f.text),
-                    })
-                    .collect();
-                Some(ParsedUnit {
-                    app: unit.id.clone(),
-                    files,
-                })
-            })
-            .collect()
+    pool.install(|| snap.apps.iter().filter_map(parse_unit_in_pool).collect())
+}
+
+/// [`parse_snapshot`] for ONE unit: `None` when it has no source.
+#[must_use]
+pub fn parse_unit(unit: &AppUnit) -> Option<ParsedUnit> {
+    crate::big_stack::big_stack_pool().install(|| parse_unit_in_pool(unit))
+}
+
+fn parse_unit_in_pool(unit: &AppUnit) -> Option<ParsedUnit> {
+    let source = unit.source.as_ref()?;
+    #[cfg(test)]
+    parse_log::record(unit);
+    let files: Vec<ParsedFile> = source
+        .files
+        .par_iter()
+        .map(|f| ParsedFile {
+            virtual_path: f.virtual_path.clone(),
+            file: Arc::new(al_syntax::parse(&f.text)),
+            provenance: unit.provenance.clone(),
+            text: Arc::clone(&f.text),
+        })
+        .collect();
+    Some(ParsedUnit {
+        app: unit.id.clone(),
+        files,
     })
+}
+
+/// Test-only record of which `.app` files had their source parsed.
+#[cfg(test)]
+pub(crate) mod parse_log {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static LOG: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(unit: &crate::snapshot::snapshot::AppUnit) {
+        if let Some(path) = &unit.app_path {
+            LOG.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(path.clone());
+        }
+    }
+
+    /// How many unit parses so far were of an `.app` under `dir` (tests use
+    /// their own temp dir, so parallel tests do not see each other).
+    pub(crate) fn parses_under(dir: &Path) -> usize {
+        LOG.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|p| p.starts_with(dir))
+            .count()
+    }
 }
 
 // ---------------------------------------------------------------------------
