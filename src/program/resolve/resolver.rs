@@ -2933,7 +2933,9 @@ fn resolve_abi_prefix_routine<'g>(
 /// sibling is not) is NOT in this set — that shape still emits its one
 /// edge unchanged this task; only a genuine dual-publisher collision is
 /// unsafe enough to fail closed on.
-fn dual_publisher_alias_ids(routines: &[RoutineNode]) -> std::collections::HashSet<RoutineNodeId> {
+fn dual_publisher_alias_ids<'a>(
+    routines: impl IntoIterator<Item = &'a RoutineNode>,
+) -> std::collections::HashSet<RoutineNodeId> {
     let mut publisher_alias_counts: std::collections::HashMap<&RoutineNodeId, usize> =
         std::collections::HashMap::new();
     for r in routines {
@@ -2958,13 +2960,15 @@ fn dual_publisher_alias_ids(routines: &[RoutineNode]) -> std::collections::HashS
 /// path: a nonzero value beyond the CDO-measured known-pair signatures is a
 /// threshold alert (investigate, don't mask — collision-guard-observability
 /// addendum).
-pub fn dual_publisher_alias_skip_count(routines: &[RoutineNode]) -> usize {
-    let alias_ids = dual_publisher_alias_ids(routines);
+pub fn dual_publisher_alias_skip_count<'a>(
+    routines: impl IntoIterator<Item = &'a RoutineNode> + Clone,
+) -> usize {
+    let alias_ids = dual_publisher_alias_ids(routines.clone());
     if alias_ids.is_empty() {
         return 0;
     }
     routines
-        .iter()
+        .into_iter()
         .filter(|r| r.source_overload_aliased && r.publisher_kind.is_some())
         .filter(|r| alias_ids.contains(&r.id))
         .count()
@@ -3246,8 +3250,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         }
@@ -3289,8 +3293,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         }
@@ -3350,8 +3354,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             friends: friends_map,
             abi_ingest_errors: Default::default(),
@@ -4315,8 +4319,8 @@ pageextension 52911 "ExtA" extends BasePage
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -4481,8 +4485,8 @@ pageextension 52911 "ExtA" extends BasePage
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -4682,8 +4686,8 @@ pageextension 52911 "ExtA" extends BasePage
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -5031,8 +5035,8 @@ codeunit 50612 "MixedCU2"
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -5239,8 +5243,8 @@ codeunit 50612 "MixedCU2"
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -5435,8 +5439,8 @@ codeunit 50612 "MixedCU2"
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -6143,8 +6147,8 @@ codeunit 50300 "OverloadCU"
         let graph = ProgramGraph {
             apps,
             topology: crate::program::topology::DependencyGraph::default(),
-            objects: vec![],
-            routines: vec![],
+            objects: vec![].into(),
+            routines: vec![].into(),
             obj_index: crate::program::graph::ObjectIndex::build(&[]),
             ..Default::default()
         };
@@ -10433,8 +10437,8 @@ codeunit 50000 "Caller"
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -12705,8 +12709,8 @@ codeunit 53971 "OverloadNCaller"
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -13097,8 +13101,8 @@ codeunit 53975 "Overload3Caller"
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -13288,8 +13292,8 @@ codeunit 60152 "AliasTarget"
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };

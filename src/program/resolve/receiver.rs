@@ -3232,8 +3232,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -3837,8 +3837,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -3986,8 +3986,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -4709,8 +4709,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -5228,7 +5228,7 @@ mod tests {
         report.dataitems = vec![dataitem("Cust", "customer", "Customer")];
         graph.objects.push(report.clone());
         graph.objects.sort_by(|a, b| a.id.cmp(&b.id));
-        graph.routines = vec![make_routine_node(report_id, "Cust")];
+        graph.routines = vec![make_routine_node(report_id, "Cust")].into();
         graph.routines.sort_by(|x, y| x.id.cmp(&y.id));
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -5867,8 +5867,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -6306,8 +6306,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };

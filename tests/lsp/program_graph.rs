@@ -40,7 +40,10 @@ fn cdo_program_graph_is_app_qualified_and_panic_free() {
     );
     // Deterministic: objects sorted by NodeId.
     assert!(
-        g.objects.windows(2).all(|w| w[0].id <= w[1].id),
+        g.objects
+            .iter()
+            .zip(g.objects.iter().skip(1))
+            .all(|(a, b)| a.id <= b.id),
         "objects must be sorted by NodeId"
     );
 }

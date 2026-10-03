@@ -8,6 +8,7 @@ use crate::program::abi_ingest::AbiCache;
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
+use crate::program::node_set::NodeSet;
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
@@ -194,13 +195,14 @@ pub fn assemble_program_graph(
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
 
+    let objects: NodeSet<ObjectNode> = objects.into();
     let obj_index = ObjectIndex::build(&objects);
 
     let mut graph = ProgramGraph {
         apps: dep.apps.clone(),
         topology: dep.topology.clone(),
         objects,
-        routines,
+        routines: routines.into(),
         obj_index,
         friends: dep.friends.clone(),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),

@@ -2887,8 +2887,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects: sorted_objects,
-            routines,
+            objects: sorted_objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -3459,8 +3459,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };

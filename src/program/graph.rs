@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::program::node::{AppRef, AppRegistry};
 use crate::program::node_extract::{ObjectNode, RoutineNode};
+use crate::program::node_set::NodeSet;
 use crate::program::topology::DependencyGraph;
 
 /// Index from (app, kind, lowercase-name) to position in `ProgramGraph::objects`.
@@ -19,9 +20,9 @@ pub struct ObjectIndex {
 impl ObjectIndex {
     /// Build the index from an already-sorted `objects` slice.
     /// On a duplicate `(app, kind, name_lc)` key the first (lowest-`NodeId`) entry wins.
-    pub fn build(objects: &[ObjectNode]) -> Self {
+    pub fn build<'a>(objects: impl IntoIterator<Item = &'a ObjectNode>) -> Self {
         let mut idx = ObjectIndex::default();
-        for (i, obj) in objects.iter().enumerate() {
+        for (i, obj) in objects.into_iter().enumerate() {
             let key = (obj.id.app, obj.id.kind, obj.name.fold_identifier());
             idx.by_app_kind_name.entry(key).or_insert(i);
         }
@@ -34,10 +35,12 @@ impl ObjectIndex {
 pub struct ProgramGraph {
     pub apps: AppRegistry,
     pub topology: DependencyGraph,
-    /// All object nodes, sorted by `ObjectNodeId` for determinism.
-    pub objects: Vec<ObjectNode>,
+    /// All object nodes, sorted by `ObjectNodeId` for determinism. A
+    /// `NodeSet`: the dependency part is shared, never copied (see
+    /// `program::node_set`).
+    pub objects: NodeSet<ObjectNode>,
     /// All routine nodes, sorted by `RoutineNodeId` for determinism.
-    pub routines: Vec<RoutineNode>,
+    pub routines: NodeSet<RoutineNode>,
     pub obj_index: ObjectIndex,
     /// `internalsVisibleTo` friend-app authorizations (Task 1.5), keyed by
     /// the app EXPOSING `internal` members → the set of caller apps its own
@@ -209,8 +212,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         }
@@ -298,8 +301,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology,
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         }

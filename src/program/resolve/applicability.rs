@@ -372,8 +372,12 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects: sorted_objects,
-            routines: routines.iter().map(RoutineNode::clone).collect(),
+            objects: sorted_objects.into(),
+            routines: routines
+                .iter()
+                .map(RoutineNode::clone)
+                .collect::<Vec<_>>()
+                .into(),
             obj_index,
             ..Default::default()
         };

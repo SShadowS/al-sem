@@ -1219,8 +1219,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines,
+                objects: objects.into(),
+                routines: routines.into(),
                 obj_index,
                 ..Default::default()
             },
@@ -1286,8 +1286,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines,
+                objects: objects.into(),
+                routines: routines.into(),
                 obj_index,
                 ..Default::default()
             },
@@ -1373,8 +1373,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines: vec![],
+                objects: objects.into(),
+                routines: vec![].into(),
                 obj_index,
                 ..Default::default()
             },
@@ -1474,8 +1474,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines: vec![],
+                objects: objects.into(),
+                routines: vec![].into(),
                 obj_index,
                 ..Default::default()
             },
@@ -1701,8 +1701,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines: vec![],
+                objects: objects.into(),
+                routines: vec![].into(),
                 obj_index,
                 ..Default::default()
             },
@@ -1769,8 +1769,8 @@ mod tests {
             ProgramGraph {
                 apps,
                 topology,
-                objects,
-                routines: vec![],
+                objects: objects.into(),
+                routines: vec![].into(),
                 obj_index,
                 ..Default::default()
             },

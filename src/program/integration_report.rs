@@ -416,8 +416,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             friends: Default::default(),
             abi_ingest_errors: Default::default(),

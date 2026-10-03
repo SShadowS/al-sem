@@ -2807,8 +2807,8 @@ mod tests {
         let graph = ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects,
-            routines: vec![],
+            objects: objects.into(),
+            routines: vec![].into(),
             obj_index,
             ..Default::default()
         };
@@ -3493,8 +3493,8 @@ codeunit 50100 "C"
         let graph = ProgramGraph {
             apps,
             topology,
-            objects,
-            routines,
+            objects: objects.into(),
+            routines: routines.into(),
             obj_index,
             ..Default::default()
         };
@@ -3615,7 +3615,7 @@ codeunit 50700 "Caller"
         let objects = vec![table];
         let obj_index = ObjectIndex::build(&objects);
         ProgramGraph {
-            objects,
+            objects: objects.into(),
             obj_index,
             ..Default::default()
         }
@@ -3654,7 +3654,7 @@ codeunit 50700 "Caller"
             .collect();
         let obj_index = ObjectIndex::build(&objects);
         ProgramGraph {
-            objects,
+            objects: objects.into(),
             obj_index,
             ..Default::default()
         }
@@ -3725,9 +3725,9 @@ codeunit 50700 "Caller"
         let obj_index = ObjectIndex::build(&objects);
         routines.sort_by(|a, b| a.id.cmp(&b.id));
         ProgramGraph {
-            objects,
+            objects: objects.into(),
             obj_index,
-            routines,
+            routines: routines.into(),
             ..Default::default()
         }
     }
@@ -3961,7 +3961,7 @@ codeunit 50700 "Caller"
                 SubtypeTag::AlreadyQuoted,
             )]),
         );
-        graph.routines = vec![text_overload.clone(), record_overload.clone()];
+        graph.routines = vec![text_overload.clone(), record_overload.clone()].into();
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
         let index = ResolveIndex::build(&graph);
 

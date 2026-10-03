@@ -10,7 +10,7 @@
 //! `Vec::extend` + stable `sort_by` produced. Nothing is copied.
 
 use std::cmp::Ordering;
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
@@ -152,6 +152,37 @@ impl<T: SortKey> Index<usize> for NodeSet<T> {
     }
 }
 
+/// Mutating the shared part copies it (`Arc::make_mut`, copy-on-write).
+/// Production code never mutates graph nodes after assembly; these exist for
+/// tests.
+impl<T: SortKey + Clone> IndexMut<usize> for NodeSet<T> {
+    fn index_mut(&mut self, i: usize) -> &mut T {
+        match self.own_pos.binary_search(&i) {
+            Ok(j) => &mut self.own[j],
+            Err(j) => &mut Arc::make_mut(&mut self.shared)[i - j],
+        }
+    }
+}
+
+impl<T: SortKey + Clone> NodeSet<T> {
+    /// Mutation order is unspecified; mutating a node's sort key requires
+    /// `sort_by` afterwards, as with a `Vec`. Copies the shared part
+    /// (copy-on-write).
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        Arc::make_mut(&mut self.shared)
+            .iter_mut()
+            .chain(self.own.iter_mut())
+    }
+}
+
+impl<T> NodeSet<T> {
+    pub fn clear(&mut self) {
+        self.shared = Arc::new(Vec::new());
+        self.own.clear();
+        self.own_pos.clear();
+    }
+}
+
 impl<T: SortKey> From<Vec<T>> for NodeSet<T> {
     fn from(own: Vec<T>) -> Self {
         NodeSet::layered(Arc::new(Vec::new()), own)
@@ -262,6 +293,38 @@ mod tests {
         set.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(flat(&set), vec![N(1, "a"), N(2, "b"), N(4, "a")]);
         assert_eq!(set[1], N(2, "b"));
+    }
+
+    #[test]
+    fn index_mut_hits_merged_index_and_copies_shared_on_write() {
+        let original = Arc::new(vec![N(3, "s"), N(4, "s"), N(7, "s")]);
+        let mut set =
+            NodeSet::layered(Arc::clone(&original), vec![N(0, "o"), N(1, "o"), N(5, "o")]);
+        // merged: 0o 1o 3s 4s 5o 7s. Index 1 and 4 are own; 3 and 5 shared/own mix.
+        set[1].1 = "x"; // own
+        set[4].1 = "y"; // own (interleaved)
+        assert_eq!(set[1], N(1, "x"));
+        assert_eq!(set[4], N(5, "y"));
+        // shared untouched so far: no copy yet.
+        assert!(Arc::ptr_eq(set.shared(), &original));
+        set[3].1 = "z"; // shared element -> copy-on-write
+        assert_eq!(set[3], N(4, "z"));
+        assert_eq!(set[2], N(3, "s"));
+        assert_eq!(set[5], N(7, "s"));
+        assert!(!Arc::ptr_eq(set.shared(), &original));
+        assert_eq!(*original, vec![N(3, "s"), N(4, "s"), N(7, "s")]);
+    }
+
+    #[test]
+    fn iter_mut_and_clear() {
+        let mut set = NodeSet::layered(Arc::new(vec![N(3, "s")]), vec![N(1, "o")]);
+        for n in set.iter_mut() {
+            n.1 = "m";
+        }
+        assert_eq!(flat(&set), vec![N(1, "m"), N(3, "m")]);
+        set.clear();
+        assert!(set.is_empty());
+        assert_eq!(set.get(0), None);
     }
 
     #[test]

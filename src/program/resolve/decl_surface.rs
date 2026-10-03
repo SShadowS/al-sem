@@ -239,8 +239,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects: vec![],
-            routines: vec![],
+            objects: vec![].into(),
+            routines: vec![].into(),
             obj_index: ObjectIndex::build(&[]),
             ..Default::default()
         }
@@ -255,8 +255,8 @@ mod tests {
         ProgramGraph {
             apps,
             topology: DependencyGraph::default(),
-            objects: vec![],
-            routines: vec![],
+            objects: vec![].into(),
+            routines: vec![].into(),
             obj_index: ObjectIndex::build(&[]),
             ..Default::default()
         }
