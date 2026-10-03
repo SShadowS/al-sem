@@ -69,6 +69,9 @@ class Git:
     # `tree-sitter-al/` never revert a merge. Without this flag BOTH probes
     # report the submodule path for a dirty-worktree/unchanged-pointer
     # submodule, which is indistinguishable from a real change.
+    # Since 2026-10-03 `tree-sitter-al/` is a gitignored clone, not a
+    # submodule, so this repo has none; the flag stays for old worktrees
+    # and is a no-op otherwise.
     _IGNORE_SUB = "--ignore-submodules=dirty"
 
     def __init__(self, cwd: Path | str, run: Callable = subprocess.run):

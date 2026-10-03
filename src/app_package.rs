@@ -3,15 +3,16 @@
 //! .app files are ZIP archives with a 40-byte NAVX header containing:
 //! - NavxManifest.xml: App metadata (ID, name, publisher, version)
 //! - SymbolReference.json: All symbol definitions (codeunits, tables, etc.)
+//!
+//! A Ready-to-Run package nests the real app one level down; opening goes
+//! through [`open_app_file`], which unwraps it.
 
+use crate::engine::deps::app_package_zip::{AppReader, open_app_file};
 use crate::types::ObjectType;
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 use std::path::Path;
-
-/// Size of the NAVX header prepended to .app files
-const NAVX_HEADER_SIZE: u64 = 40;
 
 /// App metadata from NavxManifest.xml
 #[derive(Debug, Clone)]
@@ -283,20 +284,12 @@ struct SymbolMethodProperty {
     value: Option<serde_json::Value>,
 }
 
-/// Open a `.app` file's embedded zip by seeking past the 40-byte NAVX header.
-/// Factored out of `extract_app_package` for readability; callable by other
-/// binary-scope modules. (The library-crate `snapshot::embedded` cannot use
-/// it across the lib/bin boundary, so it has its own copy.)
-pub(crate) fn open_app_zip(
-    path: &Path,
-) -> Result<zip::ZipArchive<std::io::BufReader<std::fs::File>>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open .app file: {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    reader
-        .seek(SeekFrom::Start(NAVX_HEADER_SIZE))
-        .context("Failed to skip NAVX header")?;
-    zip::ZipArchive::new(reader).context("Failed to open .app as ZIP archive")
+/// Open a `.app` file's zip, unwrapping a Ready-to-Run package (see
+/// [`crate::engine::deps::app_package_zip::open_app_file`]). A file with no
+/// zip at all is an error here: every caller needs the manifest or symbols.
+pub(crate) fn open_app_zip(path: &Path) -> Result<zip::ZipArchive<AppReader>> {
+    open_app_file(path)?
+        .with_context(|| format!("Failed to open .app as ZIP archive: {}", path.display()))
 }
 
 /// Extract and parse a .app package file
@@ -883,7 +876,7 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        let mut out = vec![0u8; NAVX_HEADER_SIZE as usize];
+        let mut out = vec![0u8; crate::engine::deps::app_package_zip::NAVX_HEADER_SIZE as usize];
         out.extend_from_slice(&zip_buf.into_inner());
         out
     }
@@ -927,7 +920,7 @@ mod tests {
             writer.write_all(b"{}").unwrap();
             writer.finish().unwrap();
         }
-        let mut bytes = vec![0u8; NAVX_HEADER_SIZE as usize];
+        let mut bytes = vec![0u8; crate::engine::deps::app_package_zip::NAVX_HEADER_SIZE as usize];
         bytes.extend_from_slice(&zip_buf.into_inner());
 
         let dir = tempfile::tempdir().expect("tempdir");

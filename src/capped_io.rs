@@ -114,6 +114,12 @@ pub const NAVX_MANIFEST_XML_CAP: u64 = 4 * 1024 * 1024;
 /// object while still bounding a hostile entry.
 pub const EMBEDDED_AL_SOURCE_CAP: u64 = 16 * 1024 * 1024;
 
+/// Cap for the nested `.app` entry inside a Ready-to-Run package (see
+/// `engine::deps::app_package_zip::read_ready_to_run_app`). It is read into
+/// memory whole. BaseApp's nested app measures ~44 MB (BC 28.0-28.4, 2026-10),
+/// System Application ~15 MB. 512 MB gives >11x headroom over BaseApp.
+pub const READY_TO_RUN_APP_CAP: u64 = 512 * 1024 * 1024;
+
 /// Cap for a `.cbor.gz` capability-snapshot artifact (the cli-b diff engine's
 /// serialized whole-workspace analysis — `deserialize_snapshot`'s `gunzip`).
 /// This is a REASONED bound, not a directly measured one: generating a real

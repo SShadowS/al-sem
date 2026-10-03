@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Ready-to-Run dependency packages are no longer silently dropped.** Microsoft ships
+  Base Application, System Application, Business Foundation and others as Ready-to-Run
+  packages (seen on BC 28.0 to 28.4): a `.app` whose zip holds only
+  `readytorunappmanifest.json`, precompiled `.dll` files and the real app as a nested
+  `.app` entry. Every `.app` reader looked for `NavxManifest.xml` and
+  `SymbolReference.json` in the wrapper, found neither, logged
+  `NavxManifest.xml not found in app package` and skipped the whole app, so every call
+  into it went unresolved. On a BC 28.4 test workspace (`cg-test-harness`: 10 of 12
+  Microsoft packages are Ready-to-Run) dependency definitions went from **290 to
+  111,635** and the warnings from 10 to 0.
+  The four readers each had their own "skip the 40-byte header, open the zip" code;
+  they now share one in `engine::deps::app_package_zip` — `open_app_file` (by path:
+  the dependency loader, ABI ingest, embedded source) and `app_zip_bytes` (by bytes:
+  the engine's manifest, symbol and source readers) — both unwrapping through
+  `read_ready_to_run_app`. Ordinary apps still stream from the file; only a nested
+  app is read into memory, bounded by the new `READY_TO_RUN_APP_CAP` (512 MB; Base
+  Application's nested app is ~44 MB). A package whose nested app cannot be read fails
+  closed like any other unreadable app. 6 new tests, each discrimination-proven:
+  disabling the path unwrap fails exactly the 3 path tests (including the
+  `SnapshotBuilder` use-level test); disabling the bytes unwrap fails exactly the 2
+  bytes tests.
+
+### Changed
+
+- `scripts/agentflow` comments no longer describe `tree-sitter-al/` as a submodule.
+
 ## [1.3.0] - 2026-10-03
 
 ### Added

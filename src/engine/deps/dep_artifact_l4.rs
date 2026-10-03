@@ -47,7 +47,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 
 use crate::engine::deps::app_manifest::parse_app_manifest_xml;
-use crate::engine::deps::app_package_zip::{extract_navx_manifest_xml, strip_app_header};
+use crate::engine::deps::app_package_zip::{app_zip_bytes, extract_navx_manifest_xml};
 use crate::engine::l2::operation_order::apply_operation_order;
 use crate::engine::l3::al_attributes::{AttributeInfo, find_attribute, has_attribute};
 use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
@@ -80,8 +80,7 @@ pub struct EmbeddedSourceFile {
 /// declared/actual size exceeds [`crate::capped_io::EMBEDDED_AL_SOURCE_CAP`]
 /// is skipped the same way — never an unbounded allocation.
 pub fn iterate_embedded_source(app_bytes: &[u8]) -> Vec<EmbeddedSourceFile> {
-    let zip = strip_app_header(app_bytes);
-    let cursor = Cursor::new(zip.to_vec());
+    let cursor = Cursor::new(app_zip_bytes(app_bytes).into_owned());
     let mut archive = match zip::ZipArchive::new(cursor) {
         Ok(a) => a,
         Err(_) => return Vec::new(),
@@ -1128,5 +1127,20 @@ mod capped_io_tests {
         );
         assert_eq!(files[0].relative_path, "Small.Codeunit.al");
         assert_eq!(files[0].content, "codeunit 1 Small { }");
+    }
+
+    /// The source of a Ready-to-Run package lives in its nested app; the
+    /// wrapper's own zip holds only `.dll` files and manifests.
+    #[test]
+    fn iterate_embedded_source_reads_the_nested_app_of_a_ready_to_run_package() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let app = test_apps::build_app(&[(
+            "src/SalesPost.Codeunit.al",
+            b"codeunit 80 \"Sales-Post\" { }",
+        )]);
+        let files = iterate_embedded_source(&test_apps::wrap_ready_to_run(&app));
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative_path, "src/SalesPost.Codeunit.al");
+        assert_eq!(files[0].content, "codeunit 80 \"Sales-Post\" { }");
     }
 }

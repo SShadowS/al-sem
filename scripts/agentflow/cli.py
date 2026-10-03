@@ -179,7 +179,7 @@ def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path, *,
     ctx.write_guard("run gate")
     # `_grammar` is derived from `ctx.paths.root`, NOT from `cwd`, and that is
     # load-bearing rather than incidental: it is what lets a gate run in a
-    # worktree that has no submodule checkout of its own. See `worktrees`.
+    # worktree that has no grammar clone of its own. See `worktrees`.
     env = supervise.sanitized_env(os.environ.copy(), _grammar(ctx), cargo_target_dir)
     log = ctx.run_dir / "logs" / f"{name}.log"
     # Here as well as at the `run` boundary, so every caller is covered rather

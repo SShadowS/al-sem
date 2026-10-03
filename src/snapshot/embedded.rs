@@ -1,18 +1,8 @@
 //! Extract embedded ShowMyCode `.al` source from a `.app` package.
 
+use crate::engine::deps::app_package_zip::open_app_file;
 use anyhow::{Context, Result};
-use std::io::{BufReader, Seek, SeekFrom};
 use std::path::Path;
-
-/// `.app` files start with a 40-byte NAVX header, then a standard zip.
-///
-/// NOTE: `src/app_package.rs` (declared in the *binary* `main.rs` scope) has
-/// an identical `NAVX_HEADER_SIZE` and a factored `open_app_zip` helper.
-/// That helper cannot be referenced here because `app_package` is not part of
-/// the *library* crate (`lib.rs` / `snapshot`). The 4-line zip-open logic is
-/// therefore duplicated; a future task should move `app_package` into `lib.rs`
-/// so both callers can share it.
-const NAVX_HEADER_SIZE: u64 = 40;
 
 /// One embedded source file recovered from a `.app`.
 ///
@@ -28,24 +18,6 @@ pub struct SourceFile {
     pub text: std::sync::Arc<str>,
 }
 
-/// Open a `.app`'s embedded zip by seeking past the NAVX header.
-///
-/// Returns `None` for symbol-only / runtime apps that contain no embedded zip
-/// (indicated by `ZipError::InvalidArchive`). All other errors — I/O failures,
-/// unsupported archive formats — are propagated so callers see real failures
-/// rather than a silent empty result.
-fn open_zip(path: &Path) -> Result<Option<zip::ZipArchive<BufReader<std::fs::File>>>> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("open .app: {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    reader.seek(SeekFrom::Start(NAVX_HEADER_SIZE))?;
-    match zip::ZipArchive::new(reader) {
-        Ok(a) => Ok(Some(a)),
-        Err(zip::result::ZipError::InvalidArchive(_)) => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading zip in .app: {}", path.display())),
-    }
-}
-
 /// blake3 hex of the whole `.app` file (artifact identity).
 pub fn app_content_hash(app_path: &Path) -> Result<String> {
     let bytes =
@@ -54,12 +26,13 @@ pub fn app_content_hash(app_path: &Path) -> Result<String> {
 }
 
 /// Extract every `*.al` entry from the `.app`'s embedded zip. Returns an empty
-/// `Vec` if the app ships no source (symbol-only / runtime app).
+/// `Vec` if the app ships no source (symbol-only / runtime app). For a
+/// Ready-to-Run package, the source comes from its nested app.
 ///
 /// Entry names are percent-decoded (the AL compiler URL-encodes them) and BOM
 /// is stripped before the text is decoded as UTF-8 (lossy).
 pub fn extract_embedded_source(app_path: &Path) -> Result<Vec<SourceFile>> {
-    let Some(mut archive) = open_zip(app_path)? else {
+    let Some(mut archive) = open_app_file(app_path)? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
@@ -171,7 +144,7 @@ mod tests {
             }
             writer.finish().unwrap();
         }
-        let mut bytes = vec![0u8; NAVX_HEADER_SIZE as usize];
+        let mut bytes = vec![0u8; crate::engine::deps::app_package_zip::NAVX_HEADER_SIZE as usize];
         bytes.extend_from_slice(&zip_buf.into_inner());
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -188,5 +161,22 @@ mod tests {
             msg.contains("Codeunit1.al"),
             "error should name the offending entry: {msg}"
         );
+    }
+
+    /// A Ready-to-Run package's source lives in its nested app.
+    #[test]
+    fn extracts_al_source_from_the_nested_app_of_a_ready_to_run_package() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let app = test_apps::build_app(&[("src/Sales%20Post.Codeunit.al", b"codeunit 80 X { }")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("Microsoft_Base Application_28.4.53241.53758.app");
+        std::fs::write(&path, test_apps::wrap_ready_to_run(&app)).unwrap();
+
+        let files = extract_embedded_source(&path).expect("extract");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].virtual_path, "src/Sales Post.Codeunit.al");
+        assert_eq!(&*files[0].text, "codeunit 80 X { }");
     }
 }

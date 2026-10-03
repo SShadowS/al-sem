@@ -355,6 +355,45 @@ mod tests {
         .unwrap();
     }
 
+    /// A Ready-to-Run package in `.alpackages` (how Microsoft ships Base
+    /// Application, System Application and others on BC 28) must load as a
+    /// dependency through the REAL `load_all_apps` → `SnapshotBuilder` path.
+    /// Before the fix the loader logged "NavxManifest.xml not found in app
+    /// package" and dropped the app, so every call into it went unresolved.
+    #[test]
+    fn ready_to_run_package_loads_as_a_dependency() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_app_json(dir.path());
+        let alpackages = dir.path().join(".alpackages");
+        std::fs::create_dir_all(&alpackages).unwrap();
+        let guid = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+        let manifest = test_apps::manifest_xml(guid, "Base Application");
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            (
+                "SymbolReference.json",
+                br#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#,
+            ),
+        ]);
+        std::fs::write(
+            alpackages.join("Microsoft_Base Application_28.4.53241.53758.app"),
+            test_apps::wrap_ready_to_run(&app),
+        )
+        .unwrap();
+
+        let (snap, _dropped) = (SnapshotBuilder {
+            workspace_root: dir.path().to_path_buf(),
+            local_providers: vec![],
+        })
+        .build_with_diagnostics()
+        .expect("snapshot build");
+
+        let base: Vec<_> = snap.apps.iter().filter(|u| u.id.guid == guid).collect();
+        assert_eq!(base.len(), 1, "the Ready-to-Run Base Application must load");
+        assert_eq!(base[0].id.version, "28.4.53241.53758");
+    }
+
     /// "Stale wins" reproduction: two `.app` files sharing one GUID at
     /// different versions (24.0.0.0, 25.0.0.0) sit in `.alpackages`. The
     /// higher version must win, and the drop must be named in the returned

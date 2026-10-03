@@ -12,12 +12,14 @@ the run it is reverting. Each verification therefore gets a tree that was
 checked out seconds ago and is deleted afterwards.
 
 TEARDOWN is `rm -rf` plus `git worktree prune`, never `git worktree remove`:
-that command REFUSES outright in a repository with a submodule ("working trees
-containing submodules cannot be moved or removed"), and this repository has
-`tree-sitter-al/`. See CLAUDE.md, Prerequisites.
+that command REFUSES outright on a worktree created while `tree-sitter-al/`
+was a submodule ("working trees containing submodules cannot be moved or
+removed"). Since 2026-10-03 the grammar is a plain gitignored clone, so new
+worktrees would allow it, but `rm -rf` works for both. See CLAUDE.md,
+Prerequisites.
 
-GATES CAN COMPILE IN THERE even though a worktree gets no submodule checkout
-of its own, because `cli._run_gate` derives `TREE_SITTER_AL_PATH` from
+GATES CAN COMPILE IN THERE even though a worktree has no grammar clone of its
+own (it is gitignored), because `cli._run_gate` derives `TREE_SITTER_AL_PATH` from
 `ctx.paths.root` rather than from the gate's cwd, and `scripts/ci-steps`'s
 `grammar_dir()` honours that env var over its own `git rev-parse
 --show-toplevel` fallback. That is a real dependency between two files, so
