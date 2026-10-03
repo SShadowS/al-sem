@@ -38,7 +38,8 @@ use al_syntax::ir::ObjectKind;
 use rayon::prelude::*;
 
 use crate::engine::perf_trace as pt;
-use crate::program::build::{DepLayer, assemble_program_graph, build_dep_layer};
+use crate::program::build::{DepLayer, assemble_program_graph, build_dep_layer_cached};
+use crate::program::dep_cache::DepCache;
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
@@ -1074,6 +1075,7 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
+    dep_cache: &DepCache,
 ) -> Option<ProgramContext> {
     let snap = (SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
@@ -1082,7 +1084,7 @@ pub fn build_context_with(
     .build_with_options(dependency_source)
     .map(|(snap, _dropped)| snap)
     .ok()?;
-    build_context_from_snapshot(snap).ok()
+    build_context_from_snapshot_cached(snap, dep_cache).ok()
 }
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the
@@ -1106,6 +1108,15 @@ pub fn build_snapshot_res(workspace_root: &Path) -> Result<AppSetSnapshot, Strin
 /// graph, and locate the primary app. Split from [`build_snapshot_res`] purely
 /// so the preflight cache can skip this half on a hit — behaviour is unchanged.
 pub fn build_context_from_snapshot(snap: AppSetSnapshot) -> Result<ProgramContext, String> {
+    build_context_from_snapshot_cached(snap, &DepCache::default())
+}
+
+/// [`build_context_from_snapshot`], sharing the dependency tier through
+/// `dep_cache` with every other root that loads the same dependencies.
+pub fn build_context_from_snapshot_cached(
+    snap: AppSetSnapshot,
+    dep_cache: &DepCache,
+) -> Result<ProgramContext, String> {
     // ws_file_set: the true workspace source virtual paths (first AppUnit).
     // Excludes embedded dep apps whose AppId matches the workspace AppId.
     let ws_file_set: HashSet<String> = snap
@@ -1136,7 +1147,12 @@ pub fn build_context_from_snapshot(snap: AppSetSnapshot) -> Result<ProgramContex
     };
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
-        build_dep_layer(&snap, &crate::program::abi_ingest::AbiCache::new(), &parsed)
+        build_dep_layer_cached(
+            &snap,
+            &crate::program::abi_ingest::AbiCache::new(),
+            &parsed,
+            dep_cache,
+        )
     };
 
     // `snap.apps` is GUID-deduped upstream (H-2), so at most one parsed unit

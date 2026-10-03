@@ -1689,6 +1689,7 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         dir2.path().to_path_buf(),
         parsed2,
         al_sem::snapshot::DependencySource::default(),
+        Arc::default(),
         |_old, _new| {},
     );
 

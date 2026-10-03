@@ -3,6 +3,7 @@
 
 pub mod abi_ingest;
 pub mod build;
+pub mod dep_cache;
 pub mod graph;
 pub mod graphify_export;
 pub mod integration_report;

@@ -109,6 +109,7 @@ use crate::lsp::updater::{ChangeEvent, Rung1Delta, SharedSnapshot, SwapScope, sp
 use crate::protocol::uri_to_path;
 use crate::snapshot::DependencySource;
 use crate::watcher::{AlFileWatcher, FileChange};
+use al_sem::program::dep_cache::DepCache;
 
 /// Everything the server needs once a valid workspace snapshot exists for
 /// ONE root. Wrapped in `Option` by [`RootState`] — `None` there means "no
@@ -161,6 +162,9 @@ struct RootBuild {
     /// `--dependency-source`: index dependencies' embedded source, or only
     /// their symbols (the memory lever — see [`DependencySource`]).
     dependency_source: DependencySource,
+    /// The process-level dependency tier every root shares (one per server):
+    /// roots loading the same dependency apps hold one copy of their nodes.
+    dep_cache: Arc<DepCache>,
 }
 
 /// One configured workspace root plus — once anything actually asks for it
@@ -220,6 +224,7 @@ impl RootState {
                     config,
                     &self.build.sink,
                     self.build.dependency_source,
+                    &self.build.dep_cache,
                 );
                 match &built {
                     Some(st) => {
@@ -364,6 +369,7 @@ pub fn run_server(
         !no_watcher,
         no_diagnostics,
         dependency_source,
+        Arc::new(DepCache::default()),
     );
     if dependency_source == DependencySource::Symbols {
         info!("Dependencies indexed from symbols only (--dependency-source symbols)");
@@ -549,9 +555,13 @@ fn build_server_state(
     config: DiagnosticConfig,
     sink: &MessageSink,
     dependency_source: DependencySource,
+    dep_cache: &Arc<DepCache>,
 ) -> Option<ServerState> {
-    let (initial, workspace) =
-        LspSnapshot::build_full_with_parsed_with(workspace_root, dependency_source)?;
+    let (initial, workspace) = LspSnapshot::build_full_with_parsed_with_cache(
+        workspace_root,
+        dependency_source,
+        dep_cache,
+    )?;
     let initial = Arc::new(initial);
     let shared = Arc::new(SharedSnapshot::new(Arc::clone(&initial)));
 
@@ -591,6 +601,7 @@ fn build_server_state(
         workspace_root.to_path_buf(),
         workspace,
         dependency_source,
+        Arc::clone(dep_cache),
         move |new, scope| {
             if !config_bg.any_enabled() {
                 return;
@@ -647,6 +658,7 @@ fn build_workspace(
     start_watchers: bool,
     no_diagnostics: bool,
     dependency_source: DependencySource,
+    dep_cache: Arc<DepCache>,
 ) -> Workspace {
     if roots.is_empty() {
         warn!(
@@ -665,6 +677,7 @@ fn build_workspace(
                 start_watcher: start_watchers,
                 no_diagnostics,
                 dependency_source,
+                dep_cache: Arc::clone(&dep_cache),
             },
         })
         .collect();
@@ -1366,6 +1379,7 @@ mod tests {
             DiagnosticConfig::default(),
             &sink,
             DependencySource::default(),
+            &Arc::default(),
         )
         .expect("build_server_state must succeed for a valid fixture workspace");
         let root = state.shared.get().workspace_root.as_path().to_path_buf();
@@ -1388,6 +1402,7 @@ mod tests {
                     start_watcher: false,
                     no_diagnostics: false,
                     dependency_source: DependencySource::default(),
+                    dep_cache: Arc::default(),
                 },
             )],
         };
@@ -1616,6 +1631,7 @@ mod tests {
             false,
             false,
             DependencySource::default(),
+            Arc::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
         assert!(workspace.roots[0].state().is_some(), "root A must build");
@@ -1798,6 +1814,7 @@ mod tests {
             false,
             false,
             DependencySource::default(),
+            Arc::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
 
@@ -1871,6 +1888,7 @@ mod tests {
             false,
             false,
             DependencySource::default(),
+            Arc::default(),
         );
         assert_eq!(workspace.roots.len(), 2);
         assert!(
@@ -2038,6 +2056,7 @@ mod tests {
             false,
             false,
             DependencySource::default(),
+            Arc::default(),
         );
 
         assert_eq!(workspace.roots.len(), 2);
@@ -2099,6 +2118,7 @@ mod tests {
             cfg,
             &sink,
             DependencySource::default(),
+            &Arc::default(),
         )
         .expect("build must still succeed with diagnostics disabled");
 

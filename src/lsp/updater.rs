@@ -128,6 +128,7 @@ use crate::lsp::snapshot::{
     build_incoming, edge_targets, push_edge_targets, recompute_file,
 };
 use crate::program::assemble_program_graph;
+use crate::program::dep_cache::DepCache;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::DeclSurface;
@@ -240,6 +241,9 @@ pub struct Updater {
     /// rung-3 full rebuild must reuse it, or it would silently swap a
     /// symbols-only server back to indexing every dependency's source.
     dependency_source: DependencySource,
+    /// The server's process-level dependency tier; a rung-3 rebuild reuses
+    /// another root's entry instead of building a private copy.
+    dep_cache: Arc<DepCache>,
 }
 
 /// The classification outcome for one coalesced batch — shared by
@@ -265,6 +269,7 @@ impl Updater {
             pending: HashMap::new(),
             decl_multiplicity: None,
             dependency_source: DependencySource::default(),
+            dep_cache: Arc::default(),
         }
     }
 
@@ -272,6 +277,13 @@ impl Updater {
     #[must_use]
     pub fn with_dependency_source(mut self, dependency_source: DependencySource) -> Self {
         self.dependency_source = dependency_source;
+        self
+    }
+
+    /// Rebuild through `dep_cache` (the server's shared dependency tier).
+    #[must_use]
+    pub fn with_dep_cache(mut self, dep_cache: Arc<DepCache>) -> Self {
+        self.dep_cache = dep_cache;
         self
     }
 
@@ -637,9 +649,11 @@ impl Updater {
     /// reflects whatever content generated any pending rung-1 edits, so
     /// there is nothing in `pending` a disk re-read wouldn't already pick up.
     fn apply_rung3(&mut self, cur: &LspSnapshot) -> Option<(LspSnapshot, Rung)> {
-        let Some((mut snapshot, workspace)) =
-            LspSnapshot::build_full_with_parsed_with(&self.workspace_root, self.dependency_source)
-        else {
+        let Some((mut snapshot, workspace)) = LspSnapshot::build_full_with_parsed_with_cache(
+            &self.workspace_root,
+            self.dependency_source,
+            &self.dep_cache,
+        ) else {
             // Fail-closed (unchanged): `cur` stays published, `self.workspace`
             // stays untouched. But a silently-dropped rung-3 rebuild (e.g. a
             // deleted/malformed `app.json`, or an unreadable workspace root)
@@ -1162,11 +1176,13 @@ pub fn spawn_updater(
     workspace_root: PathBuf,
     initial_workspace: ParsedUnit,
     dependency_source: DependencySource,
+    dep_cache: Arc<DepCache>,
     on_swap: impl Fn(&LspSnapshot, &SwapScope) + Send + 'static,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut updater = Updater::new(workspace_root, initial_workspace)
-            .with_dependency_source(dependency_source);
+            .with_dependency_source(dependency_source)
+            .with_dep_cache(dep_cache);
         let mut cur = shared.get();
 
         loop {
@@ -2006,6 +2022,7 @@ mod tests {
             dir.path().to_path_buf(),
             parsed,
             DependencySource::default(),
+            Arc::default(),
             move |_new, _scope| {
                 counter2.fetch_add(1, Ordering::SeqCst);
             },
@@ -2070,6 +2087,7 @@ mod tests {
             dir.path().to_path_buf(),
             parsed,
             DependencySource::default(),
+            Arc::default(),
             move |new, scope| {
                 let mut prev_guard = prev2.lock().unwrap();
                 let (old_graph, old_dep_layer) = &*prev_guard;

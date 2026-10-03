@@ -6,6 +6,7 @@ use std::sync::Arc;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
+use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
@@ -56,6 +57,10 @@ pub struct DepLayer {
     /// Step 2b below only ever ingests SymbolOnly (source-less) apps, and
     /// the primary/workspace app is always source-bearing.
     pub abi_ingest_errors: Vec<AbiIngestError>,
+    /// The [`DepCache`] entry the three fields above came from. Held so the
+    /// entry stays live (the cache keeps only a `Weak`) exactly as long as a
+    /// snapshot still uses this layer.
+    pub dep_nodes: Arc<DepNodes>,
 }
 
 /// Build the [`DepLayer`] from every app in `snap` OTHER than
@@ -75,10 +80,51 @@ pub fn build_dep_layer(
     abi_cache: &AbiCache,
     parsed: &[ParsedUnit],
 ) -> DepLayer {
+    build_dep_layer_cached(snap, abi_cache, parsed, &DepCache::default())
+}
+
+/// [`build_dep_layer`], taking the dependency nodes from `dep_cache` when
+/// another root already built the same dependency set (see [`DepKey`]).
+pub fn build_dep_layer_cached(
+    snap: &AppSetSnapshot,
+    abi_cache: &AbiCache,
+    parsed: &[ParsedUnit],
+    dep_cache: &DepCache,
+) -> DepLayer {
     // ── Step 1: intern all app identities (primary included, for AppRef stability) ──
     let mut apps = AppRegistry::default();
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
 
+    let dep_nodes = dep_cache.get_or_build(DepKey::of(snap), || {
+        build_dep_nodes(snap, abi_cache, parsed, &mut apps)
+    });
+
+    // ── Step 3 / 3b: wire topology + friends for the WHOLE app set ───────────
+    // Both are pure manifest data (declared_deps / internalsVisibleTo), so
+    // they belong on the immutable dep layer even though the wiring loops
+    // below also touch the primary app's OWN outbound edges/grants.
+    let topology = wire_dependency_topology(snap, &app_refs);
+    let friends = wire_friend_authorizations(snap, &app_refs);
+
+    DepLayer {
+        apps,
+        topology,
+        friends,
+        dep_objects: Arc::clone(&dep_nodes.objects),
+        dep_routines: Arc::clone(&dep_nodes.routines),
+        abi_ingest_errors: dep_nodes.abi_ingest_errors.clone(),
+        dep_nodes,
+    }
+}
+
+/// Steps 2, 2b and 4 of [`build_dep_layer_cached`]: the root-independent
+/// dependency nodes. `apps` must already hold every app of `snap` (Step 1).
+fn build_dep_nodes(
+    snap: &AppSetSnapshot,
+    abi_cache: &AbiCache,
+    parsed: &[ParsedUnit],
+    apps: &mut AppRegistry,
+) -> DepNodes {
     // ── Step 2: extract nodes from every NON-primary parsed unit ─────────────
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
@@ -122,13 +168,6 @@ pub fn build_dep_layer(
         routines.extend(result.routines);
     }
 
-    // ── Step 3 / 3b: wire topology + friends for the WHOLE app set ───────────
-    // Both are pure manifest data (declared_deps / internalsVisibleTo), so
-    // they belong on the immutable dep layer even though the wiring loops
-    // below also touch the primary app's OWN outbound edges/grants.
-    let topology = wire_dependency_topology(snap, &app_refs);
-    let friends = wire_friend_authorizations(snap, &app_refs);
-
     // ── Step 4: sort for determinism, then dedup this (non-primary) population ──
     // Same non-primary app can appear as both a workspace-multi-app source
     // AND an embedded dep (e.g. sibling apps in a multi-app workspace whose
@@ -142,12 +181,9 @@ pub fn build_dep_layer(
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
 
-    DepLayer {
-        apps,
-        topology,
-        friends,
-        dep_objects: Arc::new(objects),
-        dep_routines: Arc::new(routines),
+    DepNodes {
+        objects: Arc::new(objects),
+        routines: Arc::new(routines),
         abi_ingest_errors,
     }
 }

@@ -55,6 +55,7 @@ use rayon::prelude::*;
 
 use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::encoding::LineTable;
+use crate::program::dep_cache::DepCache;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
@@ -379,7 +380,18 @@ impl LspSnapshot {
         workspace_root: &Path,
         dependency_source: DependencySource,
     ) -> Option<LspSnapshot> {
-        let ctx = build_context_with(workspace_root, dependency_source)?;
+        Self::build_full_with_cache(workspace_root, dependency_source, &DepCache::default())
+    }
+
+    /// [`Self::build_full_with`], sharing the dependency tier through
+    /// `dep_cache` with every other root that loads the same dependencies.
+    #[must_use]
+    pub fn build_full_with_cache(
+        workspace_root: &Path,
+        dependency_source: DependencySource,
+        dep_cache: &DepCache,
+    ) -> Option<LspSnapshot> {
+        let ctx = build_context_with(workspace_root, dependency_source, dep_cache)?;
         Some(Self::from_context(ctx, workspace_root).0)
     }
 
@@ -423,7 +435,22 @@ impl LspSnapshot {
         workspace_root: &Path,
         dependency_source: DependencySource,
     ) -> Option<(LspSnapshot, ParsedUnit)> {
-        let ctx = build_context_with(workspace_root, dependency_source)?;
+        Self::build_full_with_parsed_with_cache(
+            workspace_root,
+            dependency_source,
+            &DepCache::default(),
+        )
+    }
+
+    /// [`Self::build_full_with_parsed_with`], sharing the dependency tier
+    /// through `dep_cache` — what the server's per-root builds use.
+    #[must_use]
+    pub fn build_full_with_parsed_with_cache(
+        workspace_root: &Path,
+        dependency_source: DependencySource,
+        dep_cache: &DepCache,
+    ) -> Option<(LspSnapshot, ParsedUnit)> {
+        let ctx = build_context_with(workspace_root, dependency_source, dep_cache)?;
         Some(Self::from_context(ctx, workspace_root))
     }
 
