@@ -104,18 +104,29 @@ impl<T: SortKey> NodeSet<T> {
         }
     }
 
-    /// Same contract as `slice::binary_search_by`, over the merged order.
+    /// `slice::binary_search_by`'s exact algorithm (Rust 1.96 core), over the
+    /// merged order, so it returns the SAME index the old flat `Vec` did —
+    /// including which element of a run of equal keys it lands on (a
+    /// synthetic publisher can tie with a real dependency routine).
     pub fn binary_search_by<F: FnMut(&T) -> Ordering>(&self, mut f: F) -> Result<usize, usize> {
-        let (mut lo, mut hi) = (0, self.len());
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match f(&self[mid]) {
-                Ordering::Less => lo = mid + 1,
-                Ordering::Greater => hi = mid,
-                Ordering::Equal => return Ok(mid),
-            }
+        let mut size = self.len();
+        if size == 0 {
+            return Err(0);
         }
-        Err(lo)
+        let mut base = 0usize;
+        while size > 1 {
+            let half = size / 2;
+            let mid = base + half;
+            if f(&self[mid]) != Ordering::Greater {
+                base = mid;
+            }
+            size -= half;
+        }
+        match f(&self[base]) {
+            Ordering::Equal => Ok(base),
+            Ordering::Less => Err(base + 1),
+            Ordering::Greater => Err(base),
+        }
     }
 
     /// Append to the own part. Like `Vec::push` on a sorted list, the caller
@@ -334,5 +345,39 @@ mod tests {
         assert_eq!(empty.iter().count(), 0);
         let only_shared = NodeSet::layered(Arc::new(vec![N(1, "s")]), Vec::new());
         assert_eq!(flat(&only_shared), vec![N(1, "s")]);
+    }
+
+    /// `binary_search_by` must return exactly what `slice::binary_search_by`
+    /// returns on the flattened list — the same `Ok` index inside a run of
+    /// equal keys, not just "some" equal element. Resolver sites read the
+    /// found node's fields, so a different tie pick is a different answer.
+    #[test]
+    fn binary_search_matches_slice_on_ties() {
+        let shapes: Vec<(Vec<N>, Vec<N>)> = vec![
+            (vec![N(1, "s"), N(2, "real")], vec![N(2, "synthetic")]),
+            (
+                vec![N(1, "s"), N(3, "s"), N(3, "s")],
+                vec![N(0, "o"), N(3, "o"), N(4, "o")],
+            ),
+            (
+                vec![N(2, "s"), N(2, "s"), N(2, "s"), N(5, "s")],
+                vec![N(2, "o"), N(2, "o"), N(2, "o")],
+            ),
+            (
+                vec![N(0, "s"), N(1, "s"), N(1, "s"), N(6, "s"), N(6, "s")],
+                vec![N(1, "o"), N(6, "o"), N(6, "o"), N(6, "o"), N(8, "o")],
+            ),
+        ];
+        for (shared, own) in shapes {
+            let set = NodeSet::layered(Arc::new(shared), own);
+            let flat = flat(&set);
+            for key in 0..10u32 {
+                assert_eq!(
+                    set.binary_search_by(|n| n.0.cmp(&key)),
+                    flat.binary_search_by(|n| n.0.cmp(&key)),
+                    "key {key} over {flat:?}"
+                );
+            }
+        }
     }
 }
