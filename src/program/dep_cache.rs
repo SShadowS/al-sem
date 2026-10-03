@@ -5,9 +5,10 @@
 //! dependency nodes; [`DepCache`] lets them hold one.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
+use crate::app_package::ParsedAppPackage;
 use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
@@ -19,6 +20,7 @@ use crate::snapshot::{AppId, AppSetSnapshot};
 #[derive(Default)]
 pub struct DepCache {
     nodes: Mutex<HashMap<DepKey, Weak<DepNodes>>>,
+    packages: Mutex<HashMap<(PathBuf, AppFileStamp), Weak<ParsedAppPackage>>>,
 }
 
 /// The shareable part of a `DepLayer` — independent of which root built it
@@ -47,6 +49,34 @@ impl DepCache {
         }
         map.insert(key, Arc::downgrade(&built));
         built
+    }
+
+    /// The live parsed package for the `.app` at `path`, or `load()`'s result
+    /// (now cached). `stamp` must be the one taken before the file was read;
+    /// without one (file could not be stat'ed) nothing is cached. Same lock
+    /// discipline as [`Self::get_or_build`].
+    pub fn package(
+        &self,
+        path: &Path,
+        stamp: Option<AppFileStamp>,
+        load: impl FnOnce() -> anyhow::Result<ParsedAppPackage>,
+    ) -> anyhow::Result<Arc<ParsedAppPackage>> {
+        let Some(stamp) = stamp else {
+            return load().map(Arc::new);
+        };
+        let key = (path.to_path_buf(), stamp);
+        let lock = || self.packages.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(live) = lock().get(&key).and_then(Weak::upgrade) {
+            return Ok(live);
+        }
+        let built = Arc::new(load()?);
+        let mut map = lock();
+        map.retain(|_, w| w.strong_count() > 0);
+        if let Some(live) = map.get(&key).and_then(Weak::upgrade) {
+            return Ok(live);
+        }
+        map.insert(key, Arc::downgrade(&built));
+        Ok(built)
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<DepKey, Weak<DepNodes>>> {
@@ -222,6 +252,23 @@ mod tests {
     }
 
     #[test]
+    fn roots_share_one_parsed_package_per_dependency() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Symbols, &cache);
+        let b = build(&fx.root_b, DependencySource::Symbols, &cache);
+        let abi = |s: &LspSnapshot| {
+            s.snap
+                .apps
+                .iter()
+                .find(|u| u.id.guid == DEP_GUID)
+                .and_then(|u| u.abi.clone())
+                .expect("dependency unit carries its package")
+        };
+        assert!(Arc::ptr_eq(&abi(&a), &abi(&b)));
+    }
+
+    #[test]
     fn different_dependency_source_does_not_share() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
@@ -288,7 +335,7 @@ mod tests {
             workspace_root: fx.root_a.clone(),
             local_providers: vec![],
         })
-        .build_with_options(DependencySource::Embedded)
+        .build_with_options(DependencySource::Embedded, &cache)
         .expect("snapshot build");
         write_dep_app(
             &fx.alpackages,

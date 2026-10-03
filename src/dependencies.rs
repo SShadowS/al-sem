@@ -4,6 +4,7 @@
 //! in the .alpackages folder.
 
 use crate::app_package::{ParsedAppPackage, extract_app_package};
+use crate::program::dep_cache::DepCache;
 use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use serde::Deserialize;
@@ -36,7 +37,7 @@ struct AppJson {
 pub struct ResolvedDependency {
     pub dependency: AppDependency,
     pub app_path: PathBuf,
-    pub package: ParsedAppPackage,
+    pub package: std::sync::Arc<ParsedAppPackage>,
     /// `app_path`'s stamp, taken BEFORE any of its bytes were read.
     pub stamp: Option<AppFileStamp>,
 }
@@ -448,6 +449,15 @@ pub fn find_matching_app(alpackages: &Path, dep: &AppDependency) -> Option<PathB
 pub fn load_all_apps(
     project_root: &Path,
 ) -> Result<(Vec<ResolvedDependency>, Vec<DroppedDuplicateDependency>)> {
+    load_all_apps_with(project_root, &DepCache::default())
+}
+
+/// [`load_all_apps`] sharing each parsed package through `cache`: roots that
+/// load the same `.app` hold one copy of its symbols.
+pub fn load_all_apps_with(
+    project_root: &Path,
+    cache: &DepCache,
+) -> Result<(Vec<ResolvedDependency>, Vec<DroppedDuplicateDependency>)> {
     let folders = find_all_alpackages_folders(project_root);
     if folders.is_empty() {
         debug!(
@@ -535,13 +545,21 @@ pub fn load_all_apps(
     for group in groups {
         let mut winner_idx: Option<usize> = None;
         for (i, candidate) in group.iter().enumerate() {
-            match crate::app_package::extract_app_symbols(&candidate.app_path) {
-                Ok(objects) => {
+            let loaded = cache.package(&candidate.app_path, candidate.stamp, || {
+                crate::app_package::extract_app_symbols(&candidate.app_path).map(|objects| {
+                    ParsedAppPackage {
+                        metadata: candidate.meta.clone(),
+                        objects,
+                    }
+                })
+            });
+            match loaded {
+                Ok(package) => {
                     debug!(
                         "load_all_apps: loaded {} v{} ({} objects)",
                         candidate.meta.name,
                         candidate.meta.version,
-                        objects.len()
+                        package.objects.len()
                     );
                     out.push(ResolvedDependency {
                         dependency: AppDependency {
@@ -551,10 +569,7 @@ pub fn load_all_apps(
                             version: candidate.meta.version.clone(),
                         },
                         app_path: candidate.app_path.clone(),
-                        package: ParsedAppPackage {
-                            metadata: candidate.meta.clone(),
-                            objects,
-                        },
+                        package,
                         stamp: candidate.stamp,
                     });
                     winner_idx = Some(i);
@@ -677,7 +692,7 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                         resolved.push(ResolvedDependency {
                             dependency: dep,
                             app_path,
-                            package,
+                            package: std::sync::Arc::new(package),
                             stamp,
                         });
                     }

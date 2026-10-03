@@ -998,7 +998,7 @@ mod tests {
             compilation: CompilationContext::default(),
             declared_deps: vec![],
             internals_visible_to: vec![],
-            abi: Some(dep_package),
+            abi: Some(std::sync::Arc::new(dep_package)),
             app_path: None,
             app_stamp: None,
         };

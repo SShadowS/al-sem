@@ -1084,7 +1084,7 @@ pub fn build_context_with(
         // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
     })
-    .build_with_options(dependency_source)
+    .build_with_options(dependency_source, dep_cache)
     .map(|(snap, _dropped)| snap)
     .ok()?;
     build_context_from_snapshot_cached(snap, dep_cache).ok()

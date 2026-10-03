@@ -3,7 +3,8 @@
 //! source set.
 
 use crate::app_package::ParsedAppPackage;
-use crate::dependencies::load_all_apps;
+use crate::dependencies::load_all_apps_with;
+use crate::program::dep_cache::DepCache;
 use crate::snapshot::compilation::{
     CompilationContext, context_from_app_json, context_from_metadata,
 };
@@ -49,7 +50,7 @@ pub struct AppUnit {
     /// is out of scope).
     pub internals_visible_to: Vec<crate::app_package::FriendApp>,
     /// Parsed `.app` symbol table (None for the workspace itself).
-    pub abi: Option<ParsedAppPackage>,
+    pub abi: Option<std::sync::Arc<ParsedAppPackage>>,
     /// Path to the `.app` file (None for the workspace unit).
     pub app_path: Option<PathBuf>,
     /// `app_path`'s size + mtime, taken before its bytes were read (None for
@@ -113,13 +114,15 @@ impl SnapshotBuilder {
         AppSetSnapshot,
         Vec<crate::dependencies::DroppedDuplicateDependency>,
     )> {
-        self.build_with_options(DependencySource::default())
+        self.build_with_options(DependencySource::default(), &DepCache::default())
     }
 
-    /// [`Self::build_with_diagnostics`] with an explicit [`DependencySource`].
+    /// [`Self::build_with_diagnostics`] with an explicit [`DependencySource`],
+    /// sharing each dependency's parsed package through `cache`.
     pub fn build_with_options(
         &self,
         dependency_source: DependencySource,
+        cache: &DepCache,
     ) -> Result<(
         AppSetSnapshot,
         Vec<crate::dependencies::DroppedDuplicateDependency>,
@@ -203,7 +206,7 @@ impl SnapshotBuilder {
         // ------------------------------------------------------------------
         // Dependency units
         // ------------------------------------------------------------------
-        let (resolved_deps, dropped_dep_versions) = load_all_apps(ws)?;
+        let (resolved_deps, dropped_dep_versions) = load_all_apps_with(ws, cache)?;
 
         let mut apps: Vec<AppUnit> = Vec::with_capacity(1 + resolved_deps.len());
         apps.push(ws_unit);
@@ -459,7 +462,9 @@ mod tests {
         };
 
         let base = |source: DependencySource| {
-            let (snap, _) = builder.build_with_options(source).expect("snapshot build");
+            let (snap, _) = builder
+                .build_with_options(source, &DepCache::default())
+                .expect("snapshot build");
             let unit = snap
                 .apps
                 .into_iter()
