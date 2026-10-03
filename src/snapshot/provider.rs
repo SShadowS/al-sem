@@ -1,5 +1,7 @@
 //! Source providers: acquire per-app source by the best available means.
 
+use crate::dependencies::AppFileStamp;
+use crate::program::dep_cache::DepCache;
 use crate::snapshot::cache::cached_source;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::identity::{AppId, TrustTier};
@@ -81,21 +83,27 @@ impl SourceProvider for WorkspaceProvider {
 }
 
 /// Embedded ShowMyCode source inside a dependency `.app`.
-pub struct EmbeddedAppProvider {
+pub struct EmbeddedAppProvider<'a> {
     pub app_path: PathBuf,
+    /// The stamp taken BEFORE the `.app` was read (never a fresh stat).
+    pub stamp: Option<AppFileStamp>,
+    /// Shares the extracted texts with every other root loading this `.app`.
+    pub cache: &'a DepCache,
 }
 
-impl SourceProvider for EmbeddedAppProvider {
+impl SourceProvider for EmbeddedAppProvider<'_> {
     fn try_provide(&self, _app: &AppId) -> Result<Option<SourceRoot>> {
-        let (files, content_hash) = cached_source(&self.app_path)?;
-        if files.is_empty() {
-            return Ok(None); // symbol-only app
-        }
-        Ok(Some(SourceRoot {
-            files,
-            tier: TrustTier::EmbeddedSource,
-            content_hash,
-        }))
+        self.cache.source(&self.app_path, self.stamp, || {
+            let (files, content_hash) = cached_source(&self.app_path)?;
+            if files.is_empty() {
+                return Ok(None); // symbol-only app
+            }
+            Ok(Some(SourceRoot {
+                files,
+                tier: TrustTier::EmbeddedSource,
+                content_hash,
+            }))
+        })
     }
 }
 
@@ -142,7 +150,7 @@ impl SourceProvider for LocalRepoProvider {
 /// First provider (in priority order) that yields source wins.
 pub fn select_source(
     app: &AppId,
-    providers: &[Box<dyn SourceProvider>],
+    providers: &[Box<dyn SourceProvider + '_>],
 ) -> Result<Option<SourceRoot>> {
     for p in providers {
         if let Some(root) = p.try_provide(app)? {
@@ -174,7 +182,11 @@ mod tests {
         else {
             return;
         };
-        let p = EmbeddedAppProvider { app_path };
+        let p = EmbeddedAppProvider {
+            app_path,
+            stamp: None,
+            cache: &DepCache::default(),
+        };
         let root = p.try_provide(&dummy_app()).unwrap().expect("source");
         assert_eq!(root.tier, TrustTier::EmbeddedSource);
         assert!(root.files.len() > 100);

@@ -249,10 +249,12 @@ impl SnapshotBuilder {
             // Build provider chain: EmbeddedAppProvider → LocalRepoProvider (if matched) → SymbolOnlyProvider.
             // `DependencySource::Symbols` drops the embedded rung only: an
             // explicitly configured local checkout is still honoured.
-            let mut providers: Vec<Box<dyn SourceProvider>> = Vec::new();
+            let mut providers: Vec<Box<dyn SourceProvider + '_>> = Vec::new();
             if dependency_source == DependencySource::Embedded {
                 providers.push(Box::new(EmbeddedAppProvider {
                     app_path: rd.app_path.clone(),
+                    stamp: rd.stamp,
+                    cache,
                 }));
             }
             // Match a configured local provider by GUID when known (the unique

@@ -12,7 +12,9 @@ use crate::app_package::ParsedAppPackage;
 use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
-use crate::snapshot::{AppId, AppSetSnapshot};
+use crate::snapshot::embedded::SourceFile;
+use crate::snapshot::provider::SourceRoot;
+use crate::snapshot::{AppId, AppSetSnapshot, TrustTier};
 
 /// Process-level dependency tier, shared by every workspace root that loads
 /// the SAME dependency set. Entries are held weakly: one lives exactly as
@@ -21,6 +23,51 @@ use crate::snapshot::{AppId, AppSetSnapshot};
 pub struct DepCache {
     nodes: Mutex<HashMap<DepKey, Weak<DepNodes>>>,
     packages: Mutex<HashMap<(PathBuf, AppFileStamp), Weak<ParsedAppPackage>>>,
+    sources: Mutex<HashMap<(PathBuf, AppFileStamp), WeakSource>>,
+}
+
+/// A `SourceRoot` whose file texts are held weakly (see [`DepCache::source`]).
+struct WeakSource {
+    files: Vec<(String, Weak<str>)>,
+    tier: TrustTier,
+    content_hash: String,
+}
+
+impl WeakSource {
+    fn of(root: &SourceRoot) -> Self {
+        WeakSource {
+            files: root
+                .files
+                .iter()
+                .map(|f| (f.virtual_path.clone(), Arc::downgrade(&f.text)))
+                .collect(),
+            tier: root.tier,
+            content_hash: root.content_hash.clone(),
+        }
+    }
+
+    fn is_live(&self) -> bool {
+        self.files.iter().any(|(_, w)| w.strong_count() > 0)
+    }
+
+    /// `Some` only when EVERY text is still alive.
+    fn upgrade(&self) -> Option<SourceRoot> {
+        let files = self
+            .files
+            .iter()
+            .map(|(p, w)| {
+                Some(SourceFile {
+                    virtual_path: p.clone(),
+                    text: w.upgrade()?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(SourceRoot {
+            files,
+            tier: self.tier,
+            content_hash: self.content_hash.clone(),
+        })
+    }
 }
 
 /// The shareable part of a `DepLayer` — independent of which root built it
@@ -82,6 +129,43 @@ impl DepCache {
         }
         map.insert(key, Arc::downgrade(&built));
         Ok(built)
+    }
+
+    /// The `.app`'s extracted embedded source, with every file text shared
+    /// with any live snapshot that already holds it, or `load()`'s result
+    /// (now cached). `stamp` must be the one taken before the file was read;
+    /// without one nothing is cached. A failed or empty (`None`) load caches
+    /// nothing.
+    ///
+    /// Representation: the map holds each text as a `Weak<str>`, so
+    /// `AppUnit.source` stays an owned `SourceRoot` (no reader changes). A
+    /// hit rebuilds the `SourceRoot` from the live texts; if any text is
+    /// gone the entry is a miss. The texts live exactly as long as a
+    /// snapshot holds them.
+    pub fn source(
+        &self,
+        path: &Path,
+        stamp: Option<AppFileStamp>,
+        load: impl FnOnce() -> anyhow::Result<Option<SourceRoot>>,
+    ) -> anyhow::Result<Option<SourceRoot>> {
+        let Some(stamp) = stamp else {
+            return load();
+        };
+        let key = (path.to_path_buf(), stamp);
+        let lock = || self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(live) = lock().get(&key).and_then(WeakSource::upgrade) {
+            return Ok(Some(live));
+        }
+        let Some(built) = load()? else {
+            return Ok(None);
+        };
+        let mut map = lock();
+        map.retain(|_, w| w.is_live());
+        if let Some(live) = map.get(&key).and_then(WeakSource::upgrade) {
+            return Ok(Some(live));
+        }
+        map.insert(key, WeakSource::of(&built));
+        Ok(Some(built))
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<DepKey, Weak<DepNodes>>> {
@@ -439,6 +523,52 @@ mod tests {
             two.graph().routines.shared()
         ));
         assert_eq!(cache.live_entries(), 0);
+    }
+
+    /// The dependency's embedded source texts as a snapshot holds them.
+    fn dep_texts(cache: &DepCache, root: &Path) -> Vec<Arc<str>> {
+        use crate::snapshot::SnapshotBuilder;
+        let (snap, _) = (SnapshotBuilder {
+            workspace_root: root.to_path_buf(),
+            local_providers: vec![],
+        })
+        .build_with_options(DependencySource::Embedded, cache)
+        .expect("snapshot build");
+        let dep = snap
+            .apps
+            .iter()
+            .find(|u| u.id.guid == DEP_GUID)
+            .and_then(|u| u.source.as_ref())
+            .expect("precondition: the dependency ships embedded source");
+        assert!(!dep.files.is_empty());
+        dep.files.iter().map(|f| f.text.clone()).collect()
+    }
+
+    fn same_allocations(a: &[Arc<str>], b: &[Arc<str>]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y))
+    }
+
+    /// Two roots, one cache: the extracted source is held once, but only for
+    /// the same `.app` (same stamp). A replaced file, or no cache at all,
+    /// extracts afresh.
+    #[test]
+    fn roots_share_one_extracted_source_per_app() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = dep_texts(&cache, &fx.root_a);
+        let b = dep_texts(&cache, &fx.root_b);
+        assert!(same_allocations(&a, &b), "same app, same stamp: shared");
+
+        let solo = dep_texts(&DepCache::default(), &fx.root_a);
+        assert!(!same_allocations(&a, &solo), "no shared cache: not shared");
+
+        write_dep_app(
+            &fx.alpackages,
+            r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
+        );
+        let c = dep_texts(&cache, &fx.root_a);
+        assert!(!same_allocations(&a, &c), "new stamp: not served stale");
+        assert!(c.len() > a.len(), "the new file's source is the new one");
     }
 
     #[test]
