@@ -9,6 +9,7 @@ pub mod integration_report;
 pub mod l3_mint;
 pub mod node;
 pub mod node_extract;
+pub mod node_set;
 pub mod pack;
 pub mod resolve;
 pub mod sig_fp;
