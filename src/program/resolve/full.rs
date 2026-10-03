@@ -1178,10 +1178,12 @@ pub fn build_context_from_snapshot_cached(
     };
     // `shared_tier` kept the entry alive, so the layer is built on it and the
     // dependency nodes never came from the workspace-only `parsed`.
-    debug_assert!(
+    assert!(
         shared_tier
             .as_ref()
-            .is_none_or(|t| Arc::ptr_eq(t, &dep_layer.dep_nodes))
+            .is_none_or(|t| Arc::ptr_eq(t, &dep_layer.dep_nodes)),
+        "dependency layer was not built on the held shared entry; \
+         dependency nodes would come from a workspace-only parse"
     );
     drop(shared_tier);
 

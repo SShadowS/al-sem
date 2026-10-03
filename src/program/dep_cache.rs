@@ -726,9 +726,24 @@ mod tests {
             !s.publisher_fanout.is_empty(),
             "precondition: publisher fan-out"
         );
+        // The call must hit the dependency routine `Post` (declared only in
+        // its embedded source, not in the symbols) and resolve from source,
+        // not through the ABI or a builtin.
         assert!(
-            s.incoming.keys().any(|t| t.object.app != AppRef(0)),
-            "precondition: the workspace calls into the dependency {:#?}",
+            s.incoming.iter().any(|(t, refs)| {
+                t.object.app != AppRef(0)
+                    && t.name_lc == "post"
+                    && refs.iter().any(|r| {
+                        s.edge(r).edge.routes.iter().any(|route| {
+                            route.evidence == crate::program::resolve::edge::Evidence::Source
+                                && matches!(
+                                    &route.target,
+                                    crate::program::resolve::edge::RouteTarget::Routine(_)
+                                )
+                        })
+                    })
+            }),
+            "precondition: the workspace calls Sales-Post.Post with Source evidence {:#?}",
             s.edges_by_file
                 .values()
                 .flat_map(|v| v.iter().map(|c| &c.edge))
