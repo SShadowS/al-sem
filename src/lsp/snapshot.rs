@@ -56,6 +56,7 @@ use rayon::prelude::*;
 use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::encoding::LineTable;
 use crate::program::dep_cache::DepCache;
+use crate::program::dep_cache::DepLspTier;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
@@ -98,7 +99,7 @@ pub struct EdgeRef {
 pub const EVENT_EDGES_KEY: &str = "\u{0}events";
 
 /// [`LspSnapshot::dep_texts`]'s map type.
-pub(crate) type DepTexts = HashMap<(AppRef, String), Arc<str>>;
+pub(crate) use crate::program::dep_cache::DepTexts;
 
 /// One routine declaration's identity + LSP-facing spans, owned (never
 /// borrowing the `AlFile` it was read from — `Origin` is plain data).
@@ -505,7 +506,7 @@ impl LspSnapshot {
         let mut surfaces_by_file: HashMap<String, DefSurface> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
         let event_edges: Arc<Vec<ClassifiedEdge>>;
-        let dep_texts: HashMap<(AppRef, String), Arc<str>>;
+        let dep_texts: Arc<DepTexts>;
         let dep_meta: Arc<DepMetaMap>;
 
         {
@@ -523,7 +524,16 @@ impl LspSnapshot {
             // `build_dep_texts`).
             let (surface, dep_meta_arc) =
                 DeclSurface::build_split(&graph, &parsed, primary_app_ref);
-            dep_meta = dep_meta_arc;
+            // Roots sharing a dependency tier share its LSP products too; the
+            // first root to get here publishes them.
+            let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
+                Arc::new(DepLspTier {
+                    dep_meta: dep_meta_arc,
+                    dep_texts: Arc::new(build_dep_texts(&graph, &parsed, primary_app_ref)),
+                })
+            });
+            dep_meta = Arc::clone(&tier.dep_meta);
+            dep_texts = Arc::clone(&tier.dep_texts);
 
             if let Some(idx) = primary_unit_idx {
                 // T3 Task 3 (F7): same ordered-collect-then-`par_iter` shape as
@@ -574,7 +584,6 @@ impl LspSnapshot {
                     .collect(),
             );
 
-            dep_texts = build_dep_texts(&graph, &parsed, primary_app_ref);
             // `index`/`surface`/`obj_node_map` drop here, at the end of this
             // block — their borrows of `graph`/`parsed` end before the
             // sharing phase below needs to (immutably) re-borrow `parsed`.
@@ -624,7 +633,7 @@ impl LspSnapshot {
             publisher_fanout: Arc::new(publisher_fanout),
             decls_by_file,
             decl_by_id,
-            dep_texts: Arc::new(dep_texts),
+            dep_texts,
             dep_meta,
             workspace_root: Arc::new(crate::protocol::normalize_path(workspace_root)),
         };

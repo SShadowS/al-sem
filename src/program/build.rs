@@ -185,6 +185,7 @@ fn build_dep_nodes(
         objects: Arc::new(objects),
         routines: Arc::new(routines),
         abi_ingest_errors,
+        lsp: Default::default(),
     }
 }
 

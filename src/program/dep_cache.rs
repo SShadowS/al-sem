@@ -6,12 +6,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use crate::app_package::ParsedAppPackage;
 use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
+use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
+use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
 use crate::snapshot::{AppId, AppSetSnapshot, TrustTier};
@@ -77,7 +79,20 @@ pub struct DepNodes {
     pub objects: Arc<Vec<ObjectNode>>,
     pub routines: Arc<Vec<RoutineNode>>,
     pub abi_ingest_errors: Vec<AbiIngestError>,
+    /// The LSP products derived from this tier (set by the first snapshot
+    /// that builds them). Both are keyed by this tier's AppRefs, so they are
+    /// valid exactly where the tier itself is shared.
+    pub lsp: OnceLock<Arc<DepLspTier>>,
 }
+
+/// Dependency-derived LSP data, shared with [`DepNodes`].
+pub struct DepLspTier {
+    pub dep_meta: Arc<DepMetaMap>,
+    pub dep_texts: Arc<DepTexts>,
+}
+
+/// Dependency file texts by `(app, virtual path)`.
+pub(crate) type DepTexts = HashMap<(AppRef, String), Arc<str>>;
 
 impl DepCache {
     /// The live entry for `key`, or `build()`'s result (now cached). The lock
@@ -581,5 +596,50 @@ mod tests {
         assert_eq!(cache.live_entries(), 0, "no root uses the tier any more");
         let _again = build(&fx.root_a, DependencySource::Symbols, &cache);
         assert_eq!(cache.live_entries(), 1);
+    }
+
+    /// Roots sharing a dependency tier share its `dep_meta`/`dep_texts`, and
+    /// the texts are the shared extracted-source allocations.
+    #[test]
+    fn roots_share_dep_meta_and_dep_texts() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
+        assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
+        let src = dep_texts(&cache, &fx.root_a);
+        assert!(
+            a.dep_texts
+                .values()
+                .all(|t| src.iter().any(|s| Arc::ptr_eq(s, t))),
+            "dep_texts values are the shared extracted-source Arcs"
+        );
+    }
+
+    /// A dropped root leaves nothing behind: the next root's tier is fresh
+    /// and equals a cache-less build.
+    #[test]
+    fn dep_lsp_tier_after_the_first_root_is_dropped_is_fresh_and_correct() {
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let old = Arc::downgrade(&a.dep_texts);
+        drop(a);
+        assert!(old.upgrade().is_none(), "nothing retains the dropped tier");
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert!(!b.dep_texts.is_empty());
+        assert_eq!(b.dep_texts.len(), solo.dep_texts.len());
+        for (k, v) in b.dep_texts.iter() {
+            assert_eq!(solo.dep_texts.get(k).map(|s| &**s), Some(&**v));
+        }
+        let keys = |s: &LspSnapshot| {
+            let mut k: Vec<_> = s.dep_meta.keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(keys(&b), keys(&solo));
     }
 }
