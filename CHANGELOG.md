@@ -401,6 +401,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Windows binaries now run on Windows Server Core.** They linked the C runtime
+  dynamically, so they needed `VCRUNTIME140.dll` from the VC++ redistributable, which
+  Server Core images (e.g. Business Central containers) do not ship. The process died
+  before `main()` with exit code `0xC0000135` (DLL not found) and empty stderr; an LSP
+  wrapper saw only `write |1: The pipe is being closed`. `.cargo/config.toml` now sets
+  `+crt-static` for `x86_64-pc-windows-msvc`, so the C runtime is linked into the exe.
+
 - **A known-temp write no longer hides a physical write of the same table (#33).**
   `capability_cone::inherited_fact_key` was `op|resourceKind|resourceId|confidence` —
   `extra`, and therefore `temp_state`, was not in it. A provably-temporary record operation

@@ -3,6 +3,10 @@
 # means link time dominates incremental test builds.
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
+# Link the C runtime statically so the exe does not need VCRUNTIME140.dll.
+# Windows Server Core (e.g. BC containers) ships without the VC++
+# redistributable, and a missing DLL kills the process before main() runs.
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [profile.dev]
 # Faster MSVC debuginfo handling (avoids monolithic PDB work per binary).
