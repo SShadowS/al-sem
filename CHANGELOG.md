@@ -25,17 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace roots that use the same dependencies now share one copy of them in memory.**
   Before, every root the LSP server opened built its own copy of the dependency tier: the
   dependency routine and object lists, plus each dependency's parsed `SymbolReference.json`.
-  Base Application alone is ~24 MB of that per root, so a 7-root workspace paid for it 7
+  The two big packages (Base Application 21.5 + System Application 2.5, ~24 MiB) are paid
+  for per root, so a 7-root workspace paid for it 7
   times. Now the program graph reads the dependency tier through a shared, read-only part
-  instead of cloning it (one root: graph 36.0 MiB → 0.9 MiB). The LSP server also keeps a
+  instead of cloning it (one root, census in MiB: graph 36.0 → 0.9; the "before" figures
+  were recorded earlier with the same probe, not measured side by side). The LSP server also keeps a
   process-wide cache of that tier, and of each parsed `SymbolReference` package. Roots share
   when their dependency list is the same ordered list of the same `.app` files (same path,
   same size and modified time, read before the build) and the same `--dependency-source`
   choice. The cache holds weak references, so a copy is freed when the last root using it
   closes. If an `.app` changes while a build is reading it, the result is not cached under
-  the new stamp. Measured on BC 28.4 (`symbols`, release-fast, peak private memory): 1 root
-  213 → 216 MB (no change), 3 roots 535 → 267 MB, **7 roots 1,234 → 504 MB**. One root, live
-  heap after build: 106.6 → 71.4 MiB, 1,045,868 → 625,767 allocations. With `embedded`
+  the new stamp. Measured on BC 28.4 (`symbols`, release-fast, process peak private memory in
+  MB; one run per cell, so expect a few percent of noise): 1 root 213 → 216 (no change),
+  3 roots 535 → 267, **7 roots 1,234 → about 500** (468 and 504 in two runs). One root, live
+  heap after build (census, MiB; "before" recorded earlier with the same probe): 106.6 →
+  71.4, 1,045,868 → 625,767 allocations. With `embedded`
   (peak private memory): 1 root 1,364 → 1,282 MB, 3 roots 2,218 → 1,827 MB, 7 roots
   3,957 → 2,895 MB. Still per root: `event_edges` (~12 MiB per root, since it mixes
   dependency publishers with workspace subscribers), and with `--dependency-source embedded`
