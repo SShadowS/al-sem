@@ -1,6 +1,7 @@
 //! Builds a `ProgramGraph` from an `AppSetSnapshot`.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use al_syntax::ir::ObjectKind;
 
@@ -44,11 +45,12 @@ pub struct DepLayer {
     /// Object nodes from every NON-primary app (parsed source + ABI-ingested
     /// SymbolOnly deps), already sorted + deduped exactly as the original
     /// monolithic Step 4 — scoped to just this population. Cloned into each
-    /// assembled `ProgramGraph` by `assemble_program_graph`.
-    pub dep_objects: Vec<ObjectNode>,
+    /// assembled `ProgramGraph` by `assemble_program_graph` (shared, never
+    /// cloned into a graph).
+    pub dep_objects: Arc<Vec<ObjectNode>>,
     /// Routine nodes, same population/ordering/dedup contract as
     /// `dep_objects`.
-    pub dep_routines: Vec<RoutineNode>,
+    pub dep_routines: Arc<Vec<RoutineNode>>,
     /// Per-app dependency-ABI ingest diagnostics — see
     /// [`ProgramGraph::abi_ingest_errors`]'s doc. Always non-primary-scoped:
     /// Step 2b below only ever ingests SymbolOnly (source-less) apps, and
@@ -144,8 +146,8 @@ pub fn build_dep_layer(
         apps,
         topology,
         friends,
-        dep_objects: objects,
-        dep_routines: routines,
+        dep_objects: Arc::new(objects),
+        dep_routines: Arc::new(routines),
         abi_ingest_errors,
     }
 }
@@ -177,8 +179,9 @@ pub fn assemble_program_graph(
         .find(&snap.workspace_app)
         .expect("workspace app must already be interned by build_dep_layer's Step 1");
 
-    let mut objects: Vec<ObjectNode> = dep.dep_objects.clone();
-    let mut routines: Vec<RoutineNode> = dep.dep_routines.clone();
+    // Workspace nodes only; the dependency part is shared, not copied.
+    let mut objects: Vec<ObjectNode> = Vec::new();
+    let mut routines: Vec<RoutineNode> = Vec::new();
 
     for pf in &ws_unit.files {
         extract_nodes(
@@ -195,14 +198,15 @@ pub fn assemble_program_graph(
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
 
-    let objects: NodeSet<ObjectNode> = objects.into();
+    let objects = NodeSet::layered(Arc::clone(&dep.dep_objects), objects);
+    let routines = NodeSet::layered(Arc::clone(&dep.dep_routines), routines);
     let obj_index = ObjectIndex::build(&objects);
 
     let mut graph = ProgramGraph {
         apps: dep.apps.clone(),
         topology: dep.topology.clone(),
         objects,
-        routines: routines.into(),
+        routines,
         obj_index,
         friends: dep.friends.clone(),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
@@ -815,6 +819,62 @@ codeunit 60000 "Dep Cu"
             graph_split.abi_ingest_errors.len(),
             "abi_ingest_errors count must match"
         );
+    }
+
+    /// Lever A: the assembled graph SHARES the dep layer's node lists (no
+    /// copy), and a second assembly shares the very same allocation.
+    #[test]
+    fn assemble_program_graph_shares_dep_nodes_without_copying() {
+        let ws_id = layer_split_app_id("Ws3");
+        let dep_id = layer_split_app_id("Dep3");
+        let dep_src =
+            "codeunit 60100 \"Dep3 Cu\"\n{\n    procedure Baz()\n    begin\n    end;\n}\n";
+        let ws_src = "codeunit 50100 \"Ws3 Cu\"\n{\n    procedure One()\n    begin\n    end;\n}\n";
+        let snap = AppSetSnapshot {
+            apps: vec![
+                layer_split_source_unit(&ws_id, TrustTier::Workspace, vec![]),
+                layer_split_source_unit(
+                    &dep_id,
+                    TrustTier::EmbeddedSource,
+                    vec![("Dep3.al", dep_src)],
+                ),
+            ],
+            workspace_app: ws_id.clone(),
+            world: World::Closed,
+        };
+        let parsed = parse_snapshot(&snap);
+        let dep = build_dep_layer(&snap, &AbiCache::new(), &parsed);
+        let ws = ParsedUnit {
+            app: ws_id.clone(),
+            files: vec![crate::snapshot::ParsedFile {
+                virtual_path: "Ws3.al".to_string(),
+                file: std::sync::Arc::new(al_syntax::parse(ws_src)),
+                provenance: Provenance {
+                    app: ws_id.clone(),
+                    tier: TrustTier::Workspace,
+                    content_hash: String::new(),
+                },
+                text: ws_src.into(),
+            }],
+        };
+        let g1 = assemble_program_graph(&dep, &ws, &snap);
+        let g2 = assemble_program_graph(&dep, &ws, &snap);
+        assert!(!dep.dep_objects.is_empty() && !dep.dep_routines.is_empty());
+        assert!(std::sync::Arc::ptr_eq(
+            g1.objects.shared(),
+            &dep.dep_objects
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            g1.routines.shared(),
+            &dep.dep_routines
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            g1.routines.shared(),
+            g2.routines.shared()
+        ));
+        let ws_ref = dep.apps.find(&ws_id).unwrap();
+        assert!(!g1.objects.own().is_empty());
+        assert!(g1.objects.own().iter().all(|o| o.id.app == ws_ref));
     }
 
     /// Rung-2 shape (the reason this split exists): build ONE `DepLayer`,

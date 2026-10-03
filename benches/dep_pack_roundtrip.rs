@@ -198,12 +198,12 @@ fn main() {
     // Which apps actually contribute, and their symbolic identity for the
     // pack header. `resolve` is the registry `build_dep_layer` built.
     let mut app_ids: BTreeMap<u32, AppId> = BTreeMap::new();
-    for o in &dep_layer.dep_objects {
+    for o in dep_layer.dep_objects.iter() {
         app_ids
             .entry(o.id.app.0)
             .or_insert_with(|| dep_layer.apps.resolve(o.id.app).clone());
     }
-    for r in &dep_layer.dep_routines {
+    for r in dep_layer.dep_routines.iter() {
         app_ids
             .entry(r.id.object.app.0)
             .or_insert_with(|| dep_layer.apps.resolve(r.id.object.app).clone());
@@ -220,7 +220,7 @@ fn main() {
     }
 
     let mut per_app: BTreeMap<u32, BTreeMap<&str, FileBucket>> = BTreeMap::new();
-    for o in &dep_layer.dep_objects {
+    for o in dep_layer.dep_objects.iter() {
         let path = object_path.get(&o.id).copied().unwrap_or(NO_SOURCE_FILE);
         per_app
             .entry(o.id.app.0)
@@ -230,7 +230,7 @@ fn main() {
             .objects
             .push(o.clone());
     }
-    for r in &dep_layer.dep_routines {
+    for r in dep_layer.dep_routines.iter() {
         let path = routine_path.get(&r.id).copied().unwrap_or(NO_SOURCE_FILE);
         per_app
             .entry(r.id.object.app.0)
