@@ -65,9 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symbols, now show the full cause too.
 - **A failed write to the dependency source cache no longer leaves its partial temporary
   file behind.**
-
-### Fixed
-
 - **A rare deadlock when d47, d49 or d51 run together with other detectors.** The
   ordering facts these three detectors read were computed lazily, inside the parallel
   detector loop. The thread computing them waits for its own parallel work, and while
