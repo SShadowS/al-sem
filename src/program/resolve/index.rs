@@ -135,8 +135,6 @@ pub struct OrphanSub {
 /// `graph.routines` in their already-sorted (by `NodeId`) order, so every
 /// returned list is deterministic without a secondary sort.
 pub struct ResolveIndex {
-    /// `(object_id, name_lc)` → list of `RoutineNodeId`s (overloads, ≤1 in practice).
-    routines_by_obj_name: HashMap<(ObjectNodeId, String), Vec<RoutineNodeId>>,
     /// `(app, kind, declared_id)` → `ObjectNodeId` (first in sorted order for
     /// that app; duplicates within one app silently ignored). Feeds
     /// [`Self::object_by_number`] — self-preferred (own-app shadow), and
@@ -381,15 +379,6 @@ impl ResolveIndex {
     /// the index preserves that order so every returned `Vec` is deterministic.
     /// Event subscriptions live in [`SubscriberIndex`], not here.
     pub fn build(graph: &ProgramGraph) -> Self {
-        let mut routines_by_obj_name: HashMap<(ObjectNodeId, String), Vec<RoutineNodeId>> =
-            HashMap::new();
-        for r in graph.routines.iter() {
-            routines_by_obj_name
-                .entry((r.id.object.clone(), r.id.name_lc.clone()))
-                .or_default()
-                .push(r.id.clone());
-        }
-
         let mut objs_by_number: HashMap<(AppRef, ObjectKind, i64), ObjectNodeId> = HashMap::new();
         let mut objects_by_id: HashMap<(ObjectKind, i64), Vec<ObjectNodeId>> = HashMap::new();
         let mut objects_by_name: HashMap<(ObjectKind, String), Vec<ObjectNodeId>> = HashMap::new();
@@ -457,7 +446,6 @@ impl ResolveIndex {
         }
 
         ResolveIndex {
-            routines_by_obj_name,
             objs_by_number,
             objects_by_id,
             objects_by_name,
@@ -475,7 +463,6 @@ impl ResolveIndex {
     #[doc(hidden)]
     pub fn census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any + Send>)> {
         let ResolveIndex {
-            routines_by_obj_name,
             objs_by_number,
             objects_by_id,
             objects_by_name,
@@ -485,7 +472,6 @@ impl ResolveIndex {
             implementers,
         } = self;
         vec![
-            ("routines_by_obj_name", Box::new(routines_by_obj_name)),
             ("objs_by_number", Box::new(objs_by_number)),
             ("objects_by_id", Box::new(objects_by_id)),
             ("objects_by_name", Box::new(objects_by_name)),
@@ -500,12 +486,29 @@ impl ResolveIndex {
     /// or [`WorldMode::AnalyzedSnapshot`] (no scoping needed; the object id is
     /// already fully-qualified).
     ///
-    /// Returns an empty slice when nothing is found.
-    pub fn routines_in_object(&self, obj: &ObjectNodeId, name_lc: &str) -> &[RoutineNodeId] {
-        self.routines_by_obj_name
-            .get(&(obj.clone(), name_lc.to_string()))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    /// Yields every `graph.routines` row of `(obj, name_lc)` in merged order,
+    /// multiplicity kept (physical duplicate rows included). Empty when
+    /// nothing is found.
+    ///
+    /// `RoutineNodeId` sorts by `(object, name_lc, …)` first, so these rows
+    /// are one contiguous run of the sorted list: a binary search finds it,
+    /// with no per-call allocation and no per-routine map (the map this
+    /// replaced was 50 of 57 MiB per idle LSP root; compact-graph step 2,
+    /// Task 5). `graph` must be the graph this index was built from.
+    pub fn routines_in_object<'g>(
+        &self,
+        graph: &'g ProgramGraph,
+        obj: &ObjectNodeId,
+        name_lc: &str,
+    ) -> impl ExactSizeIterator<Item = &'g RoutineNodeId> + Clone + use<'g> {
+        graph
+            .routines
+            .run_by(|r| {
+                r.id.object
+                    .cmp(obj)
+                    .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
+            })
+            .map(|r| &r.id)
     }
 
     /// Resolve an object by its **numeric AL id** as seen from `from`
@@ -869,7 +872,11 @@ impl ResolveIndex {
         if !closure.contains(&base.app) {
             return false;
         }
-        if !self.routines_in_object(base, name_lc).is_empty() {
+        if self
+            .routines_in_object(graph, base, name_lc)
+            .next()
+            .is_some()
+        {
             return true;
         }
         let Some(base_obj) = Self::find_object(graph, base) else {
@@ -882,7 +889,11 @@ impl ResolveIndex {
                 // candidate — mirrors `field_in_table`'s identical filter.
                 continue;
             }
-            if !self.routines_in_object(ext_id, name_lc).is_empty() {
+            if self
+                .routines_in_object(graph, ext_id, name_lc)
+                .next()
+                .is_some()
+            {
                 return true;
             }
         }
@@ -2226,7 +2237,7 @@ mod tests {
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(50201),
         };
-        let rids = idx.routines_in_object(&their_cu, "do");
+        let rids: Vec<_> = idx.routines_in_object(&graph, &their_cu, "do").collect();
         assert_eq!(rids.len(), 1);
         assert_eq!(rids[0].name_lc, "do");
     }
@@ -2241,7 +2252,10 @@ mod tests {
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(50201),
         };
-        assert!(idx.routines_in_object(&their_cu, "notexist").is_empty());
+        assert_eq!(
+            idx.routines_in_object(&graph, &their_cu, "notexist").len(),
+            0
+        );
     }
 
     // -- subscribers_of tests -------------------------------------------------

@@ -128,9 +128,8 @@ pub fn interface_route_applicable(
     }
 
     // 4. Unambiguous: exactly one routine in this object matches (name, arity).
-    let candidates = index.routines_in_object(&target.object, called_member_lc);
-    let matching_arity = candidates
-        .iter()
+    let matching_arity = index
+        .routines_in_object(graph, &target.object, called_member_lc)
         .filter(|r| r.params_count == called_arity)
         .count();
     matching_arity == 1

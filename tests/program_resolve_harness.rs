@@ -3579,9 +3579,8 @@ fn task2_dump_argtype_dispatch_flips_on_cdo() {
         let RouteTarget::Routine(ref rid) = route.target else {
             continue;
         };
-        let candidates = index.routines_in_object(&rid.object, &rid.name_lc);
-        let matched: usize = candidates
-            .iter()
+        let matched: usize = index
+            .routines_in_object(&graph, &rid.object, &rid.name_lc)
             .filter(|r| r.params_count == rid.params_count)
             .count();
         if matched > 1 {
@@ -11540,4 +11539,267 @@ fn ws_unicode_fold_cross_case_member_name_resolves_to_source() {
     };
     assert_eq!(rid.name_lc, "prüfung");
     assert_eq!(rid.object.kind, ObjectKind::Codeunit);
+}
+
+// ---------------------------------------------------------------------------
+// `routines_in_object` equality with the deleted per-routine map
+// (compact-graph step 2, Task 5).
+//
+// `ResolveIndex` used to hold `routines_by_obj_name`: `(object, name_lc)` ->
+// ids pushed in `graph.routines` (merged `NodeSet`) iteration order. The
+// lookup now reads the sorted routine list directly.
+// `old_routines_by_obj_name` rebuilds the deleted map exactly as the old
+// `ResolveIndex::build` loop did; for EVERY key the lookup must return the
+// same ids, in the same order, with the same multiplicity (physical
+// duplicate rows, overloads and shared-before-own ties included).
+// ---------------------------------------------------------------------------
+
+type OldRoutineMap = std::collections::HashMap<(ObjectNodeId, String), Vec<RoutineNodeId>>;
+
+/// The deleted `ResolveIndex::routines_by_obj_name`, built by the old loop.
+fn old_routines_by_obj_name(graph: &al_sem::program::ProgramGraph) -> OldRoutineMap {
+    let mut map = OldRoutineMap::new();
+    for r in graph.routines.iter() {
+        map.entry((r.id.object.clone(), r.id.name_lc.clone()))
+            .or_default()
+            .push(r.id.clone());
+    }
+    map
+}
+
+/// Shape counts proving which hazards the fixtures actually exercised.
+#[derive(Default)]
+struct RunShapes {
+    keys: usize,
+    /// Keys with more than one row (overloads or physical duplicates).
+    multi_row: usize,
+    /// Keys whose list holds the same id twice (physical duplicate rows).
+    dup_id: usize,
+    /// Keys with rows in BOTH the shared and the own part.
+    shared_and_own: usize,
+}
+
+/// Assert the lookup equals the old map on every key; return the shapes seen.
+fn assert_routines_in_object_matches_old_map(
+    label: &str,
+    graph: &al_sem::program::ProgramGraph,
+    shapes: &mut RunShapes,
+) {
+    use al_sem::program::resolve::index::ResolveIndex;
+    use std::collections::HashSet;
+
+    let index = ResolveIndex::build(graph);
+    let lookup = |obj: &ObjectNodeId, name_lc: &str| -> Vec<RoutineNodeId> {
+        index
+            .routines_in_object(graph, obj, name_lc)
+            .cloned()
+            .collect()
+    };
+    let shared_keys: HashSet<(&ObjectNodeId, &str)> = graph
+        .routines
+        .shared()
+        .iter()
+        .map(|r| (&r.id.object, r.id.name_lc.as_str()))
+        .collect();
+    let own_keys: HashSet<(&ObjectNodeId, &str)> = graph
+        .routines
+        .own()
+        .iter()
+        .map(|r| (&r.id.object, r.id.name_lc.as_str()))
+        .collect();
+    let old = old_routines_by_obj_name(graph);
+    let mut rows = 0usize;
+    for ((obj, name_lc), want) in &old {
+        assert_eq!(
+            &lookup(obj, name_lc),
+            want,
+            "[{label}] routines_in_object({obj:?}, {name_lc:?}) differs from the old map"
+        );
+        rows += want.len();
+        shapes.keys += 1;
+        if want.len() > 1 {
+            shapes.multi_row += 1;
+        }
+        if want.windows(2).any(|w| w[0] == w[1]) {
+            shapes.dup_id += 1;
+        }
+        let k = (obj, name_lc.as_str());
+        if shared_keys.contains(&k) && own_keys.contains(&k) {
+            shapes.shared_and_own += 1;
+        }
+        // A name absent from an existing object finds nothing.
+        assert!(
+            lookup(obj, "\u{0}no such routine").is_empty(),
+            "[{label}] a missing name on {obj:?} must find nothing"
+        );
+    }
+    assert_eq!(
+        rows,
+        graph.routines.len(),
+        "[{label}] every routine row sits under exactly one key"
+    );
+}
+
+fn routines_fixture_snapshot(rel: &str) -> al_sem::snapshot::AppSetSnapshot {
+    (al_sem::snapshot::SnapshotBuilder {
+        workspace_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel),
+        local_providers: vec![],
+    })
+    .build()
+    .unwrap_or_else(|e| panic!("snapshot must build for {rel}: {e:?}"))
+}
+
+#[test]
+fn routines_in_object_equals_the_old_per_routine_map() {
+    use al_sem::program::abi_ingest::AbiCache;
+    use al_sem::program::build::build_program_graph;
+    use al_sem::snapshot::embedded::SourceFile;
+
+    let graph_of = |snap: &al_sem::snapshot::AppSetSnapshot| -> al_sem::program::ProgramGraph {
+        build_program_graph(snap, &AbiCache::new())
+    };
+    let mut shapes = RunShapes::default();
+
+    // Multi-app: a workspace over two dependency `.app`s.
+    let g = graph_of(&routines_fixture_snapshot("tests/fixtures/lsp-diff-deps"));
+    assert_routines_in_object_matches_old_map("lsp-diff-deps", &g, &mut shapes);
+
+    // Base Application symbols: a large shared part with ABI overloads.
+    let base_snap = routines_fixture_snapshot("tests/r0-corpus/ws-baseapp-closure");
+    let g = graph_of(&base_snap);
+    assert!(
+        !g.routines.shared().is_empty(),
+        "fixture precondition: the Base Application routines form the shared part"
+    );
+    assert_routines_in_object_matches_old_map("ws-baseapp-closure", &g, &mut shapes);
+
+    // The same workspace plus a subscriber to a Base Application table event:
+    // the synthetic publisher carries the DEPENDENCY's object id but lives in
+    // the own part, so it interleaves with the shared rows.
+    let mut snap = base_snap;
+    let ws_app = snap.workspace_app.clone();
+    let ws = snap
+        .apps
+        .iter_mut()
+        .find(|u| u.id == ws_app)
+        .and_then(|u| u.source.as_mut())
+        .expect("workspace source");
+    let mut files = (*ws.files).clone();
+    files.push(SourceFile {
+        virtual_path: "TableEventSub.al".into(),
+        text: r#"
+codeunit 50990 "Table Event Sub"
+{
+    [EventSubscriber(ObjectType::Table, Database::"Base App Widget", 'OnAfterInsertEvent', '', false, false)]
+    local procedure OnAfterInsertWidget(var Rec: Record "Base App Widget"; RunTrigger: Boolean)
+    begin
+    end;
+}
+"#
+        .into(),
+    });
+    ws.files = std::sync::Arc::new(files);
+    let g = graph_of(&snap);
+    let ws_ref = g.apps.find(&snap.workspace_app).expect("workspace app");
+    assert!(
+        g.routines.own().iter().any(|r| r.id.object.app != ws_ref),
+        "fixture precondition: a synthetic publisher on a dependency object \
+         must sit in the own part"
+    );
+    assert_routines_in_object_matches_old_map("ws-baseapp-closure + table event", &g, &mut shapes);
+
+    // Overloads of one name on one object.
+    let g = graph_of(&routines_fixture_snapshot(
+        "tests/r0-corpus/ws-overload-collision",
+    ));
+    assert_routines_in_object_matches_old_map("ws-overload-collision", &g, &mut shapes);
+    let g = graph_of(&routines_fixture_snapshot("tests/fixtures/events"));
+    assert_routines_in_object_matches_old_map("events", &g, &mut shapes);
+    // Two `[IntegrationEvent]` overloads of one name (aliased publishers).
+    let g = graph_of(&dual_publisher_alias_snapshot());
+    assert_routines_in_object_matches_old_map("dual-publisher-alias", &g, &mut shapes);
+    let g = graph_of(&two_overload_alias_snapshot());
+    assert_routines_in_object_matches_old_map("two-overload-alias", &g, &mut shapes);
+    // One app as workspace AND embedded dependency.
+    let g = graph_of(&compound_overload_dup_snapshot());
+    assert_routines_in_object_matches_old_map("compound-overload-dup", &g, &mut shapes);
+
+    // Hand-stated layered shape (no real fixture produces it): physical
+    // duplicate rows in BOTH parts, an exact shared/own id tie, and own rows
+    // interleaving with shared rows inside one `(object, name)` run, with
+    // neighbouring names on both sides of the run in both parts.
+    let dual = graph_of(&dual_publisher_alias_snapshot());
+    let base = dual
+        .routines
+        .iter()
+        .find(|r| r.id.name_lc == "resolve")
+        .expect("dual-publisher fixture has a `resolve` routine")
+        .clone();
+    let row = |name: &str, sig_fp: u64| {
+        let mut r = base.clone();
+        r.id.name_lc = name.to_string();
+        r.id.sig_fp = sig_fp;
+        r
+    };
+    let shared = vec![
+        row("resolve", 10),
+        row("resolve", 10),
+        row("resolve", 30),
+        row("resolvf", 0),
+    ];
+    let own = vec![
+        row("resolvd", 0),
+        row("resolve", 10),
+        row("resolve", 20),
+        row("resolve", 20),
+    ];
+    let layered = al_sem::program::ProgramGraph {
+        routines: al_sem::program::node_set::NodeSet::layered(std::sync::Arc::new(shared), own),
+        ..Default::default()
+    };
+    let want_fps: Vec<u64> = old_routines_by_obj_name(&layered)
+        [&(base.id.object.clone(), "resolve".to_string())]
+        .iter()
+        .map(|id| id.sig_fp)
+        .collect();
+    assert_eq!(
+        want_fps,
+        vec![10, 10, 10, 20, 20, 30],
+        "hand-stated precondition: the old map's merged-order run"
+    );
+    assert_routines_in_object_matches_old_map("hand-layered", &layered, &mut shapes);
+
+    eprintln!(
+        "routines_in_object equality: {} keys, {} multi-row, {} duplicate-id, {} shared+own",
+        shapes.keys, shapes.multi_row, shapes.dup_id, shapes.shared_and_own
+    );
+    assert!(
+        shapes.multi_row > 0,
+        "fixture precondition: some key must hold more than one row"
+    );
+    assert!(
+        shapes.shared_and_own > 0,
+        "fixture precondition: some key must hold rows from both parts"
+    );
+    assert!(
+        shapes.dup_id > 0,
+        "fixture precondition: some key must hold a physical duplicate row"
+    );
+}
+
+/// The same equality over the pinned CDO workspace (every key of a real
+/// Business Central graph). Skips without `CDO_WS`; fails under
+/// `ENFORCE_CDO_WS=1` (see `tests/common/cdo.rs`).
+#[test]
+fn routines_in_object_equals_the_old_per_routine_map_on_cdo() {
+    let Some(shared) = cdo_shared() else {
+        return;
+    };
+    let mut shapes = RunShapes::default();
+    assert_routines_in_object_matches_old_map("CDO", shared.ctx.graph(), &mut shapes);
+    eprintln!(
+        "CDO routines_in_object equality: {} keys, {} multi-row, {} duplicate-id, {} shared+own",
+        shapes.keys, shapes.multi_row, shapes.dup_id, shapes.shared_and_own
+    );
+    assert!(shapes.multi_row > 0, "CDO precondition: overloads exist");
 }

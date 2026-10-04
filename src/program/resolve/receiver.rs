@@ -932,9 +932,10 @@ pub fn infer_receiver_type(
             let field_lc = unquote_identifier(receiver_lc);
             let routine_shadowed =
                 index.table_scope_has_routine(graph, from_object, &table_id, &field_lc)
-                    || !index
-                        .routines_in_object(&from_object.id, &field_lc)
-                        .is_empty();
+                    || index
+                        .routines_in_object(graph, &from_object.id, &field_lc)
+                        .next()
+                        .is_some();
             if !routine_shadowed
                 && let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc)
             {
@@ -1248,9 +1249,10 @@ fn object_scope_has_bare_routine_shadow(
                 None => true,
             }
         }
-        _ => !index
-            .routines_in_object(&from_object.id, name_lc)
-            .is_empty(),
+        _ => index
+            .routines_in_object(graph, &from_object.id, name_lc)
+            .next()
+            .is_some(),
     }
 }
 
@@ -1896,8 +1898,7 @@ fn interface_own_routine_node<'g>(
 ) -> Option<&'g RoutineNode> {
     let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;
     let matched: Vec<&RoutineNodeId> = index
-        .routines_in_object(&iface.id, member_lc)
-        .iter()
+        .routines_in_object(graph, &iface.id, member_lc)
         .filter(|rid| rid.params_count == arity)
         .collect();
     let [rid] = matched.as_slice() else {
@@ -2363,14 +2364,18 @@ fn resolve_dataitem_source_table(
     // extended base report's own routines for a ReportExtension (a direct
     // extension may reach the base's visible procedures bare — see
     // `ObjectKind::is_extension_kind`'s doc; over-declining is always safe).
-    if !index
-        .routines_in_object(&from_object.id, name_lc)
-        .is_empty()
+    if index
+        .routines_in_object(graph, &from_object.id, name_lc)
+        .next()
+        .is_some()
     {
         return None;
     }
     if let Some(base_id) = &base_id
-        && !index.routines_in_object(base_id, name_lc).is_empty()
+        && index
+            .routines_in_object(graph, base_id, name_lc)
+            .next()
+            .is_some()
     {
         return None;
     }

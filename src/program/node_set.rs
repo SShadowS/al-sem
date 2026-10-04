@@ -129,6 +129,28 @@ impl<T: SortKey> NodeSet<T> {
         }
     }
 
+    /// The contiguous run of elements `f` maps to `Equal`, in merged order
+    /// (shared first on ties), multiplicity kept. `f` must agree with the sort
+    /// order: `Less` before the run, `Greater` after it. Two binary searches
+    /// per part; no allocation.
+    ///
+    /// Restricting the merge to the run gives the full merge's order: every
+    /// element before the run (in either part) is strictly smaller than every
+    /// run element, and every element after it strictly larger.
+    pub fn run_by<F: Fn(&T) -> Ordering>(&self, f: F) -> NodeSetIter<'_, T> {
+        let run = |part: &[T]| {
+            let lo = part.partition_point(|x| f(x) == Ordering::Less);
+            let len = part[lo..].partition_point(|x| f(x) == Ordering::Equal);
+            lo..lo + len
+        };
+        NodeSetIter {
+            shared: &self.shared[run(&self.shared)],
+            own: &self.own[run(&self.own)],
+            s: 0,
+            o: 0,
+        }
+    }
+
     /// Append to the own part. Like `Vec::push` on a sorted list, the caller
     /// re-sorts afterwards (`sort_by`) before relying on the order.
     pub fn push(&mut self, item: T) {
@@ -345,6 +367,42 @@ mod tests {
         assert_eq!(empty.iter().count(), 0);
         let only_shared = NodeSet::layered(Arc::new(vec![N(1, "s")]), Vec::new());
         assert_eq!(flat(&only_shared), vec![N(1, "s")]);
+    }
+
+    /// `run_by` yields exactly the flattened list's elements of one key, in
+    /// order: duplicates in both parts, a shared/own tie (shared first), and
+    /// interleaving across the parts.
+    #[test]
+    fn run_by_matches_flat_filter() {
+        // Sort key is the number; the run key is the tens digit.
+        let set = NodeSet::layered(
+            Arc::new(vec![
+                N(5, "s"),
+                N(10, "s"),
+                N(10, "s"),
+                N(13, "s"),
+                N(21, "s"),
+            ]),
+            vec![N(9, "o"), N(10, "o"), N(12, "o"), N(12, "o"), N(30, "o")],
+        );
+        let flat = flat(&set);
+        for tens in 0..5u32 {
+            let got: Vec<N> = set.run_by(|n| (n.0 / 10).cmp(&tens)).cloned().collect();
+            let want: Vec<N> = flat.iter().filter(|n| n.0 / 10 == tens).cloned().collect();
+            assert_eq!(got, want, "tens {tens}");
+        }
+        let one: Vec<N> = set.run_by(|n| (n.0 / 10).cmp(&1)).cloned().collect();
+        assert_eq!(
+            one,
+            vec![
+                N(10, "s"),
+                N(10, "s"),
+                N(10, "o"),
+                N(12, "o"),
+                N(12, "o"),
+                N(13, "s")
+            ]
+        );
     }
 
     /// `binary_search_by` must return exactly what `slice::binary_search_by`

@@ -359,8 +359,8 @@ fn resolve_in_object(
     // wrappers).
     args: &[ArgDispatchInfo],
 ) -> Option<(DispatchShape, Vec<Route>)> {
-    let candidates = index.routines_in_object(obj_id, name_lc);
-    if candidates.is_empty() {
+    let candidates = index.routines_in_object(graph, obj_id, name_lc);
+    if candidates.len() == 0 {
         return None;
     }
 
@@ -403,10 +403,7 @@ fn resolve_in_object(
     // degraded-set guard below, never trusted as distinct); an
     // `UNKNOWN_ARITY`-sentinel candidate (Task 1 tri-state arity) never lands
     // in `matched` at all, since it can never equal a real call's `arity`.
-    let matched: Vec<&RoutineNodeId> = candidates
-        .iter()
-        .filter(|rid| rid.params_count == arity)
-        .collect();
+    let matched: Vec<&RoutineNodeId> = candidates.filter(|rid| rid.params_count == arity).collect();
     let pre_filter_count = matched.len();
     if pre_filter_count == 0 {
         // Name found but no arity-matched overload: emit Unknown rather than
@@ -721,16 +718,17 @@ fn object_has_member_candidate(
     obj_tier: TrustTier,
     method_lc: &str,
     arity: usize,
+    graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> bool {
-    let candidates = index.routines_in_object(obj_id, method_lc);
-    if candidates.is_empty() {
+    let mut candidates = index.routines_in_object(graph, obj_id, method_lc);
+    if candidates.len() == 0 {
         return false;
     }
     if obj_tier == TrustTier::SymbolOnly {
         return true;
     }
-    candidates.iter().any(|rid| rid.params_count == arity)
+    candidates.any(|rid| rid.params_count == arity)
 }
 
 /// Look up the declared [`Access`] of `rid` in `graph.routines` (already
@@ -841,13 +839,12 @@ fn object_has_visible_member_candidate(
     graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> bool {
-    if !object_has_member_candidate(obj_id, obj_tier, method_lc, arity, index) {
+    if !object_has_member_candidate(obj_id, obj_tier, method_lc, arity, graph, index) {
         return false;
     }
     if obj_tier == TrustTier::SymbolOnly {
         return index
-            .routines_in_object(obj_id, method_lc)
-            .iter()
+            .routines_in_object(graph, obj_id, method_lc)
             .any(|rid| {
                 object_access_visible_from(
                     obj_id,
@@ -859,8 +856,7 @@ fn object_has_visible_member_candidate(
             });
     }
     index
-        .routines_in_object(obj_id, method_lc)
-        .iter()
+        .routines_in_object(graph, obj_id, method_lc)
         .filter(|rid| rid.params_count == arity)
         .any(|rid| {
             object_access_visible_from(
@@ -900,8 +896,7 @@ fn access_exclusion_reason(
     index: &ResolveIndex,
 ) -> Option<UnknownReason> {
     index
-        .routines_in_object(obj_id, method_lc)
-        .iter()
+        .routines_in_object(graph, obj_id, method_lc)
         .filter(|rid| rid.params_count == arity)
         .find_map(|rid| match lookup_routine_access(graph, rid) {
             Some(Access::Local) if obj_id != from_object => Some(UnknownReason::LocalNotVisible),
@@ -1165,10 +1160,12 @@ fn resolve_in_extendable_scope(
                 // clears that bar, so this fallback object's own internal
                 // arity/visibility filter can only reach its `ArityMismatch`
                 // or `visible.len() == 0` (access-exclusion) branches.
-                match scope
-                    .iter()
-                    .find(|(oid, _)| !index.routines_in_object(oid, name_lc).is_empty())
-                {
+                match scope.iter().find(|(oid, _)| {
+                    index
+                        .routines_in_object(graph, oid, name_lc)
+                        .next()
+                        .is_some()
+                }) {
                     Some((oid, tier)) => match resolve_in_object(
                         oid,
                         *tier,
@@ -1846,13 +1843,13 @@ fn dispatch_entry_trigger(
     surface: &DeclSurface,
 ) -> (DispatchShape, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
-    let candidates = index.routines_in_object(target_id, trigger_name);
+    let candidates = index.routines_in_object(graph, target_id, trigger_name);
 
     // Object-level triggers have `enclosing_member_lc == None`.
     let entry_rid = candidates
-        .iter()
+        .clone()
         .find(|r| r.enclosing_member_lc.is_none())
-        .or_else(|| candidates.first());
+        .or_else(|| candidates.clone().next());
 
     let Some(entry_rid) = entry_rid else {
         // Trigger not found in index — Opaque (e.g. an object with no explicit trigger).
@@ -2043,7 +2040,7 @@ pub fn resolve_implicit_trigger(
     // identity.
 
     // Triggers on the base table itself.
-    for rid in index.routines_in_object(&table_object.id, trigger_name) {
+    for rid in index.routines_in_object(graph, &table_object.id, trigger_name) {
         if routine_is_collapse_marked(rid, graph) {
             routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
             continue;
@@ -2060,7 +2057,7 @@ pub fn resolve_implicit_trigger(
             .find(|o| &o.id == ext_id)
             .map(|o| o.tier)
             .unwrap_or(TrustTier::Workspace);
-        for rid in index.routines_in_object(ext_id, trigger_name) {
+        for rid in index.routines_in_object(graph, ext_id, trigger_name) {
             if routine_is_collapse_marked(rid, graph) {
                 routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
                 continue;
@@ -2677,8 +2674,8 @@ pub(crate) fn resolve_member_with_args(
                     );
                     routes.push(route);
                 } else {
-                    let candidates = index.routines_in_object(impl_id, method_lc);
-                    if candidates.is_empty() {
+                    let candidates = index.routines_in_object(graph, impl_id, method_lc);
+                    if candidates.len() == 0 {
                         // Method name absent from this implementer — Rule 1
                         // Unresolved. The implementer object IS resolved; tag
                         // its tier (reason-split Task 2).
@@ -2687,10 +2684,7 @@ pub(crate) fn resolve_member_with_args(
                             impl_tier,
                         ));
                     } else {
-                        let matching = candidates
-                            .iter()
-                            .filter(|r| r.params_count == arity)
-                            .count();
+                        let matching = candidates.filter(|r| r.params_count == arity).count();
                         match matching {
                             1 => {
                                 // Unique arity-matched overload: guaranteed to
@@ -2894,8 +2888,7 @@ fn resolve_abi_prefix_routine<'g>(
     };
 
     let visible: Vec<&RoutineNodeId> = index
-        .routines_in_object(&obj_id, &key.routine_name_lc)
-        .iter()
+        .routines_in_object(graph, &obj_id, &key.routine_name_lc)
         .filter(|rid| rid.params_count == dispatch_arity)
         .filter(|rid| routine_candidate_is_visible(rid, &from_object.id, graph, index))
         .collect();
@@ -9553,7 +9546,9 @@ codeunit 51499 "IfaceNestedCaller"
         // Sanity: the ambiguous implementer genuinely has TWO same-arity
         // `Bar` candidates.
         let ambig_obj = find_obj(&graph, "IFooAmbigImpl");
-        let bar_candidates = index.routines_in_object(&ambig_obj.id, "bar");
+        let bar_candidates: Vec<_> = index
+            .routines_in_object(&graph, &ambig_obj.id, "bar")
+            .collect();
         assert_eq!(
             bar_candidates.len(),
             2,
@@ -12546,7 +12541,9 @@ codeunit 53971 "OverloadNCaller"
         // collision (proves the fixture actually exercises the guard, not a
         // degenerate single-candidate case).
         let target_obj = find_obj(&graph, "OverloadNTarget");
-        let foo_candidates = index.routines_in_object(&target_obj.id, "foo");
+        let foo_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "foo")
+            .collect();
         assert_eq!(
             foo_candidates.len(),
             2,
@@ -12726,7 +12723,9 @@ codeunit 53971 "OverloadNCaller"
 
         // Sanity: two GENUINELY distinct RoutineNodeIds (differing sig_fp),
         // not a same-id collision.
-        let candidates = index.routines_in_object(&target_obj_id, "foo");
+        let candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj_id, "foo")
+            .collect();
         assert_eq!(
             candidates.len(),
             2,
@@ -12815,7 +12814,9 @@ codeunit 53973 "OverloadPCaller"
 
         // Sanity: two same-arity `Bar` candidates, BOTH `Public`, DISTINCT ids.
         let target_obj = find_obj(&graph, "OverloadPTarget");
-        let bar_candidates = index.routines_in_object(&target_obj.id, "bar");
+        let bar_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "bar")
+            .collect();
         assert_eq!(
             bar_candidates.len(),
             2,
@@ -12951,7 +12952,9 @@ codeunit 53975 "Overload3Caller"
         let surface = DeclSurface::build(&graph, &units);
 
         let target_obj = find_obj(&graph, "Overload3Target");
-        let baz_candidates = index.routines_in_object(&target_obj.id, "baz");
+        let baz_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "baz")
+            .collect();
         assert_eq!(
             baz_candidates.len(),
             3,
@@ -13312,7 +13315,9 @@ codeunit 60152 "AliasTarget"
         // the DeclSurface resolves it (non-Unknown evidence for BOTH) — the
         // exact shape the pre-fix `degraded` predicate failed to catch.
         assert_eq!(
-            index.routines_in_object(&target_obj_id, "foo").len(),
+            index
+                .routines_in_object(&graph, &target_obj_id, "foo")
+                .len(),
             2,
             "both source-aliased survivors must be indexed under the same id"
         );
