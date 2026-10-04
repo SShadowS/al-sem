@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn local_procedure_integration_event_publisher_subscription_resolves() {
         use crate::program::resolve::event::PublisherKind;
-        use crate::program::resolve::index::ResolveIndex;
+        use crate::program::resolve::index::SubscriberIndex;
         use crate::snapshot::embedded::SourceFile;
         use crate::snapshot::provider::SourceRoot;
 
@@ -1200,7 +1200,7 @@ codeunit 50900 "Subscriber CU"
         );
         assert_eq!(publisher.publisher_kind, Some(PublisherKind::Integration));
 
-        let index = ResolveIndex::build(&g);
+        let index = SubscriberIndex::build(&g);
         let subs = index.subscribers_of(&publisher.id);
         assert_eq!(
             subs.len(),

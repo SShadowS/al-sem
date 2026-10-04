@@ -131,12 +131,11 @@ pub struct OrphanSub {
 
 /// Pre-built lookup indexes over a [`ProgramGraph`].
 ///
-/// All internal `Vec`s are populated by iterating `graph.objects` and
-/// `graph.routines` in their already-sorted (by `NodeId`) order, so every
-/// returned list is deterministic without a secondary sort.
+/// All internal `Vec`s are populated by iterating `graph.objects` in its
+/// already-sorted (by `NodeId`) order, so every returned list is
+/// deterministic without a secondary sort. Routines are not copied in:
+/// [`Self::routines_in_object`] reads `graph.routines` directly.
 pub struct ResolveIndex {
-    /// `(object_id, name_lc)` → list of `RoutineNodeId`s (overloads, ≤1 in practice).
-    routines_by_obj_name: HashMap<(ObjectNodeId, String), Vec<RoutineNodeId>>,
     /// `(app, kind, declared_id)` → `ObjectNodeId` (first in sorted order for
     /// that app; duplicates within one app silently ignored). Feeds
     /// [`Self::object_by_number`] — self-preferred (own-app shadow), and
@@ -176,6 +175,18 @@ pub struct ResolveIndex {
     report_extensions: HashMap<String, Vec<ObjectNodeId>>,
     /// Lowercased interface name → all object ids that implement it.
     implementers: HashMap<String, Vec<ObjectNodeId>>,
+}
+
+/// Event subscriptions resolved over a [`ProgramGraph`]: which subscribers
+/// each publisher routine has, plus the subscriptions that could not be
+/// bound (ambiguous or orphaned).
+///
+/// Kept apart from [`ResolveIndex`] on purpose. Only
+/// `resolver::emit_event_flow_edges` reads it, and it builds one for the
+/// length of that call. The LSP updater keeps a `ResolveIndex` alive while
+/// idle (rung 1) and never reads subscribers, so holding them there cost
+/// memory for nothing (compact-graph step 2, Task 4).
+pub struct SubscriberIndex {
     /// Publisher `RoutineNodeId` → ordered list of resolved subscribers.
     subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>>,
     /// Subscriptions that could not be resolved to a single overload.
@@ -185,17 +196,11 @@ pub struct ResolveIndex {
     orphaned_subscriptions: Vec<OrphanSub>,
 }
 
-impl ResolveIndex {
-    /// Build all indexes from `graph`.
-    ///
-    /// `graph.objects` and `graph.routines` are already sorted by `NodeId`;
-    /// the index preserves that order so every returned `Vec` is deterministic.
+impl SubscriberIndex {
+    /// Resolve every `[EventSubscriber]` in `graph` to its publisher routine.
     pub fn build(graph: &ProgramGraph) -> Self {
-        let mut routines_by_obj_name: HashMap<(ObjectNodeId, String), Vec<RoutineNodeId>> =
-            HashMap::new();
         // `routine_indices_by_obj_name` groups `graph.routines` INDICES (not
-        // ids) by `(object, name_lc)`, grown in lockstep with
-        // `routines_by_obj_name` below. Indices — not a `RoutineNodeId`-keyed
+        // ids) by `(object, name_lc)`. Indices — not a `RoutineNodeId`-keyed
         // map — are required here: a genuine same-name/same-arity SOURCE
         // overload pair legitimately shares one `RoutineNodeId` (source
         // `sig_fp` is always `0`; see node.rs and
@@ -209,77 +214,7 @@ impl ResolveIndex {
             HashMap::new();
         for (i, r) in graph.routines.iter().enumerate() {
             let key = (r.id.object.clone(), r.id.name_lc.clone());
-            routines_by_obj_name
-                .entry(key.clone())
-                .or_default()
-                .push(r.id.clone());
             routine_indices_by_obj_name.entry(key).or_default().push(i);
-        }
-
-        let mut objs_by_number: HashMap<(AppRef, ObjectKind, i64), ObjectNodeId> = HashMap::new();
-        let mut objects_by_id: HashMap<(ObjectKind, i64), Vec<ObjectNodeId>> = HashMap::new();
-        let mut objects_by_name: HashMap<(ObjectKind, String), Vec<ObjectNodeId>> = HashMap::new();
-        let mut table_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-        let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-        let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-        let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-
-        for obj in &graph.objects {
-            // By-number: first sorted entry wins for a given (app, kind, id).
-            if let Some(n) = obj.declared_id {
-                objs_by_number
-                    .entry((obj.id.app, obj.id.kind, n))
-                    .or_insert_with(|| obj.id.clone());
-                objects_by_id
-                    .entry((obj.id.kind, n))
-                    .or_default()
-                    .push(obj.id.clone());
-            }
-            objects_by_name
-                .entry((obj.id.kind, obj.name.fold_identifier()))
-                .or_default()
-                .push(obj.id.clone());
-
-            // TableExtension → base table name (lowercased).
-            if obj.id.kind == ObjectKind::TableExtension
-                && let Some(ref target) = obj.extends_target
-            {
-                table_extensions
-                    .entry(target.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
-            }
-
-            // PageExtension → base page name (lowercased) — the Task 1 analog
-            // of the TableExtension index above.
-            if obj.id.kind == ObjectKind::PageExtension
-                && let Some(ref target) = obj.extends_target
-            {
-                page_extensions
-                    .entry(target.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
-            }
-
-            // ReportExtension → base report name (lowercased) — the
-            // roadmap-closure plan Task 1 analog of the Table/Page indexes
-            // above.
-            if obj.id.kind == ObjectKind::ReportExtension
-                && let Some(ref target) = obj.extends_target
-            {
-                report_extensions
-                    .entry(target.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
-            }
-
-            // Interface implementers.
-            for iface in &obj.implements {
-                implementers
-                    .entry(iface.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
-            }
         }
 
         // ── Event subscriber index ────────────────────────────────────────────
@@ -407,8 +342,111 @@ impl ResolveIndex {
             entries.sort_by(|a, b| a.subscriber.cmp(&b.subscriber));
         }
 
+        SubscriberIndex {
+            subscribers_map,
+            ambiguous_subscriptions,
+            orphaned_subscriptions,
+        }
+    }
+
+    /// All resolved event subscribers of `publisher` — [`WorldMode::AnalyzedSnapshot`].
+    ///
+    /// Returns a deterministically sorted (by `subscriber` `RoutineNodeId`) slice.
+    /// Empty when `publisher` is not a publisher routine or has no subscribers.
+    pub fn subscribers_of(&self, publisher: &RoutineNodeId) -> &[SubscriberEntry] {
+        self.subscribers_map
+            .get(publisher)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Subscriptions that matched a publisher object but could not be resolved
+    /// to a single overload (multiple candidates, no unique strict arity match).
+    pub fn ambiguous_subscriptions(&self) -> &[AmbiguousSub] {
+        &self.ambiguous_subscriptions
+    }
+
+    /// Subscriptions whose publisher object resolved but had zero eligible
+    /// routine candidates (H-1 fix; see [`OrphanSub`]'s doc).
+    pub fn orphaned_subscriptions(&self) -> &[OrphanSub] {
+        &self.orphaned_subscriptions
+    }
+}
+
+impl ResolveIndex {
+    /// Build all indexes from `graph`.
+    ///
+    /// `graph.objects` and `graph.routines` are already sorted by `NodeId`;
+    /// the index preserves that order so every returned `Vec` is deterministic.
+    /// Event subscriptions live in [`SubscriberIndex`], not here.
+    pub fn build(graph: &ProgramGraph) -> Self {
+        let mut objs_by_number: HashMap<(AppRef, ObjectKind, i64), ObjectNodeId> = HashMap::new();
+        let mut objects_by_id: HashMap<(ObjectKind, i64), Vec<ObjectNodeId>> = HashMap::new();
+        let mut objects_by_name: HashMap<(ObjectKind, String), Vec<ObjectNodeId>> = HashMap::new();
+        let mut table_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+
+        for obj in &graph.objects {
+            // By-number: first sorted entry wins for a given (app, kind, id).
+            if let Some(n) = obj.declared_id {
+                objs_by_number
+                    .entry((obj.id.app, obj.id.kind, n))
+                    .or_insert_with(|| obj.id.clone());
+                objects_by_id
+                    .entry((obj.id.kind, n))
+                    .or_default()
+                    .push(obj.id.clone());
+            }
+            objects_by_name
+                .entry((obj.id.kind, obj.name.fold_identifier()))
+                .or_default()
+                .push(obj.id.clone());
+
+            // TableExtension → base table name (lowercased).
+            if obj.id.kind == ObjectKind::TableExtension
+                && let Some(ref target) = obj.extends_target
+            {
+                table_extensions
+                    .entry(target.fold_identifier())
+                    .or_default()
+                    .push(obj.id.clone());
+            }
+
+            // PageExtension → base page name (lowercased) — the Task 1 analog
+            // of the TableExtension index above.
+            if obj.id.kind == ObjectKind::PageExtension
+                && let Some(ref target) = obj.extends_target
+            {
+                page_extensions
+                    .entry(target.fold_identifier())
+                    .or_default()
+                    .push(obj.id.clone());
+            }
+
+            // ReportExtension → base report name (lowercased) — the
+            // roadmap-closure plan Task 1 analog of the Table/Page indexes
+            // above.
+            if obj.id.kind == ObjectKind::ReportExtension
+                && let Some(ref target) = obj.extends_target
+            {
+                report_extensions
+                    .entry(target.fold_identifier())
+                    .or_default()
+                    .push(obj.id.clone());
+            }
+
+            // Interface implementers.
+            for iface in &obj.implements {
+                implementers
+                    .entry(iface.fold_identifier())
+                    .or_default()
+                    .push(obj.id.clone());
+            }
+        }
+
         ResolveIndex {
-            routines_by_obj_name,
             objs_by_number,
             objects_by_id,
             objects_by_name,
@@ -416,22 +454,64 @@ impl ResolveIndex {
             page_extensions,
             report_extensions,
             implementers,
-            subscribers_map,
-            ambiguous_subscriptions,
-            orphaned_subscriptions,
         }
+    }
+
+    /// Census only: move every field out, boxed and named, so a probe can drop
+    /// them one at a time and read the heap delta. Production never calls it.
+    /// A new field must be added here; `census_parts_names_every_field` fails
+    /// until it is.
+    #[doc(hidden)]
+    pub fn census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any + Send>)> {
+        let ResolveIndex {
+            objs_by_number,
+            objects_by_id,
+            objects_by_name,
+            table_extensions,
+            page_extensions,
+            report_extensions,
+            implementers,
+        } = self;
+        vec![
+            ("objs_by_number", Box::new(objs_by_number)),
+            ("objects_by_id", Box::new(objects_by_id)),
+            ("objects_by_name", Box::new(objects_by_name)),
+            ("table_extensions", Box::new(table_extensions)),
+            ("page_extensions", Box::new(page_extensions)),
+            ("report_extensions", Box::new(report_extensions)),
+            ("implementers", Box::new(implementers)),
+        ]
     }
 
     /// All overloads of `name_lc` declared in `obj` — [`WorldMode::CallerClosure`]
     /// or [`WorldMode::AnalyzedSnapshot`] (no scoping needed; the object id is
     /// already fully-qualified).
     ///
-    /// Returns an empty slice when nothing is found.
-    pub fn routines_in_object(&self, obj: &ObjectNodeId, name_lc: &str) -> &[RoutineNodeId] {
-        self.routines_by_obj_name
-            .get(&(obj.clone(), name_lc.to_string()))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    /// Yields every `graph.routines` row of `(obj, name_lc)` in merged order,
+    /// multiplicity kept (physical duplicate rows included). Empty when
+    /// nothing is found.
+    ///
+    /// `RoutineNodeId` sorts by `(object, name_lc, …)` first, so these rows
+    /// are one contiguous run of the sorted list: a binary search finds it,
+    /// with no per-call allocation and no per-routine map (the map this
+    /// replaced was 50.03 of 56.81 MiB per idle updater on the CG corpus,
+    /// embedded mode, root 1; see `docs/2026-10-04-step2-index-census.md`).
+    /// `graph.routines` must be sorted (the `NodeSet` invariant) and consistent
+    /// with the object maps the caller also uses; the index holds no routines.
+    pub fn routines_in_object<'g>(
+        &self,
+        graph: &'g ProgramGraph,
+        obj: &ObjectNodeId,
+        name_lc: &str,
+    ) -> impl ExactSizeIterator<Item = &'g RoutineNodeId> + Clone + use<'g> {
+        graph
+            .routines
+            .run_by(|r| {
+                r.id.object
+                    .cmp(obj)
+                    .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
+            })
+            .map(|r| &r.id)
     }
 
     /// Resolve an object by its **numeric AL id** as seen from `from`
@@ -795,7 +875,11 @@ impl ResolveIndex {
         if !closure.contains(&base.app) {
             return false;
         }
-        if !self.routines_in_object(base, name_lc).is_empty() {
+        if self
+            .routines_in_object(graph, base, name_lc)
+            .next()
+            .is_some()
+        {
             return true;
         }
         let Some(base_obj) = Self::find_object(graph, base) else {
@@ -808,7 +892,11 @@ impl ResolveIndex {
                 // candidate — mirrors `field_in_table`'s identical filter.
                 continue;
             }
-            if !self.routines_in_object(ext_id, name_lc).is_empty() {
+            if self
+                .routines_in_object(graph, ext_id, name_lc)
+                .next()
+                .is_some()
+            {
                 return true;
             }
         }
@@ -891,29 +979,6 @@ impl ResolveIndex {
             self.resolve_object_ref(graph, from.clone(), target.kind, &base_ref),
             ObjectRefResolution::Unique(id) if &id == target
         )
-    }
-
-    /// All resolved event subscribers of `publisher` — [`WorldMode::AnalyzedSnapshot`].
-    ///
-    /// Returns a deterministically sorted (by `subscriber` `RoutineNodeId`) slice.
-    /// Empty when `publisher` is not a publisher routine or has no subscribers.
-    pub fn subscribers_of(&self, publisher: &RoutineNodeId) -> &[SubscriberEntry] {
-        self.subscribers_map
-            .get(publisher)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    /// Subscriptions that matched a publisher object but could not be resolved
-    /// to a single overload (multiple candidates, no unique strict arity match).
-    pub fn ambiguous_subscriptions(&self) -> &[AmbiguousSub] {
-        &self.ambiguous_subscriptions
-    }
-
-    /// Subscriptions whose publisher object resolved but had zero eligible
-    /// routine candidates (H-1 fix; see [`OrphanSub`]'s doc).
-    pub fn orphaned_subscriptions(&self) -> &[OrphanSub] {
-        &self.orphaned_subscriptions
     }
 }
 
@@ -1294,6 +1359,31 @@ mod tests {
             a,
             b,
         )
+    }
+
+    /// The census must name every `ResolveIndex` field, no more, no fewer. The
+    /// field list is read from this file's own struct text, so a new field
+    /// fails here even if the destructure in `census_parts` is loosened.
+    #[test]
+    fn census_parts_names_every_field() {
+        let src = include_str!("index.rs");
+        let start = src.find("pub struct ResolveIndex {").unwrap();
+        let body = &src[start..][..src[start..].find("\n}\n").unwrap()];
+        let mut declared: Vec<&str> = body
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter_map(|l| l.trim().split_once(':').map(|(n, _)| n))
+            .collect();
+        declared.sort_unstable();
+        let (graph, _a, _b) = build_fixture();
+        let mut named: Vec<&str> = ResolveIndex::build(&graph)
+            .census_parts()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        named.sort_unstable();
+        assert_eq!(named, declared);
     }
 
     // -- object_by_number tests -----------------------------------------------
@@ -2150,7 +2240,7 @@ mod tests {
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(50201),
         };
-        let rids = idx.routines_in_object(&their_cu, "do");
+        let rids: Vec<_> = idx.routines_in_object(&graph, &their_cu, "do").collect();
         assert_eq!(rids.len(), 1);
         assert_eq!(rids[0].name_lc, "do");
     }
@@ -2165,7 +2255,10 @@ mod tests {
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(50201),
         };
-        assert!(idx.routines_in_object(&their_cu, "notexist").is_empty());
+        assert_eq!(
+            idx.routines_in_object(&graph, &their_cu, "notexist").len(),
+            0
+        );
     }
 
     // -- subscribers_of tests -------------------------------------------------
@@ -2173,7 +2266,7 @@ mod tests {
     #[test]
     fn subscribers_of_stub_returns_empty() {
         let (graph, a, _b) = build_fixture();
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
 
         let fake_pub = RoutineNodeId {
             object: ObjectNodeId {
@@ -2232,7 +2325,7 @@ mod tests {
             )],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         let subs = idx.subscribers_of(&pub_onafterx_id);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].conditions, vec![Condition::ManualBinding]);
@@ -2295,7 +2388,7 @@ mod tests {
             )],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         assert_eq!(idx.subscribers_of(&pub_onafterx_id).len(), 1);
         assert_eq!(idx.subscribers_of(&pub_onbeforex_id).len(), 1);
     }
@@ -2337,7 +2430,7 @@ mod tests {
             vec![make_subscriber(sub_id, "Handler", 0, vec![sa], false)],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         let subs = idx.subscribers_of(&pub_onafterx_id);
         assert_eq!(subs.len(), 1);
         assert!(
@@ -2405,7 +2498,7 @@ mod tests {
             )],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         assert!(idx.subscribers_of(&pub_onafterx_1param_id).is_empty());
         assert!(idx.subscribers_of(&pub_onafterx_2param_id).is_empty());
         assert_eq!(idx.ambiguous_subscriptions().len(), 1);
@@ -2452,7 +2545,7 @@ mod tests {
                 false,
             )],
         );
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         assert_eq!(
             idx.subscribers_of(&pub_arity0).len(),
             1,
@@ -2502,7 +2595,7 @@ mod tests {
                 false,
             )],
         );
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         assert!(
             idx.subscribers_of(&pub_arity0).is_empty(),
             "arity-1 subscriber must NOT bind to an arity-0 publisher whose \
@@ -2658,7 +2751,7 @@ mod tests {
             )],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         // Publisher not found → silently dropped, no panic.
         assert!(idx.ambiguous_subscriptions().is_empty());
     }
@@ -2720,10 +2813,130 @@ mod tests {
             )],
         );
 
-        let idx = ResolveIndex::build(&graph);
+        let idx = SubscriberIndex::build(&graph);
         assert_eq!(idx.subscribers_of(&pub_onafterx_0param_id).len(), 1);
         assert!(idx.subscribers_of(&pub_onafterx_1param_id).is_empty());
         assert!(idx.ambiguous_subscriptions().is_empty());
+    }
+
+    // (g) Pinned subscriber output --------------------------------------------
+
+    /// The subscriber lists, ambiguous list and orphan list for one fixture,
+    /// pinned as literal text. The expected text was captured from the build
+    /// BEFORE the subscriber maps moved out of `ResolveIndex` (compact-graph
+    /// step 2, Task 4), so the move is proven to change nothing: same entries,
+    /// same order, same conditions.
+    #[test]
+    fn subscriber_lists_match_the_pre_move_capture() {
+        let app = AppRef(0);
+        let pub_id = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(1),
+        };
+        let sub_id = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(2),
+        };
+        let mut license = sub_args("pub", "onafterx");
+        license.skip_on_missing_license = true;
+        let mut element = sub_args("pub", "onafterx");
+        element.element = Some("Field1".to_string());
+        let (graph, _, _) = build_event_fixture(
+            vec![
+                make_publisher(
+                    pub_id.clone(),
+                    "OnAfterX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(
+                    pub_id.clone(),
+                    "OnAmb",
+                    1,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(
+                    pub_id.clone(),
+                    "OnAmb",
+                    2,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+            ],
+            vec![
+                // Declared out of name order on purpose; the graph sorts them.
+                make_subscriber(sub_id.clone(), "HandlerC", 0, vec![element], false),
+                make_subscriber(
+                    sub_id.clone(),
+                    "HandlerA",
+                    0,
+                    vec![sub_args("pub", "onafterx")],
+                    true,
+                ),
+                make_subscriber(sub_id.clone(), "HandlerB", 0, vec![license], false),
+                make_subscriber(
+                    sub_id.clone(),
+                    "HandlerD",
+                    0,
+                    vec![sub_args("pub", "onamb")],
+                    false,
+                ),
+                make_subscriber(
+                    sub_id.clone(),
+                    "HandlerE",
+                    0,
+                    vec![sub_args("pub", "onmissing")],
+                    false,
+                ),
+            ],
+        );
+        let publisher = |name: &str, params: usize| RoutineNodeId {
+            object: pub_id.clone(),
+            name_lc: name.to_string(),
+            enclosing_member_lc: None,
+            params_count: params,
+            sig_fp: 0,
+        };
+
+        let idx = SubscriberIndex::build(&graph);
+        let mut out = String::new();
+        for (name, params) in [("onafterx", 0), ("onamb", 1), ("onamb", 2)] {
+            for s in idx.subscribers_of(&publisher(name, params)) {
+                out.push_str(&format!(
+                    "sub {name}/{params} <- {} {:?} {:?}\n",
+                    s.subscriber.name_lc, s.conditions, s.element
+                ));
+            }
+        }
+        for a in idx.ambiguous_subscriptions() {
+            out.push_str(&format!(
+                "ambiguous {} -> {}/{} x{}\n",
+                a.subscriber.name_lc,
+                a.publisher_object == pub_id,
+                a.event_name_lc,
+                a.candidate_count
+            ));
+        }
+        for o in idx.orphaned_subscriptions() {
+            out.push_str(&format!(
+                "orphan {} -> {}/{}\n",
+                o.subscriber.name_lc,
+                o.publisher_object == pub_id,
+                o.event_name_lc
+            ));
+        }
+        assert_eq!(
+            out,
+            "sub onafterx/0 <- handlera [ManualBinding] None\n\
+             sub onafterx/0 <- handlerb [SkipOnMissingLicense] None\n\
+             sub onafterx/0 <- handlerc [] Some(\"Field1\")\n\
+             ambiguous handlerd -> true/onamb x2\n\
+             orphan handlere -> true/onmissing\n"
+        );
     }
 
     // -- WorldMode is a value type test ---------------------------------------

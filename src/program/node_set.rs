@@ -57,6 +57,8 @@ impl<T> Default for NodeSet<T> {
 impl<T: SortKey> NodeSet<T> {
     /// `shared` and `own` must each already be sorted by `sort_key`.
     pub fn layered(shared: Arc<Vec<T>>, own: Vec<T>) -> Self {
+        Self::debug_assert_sorted(&shared);
+        Self::debug_assert_sorted(&own);
         let mut set = NodeSet {
             shared,
             own,
@@ -64,6 +66,16 @@ impl<T: SortKey> NodeSet<T> {
         };
         set.reindex();
         set
+    }
+
+    /// `run_by` and every routine lookup depend on each part being sorted.
+    /// (Checked where sortedness is promised, not in `reindex`: `push` and
+    /// `extend` legitimately leave `own` unsorted until `sort_by`.)
+    fn debug_assert_sorted(part: &[T]) {
+        debug_assert!(
+            part.windows(2).all(|w| w[0].sort_key() <= w[1].sort_key()),
+            "NodeSet part is not sorted by its sort key"
+        );
     }
 
     /// Recompute `own_pos`: an own element lands after every shared element
@@ -129,6 +141,28 @@ impl<T: SortKey> NodeSet<T> {
         }
     }
 
+    /// The contiguous run of elements `f` maps to `Equal`, in merged order
+    /// (shared first on ties), multiplicity kept. `f` must agree with the sort
+    /// order: `Less` before the run, `Greater` after it. Two binary searches
+    /// per part; no allocation.
+    ///
+    /// Restricting the merge to the run gives the full merge's order: every
+    /// element before the run (in either part) is strictly smaller than every
+    /// run element, and every element after it strictly larger.
+    pub fn run_by<F: Fn(&T) -> Ordering>(&self, f: F) -> NodeSetIter<'_, T> {
+        let run = |part: &[T]| {
+            let lo = part.partition_point(|x| f(x) == Ordering::Less);
+            let len = part[lo..].partition_point(|x| f(x) == Ordering::Equal);
+            lo..lo + len
+        };
+        NodeSetIter {
+            shared: &self.shared[run(&self.shared)],
+            own: &self.own[run(&self.own)],
+            s: 0,
+            o: 0,
+        }
+    }
+
     /// Append to the own part. Like `Vec::push` on a sorted list, the caller
     /// re-sorts afterwards (`sort_by`) before relying on the order.
     pub fn push(&mut self, item: T) {
@@ -144,6 +178,7 @@ impl<T: SortKey> NodeSet<T> {
     /// Stable-sort the own part (the shared part is sorted by construction).
     pub fn sort_by<F: FnMut(&T, &T) -> Ordering>(&mut self, f: F) {
         self.own.sort_by(f);
+        Self::debug_assert_sorted(&self.own);
         self.reindex();
     }
 
@@ -338,6 +373,30 @@ mod tests {
         assert_eq!(set.get(0), None);
     }
 
+    /// Discrimination for the sortedness `debug_assert!`: an unsorted part
+    /// panics in debug builds, a sorted one passes.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not sorted")]
+    fn unsorted_own_part_panics_in_debug() {
+        let _ = NodeSet::layered(Arc::new(vec![N(1, "s")]), vec![N(4, "o"), N(2, "o")]);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not sorted")]
+    fn unsorted_shared_part_panics_in_debug() {
+        let _ = NodeSet::layered(Arc::new(vec![N(5, "s"), N(3, "s")]), Vec::new());
+    }
+
+    #[test]
+    fn sorted_parts_with_ties_pass() {
+        let _ = NodeSet::layered(
+            Arc::new(vec![N(1, "s"), N(1, "s")]),
+            vec![N(1, "o"), N(2, "o")],
+        );
+    }
+
     #[test]
     fn empty_parts_are_fine() {
         let empty: NodeSet<N> = NodeSet::default();
@@ -345,6 +404,42 @@ mod tests {
         assert_eq!(empty.iter().count(), 0);
         let only_shared = NodeSet::layered(Arc::new(vec![N(1, "s")]), Vec::new());
         assert_eq!(flat(&only_shared), vec![N(1, "s")]);
+    }
+
+    /// `run_by` yields exactly the flattened list's elements of one key, in
+    /// order: duplicates in both parts, a shared/own tie (shared first), and
+    /// interleaving across the parts.
+    #[test]
+    fn run_by_matches_flat_filter() {
+        // Sort key is the number; the run key is the tens digit.
+        let set = NodeSet::layered(
+            Arc::new(vec![
+                N(5, "s"),
+                N(10, "s"),
+                N(10, "s"),
+                N(13, "s"),
+                N(21, "s"),
+            ]),
+            vec![N(9, "o"), N(10, "o"), N(12, "o"), N(12, "o"), N(30, "o")],
+        );
+        let flat = flat(&set);
+        for tens in 0..5u32 {
+            let got: Vec<N> = set.run_by(|n| (n.0 / 10).cmp(&tens)).cloned().collect();
+            let want: Vec<N> = flat.iter().filter(|n| n.0 / 10 == tens).cloned().collect();
+            assert_eq!(got, want, "tens {tens}");
+        }
+        let one: Vec<N> = set.run_by(|n| (n.0 / 10).cmp(&1)).cloned().collect();
+        assert_eq!(
+            one,
+            vec![
+                N(10, "s"),
+                N(10, "s"),
+                N(10, "o"),
+                N(12, "o"),
+                N(12, "o"),
+                N(13, "s")
+            ]
+        );
     }
 
     /// `binary_search_by` must return exactly what `slice::binary_search_by`

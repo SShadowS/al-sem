@@ -1,0 +1,55 @@
+size_of: RoutineNodeId=96 ObjectNodeId=32 RoutineNode=264 ObjectNode=296 RoutineMeta=200 ClassifiedEdge=416 Route=240 DeclEntry=240 EdgeRef=24 ParsedFileEntry=128
+
+######## root 1 = U:/Git/DO-cdo-baseline/Cloud (Symbols) built in 1.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live      31.2  in-phase peak      50.3  live allocs    +136842
+  2.parse                                  end-live      70.9  in-phase peak      71.1  live allocs    +319424
+  3.dep_layer                              end-live     107.8  in-phase peak     183.7  live allocs    +771867
+  4.assemble_graph                         end-live     112.2  in-phase peak     113.6  live allocs    +803946
+  5.index+surface+dep_meta+dep_texts       end-live     156.5  in-phase peak     166.9  live allocs   +1055268
+  6.resolve_workspace_files                end-live     179.1  in-phase peak     179.2  live allocs   +1250486
+  7.event_edges                            end-live     179.2  in-phase peak     189.3  live allocs   +1250841
+  8.incoming+decl_by_id                    end-live     139.2  in-phase peak     179.2  live allocs   +1030956
+  9.publish_snapshot                       end-live     139.4  in-phase peak     139.4  live allocs   +1032127
+  10.returned                              end-live     139.2  in-phase peak     139.4  live allocs   +1031542
+  BUILD PEAK 189.3 MiB; retained after settle 139.2 MiB in 1031542 allocs
+  + diagnostics map 3.72 MiB in 7971 allocs
+  shape: objects 11188 (shared 10604 own 584), routines 64740 (shared 59220 own 5520), dep_meta 0, dep_texts 0, ws files 582, edges_by_file edges 20707, event_edges 49, incoming keys 2732, decl_by_id 5512
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 47 | ws publisher 2 | routes into ws 53 | dep->dep set identical to root 1: None
+
+ALL 1 ROOTS LIVE: 143.0 MiB in 1039515 allocs
+
+==== --index-split: Rung1Context pieces per root ====
+
+-- root 1 U:/Git/DO-cdo-baseline/Cloud : objects 11188 (own 584), routines 64740 (own 5520)
+  ResolveIndex total    41.11 MiB   223865 allocs | object map (584 entries)     0.04 MiB     11 allocs | DeclSurface (local part)     3.06 MiB  27444 allocs
+  Rung1Context pieces sum 44.21 MiB in 251320 allocs
+    routines_by_obj_name          35.69 MiB   189090 allocs
+    objs_by_number                 0.77 MiB        2 allocs
+    objects_by_id                  2.00 MiB    11139 allocs
+    objects_by_name                2.49 MiB    22400 allocs
+    table_extensions               0.02 MiB      224 allocs
+    page_extensions                0.06 MiB      530 allocs
+    report_extensions              0.00 MiB        1 allocs
+    implementers                   0.03 MiB      272 allocs
+    subscribers_map                0.04 MiB      209 allocs
+    ambiguous_subscriptions        0.00 MiB        1 allocs
+    orphaned_subscriptions         0.00 MiB        8 allocs
+    sum of parts                  41.11 MiB   223876 allocs  (total minus parts: -0.000 MiB, -11 allocs)
+
+SUM over 1 roots (MiB, allocs):
+  ResolveIndex total               41.11 MiB    223865 allocs
+  object map                        0.04 MiB        11 allocs
+  DeclSurface local                 3.06 MiB     27444 allocs
+    routines_by_obj_name           35.69 MiB    189090 allocs
+    objs_by_number                  0.77 MiB         2 allocs
+    objects_by_id                   2.00 MiB     11139 allocs
+    objects_by_name                 2.49 MiB     22400 allocs
+    table_extensions                0.02 MiB       224 allocs
+    page_extensions                 0.06 MiB       530 allocs
+    report_extensions               0.00 MiB         1 allocs
+    implementers                    0.03 MiB       272 allocs
+    subscribers_map                 0.04 MiB       209 allocs
+    ambiguous_subscriptions         0.00 MiB         1 allocs
+    orphaned_subscriptions          0.00 MiB         8 allocs
+RSS context (OS, not used for any byte figure): 201,8 MiB working set, 251,7 MiB peak working set

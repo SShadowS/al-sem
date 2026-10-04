@@ -35,8 +35,10 @@
 //! # Arity matching (Phase 2 / Phase 3 Task 0; ambiguity guard beyond-1B.3b Task 2)
 //!
 //! `RoutineNodeId` now carries `params_count`, so each overload (same name,
-//! different arity) is a distinct node in the graph and index.
-//! `routines_in_object` returns one entry per distinct overload.  An overload
+//! different arity) is a distinct node in the graph.
+//! `routines_in_object` reads the sorted `graph.routines` list and yields
+//! every row of `(object, name)`, multiplicity kept (physical duplicate rows
+//! included).  An overload
 //! matches when `rid.params_count == arity`.  When EXACTLY ONE match is found
 //! it is returned.  When the name is found but NO overload matches the arity,
 //! OR more than one same-arity overload matches (a genuine SOURCE-overload
@@ -78,7 +80,7 @@ use crate::program::resolve::edge::{
     SetCompleteness, SiteId, SourcePos, UnknownReason, Witness, callee_fp,
 };
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::index::ResolveIndex;
+use crate::program::resolve::index::{ResolveIndex, SubscriberIndex};
 use crate::program::resolve::member_catalog::{
     MemberCatalogKind, member_builtin, member_builtin_id,
 };
@@ -359,8 +361,8 @@ fn resolve_in_object(
     // wrappers).
     args: &[ArgDispatchInfo],
 ) -> Option<(DispatchShape, Vec<Route>)> {
-    let candidates = index.routines_in_object(obj_id, name_lc);
-    if candidates.is_empty() {
+    let candidates = index.routines_in_object(graph, obj_id, name_lc);
+    if candidates.len() == 0 {
         return None;
     }
 
@@ -403,10 +405,7 @@ fn resolve_in_object(
     // degraded-set guard below, never trusted as distinct); an
     // `UNKNOWN_ARITY`-sentinel candidate (Task 1 tri-state arity) never lands
     // in `matched` at all, since it can never equal a real call's `arity`.
-    let matched: Vec<&RoutineNodeId> = candidates
-        .iter()
-        .filter(|rid| rid.params_count == arity)
-        .collect();
+    let matched: Vec<&RoutineNodeId> = candidates.filter(|rid| rid.params_count == arity).collect();
     let pre_filter_count = matched.len();
     if pre_filter_count == 0 {
         // Name found but no arity-matched overload: emit Unknown rather than
@@ -721,24 +720,25 @@ fn object_has_member_candidate(
     obj_tier: TrustTier,
     method_lc: &str,
     arity: usize,
+    graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> bool {
-    let candidates = index.routines_in_object(obj_id, method_lc);
-    if candidates.is_empty() {
+    let mut candidates = index.routines_in_object(graph, obj_id, method_lc);
+    if candidates.len() == 0 {
         return false;
     }
     if obj_tier == TrustTier::SymbolOnly {
         return true;
     }
-    candidates.iter().any(|rid| rid.params_count == arity)
+    candidates.any(|rid| rid.params_count == arity)
 }
 
 /// Look up the declared [`Access`] of `rid` in `graph.routines` (already
 /// sorted by `RoutineNodeId` — binary-searchable, mirroring
 /// `make_routine_route`'s existing `graph.routines.binary_search_by` lookup
 /// pattern). Returns `None` on a lookup miss — should never happen for a
-/// `RoutineNodeId` sourced from `index.routines_in_object` (the index is
-/// built directly from `graph.routines`), but if it ever does, the caller
+/// `RoutineNodeId` sourced from `index.routines_in_object` (those ids are
+/// read straight from `graph.routines`), but if it ever does, the caller
 /// ([`object_has_visible_member_candidate`]) fails closed rather than
 /// assuming the routine is visible.
 fn lookup_routine_access(graph: &ProgramGraph, rid: &RoutineNodeId) -> Option<Access> {
@@ -841,13 +841,12 @@ fn object_has_visible_member_candidate(
     graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> bool {
-    if !object_has_member_candidate(obj_id, obj_tier, method_lc, arity, index) {
+    if !object_has_member_candidate(obj_id, obj_tier, method_lc, arity, graph, index) {
         return false;
     }
     if obj_tier == TrustTier::SymbolOnly {
         return index
-            .routines_in_object(obj_id, method_lc)
-            .iter()
+            .routines_in_object(graph, obj_id, method_lc)
             .any(|rid| {
                 object_access_visible_from(
                     obj_id,
@@ -859,8 +858,7 @@ fn object_has_visible_member_candidate(
             });
     }
     index
-        .routines_in_object(obj_id, method_lc)
-        .iter()
+        .routines_in_object(graph, obj_id, method_lc)
         .filter(|rid| rid.params_count == arity)
         .any(|rid| {
             object_access_visible_from(
@@ -900,8 +898,7 @@ fn access_exclusion_reason(
     index: &ResolveIndex,
 ) -> Option<UnknownReason> {
     index
-        .routines_in_object(obj_id, method_lc)
-        .iter()
+        .routines_in_object(graph, obj_id, method_lc)
         .filter(|rid| rid.params_count == arity)
         .find_map(|rid| match lookup_routine_access(graph, rid) {
             Some(Access::Local) if obj_id != from_object => Some(UnknownReason::LocalNotVisible),
@@ -1165,10 +1162,12 @@ fn resolve_in_extendable_scope(
                 // clears that bar, so this fallback object's own internal
                 // arity/visibility filter can only reach its `ArityMismatch`
                 // or `visible.len() == 0` (access-exclusion) branches.
-                match scope
-                    .iter()
-                    .find(|(oid, _)| !index.routines_in_object(oid, name_lc).is_empty())
-                {
+                match scope.iter().find(|(oid, _)| {
+                    index
+                        .routines_in_object(graph, oid, name_lc)
+                        .next()
+                        .is_some()
+                }) {
                     Some((oid, tier)) => match resolve_in_object(
                         oid,
                         *tier,
@@ -1846,13 +1845,13 @@ fn dispatch_entry_trigger(
     surface: &DeclSurface,
 ) -> (DispatchShape, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
-    let candidates = index.routines_in_object(target_id, trigger_name);
+    let candidates = index.routines_in_object(graph, target_id, trigger_name);
 
     // Object-level triggers have `enclosing_member_lc == None`.
     let entry_rid = candidates
-        .iter()
+        .clone()
         .find(|r| r.enclosing_member_lc.is_none())
-        .or_else(|| candidates.first());
+        .or_else(|| candidates.clone().next());
 
     let Some(entry_rid) = entry_rid else {
         // Trigger not found in index — Opaque (e.g. an object with no explicit trigger).
@@ -2043,7 +2042,7 @@ pub fn resolve_implicit_trigger(
     // identity.
 
     // Triggers on the base table itself.
-    for rid in index.routines_in_object(&table_object.id, trigger_name) {
+    for rid in index.routines_in_object(graph, &table_object.id, trigger_name) {
         if routine_is_collapse_marked(rid, graph) {
             routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
             continue;
@@ -2060,7 +2059,7 @@ pub fn resolve_implicit_trigger(
             .find(|o| &o.id == ext_id)
             .map(|o| o.tier)
             .unwrap_or(TrustTier::Workspace);
-        for rid in index.routines_in_object(ext_id, trigger_name) {
+        for rid in index.routines_in_object(graph, ext_id, trigger_name) {
             if routine_is_collapse_marked(rid, graph) {
                 routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
                 continue;
@@ -2677,8 +2676,8 @@ pub(crate) fn resolve_member_with_args(
                     );
                     routes.push(route);
                 } else {
-                    let candidates = index.routines_in_object(impl_id, method_lc);
-                    if candidates.is_empty() {
+                    let candidates = index.routines_in_object(graph, impl_id, method_lc);
+                    if candidates.len() == 0 {
                         // Method name absent from this implementer — Rule 1
                         // Unresolved. The implementer object IS resolved; tag
                         // its tier (reason-split Task 2).
@@ -2687,10 +2686,7 @@ pub(crate) fn resolve_member_with_args(
                             impl_tier,
                         ));
                     } else {
-                        let matching = candidates
-                            .iter()
-                            .filter(|r| r.params_count == arity)
-                            .count();
+                        let matching = candidates.filter(|r| r.params_count == arity).count();
                         match matching {
                             1 => {
                                 // Unique arity-matched overload: guaranteed to
@@ -2894,8 +2890,7 @@ fn resolve_abi_prefix_routine<'g>(
     };
 
     let visible: Vec<&RoutineNodeId> = index
-        .routines_in_object(&obj_id, &key.routine_name_lc)
-        .iter()
+        .routines_in_object(graph, &obj_id, &key.routine_name_lc)
         .filter(|rid| rid.params_count == dispatch_arity)
         .filter(|rid| routine_candidate_is_visible(rid, &from_object.id, graph, index))
         .collect();
@@ -2925,7 +2920,7 @@ fn resolve_abi_prefix_routine<'g>(
 /// physically distinct publisher declarations that single answer actually
 /// belongs to. Every loop iteration for the shared id would additionally
 /// push an `Edge` with the IDENTICAL `(from, site)` pair (routes too, since
-/// [`ResolveIndex::subscribers_of`] is also keyed by the shared id), which
+/// [`SubscriberIndex::subscribers_of`] is also keyed by the shared id), which
 /// would silently look like a harmless duplicate to any `(from, site)`
 /// dedup downstream — but could just as easily be masking a dropped
 /// fan-out once Task 2 gives each overload real per-candidate identity.
@@ -2975,7 +2970,7 @@ pub fn dual_publisher_alias_skip_count<'a>(
 }
 
 /// Emit one `EventFlow` `Multicast` edge per publisher event routine, with
-/// routes to all its resolved subscribers (from [`ResolveIndex::subscribers_of`]).
+/// routes to all its resolved subscribers (from [`SubscriberIndex::subscribers_of`]).
 ///
 /// # Edge contract
 ///
@@ -3014,14 +3009,16 @@ pub fn dual_publisher_alias_skip_count<'a>(
 /// # Determinism
 /// Publishers are iterated in `graph.routines` order (already sorted by
 /// `RoutineNodeId`); subscriber routes within each edge are already sorted by
-/// subscriber `RoutineNodeId` by [`ResolveIndex::build`].
-pub fn emit_event_flow_edges(
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
-) -> Vec<Edge> {
+/// subscriber `RoutineNodeId` by [`SubscriberIndex::build`].
+///
+/// # Why the subscriber index is built here
+/// This is the only reader of event subscriptions, so the [`SubscriberIndex`]
+/// lives only for this call instead of inside the long-lived [`ResolveIndex`]
+/// (which the LSP updater keeps while idle).
+pub fn emit_event_flow_edges(graph: &ProgramGraph, surface: &DeclSurface) -> Vec<Edge> {
     let mut edges = Vec::new();
     let dual_publisher_alias = dual_publisher_alias_ids(&graph.routines);
+    let index = SubscriberIndex::build(graph);
 
     for pub_routine in &graph.routines {
         if pub_routine.publisher_kind.is_none() {
@@ -3036,7 +3033,7 @@ pub fn emit_event_flow_edges(
         let subs = index.subscribers_of(&pub_routine.id);
 
         // Build one Route per subscriber (sorted by subscriber RoutineNodeId — already
-        // guaranteed by ResolveIndex::build).
+        // guaranteed by SubscriberIndex::build).
         // COLLAPSE-MARKER GUARD (Task 2 review fix): this subscriber fan-out
         // looks up each candidate by ROLE (an already-matched subscriber
         // entry), never through `resolve_in_object`'s name+arity selection,
@@ -5451,8 +5448,8 @@ codeunit 50612 "MixedCU2"
 
     #[test]
     fn event_flow_skips_route_for_collapse_marked_subscriber() {
-        let (graph, index, surface) = event_flow_marker_guard_fixture(true);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let (graph, _index, surface) = event_flow_marker_guard_fixture(true);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let event_edges: Vec<&Edge> = edges
             .iter()
             .filter(|e| e.kind == EdgeKind::EventFlow)
@@ -5476,8 +5473,8 @@ codeunit 50612 "MixedCU2"
 
     #[test]
     fn event_flow_includes_route_for_unmarked_subscriber_normally() {
-        let (graph, index, surface) = event_flow_marker_guard_fixture(false);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let (graph, _index, surface) = event_flow_marker_guard_fixture(false);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let event_edges: Vec<&Edge> = edges
             .iter()
             .filter(|e| e.kind == EdgeKind::EventFlow)
@@ -9546,7 +9543,9 @@ codeunit 51499 "IfaceNestedCaller"
         // Sanity: the ambiguous implementer genuinely has TWO same-arity
         // `Bar` candidates.
         let ambig_obj = find_obj(&graph, "IFooAmbigImpl");
-        let bar_candidates = index.routines_in_object(&ambig_obj.id, "bar");
+        let bar_candidates: Vec<_> = index
+            .routines_in_object(&graph, &ambig_obj.id, "bar")
+            .collect();
         assert_eq!(
             bar_candidates.len(),
             2,
@@ -9965,10 +9964,9 @@ codeunit 50701 "EvtManualSub"
     #[test]
     fn event_flow_manual_subscriber_emits_correct_edge() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
 
         // Must produce exactly ONE EventFlow edge (for OnAfterX publisher).
         let event_edges: Vec<&Edge> = edges
@@ -10047,10 +10045,9 @@ codeunit 50701 "EvtManualSub"
     #[test]
     fn event_flow_manual_route_excluded_from_default_reachable() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.kind == EdgeKind::EventFlow)
@@ -10089,10 +10086,9 @@ codeunit 50702 "NoSubPub"
         let unit_pub = make_unit(app_id, "NoSubPub.al", pub_src);
         let units = vec![unit_pub];
         let graph = build_graph(&units, None);
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
 
         let event_edges: Vec<&Edge> = edges
             .iter()
@@ -10165,9 +10161,8 @@ codeunit 50710 "CustDeleteSub"
             .expect("synthetic platform publisher injected on Customer");
 
         // The subscriber binds to it → exactly one EventFlow edge, one route, Resolved.
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.from == synth.id)
@@ -10227,9 +10222,8 @@ codeunit 50711 "CustCardOpenSub"
             })
             .expect("synthetic platform publisher injected on the page");
 
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.from == synth.id)
@@ -10267,10 +10261,9 @@ codeunit 50704 "DefaultSub"
         let unit_sub = make_unit(app_id, "DefaultSub.al", sub_src);
         let units = vec![unit_pub, unit_sub];
         let graph = build_graph(&units, None);
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.kind == EdgeKind::EventFlow)
@@ -10296,11 +10289,10 @@ codeunit 50704 "DefaultSub"
     #[test]
     fn event_flow_emission_is_deterministic() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges1 = emit_event_flow_edges(&graph, &index, &surface);
-        let edges2 = emit_event_flow_edges(&graph, &index, &surface);
+        let edges1 = emit_event_flow_edges(&graph, &surface);
+        let edges2 = emit_event_flow_edges(&graph, &surface);
 
         assert_eq!(
             edges1, edges2,
@@ -12539,7 +12531,9 @@ codeunit 53971 "OverloadNCaller"
         // collision (proves the fixture actually exercises the guard, not a
         // degenerate single-candidate case).
         let target_obj = find_obj(&graph, "OverloadNTarget");
-        let foo_candidates = index.routines_in_object(&target_obj.id, "foo");
+        let foo_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "foo")
+            .collect();
         assert_eq!(
             foo_candidates.len(),
             2,
@@ -12719,7 +12713,9 @@ codeunit 53971 "OverloadNCaller"
 
         // Sanity: two GENUINELY distinct RoutineNodeIds (differing sig_fp),
         // not a same-id collision.
-        let candidates = index.routines_in_object(&target_obj_id, "foo");
+        let candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj_id, "foo")
+            .collect();
         assert_eq!(
             candidates.len(),
             2,
@@ -12808,7 +12804,9 @@ codeunit 53973 "OverloadPCaller"
 
         // Sanity: two same-arity `Bar` candidates, BOTH `Public`, DISTINCT ids.
         let target_obj = find_obj(&graph, "OverloadPTarget");
-        let bar_candidates = index.routines_in_object(&target_obj.id, "bar");
+        let bar_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "bar")
+            .collect();
         assert_eq!(
             bar_candidates.len(),
             2,
@@ -12944,7 +12942,9 @@ codeunit 53975 "Overload3Caller"
         let surface = DeclSurface::build(&graph, &units);
 
         let target_obj = find_obj(&graph, "Overload3Target");
-        let baz_candidates = index.routines_in_object(&target_obj.id, "baz");
+        let baz_candidates: Vec<_> = index
+            .routines_in_object(&graph, &target_obj.id, "baz")
+            .collect();
         assert_eq!(
             baz_candidates.len(),
             3,
@@ -13305,7 +13305,9 @@ codeunit 60152 "AliasTarget"
         // the DeclSurface resolves it (non-Unknown evidence for BOTH) — the
         // exact shape the pre-fix `degraded` predicate failed to catch.
         assert_eq!(
-            index.routines_in_object(&target_obj_id, "foo").len(),
+            index
+                .routines_in_object(&graph, &target_obj_id, "foo")
+                .len(),
             2,
             "both source-aliased survivors must be indexed under the same id"
         );

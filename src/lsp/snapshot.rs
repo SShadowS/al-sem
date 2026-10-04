@@ -64,7 +64,7 @@ use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
 use crate::program::resolve::edge::{Edge, RouteTarget};
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::{
-    ClassifiedEdge, ObligationId, ProgramContext, build_context_with,
+    ClassifiedEdge, ObligationId, ProgramContext, build_context_with, workspace_object_map,
 };
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::sig_fp::source_routine_node_id;
@@ -279,9 +279,13 @@ pub struct LspSnapshot {
     /// Workspace-scoped: holds ONLY Phase-1 (workspace-caller) `Call`/`Run`/
     /// `ImplicitTrigger` edge buckets, keyed by `virtual_path`.
     pub edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>>,
-    /// Phase-2 `EventFlow` edges (whole-program: every publisher in every
-    /// app, not just the workspace) — kept in ONE flat bucket rather than
-    /// per-file, addressed via the reserved [`EVENT_EDGES_KEY`].
+    /// Phase-2 `EventFlow` edges (whole-program: subscribed publishers in
+    /// every app, not just the workspace) — kept in ONE flat bucket rather
+    /// than per-file, addressed via the reserved [`EVENT_EDGES_KEY`].
+    ///
+    /// Holds only links with at least one route. This is NOT the full
+    /// publisher list: a publisher nobody subscribes to has no entry here.
+    /// The program report (`resolve_full_program`) keeps the route-less links.
     pub event_edges: Arc<Vec<ClassifiedEdge>>,
     /// DERIVED — see [`build_incoming`]'s doc. Rebuilt WHOLESALE at rung 2/3
     /// (and by [`LspSnapshot::build_full`]); PATCHED (touched-file-local) at
@@ -518,8 +522,7 @@ impl LspSnapshot {
         let dep_meta: Arc<DepMetaMap>;
 
         {
-            let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
-                graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
+            let obj_node_map = workspace_object_map(&graph, primary_app_ref);
             let index = ResolveIndex::build(&graph);
             // The rung-1 construction: workspace decls over the dependency
             // tier's frozen `dep_meta` (built with the dependency nodes, so
@@ -578,10 +581,14 @@ impl LspSnapshot {
             }
             crate::census_hook::mark("6.resolve_workspace_files");
 
-            let raw_event_edges = emit_event_flow_edges(&graph, &index, &surface);
+            let raw_event_edges = emit_event_flow_edges(&graph, &surface);
+            // Links without routes have no LSP reader (no incoming ref, no
+            // fan-out, no outgoing item); the program report keeps them
+            // (spec §2, §6 2b).
             event_edges = Arc::new(
                 raw_event_edges
                     .into_iter()
+                    .filter(|edge| !edge.routes.is_empty())
                     .map(|edge| ClassifiedEdge {
                         obligation_id: ObligationId::Publisher(edge.from.clone()),
                         edge,
@@ -792,8 +799,9 @@ fn point_in_origin(pos: (u32, u32), origin: &al_syntax::ir::Origin) -> bool {
 /// `routes.len()` over every `event_edges` entry whose `edge.from == P` —
 /// the REAL resolved-subscriber count, never mere edge presence (an
 /// `emit_event_flow_edges` publisher entry always exists even with zero
-/// subscribers, so counting entries rather than summing routes would
-/// overcount an unsubscribed publisher as "used").
+/// subscribers (the LSP snapshot drops route-less ones), so counting entries
+/// rather than summing routes would overcount an unsubscribed publisher as
+/// "used").
 ///
 /// Builds ONE `Arc<str>` per file (Tier-2 latency wave, Task 1 / F5) — every
 /// `EdgeRef` for that file's edges `Arc::clone`s it, replacing the OLD
@@ -1091,6 +1099,12 @@ mod tests {
     procedure OnAfterProcess()
     begin
     end;
+
+    // A publisher nobody subscribes to: its event link has no routes.
+    [IntegrationEvent(false, false)]
+    procedure OnNobodyListens()
+    begin
+    end;
 }
 "#,
         )
@@ -1132,13 +1146,25 @@ mod tests {
         got.extend(snap.event_edges.iter().map(|ce| ce.edge.clone()));
         got.sort();
 
-        let mut want: Vec<Edge> = report.edges.into_iter().map(|ce| ce.edge).collect();
+        // The LSP keeps only event links with routes; the report keeps all.
+        let all: Vec<Edge> = report.edges.into_iter().map(|ce| ce.edge).collect();
+        let is_empty_link = |e: &Edge| e.kind == EdgeKind::EventFlow && e.routes.is_empty();
+        assert!(
+            all.iter().any(is_empty_link),
+            "the report must still hold route-less event links (not lost)"
+        );
+        let mut want: Vec<Edge> = all.into_iter().filter(|e| !is_empty_link(e)).collect();
         want.sort();
 
         assert_eq!(
             got, want,
             "build_full's edges_by_file + event_edges union must equal a \
-             direct resolve_full_program run (order-insensitive)"
+             direct resolve_full_program run minus route-less event links \
+             (order-insensitive)"
+        );
+        assert!(
+            snap.event_edges.iter().all(|ce| !ce.edge.routes.is_empty()),
+            "no route-less event link is stored in the LSP snapshot"
         );
         assert!(!got.is_empty(), "fixture must produce real edges");
     }
@@ -1403,6 +1429,17 @@ mod tests {
             "a publisher with ZERO real subscribers must have no \
              publisher_fanout entry — edge presence alone is never fan-out"
         );
+        // Its route-less link is not stored at all, and the lens count and
+        // the incoming index are unchanged (zero).
+        assert!(
+            snap.event_edges.iter().all(|ce| ce.edge.from != publisher),
+            "a route-less event link must not be stored in the LSP snapshot"
+        );
+        assert_eq!(
+            crate::lsp::lens::effective_incoming_count(&snap, &publisher),
+            0
+        );
+        assert!(!snap.incoming.contains_key(&publisher));
     }
 
     // ── build_incoming: one edge, 2 routes to the SAME target → 1 EdgeRef ──

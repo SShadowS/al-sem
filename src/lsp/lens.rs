@@ -177,7 +177,8 @@ pub(crate) fn find_routine_by_origin(
 ///   slower for a 2x larger event-bearing corpus. `publisher_fanout` already
 ///   sums ROUTES (never mere edge presence — `emit_event_flow_edges` emits
 ///   one `ClassifiedEdge` per publisher UNCONDITIONALLY, even with zero
-///   subscribers, so a publisher's own entry existing is never itself
+///   subscribers (the LSP snapshot drops route-less ones), so a publisher's
+///   own entry existing is never itself
 ///   evidence of usage), mirroring legacy's own
 ///   `event_subscriptions.get(qname).len()` term (rule R5's "subscribed" half).
 #[must_use]

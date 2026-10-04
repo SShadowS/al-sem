@@ -22,7 +22,6 @@ use crate::program::resolve::edge::{
     UnknownReason, Witness, callee_fp,
 };
 use crate::program::resolve::extract_min::extract_raw_sites;
-use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::resolver::emit_event_flow_edges;
 use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::ParsedUnit;
@@ -89,11 +88,10 @@ pub fn resolve_program(graph: &ProgramGraph, parsed: &[ParsedUnit]) -> Vec<Edge>
     }
 
     // Phase 4b Task 3: append publisher-anchored EventFlow Multicast edges.
-    // Build ResolveIndex + DeclSurface from the same inputs; both are used only
-    // within this call so the DeclSurface lifetime is contained here.
-    let index = ResolveIndex::build(graph);
+    // Build the DeclSurface from the same inputs; it is used only within this
+    // call so its lifetime is contained here.
     let surface = DeclSurface::build(graph, parsed);
-    edges.extend(emit_event_flow_edges(graph, &index, &surface));
+    edges.extend(emit_event_flow_edges(graph, &surface));
 
     edges
 }

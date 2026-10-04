@@ -1,0 +1,140 @@
+size_of: RoutineNodeId=96 ObjectNodeId=32 RoutineNode=264 ObjectNode=296 RoutineMeta=200 ClassifiedEdge=416 Route=240 DeclEntry=240 EdgeRef=24 ParsedFileEntry=128
+
+######## root 1 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Core (Symbols) built in 1.8s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live      24.2  in-phase peak      43.6  live allocs    +123448
+  2.parse                                  end-live      24.6  in-phase peak      24.7  live allocs    +124233
+  3.dep_layer                              end-live      58.8  in-phase peak     130.1  live allocs    +544073
+  4.assemble_graph                         end-live      59.6  in-phase peak      59.9  live allocs    +553865
+  5.index+surface+dep_meta+dep_texts       end-live      91.5  in-phase peak      99.4  live allocs    +742360
+  6.resolve_workspace_files                end-live      91.5  in-phase peak      91.6  live allocs    +742792
+  7.event_edges                            end-live      91.4  in-phase peak     101.5  live allocs    +742576
+  8.incoming+decl_by_id                    end-live      59.6  in-phase peak      91.4  live allocs    +554146
+  9.publish_snapshot                       end-live      59.6  in-phase peak      59.6  live allocs    +554165
+  10.returned                              end-live      59.6  in-phase peak      59.6  live allocs    +554156
+  BUILD PEAK 130.1 MiB; retained after settle 59.6 MiB in 554156 allocs
+  + diagnostics map 0.01 MiB in 46 allocs
+  shape: objects 9656 (shared 9650 own 6), routines 54284 (shared 54272 own 12), dep_meta 0, dep_texts 0, ws files 6, edges_by_file edges 19, event_edges 0, incoming keys 4, decl_by_id 12
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: None
+
+######## root 2 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Fleet (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +330
+  2.parse                                  end-live       0.3  in-phase peak       0.4  live allocs      +1154
+  3.dep_layer                              end-live       0.2  in-phase peak       0.3  live allocs      +1075
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.3  live allocs     +10712
+  5.index+surface+dep_meta+dep_texts       end-live      32.9  in-phase peak      40.9  live allocs    +199199
+  6.resolve_workspace_files                end-live      32.8  in-phase peak      33.0  live allocs    +199566
+  7.event_edges                            end-live      32.8  in-phase peak      42.8  live allocs    +199343
+  8.incoming+decl_by_id                    end-live       1.0  in-phase peak      32.8  live allocs     +10914
+  9.publish_snapshot                       end-live       1.0  in-phase peak       1.0  live allocs     +10937
+  10.returned                              end-live       1.0  in-phase peak       1.0  live allocs     +10926
+  BUILD PEAK 42.8 MiB; retained after settle 1.0 MiB in 10926 allocs
+  + diagnostics map 0.01 MiB in 41 allocs
+  shape: objects 9658 (shared 9650 own 8), routines 54282 (shared 54272 own 10), dep_meta 0, dep_texts 0, ws files 8, edges_by_file edges 22, event_edges 1, incoming keys 5, decl_by_id 10
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 1 | routes into ws 1 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+######## root 3 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Integration (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +320
+  2.parse                                  end-live       0.3  in-phase peak       0.4  live allocs       +968
+  3.dep_layer                              end-live       0.3  in-phase peak       0.3  live allocs      +1015
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.3  live allocs     +10406
+  5.index+surface+dep_meta+dep_texts       end-live      32.9  in-phase peak      40.8  live allocs    +198825
+  6.resolve_workspace_files                end-live      32.8  in-phase peak      33.0  live allocs    +199125
+  7.event_edges                            end-live      32.8  in-phase peak      42.8  live allocs    +198904
+  8.incoming+decl_by_id                    end-live       0.9  in-phase peak      32.8  live allocs     +10513
+  9.publish_snapshot                       end-live       0.9  in-phase peak       0.9  live allocs     +10526
+  10.returned                              end-live       0.9  in-phase peak       0.9  live allocs     +10520
+  BUILD PEAK 42.8 MiB; retained after settle 0.9 MiB in 10520 allocs
+  + diagnostics map 0.00 MiB in 22 allocs
+  shape: objects 9653 (shared 9650 own 3), routines 54277 (shared 54272 own 5), dep_meta 0, dep_texts 0, ws files 3, edges_by_file edges 14, event_edges 0, incoming keys 2, decl_by_id 5
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+######## root 4 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Leasing (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +320
+  2.parse                                  end-live       0.3  in-phase peak       0.4  live allocs       +887
+  3.dep_layer                              end-live       0.3  in-phase peak       0.3  live allocs       +930
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.4  live allocs     +10505
+  5.index+surface+dep_meta+dep_texts       end-live      32.9  in-phase peak      40.9  live allocs    +198924
+  6.resolve_workspace_files                end-live      32.9  in-phase peak      33.0  live allocs    +199276
+  7.event_edges                            end-live      32.8  in-phase peak      42.8  live allocs    +199032
+  8.incoming+decl_by_id                    end-live       1.0  in-phase peak      32.8  live allocs     +10630
+  9.publish_snapshot                       end-live       1.0  in-phase peak       1.0  live allocs     +10643
+  10.returned                              end-live       1.0  in-phase peak       1.0  live allocs     +10637
+  BUILD PEAK 42.8 MiB; retained after settle 1.0 MiB in 10637 allocs
+  + diagnostics map 0.01 MiB in 28 allocs
+  shape: objects 9653 (shared 9650 own 3), routines 54276 (shared 54272 own 4), dep_meta 0, dep_texts 0, ws files 3, edges_by_file edges 22, event_edges 0, incoming keys 0, decl_by_id 4
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+######## root 5 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Rental (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.5  live allocs       +336
+  2.parse                                  end-live       0.3  in-phase peak       0.5  live allocs      +1274
+  3.dep_layer                              end-live       0.2  in-phase peak       0.3  live allocs      +1138
+  4.assemble_graph                         end-live       1.2  in-phase peak       1.4  live allocs     +10988
+  5.index+surface+dep_meta+dep_texts       end-live      33.0  in-phase peak      40.9  live allocs    +199483
+  6.resolve_workspace_files                end-live      32.9  in-phase peak      33.1  live allocs    +199935
+  7.event_edges                            end-live      32.8  in-phase peak      42.8  live allocs    +199740
+  8.incoming+decl_by_id                    end-live       1.0  in-phase peak      32.8  live allocs     +11303
+  9.publish_snapshot                       end-live       1.0  in-phase peak       1.0  live allocs     +11328
+  10.returned                              end-live       1.0  in-phase peak       1.0  live allocs     +11316
+  BUILD PEAK 42.8 MiB; retained after settle 1.0 MiB in 11316 allocs
+  + diagnostics map 0.01 MiB in 56 allocs
+  shape: objects 9659 (shared 9650 own 9), routines 54283 (shared 54272 own 11), dep_meta 0, dep_texts 0, ws files 9, edges_by_file edges 40, event_edges 0, incoming keys 5, decl_by_id 11
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+######## root 6 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Reporting (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +324
+  2.parse                                  end-live       0.3  in-phase peak       0.4  live allocs       +877
+  3.dep_layer                              end-live       0.3  in-phase peak       0.3  live allocs       +914
+  4.assemble_graph                         end-live       1.0  in-phase peak       1.3  live allocs     +10209
+  5.index+surface+dep_meta+dep_texts       end-live      32.8  in-phase peak      40.8  live allocs    +198583
+  6.resolve_workspace_files                end-live      32.7  in-phase peak      32.9  live allocs    +198725
+  7.event_edges                            end-live      32.7  in-phase peak      42.7  live allocs    +198507
+  8.incoming+decl_by_id                    end-live       0.9  in-phase peak      32.7  live allocs     +10133
+  9.publish_snapshot                       end-live       0.9  in-phase peak       0.9  live allocs     +10142
+  10.returned                              end-live       0.9  in-phase peak       0.9  live allocs     +10138
+  BUILD PEAK 42.7 MiB; retained after settle 0.9 MiB in 10138 allocs
+  + diagnostics map 0.00 MiB in 4 allocs
+  shape: objects 9651 (shared 9650 own 1), routines 54272 (shared 54272 own 0), dep_meta 0, dep_texts 0, ws files 1, edges_by_file edges 0, event_edges 0, incoming keys 0, decl_by_id 0
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+######## root 7 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Test (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.5  live allocs       +350
+  2.parse                                  end-live       0.5  in-phase peak       0.7  live allocs      +1975
+  3.dep_layer                              end-live       0.4  in-phase peak       0.5  live allocs      +1839
+  4.assemble_graph                         end-live       1.3  in-phase peak       1.6  live allocs     +11661
+  5.index+surface+dep_meta+dep_texts       end-live      33.2  in-phase peak      41.1  live allocs    +200228
+  6.resolve_workspace_files                end-live      33.2  in-phase peak      33.3  live allocs    +201491
+  7.event_edges                            end-live      33.2  in-phase peak      43.2  live allocs    +201308
+  8.incoming+decl_by_id                    end-live       1.3  in-phase peak      33.2  live allocs     +12861
+  9.publish_snapshot                       end-live       1.4  in-phase peak       1.4  live allocs     +12880
+  10.returned                              end-live       1.4  in-phase peak       1.4  live allocs     +12871
+  BUILD PEAK 43.2 MiB; retained after settle 1.4 MiB in 12871 allocs
+  + diagnostics map 0.01 MiB in 22 allocs
+  shape: objects 9656 (shared 9650 own 6), routines 54298 (shared 54272 own 26), dep_meta 0, dep_texts 0, ws files 6, edges_by_file edges 164, event_edges 0, incoming keys 5, decl_by_id 26
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_texts ptr_eq true | objects.shared ptr_eq true
+
+ALL 7 ROOTS LIVE: 65.7 MiB in 620791 allocs
+
+==== --with-updaters: starting one updater per root ====
+  root 1 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Core: updater adds 31.82 MiB in 188501 allocs
+  root 2 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Fleet: updater adds 31.82 MiB in 188495 allocs
+  root 3 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Integration: updater adds 31.81 MiB in 188427 allocs
+  root 4 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Leasing: updater adds 31.81 MiB in 188427 allocs
+  root 5 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Rental: updater adds 31.82 MiB in 188503 allocs
+  root 6 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Reporting: updater adds 31.81 MiB in 188382 allocs
+  root 7 C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/e9b369c8-ac7c-4abe-91bb-e823ec61a546/scratchpad/cgref/Test: updater adds 31.83 MiB in 188575 allocs
+RETAINED, ALL 7 UPDATERS IDLE: 288.5 MiB in 1940114 allocs (all-roots-built was 65.7 MiB; updaters add 222.7 MiB in 1319304 allocs)
+RSS context (OS, not used for any byte figure): 357,3 MiB working set, 362,2 MiB peak working set
+after updaters joined and snapshots dropped: live 0.2 MiB

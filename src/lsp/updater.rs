@@ -129,11 +129,11 @@ use crate::lsp::snapshot::{
 };
 use crate::program::assemble_program_graph;
 use crate::program::dep_cache::DepCache;
-use crate::program::node::{ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::emit_event_flow_edges;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId};
+use crate::program::resolve::full::{ClassifiedEdge, ObligationId, workspace_object_map};
 use crate::program::resolve::index::ResolveIndex;
 use crate::snapshot::{DependencySource, ParsedFile, ParsedUnit, Provenance, TrustTier};
 
@@ -320,12 +320,7 @@ impl Updater {
                 // updater doesn't retain any).
                 let surface = DeclSurface::build(&cur.graph, std::slice::from_ref(&self.workspace))
                     .with_frozen(Arc::clone(&cur.dep_meta));
-                let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> = cur
-                    .graph
-                    .objects
-                    .iter()
-                    .map(|o| (o.id.clone(), o))
-                    .collect();
+                let obj_node_map = workspace_object_map(&cur.graph, primary_app_ref_of(cur));
                 let (snapshot, _delta) = apply_rung1_core(
                     cur,
                     saves,
@@ -529,15 +524,11 @@ impl Updater {
         // `ParsedUnit` to rebuild it from in the first place.
         let surface = DeclSurface::build(&new_graph, std::slice::from_ref(&self.workspace))
             .with_frozen(Arc::clone(&cur.dep_meta));
-        let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> = new_graph
-            .objects
-            .iter()
-            .map(|o| (o.id.clone(), o))
-            .collect();
         let primary_app_ref = new_graph
             .apps
             .find(&cur.snap.workspace_app)
             .expect("assemble_program_graph must intern the workspace app");
+        let obj_node_map = workspace_object_map(&new_graph, primary_app_ref);
 
         let mut edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
@@ -590,10 +581,14 @@ impl Updater {
             );
         }
 
-        let raw_event_edges = emit_event_flow_edges(&new_graph, &index, &surface);
+        let raw_event_edges = emit_event_flow_edges(&new_graph, &surface);
+        // Links without routes have no LSP reader (no incoming ref, no
+        // fan-out, no outgoing item); the program report keeps them
+        // (spec §2, §6 2b). Same filter as `LspSnapshot::from_context`.
         let event_edges = Arc::new(
             raw_event_edges
                 .into_iter()
+                .filter(|edge| !edge.routes.is_empty())
                 .map(|edge| ClassifiedEdge {
                     obligation_id: ObligationId::Publisher(edge.from.clone()),
                     edge,
@@ -795,11 +790,7 @@ fn apply_rung1_core(
     pending: &mut HashMap<String, ParsedFile>,
     decl_multiplicity: &mut Option<HashMap<RoutineNodeId, u32>>,
 ) -> (LspSnapshot, Rung1Delta) {
-    let primary_app_ref = cur
-        .graph
-        .apps
-        .find(&cur.snap.workspace_app)
-        .expect("the workspace app must already be interned in an existing graph");
+    let primary_app_ref = primary_app_ref_of(cur);
 
     let mut edges_by_file = cur.edges_by_file.clone();
     let mut decls_by_file = cur.decls_by_file.clone();
@@ -1147,14 +1138,17 @@ impl<'g> Rung1Context<'g> {
             index: ResolveIndex::build(&cur.graph),
             surface: DeclSurface::build(&cur.graph, std::slice::from_ref(workspace))
                 .with_frozen(Arc::clone(&cur.dep_meta)),
-            obj_node_map: cur
-                .graph
-                .objects
-                .iter()
-                .map(|o| (o.id.clone(), o))
-                .collect(),
+            obj_node_map: workspace_object_map(&cur.graph, primary_app_ref_of(cur)),
         }
     }
+}
+
+/// The workspace app's `AppRef` in `cur`'s graph (rung 1 never changes it).
+fn primary_app_ref_of(cur: &LspSnapshot) -> AppRef {
+    cur.graph
+        .apps
+        .find(&cur.snap.workspace_app)
+        .expect("assemble_program_graph must intern the workspace app")
 }
 
 /// Spawn the updater thread implementing the module doc's "scoped-context
