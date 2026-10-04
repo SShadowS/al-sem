@@ -11,6 +11,7 @@ use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
+use crate::program::profile::BuildProfile;
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
@@ -80,7 +81,13 @@ pub fn build_dep_layer(
     abi_cache: &AbiCache,
     parsed: &[ParsedUnit],
 ) -> DepLayer {
-    build_dep_layer_cached(snap, abi_cache, parsed, &DepCache::default())
+    build_dep_layer_cached(
+        snap,
+        abi_cache,
+        parsed,
+        BuildProfile::FULL,
+        &DepCache::default(),
+    )
 }
 
 /// [`build_dep_layer`], taking the dependency nodes from `dep_cache` when
@@ -91,13 +98,14 @@ pub fn build_dep_layer_cached(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
     parsed: &[ParsedUnit],
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> DepLayer {
     // ── Step 1: intern all app identities (primary included, for AppRef stability) ──
     let mut apps = AppRegistry::default();
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
 
-    let dep_nodes = dep_cache.get_or_build(DepKey::of(snap), || {
+    let dep_nodes = dep_cache.get_or_build(DepKey::of(snap, profile), || {
         build_dep_nodes(snap, abi_cache, parsed, &mut apps)
     });
 

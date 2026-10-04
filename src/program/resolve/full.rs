@@ -43,6 +43,7 @@ use crate::program::dep_cache::{DepCache, DepKey};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
+use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::abi_check::{
     AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
@@ -1053,9 +1054,17 @@ pub struct ProgramContext {
     /// (see [`assemble_program_graph`]'s doc); kept here so a caller that wants
     /// to REUSE it across rebuilds doesn't have to re-derive it a second time.
     pub(crate) dep_layer: DepLayer,
+    /// What this build was asked to keep (spec §4).
+    pub(crate) profile: BuildProfile,
 }
 
 impl ProgramContext {
+    /// What this build was asked to keep.
+    #[must_use]
+    pub fn profile(&self) -> BuildProfile {
+        self.profile
+    }
+
     /// The assembled whole-program graph (shared-substrate consumers only).
     #[must_use]
     pub fn graph(&self) -> &ProgramGraph {
@@ -1075,7 +1084,7 @@ impl ProgramContext {
 }
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
-    build_context_from_snapshot(build_snapshot_res(workspace_root)?)
+    build_context_from_snapshot(build_snapshot_res(workspace_root)?, BuildProfile::FULL)
 }
 
 /// [`build_context`] with an explicit [`DependencySource`] — the LSP server
@@ -1088,6 +1097,7 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Option<ProgramContext> {
     let snap = (SnapshotBuilder {
@@ -1101,7 +1111,7 @@ pub fn build_context_with(
     .map(|(snap, _dropped)| snap)
     .ok()?;
     crate::census_hook::mark("1.snapshot");
-    build_context_from_snapshot_cached(snap, dep_cache).ok()
+    build_context_from_snapshot_cached(snap, profile, dep_cache).ok()
 }
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the
@@ -1124,14 +1134,18 @@ pub fn build_snapshot_res(workspace_root: &Path) -> Result<AppSetSnapshot, Strin
 /// Steps 2-3 of [`build_context_res`]: parse the snapshot, build the layered
 /// graph, and locate the primary app. Split from [`build_snapshot_res`] purely
 /// so the preflight cache can skip this half on a hit — behaviour is unchanged.
-pub fn build_context_from_snapshot(snap: AppSetSnapshot) -> Result<ProgramContext, String> {
-    build_context_from_snapshot_cached(snap, &DepCache::default())
+pub fn build_context_from_snapshot(
+    snap: AppSetSnapshot,
+    profile: BuildProfile,
+) -> Result<ProgramContext, String> {
+    build_context_from_snapshot_cached(snap, profile, &DepCache::default())
 }
 
 /// [`build_context_from_snapshot`], sharing the dependency tier through
 /// `dep_cache` with every other root that loads the same dependencies.
 pub fn build_context_from_snapshot_cached(
     snap: AppSetSnapshot,
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Result<ProgramContext, String> {
     // ws_file_set: the true workspace source virtual paths (first AppUnit).
@@ -1164,7 +1178,7 @@ pub fn build_context_from_snapshot_cached(
     // hit only the workspace is parsed and `parsed` holds the workspace unit
     // alone. Only the LSP passes a shared cache; every other caller passes a
     // throwaway one, never hits, and still gets every unit.
-    let shared_tier = dep_cache.get(&DepKey::of(&snap));
+    let shared_tier = dep_cache.get(&DepKey::of(&snap, profile));
     let parsed = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
         if shared_tier.is_some() {
@@ -1184,6 +1198,7 @@ pub fn build_context_from_snapshot_cached(
             &snap,
             &crate::program::abi_ingest::AbiCache::new(),
             &parsed,
+            profile,
             dep_cache,
         )
     };
@@ -1233,6 +1248,7 @@ pub fn build_context_from_snapshot_cached(
         primary_app_ref,
         ws_file_set,
         dep_layer,
+        profile,
     })
 }
 
@@ -1371,7 +1387,12 @@ pub fn fresh_coverage(workspace_root: &Path) -> Result<FreshCoverage, String> {
         return Ok(hit);
     }
 
-    let ctx = build_context_from_snapshot(snap)?;
+    // Reads no dependency body; it DOES read edge details, which a later step
+    // will declare in the profile (spec §4).
+    let profile = BuildProfile {
+        dependency_bodies: DependencyBodies::Summary,
+    };
+    let ctx = build_context_from_snapshot(snap, profile)?;
     let report = {
         let _s = pt::span("preflight", "preflight.resolve_full");
         resolve_full_program_with(&ctx)

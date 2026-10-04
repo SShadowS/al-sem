@@ -1174,6 +1174,8 @@ mod tests {
             primary_app_ref,
             ws_file_set,
             dep_layer,
+            // Test fixture: assembled by hand, stands for the LSP build.
+            profile: crate::program::profile::BuildProfile::LIGHT,
         };
         LspSnapshot::from_context(ctx, std::path::Path::new("/workspace")).0
     }

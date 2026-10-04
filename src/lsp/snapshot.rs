@@ -59,6 +59,7 @@ use crate::program::dep_cache::DepCache;
 use crate::program::dep_cache::DepLspTier;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
+use crate::program::profile::BuildProfile;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
 use crate::program::resolve::edge::{Edge, RouteTarget};
 use crate::program::resolve::emit_event_flow_edges;
@@ -392,7 +393,12 @@ impl LspSnapshot {
         dependency_source: DependencySource,
         dep_cache: &DepCache,
     ) -> Option<LspSnapshot> {
-        let ctx = build_context_with(workspace_root, dependency_source, dep_cache)?;
+        let ctx = build_context_with(
+            workspace_root,
+            dependency_source,
+            BuildProfile::LIGHT,
+            dep_cache,
+        )?;
         Some(Self::from_context(ctx, workspace_root).0)
     }
 
@@ -451,7 +457,12 @@ impl LspSnapshot {
         dependency_source: DependencySource,
         dep_cache: &DepCache,
     ) -> Option<(LspSnapshot, ParsedUnit)> {
-        let ctx = build_context_with(workspace_root, dependency_source, dep_cache)?;
+        let ctx = build_context_with(
+            workspace_root,
+            dependency_source,
+            BuildProfile::LIGHT,
+            dep_cache,
+        )?;
         Some(Self::from_context(ctx, workspace_root))
     }
 
@@ -487,6 +498,7 @@ impl LspSnapshot {
             primary_app_ref,
             ws_file_set,
             dep_layer,
+            profile: _,
         } = ctx;
 
         // Locate the ONE primary (workspace) `ParsedUnit` — `snap.apps` is

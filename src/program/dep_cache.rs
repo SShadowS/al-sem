@@ -13,6 +13,7 @@ use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
 use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
+use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
@@ -200,6 +201,8 @@ impl DepCache {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DepKey {
     apps: Vec<DepAppKey>,
+    /// A profile that keeps dependency trees builds a different tier.
+    keep_bodies: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -216,7 +219,7 @@ struct DepAppKey {
 }
 
 impl DepKey {
-    pub fn of(snap: &AppSetSnapshot) -> DepKey {
+    pub fn of(snap: &AppSetSnapshot, profile: BuildProfile) -> DepKey {
         let apps = snap
             .apps
             .iter()
@@ -228,7 +231,10 @@ impl DepKey {
                 has_source: unit.source.is_some(),
             })
             .collect();
-        DepKey { apps }
+        DepKey {
+            apps,
+            keep_bodies: profile.dependency_bodies == DependencyBodies::Keep,
+        }
     }
 }
 
@@ -451,7 +457,8 @@ mod tests {
             &fx.alpackages,
             r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
         );
-        let old = build_context_from_snapshot_cached(snap, &cache).expect("context");
+        let old =
+            build_context_from_snapshot_cached(snap, BuildProfile::LIGHT, &cache).expect("context");
         assert!(
             !old.graph().objects.iter().any(|o| o.name == "Extra"),
             "precondition: the first context was built from the OLD bytes"
@@ -533,8 +540,10 @@ mod tests {
             dep.app_stamp = None;
             snap
         };
-        let one = build_context_from_snapshot_cached(snap(), &cache).expect("context");
-        let two = build_context_from_snapshot_cached(snap(), &cache).expect("context");
+        let one = build_context_from_snapshot_cached(snap(), BuildProfile::LIGHT, &cache)
+            .expect("context");
+        let two = build_context_from_snapshot_cached(snap(), BuildProfile::LIGHT, &cache)
+            .expect("context");
         assert!(
             !one.graph().routines.shared().is_empty(),
             "precondition: the dependency tier is built"
@@ -813,11 +822,44 @@ mod tests {
             1,
             "precondition: root A parsed the dependency once"
         );
-        let ctx =
-            build_context_with(&fx.root_b, DependencySource::Embedded, &cache).expect("context");
+        let ctx = build_context_with(
+            &fx.root_b,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("context");
         assert_eq!(parses_under(fx._dir.path()), 1, "B parsed the dependency");
         let apps: Vec<_> = ctx.parsed().iter().map(|u| u.app.guid.clone()).collect();
         assert_eq!(apps, vec![GUID_B.to_string()]);
+    }
+
+    /// Profiles that keep different things build different dependency tiers.
+    #[test]
+    fn different_profiles_do_not_share_a_dep_tier() {
+        use crate::program::resolve::full::build_context_with;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let light = build_context_with(
+            &fx.root_a,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("light");
+        let full = build_context_with(
+            &fx.root_b,
+            DependencySource::Embedded,
+            BuildProfile::FULL,
+            &cache,
+        )
+        .expect("full");
+        assert_eq!(light.profile(), BuildProfile::LIGHT);
+        assert_eq!(full.profile(), BuildProfile::FULL);
+        assert!(!Arc::ptr_eq(
+            &light.dep_layer.dep_nodes,
+            &full.dep_layer.dep_nodes
+        ));
     }
 
     /// A rung-3 rebuild of a root whose dependency set did not change is a
