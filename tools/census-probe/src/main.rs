@@ -224,14 +224,21 @@ fn drop_root_by_field(r: Root) {
                         objects,
                         routines,
                         abi_ingest_errors,
+                        dep_meta,
+                        recovered,
+                        bodies,
                         lsp,
                     } = n;
                     step("SHARED dep tier: objects", objects);
                     step("SHARED dep tier: routines", routines);
                     step("SHARED dep tier: abi_ingest_errors", abi_ingest_errors);
+                    // dep_meta moved from DepLspTier to DepNodes; same label.
+                    step("SHARED dep tier: dep_meta", dep_meta);
+                    step("SHARED dep tier: recovered", recovered);
+                    // New field: dependency ParsedUnits, Some only under Keep (FULL).
+                    step("SHARED dep tier: bodies (Keep only)", bodies);
                     match lsp.into_inner().map(Arc::try_unwrap) {
                         Some(Ok(t)) => {
-                            step("SHARED dep tier: dep_meta", t.dep_meta);
                             step("SHARED dep tier: dep_texts", t.dep_texts);
                         }
                         Some(Err(t)) => {
