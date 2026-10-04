@@ -59,10 +59,17 @@ run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets
 # The task-gate lint: the SAME lints and `-D warnings` as `run_clippy`, but in
 # the dev profile. The release profile disables incremental compilation, so every
 # `clippy --release` re-checks the whole crate from scratch; the dev profile
-# reuses its previous work. Lints that differ between the two profiles are rare
-# (code behind `cfg(debug_assertions)`), which is why `all` — the branch gate and
-# what CI runs — keeps the exact release bar.
-run_clippy_dev() { require_grammar || return 1; cargo clippy --all-targets --all-features -- -D warnings; }
+# reuses its previous work (21 s warm vs minutes).
+#
+# Debug assertions are switched OFF so this sees the same `cfg` CI's release lint
+# sees. With them on, code that only a `#[cfg(debug_assertions)]` test uses looks
+# used here and "never used" in CI: that exact lint broke CI on 2026-10-04 right
+# after a green task gate. `all` — the branch gate and what CI runs — still keeps
+# the exact release bar.
+run_clippy_dev() {
+    require_grammar || return 1
+    CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false cargo clippy --all-targets --all-features -- -D warnings
+}
 
 # NOTE: cannot run from a git worktree with no grammar checkout — the grammar
 # clone is gitignored, so a worktree has none and `tree-sitter-al/src/node-types.json` is

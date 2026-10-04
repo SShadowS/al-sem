@@ -821,7 +821,9 @@ mod tests {
         Ok(ordering_output(state))
     }
 
-    /// Reads the facts the way d47/d49/d51 do.
+    /// Reads the facts the way d47/d49/d51 do. Only the debug-only guard test
+    /// uses it, so it is debug-only too (CI lints in release).
+    #[cfg(debug_assertions)]
     fn ordering_facts_reader(
         _r: &L3Resolved,
         c: &DetectorContext,
