@@ -7634,7 +7634,6 @@ fn distinct_sig_fp_publishers_both_emit_correct_spans() {
     use al_sem::program::abi_ingest::AbiCache;
     use al_sem::program::build::build_program_graph;
     use al_sem::program::resolve::decl_surface::DeclSurface;
-    use al_sem::program::resolve::index::ResolveIndex;
     use al_sem::program::resolve::resolver::{
         dual_publisher_alias_skip_count, emit_event_flow_edges,
     };
@@ -7644,7 +7643,6 @@ fn distinct_sig_fp_publishers_both_emit_correct_spans() {
     let cache = AbiCache::new();
     let graph = build_program_graph(&snap, &cache);
     let parsed = parse_snapshot(&snap);
-    let index = ResolveIndex::build(&graph);
     let surface = DeclSurface::build(&graph, &parsed);
 
     // Precondition: both overloads survived, both UNMARKED (distinct ids),
@@ -7683,7 +7681,7 @@ fn distinct_sig_fp_publishers_both_emit_correct_spans() {
          dual-publisher-alias skip"
     );
 
-    let edges = emit_event_flow_edges(&graph, &index, &surface);
+    let edges = emit_event_flow_edges(&graph, &surface);
     assert_eq!(
         edges.len(),
         2,

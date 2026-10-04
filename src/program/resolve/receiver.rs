@@ -6298,11 +6298,13 @@ mod tests {
         let shared_dep2 =
             make_object_node(dep2, ObjectKind::ControlAddIn, "Shared.Addin", None, None);
 
-        let routines = vec![
+        let mut routines = vec![
             control_addin_routine(editor.id.clone(), "InitEditor", 2),
             control_addin_routine(editor.id.clone(), "GetHTML", 0),
             control_addin_routine(broken.id.clone(), "Foo", 0),
         ];
+        // `NodeSet` lookups need a sorted list (the hand-built order was not).
+        routines.sort_by(|a, b| a.id.cmp(&b.id));
 
         let mut objects = vec![host, editor, broken, shared_dep1, shared_dep2];
         objects.sort_by(|a, b| a.id.cmp(&b.id));

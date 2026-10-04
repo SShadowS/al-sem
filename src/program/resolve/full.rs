@@ -862,7 +862,7 @@ fn resolve_full_program_from_parts(
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).
     // We must track obligation ids in the same pass so coverage holds.
-    let event_edges = emit_event_flow_edges(graph, &index, surface);
+    let event_edges = emit_event_flow_edges(graph, surface);
     for edge in event_edges {
         // Each publisher routine emits exactly one EventFlow edge.
         let obl_id = ObligationId::Publisher(edge.from.clone());

@@ -1,5 +1,9 @@
 # Step 2: what the idle updater's resolver index holds, by field (2026-10-04)
 
+> This records the index BEFORE Tasks 4-5 (subscriber maps and the per-routine map are
+> gone now). For the current layout see the "After step 2" section of
+> `docs/2026-10-04-step0-server-census.md`.
+
 ## Conventions
 
 Same as `docs/2026-10-04-step0-server-census.md`.

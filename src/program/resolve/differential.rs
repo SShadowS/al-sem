@@ -501,15 +501,13 @@ pub fn project_fresh_event_rows(workspace_root: &Path) -> Vec<CanonicalEventRow>
 pub fn project_fresh_event_rows_on(
     ctx: &crate::program::resolve::full::ProgramContext,
 ) -> Vec<CanonicalEventRow> {
-    use crate::program::resolve::index::ResolveIndex;
     use crate::program::resolve::resolver::emit_event_flow_edges;
 
     let graph = &ctx.graph;
-    let index = ResolveIndex::build(graph);
     let surface = ctx.decl_surface();
     let apps = &graph.apps;
 
-    let fresh_edges = emit_event_flow_edges(graph, &index, &surface);
+    let fresh_edges = emit_event_flow_edges(graph, &surface);
 
     let mut rows: Vec<CanonicalEventRow> = Vec::new();
     for edge in &fresh_edges {

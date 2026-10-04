@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (1 root), embedded: idle with updaters 449.9 to 380.2 MiB; one updater 66.35 to 8.48
     MiB. `symbols` mode, CG: idle 375.4 to 100.2 MiB. RSS and the process peak were not
     measured. No golden moved.
+  - API changes (the crate is only used by this repo):
+    - New `SubscriberIndex`. `subscribers_of`, `ambiguous_subscriptions` and
+      `orphaned_subscriptions` moved to it from `ResolveIndex`.
+    - `routines_in_object` now takes the `graph` and returns an iterator.
+    - `emit_event_flow_edges` no longer takes an index parameter.
+    - `workspace_object_map` is now public.
+    - `ResolveIndex::census_parts` added (for the census probe only).
 
 ## [1.3.4] - 2026-10-04
 

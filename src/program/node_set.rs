@@ -57,6 +57,8 @@ impl<T> Default for NodeSet<T> {
 impl<T: SortKey> NodeSet<T> {
     /// `shared` and `own` must each already be sorted by `sort_key`.
     pub fn layered(shared: Arc<Vec<T>>, own: Vec<T>) -> Self {
+        Self::debug_assert_sorted(&shared);
+        Self::debug_assert_sorted(&own);
         let mut set = NodeSet {
             shared,
             own,
@@ -64,6 +66,16 @@ impl<T: SortKey> NodeSet<T> {
         };
         set.reindex();
         set
+    }
+
+    /// `run_by` and every routine lookup depend on each part being sorted.
+    /// (Checked where sortedness is promised, not in `reindex`: `push` and
+    /// `extend` legitimately leave `own` unsorted until `sort_by`.)
+    fn debug_assert_sorted(part: &[T]) {
+        debug_assert!(
+            part.windows(2).all(|w| w[0].sort_key() <= w[1].sort_key()),
+            "NodeSet part is not sorted by its sort key"
+        );
     }
 
     /// Recompute `own_pos`: an own element lands after every shared element
@@ -166,6 +178,7 @@ impl<T: SortKey> NodeSet<T> {
     /// Stable-sort the own part (the shared part is sorted by construction).
     pub fn sort_by<F: FnMut(&T, &T) -> Ordering>(&mut self, f: F) {
         self.own.sort_by(f);
+        Self::debug_assert_sorted(&self.own);
         self.reindex();
     }
 
@@ -358,6 +371,30 @@ mod tests {
         set.clear();
         assert!(set.is_empty());
         assert_eq!(set.get(0), None);
+    }
+
+    /// Discrimination for the sortedness `debug_assert!`: an unsorted part
+    /// panics in debug builds, a sorted one passes.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not sorted")]
+    fn unsorted_own_part_panics_in_debug() {
+        let _ = NodeSet::layered(Arc::new(vec![N(1, "s")]), vec![N(4, "o"), N(2, "o")]);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not sorted")]
+    fn unsorted_shared_part_panics_in_debug() {
+        let _ = NodeSet::layered(Arc::new(vec![N(5, "s"), N(3, "s")]), Vec::new());
+    }
+
+    #[test]
+    fn sorted_parts_with_ties_pass() {
+        let _ = NodeSet::layered(
+            Arc::new(vec![N(1, "s"), N(1, "s")]),
+            vec![N(1, "o"), N(2, "o")],
+        );
     }
 
     #[test]

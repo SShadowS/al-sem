@@ -35,8 +35,10 @@
 //! # Arity matching (Phase 2 / Phase 3 Task 0; ambiguity guard beyond-1B.3b Task 2)
 //!
 //! `RoutineNodeId` now carries `params_count`, so each overload (same name,
-//! different arity) is a distinct node in the graph and index.
-//! `routines_in_object` returns one entry per distinct overload.  An overload
+//! different arity) is a distinct node in the graph.
+//! `routines_in_object` reads the sorted `graph.routines` list and yields
+//! every row of `(object, name)`, multiplicity kept (physical duplicate rows
+//! included).  An overload
 //! matches when `rid.params_count == arity`.  When EXACTLY ONE match is found
 //! it is returned.  When the name is found but NO overload matches the arity,
 //! OR more than one same-arity overload matches (a genuine SOURCE-overload
@@ -3012,13 +3014,8 @@ pub fn dual_publisher_alias_skip_count<'a>(
 /// # Why the subscriber index is built here
 /// This is the only reader of event subscriptions, so the [`SubscriberIndex`]
 /// lives only for this call instead of inside the long-lived [`ResolveIndex`]
-/// (which the LSP updater keeps while idle). `_index` is no longer read; it
-/// stays so the 16 call sites keep their shape (compact-graph step 2, Task 4).
-pub fn emit_event_flow_edges(
-    graph: &ProgramGraph,
-    _index: &ResolveIndex,
-    surface: &DeclSurface,
-) -> Vec<Edge> {
+/// (which the LSP updater keeps while idle).
+pub fn emit_event_flow_edges(graph: &ProgramGraph, surface: &DeclSurface) -> Vec<Edge> {
     let mut edges = Vec::new();
     let dual_publisher_alias = dual_publisher_alias_ids(&graph.routines);
     let index = SubscriberIndex::build(graph);
@@ -5451,8 +5448,8 @@ codeunit 50612 "MixedCU2"
 
     #[test]
     fn event_flow_skips_route_for_collapse_marked_subscriber() {
-        let (graph, index, surface) = event_flow_marker_guard_fixture(true);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let (graph, _index, surface) = event_flow_marker_guard_fixture(true);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let event_edges: Vec<&Edge> = edges
             .iter()
             .filter(|e| e.kind == EdgeKind::EventFlow)
@@ -5476,8 +5473,8 @@ codeunit 50612 "MixedCU2"
 
     #[test]
     fn event_flow_includes_route_for_unmarked_subscriber_normally() {
-        let (graph, index, surface) = event_flow_marker_guard_fixture(false);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let (graph, _index, surface) = event_flow_marker_guard_fixture(false);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let event_edges: Vec<&Edge> = edges
             .iter()
             .filter(|e| e.kind == EdgeKind::EventFlow)
@@ -9967,10 +9964,9 @@ codeunit 50701 "EvtManualSub"
     #[test]
     fn event_flow_manual_subscriber_emits_correct_edge() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
 
         // Must produce exactly ONE EventFlow edge (for OnAfterX publisher).
         let event_edges: Vec<&Edge> = edges
@@ -10049,10 +10045,9 @@ codeunit 50701 "EvtManualSub"
     #[test]
     fn event_flow_manual_route_excluded_from_default_reachable() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.kind == EdgeKind::EventFlow)
@@ -10091,10 +10086,9 @@ codeunit 50702 "NoSubPub"
         let unit_pub = make_unit(app_id, "NoSubPub.al", pub_src);
         let units = vec![unit_pub];
         let graph = build_graph(&units, None);
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
 
         let event_edges: Vec<&Edge> = edges
             .iter()
@@ -10167,9 +10161,8 @@ codeunit 50710 "CustDeleteSub"
             .expect("synthetic platform publisher injected on Customer");
 
         // The subscriber binds to it → exactly one EventFlow edge, one route, Resolved.
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.from == synth.id)
@@ -10229,9 +10222,8 @@ codeunit 50711 "CustCardOpenSub"
             })
             .expect("synthetic platform publisher injected on the page");
 
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.from == synth.id)
@@ -10269,10 +10261,9 @@ codeunit 50704 "DefaultSub"
         let unit_sub = make_unit(app_id, "DefaultSub.al", sub_src);
         let units = vec![unit_pub, unit_sub];
         let graph = build_graph(&units, None);
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges = emit_event_flow_edges(&graph, &index, &surface);
+        let edges = emit_event_flow_edges(&graph, &surface);
         let e = edges
             .iter()
             .find(|e| e.kind == EdgeKind::EventFlow)
@@ -10298,11 +10289,10 @@ codeunit 50704 "DefaultSub"
     #[test]
     fn event_flow_emission_is_deterministic() {
         let (graph, units) = build_event_flow_fixture_manual();
-        let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &units);
 
-        let edges1 = emit_event_flow_edges(&graph, &index, &surface);
-        let edges2 = emit_event_flow_edges(&graph, &index, &surface);
+        let edges1 = emit_event_flow_edges(&graph, &surface);
+        let edges2 = emit_event_flow_edges(&graph, &surface);
 
         assert_eq!(
             edges1, edges2,

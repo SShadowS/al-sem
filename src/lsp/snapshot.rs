@@ -279,9 +279,13 @@ pub struct LspSnapshot {
     /// Workspace-scoped: holds ONLY Phase-1 (workspace-caller) `Call`/`Run`/
     /// `ImplicitTrigger` edge buckets, keyed by `virtual_path`.
     pub edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>>,
-    /// Phase-2 `EventFlow` edges (whole-program: every publisher in every
-    /// app, not just the workspace) — kept in ONE flat bucket rather than
-    /// per-file, addressed via the reserved [`EVENT_EDGES_KEY`].
+    /// Phase-2 `EventFlow` edges (whole-program: subscribed publishers in
+    /// every app, not just the workspace) — kept in ONE flat bucket rather
+    /// than per-file, addressed via the reserved [`EVENT_EDGES_KEY`].
+    ///
+    /// Holds only links with at least one route. This is NOT the full
+    /// publisher list: a publisher nobody subscribes to has no entry here.
+    /// The program report (`resolve_full_program`) keeps the route-less links.
     pub event_edges: Arc<Vec<ClassifiedEdge>>,
     /// DERIVED — see [`build_incoming`]'s doc. Rebuilt WHOLESALE at rung 2/3
     /// (and by [`LspSnapshot::build_full`]); PATCHED (touched-file-local) at
@@ -577,7 +581,7 @@ impl LspSnapshot {
             }
             crate::census_hook::mark("6.resolve_workspace_files");
 
-            let raw_event_edges = emit_event_flow_edges(&graph, &index, &surface);
+            let raw_event_edges = emit_event_flow_edges(&graph, &surface);
             // Links without routes have no LSP reader (no incoming ref, no
             // fan-out, no outgoing item); the program report keeps them
             // (spec §2, §6 2b).
@@ -795,8 +799,9 @@ fn point_in_origin(pos: (u32, u32), origin: &al_syntax::ir::Origin) -> bool {
 /// `routes.len()` over every `event_edges` entry whose `edge.from == P` —
 /// the REAL resolved-subscriber count, never mere edge presence (an
 /// `emit_event_flow_edges` publisher entry always exists even with zero
-/// subscribers, so counting entries rather than summing routes would
-/// overcount an unsubscribed publisher as "used").
+/// subscribers (the LSP snapshot drops route-less ones), so counting entries
+/// rather than summing routes would overcount an unsubscribed publisher as
+/// "used").
 ///
 /// Builds ONE `Arc<str>` per file (Tier-2 latency wave, Task 1 / F5) — every
 /// `EdgeRef` for that file's edges `Arc::clone`s it, replacing the OLD

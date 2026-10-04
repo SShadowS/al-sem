@@ -496,7 +496,8 @@ impl ResolveIndex {
     /// with no per-call allocation and no per-routine map (the map this
     /// replaced was 50.03 of 56.81 MiB per idle updater on the CG corpus,
     /// embedded mode, root 1; see `docs/2026-10-04-step2-index-census.md`).
-    /// `graph` must be the graph this index was built from.
+    /// `graph.routines` must be sorted (the `NodeSet` invariant) and consistent
+    /// with the object maps the caller also uses; the index holds no routines.
     pub fn routines_in_object<'g>(
         &self,
         graph: &'g ProgramGraph,

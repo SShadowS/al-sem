@@ -581,7 +581,7 @@ impl Updater {
             );
         }
 
-        let raw_event_edges = emit_event_flow_edges(&new_graph, &index, &surface);
+        let raw_event_edges = emit_event_flow_edges(&new_graph, &surface);
         // Links without routes have no LSP reader (no incoming ref, no
         // fan-out, no outgoing item); the program report keeps them
         // (spec §2, §6 2b). Same filter as `LspSnapshot::from_context`.
@@ -790,11 +790,7 @@ fn apply_rung1_core(
     pending: &mut HashMap<String, ParsedFile>,
     decl_multiplicity: &mut Option<HashMap<RoutineNodeId, u32>>,
 ) -> (LspSnapshot, Rung1Delta) {
-    let primary_app_ref = cur
-        .graph
-        .apps
-        .find(&cur.snap.workspace_app)
-        .expect("the workspace app must already be interned in an existing graph");
+    let primary_app_ref = primary_app_ref_of(cur);
 
     let mut edges_by_file = cur.edges_by_file.clone();
     let mut decls_by_file = cur.decls_by_file.clone();
