@@ -104,8 +104,11 @@ keeps every unit until the context dies.
   full `ParsedUnit`s, so any future analysis can walk dependency code.
 - Both profiles build the dependency layer and `DeclSurface` from the summaries, so both take
   ONE code path to the same graph.
-- `recovered_file_paths` reads the summaries' flag (pack spec §11.2). Its absence-proof
-  invariant is unchanged.
+- **Parse-recovery status gets a lasting home.** Before a summary is consumed, its
+  `parse_status_recovered` flag moves into a recovered-paths list held by the dependency tier
+  (shared, so a cache hit sees it too). `recovered_file_paths` (pack spec §11.2) returns that
+  list combined with the workspace's own recovered files. Its absence-proof invariant is
+  unchanged, and the summaries themselves are not kept.
 - `build_dep_texts` (`src/lsp/snapshot.rs:1046`) also reads dependency `ParsedUnit`s, for
   paths and texts, not syntax trees. It is rewired to read the snapshot's source files
   (the same `Arc<str>`s), so it no longer depends on `parsed`.
@@ -136,8 +139,11 @@ keeps every unit until the context dies.
    `master` output, not only against itself.
 2. A test proves `Summary` frees trees as it goes: live dependency syntax trees during the
    build stay bounded by about one per worker thread.
-3. Probe re-run. Target: light peak at 7 CG roots from 1,121 MiB to about 425 MiB; `alsem`'s
-   `fresh_coverage` peak falls by a similar amount.
+3. Probe re-run. Target for THIS step: the first root's build peak loses the co-resident
+   dependency syntax trees (804 MiB on CG, 915 MiB on CDO, minus about one file per worker
+   thread); `alsem`'s `fresh_coverage` peak falls by a similar amount. The 7-root process
+   peak this step reaches is recorded, not targeted: it also includes the updater indexes
+   (§3), which step 2 shares. Step 0 sets the exact number.
 
 ## §6 — Step 2: share event links between roots
 
@@ -171,10 +177,13 @@ after merging and appended to the root's own tier, even when the object is a dep
   (it had no dependency subscriber) still produces its link.
 - **Ordered merge.** A publisher's combined routes are the shared routes merged with the root's
   added routes in the same global order today's sort produces.
-- **Synthetic platform publishers** are classified by where their facts come from: those
-  derived only from dependency subscribers belong to the shared tier, those touching a
-  workspace subscriber belong to the root. Which ones are shareable is decided in this step,
-  with the equality check below as the gate.
+- **Synthetic platform publishers.** Publishers synthesized from dependency subscribers belong
+  to the shared tier. Root-owned synthesis supplies ONLY publishers absent from the shared
+  tier. When a platform event already has a shared synthetic publisher, a workspace
+  subscription to it reuses that publisher (a root-owned added route), never a second
+  root-owned publisher and never a relocated shared one, so subscription resolution never
+  sees duplicate candidates. Tested with a platform event that has both dependency and
+  workspace subscribers, and with one that has only a workspace subscriber.
 - The CG measurement (identical across 7 roots) is evidence, not proof. The equality check
   is the proof, and it must include roots whose subscriptions change.
 
@@ -193,8 +202,10 @@ retained.
    correctly. Rung-1 and rung-2 answers with the shared updater indexes equal today's.
 2. Every LSP answer (call hierarchy, code lens, diagnostics, custom requests) is identical
    under both profiles.
-3. Probe re-run. Target: each extra root from about 18 MiB to about 2.5 MiB, roughly 100 MiB
-   less at 7 roots, so 7 roots keep under about 260 MiB.
+3. Probe re-run. Estimates, snapshot-only (they exclude the updater indexes): each extra
+   root's snapshot from about 18 MiB to about 2.5 MiB, roughly 100 MiB less at 7 roots. The
+   updater-index saving is priced separately by step 0. Total per-root server memory is
+   measured with the updaters running, as in step 0.
 
 ## §7 — Step 3: B3, the detectors on the program engine
 
@@ -305,7 +316,8 @@ No fixed saving is promised here, because steps 1 and 2 change the base.
   CHANGELOG.
 - Held throughout: real-unknown rate 0; `FULL` output identical to today; goldens move only in
   step 3, with written triage.
-- Steps 1 and 2 can ship on their own (they are what the 3 GB container needs).
+- Steps 1 and 2 can ship on their own. Whether they are ENOUGH for the 3 GB container is
+  decided by the harness gate in §11, not assumed.
 - The first commit fixes CLAUDE.md's wrong claim that L4/L5 consume the program engine, and
   adds the profile rule.
 
@@ -323,6 +335,10 @@ No fixed saving is promised here, because steps 1 and 2 change the base.
 - Retained heap with the server idle (updaters included): set from step 0's measurement. The
   goal is the snapshots' ~260 MiB plus one shared copy of the dependency updater indexes,
   not seven copies. The exact number is written in at step 0, before step 1 starts.
-- An RSS reading in the container confirms the heap figures; it is reported, not targeted.
+- **Container acceptance (the real pass criterion):** heap figures do not prove
+  deployability. Steps 1 and 2 count as done for the container only when the CentralGauge
+  harness's own gate passes: a signed release, a full 7-root cell at 3 GB next to the AL
+  language server, zero "memory allocation ... failed" lines, over the harness's standard
+  number of cold runs. RSS is reported alongside as context.
 - `alsem` findings come from the program engine; every difference from today is triaged.
 - Real-unknown rate stays 0; all gates green at every step; `FULL` keeps every fact.
