@@ -78,7 +78,7 @@ use crate::program::resolve::edge::{
     SetCompleteness, SiteId, SourcePos, UnknownReason, Witness, callee_fp,
 };
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::index::ResolveIndex;
+use crate::program::resolve::index::{ResolveIndex, SubscriberIndex};
 use crate::program::resolve::member_catalog::{
     MemberCatalogKind, member_builtin, member_builtin_id,
 };
@@ -2925,7 +2925,7 @@ fn resolve_abi_prefix_routine<'g>(
 /// physically distinct publisher declarations that single answer actually
 /// belongs to. Every loop iteration for the shared id would additionally
 /// push an `Edge` with the IDENTICAL `(from, site)` pair (routes too, since
-/// [`ResolveIndex::subscribers_of`] is also keyed by the shared id), which
+/// [`SubscriberIndex::subscribers_of`] is also keyed by the shared id), which
 /// would silently look like a harmless duplicate to any `(from, site)`
 /// dedup downstream — but could just as easily be masking a dropped
 /// fan-out once Task 2 gives each overload real per-candidate identity.
@@ -2975,7 +2975,7 @@ pub fn dual_publisher_alias_skip_count<'a>(
 }
 
 /// Emit one `EventFlow` `Multicast` edge per publisher event routine, with
-/// routes to all its resolved subscribers (from [`ResolveIndex::subscribers_of`]).
+/// routes to all its resolved subscribers (from [`SubscriberIndex::subscribers_of`]).
 ///
 /// # Edge contract
 ///
@@ -3014,14 +3014,21 @@ pub fn dual_publisher_alias_skip_count<'a>(
 /// # Determinism
 /// Publishers are iterated in `graph.routines` order (already sorted by
 /// `RoutineNodeId`); subscriber routes within each edge are already sorted by
-/// subscriber `RoutineNodeId` by [`ResolveIndex::build`].
+/// subscriber `RoutineNodeId` by [`SubscriberIndex::build`].
+///
+/// # Why the subscriber index is built here
+/// This is the only reader of event subscriptions, so the [`SubscriberIndex`]
+/// lives only for this call instead of inside the long-lived [`ResolveIndex`]
+/// (which the LSP updater keeps while idle). `_index` is no longer read; it
+/// stays so the 16 call sites keep their shape (compact-graph step 2, Task 4).
 pub fn emit_event_flow_edges(
     graph: &ProgramGraph,
-    index: &ResolveIndex,
+    _index: &ResolveIndex,
     surface: &DeclSurface,
 ) -> Vec<Edge> {
     let mut edges = Vec::new();
     let dual_publisher_alias = dual_publisher_alias_ids(&graph.routines);
+    let index = SubscriberIndex::build(graph);
 
     for pub_routine in &graph.routines {
         if pub_routine.publisher_kind.is_none() {
@@ -3036,7 +3043,7 @@ pub fn emit_event_flow_edges(
         let subs = index.subscribers_of(&pub_routine.id);
 
         // Build one Route per subscriber (sorted by subscriber RoutineNodeId — already
-        // guaranteed by ResolveIndex::build).
+        // guaranteed by SubscriberIndex::build).
         // COLLAPSE-MARKER GUARD (Task 2 review fix): this subscriber fan-out
         // looks up each candidate by ROLE (an already-matched subscriber
         // entry), never through `resolve_in_object`'s name+arity selection,

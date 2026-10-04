@@ -7242,17 +7242,18 @@ fn compound_obj_dup_and_overload_dedups_to_canonical_count() {
 /// Before the fix, the inflated 4-entry run left 2 publisher-tagged raw
 /// candidates (both from the SAME genuine overload, duplicated by `obj_dup`)
 /// with equal arity, so `ResolveIndex::build`'s `>1` arm found no unique
-/// strict-arity match and dropped the subscription as ambiguous.
+/// strict-arity match and dropped the subscription as ambiguous. (That
+/// candidate logic now lives in `SubscriberIndex::build`.)
 #[test]
 fn compound_obj_dup_and_overload_subscription_resolves_not_ambiguous() {
     use al_sem::program::abi_ingest::AbiCache;
     use al_sem::program::build::build_program_graph;
-    use al_sem::program::resolve::index::ResolveIndex;
+    use al_sem::program::resolve::index::SubscriberIndex;
 
     let snap = compound_overload_dup_snapshot();
     let cache = AbiCache::new();
     let graph = build_program_graph(&snap, &cache);
-    let idx = ResolveIndex::build(&graph);
+    let idx = SubscriberIndex::build(&graph);
 
     assert!(
         idx.ambiguous_subscriptions().is_empty(),
