@@ -131,9 +131,10 @@ pub struct OrphanSub {
 
 /// Pre-built lookup indexes over a [`ProgramGraph`].
 ///
-/// All internal `Vec`s are populated by iterating `graph.objects` and
-/// `graph.routines` in their already-sorted (by `NodeId`) order, so every
-/// returned list is deterministic without a secondary sort.
+/// All internal `Vec`s are populated by iterating `graph.objects` in its
+/// already-sorted (by `NodeId`) order, so every returned list is
+/// deterministic without a secondary sort. Routines are not copied in:
+/// [`Self::routines_in_object`] reads `graph.routines` directly.
 pub struct ResolveIndex {
     /// `(app, kind, declared_id)` → `ObjectNodeId` (first in sorted order for
     /// that app; duplicates within one app silently ignored). Feeds
@@ -493,8 +494,8 @@ impl ResolveIndex {
     /// `RoutineNodeId` sorts by `(object, name_lc, …)` first, so these rows
     /// are one contiguous run of the sorted list: a binary search finds it,
     /// with no per-call allocation and no per-routine map (the map this
-    /// replaced was 50 of 57 MiB per idle LSP root; compact-graph step 2,
-    /// Task 5). `graph` must be the graph this index was built from.
+    /// replaced was 50.03 of 56.81 MiB per idle updater on the CG corpus,
+    /// embedded mode, root 1; see `docs/2026-10-04-step2-index-census.md`). `graph` must be the graph this index was built from.
     pub fn routines_in_object<'g>(
         &self,
         graph: &'g ProgramGraph,

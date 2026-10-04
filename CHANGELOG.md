@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Lighter per-root state in the LSP server (compact-graph step 2).** Four changes. All
+  numbers are heap bytes from the counting allocator (not RSS), one run per cell, from
+  `tools/census-probe` (`runs-step2/` against `runs-after/`; the report is the "After
+  step 2" section of `docs/2026-10-04-step0-server-census.md`).
+  - The resolver's object map now holds workspace objects only.
+  - The LSP snapshot keeps only event links that have routes (24,527 down to 2,033 per
+    root on the CG corpus). The program report still keeps all of them.
+  - The subscriber maps moved out of the resolver index into the one function that reads
+    them (about 1.8 MiB per root).
+  - The per-routine map `routines_by_obj_name` is gone; `routines_in_object` binary-searches
+    the sorted routine list (50.03 of 56.81 MiB per idle updater on CG).
+  - Result, CG corpus (7 roots, CG harness), embedded mode: idle with updaters 763.6 to
+    310.6 MiB; one updater 57.45 to 4.94 MiB; snapshots only 361.4 to 275.9 MiB; first
+    root's build peak 317.8 to 287.1 MiB. CDO (1 root): idle with updaters 449.9 to 380.2
+    MiB; one updater 66.3 to 8.48 MiB. `symbols` mode, CG: idle 375.4 to 100.2 MiB. No
+    golden moved.
+
 ## [1.3.4] - 2026-10-04
 
 ### Added

@@ -735,8 +735,8 @@ fn object_has_member_candidate(
 /// sorted by `RoutineNodeId` — binary-searchable, mirroring
 /// `make_routine_route`'s existing `graph.routines.binary_search_by` lookup
 /// pattern). Returns `None` on a lookup miss — should never happen for a
-/// `RoutineNodeId` sourced from `index.routines_in_object` (the index is
-/// built directly from `graph.routines`), but if it ever does, the caller
+/// `RoutineNodeId` sourced from `index.routines_in_object` (those ids are
+/// read straight from `graph.routines`), but if it ever does, the caller
 /// ([`object_has_visible_member_candidate`]) fails closed rather than
 /// assuming the routine is visible.
 fn lookup_routine_access(graph: &ProgramGraph, rid: &RoutineNodeId) -> Option<Access> {

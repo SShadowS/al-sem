@@ -58,3 +58,28 @@ What the numbers say:
 - Updater share per root is unchanged (CG embedded 402.2 total, symbols 227.2, CDO 66.3 and 44.8).
 - Not measured here: `fresh_coverage`'s peak (the probe builds LSP snapshots, not that path) and the process peak in server order.
 - RSS context only (updaters idle, one reading): CG embedded 931.3 MiB working set (peak 940.6), CG symbols 460.4 (464.7), CDO embedded 574.3 (580.6), CDO symbols 258.3 (264.7). Heap figures above are not comparable to these.
+
+## After step 2 (2026-10-04): lighter per-root state
+
+Same probe, corpora and four modes. Engine: branch `feat/step2-lighter-root` at `eee47e2e` (plus this task's doc-only edits). Raw output: `tools/census-probe/runs-step2/{cg,cdo}-{embedded,symbols}-{base,updaters}.txt`, plus `cg-embedded-split.txt` (`--index-split`). One run per cell. "Before" is the After-step-1 table above. Heap bytes from the counting allocator, never RSS. The four changes: `dccf397a` (resolver object map holds workspace objects only), `819ea98e` (LSP snapshot keeps only event links with routes), `8ff2c81c` (subscriber maps leave `ResolveIndex`), `eee47e2e` (`routines_by_obj_name` deleted).
+
+| Corpus | Mode | Build peak, root 1 (before / after) | Snapshots only (before / after) | Updaters idle (before / after) | One updater (before / after) |
+|---|---|--:|--:|--:|--:|
+| CG, 7 roots | embedded | 317.8 / **287.1** | 361.4 / **275.9** | 763.6 / **310.6** | 57.45 / **4.94** |
+| CG, 7 roots | symbols | 130.0 / 130.0 | 148.3 / **65.7** | 375.4 / **100.2** | 32.46 / **4.93** |
+| CDO, 1 root | embedded | 449.1 / **395.3** | 383.6 / **371.7** | 449.9 / **380.2** | 66.35 / **8.48** |
+| CDO, 1 root | symbols | 200.5 / **183.6** | 155.1 / **142.9** | 199.9 / **151.4** | 44.81 / **8.48** |
+
+(The "before" snapshots-only and idle columns are the `updaters`-run values of After step 1; the new `base` runs agree with the new `updaters` runs within 0.1 MiB, e.g. CG embedded 275.9 vs 276.0.)
+
+What the numbers say, and which task the probe can attribute:
+
+- **One idle updater, CG embedded: 57.45 to 4.94 MiB.** The index census (`docs/2026-10-04-step2-index-census.md`) measured 56.81 MiB for the index plus object map plus local `DeclSurface`, of which `routines_by_obj_name` 50.03 and the subscriber maps 1.84. 56.81 - 50.03 - 1.84 = 4.94, which is the new figure. So `eee47e2e` accounts for 50.03 MiB and `8ff2c81c` for 1.84 (both from the census, which was taken before those commits; this run's `--index-split` shows the sum of the remaining fields is 4.93 MiB: `objects_by_name` 2.29, `objects_by_id` 1.81, `objs_by_number` 0.77, the three extension maps and `implementers` 0.07). `dccf397a`'s share is the 0.64 MiB difference between step 0's 57.45 and the census's 56.81 (the census says it fits; no probe isolates it). CDO: 66.35 to 8.48; its fields were not split in this run, the same arithmetic is not repeated for it.
+- **Snapshots only, CG embedded: 361.4 to 275.9 MiB (-85.5; about 12.2 per root).** Attributed to `819ea98e`: `event_edges` per root fell from 24,527 to 2,033 (the `shape:` line), and root 1's retained size from 253.2 to 241.1 MiB (-12.1). The other three changes live in the index, which the snapshots do not hold. CDO fell 11.9 (383.6 to 371.7), CG symbols 82.6 (148.3 to 65.7).
+- **Build peak.** The in-phase peaks of phases 5 and 7 fell (CG embedded phase 5 from 307.7 to 241.6, phase 7 from 317.8 to 259.7), so the build peak is now set in phase 3 (`dep_layer`) in all four cells, at 287.1 (CG embedded), 395.3 (CDO embedded), 130.0 (CG symbols) and 183.6 (CDO symbols). Phase 3 is untouched by step 2: CG embedded 287.1 before and after; CG symbols 130.0 both; CDO symbols 183.7 in the After-step-1 text (183.6 now, run-to-run) (its peak was set later in phase 7 at 200.5). The drop in peak is therefore the removed index and event-edge transients in later phases, and the new peak is the dependency layer.
+- **Residual.** Per root, the idle updater is 4.93 to 4.94 MiB on CG and 8.48 on CDO, roughly what is left of the index (all objects, shared and own, since the index is built over the whole graph) plus `DeclSurface`'s local part (0.01 MiB CG, 3.06 CDO per the index census). Roots 2 to 7 each still hold 5.6 to 6.2 MiB of snapshot of their own (retained after settle), over a shared tier that is pointer-equal to root 1's.
+- Not measured here: `fresh_coverage`'s peak, the process peak in server order, RSS (not re-read this time).
+
+### What is left per root (input to the sharing decision, 2d)
+
+CG corpus, embedded, 7 roots, updaters idle: 310.6 MiB retained heap (symbols: 100.2). Of that, root 1's snapshot is 241.1 MiB (the shared tier included, held once because roots 2 to 7 share it by pointer), roots 2 to 7's own snapshots add 34.9 MiB (5.6 to 6.2 each), and the seven updaters add 34.6 MiB (4.93 to 4.95 each). So 69.5 MiB, or 22% of the total, is per-root state beyond root 1's snapshot. The updater part is almost all `ResolveIndex` over a graph whose objects are 9,789 shared and 6 to 9 own per root: its object maps (`objects_by_name` 2.29, `objects_by_id` 1.81, `objs_by_number` 0.77 MiB) are built over all 9,795 objects, and the shared objects are the same in every root. Whether the shared part of those three maps could be built once and shared was not measured: no probe splits them by tier, and the maps' keys and per-root differences were not compared. The CDO workspace (1 root) holds 380.2 MiB idle, of which 8.48 is the updater; sharing does not change a one-root server.
