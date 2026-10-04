@@ -69,6 +69,48 @@ pub fn read_capped<R: Read>(reader: R, cap: u64) -> Result<Vec<u8>, CapReadError
     Ok(out)
 }
 
+/// Copy all of `reader` into an anonymous temp file, capped at `cap` bytes,
+/// and return the file rewound to its start.
+///
+/// The disk-backed twin of [`read_capped`], for entries big enough (tens of
+/// MB) that one contiguous heap buffer is a risk under a tight memory limit.
+/// Same cap rule: at most `cap + 1` bytes are ever copied, and more than `cap`
+/// is [`CapReadError::CapExceeded`]. The file has no name and is deleted when
+/// the returned handle is dropped.
+pub fn copy_capped_to_tempfile<R: Read>(
+    reader: R,
+    cap: u64,
+) -> Result<std::fs::File, CapReadError> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = tempfile::tempfile().map_err(CapReadError::Io)?;
+    let mut writer = std::io::BufWriter::with_capacity(1 << 20, &mut file);
+    let copied = std::io::copy(&mut reader.take(cap.saturating_add(1)), &mut writer)
+        .map_err(CapReadError::Io)?;
+    writer.flush().map_err(CapReadError::Io)?;
+    drop(writer);
+    if copied > cap {
+        return Err(CapReadError::CapExceeded { cap });
+    }
+    file.seek(SeekFrom::Start(0)).map_err(CapReadError::Io)?;
+    Ok(file)
+}
+
+/// Map `file` read-only, or `None` when it is empty (mapping an empty file is
+/// an error on some platforms). A read-only file-backed mapping is paged in
+/// from the file and does not count against Windows commit, unlike a heap
+/// buffer of the same size.
+///
+/// # Safety
+///
+/// Nothing may change or truncate the file while the mapping is alive.
+pub unsafe fn map_read_only(file: &std::fs::File) -> std::io::Result<Option<memmap2::Mmap>> {
+    if file.metadata()?.len() == 0 {
+        return Ok(None);
+    }
+    // SAFETY: passed on to the caller (see the function's contract).
+    unsafe { memmap2::Mmap::map(file) }.map(Some)
+}
+
 /// Check a zip entry's central-directory-declared uncompressed size against
 /// `cap` BEFORE reading it — belt and suspenders alongside `read_capped`'s
 /// read-time cap (the brief's "reject before reading when declared size
@@ -116,7 +158,8 @@ pub const EMBEDDED_AL_SOURCE_CAP: u64 = 16 * 1024 * 1024;
 
 /// Cap for the nested `.app` entry inside a Ready-to-Run package (see
 /// `engine::deps::app_package_zip::read_ready_to_run_app`). It is read into
-/// memory whole. BaseApp's nested app measures ~44 MB (BC 28.0-28.4, 2026-10),
+/// memory whole from bytes, or into a temp file when opened from a path
+/// (`open_app_file`). BaseApp's nested app measures ~44 MB (BC 28.0-28.4, 2026-10),
 /// System Application ~15 MB. 512 MB gives >11x headroom over BaseApp.
 pub const READY_TO_RUN_APP_CAP: u64 = 512 * 1024 * 1024;
 
@@ -180,6 +223,20 @@ mod tests {
     #[test]
     fn unbounded_stream_is_capped_not_drained() {
         let err = read_capped(Unbounded, 4096).unwrap_err();
+        assert!(matches!(err, CapReadError::CapExceeded { cap: 4096 }));
+    }
+
+    #[test]
+    fn tempfile_copy_round_trips_at_cap_and_rejects_over_cap() {
+        let data = vec![7u8; 100];
+        let mut file = copy_capped_to_tempfile(Cursor::new(data.clone()), 100).expect("at cap");
+        let mut back = Vec::new();
+        file.read_to_end(&mut back).unwrap();
+        assert_eq!(back, data);
+
+        let err = copy_capped_to_tempfile(Cursor::new(vec![7u8; 101]), 100).unwrap_err();
+        assert!(matches!(err, CapReadError::CapExceeded { cap: 100 }));
+        let err = copy_capped_to_tempfile(Unbounded, 4096).unwrap_err();
         assert!(matches!(err, CapReadError::CapExceeded { cap: 4096 }));
     }
 

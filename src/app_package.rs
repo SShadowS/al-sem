@@ -451,25 +451,60 @@ fn parse_symbols<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<Vec
         crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
     )
     .context("SymbolReference.json declared size exceeds cap")?;
-    let content =
-        crate::capped_io::read_capped(symbols_file, crate::capped_io::SYMBOL_REFERENCE_JSON_CAP)
-            .context("Failed to read SymbolReference.json")?;
-
-    // Handle UTF-8 BOM if present
-    let json_str = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        std::str::from_utf8(&content[3..]).context("Invalid UTF-8 in SymbolReference.json")?
-    } else {
-        std::str::from_utf8(&content).context("Invalid UTF-8 in SymbolReference.json")?
-    };
-
-    // The JSON may have null byte padding after the actual content — see
-    // `parse_first_json_value`'s doc.
     let symbols: SymbolReference =
-        parse_first_json_value(json_str).context("Failed to parse SymbolReference.json")?;
+        stream_first_json_value(symbols_file, crate::capped_io::SYMBOL_REFERENCE_JSON_CAP)?;
 
     let mut objects = Vec::new();
     collect_objects_top(symbols, &mut objects);
     Ok(objects)
+}
+
+/// [`parse_first_json_value`] over a reader, without first reading it into
+/// one buffer: BaseApp's `SymbolReference.json` is ~58 MB, too big for one
+/// heap block under a tight container memory limit.
+///
+/// Same rules as the in-memory read it replaces: a leading UTF-8 BOM is
+/// skipped, only the FIRST JSON value is parsed (trailing NUL padding is
+/// fine), and more than `cap` bytes in the entry is an error. The rest of the
+/// entry after the value is read and thrown away only to enforce that cap.
+fn stream_first_json_value<T: serde::de::DeserializeOwned>(
+    reader: impl Read,
+    cap: u64,
+) -> Result<T> {
+    use serde::de::Error as _;
+    let mut limited = reader.take(cap.saturating_add(1));
+    let parsed = (|| -> std::io::Result<std::result::Result<T, serde_json::Error>> {
+        let mut buffered = std::io::BufReader::with_capacity(64 * 1024, &mut limited);
+        let mut head = Vec::with_capacity(3);
+        (&mut buffered).take(3).read_to_end(&mut head)?;
+        if head == [0xEF, 0xBB, 0xBF] {
+            head.clear();
+        }
+        let mut input = std::io::Cursor::new(head).chain(buffered);
+        let value = match serde_json::Deserializer::from_reader(&mut input)
+            .into_iter::<T>()
+            .next()
+        {
+            Some(result) => result,
+            None => Err(serde_json::Error::custom("no JSON content in input")),
+        };
+        // Read the rest only so the cap below sees the whole entry.
+        std::io::copy(&mut input, &mut std::io::sink())?;
+        Ok(value)
+    })();
+    // `take` has handed out all `cap + 1` bytes: the entry is over the cap,
+    // whatever the parser made of the cut-off text.
+    if limited.limit() == 0 {
+        return Err(crate::capped_io::CapReadError::CapExceeded { cap })
+            .context("Failed to read SymbolReference.json");
+    }
+    let value = parsed
+        .map_err(crate::capped_io::CapReadError::Io)
+        .context("Failed to read SymbolReference.json")?;
+    match value {
+        Err(e) if e.is_io() => Err(e).context("Failed to read SymbolReference.json"),
+        other => other.context("Failed to parse SymbolReference.json"),
+    }
 }
 
 /// Drain top-level SymbolReference into ExternalObject entries, including
@@ -950,5 +985,50 @@ mod tests {
 
         let pkg = extract_app_package(&path).expect("normal-sized app must parse");
         assert_eq!(pkg.metadata.name, "BombApp");
+    }
+
+    const STREAM_SYMBOLS: &str = r#"{"Tables":[{"Id":18,"Name":"Customer"}],"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Parameters":[{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Sales Header"}}}]}]}],"Namespaces":[{"Name":"Microsoft","Codeunits":[{"Id":90,"Name":"Purch.-Post"}]}]}"#;
+
+    /// The streaming `parse_symbols` must accept a BOM-prefixed and a
+    /// NUL-padded `SymbolReference.json` and yield the same objects as the
+    /// old in-memory route (`from_utf8` + `parse_first_json_value`).
+    #[test]
+    fn streamed_symbols_match_the_in_memory_parse_with_bom_and_nul_padding() {
+        let expected = {
+            let symbols: SymbolReference = parse_first_json_value(STREAM_SYMBOLS).unwrap();
+            let mut objects = Vec::new();
+            collect_objects_top(symbols, &mut objects);
+            format!("{objects:?}")
+        };
+        assert!(expected.contains("Purch.-Post") && expected.contains("Sales Header"));
+
+        let bom = [b"\xEF\xBB\xBF".as_slice(), STREAM_SYMBOLS.as_bytes()].concat();
+        let nul = [STREAM_SYMBOLS.as_bytes(), &[0u8; 4096]].concat();
+        let both = [bom.as_slice(), &[0u8; 17]].concat();
+        for (label, entry) in [("bom", &bom), ("nul", &nul), ("bom+nul", &both)] {
+            let app = crate::engine::deps::app_package_zip::test_apps::build_app(&[(
+                "SymbolReference.json",
+                entry,
+            )]);
+            let zip = crate::engine::deps::app_package_zip::strip_app_header(&app);
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+            let objects = parse_symbols(&mut archive).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            assert_eq!(format!("{objects:?}"), expected, "{label}");
+        }
+    }
+
+    /// The cap covers the whole entry, including bytes after the first JSON
+    /// value that the parser never looks at.
+    #[test]
+    fn streamed_symbols_reject_padding_past_the_cap() {
+        // Padding well past the 64 KiB read buffer, so only the drain after
+        // the value can reach the cap.
+        let entry = [b"{}".as_slice(), &vec![0u8; 200_000]].concat();
+        let err = stream_first_json_value::<SymbolReference>(&entry[..], 200_001).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("exceeds the 200001-byte cap"),
+            "{err:#}"
+        );
+        assert!(stream_first_json_value::<SymbolReference>(&entry[..], 200_002).is_ok());
     }
 }

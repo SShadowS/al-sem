@@ -19,10 +19,16 @@ pub struct SourceFile {
 }
 
 /// blake3 hex of the whole `.app` file (artifact identity).
+///
+/// Streamed through the hasher, never read whole: BaseApp's `.app` is ~105 MB.
 pub fn app_content_hash(app_path: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(app_path).with_context(|| format!("read .app: {}", app_path.display()))?;
-    Ok(blake3::hash(&bytes).to_hex().to_string())
+    let file = std::fs::File::open(app_path)
+        .with_context(|| format!("read .app: {}", app_path.display()))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher
+        .update_reader(file)
+        .with_context(|| format!("read .app: {}", app_path.display()))?;
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 /// Extract every `*.al` entry from the `.app`'s embedded zip. Returns an empty
@@ -119,6 +125,21 @@ mod tests {
             app_content_hash(&app).unwrap()
         );
         assert_eq!(app_content_hash(Path::new(&app)).unwrap().len(), 64);
+    }
+
+    /// The streamed hash equals the old whole-file `blake3::hash` — it keys
+    /// the on-disk source cache, so it must not change.
+    #[test]
+    fn streamed_content_hash_equals_whole_file_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.app");
+        // Over blake3's 1 KiB chunk and 64 KiB reader buffer sizes.
+        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            app_content_hash(&path).unwrap(),
+            blake3::hash(&bytes).to_hex().to_string()
+        );
     }
 
     /// Task T2.2: an embedded `.al` entry declaring more than

@@ -28,6 +28,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (about 15.5 MiB in a one-root census). The first root of a dependency set still parses
   it, with the same transient peak as before. A one-root census of retained memory is
   unchanged at 252.3 MiB; the "before" census was recorded earlier with the same probe.
+- **Loading large dependencies no longer needs one big block of memory per file.** The
+  LSP server can share a small container with the AL language server. There, total
+  memory runs short in brief spikes, and one failed allocation aborts the process. Five
+  reads used to take tens of MB in one piece; now none does:
+  - The `.app` nested inside a Ready-to-Run package (Base Application: ~44 MB) is
+    unpacked into a temporary file that is deleted when it is closed, not into memory.
+  - The symbol list (`SymbolReference.json`, Base Application: ~58 MB) is parsed
+    straight from the package as it is unpacked, for the dependency list.
+  - For the call-graph engine, the same file is unpacked into a temporary file and
+    memory-mapped read-only. A read-only file mapping does not count against Windows'
+    memory limit (commit).
+  - The content hash of each `.app` (Base Application: ~105 MB) is computed while
+    reading the file in small pieces, not after reading it whole. The hash is the same.
+  - The cached dependency source (`~/.al-sem/cache/*.json`) is memory-mapped when read
+    and written straight to the file when saved. Its format is the same.
+
+  The size limits are unchanged, and an over-limit entry is still rejected.
+
+### Fixed
+
+- **The warning for a dependency `.app` whose manifest cannot be read now shows the real
+  cause.** It used to print only the outer context, for example just
+  `Ready-to-Run package: <path>`. The warning for a dependency whose symbols cannot be
+  parsed now shows the full cause too.
 
 ## [1.3.2] - 2026-10-03
 
