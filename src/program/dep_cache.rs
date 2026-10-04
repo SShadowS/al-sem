@@ -73,9 +73,11 @@ pub struct DepNodes {
     /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
     /// not parse the dependencies) still reports them.
     pub recovered: Vec<String>,
-    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` exactly when
-    /// the tier was built under `DependencyBodies::Keep` (the key's
-    /// `keep_bodies`), so a `Keep` hit always carries them.
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` only when
+    /// the tier was built from a `Keep` build parse (`DepInput::Built` under
+    /// `DependencyBodies::Keep`). A `DepInput::Parsed` input never keeps
+    /// bodies, and `build_dep_layer_cached` asserts it is never keyed `Keep`,
+    /// so a `Keep` hit always carries them.
     pub bodies: Option<Arc<Vec<ParsedUnit>>>,
     /// The LSP products derived from this tier (set by the first snapshot
     /// that builds them). Keyed by this tier's AppRefs, so they are valid
@@ -245,6 +247,12 @@ impl DepKey {
         }
     }
 }
+
+/// The shared `CDO_WS` gate (skips without it, panics under
+/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do.
+#[cfg(test)]
+#[path = "../../tests/common/cdo.rs"]
+mod cdo;
 
 #[cfg(test)]
 mod tests {
@@ -1043,5 +1051,66 @@ mod tests {
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert_non_trivial(&solo);
         assert_eq!(answers(&rebuilt), answers(&solo));
+    }
+
+    /// Spec §5 check 1 on the real workspace: `LIGHT` (the LSP) and `FULL`
+    /// give the same program report and the same LSP answers on CDO, so a
+    /// shape only Base Application has cannot break the LIGHT path unseen.
+    /// Gated on `CDO_WS`; `scripts/cdo-gate` runs it via `--lib`.
+    #[test]
+    fn cdo_light_and_full_profiles_give_the_same_report_and_answers() {
+        use crate::program::dep_summary::tests::report_text;
+        use crate::program::resolve::full::build_context_with;
+        let Some(ws) = super::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        // One profile at a time: each CDO build is dropped before the next
+        // starts, and only its text projection is kept.
+        let project = |profile: BuildProfile| {
+            let ctx = build_context_with(
+                &ws,
+                DependencySource::Embedded,
+                profile,
+                &DepCache::default(),
+            )
+            .expect("CDO context");
+            let has_bodies = ctx
+                .dep_bodies()
+                .is_some_and(|b| b.iter().any(|u| !u.files.is_empty()));
+            let report = report_text(&ctx);
+            let (snap, _) = LspSnapshot::from_context(ctx, &ws);
+            assert!(
+                !snap.dep_meta.is_empty() && !snap.dep_texts.is_empty(),
+                "precondition: {profile:?} has a dependency tier"
+            );
+            (has_bodies, report, answers(&snap))
+        };
+        let light = project(BuildProfile::LIGHT);
+        let full = project(BuildProfile::FULL);
+        assert!(!light.0, "precondition: LIGHT keeps no dependency bodies");
+        assert!(full.0, "precondition: FULL keeps CDO's dependency bodies");
+        assert_same_text("program report", &light.1, &full.1);
+        assert_same_text("LSP answers", &light.2, &full.2);
+    }
+
+    /// `assert_eq!` on texts this large would print hundreds of MiB; name
+    /// the first differing line instead.
+    fn assert_same_text(what: &str, light: &str, full: &str) {
+        if light == full {
+            return;
+        }
+        let (l, f): (Vec<_>, Vec<_>) = (light.lines().collect(), full.lines().collect());
+        let at = l
+            .iter()
+            .zip(&f)
+            .position(|(a, b)| a != b)
+            .unwrap_or(l.len().min(f.len()));
+        panic!(
+            "{what} differ at line {at} (LIGHT {} lines, FULL {} lines)\nLIGHT: {:?}\nFULL:  {:?}",
+            l.len(),
+            f.len(),
+            l.get(at),
+            f.get(at)
+        );
     }
 }

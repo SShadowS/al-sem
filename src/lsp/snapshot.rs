@@ -341,9 +341,9 @@ pub struct LspSnapshot {
     /// `dep_texts` is: dependency source cannot change on those rungs — see
     /// its doc). Rung 1/2 rebuild a workspace-only `DeclSurface` via
     /// [`DeclSurface::with_frozen`], composing it with this tier rather than
-    /// re-deriving it, which is what lets the LSP steady state drop
-    /// dependency parse arenas after the first full build (see
-    /// [`Self::from_context`]). ALSO doubles as the `RouteTarget::Routine(id)`
+    /// re-deriving it, so no rung ever needs a dependency parse tree (under
+    /// the LSP's `LIGHT` profile those trees die during the parse, right
+    /// after each file is summarized). ALSO doubles as the `RouteTarget::Routine(id)`
     /// counterpart of [`Self::decl_by_id`] for every NON-primary (dependency)
     /// app — the design doc's §5 promise that "a dep with embedded source
     /// gets REAL navigable spans (legacy never could)". `make_routine_route`

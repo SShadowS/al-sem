@@ -83,17 +83,19 @@ pub fn build_dep_layer(
     abi_cache: &AbiCache,
     parsed: &[ParsedUnit],
 ) -> DepLayer {
+    // `LIGHT`: a `Parsed` input keeps no bodies, so its key must not claim
+    // them (see `build_dep_layer_cached`'s assert).
     build_dep_layer_cached(
         snap,
         abi_cache,
         DepInput::Parsed(parsed),
-        BuildProfile::FULL,
+        BuildProfile::LIGHT,
         &DepCache::default(),
     )
 }
 
 /// Where the dependency layer's per-file summaries come from.
-pub enum DepInput<'a> {
+pub(crate) enum DepInput<'a> {
     /// Already-parsed units (every source-bearing unit; the workspace's is
     /// skipped): each dependency file is summarized from its tree. The layer
     /// keeps no bodies. For [`build_dep_layer`] and its callers.
@@ -107,13 +109,23 @@ pub enum DepInput<'a> {
 /// another root already built the same dependency set (see [`DepKey`]).
 /// `input` is read only on a miss, so a caller that already holds the live
 /// entry may pass a parse without dependencies.
-pub fn build_dep_layer_cached(
+///
+/// A `DepInput::Parsed` input builds a tier without bodies, so it must never
+/// be keyed with a `Keep` profile: on a shared cache that tier would be
+/// published as a `Keep` entry, and the next `FULL` hit would find no bodies
+/// and panic in `ProgramContext::all_units`.
+pub(crate) fn build_dep_layer_cached(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
     input: DepInput<'_>,
     profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> DepLayer {
+    debug_assert!(
+        !(matches!(input, DepInput::Parsed(_))
+            && profile.dependency_bodies == crate::program::profile::DependencyBodies::Keep),
+        "a Parsed input keeps no dependency bodies; keying it Keep would publish a body-less Keep tier"
+    );
     // ── Step 1: intern all app identities (primary included, for AppRef stability) ──
     let mut apps = AppRegistry::default();
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
@@ -663,7 +675,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// this branch only ever fires for `r.tier != TrustTier::SymbolOnly`, whose
 /// `param_sig_key` is never the ABI-only empty-key sentinel this function
 /// collapses on.
-pub(crate) fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
+fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
     // Pass 1 decides, per entry, whether it survives and how it is marked
     // (borrowing); pass 2 MOVES the survivors out, so nothing is cloned.
     #[derive(Clone, Copy)]
@@ -1655,5 +1667,70 @@ codeunit 50301 "Preproc Dup Sig"
              source_overload_aliased (that marker is for genuine overload \
              collisions only)"
         );
+    }
+
+    /// Review Focus 3: the same non-primary app present TWICE (workspace
+    /// multi-app source AND embedded dependency) must reduce, through the
+    /// summaries + Step 4's sort/dedup, to exactly `build_dep_layer`'s nodes,
+    /// and the summaries' meta must equal the frozen map taken from the trees.
+    #[test]
+    fn sibling_app_summaries_reduce_to_the_layer_nodes_and_frozen_meta() {
+        use crate::program::dep_summary::tests::{
+            DEP_FILES, app_id, old_frozen_tier, unit, ws_unit,
+        };
+        let (ws, dep) = (app_id("Ws"), app_id("Dep"));
+        let snap = AppSetSnapshot {
+            apps: vec![
+                ws_unit(&ws),
+                unit(&dep, TrustTier::EmbeddedSource, &DEP_FILES),
+                unit(&dep, TrustTier::Workspace, &DEP_FILES),
+            ],
+            workspace_app: ws.clone(),
+            world: World::Closed,
+        };
+        let cache = AbiCache::new();
+        let parsed = parse_snapshot(&snap);
+        let layer = build_dep_layer(&snap, &cache, &parsed);
+
+        let units: Vec<DepUnitSummary> = parsed
+            .iter()
+            .filter(|u| u.app != snap.workspace_app)
+            .map(|u| {
+                let app = layer.apps.find(&u.app).unwrap();
+                DepUnitSummary {
+                    app: u.app.clone(),
+                    files: u
+                        .files
+                        .iter()
+                        .map(|pf| {
+                            summarize_file(app, pf.provenance.tier, &pf.virtual_path, &pf.file)
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        assert_eq!(units.len(), 2, "the sibling must really appear twice");
+
+        let mut objects = Vec::new();
+        let mut routines = Vec::new();
+        let mut dep_meta = DepMetaMap::new();
+        for f in units.iter().flat_map(|u| &u.files) {
+            objects.extend(f.objects.iter().cloned());
+            routines.extend(f.routines.iter().cloned());
+            dep_meta.extend(f.routine_meta.iter().cloned());
+        }
+        let raw_routines = routines.len();
+        objects.sort_by(|a, b| a.id.cmp(&b.id));
+        objects.dedup_by(|a, b| a.id == b.id);
+        routines.sort_by(|a, b| a.id.cmp(&b.id));
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+
+        assert!(routines.len() < raw_routines, "dedup must have fired");
+        assert_eq!(objects, *layer.dep_objects);
+        assert_eq!(routines, *layer.dep_routines);
+
+        let graph = build_program_graph_from_parsed(&snap, &cache, &parsed);
+        let primary = graph.apps.find(&ws).unwrap();
+        assert_eq!(dep_meta, old_frozen_tier(&graph, &parsed, primary));
     }
 }

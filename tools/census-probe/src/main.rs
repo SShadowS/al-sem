@@ -80,7 +80,8 @@ fn mibu(b: u64) -> f64 {
     b as f64 / 1_048_576.0
 }
 
-/// Wait until background drops (dep-arena-drop thread) stop moving the heap.
+/// Wait until the live heap stops moving (e.g. an updater's background work),
+/// so a reading is not taken mid-change.
 fn settle() {
     let mut last = BYTES.load(Relaxed);
     let mut stable = 0;

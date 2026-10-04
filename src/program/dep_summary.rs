@@ -147,20 +147,19 @@ pub fn summarize_file(
     }
 }
 
+/// Fixtures here are shared with `build.rs`'s sibling-dedup test and the
+/// CDO profile test in `dep_cache.rs`.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::program::abi_ingest::AbiCache;
-    use crate::program::build::{
-        build_dep_layer, build_program_graph_from_parsed,
-        dedup_routines_preserving_genuine_overloads,
-    };
+    use crate::program::build::build_dep_layer;
     use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
     use crate::snapshot::compilation::CompilationContext;
     use crate::snapshot::provider::SourceRoot;
     use crate::snapshot::{AppSetSnapshot, AppUnit, Provenance, World, parse_snapshot};
 
-    fn app_id(name: &str) -> AppId {
+    pub(crate) fn app_id(name: &str) -> AppId {
         AppId {
             guid: String::new(),
             name: name.to_string(),
@@ -169,7 +168,7 @@ mod tests {
         }
     }
 
-    fn unit(id: &AppId, tier: TrustTier, files: &[(&str, &str)]) -> AppUnit {
+    pub(crate) fn unit(id: &AppId, tier: TrustTier, files: &[(&str, &str)]) -> AppUnit {
         AppUnit {
             id: id.clone(),
             provenance: Provenance {
@@ -229,13 +228,13 @@ codeunit 60002 "Plain Cu"
     end;
 }
 "#;
-    const DEP_FILES: [(&str, &str); 3] = [
+    pub(crate) const DEP_FILES: [(&str, &str); 3] = [
         ("Over.al", OVERLOADS),
         ("Broken.al", BROKEN),
         ("Plain.al", PLAIN),
     ];
 
-    fn ws_unit(ws: &AppId) -> AppUnit {
+    pub(crate) fn ws_unit(ws: &AppId) -> AppUnit {
         unit(
             ws,
             TrustTier::Workspace,
@@ -281,71 +280,9 @@ codeunit 60002 "Plain Cu"
         }
     }
 
-    /// Review Focus 3: the same non-primary app present TWICE (workspace
-    /// multi-app source AND embedded dependency) must reduce, through the
-    /// summaries + Step 4's sort/dedup, to exactly `build_dep_layer`'s nodes,
-    /// and the summaries' meta must equal the frozen map taken from the trees.
-    #[test]
-    fn sibling_app_summaries_reduce_to_the_layer_nodes_and_frozen_meta() {
-        let (ws, dep) = (app_id("Ws"), app_id("Dep"));
-        let snap = AppSetSnapshot {
-            apps: vec![
-                ws_unit(&ws),
-                unit(&dep, TrustTier::EmbeddedSource, &DEP_FILES),
-                unit(&dep, TrustTier::Workspace, &DEP_FILES),
-            ],
-            workspace_app: ws.clone(),
-            world: World::Closed,
-        };
-        let cache = AbiCache::new();
-        let parsed = parse_snapshot(&snap);
-        let layer = build_dep_layer(&snap, &cache, &parsed);
-
-        let units: Vec<DepUnitSummary> = parsed
-            .iter()
-            .filter(|u| u.app != snap.workspace_app)
-            .map(|u| {
-                let app = layer.apps.find(&u.app).unwrap();
-                DepUnitSummary {
-                    app: u.app.clone(),
-                    files: u
-                        .files
-                        .iter()
-                        .map(|pf| {
-                            summarize_file(app, pf.provenance.tier, &pf.virtual_path, &pf.file)
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        assert_eq!(units.len(), 2, "the sibling must really appear twice");
-
-        let mut objects = Vec::new();
-        let mut routines = Vec::new();
-        let mut dep_meta = DepMetaMap::new();
-        for f in units.iter().flat_map(|u| &u.files) {
-            objects.extend(f.objects.iter().cloned());
-            routines.extend(f.routines.iter().cloned());
-            dep_meta.extend(f.routine_meta.iter().cloned());
-        }
-        let raw_routines = routines.len();
-        objects.sort_by(|a, b| a.id.cmp(&b.id));
-        objects.dedup_by(|a, b| a.id == b.id);
-        routines.sort_by(|a, b| a.id.cmp(&b.id));
-        dedup_routines_preserving_genuine_overloads(&mut routines);
-
-        assert!(routines.len() < raw_routines, "dedup must have fired");
-        assert_eq!(objects, *layer.dep_objects);
-        assert_eq!(routines, *layer.dep_routines);
-
-        let graph = build_program_graph_from_parsed(&snap, &cache, &parsed);
-        let primary = graph.apps.find(&ws).unwrap();
-        assert_eq!(dep_meta, old_frozen_tier(&graph, &parsed, primary));
-    }
-
     /// The pre-summary frozen tier, straight from the trees: every non-primary
     /// unit's `RoutineMeta`, in parsed order (last write wins).
-    fn old_frozen_tier(
+    pub(crate) fn old_frozen_tier(
         graph: &crate::program::graph::ProgramGraph,
         parsed: &[ParsedUnit],
         primary: AppRef,
@@ -489,7 +426,7 @@ codeunit 60002 "Plain Cu"
     }
 
     /// The report fields both profiles must agree on, as comparable text.
-    fn report_text(ctx: &crate::program::resolve::full::ProgramContext) -> String {
+    pub(crate) fn report_text(ctx: &crate::program::resolve::full::ProgramContext) -> String {
         let r = crate::program::resolve::full::resolve_full_program_with(ctx);
         let edges: Vec<_> = r
             .edges
