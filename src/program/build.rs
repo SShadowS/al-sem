@@ -613,7 +613,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// this branch only ever fires for `r.tier != TrustTier::SymbolOnly`, whose
 /// `param_sig_key` is never the ABI-only empty-key sentinel this function
 /// collapses on.
-fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
+pub(crate) fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
     let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
     let mut i = 0;
     while i < routines.len() {

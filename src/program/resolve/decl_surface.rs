@@ -75,6 +75,35 @@ impl RoutineMeta {
     }
 }
 
+/// Every routine declared in `file`, keyed as `DeclSurface` keys it. The ONE
+/// place that turns a file's declarations into `RoutineMeta`: `build`,
+/// `build_split` and the dependency summaries all call it, so they cannot drift.
+pub(crate) fn file_routine_meta(
+    app: AppRef,
+    file: &al_syntax::ir::AlFile,
+    virtual_path: &str,
+) -> Vec<(RoutineNodeId, RoutineMeta)> {
+    let mut out = Vec::new();
+    for obj in &file.objects {
+        let key = match obj.id {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(obj.name.fold_identifier()),
+        };
+        let obj_id = ObjectNodeId {
+            app,
+            kind: obj.kind,
+            key,
+        };
+        for routine in &obj.routines {
+            out.push((
+                source_routine_node_id(obj_id.clone(), routine),
+                RoutineMeta::from_decl(routine, virtual_path),
+            ));
+        }
+    }
+    out
+}
+
 pub type DepMetaMap = HashMap<RoutineNodeId, RoutineMeta>;
 
 pub struct DeclSurface {
@@ -94,20 +123,8 @@ impl DeclSurface {
                 continue;
             };
             for pf in &unit.files {
-                for obj in &pf.file.objects {
-                    let key = match obj.id {
-                        Some(n) => ObjKey::Id(n),
-                        None => ObjKey::Name(obj.name.fold_identifier()),
-                    };
-                    let obj_id = ObjectNodeId {
-                        app: app_ref,
-                        kind: obj.kind,
-                        key,
-                    };
-                    for routine in &obj.routines {
-                        let r_id = source_routine_node_id(obj_id.clone(), routine);
-                        local.insert(r_id, RoutineMeta::from_decl(routine, &pf.virtual_path));
-                    }
+                for (r_id, meta) in file_routine_meta(app_ref, &pf.file, &pf.virtual_path) {
+                    local.insert(r_id, meta);
                 }
             }
         }
@@ -143,24 +160,11 @@ impl DeclSurface {
             };
             let is_primary = app_ref == primary;
             for pf in &unit.files {
-                for obj in &pf.file.objects {
-                    let key = match obj.id {
-                        Some(n) => ObjKey::Id(n),
-                        None => ObjKey::Name(obj.name.fold_identifier()),
-                    };
-                    let obj_id = ObjectNodeId {
-                        app: app_ref,
-                        kind: obj.kind,
-                        key,
-                    };
-                    for routine in &obj.routines {
-                        let r_id = source_routine_node_id(obj_id.clone(), routine);
-                        let meta = RoutineMeta::from_decl(routine, &pf.virtual_path);
-                        if is_primary {
-                            local.insert(r_id, meta);
-                        } else {
-                            dep.insert(r_id, meta);
-                        }
+                for (r_id, meta) in file_routine_meta(app_ref, &pf.file, &pf.virtual_path) {
+                    if is_primary {
+                        local.insert(r_id, meta);
+                    } else {
+                        dep.insert(r_id, meta);
                     }
                 }
             }
