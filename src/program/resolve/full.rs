@@ -38,11 +38,13 @@ use al_syntax::ir::ObjectKind;
 use rayon::prelude::*;
 
 use crate::engine::perf_trace as pt;
-use crate::program::build::{DepLayer, assemble_program_graph, build_dep_layer_cached};
+use crate::program::build::{DepInput, DepLayer, assemble_program_graph, build_dep_layer_cached};
 use crate::program::dep_cache::{DepCache, DepKey};
+use crate::program::dep_summary::parse_for_build;
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
+use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::abi_check::{
     AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
@@ -69,7 +71,6 @@ use crate::program::resolve::resolver::{
 use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::{
     AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
-    parse_snapshot,
 };
 use std::sync::Arc;
 
@@ -766,9 +767,13 @@ pub(crate) fn resolve_file_obligations(
 /// This is the clean-room inner loop.  It does NOT call any L3 oracle.
 /// Publishers are resolved via [`emit_event_flow_edges`]; all call-site
 /// obligations are resolved via the shape-dispatch helpers.
+///
+/// `surface` is built by the caller (normally [`ProgramContext::decl_surface`]):
+/// workspace decls over the dependency tier's frozen `dep_meta`.
 fn resolve_full_program_from_parts(
     graph: &ProgramGraph,
     parsed: &[ParsedUnit],
+    surface: &DeclSurface,
     primary_app_ref: AppRef,
     ws_file_set: &HashSet<String>,
 ) -> (Vec<ClassifiedEdge>, Coverage, BuiltinDispatchAudit) {
@@ -777,7 +782,6 @@ fn resolve_full_program_from_parts(
         graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
 
     let index = ResolveIndex::build(graph);
-    let surface = DeclSurface::build(graph, parsed);
 
     let mut obligation_id_set: HashSet<ObligationId> = HashSet::new();
     let mut classified_edges: Vec<ClassifiedEdge> = Vec::new();
@@ -819,14 +823,7 @@ fn resolve_full_program_from_parts(
         files_to_resolve
             .par_iter()
             .map(|pf| {
-                resolve_file_obligations(
-                    pf,
-                    primary_app_ref,
-                    graph,
-                    &index,
-                    &surface,
-                    &obj_node_map,
-                )
+                resolve_file_obligations(pf, primary_app_ref, graph, &index, surface, &obj_node_map)
             })
             .collect()
     });
@@ -851,7 +848,7 @@ fn resolve_full_program_from_parts(
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).
     // We must track obligation ids in the same pass so coverage holds.
-    let event_edges = emit_event_flow_edges(graph, &index, &surface);
+    let event_edges = emit_event_flow_edges(graph, &index, surface);
     for edge in event_edges {
         // Each publisher routine emits exactly one EventFlow edge.
         let obl_id = ObligationId::Publisher(edge.from.clone());
@@ -949,8 +946,13 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit) =
-        resolve_full_program_from_parts(graph, parsed, primary_app_ref, ws_file_set);
+    let (edges, coverage, builtin_dispatch_audit) = resolve_full_program_from_parts(
+        graph,
+        parsed,
+        &ctx.decl_surface(),
+        primary_app_ref,
+        ws_file_set,
+    );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -986,7 +988,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
 
     // Task 3 (preprocessor foundations plan): additive Recovered-parse
     // diagnostic — surfaced, never gating (see `recovered_files`'s doc).
-    let recovered_files = crate::snapshot::parse::recovered_file_paths(parsed);
+    let recovered_files = ctx.recovered_files();
 
     ProgramReport {
         edges,
@@ -1016,6 +1018,7 @@ pub fn resolve_full_program_for_export(
     let (edges, _coverage, _builtin_dispatch_audit) = resolve_full_program_from_parts(
         &ctx.graph,
         &ctx.parsed,
+        &ctx.decl_surface(),
         ctx.primary_app_ref,
         &ctx.ws_file_set,
     );
@@ -1042,9 +1045,9 @@ pub fn resolve_full_program_for_export(
 pub struct ProgramContext {
     pub(crate) snap: AppSetSnapshot,
     pub(crate) graph: ProgramGraph,
-    /// Every source-bearing unit — except on a shared-tier hit (LSP only,
-    /// see [`build_context_from_snapshot_cached`]), where it holds the
-    /// workspace unit alone.
+    /// The workspace unit alone (empty when the workspace has no source).
+    /// Dependency trees, when the profile keeps them, live in the dependency
+    /// tier: see [`ProgramContext::dep_bodies`].
     pub(crate) parsed: Vec<ParsedUnit>,
     pub(crate) primary_app_ref: AppRef,
     pub(crate) ws_file_set: HashSet<String>,
@@ -1053,41 +1056,103 @@ pub struct ProgramContext {
     /// (see [`assemble_program_graph`]'s doc); kept here so a caller that wants
     /// to REUSE it across rebuilds doesn't have to re-derive it a second time.
     pub(crate) dep_layer: DepLayer,
+    /// What this build was asked to keep (spec §4).
+    pub(crate) profile: BuildProfile,
 }
 
 impl ProgramContext {
+    /// What this build was asked to keep.
+    #[must_use]
+    pub fn profile(&self) -> BuildProfile {
+        self.profile
+    }
+
     /// The assembled whole-program graph (shared-substrate consumers only).
     #[must_use]
     pub fn graph(&self) -> &ProgramGraph {
         &self.graph
     }
 
-    /// The parsed units backing `graph` (shared-substrate consumers only).
-    ///
-    /// Built with a shared [`DepCache`] that hit, this holds ONLY the
-    /// workspace unit: the dependencies were not parsed again. A caller that
-    /// needs dependency bodies must build with a throwaway
-    /// `DepCache::default()`.
+    /// The workspace's parsed unit (at most one). Dependency trees are in
+    /// [`Self::dep_bodies`].
     #[must_use]
     pub fn parsed(&self) -> &[ParsedUnit] {
         &self.parsed
     }
+
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` exactly
+    /// when the profile is `DependencyBodies::Keep` (a `Keep` build never
+    /// shares a tier built without them — see `DepKey`).
+    #[must_use]
+    pub fn dep_bodies(&self) -> Option<&[ParsedUnit]> {
+        self.dep_layer
+            .dep_nodes
+            .bodies
+            .as_deref()
+            .map(Vec::as_slice)
+    }
+
+    /// Every parsed unit in `snap.apps` order (workspace first, then the
+    /// dependency bodies): what `parse_snapshot` would give. Needs `Keep`.
+    ///
+    /// # Panics
+    /// When the profile does not keep dependency bodies — a reader of
+    /// dependency trees must declare `Keep` (spec §4).
+    #[must_use]
+    pub fn all_units(&self) -> Vec<&ParsedUnit> {
+        let deps = self
+            .dep_bodies()
+            .expect("reading dependency trees needs DependencyBodies::Keep");
+        self.parsed.iter().chain(deps).collect()
+    }
+
+    /// The workspace unit of `parsed` (at most one: `snap.apps` is
+    /// GUID-deduped upstream) — the only unit the local `DeclSurface` tier
+    /// and the workspace recovered list read.
+    fn workspace_unit(&self) -> &[ParsedUnit] {
+        self.parsed
+            .iter()
+            .position(|u| u.app == self.snap.workspace_app)
+            .map_or(&[][..], |i| std::slice::from_ref(&self.parsed[i]))
+    }
+
+    /// Workspace decls over the dependency tier's frozen `dep_meta`. The
+    /// dependency `RoutineMeta` always comes from the tier, never from
+    /// dependency `ParsedUnit`s.
+    #[must_use]
+    pub fn decl_surface(&self) -> DeclSurface {
+        DeclSurface::build(&self.graph, self.workspace_unit())
+            .with_frozen(Arc::clone(&self.dep_layer.dep_nodes.dep_meta))
+    }
+
+    /// `"<app name>::<virtual path>"` of every `Recovered` source file,
+    /// sorted: the dependency tier's list plus the workspace's own. See
+    /// [`crate::snapshot::parse::recovered_file_paths`] for the invariant.
+    #[must_use]
+    pub fn recovered_files(&self) -> Vec<String> {
+        let mut paths = self.dep_layer.dep_nodes.recovered.clone();
+        paths.extend(crate::snapshot::parse::recovered_file_paths(
+            self.workspace_unit(),
+        ));
+        paths.sort();
+        paths
+    }
 }
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
-    build_context_from_snapshot(build_snapshot_res(workspace_root)?)
+    build_context_from_snapshot(build_snapshot_res(workspace_root)?, BuildProfile::FULL)
 }
 
 /// [`build_context`] with an explicit [`DependencySource`] — the LSP server
 /// and CLI index path, which let the user trade dependency depth for memory.
 ///
-/// When `dep_cache` hits, the result's [`ProgramContext::parsed`] holds only
-/// the workspace unit. Pass a throwaway `DepCache::default()` when the
-/// dependency bodies are needed.
+/// When `dep_cache` hits, the dependencies are not parsed again; a `Keep`
+/// profile still gets [`ProgramContext::dep_bodies`] from the shared tier.
 #[must_use]
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Option<ProgramContext> {
     let snap = (SnapshotBuilder {
@@ -1100,7 +1165,8 @@ pub fn build_context_with(
     .build_with_options(dependency_source, dep_cache)
     .map(|(snap, _dropped)| snap)
     .ok()?;
-    build_context_from_snapshot_cached(snap, dep_cache).ok()
+    crate::census_hook::mark("1.snapshot");
+    build_context_from_snapshot_cached(snap, profile, dep_cache).ok()
 }
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the
@@ -1123,14 +1189,18 @@ pub fn build_snapshot_res(workspace_root: &Path) -> Result<AppSetSnapshot, Strin
 /// Steps 2-3 of [`build_context_res`]: parse the snapshot, build the layered
 /// graph, and locate the primary app. Split from [`build_snapshot_res`] purely
 /// so the preflight cache can skip this half on a hit — behaviour is unchanged.
-pub fn build_context_from_snapshot(snap: AppSetSnapshot) -> Result<ProgramContext, String> {
-    build_context_from_snapshot_cached(snap, &DepCache::default())
+pub fn build_context_from_snapshot(
+    snap: AppSetSnapshot,
+    profile: BuildProfile,
+) -> Result<ProgramContext, String> {
+    build_context_from_snapshot_cached(snap, profile, &DepCache::default())
 }
 
 /// [`build_context_from_snapshot`], sharing the dependency tier through
 /// `dep_cache` with every other root that loads the same dependencies.
 pub fn build_context_from_snapshot_cached(
     snap: AppSetSnapshot,
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Result<ProgramContext, String> {
     // ws_file_set: the true workspace source virtual paths (first AppUnit).
@@ -1158,35 +1228,31 @@ pub fn build_context_from_snapshot_cached(
     // `assemble_program_graph_matches_build_program_graph_field_by_field`
     // characterization test in `program::build`).
     //
-    // A shared dependency tier whose LSP products are already published
-    // answers everything the LSP needs from the dependencies, so on such a
-    // hit only the workspace is parsed and `parsed` holds the workspace unit
-    // alone. Only the LSP passes a shared cache; every other caller passes a
-    // throwaway one, never hits, and still gets every unit.
-    let shared_tier = dep_cache.get(&DepKey::of(&snap));
-    let parsed = {
+    // Each dependency file is summarized as it is parsed; under `Summary` its
+    // tree dies right there, under `Keep` the trees go into the tier. A live
+    // shared tier carries everything resolution reads from the dependencies
+    // (`dep_meta`, `recovered`, and the bodies when the key keeps them), so on
+    // a hit only the workspace is parsed. `parsed` is the workspace unit
+    // alone, always.
+    let shared_tier = dep_cache.get(&DepKey::of(&snap, profile));
+    let mut parse = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
-        if shared_tier.is_some() {
-            snap.apps
-                .iter()
-                .filter(|u| u.id == snap.workspace_app)
-                .filter_map(crate::snapshot::parse::parse_unit)
-                .collect()
-        } else {
-            parse_snapshot(&snap)
-        }
+        parse_for_build(&snap, profile, shared_tier.is_some())
     };
+    let parsed: Vec<ParsedUnit> = parse.workspace.take().into_iter().collect();
+    crate::census_hook::mark("2.parse");
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
         build_dep_layer_cached(
             &snap,
             &crate::program::abi_ingest::AbiCache::new(),
-            &parsed,
+            DepInput::Built(parse),
+            profile,
             dep_cache,
         )
     };
     // `shared_tier` kept the entry alive, so the layer is built on it and the
-    // dependency nodes never came from the workspace-only `parsed`.
+    // dependency nodes never came from the dependency-less parse.
     assert!(
         shared_tier
             .as_ref()
@@ -1195,6 +1261,7 @@ pub fn build_context_from_snapshot_cached(
          dependency nodes would come from a workspace-only parse"
     );
     drop(shared_tier);
+    crate::census_hook::mark("3.dep_layer");
 
     // `snap.apps` is GUID-deduped upstream (H-2), so at most one parsed unit
     // can match the workspace identity.
@@ -1213,6 +1280,7 @@ pub fn build_context_from_snapshot_cached(
         let _s = pt::span("preflight", "preflight.assemble_graph");
         assemble_program_graph(&dep_layer, ws_unit, &snap)
     };
+    crate::census_hook::mark("4.assemble_graph");
 
     // ── Step 3: Locate primary (workspace) app ────────────────────────────────
     let primary_app_ref = graph.apps.find(&snap.workspace_app).ok_or_else(|| {
@@ -1229,6 +1297,7 @@ pub fn build_context_from_snapshot_cached(
         primary_app_ref,
         ws_file_set,
         dep_layer,
+        profile,
     })
 }
 
@@ -1367,7 +1436,12 @@ pub fn fresh_coverage(workspace_root: &Path) -> Result<FreshCoverage, String> {
         return Ok(hit);
     }
 
-    let ctx = build_context_from_snapshot(snap)?;
+    // Reads no dependency body; it DOES read edge details, which a later step
+    // will declare in the profile (spec §4).
+    let profile = BuildProfile {
+        dependency_bodies: DependencyBodies::Summary,
+    };
+    let ctx = build_context_from_snapshot(snap, profile)?;
     let report = {
         let _s = pt::span("preflight", "preflight.resolve_full");
         resolve_full_program_with(&ctx)
@@ -1457,6 +1531,7 @@ mod tests {
     use super::*;
     use crate::program::node::ObjKey;
     use crate::program::resolve::edge::{Condition, SourcePos};
+    use crate::snapshot::parse_snapshot;
 
     fn rid(name: &str) -> RoutineNodeId {
         RoutineNodeId {
@@ -1742,8 +1817,15 @@ mod tests {
                 .unwrap_or_default();
 
             let t5 = std::time::Instant::now();
-            let (edges, coverage, _audit) =
-                resolve_full_program_from_parts(&graph, &parsed, primary_app_ref, &ws_file_set);
+            // The surface is built inside the timed window, so the total
+            // still includes the DeclSurface build, as the label says.
+            let (edges, coverage, _audit) = resolve_full_program_from_parts(
+                &graph,
+                &parsed,
+                &DeclSurface::build(&graph, &parsed),
+                primary_app_ref,
+                &ws_file_set,
+            );
             resolve_from_parts_total_times.push(t5.elapsed());
 
             assert!(
@@ -1861,8 +1943,13 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit) =
-            resolve_full_program_from_parts(graph, parsed, primary_app_ref, ws_file_set);
+        let (full_edges, coverage, _audit) = resolve_full_program_from_parts(
+            graph,
+            parsed,
+            &ctx.decl_surface(),
+            primary_app_ref,
+            ws_file_set,
+        );
         assert!(coverage_holds(&coverage), "fixture coverage must hold");
 
         // Phase-1 (call-site) edges only, in the full run's own order —
@@ -1884,7 +1971,7 @@ mod tests {
         let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
             graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
         let index = ResolveIndex::build(graph);
-        let surface = DeclSurface::build(graph, parsed);
+        let surface = ctx.decl_surface();
 
         // Walk in the EXACT same order `resolve_full_program_from_parts`
         // does: parsed units (filtered to the primary app) x unit.files

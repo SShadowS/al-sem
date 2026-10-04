@@ -13,10 +13,11 @@ use crate::dependencies::AppFileStamp;
 use crate::program::graph::AbiIngestError;
 use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
+use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
-use crate::snapshot::{AppId, AppSetSnapshot, TrustTier};
+use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
 
 /// Process-level dependency tier, shared by every workspace root that loads
 /// the SAME dependency set. Entries are held weakly: one lives exactly as
@@ -64,15 +65,28 @@ pub struct DepNodes {
     pub objects: Arc<Vec<ObjectNode>>,
     pub routines: Arc<Vec<RoutineNode>>,
     pub abi_ingest_errors: Vec<AbiIngestError>,
+    /// The frozen `DeclSurface` tier: every dependency routine's
+    /// `RoutineMeta`, built with the nodes. Every consumer reads dependency
+    /// metadata from here, never from dependency `ParsedUnit`s.
+    pub dep_meta: Arc<DepMetaMap>,
+    /// `"<app name>::<virtual path>"` of every dependency file whose parse
+    /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
+    /// not parse the dependencies) still reports them.
+    pub recovered: Vec<String>,
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` only when
+    /// the tier was built from a `Keep` build parse (`DepInput::Built` under
+    /// `DependencyBodies::Keep`). A `DepInput::Parsed` input never keeps
+    /// bodies, and `build_dep_layer_cached` asserts it is never keyed `Keep`,
+    /// so a `Keep` hit always carries them.
+    pub bodies: Option<Arc<Vec<ParsedUnit>>>,
     /// The LSP products derived from this tier (set by the first snapshot
-    /// that builds them). Both are keyed by this tier's AppRefs, so they are
-    /// valid exactly where the tier itself is shared.
+    /// that builds them). Keyed by this tier's AppRefs, so they are valid
+    /// exactly where the tier itself is shared.
     pub lsp: OnceLock<Arc<DepLspTier>>,
 }
 
 /// Dependency-derived LSP data, shared with [`DepNodes`].
 pub struct DepLspTier {
-    pub dep_meta: Arc<DepMetaMap>,
     pub dep_texts: Arc<DepTexts>,
 }
 
@@ -103,15 +117,12 @@ impl DepCache {
         built
     }
 
-    /// The live entry for `key`, only if its LSP products (`lsp`) are already
-    /// published. Never builds. An entry without them (built by a CLI-style
-    /// build, or by a root still inside `from_context`) is a miss: whoever
-    /// fills the slot needs the dependency parse trees.
+    /// The live entry for `key`, if any. Never builds. Any live entry is a
+    /// hit: it always carries `dep_meta` and `recovered` (and the bodies when
+    /// `key` keeps them), and its LSP products (`dep_texts`) can be built
+    /// from any snapshot, so a hit never needs to parse the dependencies.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
-        self.lock()
-            .get(key)
-            .and_then(Weak::upgrade)
-            .filter(|nodes| nodes.lsp.get().is_some())
+        self.lock().get(key).and_then(Weak::upgrade)
     }
 
     /// The live parsed package for the `.app` at `path`, or `load()`'s result
@@ -200,6 +211,8 @@ impl DepCache {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DepKey {
     apps: Vec<DepAppKey>,
+    /// A profile that keeps dependency trees builds a different tier.
+    keep_bodies: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -216,7 +229,7 @@ struct DepAppKey {
 }
 
 impl DepKey {
-    pub fn of(snap: &AppSetSnapshot) -> DepKey {
+    pub fn of(snap: &AppSetSnapshot, profile: BuildProfile) -> DepKey {
         let apps = snap
             .apps
             .iter()
@@ -228,9 +241,18 @@ impl DepKey {
                 has_source: unit.source.is_some(),
             })
             .collect();
-        DepKey { apps }
+        DepKey {
+            apps,
+            keep_bodies: profile.dependency_bodies == DependencyBodies::Keep,
+        }
     }
 }
+
+/// The shared `CDO_WS` gate (skips without it, panics under
+/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do.
+#[cfg(test)]
+#[path = "../../tests/common/cdo.rs"]
+mod cdo;
 
 #[cfg(test)]
 mod tests {
@@ -451,7 +473,8 @@ mod tests {
             &fx.alpackages,
             r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
         );
-        let old = build_context_from_snapshot_cached(snap, &cache).expect("context");
+        let old =
+            build_context_from_snapshot_cached(snap, BuildProfile::LIGHT, &cache).expect("context");
         assert!(
             !old.graph().objects.iter().any(|o| o.name == "Extra"),
             "precondition: the first context was built from the OLD bytes"
@@ -533,8 +556,10 @@ mod tests {
             dep.app_stamp = None;
             snap
         };
-        let one = build_context_from_snapshot_cached(snap(), &cache).expect("context");
-        let two = build_context_from_snapshot_cached(snap(), &cache).expect("context");
+        let one = build_context_from_snapshot_cached(snap(), BuildProfile::LIGHT, &cache)
+            .expect("context");
+        let two = build_context_from_snapshot_cached(snap(), BuildProfile::LIGHT, &cache)
+            .expect("context");
         assert!(
             !one.graph().routines.shared().is_empty(),
             "precondition: the dependency tier is built"
@@ -625,13 +650,8 @@ mod tests {
             "the cache holds no Weak into the text (only this test does)"
         );
         drop(a);
-        // `LspSnapshot::from_context` drops the dependency parse units on a
-        // background thread, so the last strong holder goes away shortly
-        // after `drop(a)`, not during it.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while text.strong_count() > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        // No dependency tree outlives the build (LIGHT drops each one during
+        // the parse), so the last strong holder goes with `a`.
         assert!(text.upgrade().is_none(), "no strong holder is left");
     }
 
@@ -647,8 +667,9 @@ mod tests {
         assert_eq!(cache.live_entries(), 1);
     }
 
-    /// Roots sharing a dependency tier share its `dep_meta`/`dep_texts`, and
-    /// the texts are the shared extracted-source allocations.
+    /// Roots sharing a dependency tier share its `dep_meta` (held by the
+    /// tier's nodes) and `dep_texts`, and the texts are the shared
+    /// extracted-source allocations.
     #[test]
     fn roots_share_dep_meta_and_dep_texts() {
         let fx = two_roots_one_alpackages();
@@ -657,6 +678,11 @@ mod tests {
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
         assert!(!a.dep_meta.is_empty(), "precondition: dependency decls");
+        assert!(Arc::ptr_eq(&a.dep_meta, &a.dep_layer.dep_nodes.dep_meta));
+        assert!(Arc::ptr_eq(
+            &a.dep_layer.dep_nodes.dep_meta,
+            &b.dep_layer.dep_nodes.dep_meta
+        ));
         assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
         assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
         let src = dep_texts(&cache, &fx.root_a);
@@ -668,16 +694,26 @@ mod tests {
         );
     }
 
-    /// A dropped root leaves nothing behind: the next root's tier is fresh
-    /// and equals a cache-less build.
+    /// A dropped last root leaves nothing behind: the next root's tier
+    /// (`dep_meta`, `recovered`, `dep_texts`) is fresh and equals a
+    /// cache-less build.
     #[test]
-    fn dep_lsp_tier_after_the_first_root_is_dropped_is_fresh_and_correct() {
+    fn dep_tier_after_the_last_root_is_dropped_is_fresh_and_correct() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let old = Arc::downgrade(&a.dep_texts);
+        let old_texts = Arc::downgrade(&a.dep_texts);
+        let old_meta = Arc::downgrade(&a.dep_layer.dep_nodes.dep_meta);
         drop(a);
-        assert!(old.upgrade().is_none(), "nothing retains the dropped tier");
+        assert!(
+            old_texts.upgrade().is_none(),
+            "nothing retains the dropped texts"
+        );
+        assert!(
+            old_meta.upgrade().is_none(),
+            "nothing retains the dropped dep_meta"
+        );
+        assert_eq!(cache.live_entries(), 0, "the dropped tier is not live");
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert!(!b.dep_texts.is_empty());
@@ -685,12 +721,12 @@ mod tests {
         for (k, v) in b.dep_texts.iter() {
             assert_eq!(solo.dep_texts.get(k).map(|s| &**s), Some(&**v));
         }
-        let keys = |s: &LspSnapshot| {
-            let mut k: Vec<_> = s.dep_meta.keys().cloned().collect();
-            k.sort();
-            k
-        };
-        assert_eq!(keys(&b), keys(&solo));
+        assert!(!b.dep_meta.is_empty(), "precondition: dependency decls");
+        assert_eq!(*b.dep_meta, *solo.dep_meta);
+        assert_eq!(
+            b.dep_layer.dep_nodes.recovered,
+            solo.dep_layer.dep_nodes.recovered
+        );
     }
 
     /// Every LSP answer of a snapshot, order-independent, as text.
@@ -799,25 +835,172 @@ mod tests {
         assert_eq!(answers(&b), answers(&solo));
     }
 
-    /// On a hit only the workspace unit is parsed; the dependency's source is
-    /// not parsed again.
+    /// Any live tier is a hit, even one whose LSP products were never
+    /// published (root A here is a plain context, not a snapshot). On a hit
+    /// only the workspace unit is parsed, and the snapshot built from it
+    /// answers like a cache-less build.
     #[test]
-    fn a_shared_tier_hit_parses_only_the_workspace() {
+    fn any_live_tier_is_a_hit_that_parses_only_the_workspace() {
         use crate::program::resolve::full::build_context_with;
         use crate::snapshot::parse::parse_log::parses_under;
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
-        let _a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let a = build_context_with(
+            &fx.root_a,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("context");
+        assert!(
+            a.dep_layer.dep_nodes.lsp.get().is_none(),
+            "precondition: the tier's LSP products are not published"
+        );
         assert_eq!(
             parses_under(fx._dir.path()),
             1,
             "precondition: root A parsed the dependency once"
         );
-        let ctx =
-            build_context_with(&fx.root_b, DependencySource::Embedded, &cache).expect("context");
+        let ctx = build_context_with(
+            &fx.root_b,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("context");
         assert_eq!(parses_under(fx._dir.path()), 1, "B parsed the dependency");
         let apps: Vec<_> = ctx.parsed().iter().map(|u| u.app.guid.clone()).collect();
         assert_eq!(apps, vec![GUID_B.to_string()]);
+        assert!(Arc::ptr_eq(
+            &a.dep_layer.dep_nodes,
+            &ctx.dep_layer.dep_nodes
+        ));
+
+        let (b, _) = LspSnapshot::from_context(ctx, &fx.root_b);
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// Profiles that keep different things build different dependency tiers.
+    #[test]
+    fn different_profiles_do_not_share_a_dep_tier() {
+        use crate::program::resolve::full::build_context_with;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let light = build_context_with(
+            &fx.root_a,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("light");
+        let full = build_context_with(
+            &fx.root_b,
+            DependencySource::Embedded,
+            BuildProfile::FULL,
+            &cache,
+        )
+        .expect("full");
+        assert_eq!(light.profile(), BuildProfile::LIGHT);
+        assert_eq!(full.profile(), BuildProfile::FULL);
+        assert!(!Arc::ptr_eq(
+            &light.dep_layer.dep_nodes,
+            &full.dep_layer.dep_nodes
+        ));
+    }
+
+    /// Review Focus 2: a `Keep` request is never served a tier without
+    /// bodies, and a `Summary` request never gets bodies — whatever was
+    /// built first, and when two `Keep` builds race.
+    #[test]
+    fn a_full_build_always_gets_bodies_whatever_the_cache_holds() {
+        use crate::program::resolve::full::{ProgramContext, build_context_with};
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let ctx = |root: &Path, profile| {
+            build_context_with(root, DependencySource::Embedded, profile, &cache).expect("context")
+        };
+        let bodies = |c: &ProgramContext| {
+            let b = c
+                .dep_bodies()
+                .expect("a FULL context has dependency bodies");
+            assert!(
+                b.iter().any(|u| !u.files.is_empty()),
+                "the bodies hold the dependency's files"
+            );
+        };
+
+        // LIGHT then FULL.
+        let light = ctx(&fx.root_a, BuildProfile::LIGHT);
+        assert!(light.dep_bodies().is_none());
+        let full = ctx(&fx.root_b, BuildProfile::FULL);
+        bodies(&full);
+
+        // FULL then LIGHT (both tiers live): LIGHT shares the LIGHT tier.
+        let light_again = ctx(&fx.root_b, BuildProfile::LIGHT);
+        assert!(light_again.dep_bodies().is_none());
+        assert!(Arc::ptr_eq(
+            &light.dep_layer.dep_nodes,
+            &light_again.dep_layer.dep_nodes
+        ));
+
+        // FULL twice: the second shares the first's tier, bodies included.
+        let full_again = ctx(&fx.root_a, BuildProfile::FULL);
+        bodies(&full_again);
+        assert!(Arc::ptr_eq(
+            &full.dep_layer.dep_nodes,
+            &full_again.dep_layer.dep_nodes
+        ));
+        drop((light, full, light_again, full_again));
+        assert_eq!(cache.live_entries(), 0);
+
+        // Two FULL builds at once, on an empty cache.
+        let (one, two) = std::thread::scope(|s| {
+            let a = s.spawn(|| ctx(&fx.root_a, BuildProfile::FULL));
+            let b = s.spawn(|| ctx(&fx.root_b, BuildProfile::FULL));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        bodies(&one);
+        bodies(&two);
+    }
+
+    /// Review Focus 5: symbols mode has no dependency source, so nothing is
+    /// summarized and `dep_meta` is empty; the nodes are the `FULL` build's.
+    #[test]
+    fn symbols_mode_summarizes_nothing_and_matches_full() {
+        use crate::program::dep_summary::parse_for_build;
+        use crate::program::resolve::full::build_context_with;
+        let fx = two_roots_one_alpackages();
+        let light = build_context_with(
+            &fx.root_a,
+            DependencySource::Symbols,
+            BuildProfile::LIGHT,
+            &DepCache::default(),
+        )
+        .expect("light");
+        let full = build_context_with(
+            &fx.root_a,
+            DependencySource::Symbols,
+            BuildProfile::FULL,
+            &DepCache::default(),
+        )
+        .expect("full");
+        let parse = parse_for_build(&light.snap, BuildProfile::LIGHT, false);
+        assert!(parse.workspace.is_some());
+        assert!(parse.dep_summaries.is_empty(), "no dependency source");
+        assert!(light.dep_layer.dep_nodes.dep_meta.is_empty());
+        assert!(
+            !light.graph().routines.shared().is_empty(),
+            "precondition: the dependency's ABI nodes load"
+        );
+        let nodes = |c: &crate::program::resolve::full::ProgramContext| {
+            (
+                c.graph().objects.iter().cloned().collect::<Vec<_>>(),
+                c.graph().routines.iter().cloned().collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(nodes(&light), nodes(&full));
     }
 
     /// A rung-3 rebuild of a root whose dependency set did not change is a
@@ -868,5 +1051,66 @@ mod tests {
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert_non_trivial(&solo);
         assert_eq!(answers(&rebuilt), answers(&solo));
+    }
+
+    /// Spec §5 check 1 on the real workspace: `LIGHT` (the LSP) and `FULL`
+    /// give the same program report and the same LSP answers on CDO, so a
+    /// shape only Base Application has cannot break the LIGHT path unseen.
+    /// Gated on `CDO_WS`; `scripts/cdo-gate` runs it via `--lib`.
+    #[test]
+    fn cdo_light_and_full_profiles_give_the_same_report_and_answers() {
+        use crate::program::dep_summary::tests::report_text;
+        use crate::program::resolve::full::build_context_with;
+        let Some(ws) = super::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        // One profile at a time: each CDO build is dropped before the next
+        // starts, and only its text projection is kept.
+        let project = |profile: BuildProfile| {
+            let ctx = build_context_with(
+                &ws,
+                DependencySource::Embedded,
+                profile,
+                &DepCache::default(),
+            )
+            .expect("CDO context");
+            let has_bodies = ctx
+                .dep_bodies()
+                .is_some_and(|b| b.iter().any(|u| !u.files.is_empty()));
+            let report = report_text(&ctx);
+            let (snap, _) = LspSnapshot::from_context(ctx, &ws);
+            assert!(
+                !snap.dep_meta.is_empty() && !snap.dep_texts.is_empty(),
+                "precondition: {profile:?} has a dependency tier"
+            );
+            (has_bodies, report, answers(&snap))
+        };
+        let light = project(BuildProfile::LIGHT);
+        let full = project(BuildProfile::FULL);
+        assert!(!light.0, "precondition: LIGHT keeps no dependency bodies");
+        assert!(full.0, "precondition: FULL keeps CDO's dependency bodies");
+        assert_same_text("program report", &light.1, &full.1);
+        assert_same_text("LSP answers", &light.2, &full.2);
+    }
+
+    /// `assert_eq!` on texts this large would print hundreds of MiB; name
+    /// the first differing line instead.
+    fn assert_same_text(what: &str, light: &str, full: &str) {
+        if light == full {
+            return;
+        }
+        let (l, f): (Vec<_>, Vec<_>) = (light.lines().collect(), full.lines().collect());
+        let at = l
+            .iter()
+            .zip(&f)
+            .position(|(a, b)| a != b)
+            .unwrap_or(l.len().min(f.len()));
+        panic!(
+            "{what} differ at line {at} (LIGHT {} lines, FULL {} lines)\nLIGHT: {:?}\nFULL:  {:?}",
+            l.len(),
+            f.len(),
+            l.get(at),
+            f.get(at)
+        );
     }
 }

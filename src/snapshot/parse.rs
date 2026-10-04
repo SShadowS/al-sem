@@ -57,20 +57,30 @@ pub struct ParsedUnit {
 /// function), so this ships as an ADDITIVE, non-gating diagnostic — a full
 /// per-file resolution gate (declining a specific claim once one exists) is
 /// deferred until a real consumer needs it.
+///
+/// A whole-program build reads this through
+/// `ProgramContext::recovered_files`: the dependency tier records its files'
+/// entries while it is built (`DepNodes::recovered`, same
+/// [`recovered_path`] format), so only the workspace unit is passed here.
 #[must_use]
 pub fn recovered_file_paths(units: &[ParsedUnit]) -> Vec<String> {
     let mut paths: Vec<String> = units
         .iter()
         .flat_map(|unit| {
-            let app_name = unit.app.name.clone();
             unit.files
                 .iter()
                 .filter(|pf| pf.file.parse_status == al_syntax::ir::ParseStatus::Recovered)
-                .map(move |pf| format!("{app_name}::{}", pf.virtual_path))
+                .map(move |pf| recovered_path(&unit.app.name, &pf.virtual_path))
         })
         .collect();
     paths.sort();
     paths
+}
+
+/// One [`recovered_file_paths`] entry: `"<app name>::<virtual path>"`.
+#[must_use]
+pub(crate) fn recovered_path(app_name: &str, virtual_path: &str) -> String {
+    format!("{app_name}::{virtual_path}")
 }
 
 /// Parse every source file of every source-bearing app in `snap` in parallel.
@@ -100,17 +110,24 @@ fn parse_unit_in_pool(unit: &AppUnit) -> Option<ParsedUnit> {
     let files: Vec<ParsedFile> = source
         .files
         .par_iter()
-        .map(|f| ParsedFile {
-            virtual_path: f.virtual_path.clone(),
-            file: Arc::new(al_syntax::parse(&f.text)),
-            provenance: unit.provenance.clone(),
-            text: Arc::clone(&f.text),
-        })
+        .map(|f| parse_file(unit, f))
         .collect();
     Some(ParsedUnit {
         app: unit.id.clone(),
         files,
     })
+}
+
+/// Parse one source file of `unit`: the single parse code path. Call it on
+/// [`crate::big_stack::big_stack_pool`] (the lowerer's recursion needs the
+/// big stack).
+pub(crate) fn parse_file(unit: &AppUnit, f: &crate::snapshot::embedded::SourceFile) -> ParsedFile {
+    ParsedFile {
+        virtual_path: f.virtual_path.clone(),
+        file: Arc::new(al_syntax::parse(&f.text)),
+        provenance: unit.provenance.clone(),
+        text: Arc::clone(&f.text),
+    }
 }
 
 /// Test-only record of which `.app` files had their source parsed.
@@ -121,7 +138,7 @@ pub(crate) mod parse_log {
 
     static LOG: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-    pub(super) fn record(unit: &crate::snapshot::snapshot::AppUnit) {
+    pub(crate) fn record(unit: &crate::snapshot::snapshot::AppUnit) {
         if let Some(path) = &unit.app_path {
             LOG.lock()
                 .unwrap_or_else(PoisonError::into_inner)

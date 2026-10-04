@@ -7,10 +7,13 @@ use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
+use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
+use crate::program::profile::BuildProfile;
+use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
@@ -80,25 +83,55 @@ pub fn build_dep_layer(
     abi_cache: &AbiCache,
     parsed: &[ParsedUnit],
 ) -> DepLayer {
-    build_dep_layer_cached(snap, abi_cache, parsed, &DepCache::default())
+    // `LIGHT`: a `Parsed` input keeps no bodies, so its key must not claim
+    // them (see `build_dep_layer_cached`'s assert).
+    build_dep_layer_cached(
+        snap,
+        abi_cache,
+        DepInput::Parsed(parsed),
+        BuildProfile::LIGHT,
+        &DepCache::default(),
+    )
+}
+
+/// Where the dependency layer's per-file summaries come from.
+pub(crate) enum DepInput<'a> {
+    /// Already-parsed units (every source-bearing unit; the workspace's is
+    /// skipped): each dependency file is summarized from its tree. The layer
+    /// keeps no bodies. For [`build_dep_layer`] and its callers.
+    Parsed(&'a [ParsedUnit]),
+    /// A profiled build parse ([`crate::program::dep_summary::parse_for_build`]): its summaries are
+    /// consumed, and its dependency bodies (if any) kept in the tier.
+    Built(BuildParse),
 }
 
 /// [`build_dep_layer`], taking the dependency nodes from `dep_cache` when
 /// another root already built the same dependency set (see [`DepKey`]).
-/// `parsed` is read only on a miss, so a caller that already holds the live
-/// entry may pass the workspace unit alone.
-pub fn build_dep_layer_cached(
+/// `input` is read only on a miss, so a caller that already holds the live
+/// entry may pass a parse without dependencies.
+///
+/// A `DepInput::Parsed` input builds a tier without bodies, so it must never
+/// be keyed with a `Keep` profile: on a shared cache that tier would be
+/// published as a `Keep` entry, and the next `FULL` hit would find no bodies
+/// and panic in `ProgramContext::all_units`.
+pub(crate) fn build_dep_layer_cached(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
-    parsed: &[ParsedUnit],
+    input: DepInput<'_>,
+    profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> DepLayer {
+    debug_assert!(
+        !(matches!(input, DepInput::Parsed(_))
+            && profile.dependency_bodies == crate::program::profile::DependencyBodies::Keep),
+        "a Parsed input keeps no dependency bodies; keying it Keep would publish a body-less Keep tier"
+    );
     // ── Step 1: intern all app identities (primary included, for AppRef stability) ──
     let mut apps = AppRegistry::default();
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
 
-    let dep_nodes = dep_cache.get_or_build(DepKey::of(snap), || {
-        build_dep_nodes(snap, abi_cache, parsed, &mut apps)
+    let dep_nodes = dep_cache.get_or_build(DepKey::of(snap, profile), || {
+        build_dep_nodes(snap, abi_cache, input, &mut apps)
     });
 
     // ── Step 3 / 3b: wire topology + friends for the WHOLE app set ───────────
@@ -124,29 +157,63 @@ pub fn build_dep_layer_cached(
 fn build_dep_nodes(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
-    parsed: &[ParsedUnit],
+    input: DepInput<'_>,
     apps: &mut AppRegistry,
 ) -> DepNodes {
-    // ── Step 2: extract nodes from every NON-primary parsed unit ─────────────
+    // ── Step 2: the NON-primary per-file summaries ───────────────────────────
+    let (summaries, bodies) = match input {
+        DepInput::Parsed(parsed) => {
+            let summaries = parsed
+                .iter()
+                // primary — extracted fresh per call by `assemble_program_graph`.
+                .filter(|unit| unit.app != snap.workspace_app)
+                .map(|unit| {
+                    // `intern` is idempotent — the `AppRef` assigned in step 1.
+                    let app_ref = apps.intern(&unit.app);
+                    DepUnitSummary {
+                        app: unit.app.clone(),
+                        files: unit
+                            .files
+                            .iter()
+                            .map(|pf| {
+                                summarize_file(
+                                    app_ref,
+                                    pf.provenance.tier,
+                                    &pf.virtual_path,
+                                    &pf.file,
+                                )
+                            })
+                            .collect(),
+                    }
+                })
+                .collect();
+            (summaries, None)
+        }
+        DepInput::Built(parse) => (parse.dep_summaries, parse.dep_bodies.map(Arc::new)),
+    };
+
+    // Each summary is consumed: its nodes move into the layer, its
+    // `RoutineMeta` into `dep_meta` (in parse order, so a true same-key
+    // collision keeps the last one, as `DeclSurface::build` does), and its
+    // recovered flag into `recovered`. Nothing summary-shaped survives.
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
-
-    for unit in parsed {
-        if unit.app == snap.workspace_app {
-            continue; // primary — extracted fresh per call by `assemble_program_graph`.
-        }
-        // `intern` is idempotent — returns the same `AppRef` assigned in step 1.
-        let app_ref = apps.intern(&unit.app);
-        for pf in &unit.files {
-            extract_nodes(
-                app_ref,
-                &pf.file,
-                pf.provenance.tier,
-                &mut objects,
-                &mut routines,
-            );
+    let mut dep_meta = DepMetaMap::new();
+    let mut recovered: Vec<String> = Vec::new();
+    for unit in summaries {
+        for file in unit.files {
+            objects.extend(file.objects);
+            routines.extend(file.routines);
+            dep_meta.extend(file.routine_meta);
+            if file.parse_status_recovered {
+                recovered.push(crate::snapshot::parse::recovered_path(
+                    &unit.app.name,
+                    &file.virtual_path,
+                ));
+            }
         }
     }
+    recovered.sort();
 
     // ── Step 2b: ingest SymbolOnly dep ABI nodes ─────────────────────────────
     let mut abi_ingest_errors: Vec<AbiIngestError> = Vec::new();
@@ -187,6 +254,9 @@ fn build_dep_nodes(
         objects: Arc::new(objects),
         routines: Arc::new(routines),
         abi_ingest_errors,
+        dep_meta: Arc::new(dep_meta),
+        recovered,
+        bodies,
         lsp: Default::default(),
     }
 }
@@ -606,7 +676,16 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// `param_sig_key` is never the ABI-only empty-key sentinel this function
 /// collapses on.
 fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
-    let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
+    // Pass 1 decides, per entry, whether it survives and how it is marked
+    // (borrowing); pass 2 MOVES the survivors out, so nothing is cloned.
+    #[derive(Clone, Copy)]
+    enum Verdict {
+        Drop,
+        Keep,
+        KeepCollapsed,
+        KeepAliased,
+    }
+    let mut verdicts: Vec<Verdict> = Vec::with_capacity(routines.len());
     let mut i = 0;
     while i < routines.len() {
         let mut j = i + 1;
@@ -629,28 +708,40 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         // later entry in the run that repeats an already-seen param signature.
         let mut seen_sigs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for r in &routines[i..j] {
-            if seen_sigs.insert(r.param_sig_key.as_str()) {
-                let mut survivor = r.clone();
-                if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
-                    survivor.abi_overload_collapsed = true;
-                    // Task 2 (roadmap-closure plan): demote the retained ABI
-                    // parameter list in LOCKSTEP with the collapse marker —
-                    // the SAME survivor, the SAME "≥2 raw entries
-                    // fingerprint-collided" condition. `abi_params` on this
-                    // survivor belongs to only ONE of the ≥2 real
-                    // declarations (arbitrary raw-JSON-order choice, same as
-                    // `return_type`/`return_type_id` above) — the structural
-                    // guard (`AbiParams::CollapsedUntrusted`) makes reading
-                    // it for arg-type dispatch impossible by type, never
-                    // merely a convention a future call site could forget.
-                    survivor.abi_params = AbiParams::CollapsedUntrusted;
-                } else if r.tier != TrustTier::SymbolOnly && distinct_key_count >= 2 {
-                    survivor.source_overload_aliased = true;
-                }
-                out.push(survivor);
-            }
+            verdicts.push(if !seen_sigs.insert(r.param_sig_key.as_str()) {
+                Verdict::Drop
+            } else if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
+                Verdict::KeepCollapsed
+            } else if r.tier != TrustTier::SymbolOnly && distinct_key_count >= 2 {
+                Verdict::KeepAliased
+            } else {
+                Verdict::Keep
+            });
         }
         i = j;
+    }
+    let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
+    for (mut survivor, verdict) in routines.drain(..).zip(verdicts) {
+        match verdict {
+            Verdict::Drop => continue,
+            Verdict::Keep => {}
+            Verdict::KeepCollapsed => {
+                survivor.abi_overload_collapsed = true;
+                // Task 2 (roadmap-closure plan): demote the retained ABI
+                // parameter list in LOCKSTEP with the collapse marker —
+                // the SAME survivor, the SAME "≥2 raw entries
+                // fingerprint-collided" condition. `abi_params` on this
+                // survivor belongs to only ONE of the ≥2 real
+                // declarations (arbitrary raw-JSON-order choice, same as
+                // `return_type`/`return_type_id` above) — the structural
+                // guard (`AbiParams::CollapsedUntrusted`) makes reading
+                // it for arg-type dispatch impossible by type, never
+                // merely a convention a future call site could forget.
+                survivor.abi_params = AbiParams::CollapsedUntrusted;
+            }
+            Verdict::KeepAliased => survivor.source_overload_aliased = true,
+        }
+        out.push(survivor);
     }
     *routines = out;
 }
@@ -1576,5 +1667,70 @@ codeunit 50301 "Preproc Dup Sig"
              source_overload_aliased (that marker is for genuine overload \
              collisions only)"
         );
+    }
+
+    /// Review Focus 3: the same non-primary app present TWICE (workspace
+    /// multi-app source AND embedded dependency) must reduce, through the
+    /// summaries + Step 4's sort/dedup, to exactly `build_dep_layer`'s nodes,
+    /// and the summaries' meta must equal the frozen map taken from the trees.
+    #[test]
+    fn sibling_app_summaries_reduce_to_the_layer_nodes_and_frozen_meta() {
+        use crate::program::dep_summary::tests::{
+            DEP_FILES, app_id, old_frozen_tier, unit, ws_unit,
+        };
+        let (ws, dep) = (app_id("Ws"), app_id("Dep"));
+        let snap = AppSetSnapshot {
+            apps: vec![
+                ws_unit(&ws),
+                unit(&dep, TrustTier::EmbeddedSource, &DEP_FILES),
+                unit(&dep, TrustTier::Workspace, &DEP_FILES),
+            ],
+            workspace_app: ws.clone(),
+            world: World::Closed,
+        };
+        let cache = AbiCache::new();
+        let parsed = parse_snapshot(&snap);
+        let layer = build_dep_layer(&snap, &cache, &parsed);
+
+        let units: Vec<DepUnitSummary> = parsed
+            .iter()
+            .filter(|u| u.app != snap.workspace_app)
+            .map(|u| {
+                let app = layer.apps.find(&u.app).unwrap();
+                DepUnitSummary {
+                    app: u.app.clone(),
+                    files: u
+                        .files
+                        .iter()
+                        .map(|pf| {
+                            summarize_file(app, pf.provenance.tier, &pf.virtual_path, &pf.file)
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        assert_eq!(units.len(), 2, "the sibling must really appear twice");
+
+        let mut objects = Vec::new();
+        let mut routines = Vec::new();
+        let mut dep_meta = DepMetaMap::new();
+        for f in units.iter().flat_map(|u| &u.files) {
+            objects.extend(f.objects.iter().cloned());
+            routines.extend(f.routines.iter().cloned());
+            dep_meta.extend(f.routine_meta.iter().cloned());
+        }
+        let raw_routines = routines.len();
+        objects.sort_by(|a, b| a.id.cmp(&b.id));
+        objects.dedup_by(|a, b| a.id == b.id);
+        routines.sort_by(|a, b| a.id.cmp(&b.id));
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+
+        assert!(routines.len() < raw_routines, "dedup must have fired");
+        assert_eq!(objects, *layer.dep_objects);
+        assert_eq!(routines, *layer.dep_routines);
+
+        let graph = build_program_graph_from_parsed(&snap, &cache, &parsed);
+        let primary = graph.apps.find(&ws).unwrap();
+        assert_eq!(dep_meta, old_frozen_tier(&graph, &parsed, primary));
     }
 }

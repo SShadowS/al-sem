@@ -362,7 +362,7 @@ fn event_teeth_correct_subscriber_passes() {
             "onafterx",
             0,
             Some(false),
-            &[unit],
+            &[&unit],
             &apps,
         ),
         "correct subscriber must PASS the teeth check"
@@ -389,7 +389,7 @@ fn event_teeth_wrong_publisher_fails() {
             "onafterx",
             0,
             Some(false),
-            &[unit],
+            &[&unit],
             &apps,
         ),
         "wrong publisher name must FAIL the teeth check"
@@ -417,7 +417,7 @@ fn event_teeth_excess_params_fails() {
             "onafterx",
             0, // publisher has 0 params; subscriber has 2
             Some(false),
-            &[unit],
+            &[&unit],
             &apps,
         ),
         "subscriber with more params than publisher must FAIL the teeth check"
@@ -949,8 +949,16 @@ fn abi_ingestion_integrity_cdo_gate() {
 
         {
             let graph = shared.ctx.graph();
-            let parsed = shared.ctx.parsed();
-            let edges = resolve_program(graph, parsed);
+            // Every unit, as before: the workspace, then the dependency
+            // bodies (`build_context` is FULL, which keeps them).
+            let mut edges = resolve_program(graph, shared.ctx.parsed());
+            edges.extend(resolve_program(
+                graph,
+                shared
+                    .ctx
+                    .dep_bodies()
+                    .expect("FULL keeps dependency bodies"),
+            ));
             let h = Histogram::of_edges(&edges);
             eprintln!(
                 "Histogram: total={} resolved_source={} resolved_catalog={} \
@@ -1048,7 +1056,7 @@ fn event_teeth_non_circularity_reads_raw_ir() {
             "onafterx",
             0,
             Some(false),
-            &[unit_with_attr],
+            &[&unit_with_attr],
             &apps,
         ),
         "correct raw IR must PASS"
@@ -1075,7 +1083,7 @@ fn event_teeth_non_circularity_reads_raw_ir() {
             "onafterx",
             0,
             Some(false),
-            &[unit_no_attr],
+            &[&unit_no_attr],
             &apps,
         ),
         "absent attribute in raw IR must FAIL — proves the check reads raw ParsedUnit IR, \

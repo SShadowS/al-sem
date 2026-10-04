@@ -7,13 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/census-probe`**: a byte-census program (own Cargo workspace, not part of CI)
+  that builds the LSP snapshots for a set of roots with a counting allocator and, with
+  `--with-updaters`, starts each root's real updater and measures the idle heap. The
+  engine gets a phase-mark hook for it that does nothing unless a probe registers one.
+- **`docs/2026-10-04-step0-server-census.md`**: the measured idle memory of the running
+  server (heap bytes, not RSS), before and after the change below.
+
 ### Changed
 
+- **Dependency files are summarized when they are parsed, and the LSP drops their syntax
+  trees.** Each dependency file now yields a small per-file summary (`PackedFile`) at
+  parse time. The LSP build profile (`BuildProfile::LIGHT`) keeps the summary and drops
+  the tree; `FULL` keeps every tree, shared in the dependency tier. Measured with
+  `tools/census-probe` (heap bytes, not RSS; one run per cell): the first root's build
+  peak fell from 1,120.7 to 317.8 MiB on the 7-root CG set and from 1,324.0 to
+  449.1 MiB on CDO, both in `embedded` mode. In `symbols` mode CG fell from 143.6 to
+  130.0 MiB and CDO stayed at 200.5; that fall is not the tree drop (no dependency
+  source is parsed in that mode) but the routine dedup no longer cloning every
+  survivor. Retained heap did not fall: unchanged in `symbols` mode, 0.9-1.0 MiB higher
+  in `embedded` mode (CG +0.9, CDO +1.0) (spare buffer capacity in the shared tier's routines, because the
+  dedup now moves survivors instead of cloning them; accepted, since trimming would
+  add a copy of every routine during the build, which is the peak this change lowers).
+- **Every graph build now states a `BuildProfile`** (`LIGHT` for the LSP, an explicit
+  `Summary` for `fresh_coverage`, `FULL` for tools). There is no default, so a tool
+  cannot silently lose data it reads.
+- **The dependency tier now owns `dep_meta` and the list of recovered files**, and the
+  dependency file texts come from the snapshot.
 - **`alsem` is now built, signed and deployed by CI**, next to `al-call-hierarchy`:
   `build-and-deploy.yml` signs `alsem.exe` with the same Azure Artifact Signing step,
   builds Linux `alsem` without the `telemetry` feature, checks both Linux binaries
   need at most glibc 2.34, and copies both into the Go wrapper plugins. Before, it was
   built and signed by hand, which needed a local `az login`.
+
+### Removed
+
+- **The dependency-arena-drop thread, `DeclSurface::build_split` and
+  `freeze_dep_tier`.** Nothing needs them once the trees are dropped at parse time.
 
 ## [1.3.3] - 2026-10-04
 

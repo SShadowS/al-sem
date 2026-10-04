@@ -1985,6 +1985,7 @@ fn target_is_on_table_or_extension(
 /// `fan_out_ctx` (built by [`build_fan_out_site_context`]) supplies the
 /// Interface/`RecordOp` call-site context `edges` alone cannot carry;
 /// `graph`/`index` back the predicates' object/routine lookups; `parsed`
+/// (workspace AND dependency units — a subscriber may live in either)
 /// backs [`verify_event_subscriber_route`]'s independent raw-IR re-read.
 #[must_use]
 pub fn route_applicability(
@@ -1993,7 +1994,7 @@ pub fn route_applicability(
     graph: &ProgramGraph,
     index: &ResolveIndex,
     fan_out_ctx: &HashMap<SiteId, FanOutSiteContext>,
-    parsed: &[ParsedUnit],
+    parsed: &[&ParsedUnit],
 ) -> ApplicabilityReport {
     let mut total_routes = 0usize;
     let mut witness_contract_violations = 0usize;
@@ -2295,7 +2296,7 @@ pub fn run_route_applicability_on(
         &ctx.graph,
         &index,
         &fan_out_ctx,
-        &ctx.parsed,
+        &ctx.all_units(),
     )
 }
 
@@ -3532,7 +3533,7 @@ codeunit 50801 "EvSub"
         };
 
         let raw_abi = empty_raw_abi();
-        let units = [unit];
+        let units = [&unit];
         let report =
             route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
         assert_eq!(report.event_violations, 0);
@@ -3603,7 +3604,7 @@ codeunit 50804 "EvSub2"
         };
 
         let raw_abi = empty_raw_abi();
-        let units = [unit];
+        let units = [&unit];
         let report =
             route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
         assert_eq!(
@@ -3674,7 +3675,7 @@ codeunit 50806 "EvSub3"
         };
 
         let raw_abi = empty_raw_abi();
-        let units = [unit];
+        let units = [&unit];
         let report =
             route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
         assert_eq!(
@@ -3742,7 +3743,7 @@ codeunit 50808 "EvSub4"
         };
 
         let raw_abi = empty_raw_abi();
-        let units = [unit];
+        let units = [&unit];
         let report =
             route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
         assert_eq!(

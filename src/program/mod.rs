@@ -4,6 +4,7 @@
 pub mod abi_ingest;
 pub mod build;
 pub mod dep_cache;
+pub mod dep_summary;
 pub mod graph;
 pub mod graphify_export;
 pub mod integration_report;
@@ -12,6 +13,7 @@ pub mod node;
 pub mod node_extract;
 pub mod node_set;
 pub mod pack;
+pub mod profile;
 pub mod resolve;
 pub mod sig_fp;
 pub mod topology;
