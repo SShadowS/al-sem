@@ -38,15 +38,23 @@ export ALSEM_NO_PREFLIGHT_CACHE=1
 
 echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1 ALSEM_NO_PREFLIGHT_CACHE=1"
 
+# ⟨2026-10-04, test tiers⟩ Built with `release-fast` (thin LTO, 4 codegen units),
+# not full-LTO `release`. This gate checks BEHAVIOUR — counts, digests, zero
+# ratchets — and both profiles are optimized with debug assertions off, so they
+# run the same code paths; full LTO only bought a much slower link of every test
+# executable. Timing claims still need full `release` (`perf_bounds`, benches, the
+# SHA-pinned north-star measure — CLAUDE.md "Build Commands").
+profile=(--profile release-fast)
+
 status=0
 
 echo "cdo-gate: running program_resolve_harness (--test-threads=1)..."
-if ! cargo test --release --test program_resolve_harness -- --test-threads=1; then
+if ! cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=1; then
     status=1
 fi
 
 echo "cdo-gate: running program_graph + snapshot_robustness..."
-if ! cargo test --release --test lsp -- program_graph:: snapshot_robustness::; then
+if ! cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::; then
     status=1
 fi
 
@@ -59,7 +67,7 @@ fi
 # ENFORCE_CDO_WS=1 applies to it too (a missing CDO_WS panics instead of skipping).
 # The fixture members of the same target are cheap and run alongside it.
 echo "cdo-gate: running l4_summary_differential (CDO whole-program frozen digest)..."
-if ! cargo test --release --test l4_summary_differential; then
+if ! cargo test "${profile[@]}" --test l4_summary_differential; then
     status=1
 fi
 
@@ -86,7 +94,7 @@ fi
 # how a gate ends up blind to the next one. ENFORCE_CDO_WS=1 applies here too,
 # so a CDO-gated lib test cannot silently skip.
 echo "cdo-gate: running the library test suite (--lib)..."
-if ! cargo test --release -p al-sem --lib; then
+if ! cargo test "${profile[@]}" -p al-sem --lib; then
     status=1
 fi
 

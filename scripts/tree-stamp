@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# scripts/tree-stamp — print the git tree hash of what a test run is about to see.
+#
+# Used by `scripts/ci-steps test` (writes the stamp after a green run) and by
+# `scripts/git-hooks/pre-commit` (skips re-running the golden targets when the
+# commit's tree is IDENTICAL to a tree that just passed). The stamp is the tree
+# the TRACKED files would form if every working-tree change were staged: the
+# real index (so files already `git add`ed count) plus `add -u` (modified and
+# deleted tracked files), written through a TEMPORARY index so the developer's
+# own staging area is never touched. Untracked files are deliberately left out:
+# a new file that is not staged yet is not part of the stamp, so committing it
+# changes the tree and the hook runs the goldens — the safe direction.
+#
+# Usage:
+#   scripts/tree-stamp           # print the stamp for the current working tree
+#   scripts/tree-stamp --path    # print where ci-steps stores the last green stamp
+set -euo pipefail
+
+if [[ "${1:-}" == "--path" ]]; then
+    git rev-parse --git-path gate-stamp
+    exit 0
+fi
+
+tmp_index="$(mktemp)"
+trap 'rm -f "$tmp_index"' EXIT
+cp "$(git rev-parse --git-path index)" "$tmp_index"
+GIT_INDEX_FILE="$tmp_index" git add -u
+GIT_INDEX_FILE="$tmp_index" git write-tree

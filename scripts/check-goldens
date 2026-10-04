@@ -59,11 +59,12 @@
 #
 # NOT covered here, deliberately: the CDO-gated members of the last two targets
 # (`cdo_whole_program_v2_matches_frozen_digest`, and most of
-# `program_resolve_harness`) SKIP silently when `CDO_WS` is unset, which is the
-# normal case for this script. With `CDO_WS` exported in your environment they DO
-# run and will add minutes — that is correct, not a bug, but it is why a warm
-# `check-goldens` is slower for some developers than others. `scripts/cdo-gate` is
-# the runner that enforces the CDO side.
+# `program_resolve_harness`). This script unsets `CDO_WS`/`ENFORCE_CDO_WS` so they
+# always skip here, whatever the caller's environment: in a debug build they cost
+# ~5 minutes per run (measured 2026-10-04: `abi_ingestion_integrity_cdo_gate`
+# alone took 243 s), and `scripts/cdo-gate` already runs every one of them in an
+# optimized build with `ENFORCE_CDO_WS=1`. Before 2026-10-04 an exported `CDO_WS`
+# made them run here too, which is why this script was slow on some machines.
 #
 # Usage:
 #   scripts/check-goldens            # verify (no regen) — exits nonzero on any stale golden
@@ -187,10 +188,12 @@ targets=(
 # binary, so one stale family hides every later target — you fix it, re-run, and
 # discover the next one. A golden gate must report every stale family in one pass.
 # ⟨task-3 fix wave, review I-3(2)⟩
+unset CDO_WS ENFORCE_CDO_WS
+
 if [[ "${1:-}" == "--regen" ]]; then
     echo "check-goldens: regenerating (REGEN_TEMP_GOLDENS=1) — INSPECT the diff before committing"
     REGEN_TEMP_GOLDENS=1 cargo test --no-fail-fast "${targets[@]}" || exit 1
     echo "check-goldens: re-running WITHOUT regen to confirm green"
 fi
 
-cargo test --no-fail-fast "${targets[@]}"
+env -u REGEN_TEMP_GOLDENS cargo test --no-fail-fast "${targets[@]}"
