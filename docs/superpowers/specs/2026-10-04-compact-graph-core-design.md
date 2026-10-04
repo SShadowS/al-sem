@@ -82,7 +82,7 @@ the same model the detectors already use (`Detector::requires`, folded by `run_d
 | Field (step) | `LIGHT` | `FULL` |
 |---|---|---|
 | `dependency_bodies` (§5) | `Summary` | `Keep` |
-| `empty_event_edges` (§6) | not stored | stored |
+| (dropped 2026-10-04) `empty_event_edges` — not a profile field: the LSP snapshot, the only light view, never stores links without routes (§6 2b); the program report always keeps them | — | — |
 | `edge_details` (§8) | not stored | stored |
 | `dependency_source_text` (§8) | line positions only, if no consumer shows dependency source | stored |
 
@@ -145,13 +145,45 @@ keeps every unit until the context dies.
    peak this step reaches is recorded, not targeted: it also includes the updater indexes
    (§3), which step 2 shares. Step 0 sets the exact number.
 
-## §6 — Step 2: share event links between roots
+## §6 — Step 2: lighter per-root state (revised 2026-10-04)
+
+**Revision.** A code map made after step 1 (on master @ d7a16486) changed the order of this
+step; the user approved it on 2026-10-04. Findings:
+- 92% of each root's event links have no route (CG root 1: 2,033 of 24,527), and no LSP reader
+  uses a link without routes. The LSP snapshot can leave them out with no sharing machinery.
+  `alsem`/`aldump` read event links from the program report, not the LSP snapshot, so nothing is
+  lost (spec §2): the LSP snapshot is the light view by definition.
+- The ~57 MiB per idle updater is essentially `ResolveIndex` (most likely
+  `routines_by_obj_name`, one entry per routine). `obj_node_map` is read only for workspace ids
+  (`full.rs:660-670`), so it needs no dependency part. `DeclSurface`'s dependency part is
+  already the shared `dep_meta`.
+- Rung 1 never reads `ResolveIndex`'s subscriber maps (only `emit_event_flow_edges` does, and
+  rung 1 forwards event links). The idle `Rung1Context` carries them for nothing.
+- Hazard the original design missed: a dependency whose manifest depends on the WORKSPACE app
+  gets a topology edge to `AppRef(0)` (`build.rs:410-431`), which `DepKey` does not capture, so
+  its "dependency-only" event links can differ between roots. Any sharing needs a guard.
+
+**Order (smallest, provably-identical changes first):**
+- **2a.** Build `obj_node_map` from workspace objects only, at every build site. No behaviour
+  change by construction.
+- **2b.** The LSP snapshot stores only event links with at least one route. Every LSP answer
+  must stay identical; the backstop compares ANSWERS (non-empty links, `incoming`,
+  `publisher_fanout`), not raw storage.
+- **2c.** Make the parts of `Rung1Context` measurable, then remove the per-routine map (direct
+  lookups over the already-sorted routine list) or share it, whichever the measurement favours;
+  and stop keeping the subscriber maps in the idle `Rung1Context`. Rung 1 and rung 2 answers
+  must stay identical.
+- **2d (conditional).** Only if 2a-2c leave enough on the table at 7 roots: share the remaining
+  dependency event links and index between roots, as designed below, with the topology guard
+  (a dependency that depends on the workspace app disables sharing for that tier).
+
+The original design follows; it now applies to 2d only.
 
 **Finding.** Dependency-to-dependency event links are byte-identical in all 7 roots; only 0-2
 links per root involve the workspace. Each root rebuilds all of them (`emit_event_flow_edges`,
 plus `incoming`/`publisher_fanout` keys).
 
-**Design.**
+**Design (2d).**
 - **Shared part:** links whose publisher and subscribers are all in dependencies, computed once
   per shared dependency set and stored in the shared tier next to `dep_meta` (same
   build-on-first-use slot).
@@ -161,8 +193,8 @@ plus `incoming`/`publisher_fanout` keys).
   publishers, unless they prove shareable.
 - `event_edges`, `incoming` and `publisher_fanout` are read through one view ("shared plus this
   root's additions"), so handlers do not see two parts.
-- `empty_event_edges`: `FULL` stores links with no subscriber (the CLI counts them as
-  `honestEmpty`); `LIGHT` does not. LSP answers must be identical either way.
+- Links with no route: already handled by 2b (the LSP snapshot never stores them; the
+  program report, which `alsem`/`aldump` use, keeps them and counts them as `honestEmpty`).
 
 **Composition contract** (review finding 5). Today event references index one flat vector
 (`src/lsp/snapshot.rs:719-725, 848-858`), subscriber routes are globally sorted
@@ -194,7 +226,8 @@ to `dep_meta`) and keeps only a workspace overlay per root. This was "lever 7" i
 priced there as transient; it is moved into this step because in a running server it is
 retained.
 
-**Checks.**
+**Checks (2a-2c: each change's LSP answers equal the previous commit's on CDO and every
+fixture, rung 1/2/3 answers unchanged, probe re-run with updaters after each; 2d: as below).**
 1. The combined view equals today's per-root result, link for link, on CDO, every fixture,
    and a multi-root test where roots subscribe to dependency events. Rung-2 tests add and
    remove a workspace subscription to a dependency event (including one with no dependency
