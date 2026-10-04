@@ -422,6 +422,40 @@ impl ResolveIndex {
         }
     }
 
+    /// Census only: move every field out, boxed and named, so a probe can drop
+    /// them one at a time and read the heap delta. Production never calls it.
+    /// A new field must be added here; `census_parts_names_every_field` fails
+    /// until it is.
+    #[doc(hidden)]
+    pub fn census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any + Send>)> {
+        let ResolveIndex {
+            routines_by_obj_name,
+            objs_by_number,
+            objects_by_id,
+            objects_by_name,
+            table_extensions,
+            page_extensions,
+            report_extensions,
+            implementers,
+            subscribers_map,
+            ambiguous_subscriptions,
+            orphaned_subscriptions,
+        } = self;
+        vec![
+            ("routines_by_obj_name", Box::new(routines_by_obj_name)),
+            ("objs_by_number", Box::new(objs_by_number)),
+            ("objects_by_id", Box::new(objects_by_id)),
+            ("objects_by_name", Box::new(objects_by_name)),
+            ("table_extensions", Box::new(table_extensions)),
+            ("page_extensions", Box::new(page_extensions)),
+            ("report_extensions", Box::new(report_extensions)),
+            ("implementers", Box::new(implementers)),
+            ("subscribers_map", Box::new(subscribers_map)),
+            ("ambiguous_subscriptions", Box::new(ambiguous_subscriptions)),
+            ("orphaned_subscriptions", Box::new(orphaned_subscriptions)),
+        ]
+    }
+
     /// All overloads of `name_lc` declared in `obj` — [`WorldMode::CallerClosure`]
     /// or [`WorldMode::AnalyzedSnapshot`] (no scoping needed; the object id is
     /// already fully-qualified).
@@ -1294,6 +1328,31 @@ mod tests {
             a,
             b,
         )
+    }
+
+    /// The census must name every `ResolveIndex` field, no more, no fewer. The
+    /// field list is read from this file's own struct text, so a new field
+    /// fails here even if the destructure in `census_parts` is loosened.
+    #[test]
+    fn census_parts_names_every_field() {
+        let src = include_str!("index.rs");
+        let start = src.find("pub struct ResolveIndex {").unwrap();
+        let body = &src[start..][..src[start..].find("\n}\n").unwrap()];
+        let mut declared: Vec<&str> = body
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter_map(|l| l.trim().split_once(':').map(|(n, _)| n))
+            .collect();
+        declared.sort_unstable();
+        let (graph, _a, _b) = build_fixture();
+        let mut named: Vec<&str> = ResolveIndex::build(&graph)
+            .census_parts()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        named.sort_unstable();
+        assert_eq!(named, declared);
     }
 
     // -- object_by_number tests -----------------------------------------------

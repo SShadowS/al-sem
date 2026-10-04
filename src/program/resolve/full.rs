@@ -765,7 +765,7 @@ pub(crate) fn resolve_file_obligations(
 /// The object map `resolve_file_obligations` reads. Its only lookups use ids
 /// built from the primary app, so it holds workspace objects only: dependency
 /// objects would be dead weight, retained per root by the idle updater.
-pub(crate) fn workspace_object_map(
+pub fn workspace_object_map(
     graph: &ProgramGraph,
     primary: AppRef,
 ) -> HashMap<ObjectNodeId, &ObjectNode> {

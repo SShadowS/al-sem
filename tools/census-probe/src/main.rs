@@ -1123,6 +1123,109 @@ fn updaters_mode(
     );
 }
 
+/// `--index-split`: for each root, build the three things the idle updater's
+/// `Rung1Context` holds (`ResolveIndex`, workspace object map, `DeclSurface`)
+/// from the root's own graph, one at a time, and record the live-heap delta each
+/// adds. Then drop the `ResolveIndex` field by field (`census_parts`) and
+/// record each drop. Counting-allocator deltas only (requested bytes, hash-map
+/// capacity included). The structures are built here by the same calls as
+/// `Rung1Context::build`, not taken from a running updater.
+fn index_split_mode(built: Vec<Root>) {
+    use al_sem::program::resolve::decl_surface::DeclSurface;
+    use al_sem::program::resolve::full::workspace_object_map;
+    use al_sem::program::resolve::index::ResolveIndex;
+    println!("\n==== --index-split: Rung1Context pieces per root ====");
+    let mut sums: Vec<(String, f64, isize)> = Vec::new();
+    let mut add = |name: &str, m: f64, a: isize| {
+        if let Some(e) = sums.iter_mut().find(|e| e.0 == name) {
+            e.1 += m;
+            e.2 += a;
+        } else {
+            sums.push((name.to_string(), m, a));
+        }
+    };
+    let n = built.len();
+    for (i, r) in built.iter().enumerate() {
+        let graph = &r.snap.graph;
+        let primary = graph
+            .apps
+            .find(&r.snap.snap.workspace_app)
+            .expect("workspace app interned");
+        println!(
+            "\n-- root {} {} : objects {} (own {}), routines {} (own {})",
+            i + 1,
+            r.path.display(),
+            graph.objects.len(),
+            graph.objects.own().len(),
+            graph.routines.len(),
+            graph.routines.own().len()
+        );
+        settle();
+        let (b0, a0) = live();
+        let idx = ResolveIndex::build(graph);
+        settle();
+        let (b1, a1) = live();
+        let map = workspace_object_map(graph, primary);
+        settle();
+        let (b2, a2) = live();
+        let surf = DeclSurface::build(graph, std::slice::from_ref(&r.ws))
+            .with_frozen(Arc::clone(&r.snap.dep_meta));
+        settle();
+        let (b3, a3) = live();
+        println!(
+            "  ResolveIndex total {:>8.2} MiB {:>8} allocs | object map ({} entries) {:>8.2} MiB {:>6} allocs | DeclSurface (local part) {:>8.2} MiB {:>6} allocs",
+            mib(b1 - b0),
+            a1 - a0,
+            map.len(),
+            mib(b2 - b1),
+            a2 - a1,
+            mib(b3 - b2),
+            a3 - a2
+        );
+        add("ResolveIndex total", mib(b1 - b0), a1 - a0);
+        add("object map", mib(b2 - b1), a2 - a1);
+        add("DeclSurface local", mib(b3 - b2), a3 - a2);
+        println!(
+            "  Rung1Context pieces sum {:.2} MiB in {} allocs",
+            mib(b3 - b0),
+            a3 - a0
+        );
+        let mut parts_b = 0isize;
+        let mut parts_a = 0isize;
+        for (name, part) in idx.census_parts() {
+            let (pb, pa) = live();
+            drop(part);
+            let (qb, qa) = live();
+            println!(
+                "    {name:<26} {:>8.2} MiB {:>8} allocs",
+                mib(pb - qb),
+                pa - qa
+            );
+            add(&format!("  {name}"), mib(pb - qb), pa - qa);
+            parts_b += pb - qb;
+            parts_a += pa - qa;
+        }
+        println!(
+            "    {:<26} {:>8.2} MiB {:>8} allocs  (total minus parts: {:.3} MiB, {} allocs)",
+            "sum of parts",
+            mib(parts_b),
+            parts_a,
+            mib((b1 - b0) - parts_b),
+            (a1 - a0) - parts_a
+        );
+        drop(map);
+        drop(surf);
+    }
+    println!("\nSUM over {n} roots (MiB, allocs):");
+    for (name, m, a) in &sums {
+        println!("  {name:<28} {m:>9.2} MiB {a:>9} allocs");
+    }
+    println!(
+        "RSS context (OS, not used for any byte figure): {}",
+        rss_context()
+    );
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
@@ -1138,7 +1241,7 @@ fn main() {
     let with_updaters = rest.iter().any(|a| a == "--with-updaters");
     let roots: Vec<PathBuf> = rest
         .iter()
-        .filter(|a| *a != "--with-updaters")
+        .filter(|a| *a != "--with-updaters" && *a != "--index-split")
         .map(PathBuf::from)
         .collect();
     al_sem::census_hook::HOOK.set(on_mark).unwrap();
@@ -1255,6 +1358,10 @@ fn main() {
         at - start.1
     );
 
+    if rest.iter().any(|a| a == "--index-split") {
+        index_split_mode(built);
+        return;
+    }
     if with_updaters {
         updaters_mode(built, source, &cache, bt - start.0);
         return;
