@@ -1,0 +1,17 @@
+[package]
+name = "census-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+al-sem = { path = "../.." }
+
+# Own workspace: the probe must not join the repo's workspace or CI.
+[workspace]
+
+# Mirrors the repo's `release-fast` profile (thin LTO).
+[profile.release]
+lto = "thin"
+codegen-units = 4
+panic = "abort"

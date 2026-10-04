@@ -332,9 +332,12 @@ No fixed saving is promised here, because steps 1 and 2 change the base.
 ## §11 — Success criteria
 
 - `LIGHT`, 7 CG roots, `embedded`, counted heap: build peak about 425 MiB (from 1,121 MiB).
-- Retained heap with the server idle (updaters included): set from step 0's measurement. The
-  goal is the snapshots' ~260 MiB plus one shared copy of the dependency updater indexes,
-  not seven copies. The exact number is written in at step 0, before step 1 starts.
+- Retained heap with the server idle (updaters included), 7 CG roots, `embedded`: measured at
+  step 0 (`docs/2026-10-04-step0-server-census.md`) as **762.7 MiB** today (snapshots 360.5 +
+  updaters 402.2, i.e. 57.45 MiB per root). The goal is the snapshots plus ONE shared copy of
+  the dependency updater indexes, not seven: about 360.5 + 57.5 = **418 MiB** on today's
+  snapshots (an upper bound for one copy; the Light graph lowers the snapshot part further).
+  `symbols`: 375.5 MiB today, about 181 MiB with one shared copy.
 - **Container acceptance (the real pass criterion):** heap figures do not prove
   deployability. Steps 1 and 2 count as done for the container only when the CentralGauge
   harness's own gate passes: a signed release, a full 7-root cell at 3 GB next to the AL
