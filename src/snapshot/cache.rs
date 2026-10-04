@@ -67,11 +67,21 @@ pub fn cached_source(app_path: &Path) -> Result<(Vec<SourceFile>, String)> {
 
 /// Attempt to deserialise a cache entry.  Returns `Err` on any I/O or JSON
 /// failure so the caller can fall through to re-extraction.
+///
+/// The file is memory-mapped, not read into one heap buffer: BaseApp's entry
+/// is over 100 MB, and a read-only file mapping does not count against
+/// Windows commit.
 fn try_read_cache(cache_file: &Path) -> Result<Vec<SourceFile>> {
-    let raw = std::fs::read_to_string(cache_file)
+    let read = || -> std::io::Result<_> {
+        let file = std::fs::File::open(cache_file)?;
+        // SAFETY: cache entries are only ever replaced whole by a rename
+        // (`persist_cache`), never written or truncated in place.
+        unsafe { crate::capped_io::map_read_only(&file) }
+    };
+    let map = read().with_context(|| format!("read cache {}", cache_file.display()))?;
+    let raw = std::str::from_utf8(map.as_deref().unwrap_or(&[]))
         .with_context(|| format!("read cache {}", cache_file.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("deserialise cache {}", cache_file.display()))
+    serde_json::from_str(raw).with_context(|| format!("deserialise cache {}", cache_file.display()))
 }
 
 /// Persist `files` to `cache_file` atomically (temp-write + rename).
@@ -80,10 +90,22 @@ fn try_read_cache(cache_file: &Path) -> Result<Vec<SourceFile>> {
 /// file; last rename wins.  Both processes write identical content so the final
 /// file is always valid — no torn writes.
 fn persist_cache(cache_file: &Path, hash: &str, files: &[SourceFile]) -> Result<()> {
-    let json = serde_json::to_string(files).context("serialise source files")?;
     let tmp = cache_dir().join(format!("{hash}-{}.json.tmp", std::process::id()));
-    std::fs::write(&tmp, &json).with_context(|| format!("write cache tmp {}", tmp.display()))?;
-    std::fs::rename(&tmp, cache_file)
-        .with_context(|| format!("rename cache tmp → {}", cache_file.display()))?;
-    Ok(())
+    // Streamed to the file, not built as one big `String` first.
+    let write = || -> std::io::Result<()> {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+        serde_json::to_writer(&mut out, files)?;
+        std::io::Write::flush(&mut out)
+    };
+    let result = write()
+        .with_context(|| format!("write cache tmp {}", tmp.display()))
+        .and_then(|()| {
+            std::fs::rename(&tmp, cache_file)
+                .with_context(|| format!("rename cache tmp → {}", cache_file.display()))
+        });
+    if result.is_err() {
+        // Do not leave a partial (possibly hundreds of MB) temp file behind.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }

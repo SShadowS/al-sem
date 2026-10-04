@@ -208,7 +208,7 @@ impl AbiCache {
         // uses, so both failure modes surface through the one channel
         // `ingest_abi` propagates below.
         let abi = read_symbol_reference_from_app(app_path).unwrap_or_else(|e| SymbolReferenceAbi {
-            error: Some(format!("failed to read {}: {e}", app_path.display())),
+            error: Some(format!("failed to read {}: {e:#}", app_path.display())),
             ..Default::default()
         });
         let arc = Arc::new(abi);
@@ -239,12 +239,23 @@ pub(crate) fn read_symbol_reference_from_app(path: &Path) -> anyhow::Result<Symb
         sr_file.size(),
         crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
     )?;
-    let content =
-        crate::capped_io::read_capped(sr_file, crate::capped_io::SYMBOL_REFERENCE_JSON_CAP)?;
+    // BaseApp's entry is ~58 MB and `parse_symbol_reference` needs it as one
+    // `&str`. Decompress it into an anonymous temp file and map that file
+    // read-only, instead of one big heap buffer: a read-only file-backed
+    // mapping does not count against Windows commit. The parse returns owned
+    // data, so the mapping and the file go away when this function returns.
+    let file = crate::capped_io::copy_capped_to_tempfile(
+        sr_file,
+        crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
+    )?;
+    // SAFETY: the file is an anonymous temp file only this function can reach
+    // (no name, never shared), so nothing changes it while mapped.
+    let map = unsafe { crate::capped_io::map_read_only(&file)? };
+    let content: &[u8] = map.as_deref().unwrap_or(&[]);
     let json_str = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {
         std::str::from_utf8(&content[3..])?
     } else {
-        std::str::from_utf8(&content)?
+        std::str::from_utf8(content)?
     };
     Ok(parse_symbol_reference(json_str))
 }
@@ -632,6 +643,29 @@ mod tests {
     use crate::snapshot::{AppId, Provenance};
     use al_syntax::ir::ObjectKind;
     use std::sync::Arc;
+
+    /// The temp-file + memory-map read of a Ready-to-Run package's
+    /// `SymbolReference.json` (BOM-prefixed, NUL-padded) yields the same ABI
+    /// as parsing the JSON text directly.
+    #[test]
+    fn read_symbol_reference_from_ready_to_run_app_matches_direct_parse() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let json = r#"{"AppId":"437dbf0e-84ff-417a-965d-ed2bb9650972","Name":"Base Application","Publisher":"Microsoft","Version":"28.4.53241.53758","Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Parameters":[{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Sales Header"}}}]}]}]}"#;
+        let expected = parse_symbol_reference(json);
+        assert!(expected.error.is_none(), "{:?}", expected.error);
+        assert!(!expected.objects.is_empty());
+
+        let entry = [b"\xEF\xBB\xBF".as_slice(), json.as_bytes(), &[0u8; 64]].concat();
+        let app = test_apps::build_app(&[("SymbolReference.json", &entry)]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("Microsoft_Base Application_28.4.53241.53758.app");
+        std::fs::write(&path, test_apps::wrap_ready_to_run(&app)).unwrap();
+
+        let abi = read_symbol_reference_from_app(&path).expect("read");
+        assert_eq!(abi, expected);
+    }
 
     fn dep_id(name: &str) -> AppId {
         AppId {

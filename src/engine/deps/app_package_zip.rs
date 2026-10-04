@@ -31,8 +31,8 @@ const READY_TO_RUN_MANIFEST: &str = "readytorunappmanifest.json";
 pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
-/// The reader behind an opened `.app` zip: the file itself, or the in-memory
-/// nested app of a Ready-to-Run package.
+/// The reader behind an opened `.app` zip: the file itself, or the temp file
+/// holding the nested app of a Ready-to-Run package.
 pub type AppReader = Box<dyn ReadSeek + Send>;
 
 /// If `archive` is a Ready-to-Run package, return the bytes of the app it nests.
@@ -49,6 +49,21 @@ pub type AppReader = Box<dyn ReadSeek + Send>;
 pub fn read_ready_to_run_app<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> anyhow::Result<Option<Vec<u8>>> {
+    with_ready_to_run_app(archive, |app| {
+        Ok(crate::capped_io::read_capped(
+            app,
+            crate::capped_io::READY_TO_RUN_APP_CAP,
+        )?)
+    })
+}
+
+/// The shared half of [`read_ready_to_run_app`]: find the nested app entry,
+/// check its declared size, and hand the entry to `read`, which must enforce
+/// [`crate::capped_io::READY_TO_RUN_APP_CAP`] on the bytes it reads.
+fn with_ready_to_run_app<R: Read + Seek, T>(
+    archive: &mut zip::ZipArchive<R>,
+    read: impl FnOnce(zip::read::ZipFile<'_>) -> anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
     let manifest = match archive.by_name(READY_TO_RUN_MANIFEST) {
         Ok(f) => f,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
@@ -73,9 +88,35 @@ pub fn read_ready_to_run_app<R: Read + Seek>(
         .with_context(|| format!("Ready-to-Run package has no entry {name}"))?;
     crate::capped_io::check_declared_size(app.size(), crate::capped_io::READY_TO_RUN_APP_CAP)
         .with_context(|| format!("nested app {name} declared size exceeds cap"))?;
-    let bytes = crate::capped_io::read_capped(app, crate::capped_io::READY_TO_RUN_APP_CAP)
-        .with_context(|| format!("reading nested app {name}"))?;
-    Ok(Some(bytes))
+    let out = read(app).with_context(|| format!("reading nested app {name}"))?;
+    Ok(Some(out))
+}
+
+/// Copy a nested app entry into an anonymous temp file holding exactly
+/// `strip_app_header(<entry bytes>)`, rewound, with the same
+/// [`crate::capped_io::READY_TO_RUN_APP_CAP`] on the whole entry.
+///
+/// The disk-backed form of `strip_app_header(&read_ready_to_run_app(..))`:
+/// BaseApp's nested app is ~44 MB, too big to hold as one heap buffer under a
+/// tight container memory limit.
+fn copy_nested_app_to_tempfile<R: Read>(mut app: R) -> anyhow::Result<std::fs::File> {
+    use crate::capped_io::{CapReadError, copy_capped_to_tempfile};
+    let cap = crate::capped_io::READY_TO_RUN_APP_CAP;
+    // `strip_app_header` looks at no more than the first 4096 + 4 bytes, so
+    // this head is enough to find the same offset it would on the whole entry.
+    let mut head = Vec::new();
+    (&mut app)
+        .take(4096 + 4)
+        .read_to_end(&mut head)
+        .map_err(CapReadError::Io)?;
+    let offset = (head.len() - strip_app_header(&head).len()) as u64;
+    let rest = Cursor::new(&head[offset as usize..]).chain(app);
+    // Entry bytes = offset + copied, so `copied <= cap - offset` is the same
+    // test as `entry <= cap`. The reported cap stays the entry cap.
+    match copy_capped_to_tempfile(rest, cap - offset) {
+        Err(CapReadError::CapExceeded { .. }) => Err(CapReadError::CapExceeded { cap }.into()),
+        r => Ok(r?),
+    }
 }
 
 /// The zip bytes of a `.app`: its header stripped and, for a Ready-to-Run
@@ -105,7 +146,8 @@ pub fn app_zip_bytes(app_bytes: &[u8]) -> Cow<'_, [u8]> {
 
 /// Open a `.app` file's zip: skip the NAVX header and, for a Ready-to-Run
 /// package, open the nested app in the wrapper's place. An ordinary `.app` is
-/// still read straight from the file.
+/// still read straight from the file. A nested app is decompressed into an
+/// anonymous temp file (deleted when the archive is dropped), not into memory.
 ///
 /// `Ok(None)` when the file holds no zip at all (a symbol-only runtime app).
 pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppReader>>> {
@@ -122,13 +164,12 @@ pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppRe
             return Err(e).with_context(|| format!("reading zip in .app: {}", path.display()));
         }
     };
-    let Some(app) = read_ready_to_run_app(&mut archive)
+    let Some(app) = with_ready_to_run_app(&mut archive, |app| copy_nested_app_to_tempfile(app))
         .with_context(|| format!("Ready-to-Run package: {}", path.display()))?
     else {
         return Ok(Some(archive));
     };
-    let zip = strip_app_header(&app).to_vec();
-    let nested = zip::ZipArchive::new(Box::new(Cursor::new(zip)) as AppReader)
+    let nested = zip::ZipArchive::new(Box::new(BufReader::new(app)) as AppReader)
         .with_context(|| format!("reading nested app in {}", path.display()))?;
     Ok(Some(nested))
 }

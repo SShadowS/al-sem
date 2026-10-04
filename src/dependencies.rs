@@ -513,11 +513,7 @@ pub fn load_all_apps_with(
                     });
                 }
                 Err(e) => {
-                    warn!(
-                        "load_all_apps: failed to read manifest of {}: {}",
-                        path.display(),
-                        e
-                    );
+                    warn!("{}", manifest_read_warning(&path, &e));
                 }
             }
         }
@@ -578,7 +574,7 @@ pub fn load_all_apps_with(
                 Err(e) => {
                     let has_fallback = i + 1 < group.len();
                     warn!(
-                        "load_all_apps: failed to parse {} v{}: {}{}",
+                        "load_all_apps: failed to parse {} v{}: {:#}{}",
                         candidate.app_path.display(),
                         candidate.meta.version,
                         e,
@@ -635,6 +631,16 @@ pub fn load_all_apps_with(
     });
 
     Ok((out, dropped))
+}
+
+/// The warning `load_all_apps` logs when a `.app`'s manifest cannot be read.
+/// `{:#}` prints the whole context chain: plain `{}` printed only the outer
+/// context ("Ready-to-Run package: <path>") and hid the real cause.
+fn manifest_read_warning(path: &Path, e: &anyhow::Error) -> String {
+    format!(
+        "load_all_apps: failed to read manifest of {}: {e:#}",
+        path.display()
+    )
 }
 
 /// Resolve all dependencies for a project
@@ -697,7 +703,7 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                         });
                     }
                     Err(e) => {
-                        warn!("Failed to parse {}: {}", app_path.display(), e);
+                        warn!("Failed to parse {}: {:#}", app_path.display(), e);
                         #[cfg(feature = "telemetry")]
                         crate::telemetry::record_indexer_issue(
                             crate::telemetry::IndexerIssueKind::AppParseFailed,
@@ -731,6 +737,26 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The manifest-read warning must name the real cause, not just the
+    /// outer context. A Ready-to-Run package naming a nested app it lacks
+    /// fails with "Ready-to-Run package: <path>" outside and "missing.app"
+    /// inside; plain `{}` printed only the outside.
+    #[test]
+    fn manifest_read_warning_includes_the_inner_cause() {
+        let package = crate::engine::deps::app_package_zip::test_apps::build_app(&[(
+            "readytorunappmanifest.json",
+            br#"{"EmbeddedAppFileName":"missing.app"}"#,
+        )]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Microsoft_Base Application_28.4.app");
+        std::fs::write(&path, package).unwrap();
+
+        let err = crate::app_package::extract_app_metadata(&path).unwrap_err();
+        let line = manifest_read_warning(&path, &err);
+        assert!(line.contains("Ready-to-Run package"), "{line}");
+        assert!(line.contains("missing.app"), "{line}");
+    }
 
     // -----------------------------------------------------------------------
     // beyond-1B.3b Task 5.5: append_implicit_ms_tier_deps

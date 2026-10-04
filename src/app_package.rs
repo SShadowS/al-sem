@@ -451,15 +451,26 @@ fn parse_symbols<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<Vec
         crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
     )
     .context("SymbolReference.json declared size exceeds cap")?;
-    let content =
-        crate::capped_io::read_capped(symbols_file, crate::capped_io::SYMBOL_REFERENCE_JSON_CAP)
-            .context("Failed to read SymbolReference.json")?;
+    // BaseApp's entry is ~58 MB. Decompress it into an anonymous temp file
+    // and map that file read-only, instead of one big heap buffer: a
+    // read-only file-backed mapping does not count against Windows commit.
+    // Same route as `abi_ingest::read_symbol_reference_from_app`.
+    let file = crate::capped_io::copy_capped_to_tempfile(
+        symbols_file,
+        crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
+    )
+    .context("Failed to read SymbolReference.json")?;
+    // SAFETY: the file is an anonymous temp file only this function can reach
+    // (no name, never shared), so nothing changes it while mapped.
+    let map = unsafe { crate::capped_io::map_read_only(&file) }
+        .context("Failed to read SymbolReference.json")?;
+    let content: &[u8] = map.as_deref().unwrap_or(&[]);
 
     // Handle UTF-8 BOM if present
     let json_str = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {
         std::str::from_utf8(&content[3..]).context("Invalid UTF-8 in SymbolReference.json")?
     } else {
-        std::str::from_utf8(&content).context("Invalid UTF-8 in SymbolReference.json")?
+        std::str::from_utf8(content).context("Invalid UTF-8 in SymbolReference.json")?
     };
 
     // The JSON may have null byte padding after the actual content — see
@@ -950,5 +961,62 @@ mod tests {
 
         let pkg = extract_app_package(&path).expect("normal-sized app must parse");
         assert_eq!(pkg.metadata.name, "BombApp");
+    }
+
+    const STREAM_SYMBOLS: &str = r#"{"Tables":[{"Id":18,"Name":"Customer"}],"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Parameters":[{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Sales Header"}}}]}]}],"Namespaces":[{"Name":"Microsoft","Codeunits":[{"Id":90,"Name":"Purch.-Post"}]}]}"#;
+
+    /// The temp-file + memory-map `parse_symbols` must accept a BOM-prefixed
+    /// and a NUL-padded `SymbolReference.json` and yield the same objects as
+    /// parsing the text directly (`parse_first_json_value`).
+    #[test]
+    fn mapped_symbols_match_the_direct_parse_with_bom_and_nul_padding() {
+        let expected = {
+            let symbols: SymbolReference = parse_first_json_value(STREAM_SYMBOLS).unwrap();
+            let mut objects = Vec::new();
+            collect_objects_top(symbols, &mut objects);
+            format!("{objects:?}")
+        };
+        assert!(expected.contains("Purch.-Post") && expected.contains("Sales Header"));
+
+        let bom = [b"\xEF\xBB\xBF".as_slice(), STREAM_SYMBOLS.as_bytes()].concat();
+        let nul = [STREAM_SYMBOLS.as_bytes(), &[0u8; 4096]].concat();
+        let both = [bom.as_slice(), &[0u8; 17]].concat();
+        for (label, entry) in [("bom", &bom), ("nul", &nul), ("bom+nul", &both)] {
+            let app = crate::engine::deps::app_package_zip::test_apps::build_app(&[(
+                "SymbolReference.json",
+                entry,
+            )]);
+            let zip = crate::engine::deps::app_package_zip::strip_app_header(&app);
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+            let objects = parse_symbols(&mut archive).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            assert_eq!(format!("{objects:?}"), expected, "{label}");
+        }
+    }
+
+    /// Invalid UTF-8 anywhere in the entry — inside the JSON or in the
+    /// padding after it — is the old "Invalid UTF-8" error, never a parse.
+    #[test]
+    fn symbols_with_invalid_utf8_keep_the_old_error() {
+        let inside = br#"{"Codeunits":[{"Id":80,"Name":"Sales-Post"#
+            .iter()
+            .copied()
+            .chain([0xFF])
+            .chain(*br#""}]}"#)
+            .collect::<Vec<u8>>();
+        let padding = [STREAM_SYMBOLS.as_bytes(), &[0u8, 0xFF, 0u8]].concat();
+        for (label, entry) in [("inside", &inside), ("padding", &padding)] {
+            let app = crate::engine::deps::app_package_zip::test_apps::build_app(&[(
+                "SymbolReference.json",
+                entry,
+            )]);
+            let zip = crate::engine::deps::app_package_zip::strip_app_header(&app);
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+            let err = parse_symbols(&mut archive).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid UTF-8 in SymbolReference.json",
+                "{label}: {err:#}"
+            );
+        }
     }
 }

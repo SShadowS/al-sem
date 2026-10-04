@@ -87,6 +87,12 @@ notify = { version = "7", default-features = false, features = ["macos_fsevent"]
 # App package parsing
 zip = "2"
 roxmltree = "0.20"
+# Large dependency entries (a Ready-to-Run package's nested app, a
+# SymbolReference.json) are decompressed into an anonymous temp file instead of
+# one big heap buffer; a read-only memory map of that file does not count
+# against Windows commit. See `src/capped_io.rs`.
+tempfile = "3"
+memmap2 = "0.9"
 
 # Home directory (cross-platform)
 dirs = "6"
@@ -152,7 +158,6 @@ telemetry = [
 test-runtime = ["telemetry"]
 
 [dev-dependencies]
-tempfile = "3"
 criterion = "0.5"
 # Dual-run parity harness (owned-syntax-IR migration): integration tests link only
 # the crate + dev-deps, so the IR crate + a dir walker are listed here too.
