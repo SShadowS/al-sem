@@ -17,7 +17,7 @@ use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
-use crate::snapshot::{AppId, AppSetSnapshot, TrustTier};
+use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
 
 /// Process-level dependency tier, shared by every workspace root that loads
 /// the SAME dependency set. Entries are held weakly: one lives exactly as
@@ -65,15 +65,25 @@ pub struct DepNodes {
     pub objects: Arc<Vec<ObjectNode>>,
     pub routines: Arc<Vec<RoutineNode>>,
     pub abi_ingest_errors: Vec<AbiIngestError>,
+    /// The frozen `DeclSurface` tier: every dependency routine's
+    /// `RoutineMeta`, built with the nodes. Every consumer reads dependency
+    /// metadata from here, never from dependency `ParsedUnit`s.
+    pub dep_meta: Arc<DepMetaMap>,
+    /// `"<app name>::<virtual path>"` of every dependency file whose parse
+    /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
+    /// not parse the dependencies) still reports them.
+    pub recovered: Vec<String>,
+    /// The dependency `ParsedUnit`s, for a profile that keeps dependency
+    /// bodies. Always `None` for now.
+    pub bodies: Option<Arc<Vec<ParsedUnit>>>,
     /// The LSP products derived from this tier (set by the first snapshot
-    /// that builds them). Both are keyed by this tier's AppRefs, so they are
-    /// valid exactly where the tier itself is shared.
+    /// that builds them). Keyed by this tier's AppRefs, so they are valid
+    /// exactly where the tier itself is shared.
     pub lsp: OnceLock<Arc<DepLspTier>>,
 }
 
 /// Dependency-derived LSP data, shared with [`DepNodes`].
 pub struct DepLspTier {
-    pub dep_meta: Arc<DepMetaMap>,
     pub dep_texts: Arc<DepTexts>,
 }
 
@@ -104,15 +114,12 @@ impl DepCache {
         built
     }
 
-    /// The live entry for `key`, only if its LSP products (`lsp`) are already
-    /// published. Never builds. An entry without them (built by a CLI-style
-    /// build, or by a root still inside `from_context`) is a miss: whoever
-    /// fills the slot needs the dependency parse trees.
+    /// The live entry for `key`, if any. Never builds. Any live entry is a
+    /// hit: it always carries `dep_meta` and `recovered`, and its LSP
+    /// products (`dep_texts`) can be built from any snapshot, so a hit
+    /// never needs the dependency parse trees.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
-        self.lock()
-            .get(key)
-            .and_then(Weak::upgrade)
-            .filter(|nodes| nodes.lsp.get().is_some())
+        self.lock().get(key).and_then(Weak::upgrade)
     }
 
     /// The live parsed package for the `.app` at `path`, or `load()`'s result
@@ -656,8 +663,9 @@ mod tests {
         assert_eq!(cache.live_entries(), 1);
     }
 
-    /// Roots sharing a dependency tier share its `dep_meta`/`dep_texts`, and
-    /// the texts are the shared extracted-source allocations.
+    /// Roots sharing a dependency tier share its `dep_meta` (held by the
+    /// tier's nodes) and `dep_texts`, and the texts are the shared
+    /// extracted-source allocations.
     #[test]
     fn roots_share_dep_meta_and_dep_texts() {
         let fx = two_roots_one_alpackages();
@@ -666,6 +674,11 @@ mod tests {
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
         assert!(!a.dep_meta.is_empty(), "precondition: dependency decls");
+        assert!(Arc::ptr_eq(&a.dep_meta, &a.dep_layer.dep_nodes.dep_meta));
+        assert!(Arc::ptr_eq(
+            &a.dep_layer.dep_nodes.dep_meta,
+            &b.dep_layer.dep_nodes.dep_meta
+        ));
         assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
         assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
         let src = dep_texts(&cache, &fx.root_a);
@@ -677,16 +690,26 @@ mod tests {
         );
     }
 
-    /// A dropped root leaves nothing behind: the next root's tier is fresh
-    /// and equals a cache-less build.
+    /// A dropped last root leaves nothing behind: the next root's tier
+    /// (`dep_meta`, `recovered`, `dep_texts`) is fresh and equals a
+    /// cache-less build.
     #[test]
-    fn dep_lsp_tier_after_the_first_root_is_dropped_is_fresh_and_correct() {
+    fn dep_tier_after_the_last_root_is_dropped_is_fresh_and_correct() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let old = Arc::downgrade(&a.dep_texts);
+        let old_texts = Arc::downgrade(&a.dep_texts);
+        let old_meta = Arc::downgrade(&a.dep_layer.dep_nodes.dep_meta);
         drop(a);
-        assert!(old.upgrade().is_none(), "nothing retains the dropped tier");
+        assert!(
+            old_texts.upgrade().is_none(),
+            "nothing retains the dropped texts"
+        );
+        assert!(
+            old_meta.upgrade().is_none(),
+            "nothing retains the dropped dep_meta"
+        );
+        assert_eq!(cache.live_entries(), 0, "the dropped tier is not live");
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert!(!b.dep_texts.is_empty());
@@ -694,12 +717,12 @@ mod tests {
         for (k, v) in b.dep_texts.iter() {
             assert_eq!(solo.dep_texts.get(k).map(|s| &**s), Some(&**v));
         }
-        let keys = |s: &LspSnapshot| {
-            let mut k: Vec<_> = s.dep_meta.keys().cloned().collect();
-            k.sort();
-            k
-        };
-        assert_eq!(keys(&b), keys(&solo));
+        assert!(!b.dep_meta.is_empty(), "precondition: dependency decls");
+        assert_eq!(*b.dep_meta, *solo.dep_meta);
+        assert_eq!(
+            b.dep_layer.dep_nodes.recovered,
+            solo.dep_layer.dep_nodes.recovered
+        );
     }
 
     /// Every LSP answer of a snapshot, order-independent, as text.
@@ -808,15 +831,27 @@ mod tests {
         assert_eq!(answers(&b), answers(&solo));
     }
 
-    /// On a hit only the workspace unit is parsed; the dependency's source is
-    /// not parsed again.
+    /// Any live tier is a hit, even one whose LSP products were never
+    /// published (root A here is a plain context, not a snapshot). On a hit
+    /// only the workspace unit is parsed, and the snapshot built from it
+    /// answers like a cache-less build.
     #[test]
-    fn a_shared_tier_hit_parses_only_the_workspace() {
+    fn any_live_tier_is_a_hit_that_parses_only_the_workspace() {
         use crate::program::resolve::full::build_context_with;
         use crate::snapshot::parse::parse_log::parses_under;
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
-        let _a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let a = build_context_with(
+            &fx.root_a,
+            DependencySource::Embedded,
+            BuildProfile::LIGHT,
+            &cache,
+        )
+        .expect("context");
+        assert!(
+            a.dep_layer.dep_nodes.lsp.get().is_none(),
+            "precondition: the tier's LSP products are not published"
+        );
         assert_eq!(
             parses_under(fx._dir.path()),
             1,
@@ -832,6 +867,15 @@ mod tests {
         assert_eq!(parses_under(fx._dir.path()), 1, "B parsed the dependency");
         let apps: Vec<_> = ctx.parsed().iter().map(|u| u.app.guid.clone()).collect();
         assert_eq!(apps, vec![GUID_B.to_string()]);
+        assert!(Arc::ptr_eq(
+            &a.dep_layer.dep_nodes,
+            &ctx.dep_layer.dep_nodes
+        ));
+
+        let (b, _) = LspSnapshot::from_context(ctx, &fx.root_b);
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
     }
 
     /// Profiles that keep different things build different dependency tiers.

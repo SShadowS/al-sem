@@ -495,20 +495,18 @@ pub fn project_fresh_event_rows(workspace_root: &Path) -> Vec<CanonicalEventRow>
 }
 
 /// Substrate-taking core of [`project_fresh_event_rows`] — reads the program
-/// graph and parsed units from `ctx` instead of rebuilding the
+/// graph and decl surface from `ctx` instead of rebuilding the
 /// snapshot/graph/parse internally.
 #[must_use]
 pub fn project_fresh_event_rows_on(
     ctx: &crate::program::resolve::full::ProgramContext,
 ) -> Vec<CanonicalEventRow> {
-    use crate::program::resolve::decl_surface::DeclSurface;
     use crate::program::resolve::index::ResolveIndex;
     use crate::program::resolve::resolver::emit_event_flow_edges;
 
     let graph = &ctx.graph;
-    let parsed = &ctx.parsed;
     let index = ResolveIndex::build(graph);
-    let surface = DeclSurface::build(graph, parsed);
+    let surface = ctx.decl_surface();
     let apps = &graph.apps;
 
     let fresh_edges = emit_event_flow_edges(graph, &index, &surface);

@@ -767,9 +767,13 @@ pub(crate) fn resolve_file_obligations(
 /// This is the clean-room inner loop.  It does NOT call any L3 oracle.
 /// Publishers are resolved via [`emit_event_flow_edges`]; all call-site
 /// obligations are resolved via the shape-dispatch helpers.
+///
+/// `surface` is built by the caller (normally [`ProgramContext::decl_surface`]):
+/// workspace decls over the dependency tier's frozen `dep_meta`.
 fn resolve_full_program_from_parts(
     graph: &ProgramGraph,
     parsed: &[ParsedUnit],
+    surface: &DeclSurface,
     primary_app_ref: AppRef,
     ws_file_set: &HashSet<String>,
 ) -> (Vec<ClassifiedEdge>, Coverage, BuiltinDispatchAudit) {
@@ -778,7 +782,6 @@ fn resolve_full_program_from_parts(
         graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
 
     let index = ResolveIndex::build(graph);
-    let surface = DeclSurface::build(graph, parsed);
 
     let mut obligation_id_set: HashSet<ObligationId> = HashSet::new();
     let mut classified_edges: Vec<ClassifiedEdge> = Vec::new();
@@ -820,14 +823,7 @@ fn resolve_full_program_from_parts(
         files_to_resolve
             .par_iter()
             .map(|pf| {
-                resolve_file_obligations(
-                    pf,
-                    primary_app_ref,
-                    graph,
-                    &index,
-                    &surface,
-                    &obj_node_map,
-                )
+                resolve_file_obligations(pf, primary_app_ref, graph, &index, surface, &obj_node_map)
             })
             .collect()
     });
@@ -852,7 +848,7 @@ fn resolve_full_program_from_parts(
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).
     // We must track obligation ids in the same pass so coverage holds.
-    let event_edges = emit_event_flow_edges(graph, &index, &surface);
+    let event_edges = emit_event_flow_edges(graph, &index, surface);
     for edge in event_edges {
         // Each publisher routine emits exactly one EventFlow edge.
         let obl_id = ObligationId::Publisher(edge.from.clone());
@@ -950,8 +946,13 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit) =
-        resolve_full_program_from_parts(graph, parsed, primary_app_ref, ws_file_set);
+    let (edges, coverage, builtin_dispatch_audit) = resolve_full_program_from_parts(
+        graph,
+        parsed,
+        &ctx.decl_surface(),
+        primary_app_ref,
+        ws_file_set,
+    );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -987,7 +988,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
 
     // Task 3 (preprocessor foundations plan): additive Recovered-parse
     // diagnostic — surfaced, never gating (see `recovered_files`'s doc).
-    let recovered_files = crate::snapshot::parse::recovered_file_paths(parsed);
+    let recovered_files = ctx.recovered_files();
 
     ProgramReport {
         edges,
@@ -1017,6 +1018,7 @@ pub fn resolve_full_program_for_export(
     let (edges, _coverage, _builtin_dispatch_audit) = resolve_full_program_from_parts(
         &ctx.graph,
         &ctx.parsed,
+        &ctx.decl_surface(),
         ctx.primary_app_ref,
         &ctx.ws_file_set,
     );
@@ -1080,6 +1082,38 @@ impl ProgramContext {
     #[must_use]
     pub fn parsed(&self) -> &[ParsedUnit] {
         &self.parsed
+    }
+
+    /// The workspace unit of `parsed` (at most one: `snap.apps` is
+    /// GUID-deduped upstream) — the only unit the local `DeclSurface` tier
+    /// and the workspace recovered list read.
+    fn workspace_unit(&self) -> &[ParsedUnit] {
+        self.parsed
+            .iter()
+            .position(|u| u.app == self.snap.workspace_app)
+            .map_or(&[][..], |i| std::slice::from_ref(&self.parsed[i]))
+    }
+
+    /// Workspace decls over the dependency tier's frozen `dep_meta`. The
+    /// dependency `RoutineMeta` always comes from the tier, never from
+    /// dependency `ParsedUnit`s.
+    #[must_use]
+    pub fn decl_surface(&self) -> DeclSurface {
+        DeclSurface::build(&self.graph, self.workspace_unit())
+            .with_frozen(Arc::clone(&self.dep_layer.dep_nodes.dep_meta))
+    }
+
+    /// `"<app name>::<virtual path>"` of every `Recovered` source file,
+    /// sorted: the dependency tier's list plus the workspace's own. See
+    /// [`crate::snapshot::parse::recovered_file_paths`] for the invariant.
+    #[must_use]
+    pub fn recovered_files(&self) -> Vec<String> {
+        let mut paths = self.dep_layer.dep_nodes.recovered.clone();
+        paths.extend(crate::snapshot::parse::recovered_file_paths(
+            self.workspace_unit(),
+        ));
+        paths.sort();
+        paths
     }
 }
 
@@ -1173,11 +1207,11 @@ pub fn build_context_from_snapshot_cached(
     // `assemble_program_graph_matches_build_program_graph_field_by_field`
     // characterization test in `program::build`).
     //
-    // A shared dependency tier whose LSP products are already published
-    // answers everything the LSP needs from the dependencies, so on such a
-    // hit only the workspace is parsed and `parsed` holds the workspace unit
-    // alone. Only the LSP passes a shared cache; every other caller passes a
-    // throwaway one, never hits, and still gets every unit.
+    // A live shared dependency tier carries everything resolution reads from
+    // the dependencies (`dep_meta`, `recovered`), so on a hit only the
+    // workspace is parsed and `parsed` holds the workspace unit alone. Only
+    // the LSP passes a shared cache; every other caller passes a throwaway
+    // one, never hits, and still gets every unit.
     let shared_tier = dep_cache.get(&DepKey::of(&snap, profile));
     let parsed = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
@@ -1767,8 +1801,15 @@ mod tests {
                 .unwrap_or_default();
 
             let t5 = std::time::Instant::now();
-            let (edges, coverage, _audit) =
-                resolve_full_program_from_parts(&graph, &parsed, primary_app_ref, &ws_file_set);
+            // The surface is built inside the timed window, so the total
+            // still includes the DeclSurface build, as the label says.
+            let (edges, coverage, _audit) = resolve_full_program_from_parts(
+                &graph,
+                &parsed,
+                &DeclSurface::build(&graph, &parsed),
+                primary_app_ref,
+                &ws_file_set,
+            );
             resolve_from_parts_total_times.push(t5.elapsed());
 
             assert!(
@@ -1886,8 +1927,13 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit) =
-            resolve_full_program_from_parts(graph, parsed, primary_app_ref, ws_file_set);
+        let (full_edges, coverage, _audit) = resolve_full_program_from_parts(
+            graph,
+            parsed,
+            &ctx.decl_surface(),
+            primary_app_ref,
+            ws_file_set,
+        );
         assert!(coverage_holds(&coverage), "fixture coverage must hold");
 
         // Phase-1 (call-site) edges only, in the full run's own order —
@@ -1909,7 +1955,7 @@ mod tests {
         let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
             graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
         let index = ResolveIndex::build(graph);
-        let surface = DeclSurface::build(graph, parsed);
+        let surface = ctx.decl_surface();
 
         // Walk in the EXACT same order `resolve_full_program_from_parts`
         // does: parsed units (filtered to the primary app) x unit.files

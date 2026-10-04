@@ -234,4 +234,67 @@ codeunit 60002 "Plain Cu"
         let (_surface, frozen) = DeclSurface::build_split(&graph, &parsed, primary);
         assert_eq!(dep_meta, *frozen);
     }
+
+    /// The tier-read `ctx.decl_surface()` and `ctx.recovered_files()` equal
+    /// what the old all-units build gave: `DeclSurface::build` over a fresh
+    /// `parse_snapshot` of every unit, and `recovered_file_paths` over it.
+    /// Two dependency apps, one of them present twice (sibling), so the LAST
+    /// unit carries routines no other unit has.
+    #[test]
+    fn tier_decl_surface_and_recovered_files_match_the_all_units_build() {
+        use crate::program::profile::BuildProfile;
+        use crate::program::resolve::full::build_context_from_snapshot;
+        use crate::snapshot::parse::recovered_file_paths;
+
+        let (ws, dep, other) = (app_id("Ws"), app_id("Dep"), app_id("Other"));
+        let other_src = "codeunit 60100 \"Other Cu\"\n{\n    procedure Qux(a: Integer; var b: Text)\n    begin\n    end;\n}\n";
+        let snap = AppSetSnapshot {
+            apps: vec![
+                ws_unit(&ws),
+                unit(&dep, TrustTier::EmbeddedSource, &DEP_FILES),
+                unit(&dep, TrustTier::Workspace, &DEP_FILES),
+                unit(
+                    &other,
+                    TrustTier::EmbeddedSource,
+                    &[("Other.al", other_src)],
+                ),
+            ],
+            workspace_app: ws,
+            world: World::Closed,
+        };
+        let ctx = build_context_from_snapshot(snap, BuildProfile::FULL).expect("context");
+        let fresh = parse_snapshot(&ctx.snap);
+        assert_eq!(fresh.len(), 4, "precondition: every unit parsed");
+
+        // The old construction: one local tier over every parsed unit.
+        let old = DeclSurface::build(&ctx.graph, &fresh);
+        let new = ctx.decl_surface();
+        let primary = ctx.primary_app_ref;
+        let (_, old_dep_meta) = DeclSurface::build_split(&ctx.graph, &fresh, primary);
+        assert_eq!(
+            *ctx.dep_layer.dep_nodes.dep_meta, *old_dep_meta,
+            "the tier's dep_meta is the old frozen tier, key for key"
+        );
+        let other_ref = ctx.graph.apps.find(&app_id("Other")).unwrap();
+        let mut dep_ids = 0;
+        for r in ctx.graph.routines.iter() {
+            assert_eq!(new.get(&r.id), old.get(&r.id), "{:?}", r.id);
+            if r.id.object.app != primary && old.get(&r.id).is_some() {
+                dep_ids += 1;
+            }
+        }
+        assert!(dep_ids > 0, "precondition: dependency routines resolve");
+        assert!(
+            old_dep_meta.keys().any(|id| id.object.app == other_ref),
+            "precondition: the last unit has routines of its own"
+        );
+
+        let recovered = ctx.recovered_files();
+        assert_eq!(recovered, recovered_file_paths(&fresh));
+        assert_eq!(
+            recovered,
+            vec!["Dep::Broken.al".to_string(), "Dep::Broken.al".to_string()],
+            "precondition: both copies of the broken dependency file"
+        );
+    }
 }

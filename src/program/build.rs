@@ -7,11 +7,13 @@ use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
+use crate::program::dep_summary::summarize_file;
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
+use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
@@ -135,9 +137,15 @@ fn build_dep_nodes(
     parsed: &[ParsedUnit],
     apps: &mut AppRegistry,
 ) -> DepNodes {
-    // ── Step 2: extract nodes from every NON-primary parsed unit ─────────────
+    // ── Step 2: summarize every NON-primary parsed file ──────────────────────
+    // Each summary is consumed at once: its nodes move into the layer, its
+    // `RoutineMeta` into `dep_meta` (in parsed order, so a true same-key
+    // collision keeps the last one, as `DeclSurface::build` does), and its
+    // recovered flag into `recovered`.
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
+    let mut dep_meta = DepMetaMap::new();
+    let mut recovered: Vec<String> = Vec::new();
 
     for unit in parsed {
         if unit.app == snap.workspace_app {
@@ -146,15 +154,19 @@ fn build_dep_nodes(
         // `intern` is idempotent — returns the same `AppRef` assigned in step 1.
         let app_ref = apps.intern(&unit.app);
         for pf in &unit.files {
-            extract_nodes(
-                app_ref,
-                &pf.file,
-                pf.provenance.tier,
-                &mut objects,
-                &mut routines,
-            );
+            let summary = summarize_file(app_ref, pf.provenance.tier, &pf.virtual_path, &pf.file);
+            objects.extend(summary.objects);
+            routines.extend(summary.routines);
+            dep_meta.extend(summary.routine_meta);
+            if summary.parse_status_recovered {
+                recovered.push(crate::snapshot::parse::recovered_path(
+                    &unit.app.name,
+                    &summary.virtual_path,
+                ));
+            }
         }
     }
+    recovered.sort();
 
     // ── Step 2b: ingest SymbolOnly dep ABI nodes ─────────────────────────────
     let mut abi_ingest_errors: Vec<AbiIngestError> = Vec::new();
@@ -195,6 +207,9 @@ fn build_dep_nodes(
         objects: Arc::new(objects),
         routines: Arc::new(routines),
         abi_ingest_errors,
+        dep_meta: Arc::new(dep_meta),
+        recovered,
+        bodies: None,
         lsp: Default::default(),
     }
 }

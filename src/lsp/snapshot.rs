@@ -57,7 +57,7 @@ use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::encoding::LineTable;
 use crate::program::dep_cache::DepCache;
 use crate::program::dep_cache::DepLspTier;
-use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::BuildProfile;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
@@ -334,8 +334,9 @@ pub struct LspSnapshot {
     pub dep_texts: Arc<DepTexts>,
     /// The frozen dependency tier of the owned `DeclSurface` (T3 Task 12):
     /// every non-primary routine's `RoutineMeta` projection (name, origins,
-    /// `parse_incomplete`, param `ty`/`by_ref` — never the body), built once
-    /// at startup/rung-3 via [`DeclSurface::freeze_dep_tier`] and forwarded
+    /// `parse_incomplete`, param `ty`/`by_ref` — never the body), built with
+    /// the dependency nodes (`DepNodes::dep_meta`, shared by every root on
+    /// the same dependency tier) and forwarded
     /// by `Arc::clone` across rungs 1/2 (sound for the same reason
     /// `dep_texts` is: dependency source cannot change on those rungs — see
     /// its doc). Rung 1/2 rebuild a workspace-only `DeclSurface` via
@@ -408,9 +409,9 @@ impl LspSnapshot {
     ///
     /// T3 Task 12 (owned DeclSurface lifecycle): dependency `ParsedUnit`s —
     /// `ctx.parsed`'s non-workspace entries — are DROPPED inside
-    /// [`Self::from_context`] once the frozen dep-tier `DeclSurface` and the
-    /// `dep_decl_by_id`/`dep_texts` indexes have been derived from them;
-    /// only the workspace unit survives to be returned here. This is the
+    /// [`Self::from_context`], which never reads them (the dependency tier
+    /// supplies `dep_meta`, and `dep_texts` comes from the snapshot's source
+    /// files); only the workspace unit survives to be returned here. This is the
     /// whole point of the owned-DeclSurface design: the updater's steady
     /// state never again retains dependency parse arenas (~1.5GB on a
     /// CDO-scale workspace) — see the design spec
@@ -478,11 +479,10 @@ impl LspSnapshot {
     /// composition a second time just to exercise it without disk I/O.
     ///
     /// Returns the `LspSnapshot` alongside the ONE workspace [`ParsedUnit`]
-    /// (T3 Task 12): dependency `ParsedUnit`s in `ctx.parsed` are consumed
-    /// and dropped here, at the end of the transient borrow phase below —
-    /// the exact point the memory win takes effect — after the frozen
-    /// dep-tier `DeclSurface`/`dep_meta`/`dep_texts` have all been
-    /// derived from them. `ParsedFile.file`/`.text` are `Arc`-shared (perf
+    /// (T3 Task 12): dependency `ParsedUnit`s in `ctx.parsed` are dropped
+    /// here, at the end of the transient borrow phase below, unread:
+    /// `dep_meta` comes from the dependency tier and `dep_texts` from the
+    /// snapshot's source files. `ParsedFile.file`/`.text` are `Arc`-shared (perf
     /// safe-wins Task 2), so the published snapshot's workspace
     /// `ParsedFileEntry`s hold `Arc::clone`s rather than consuming the
     /// workspace unit by value; `build_full` just drops the returned
@@ -525,41 +525,21 @@ impl LspSnapshot {
             let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
                 graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
             let index = ResolveIndex::build(&graph);
-            // Build the two-tier surface with the dependency tier already
-            // split out (T3 Task 12) — `build_split` fuses the old
-            // `DeclSurface::build` + `freeze_dep_tier` into one pass,
-            // avoiding a second drain-and-re-partition of every (~127k)
-            // entry. Exercising the composed two-tier lookup here (rather
-            // than only from rung 1/2 onward) proves it resolves identically
-            // to the old always-local `BodyMap`-style build for every
-            // consumer below (`recompute_file`/`emit_event_flow_edges`/
-            // `build_dep_texts`).
-            //
-            // Roots sharing a dependency tier share its LSP products too; the
-            // first root to get here publishes them. Once published, the
-            // dependency units may not even have been parsed (see
-            // `build_context_from_snapshot_cached`), so the surface is the
-            // rung-1 construction: workspace decls over the published tier.
-            let (surface, tier) = match dep_layer.dep_nodes.lsp.get() {
-                Some(tier) => {
-                    let ws = primary_unit_idx.map_or(&[][..], |i| std::slice::from_ref(&parsed[i]));
-                    let surface =
-                        DeclSurface::build(&graph, ws).with_frozen(Arc::clone(&tier.dep_meta));
-                    (surface, tier)
-                }
-                None => {
-                    let (surface, dep_meta_arc) =
-                        DeclSurface::build_split(&graph, &parsed, primary_app_ref);
-                    let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
-                        Arc::new(DepLspTier {
-                            dep_meta: dep_meta_arc,
-                            dep_texts: Arc::new(build_dep_texts(&graph, &parsed, primary_app_ref)),
-                        })
-                    });
-                    (surface, tier)
-                }
-            };
-            dep_meta = Arc::clone(&tier.dep_meta);
+            // The rung-1 construction: workspace decls over the dependency
+            // tier's frozen `dep_meta` (built with the dependency nodes, so
+            // a shared-tier hit — which parsed only the workspace — has it
+            // too). Roots sharing a dependency tier share its `dep_texts`;
+            // the first root to get here publishes them, read from the
+            // snapshot's source files (no parse needed).
+            let ws = primary_unit_idx.map_or(&[][..], |i| std::slice::from_ref(&parsed[i]));
+            let surface = DeclSurface::build(&graph, ws)
+                .with_frozen(Arc::clone(&dep_layer.dep_nodes.dep_meta));
+            let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
+                Arc::new(DepLspTier {
+                    dep_texts: Arc::new(build_dep_texts(&snap, &graph.apps, primary_app_ref)),
+                })
+            });
+            dep_meta = Arc::clone(&dep_layer.dep_nodes.dep_meta);
             dep_texts = Arc::clone(&tier.dep_texts);
             crate::census_hook::mark("5.index+surface+dep_meta+dep_texts");
 
@@ -627,10 +607,8 @@ impl LspSnapshot {
         // `Arc`-shared, so the published snapshot CLONES the `Arc`s and
         // leaves `parsed`'s workspace entries intact for the extraction
         // below — dependency `ParsedUnit`s are handed to a background thread
-        // and dropped a few lines down (see the drop block), once every
-        // consumer that needs them (the frozen dep-tier `DeclSurface`,
-        // `dep_meta`, `dep_texts` — all derived above) has already
-        // run.
+        // and dropped a few lines down (see the drop block); nothing here
+        // reads them.
         let mut parsed_files: HashMap<String, Arc<ParsedFileEntry>> = HashMap::new();
         if let Some(idx) = primary_unit_idx {
             for pf in &parsed[idx].files {
@@ -673,9 +651,8 @@ impl LspSnapshot {
         // dependency `ParsedUnit`s (the ~1.5GB of parse arenas — tree-sitter
         // trees + owned IR, uniquely owned by these units) to a detached
         // background thread to DROP off the critical path (T3 Task 12
-        // follow-up). Every consumer of dependency parse arenas — the frozen
-        // dep-tier `DeclSurface`, `dep_meta`, `dep_texts` — has already
-        // run above, so nothing observes the deps after this point; the
+        // follow-up). Nothing in this function reads them (`dep_meta` is the
+        // dependency tier's, `dep_texts` the snapshot's source texts); the
         // snapshot retains only `Arc::clone`s of WORKSPACE `pf.file`/`text`
         // (plus dependency TEXT via `dep_texts`), never the dependency
         // `AlFile` arenas. Dropping them synchronously here cost ~0.5s of
@@ -1058,27 +1035,31 @@ pub fn build_decl_multiplicity(
 /// [`LspSnapshot::decl_and_text`] now derives a borrowed `DeclView` from
 /// `dep_meta` directly instead of looking up a second, fully-duplicate
 /// owned map.)
+///
+/// Dependency file texts by `(app, virtual path)`, read from the snapshot's
+/// source files (the same `Arc<str>`s, never copies). Needs no parse. The
+/// first file wins on a repeated key, as when this read parsed units (which
+/// hold the same texts, in the same `snap.apps` order).
 #[must_use]
 pub(crate) fn build_dep_texts(
-    graph: &ProgramGraph,
-    parsed: &[ParsedUnit],
-    primary_app: AppRef,
+    snap: &AppSetSnapshot,
+    apps: &AppRegistry,
+    primary: AppRef,
 ) -> DepTexts {
-    let mut dep_texts: HashMap<(AppRef, String), Arc<str>> = HashMap::new();
-    for unit in parsed {
-        let Some(app_ref) = graph.apps.find(&unit.app) else {
+    let mut dep_texts = DepTexts::new();
+    for unit in &snap.apps {
+        let (Some(app_ref), Some(source)) = (apps.find(&unit.id), unit.source.as_ref()) else {
             continue;
         };
-        if app_ref == primary_app {
+        if app_ref == primary {
             continue;
         }
-        for pf in &unit.files {
+        for f in source.files.iter() {
             dep_texts
-                .entry((app_ref, pf.virtual_path.clone()))
-                .or_insert_with(|| Arc::clone(&pf.text));
+                .entry((app_ref, f.virtual_path.clone()))
+                .or_insert_with(|| Arc::clone(&f.text));
         }
     }
-
     dep_texts
 }
 

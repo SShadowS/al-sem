@@ -57,20 +57,30 @@ pub struct ParsedUnit {
 /// function), so this ships as an ADDITIVE, non-gating diagnostic — a full
 /// per-file resolution gate (declining a specific claim once one exists) is
 /// deferred until a real consumer needs it.
+///
+/// A whole-program build reads this through
+/// `ProgramContext::recovered_files`: the dependency tier records its files'
+/// entries while it is built (`DepNodes::recovered`, same
+/// [`recovered_path`] format), so only the workspace unit is passed here.
 #[must_use]
 pub fn recovered_file_paths(units: &[ParsedUnit]) -> Vec<String> {
     let mut paths: Vec<String> = units
         .iter()
         .flat_map(|unit| {
-            let app_name = unit.app.name.clone();
             unit.files
                 .iter()
                 .filter(|pf| pf.file.parse_status == al_syntax::ir::ParseStatus::Recovered)
-                .map(move |pf| format!("{app_name}::{}", pf.virtual_path))
+                .map(move |pf| recovered_path(&unit.app.name, &pf.virtual_path))
         })
         .collect();
     paths.sort();
     paths
+}
+
+/// One [`recovered_file_paths`] entry: `"<app name>::<virtual path>"`.
+#[must_use]
+pub(crate) fn recovered_path(app_name: &str, virtual_path: &str) -> String {
+    format!("{app_name}::{virtual_path}")
 }
 
 /// Parse every source file of every source-bearing app in `snap` in parallel.
