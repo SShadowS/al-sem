@@ -762,6 +762,21 @@ pub(crate) fn resolve_file_obligations(
     }
 }
 
+/// The object map `resolve_file_obligations` reads. Its only lookups use ids
+/// built from the primary app, so it holds workspace objects only: dependency
+/// objects would be dead weight, retained per root by the idle updater.
+pub(crate) fn workspace_object_map(
+    graph: &ProgramGraph,
+    primary: AppRef,
+) -> HashMap<ObjectNodeId, &ObjectNode> {
+    graph
+        .objects
+        .iter()
+        .filter(|o| o.id.app == primary)
+        .map(|o| (o.id.clone(), o))
+        .collect()
+}
+
 /// Resolve all obligations and compute coverage.
 ///
 /// This is the clean-room inner loop.  It does NOT call any L3 oracle.
@@ -778,8 +793,7 @@ fn resolve_full_program_from_parts(
     ws_file_set: &HashSet<String>,
 ) -> (Vec<ClassifiedEdge>, Coverage, BuiltinDispatchAudit) {
     // Quick ObjectNodeId → &ObjectNode lookup.
-    let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
-        graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
+    let obj_node_map = workspace_object_map(graph, primary_app_ref);
 
     let index = ResolveIndex::build(graph);
 
@@ -1968,8 +1982,7 @@ mod tests {
         // `resolve_full_program_from_parts` builds internally (it is a
         // private inner helper with no other seam to observe from) — this
         // mirrors its own setup exactly.
-        let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
-            graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
+        let obj_node_map = workspace_object_map(graph, primary_app_ref);
         let index = ResolveIndex::build(graph);
         let surface = ctx.decl_surface();
 
@@ -2036,6 +2049,61 @@ mod tests {
             assert_eq!(&got.obligation_id, &want.obligation_id);
             assert_eq!(&got.edge, &want.edge);
         }
+    }
+
+    /// `workspace_object_map` holds exactly the primary app's objects, and
+    /// resolving a file with it gives the same edges as the whole-graph map
+    /// (the only lookups use primary-app ids).
+    #[test]
+    fn workspace_object_map_is_workspace_only_and_resolves_identically() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-baseapp-closure");
+        let ctx = build_context(&ws).expect("build_context");
+        let ProgramContext {
+            graph,
+            parsed,
+            primary_app_ref,
+            ws_file_set,
+            ..
+        } = &ctx;
+        let primary = *primary_app_ref;
+
+        let ws_map = workspace_object_map(graph, primary);
+        let full_map: HashMap<ObjectNodeId, &ObjectNode> =
+            graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
+        let ws_count = graph.objects.iter().filter(|o| o.id.app == primary).count();
+        assert!(ws_count > 0, "fixture has a workspace object");
+        assert!(
+            full_map.len() > ws_count,
+            "fixture must carry dependency objects so the maps can differ"
+        );
+        assert_eq!(ws_map.len(), ws_count);
+        assert!(ws_map.keys().all(|id| id.app == primary));
+
+        let index = ResolveIndex::build(graph);
+        let surface = ctx.decl_surface();
+        let mut checked = 0;
+        for unit in parsed
+            .iter()
+            .filter(|u| graph.apps.find(&u.app) == Some(primary))
+        {
+            for pf in unit
+                .files
+                .iter()
+                .filter(|pf| ws_file_set.contains(&pf.virtual_path))
+            {
+                let a = resolve_file_obligations(pf, primary, graph, &index, &surface, &ws_map);
+                let b = resolve_file_obligations(pf, primary, graph, &index, &surface, &full_map);
+                assert!(!a.edges.is_empty());
+                assert_eq!(a.edges.len(), b.edges.len());
+                for (x, y) in a.edges.iter().zip(b.edges.iter()) {
+                    assert_eq!(x.obligation_id, y.obligation_id);
+                    assert_eq!(x.edge, y.edge);
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 1);
     }
 
     // -----------------------------------------------------------------------

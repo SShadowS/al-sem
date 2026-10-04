@@ -64,7 +64,7 @@ use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
 use crate::program::resolve::edge::{Edge, RouteTarget};
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::{
-    ClassifiedEdge, ObligationId, ProgramContext, build_context_with,
+    ClassifiedEdge, ObligationId, ProgramContext, build_context_with, workspace_object_map,
 };
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::sig_fp::source_routine_node_id;
@@ -518,8 +518,7 @@ impl LspSnapshot {
         let dep_meta: Arc<DepMetaMap>;
 
         {
-            let obj_node_map: HashMap<ObjectNodeId, &ObjectNode> =
-                graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
+            let obj_node_map = workspace_object_map(&graph, primary_app_ref);
             let index = ResolveIndex::build(&graph);
             // The rung-1 construction: workspace decls over the dependency
             // tier's frozen `dep_meta` (built with the dependency nodes, so
