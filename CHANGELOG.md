@@ -15,16 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step 2" section of `docs/2026-10-04-step0-server-census.md`).
   - The resolver's object map now holds workspace objects only.
   - The LSP snapshot keeps only event links that have routes (24,527 down to 2,033 per
-    root on the CG corpus). The program report still keeps all of them.
+    root, CG embedded). The program report still keeps all of them.
   - The subscriber maps moved out of the resolver index into the one function that reads
-    them (about 1.8 MiB per root).
+    them (about 1.8 MiB per root in embedded mode on both corpora; near zero in symbols
+    mode).
   - The per-routine map `routines_by_obj_name` is gone; `routines_in_object` binary-searches
-    the sorted routine list (50.03 of 56.81 MiB per idle updater on CG).
+    the sorted routine list (50.03 of 56.81 MiB per idle updater, CG embedded).
   - Result, CG corpus (7 roots, CG harness), embedded mode: idle with updaters 763.6 to
     310.6 MiB; one updater 57.45 to 4.94 MiB; snapshots only 361.4 to 275.9 MiB; first
-    root's build peak 317.8 to 287.1 MiB. CDO (1 root): idle with updaters 449.9 to 380.2
-    MiB; one updater 66.3 to 8.48 MiB. `symbols` mode, CG: idle 375.4 to 100.2 MiB. No
-    golden moved.
+    root's build peak 317.8 to 287.1 MiB. The peak now sits on the dependency layer, which
+    step 2 did not touch, so further index or event-link cuts will not lower it. CDO
+    (1 root), embedded: idle with updaters 449.9 to 380.2 MiB; one updater 66.35 to 8.48
+    MiB. `symbols` mode, CG: idle 375.4 to 100.2 MiB. RSS and the process peak were not
+    measured. No golden moved.
 
 ## [1.3.4] - 2026-10-04
 
