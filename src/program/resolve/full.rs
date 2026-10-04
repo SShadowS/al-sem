@@ -1100,6 +1100,7 @@ pub fn build_context_with(
     .build_with_options(dependency_source, dep_cache)
     .map(|(snap, _dropped)| snap)
     .ok()?;
+    crate::census_hook::mark("1.snapshot");
     build_context_from_snapshot_cached(snap, dep_cache).ok()
 }
 
@@ -1176,6 +1177,7 @@ pub fn build_context_from_snapshot_cached(
             parse_snapshot(&snap)
         }
     };
+    crate::census_hook::mark("2.parse");
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
         build_dep_layer_cached(
@@ -1195,6 +1197,7 @@ pub fn build_context_from_snapshot_cached(
          dependency nodes would come from a workspace-only parse"
     );
     drop(shared_tier);
+    crate::census_hook::mark("3.dep_layer");
 
     // `snap.apps` is GUID-deduped upstream (H-2), so at most one parsed unit
     // can match the workspace identity.
@@ -1213,6 +1216,7 @@ pub fn build_context_from_snapshot_cached(
         let _s = pt::span("preflight", "preflight.assemble_graph");
         assemble_program_graph(&dep_layer, ws_unit, &snap)
     };
+    crate::census_hook::mark("4.assemble_graph");
 
     // ── Step 3: Locate primary (workspace) app ────────────────────────────────
     let primary_app_ref = graph.apps.find(&snap.workspace_app).ok_or_else(|| {

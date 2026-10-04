@@ -24,6 +24,8 @@ pub mod big_stack;
 /// Bounded-read helper shared by every zip/gzip decompression site (Task
 /// T2.2, DoS hardening) — see the module doc.
 pub mod capped_io;
+/// No-op phase marks for the out-of-tree byte-census probe — see the module doc.
+pub mod census_hook;
 pub mod config;
 pub mod dependencies;
 pub mod engine;

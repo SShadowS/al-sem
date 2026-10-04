@@ -549,6 +549,7 @@ impl LspSnapshot {
             };
             dep_meta = Arc::clone(&tier.dep_meta);
             dep_texts = Arc::clone(&tier.dep_texts);
+            crate::census_hook::mark("5.index+surface+dep_meta+dep_texts");
 
             if let Some(idx) = primary_unit_idx {
                 // T3 Task 3 (F7): same ordered-collect-then-`par_iter` shape as
@@ -587,6 +588,7 @@ impl LspSnapshot {
                     decls_by_file.insert(pf.virtual_path.clone(), Arc::new(decls));
                 }
             }
+            crate::census_hook::mark("6.resolve_workspace_files");
 
             let raw_event_edges = emit_event_flow_edges(&graph, &index, &surface);
             event_edges = Arc::new(
@@ -598,6 +600,7 @@ impl LspSnapshot {
                     })
                     .collect(),
             );
+            crate::census_hook::mark("7.event_edges");
 
             // `index`/`surface`/`obj_node_map` drop here, at the end of this
             // block — their borrows of `graph`/`parsed` end before the
@@ -606,6 +609,7 @@ impl LspSnapshot {
 
         let (incoming, publisher_fanout) = build_incoming(&edges_by_file, &event_edges);
         let decl_by_id = build_decl_by_id(&decls_by_file);
+        crate::census_hook::mark("8.incoming+decl_by_id");
 
         // ── Sharing phase (perf safe-wins Task 2): `AlFile`/text are
         // `Arc`-shared, so the published snapshot CLONES the `Arc`s and
@@ -678,6 +682,7 @@ impl LspSnapshot {
                 files: vec![],
             },
         };
+        crate::census_hook::mark("9.publish_snapshot");
         if !parsed.is_empty() {
             let _ = std::thread::Builder::new()
                 .name("dep-arena-drop".into())
