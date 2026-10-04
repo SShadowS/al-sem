@@ -73,8 +73,9 @@ pub struct DepNodes {
     /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
     /// not parse the dependencies) still reports them.
     pub recovered: Vec<String>,
-    /// The dependency `ParsedUnit`s, for a profile that keeps dependency
-    /// bodies. Always `None` for now.
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` exactly when
+    /// the tier was built under `DependencyBodies::Keep` (the key's
+    /// `keep_bodies`), so a `Keep` hit always carries them.
     pub bodies: Option<Arc<Vec<ParsedUnit>>>,
     /// The LSP products derived from this tier (set by the first snapshot
     /// that builds them). Keyed by this tier's AppRefs, so they are valid
@@ -115,9 +116,9 @@ impl DepCache {
     }
 
     /// The live entry for `key`, if any. Never builds. Any live entry is a
-    /// hit: it always carries `dep_meta` and `recovered`, and its LSP
-    /// products (`dep_texts`) can be built from any snapshot, so a hit
-    /// never needs the dependency parse trees.
+    /// hit: it always carries `dep_meta` and `recovered` (and the bodies when
+    /// `key` keeps them), and its LSP products (`dep_texts`) can be built
+    /// from any snapshot, so a hit never needs to parse the dependencies.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
         self.lock().get(key).and_then(Weak::upgrade)
     }
@@ -641,13 +642,8 @@ mod tests {
             "the cache holds no Weak into the text (only this test does)"
         );
         drop(a);
-        // `LspSnapshot::from_context` drops the dependency parse units on a
-        // background thread, so the last strong holder goes away shortly
-        // after `drop(a)`, not during it.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while text.strong_count() > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        // No dependency tree outlives the build (LIGHT drops each one during
+        // the parse), so the last strong holder goes with `a`.
         assert!(text.upgrade().is_none(), "no strong holder is left");
     }
 
@@ -904,6 +900,99 @@ mod tests {
             &light.dep_layer.dep_nodes,
             &full.dep_layer.dep_nodes
         ));
+    }
+
+    /// Review Focus 2: a `Keep` request is never served a tier without
+    /// bodies, and a `Summary` request never gets bodies — whatever was
+    /// built first, and when two `Keep` builds race.
+    #[test]
+    fn a_full_build_always_gets_bodies_whatever_the_cache_holds() {
+        use crate::program::resolve::full::{ProgramContext, build_context_with};
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let ctx = |root: &Path, profile| {
+            build_context_with(root, DependencySource::Embedded, profile, &cache).expect("context")
+        };
+        let bodies = |c: &ProgramContext| {
+            let b = c
+                .dep_bodies()
+                .expect("a FULL context has dependency bodies");
+            assert!(
+                b.iter().any(|u| !u.files.is_empty()),
+                "the bodies hold the dependency's files"
+            );
+        };
+
+        // LIGHT then FULL.
+        let light = ctx(&fx.root_a, BuildProfile::LIGHT);
+        assert!(light.dep_bodies().is_none());
+        let full = ctx(&fx.root_b, BuildProfile::FULL);
+        bodies(&full);
+
+        // FULL then LIGHT (both tiers live): LIGHT shares the LIGHT tier.
+        let light_again = ctx(&fx.root_b, BuildProfile::LIGHT);
+        assert!(light_again.dep_bodies().is_none());
+        assert!(Arc::ptr_eq(
+            &light.dep_layer.dep_nodes,
+            &light_again.dep_layer.dep_nodes
+        ));
+
+        // FULL twice: the second shares the first's tier, bodies included.
+        let full_again = ctx(&fx.root_a, BuildProfile::FULL);
+        bodies(&full_again);
+        assert!(Arc::ptr_eq(
+            &full.dep_layer.dep_nodes,
+            &full_again.dep_layer.dep_nodes
+        ));
+        drop((light, full, light_again, full_again));
+        assert_eq!(cache.live_entries(), 0);
+
+        // Two FULL builds at once, on an empty cache.
+        let (one, two) = std::thread::scope(|s| {
+            let a = s.spawn(|| ctx(&fx.root_a, BuildProfile::FULL));
+            let b = s.spawn(|| ctx(&fx.root_b, BuildProfile::FULL));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        bodies(&one);
+        bodies(&two);
+    }
+
+    /// Review Focus 5: symbols mode has no dependency source, so nothing is
+    /// summarized and `dep_meta` is empty; the nodes are the `FULL` build's.
+    #[test]
+    fn symbols_mode_summarizes_nothing_and_matches_full() {
+        use crate::program::dep_summary::parse_for_build;
+        use crate::program::resolve::full::build_context_with;
+        let fx = two_roots_one_alpackages();
+        let light = build_context_with(
+            &fx.root_a,
+            DependencySource::Symbols,
+            BuildProfile::LIGHT,
+            &DepCache::default(),
+        )
+        .expect("light");
+        let full = build_context_with(
+            &fx.root_a,
+            DependencySource::Symbols,
+            BuildProfile::FULL,
+            &DepCache::default(),
+        )
+        .expect("full");
+        let parse = parse_for_build(&light.snap, BuildProfile::LIGHT, false);
+        assert!(parse.workspace.is_some());
+        assert!(parse.dep_summaries.is_empty(), "no dependency source");
+        assert!(light.dep_layer.dep_nodes.dep_meta.is_empty());
+        assert!(
+            !light.graph().routines.shared().is_empty(),
+            "precondition: the dependency's ABI nodes load"
+        );
+        let nodes = |c: &crate::program::resolve::full::ProgramContext| {
+            (
+                c.graph().objects.iter().cloned().collect::<Vec<_>>(),
+                c.graph().routines.iter().cloned().collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(nodes(&light), nodes(&full));
     }
 
     /// A rung-3 rebuild of a root whose dependency set did not change is a

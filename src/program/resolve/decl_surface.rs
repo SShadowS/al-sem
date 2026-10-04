@@ -76,8 +76,8 @@ impl RoutineMeta {
 }
 
 /// Every routine declared in `file`, keyed as `DeclSurface` keys it. The ONE
-/// place that turns a file's declarations into `RoutineMeta`: `build`,
-/// `build_split` and the dependency summaries all call it, so they cannot drift.
+/// place that turns a file's declarations into `RoutineMeta`: `build` and the
+/// dependency summaries both call it, so they cannot drift.
 pub(crate) fn file_routine_meta(
     app: AppRef,
     file: &al_syntax::ir::AlFile,
@@ -134,72 +134,11 @@ impl DeclSurface {
         }
     }
 
-    /// Build a snapshot surface with the dependency tier already SPLIT OUT,
-    /// in a single pass — the fused equivalent of [`Self::build`] immediately
-    /// followed by [`Self::freeze_dep_tier`], but WITHOUT the second
-    /// drain-and-re-partition of every (~127k on a CDO-scale workspace)
-    /// entry those two steps otherwise perform back-to-back. Entries whose
-    /// object app is `primary` land in the `local` tier; all others go
-    /// straight into the frozen dependency tier. Returns the surface (with
-    /// its frozen tier already attached) alongside the `Arc<DepMetaMap>` for
-    /// [`crate::lsp::snapshot::LspSnapshot::dep_meta`] to forward across rungs.
-    ///
-    /// Semantics are IDENTICAL to `build` + `freeze_dep_tier` (same
-    /// app-absent skip, same object-key rule, same last-write-wins on true
-    /// same-key collision within a tier).
-    pub fn build_split(
-        graph: &ProgramGraph,
-        parsed: &[ParsedUnit],
-        primary: AppRef,
-    ) -> (Self, Arc<DepMetaMap>) {
-        let mut local: HashMap<RoutineNodeId, RoutineMeta> = HashMap::new();
-        let mut dep: DepMetaMap = HashMap::new();
-        for unit in parsed {
-            let Some(app_ref) = graph.apps.find(&unit.app) else {
-                continue;
-            };
-            let is_primary = app_ref == primary;
-            for pf in &unit.files {
-                for (r_id, meta) in file_routine_meta(app_ref, &pf.file, &pf.virtual_path) {
-                    if is_primary {
-                        local.insert(r_id, meta);
-                    } else {
-                        dep.insert(r_id, meta);
-                    }
-                }
-            }
-        }
-        let frozen = Arc::new(dep);
-        (
-            DeclSurface {
-                local,
-                frozen: Some(Arc::clone(&frozen)),
-            },
-            frozen,
-        )
-    }
-
+    /// Attach the frozen dependency tier (the dependency layer's `dep_meta`).
     #[must_use]
     pub fn with_frozen(mut self, frozen: Arc<DepMetaMap>) -> Self {
         self.frozen = Some(frozen);
         self
-    }
-
-    /// Move every non-`primary` entry out of the local tier into the frozen
-    /// tier; returns the frozen map (also retained by `self` for lookups).
-    pub fn freeze_dep_tier(&mut self, primary: AppRef) -> Arc<DepMetaMap> {
-        let mut dep: DepMetaMap = HashMap::new();
-        let local = std::mem::take(&mut self.local);
-        for (id, meta) in local {
-            if id.object.app == primary {
-                self.local.insert(id, meta);
-            } else {
-                dep.insert(id, meta);
-            }
-        }
-        let frozen = Arc::new(dep);
-        self.frozen = Some(Arc::clone(&frozen));
-        frozen
     }
 
     pub fn get(&self, id: &RoutineNodeId) -> Option<&RoutineMeta> {
@@ -502,63 +441,6 @@ tableextension 50100 "Cust Ext" extends Customer
     }
 
     #[test]
-    fn freeze_dep_tier_moves_non_primary_entries_and_lookup_still_serves_them() {
-        let primary_id = make_app_id("PrimaryApp");
-        let dep_id = make_app_id("DepApp");
-        let graph = two_app_graph(&primary_id, &dep_id);
-
-        let ws_src = r#"codeunit 50100 "WS" { procedure WsProc() begin end; }"#;
-        let dep_src = r#"codeunit 50200 "Dep" { procedure DepProc() begin end; }"#;
-
-        let ws_unit = make_unit(primary_id, ws_src);
-        let dep_unit = make_unit(dep_id, dep_src);
-
-        let units = [ws_unit, dep_unit];
-        let mut surface = DeclSurface::build(&graph, &units);
-
-        let primary_ref = AppRef(0);
-        let dep_ref = AppRef(1);
-
-        let ws_rid = RoutineNodeId {
-            object: ObjectNodeId {
-                app: primary_ref,
-                kind: ObjectKind::Codeunit,
-                key: ObjKey::Id(50100),
-            },
-            name_lc: "wsproc".into(),
-            enclosing_member_lc: None,
-            params_count: 0,
-            sig_fp: 0,
-        };
-        let dep_rid = RoutineNodeId {
-            object: ObjectNodeId {
-                app: dep_ref,
-                kind: ObjectKind::Codeunit,
-                key: ObjKey::Id(50200),
-            },
-            name_lc: "depproc".into(),
-            enclosing_member_lc: None,
-            params_count: 0,
-            sig_fp: 0,
-        };
-
-        // Both entries exist in the local tier before freezing.
-        assert!(surface.get(&ws_rid).is_some());
-        assert!(surface.get(&dep_rid).is_some());
-
-        let frozen = surface.freeze_dep_tier(primary_ref);
-
-        // dep routine still found via get() (now served from the frozen tier).
-        assert!(surface.get(&dep_rid).is_some());
-        // workspace routine still found (local tier, untouched by freeze).
-        assert!(surface.get(&ws_rid).is_some());
-
-        // The frozen map contains exactly the dep entry.
-        assert_eq!(frozen.len(), 1);
-        assert!(frozen.contains_key(&dep_rid));
-    }
-
-    #[test]
     fn with_frozen_composes_a_workspace_only_build_with_a_prior_dep_tier() {
         let primary_id = make_app_id("PrimaryApp");
         let dep_id = make_app_id("DepApp");
@@ -567,21 +449,18 @@ tableextension 50100 "Cust Ext" extends Customer
         let ws_src = r#"codeunit 50100 "WS" { procedure WsProc() begin end; }"#;
         let dep_src = r#"codeunit 50200 "Dep" { procedure DepProc() begin end; }"#;
 
-        let ws_unit = make_unit(primary_id.clone(), ws_src);
         let dep_unit = make_unit(dep_id, dep_src);
-        let ws_unit_2 = make_unit(primary_id, ws_src);
+        let ws_unit = make_unit(primary_id, ws_src);
 
         let primary_ref = AppRef(0);
         let dep_ref = AppRef(1);
 
-        // Build the full surface once, freeze the dep tier to get the Arc.
-        let units = [ws_unit, dep_unit];
-        let mut full_surface = DeclSurface::build(&graph, &units);
-        let frozen = full_surface.freeze_dep_tier(primary_ref);
+        // The dependency tier: the dependency unit's decls, frozen.
+        let frozen = Arc::new(DeclSurface::build(&graph, &[dep_unit]).local);
 
         // Now simulate a rung: build from the WORKSPACE unit only, attach
         // the prior frozen dep tier.
-        let ws_units = [ws_unit_2];
+        let ws_units = [ws_unit];
         let surface = DeclSurface::build(&graph, &ws_units).with_frozen(Arc::clone(&frozen));
 
         let ws_rid = RoutineNodeId {
@@ -634,10 +513,8 @@ tableextension 50100 "Cust Ext" extends Customer
         let stale_src = r#"codeunit 50100 "C" { procedure Proc() begin end; }"#;
         let stale_unit = make_unit(primary_id.clone(), stale_src);
         let stale_units = [stale_unit];
-        let mut stale_surface = DeclSurface::build(&graph, &stale_units);
-        // Force everything (including the primary entry) into a frozen map by
-        // freezing with a bogus "primary" that matches nothing.
-        let frozen = stale_surface.freeze_dep_tier(AppRef(u32::MAX));
+        // Put the stale primary entry into a frozen map.
+        let frozen = Arc::new(DeclSurface::build(&graph, &stale_units).local);
         assert!(
             frozen.contains_key(&rid),
             "fixture sanity: stale entry present"
@@ -653,66 +530,5 @@ tableextension 50100 "Cust Ext" extends Customer
         // this resolves to the freshly-built local entry even though the
         // frozen tier holds a stale entry under the same key.
         assert_eq!(meta.name, "Proc");
-    }
-
-    /// `build_split` (the fused fast path used by `from_context`) must produce
-    /// the SAME two-tier partition — local (primary-only) + frozen (deps) —
-    /// as the general `build` + `freeze_dep_tier` sequence it replaces.
-    #[test]
-    fn build_split_matches_build_then_freeze() {
-        let primary_id = make_app_id("PrimaryApp");
-        let dep_id = make_app_id("DepApp");
-        let graph = two_app_graph(&primary_id, &dep_id);
-        let primary_ref = AppRef(0);
-
-        let ws_src =
-            r#"codeunit 50100 "WS" { procedure WsProc() begin end; procedure WsTwo() begin end; }"#;
-        let dep_src = r#"codeunit 50200 "Dep" { procedure DepProc() begin end; procedure DepTwo() begin end; }"#;
-
-        // Reference: build the full local surface, then freeze the dep tier.
-        let ref_units = [
-            make_unit(primary_id.clone(), ws_src),
-            make_unit(dep_id.clone(), dep_src),
-        ];
-        let mut ref_surface = DeclSurface::build(&graph, &ref_units);
-        let ref_frozen = ref_surface.freeze_dep_tier(primary_ref);
-
-        // Fused: build_split partitions in one pass.
-        let split_units = [make_unit(primary_id, ws_src), make_unit(dep_id, dep_src)];
-        let (split_surface, split_frozen) =
-            DeclSurface::build_split(&graph, &split_units, primary_ref);
-
-        // Local tiers must carry the identical primary-app key set.
-        let ref_local: std::collections::BTreeSet<_> = ref_surface.local.keys().cloned().collect();
-        let split_local: std::collections::BTreeSet<_> =
-            split_surface.local.keys().cloned().collect();
-        assert_eq!(
-            ref_local, split_local,
-            "build_split local tier must match build+freeze local tier"
-        );
-
-        // Frozen (dependency) tiers must carry the identical dep key set.
-        let ref_dep: std::collections::BTreeSet<_> = ref_frozen.keys().cloned().collect();
-        let split_dep: std::collections::BTreeSet<_> = split_frozen.keys().cloned().collect();
-        assert_eq!(
-            ref_dep, split_dep,
-            "build_split frozen tier must match build+freeze frozen tier"
-        );
-
-        // Both partitions are non-vacuous (fixture sanity) and disjoint.
-        assert!(!split_local.is_empty() && !split_dep.is_empty());
-        assert!(
-            split_local.is_disjoint(&split_dep),
-            "a routine cannot be in both tiers"
-        );
-
-        // Every meta must be retrievable and carry matching names across builds.
-        for id in &split_dep {
-            assert_eq!(
-                split_surface.get(id).map(|m| m.name.as_str()),
-                ref_surface.get(id).map(|m| m.name.as_str()),
-                "dep meta name must match across build methods"
-            );
-        }
     }
 }

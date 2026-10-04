@@ -7,7 +7,7 @@ use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
-use crate::program::dep_summary::summarize_file;
+use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
 use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
@@ -86,20 +86,31 @@ pub fn build_dep_layer(
     build_dep_layer_cached(
         snap,
         abi_cache,
-        parsed,
+        DepInput::Parsed(parsed),
         BuildProfile::FULL,
         &DepCache::default(),
     )
 }
 
+/// Where the dependency layer's per-file summaries come from.
+pub enum DepInput<'a> {
+    /// Already-parsed units (every source-bearing unit; the workspace's is
+    /// skipped): each dependency file is summarized from its tree. The layer
+    /// keeps no bodies. For [`build_dep_layer`] and its callers.
+    Parsed(&'a [ParsedUnit]),
+    /// A profiled build parse ([`crate::program::dep_summary::parse_for_build`]): its summaries are
+    /// consumed, and its dependency bodies (if any) kept in the tier.
+    Built(BuildParse),
+}
+
 /// [`build_dep_layer`], taking the dependency nodes from `dep_cache` when
 /// another root already built the same dependency set (see [`DepKey`]).
-/// `parsed` is read only on a miss, so a caller that already holds the live
-/// entry may pass the workspace unit alone.
+/// `input` is read only on a miss, so a caller that already holds the live
+/// entry may pass a parse without dependencies.
 pub fn build_dep_layer_cached(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
-    parsed: &[ParsedUnit],
+    input: DepInput<'_>,
     profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> DepLayer {
@@ -108,7 +119,7 @@ pub fn build_dep_layer_cached(
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
 
     let dep_nodes = dep_cache.get_or_build(DepKey::of(snap, profile), || {
-        build_dep_nodes(snap, abi_cache, parsed, &mut apps)
+        build_dep_nodes(snap, abi_cache, input, &mut apps)
     });
 
     // ── Step 3 / 3b: wire topology + friends for the WHOLE app set ───────────
@@ -134,34 +145,58 @@ pub fn build_dep_layer_cached(
 fn build_dep_nodes(
     snap: &AppSetSnapshot,
     abi_cache: &AbiCache,
-    parsed: &[ParsedUnit],
+    input: DepInput<'_>,
     apps: &mut AppRegistry,
 ) -> DepNodes {
-    // ── Step 2: summarize every NON-primary parsed file ──────────────────────
-    // Each summary is consumed at once: its nodes move into the layer, its
-    // `RoutineMeta` into `dep_meta` (in parsed order, so a true same-key
+    // ── Step 2: the NON-primary per-file summaries ───────────────────────────
+    let (summaries, bodies) = match input {
+        DepInput::Parsed(parsed) => {
+            let summaries = parsed
+                .iter()
+                // primary — extracted fresh per call by `assemble_program_graph`.
+                .filter(|unit| unit.app != snap.workspace_app)
+                .map(|unit| {
+                    // `intern` is idempotent — the `AppRef` assigned in step 1.
+                    let app_ref = apps.intern(&unit.app);
+                    DepUnitSummary {
+                        app: unit.app.clone(),
+                        files: unit
+                            .files
+                            .iter()
+                            .map(|pf| {
+                                summarize_file(
+                                    app_ref,
+                                    pf.provenance.tier,
+                                    &pf.virtual_path,
+                                    &pf.file,
+                                )
+                            })
+                            .collect(),
+                    }
+                })
+                .collect();
+            (summaries, None)
+        }
+        DepInput::Built(parse) => (parse.dep_summaries, parse.dep_bodies.map(Arc::new)),
+    };
+
+    // Each summary is consumed: its nodes move into the layer, its
+    // `RoutineMeta` into `dep_meta` (in parse order, so a true same-key
     // collision keeps the last one, as `DeclSurface::build` does), and its
-    // recovered flag into `recovered`.
+    // recovered flag into `recovered`. Nothing summary-shaped survives.
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
     let mut dep_meta = DepMetaMap::new();
     let mut recovered: Vec<String> = Vec::new();
-
-    for unit in parsed {
-        if unit.app == snap.workspace_app {
-            continue; // primary — extracted fresh per call by `assemble_program_graph`.
-        }
-        // `intern` is idempotent — returns the same `AppRef` assigned in step 1.
-        let app_ref = apps.intern(&unit.app);
-        for pf in &unit.files {
-            let summary = summarize_file(app_ref, pf.provenance.tier, &pf.virtual_path, &pf.file);
-            objects.extend(summary.objects);
-            routines.extend(summary.routines);
-            dep_meta.extend(summary.routine_meta);
-            if summary.parse_status_recovered {
+    for unit in summaries {
+        for file in unit.files {
+            objects.extend(file.objects);
+            routines.extend(file.routines);
+            dep_meta.extend(file.routine_meta);
+            if file.parse_status_recovered {
                 recovered.push(crate::snapshot::parse::recovered_path(
                     &unit.app.name,
-                    &summary.virtual_path,
+                    &file.virtual_path,
                 ));
             }
         }
@@ -209,7 +244,7 @@ fn build_dep_nodes(
         abi_ingest_errors,
         dep_meta: Arc::new(dep_meta),
         recovered,
-        bodies: None,
+        bodies,
         lsp: Default::default(),
     }
 }
@@ -629,7 +664,16 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// `param_sig_key` is never the ABI-only empty-key sentinel this function
 /// collapses on.
 pub(crate) fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
-    let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
+    // Pass 1 decides, per entry, whether it survives and how it is marked
+    // (borrowing); pass 2 MOVES the survivors out, so nothing is cloned.
+    #[derive(Clone, Copy)]
+    enum Verdict {
+        Drop,
+        Keep,
+        KeepCollapsed,
+        KeepAliased,
+    }
+    let mut verdicts: Vec<Verdict> = Vec::with_capacity(routines.len());
     let mut i = 0;
     while i < routines.len() {
         let mut j = i + 1;
@@ -652,28 +696,40 @@ pub(crate) fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<Rou
         // later entry in the run that repeats an already-seen param signature.
         let mut seen_sigs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for r in &routines[i..j] {
-            if seen_sigs.insert(r.param_sig_key.as_str()) {
-                let mut survivor = r.clone();
-                if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
-                    survivor.abi_overload_collapsed = true;
-                    // Task 2 (roadmap-closure plan): demote the retained ABI
-                    // parameter list in LOCKSTEP with the collapse marker —
-                    // the SAME survivor, the SAME "≥2 raw entries
-                    // fingerprint-collided" condition. `abi_params` on this
-                    // survivor belongs to only ONE of the ≥2 real
-                    // declarations (arbitrary raw-JSON-order choice, same as
-                    // `return_type`/`return_type_id` above) — the structural
-                    // guard (`AbiParams::CollapsedUntrusted`) makes reading
-                    // it for arg-type dispatch impossible by type, never
-                    // merely a convention a future call site could forget.
-                    survivor.abi_params = AbiParams::CollapsedUntrusted;
-                } else if r.tier != TrustTier::SymbolOnly && distinct_key_count >= 2 {
-                    survivor.source_overload_aliased = true;
-                }
-                out.push(survivor);
-            }
+            verdicts.push(if !seen_sigs.insert(r.param_sig_key.as_str()) {
+                Verdict::Drop
+            } else if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
+                Verdict::KeepCollapsed
+            } else if r.tier != TrustTier::SymbolOnly && distinct_key_count >= 2 {
+                Verdict::KeepAliased
+            } else {
+                Verdict::Keep
+            });
         }
         i = j;
+    }
+    let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
+    for (mut survivor, verdict) in routines.drain(..).zip(verdicts) {
+        match verdict {
+            Verdict::Drop => continue,
+            Verdict::Keep => {}
+            Verdict::KeepCollapsed => {
+                survivor.abi_overload_collapsed = true;
+                // Task 2 (roadmap-closure plan): demote the retained ABI
+                // parameter list in LOCKSTEP with the collapse marker —
+                // the SAME survivor, the SAME "≥2 raw entries
+                // fingerprint-collided" condition. `abi_params` on this
+                // survivor belongs to only ONE of the ≥2 real
+                // declarations (arbitrary raw-JSON-order choice, same as
+                // `return_type`/`return_type_id` above) — the structural
+                // guard (`AbiParams::CollapsedUntrusted`) makes reading
+                // it for arg-type dispatch impossible by type, never
+                // merely a convention a future call site could forget.
+                survivor.abi_params = AbiParams::CollapsedUntrusted;
+            }
+            Verdict::KeepAliased => survivor.source_overload_aliased = true,
+        }
+        out.push(survivor);
     }
     *routines = out;
 }

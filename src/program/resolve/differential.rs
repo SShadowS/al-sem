@@ -577,7 +577,7 @@ pub fn verify_event_subscriber_route(
     event_name_lc: &str,
     publisher_params_count: usize,
     publisher_include_sender: Option<bool>,
-    parsed: &[crate::snapshot::ParsedUnit],
+    parsed: &[&crate::snapshot::ParsedUnit],
     apps: &AppRegistry,
 ) -> bool {
     use crate::program::node::ObjKey;

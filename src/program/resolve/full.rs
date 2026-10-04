@@ -38,8 +38,9 @@ use al_syntax::ir::ObjectKind;
 use rayon::prelude::*;
 
 use crate::engine::perf_trace as pt;
-use crate::program::build::{DepLayer, assemble_program_graph, build_dep_layer_cached};
+use crate::program::build::{DepInput, DepLayer, assemble_program_graph, build_dep_layer_cached};
 use crate::program::dep_cache::{DepCache, DepKey};
+use crate::program::dep_summary::parse_for_build;
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
@@ -70,7 +71,6 @@ use crate::program::resolve::resolver::{
 use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::{
     AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
-    parse_snapshot,
 };
 use std::sync::Arc;
 
@@ -1045,9 +1045,9 @@ pub fn resolve_full_program_for_export(
 pub struct ProgramContext {
     pub(crate) snap: AppSetSnapshot,
     pub(crate) graph: ProgramGraph,
-    /// Every source-bearing unit — except on a shared-tier hit (LSP only,
-    /// see [`build_context_from_snapshot_cached`]), where it holds the
-    /// workspace unit alone.
+    /// The workspace unit alone (empty when the workspace has no source).
+    /// Dependency trees, when the profile keeps them, live in the dependency
+    /// tier: see [`ProgramContext::dep_bodies`].
     pub(crate) parsed: Vec<ParsedUnit>,
     pub(crate) primary_app_ref: AppRef,
     pub(crate) ws_file_set: HashSet<String>,
@@ -1073,15 +1073,37 @@ impl ProgramContext {
         &self.graph
     }
 
-    /// The parsed units backing `graph` (shared-substrate consumers only).
-    ///
-    /// Built with a shared [`DepCache`] that hit, this holds ONLY the
-    /// workspace unit: the dependencies were not parsed again. A caller that
-    /// needs dependency bodies must build with a throwaway
-    /// `DepCache::default()`.
+    /// The workspace's parsed unit (at most one). Dependency trees are in
+    /// [`Self::dep_bodies`].
     #[must_use]
     pub fn parsed(&self) -> &[ParsedUnit] {
         &self.parsed
+    }
+
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` exactly
+    /// when the profile is `DependencyBodies::Keep` (a `Keep` build never
+    /// shares a tier built without them — see `DepKey`).
+    #[must_use]
+    pub fn dep_bodies(&self) -> Option<&[ParsedUnit]> {
+        self.dep_layer
+            .dep_nodes
+            .bodies
+            .as_deref()
+            .map(Vec::as_slice)
+    }
+
+    /// Every parsed unit in `snap.apps` order (workspace first, then the
+    /// dependency bodies): what `parse_snapshot` would give. Needs `Keep`.
+    ///
+    /// # Panics
+    /// When the profile does not keep dependency bodies — a reader of
+    /// dependency trees must declare `Keep` (spec §4).
+    #[must_use]
+    pub fn all_units(&self) -> Vec<&ParsedUnit> {
+        let deps = self
+            .dep_bodies()
+            .expect("reading dependency trees needs DependencyBodies::Keep");
+        self.parsed.iter().chain(deps).collect()
     }
 
     /// The workspace unit of `parsed` (at most one: `snap.apps` is
@@ -1124,9 +1146,8 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 /// [`build_context`] with an explicit [`DependencySource`] — the LSP server
 /// and CLI index path, which let the user trade dependency depth for memory.
 ///
-/// When `dep_cache` hits, the result's [`ProgramContext::parsed`] holds only
-/// the workspace unit. Pass a throwaway `DepCache::default()` when the
-/// dependency bodies are needed.
+/// When `dep_cache` hits, the dependencies are not parsed again; a `Keep`
+/// profile still gets [`ProgramContext::dep_bodies`] from the shared tier.
 #[must_use]
 pub fn build_context_with(
     workspace_root: &Path,
@@ -1207,37 +1228,31 @@ pub fn build_context_from_snapshot_cached(
     // `assemble_program_graph_matches_build_program_graph_field_by_field`
     // characterization test in `program::build`).
     //
-    // A live shared dependency tier carries everything resolution reads from
-    // the dependencies (`dep_meta`, `recovered`), so on a hit only the
-    // workspace is parsed and `parsed` holds the workspace unit alone. Only
-    // the LSP passes a shared cache; every other caller passes a throwaway
-    // one, never hits, and still gets every unit.
+    // Each dependency file is summarized as it is parsed; under `Summary` its
+    // tree dies right there, under `Keep` the trees go into the tier. A live
+    // shared tier carries everything resolution reads from the dependencies
+    // (`dep_meta`, `recovered`, and the bodies when the key keeps them), so on
+    // a hit only the workspace is parsed. `parsed` is the workspace unit
+    // alone, always.
     let shared_tier = dep_cache.get(&DepKey::of(&snap, profile));
-    let parsed = {
+    let mut parse = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
-        if shared_tier.is_some() {
-            snap.apps
-                .iter()
-                .filter(|u| u.id == snap.workspace_app)
-                .filter_map(crate::snapshot::parse::parse_unit)
-                .collect()
-        } else {
-            parse_snapshot(&snap)
-        }
+        parse_for_build(&snap, profile, shared_tier.is_some())
     };
+    let parsed: Vec<ParsedUnit> = parse.workspace.take().into_iter().collect();
     crate::census_hook::mark("2.parse");
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
         build_dep_layer_cached(
             &snap,
             &crate::program::abi_ingest::AbiCache::new(),
-            &parsed,
+            DepInput::Built(parse),
             profile,
             dep_cache,
         )
     };
     // `shared_tier` kept the entry alive, so the layer is built on it and the
-    // dependency nodes never came from the workspace-only `parsed`.
+    // dependency nodes never came from the dependency-less parse.
     assert!(
         shared_tier
             .as_ref()
@@ -1516,6 +1531,7 @@ mod tests {
     use super::*;
     use crate::program::node::ObjKey;
     use crate::program::resolve::edge::{Condition, SourcePos};
+    use crate::snapshot::parse_snapshot;
 
     fn rid(name: &str) -> RoutineNodeId {
         RoutineNodeId {

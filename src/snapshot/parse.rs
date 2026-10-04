@@ -110,17 +110,24 @@ fn parse_unit_in_pool(unit: &AppUnit) -> Option<ParsedUnit> {
     let files: Vec<ParsedFile> = source
         .files
         .par_iter()
-        .map(|f| ParsedFile {
-            virtual_path: f.virtual_path.clone(),
-            file: Arc::new(al_syntax::parse(&f.text)),
-            provenance: unit.provenance.clone(),
-            text: Arc::clone(&f.text),
-        })
+        .map(|f| parse_file(unit, f))
         .collect();
     Some(ParsedUnit {
         app: unit.id.clone(),
         files,
     })
+}
+
+/// Parse one source file of `unit`: the single parse code path. Call it on
+/// [`crate::big_stack::big_stack_pool`] (the lowerer's recursion needs the
+/// big stack).
+pub(crate) fn parse_file(unit: &AppUnit, f: &crate::snapshot::embedded::SourceFile) -> ParsedFile {
+    ParsedFile {
+        virtual_path: f.virtual_path.clone(),
+        file: Arc::new(al_syntax::parse(&f.text)),
+        provenance: unit.provenance.clone(),
+        text: Arc::clone(&f.text),
+    }
 }
 
 /// Test-only record of which `.app` files had their source parsed.
@@ -131,7 +138,7 @@ pub(crate) mod parse_log {
 
     static LOG: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-    pub(super) fn record(unit: &crate::snapshot::snapshot::AppUnit) {
+    pub(crate) fn record(unit: &crate::snapshot::snapshot::AppUnit) {
         if let Some(path) = &unit.app_path {
             LOG.lock()
                 .unwrap_or_else(PoisonError::into_inner)

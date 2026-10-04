@@ -36,12 +36,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use al_sem::program::abi_ingest::AbiCache;
-use al_sem::program::build::{assemble_program_graph, build_dep_layer};
+use al_sem::program::build::build_dep_layer;
 use al_sem::program::node::{AppRef, AppRegistry, ObjectNodeId, RoutineNodeId};
 use al_sem::program::node_extract::{ObjectNode, RoutineNode};
 use al_sem::program::pack::{DepPack, PACK_SCHEMA, PackedFile, compute_self_hash, decode, encode};
-use al_sem::program::resolve::decl_surface::{DeclSurface, RoutineMeta};
-use al_sem::snapshot::{AppId, ParsedUnit, SnapshotBuilder, parse_snapshot};
+use al_sem::program::resolve::decl_surface::RoutineMeta;
+use al_sem::snapshot::{AppId, SnapshotBuilder, parse_snapshot};
 use rayon::prelude::*;
 
 /// One app's contribution, already bucketed by the file it came from.
@@ -153,31 +153,11 @@ fn main() {
     }
 
     // ---- The RoutineMeta tier, which is over half the payload -----------
-    // `DeclSurface::build_split` produces exactly the dep-tier `RoutineMeta`
+    // The dependency layer's `dep_meta` is exactly the dep-tier `RoutineMeta`
     // map. This is NOT optional: a pack without it measures roughly a third of
     // the real bytes, and it is not derivable on a hit because `from_decl`
     // needs a `RoutineDecl`. A gate run without it is a floor, not a decision.
-    //
-    // `build_split` wants a `ProgramGraph` (for its `AppRegistry`) and the
-    // primary `AppRef`. Assembling from the dep layer we already have avoids
-    // the second full `parse_snapshot` that `build_program_graph` would do.
-    let empty_ws_unit;
-    let ws_unit: &ParsedUnit = match parsed.iter().find(|u| u.app == snap.workspace_app) {
-        Some(u) => u,
-        None => {
-            empty_ws_unit = ParsedUnit {
-                app: snap.workspace_app.clone(),
-                files: vec![],
-            };
-            &empty_ws_unit
-        }
-    };
-    let graph = assemble_program_graph(&dep_layer, ws_unit, &snap);
-    let primary_app_ref = graph
-        .apps
-        .find(&snap.workspace_app)
-        .expect("workspace app must be interned");
-    let (_decl_surface, dep_meta) = DeclSurface::build_split(&graph, &parsed, primary_app_ref);
+    let dep_meta = &dep_layer.dep_nodes.dep_meta;
     println!("routine_meta entries: {}", dep_meta.len());
     assert!(
         !dep_meta.is_empty(),
