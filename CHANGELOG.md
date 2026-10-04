@@ -66,6 +66,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A failed write to the dependency source cache no longer leaves its partial temporary
   file behind.**
 
+### Fixed
+
+- **A rare deadlock when d47, d49 or d51 run together with other detectors.** The
+  ordering facts these three detectors read were computed lazily, inside the parallel
+  detector loop. The thread computing them waits for its own parallel work, and while
+  waiting the thread pool hands it other detectors' work; that work could end up
+  waiting on a detector that was itself waiting for the ordering facts. Nothing then
+  finished. `r4_differential` hung for 10 minutes at 0 % CPU, and a memory dump
+  confirmed the cycle. The three detectors now declare a new `substrate::ORDERING_FACTS`
+  bit, and the detector loop computes the facts once before it starts. In debug
+  builds, a detector that reads the facts without declaring the bit fails instead of
+  hanging sometimes — but only when it runs without another detector that declares
+  the bit, so a test now runs every registered detector on its own. Findings are
+  unchanged. A panic while computing the facts now ends the whole detector run in
+  debug and test builds instead of becoming one detector's diagnostic; release builds
+  abort on any panic either way.
+
 ## [1.3.2] - 2026-10-03
 
 ### Added
