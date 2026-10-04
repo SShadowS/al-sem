@@ -171,8 +171,10 @@ Workspace + .alpackages → snapshot::snapshot_workspace (AppSetSnapshot, identi
     (taxonomy'd edge counts) + per-edge Route report
 ```
 Driven via `aldump --program-call-graph-stats <workspace>` (the north-star metric command)
-or consumed programmatically by `src/engine/l4`/`l5` (effect summaries, detectors) and
-`src/engine/gate` (the `analyze` CLI's SARIF/JSON/HTML report path).
+or consumed programmatically by `src/engine/gate` (the `analyze` CLI's preflight).
+**`alsem analyze` runs the program engine only for its preflight count
+(`fresh_coverage`).** Its detectors (`src/engine/l4`/`l5`) still run on the separate L3
+model until spec step 3 (B3, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`).
 
 **Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
 - `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`
@@ -218,6 +220,10 @@ or consumed programmatically by `src/engine/l4`/`l5` (effect summaries, detector
   identity-verified per-app source roots (`snapshot_workspace`, `AppSetSnapshot`)
 - `src/program/` - Whole-program semantic graph: `node`/`topology` (app-qualified identity
   + index), `build` (assembly), `sig_fp` (signature fingerprints)
+- `src/program/profile.rs` - `BuildProfile` (`LIGHT`/`FULL`/explicit `Summary`): what a graph
+  build keeps of the dependencies. Every build states one.
+- `src/program/dep_summary.rs` - `PackedFile`, the per-file dependency summary made at parse
+  time so `LIGHT` can drop the syntax tree.
 - `src/program/resolve/` - **The fresh call/behaviour-edge resolver** — `full.rs`
   (`resolve_full_program`, the entry point), `resolver.rs`/`receiver.rs`/`arg_dispatch.rs`
   (dispatch), `builtins.rs`/`member_catalog.rs` (platform intrinsic catalogs), `edge.rs`
@@ -567,6 +573,9 @@ under `docs/superpowers/specs/`.
 
 ## Testing Philosophy & Goldens
 
+- **Build profiles (spec 2026-10-04 §4).** Every graph build states a `BuildProfile`; there
+  is no default. A memory saving is a profile choice, never a deletion: `FULL` keeps every
+  fact. A tool that reads something must declare it.
 - **A test must pin the USE, not just the helper — and you must prove it can fail.**
   The recurring defect in this repo: a test calls a helper directly and asserts its
   behaviour, so the production **call site** can be deleted while the test, the whole

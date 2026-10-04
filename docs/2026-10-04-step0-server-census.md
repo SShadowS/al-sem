@@ -37,3 +37,23 @@ RSS, context only (one reading per run, taken with the updaters idle): CG embedd
 ## What this says
 
 The idle baseline before any edit of today's server on the 7-root CG set is **762.7 MiB** of heap in `embedded` mode (375.5 in `symbols`), not the 360.5 MiB the snapshots alone hold: the updaters more than double it. Retained heap after edits has not been measured. Each root's updater adds almost the same 57.4 MiB (32.5 in symbols) however small the workspace is (CG roots have 1 to 9 source files, 36 in total), which is consistent with whole-graph indexes dominated by dependency entries (inferred; not split). They are not shared today. The updater indexes for the 6 roots beyond the first account for about 344.7 MiB (6 x 57.45) in `embedded` and 194.8 MiB in `symbols`. A single shared copy would remove most of those, leaving about 418 MiB idle in `embedded` at best (360.5 + 57.5). That is a floor, not an upper bound: every extra root still keeps its own workspace-specific part, which the probe cannot separate; at an estimated ~0.6 MiB per CG root the figure is about 422 MiB. For `symbols`, at least about 181 MiB. The three structures are not split (see Conventions).
+
+## After step 1 (2026-10-04): parse, summarize, drop
+
+Same probe, same corpora, same four modes as above. Engine: branch `feat/compact-graph-core` at `c75ce97a` (the LSP builds with `BuildProfile::LIGHT`: each dependency file is summarized at parse time and its syntax tree is dropped). Probe: `tools/census-probe/` after the commit that makes it follow `DepNodes` (its measurements and accounting are unchanged). Raw output: `tools/census-probe/runs-after/{cg,cdo}-{embedded,symbols}-{base,updaters}.txt`. One run per cell; the step 0 runs repeat within 0.1 MiB between the `base` and `updaters` runs, so that is the noise seen here. Heap bytes from the counting allocator, never RSS.
+
+| Corpus | Mode | Build peak, root 1 (before / after) | Snapshots only (before / after) | Updaters idle (before / after) |
+|---|---|--:|--:|--:|
+| CG, 7 roots | embedded | 1,120.7 / **317.8** | 360.5 / 361.4 | 762.7 / 763.6 |
+| CG, 7 roots | symbols | 143.6 / **130.0** | 148.3 / 148.3 | 375.5 / 375.4 |
+| CDO, 1 root | embedded | 1,324.0 / **449.1** | 382.6 / 383.6 | 448.9 / 449.9 |
+| CDO, 1 root | symbols | 200.5 / 200.5 | 155.2 / 155.1 | 200.0 / 199.9 |
+
+What the numbers say:
+
+- **The first root's build peak fell by 802.9 MiB (CG embedded) and 874.9 MiB (CDO embedded).** The 804 and 915 MiB of dependency syntax trees that the step 0 phase table showed after `2.parse` are gone: CDO's `parse` phase now ends at 326.7 MiB live, was 1,063.4. The peak now sits in phase 7 (`event_edges`), near the end of the build, at 449.1 MiB on CDO.
+- **`symbols` mode:** CG fell 13.6 MiB (143.6 to 130.0). CDO did not move (200.5 both), because no dependency source is parsed in that mode, so there was nothing to drop.
+- **Retained heap did not fall.** It is unchanged within noise except `embedded` mode, where snapshots-only is 0.9 to 1.0 MiB higher (CG 361.4 vs 360.5, CDO 383.6 vs 382.6) and updaters-idle moves with it. That is above the 0.1 MiB noise and is probably the per-file summaries the tier now keeps; the probe does not split it further, so the cause is inferred, not measured. Allocation counts are within 25 of each other.
+- Updater share per root is unchanged (CG embedded 402.2 total, symbols 227.2, CDO 66.3 and 44.8).
+- Not measured here: `fresh_coverage`'s peak (the probe builds LSP snapshots, not that path) and the process peak in server order.
+- RSS context only (updaters idle, one reading): CG embedded 931.3 MiB working set (peak 940.6), CG symbols 460.4 (464.7), CDO embedded 574.3 (580.6), CDO symbols 258.3 (264.7). Heap figures above are not comparable to these.

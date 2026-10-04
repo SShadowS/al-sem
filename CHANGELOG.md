@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/census-probe`**: a byte-census program (own Cargo workspace, not part of CI)
+  that builds the LSP snapshots for a set of roots with a counting allocator and, with
+  `--with-updaters`, starts each root's real updater and measures the idle heap. The
+  engine gets a phase-mark hook for it that does nothing unless a probe registers one.
+- **`docs/2026-10-04-step0-server-census.md`**: the measured idle memory of the running
+  server (heap bytes, not RSS), before and after the change below.
+
 ### Changed
+
+- **Dependency files are summarized when they are parsed, and the LSP drops their syntax
+  trees.** Each dependency file now yields a small per-file summary (`PackedFile`) at
+  parse time. The LSP build profile (`BuildProfile::LIGHT`) keeps the summary and drops
+  the tree; `FULL` keeps every tree, shared in the dependency tier. Measured with
+  `tools/census-probe` (heap bytes, not RSS; one run per cell): the first root's build
+  peak fell from 1,120.7 to 317.8 MiB on the 7-root CG set and from 1,324.0 to
+  449.1 MiB on CDO, both in `embedded` mode. In `symbols` mode CG fell from 143.6 to
+  130.0 MiB and CDO stayed at 200.5. Retained heap did not fall: it is unchanged within
+  noise, about 1 MiB higher in `embedded` mode.
+- **Every graph build now states a `BuildProfile`** (`LIGHT` for the LSP, an explicit
+  `Summary` for `fresh_coverage`, `FULL` for tools). There is no default, so a tool
+  cannot silently lose data it reads.
+- **The dependency tier now owns `dep_meta` and the list of recovered files**, and the
+  dependency file texts come from the snapshot.
+- **Removed the dependency-arena-drop thread, `DeclSurface::build_split` and
+  `freeze_dep_tier`.** Nothing needs them once the trees are dropped at parse time.
 
 - **`alsem` is now built, signed and deployed by CI**, next to `al-call-hierarchy`:
   `build-and-deploy.yml` signs `alsem.exe` with the same Azure Artifact Signing step,
