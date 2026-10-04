@@ -34,11 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads used to take tens of MB in one piece; now none does:
   - The `.app` nested inside a Ready-to-Run package (Base Application: ~44 MB) is
     unpacked into a temporary file that is deleted when it is closed, not into memory.
-  - The symbol list (`SymbolReference.json`, Base Application: ~58 MB) is parsed
-    straight from the package as it is unpacked, for the dependency list.
-  - For the call-graph engine, the same file is unpacked into a temporary file and
-    memory-mapped read-only. A read-only file mapping does not count against Windows'
-    memory limit (commit).
+  - The symbol list (`SymbolReference.json`, Base Application: ~58 MB) is unpacked
+    into a temporary file and memory-mapped read-only, both for the dependency list
+    and for the call-graph engine. A read-only file mapping does not count against
+    Windows' memory limit (commit). It is parsed exactly as before.
   - The content hash of each `.app` (Base Application: ~105 MB) is computed while
     reading the file in small pieces, not after reading it whole. The hash is the same.
   - The cached dependency source (`~/.al-sem/cache/*.json`) is memory-mapped when read
@@ -50,8 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The warning for a dependency `.app` whose manifest cannot be read now shows the real
   cause.** It used to print only the outer context, for example just
-  `Ready-to-Run package: <path>`. The warning for a dependency whose symbols cannot be
-  parsed now shows the full cause too.
+  `Ready-to-Run package: <path>`. The warnings for a dependency whose symbols cannot be
+  parsed, and the error recorded when the call-graph engine cannot read a dependency's
+  symbols, now show the full cause too.
+- **A failed write to the dependency source cache no longer leaves its partial temporary
+  file behind.**
 
 ## [1.3.2] - 2026-10-03
 

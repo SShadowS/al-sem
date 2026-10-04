@@ -97,8 +97,15 @@ fn persist_cache(cache_file: &Path, hash: &str, files: &[SourceFile]) -> Result<
         serde_json::to_writer(&mut out, files)?;
         std::io::Write::flush(&mut out)
     };
-    write().with_context(|| format!("write cache tmp {}", tmp.display()))?;
-    std::fs::rename(&tmp, cache_file)
-        .with_context(|| format!("rename cache tmp → {}", cache_file.display()))?;
-    Ok(())
+    let result = write()
+        .with_context(|| format!("write cache tmp {}", tmp.display()))
+        .and_then(|()| {
+            std::fs::rename(&tmp, cache_file)
+                .with_context(|| format!("rename cache tmp → {}", cache_file.display()))
+        });
+    if result.is_err() {
+        // Do not leave a partial (possibly hundreds of MB) temp file behind.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }

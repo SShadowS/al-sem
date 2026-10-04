@@ -208,7 +208,7 @@ impl AbiCache {
         // uses, so both failure modes surface through the one channel
         // `ingest_abi` propagates below.
         let abi = read_symbol_reference_from_app(app_path).unwrap_or_else(|e| SymbolReferenceAbi {
-            error: Some(format!("failed to read {}: {e}", app_path.display())),
+            error: Some(format!("failed to read {}: {e:#}", app_path.display())),
             ..Default::default()
         });
         let arc = Arc::new(abi);
