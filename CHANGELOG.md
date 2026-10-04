@@ -25,8 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tools/census-probe` (heap bytes, not RSS; one run per cell): the first root's build
   peak fell from 1,120.7 to 317.8 MiB on the 7-root CG set and from 1,324.0 to
   449.1 MiB on CDO, both in `embedded` mode. In `symbols` mode CG fell from 143.6 to
-  130.0 MiB and CDO stayed at 200.5. Retained heap did not fall: it is unchanged within
-  noise, about 1 MiB higher in `embedded` mode.
+  130.0 MiB and CDO stayed at 200.5; that fall is not the tree drop (no dependency
+  source is parsed in that mode) but the routine dedup no longer cloning every
+  survivor. Retained heap did not fall: unchanged in `symbols` mode, 0.9 MiB higher in
+  `embedded` mode (spare buffer capacity in the shared tier's routines, because the
+  dedup now moves survivors instead of cloning them; accepted, since trimming would
+  add a copy of every routine during the build, which is the peak this change lowers).
 - **Every graph build now states a `BuildProfile`** (`LIGHT` for the LSP, an explicit
   `Summary` for `fresh_coverage`, `FULL` for tools). There is no default, so a tool
   cannot silently lose data it reads.
@@ -34,7 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency file texts come from the snapshot.
 - **Removed the dependency-arena-drop thread, `DeclSurface::build_split` and
   `freeze_dep_tier`.** Nothing needs them once the trees are dropped at parse time.
-
 - **`alsem` is now built, signed and deployed by CI**, next to `al-call-hierarchy`:
   `build-and-deploy.yml` signs `alsem.exe` with the same Azure Artifact Signing step,
   builds Linux `alsem` without the `telemetry` feature, checks both Linux binaries
