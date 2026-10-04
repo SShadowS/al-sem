@@ -1298,8 +1298,7 @@ pub fn registered_detectors() -> Vec<Detector> {
         Detector {
             name: "d47-io-unsafe-txn".to_string(),
             run: d47::detect_d47,
-            // ordering facts are lazy (get_ordering_facts) — not a gated substrate.
-            requires: 0,
+            requires: substrate::ORDERING_FACTS,
         },
         // d48: OPT-IN (io-in-loop, surfaced by transaction-integrity preset).
         Detector {
@@ -1312,8 +1311,7 @@ pub fn registered_detectors() -> Vec<Detector> {
         Detector {
             name: "d49-uncommitted-write-before-ui".to_string(),
             run: d49::detect_d49,
-            // ordering facts are lazy (get_ordering_facts) — not a gated substrate.
-            requires: 0,
+            requires: substrate::ORDERING_FACTS,
         },
         // d50: OPT-IN (checked-run-implicit-commit, advisory info/medium).
         Detector {
@@ -1326,8 +1324,7 @@ pub fn registered_detectors() -> Vec<Detector> {
         Detector {
             name: "d51-retry-side-effect-duplication".to_string(),
             run: d51::detect_d51,
-            // ordering facts are lazy (get_ordering_facts) — not a gated substrate.
-            requires: 0,
+            requires: substrate::ORDERING_FACTS,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
         Detector {

@@ -796,12 +796,22 @@ impl DetectorContext<'_> {
     }
 
     /// The L4.5 ordering facts, keyed by `StableRoutineId`. Lazily computed on
-    /// first access (memoized via `OnceLock` — thread-safe for future parallel
-    /// detector runs). d47/d49/d51 look up their reportable routine's facts here
-    /// exactly as al-sem's `ctx.getOrderingFacts()`.
+    /// first access and memoized via `OnceLock`. d47/d49/d51 look up their
+    /// reportable routine's facts here exactly as al-sem's `ctx.getOrderingFacts()`.
+    ///
+    /// Thread-safe is NOT the same as safe inside the parallel detector loop:
+    /// filling the slot there can deadlock (see `substrate::ORDERING_FACTS`). A
+    /// detector that reads this must declare that bit, so `run_each` fills the
+    /// slot first; in debug builds an undeclared read panics here instead of
+    /// hanging sometimes.
     pub fn get_ordering_facts(
         &self,
     ) -> &HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts> {
+        debug_assert!(
+            self.ordering_facts.get().is_some() || !crate::engine::l5::registry::in_detector_loop(),
+            "a detector read ctx.get_ordering_facts() inside the parallel detector \
+             loop without declaring substrate::ORDERING_FACTS in its `requires`"
+        );
         self.ordering_facts
             .get_or_init(|| match self.ordering_source {
                 Some(resolved) => {
