@@ -41,7 +41,37 @@ cargo test -p al-sem --lib <filter>   # Package is al-sem (HYPHEN); al_sem fails
 rustfmt path/to/file.rs        # Format a file (NEVER `cargo fmt` — whole-crate churn)
 scripts/ci-steps clippy        # Lint — CI's EXACT bar (release + -D warnings)
 scripts/check-goldens          # Run ALL byte-compared golden families at once (see Testing Philosophy & Goldens)
+scripts/ci-steps task          # The per-task gate (see Test tiers below)
 ```
+
+### Test tiers
+
+Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
+
+| Tier | When | Command | What it runs |
+|------|------|---------|--------------|
+| 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::` | only what you touched |
+| 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
+| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite |
+
+- **The debug suites never run the CDO tests.** `ci-steps test`, `check-goldens` and
+  the pre-commit hook unset `CDO_WS`, so the CDO-gated tests skip there whatever your
+  environment says. In a debug build they cost ~5 minutes per run
+  (`abi_ingestion_integrity_cdo_gate` alone took 243 s). `scripts/cdo-gate` is the one
+  runner for them, built with `release-fast`. **Do not set `CDO_WS` globally** — it was
+  set as a user environment variable until 2026-10-04 and made every `cargo test` a
+  CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud`; pass it to `cdo-gate`.
+- **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
+  stamp of the tested tree (`scripts/tree-stamp`, stored at
+  `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the
+  commit's tree is IDENTICAL to that stamp; partial staging or any later edit runs the
+  goldens as before. `fmt` and the coverage check never skip.
+- Measured 2026-10-04 (dev machine, warm caches, no source edit between runs). Before,
+  every task ran `ci-steps all` (636 s) + `check-goldens` (299 s) + `cdo-gate` (384 s)
+  = **~22 min**. Now the task gate is **34 s** (65 s while `gen-syntax` still rewrote
+  its files and forced a full recompile — fixed the same day), and the branch gate is
+  `ci-steps all` (422 s) + `cdo-gate` (269 s) = **~11.5 min, once per branch**. A source
+  edit adds its debug rebuild on top; that part was not measured.
 
 **Do not pipe a long-running gate/test through `| tail`** (e.g. `bash scripts/cdo-gate … | tail`): the pipeline's exit code is `tail`'s, not the command's, so a FAILURE reads as success. Redirect to a log file and `grep` it, or run it with `run_in_background` and read the output file.
 
@@ -613,7 +643,9 @@ under `docs/superpowers/specs/`.
   cover `--test r3` at all). A **pre-commit hook** (`scripts/git-hooks/pre-commit`,
   enabled via `git config core.hooksPath scripts/git-hooks`) blocks a commit
   touching any of those paths unless `check-goldens` passes; enable it once per
-  clone. It costs ~23s warm-cache when it fires, plus any debug rebuild.
+  clone. It costs ~23s warm-cache when it fires, plus any debug rebuild, and it
+  skips the golden run when the exact tree already passed `scripts/ci-steps test`
+  (see Test tiers).
 - **A NEW `tests/r0-corpus/` fixture moves THREE golden families, and
   `--test r4` alone will not tell you.** Adding `ws-d2-uncertain` (2026-07-31) needed
   `tests/r4-goldens/*.r4.golden.json`, `tests/r2c-goldens/*.l3eg.golden.json` (the l3eg

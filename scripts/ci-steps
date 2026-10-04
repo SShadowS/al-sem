@@ -20,7 +20,9 @@
 # missing `parser.c`.
 #
 # Usage: scripts/ci-steps <step>
-#   fmt | clippy | gen-syntax | test | build | perf-bounds | all
+#   fmt | clippy | clippy-dev | gen-syntax | test | build | perf-bounds
+#   task   — the per-task gate: fmt, clippy-dev, gen-syntax, test
+#   all    — exactly what CI runs; with scripts/cdo-gate it is the branch gate
 set -uo pipefail
 
 step="${1:-}"
@@ -54,6 +56,14 @@ run_fmt() { cargo fmt --check; }
 
 run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets --all-features -- -D warnings; }
 
+# The task-gate lint: the SAME lints and `-D warnings` as `run_clippy`, but in
+# the dev profile. The release profile disables incremental compilation, so every
+# `clippy --release` re-checks the whole crate from scratch; the dev profile
+# reuses its previous work. Lints that differ between the two profiles are rare
+# (code behind `cfg(debug_assertions)`), which is why `all` — the branch gate and
+# what CI runs — keeps the exact release bar.
+run_clippy_dev() { require_grammar || return 1; cargo clippy --all-targets --all-features -- -D warnings; }
+
 # NOTE: cannot run from a git worktree with no grammar checkout — the grammar
 # clone is gitignored, so a worktree has none and `tree-sitter-al/src/node-types.json` is
 # absent. Run it in the main checkout, or point TREE_SITTER_AL_PATH at an
@@ -64,7 +74,28 @@ run_gen_syntax() {
     git diff --exit-code crates/al-syntax/src/raw/generated
 }
 
-run_test() { require_grammar || return 1; cargo test --workspace; }
+# The whole suite, ONCE, with the CDO workspace switched off. The CDO-gated tests
+# skip when `CDO_WS` is unset; with it set they run against the real workspace
+# in DEBUG mode, which cost ~6 minutes per run (`abi_ingestion_integrity_cdo_gate`
+# alone took 243 s) and doubled again in `check-goldens`. `scripts/cdo-gate` is the
+# one runner for them (optimized build, `ENFORCE_CDO_WS=1`), so unsetting here
+# loses no coverage. `REGEN_TEMP_GOLDENS` is unset too: a regen run passes
+# trivially, and this run's green result is recorded as a stamp (below) that lets
+# the pre-commit hook skip re-running the golden targets on the identical tree.
+#
+# The stamp is taken BEFORE the run and written only if the run is green AND the
+# tree did not change while it ran, so it always names a tree that was tested.
+run_test() {
+    require_grammar || return 1
+    local stamp_before stamp_after stamp_file
+    stamp_before="$("$(dirname "$0")/tree-stamp")" || return 1
+    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo test --workspace || return 1
+    stamp_after="$("$(dirname "$0")/tree-stamp")" || return 0
+    if [[ "$stamp_before" == "$stamp_after" ]]; then
+        stamp_file="$("$(dirname "$0")/tree-stamp" --path)"
+        printf '%s\n' "$stamp_before" > "$stamp_file"
+    fi
+}
 
 run_build() { require_grammar || return 1; cargo build --release; }
 
@@ -73,10 +104,28 @@ run_perf_bounds() { require_grammar || return 1; cargo test --release --test per
 case "$step" in
     fmt)         run_fmt ;;
     clippy)      run_clippy ;;
+    clippy-dev)  run_clippy_dev ;;
     gen-syntax)  run_gen_syntax ;;
     test)        run_test ;;
     build)       run_build ;;
     perf-bounds) run_perf_bounds ;;
+    # The per-task gate (CLAUDE.md "Test tiers"): everything that can fail on a
+    # normal change, fast. No release builds; dev-profile clippy; the whole test
+    # suite once (it includes every golden target, so `check-goldens` is not a
+    # separate step). Run before every commit/task.
+    task)
+        rc=0
+        for s in fmt clippy-dev gen-syntax test; do
+            echo "=== ci-steps: $s ==="
+            if ! "$0" "$s"; then
+                echo "ci-steps: FAILED at '$s'" >&2
+                rc=1
+            fi
+        done
+        exit "$rc"
+        ;;
+    # Exactly what CI runs. Part of the branch gate (with `scripts/cdo-gate`),
+    # run once before a merge, not on every task.
     all)
         rc=0
         for s in fmt clippy gen-syntax test build perf-bounds; do
@@ -89,7 +138,7 @@ case "$step" in
         exit "$rc"
         ;;
     *)
-        echo "usage: scripts/ci-steps <fmt|clippy|gen-syntax|test|build|perf-bounds|all>" >&2
+        echo "usage: scripts/ci-steps <fmt|clippy|clippy-dev|gen-syntax|test|build|perf-bounds|task|all>" >&2
         exit 2
         ;;
 esac

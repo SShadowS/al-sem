@@ -128,11 +128,17 @@ fn main() -> ExitCode {
         };
     }
 
+    // Generate and format into a staging directory, then replace only the files whose
+    // content changed. Rewriting an unchanged file still bumps its mtime, and cargo
+    // fingerprints sources by mtime — so an unconditional write made every
+    // `scripts/ci-steps` run (which calls gen-syntax before the tests) recompile
+    // `al-syntax`, `al-sem` and every test executable from scratch.
     std::fs::create_dir_all(&out_dir).expect("create generated dir");
+    let staging = out_dir.join(".gen-staging");
+    std::fs::create_dir_all(&staging).expect("create staging dir");
     for (name, content) in &files {
-        let path = out_dir.join(name);
+        let path = staging.join(name);
         std::fs::write(&path, content).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
-        println!("wrote {}", path.display());
     }
 
     // Format the generated Rust with rustfmt so the checked-in output is CANONICAL
@@ -140,11 +146,12 @@ fn main() -> ExitCode {
     // bytes gen-syntax does, so there is no fmt/gen-syntax ping-pong. (Mirrors how
     // rust-analyzer formats its ungrammar-generated syntax nodes.) `node-types.sha256`
     // is not Rust, so it is excluded. The edition comes from the workspace
-    // `rustfmt.toml` (single source of truth) — NOT hardcoded here.
+    // `rustfmt.toml` (single source of truth, found by walking up from the staging
+    // dir) — NOT hardcoded here.
     let rs_paths: Vec<_> = files
         .iter()
         .filter(|(name, _)| name.ends_with(".rs"))
-        .map(|(name, _)| out_dir.join(name))
+        .map(|(name, _)| staging.join(name))
         .collect();
     let status = std::process::Command::new("rustfmt")
         .args(&rs_paths)
@@ -159,6 +166,22 @@ fn main() -> ExitCode {
         panic!("rustfmt failed on the generated files (exit {status})");
     }
     println!("formatted {} generated Rust file(s)", rs_paths.len());
+
+    // CR-insensitive, like `--check`: a Windows checkout may hold CRLF copies of
+    // byte-identical content, and rewriting those would also bump the mtime.
+    for (name, _) in &files {
+        let (staged, path) = (staging.join(name), out_dir.join(name));
+        let new = std::fs::read_to_string(&staged)
+            .unwrap_or_else(|e| panic!("read {}: {e}", staged.display()));
+        let old = std::fs::read_to_string(&path).ok();
+        if old.as_deref().map(normalize) == Some(normalize(&new)) {
+            println!("unchanged {}", path.display());
+        } else {
+            std::fs::write(&path, &new).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+            println!("wrote {}", path.display());
+        }
+    }
+    std::fs::remove_dir_all(&staging).expect("remove staging dir");
 
     println!(
         "gen-syntax: {} named kinds, {} fields, {} typed structs, {} union enums, hash {}",

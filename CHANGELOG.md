@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Development gates are tiered so a task iteration no longer re-runs the slow checks.**
+  `scripts/ci-steps task` is the new per-task gate: `fmt`, dev-profile clippy,
+  `gen-syntax` and the whole test suite once. `ci-steps all` (CI's exact bar) plus
+  `scripts/cdo-gate` is the branch gate, run once before a merge. The debug suites
+  (`ci-steps test`, `check-goldens`, the pre-commit hook) now unset `CDO_WS`, so the
+  CDO-gated tests run only in `cdo-gate`; before, an exported `CDO_WS` ran them in
+  debug mode twice per round (~5 min each). `cdo-gate` builds with `release-fast`
+  instead of full-LTO `release`. The pre-commit hook skips its golden run when the
+  commit's tree is identical to one a green `ci-steps test` just tested
+  (`scripts/tree-stamp`). No test was removed or weakened, and CI is unchanged.
+
 - **In `embedded` mode, workspace roots with the same dependency set now share the whole
   dependency tier, so a second root no longer re-reads or re-parses the dependencies.**
   v1.3.2 already shared the dependency nodes between roots. Now, as long as the roots have

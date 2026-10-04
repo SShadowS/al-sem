@@ -51,8 +51,8 @@
 # every source commit (`src/`, not just `src/engine/`). Measured on the dev machine
 # with a warm `target/` (nothing to recompile): 22s wall, 726 tests. A cold or
 # source-invalidated cache pays the debug rebuild on top, which is the real cost
-# most of the time. With `CDO_WS` exported it is slower again, because the
-# CDO-gated members stop skipping. That is the intended trade; a stale golden
+# most of the time (`check-goldens` unsets `CDO_WS`, so the CDO-gated members
+# always skip here — `scripts/cdo-gate` runs them). That is the intended trade; a stale golden
 # shipping green is strictly worse than a slower commit. If a commit genuinely
 # cannot move a golden and you need the seconds back, `--no-verify` is there, but
 # you own the consequence.
@@ -121,6 +121,20 @@ fi
 if ! "$repo_root/scripts/check-goldens" --verify-coverage; then
     echo "pre-commit: golden COVERAGE check failed (see above) — fix scripts/check-goldens" >&2
     exit 1
+fi
+
+# ⟨2026-10-04, test tiers⟩ Skip the re-run when the tree being committed is
+# EXACTLY a tree that `scripts/ci-steps test` (run by `ci-steps task`/`all`) just
+# passed: that run is the whole suite, which already contains every target
+# `check-goldens` drives, with `REGEN_TEMP_GOLDENS` unset. The stamp is the
+# tracked working tree at that run (see `scripts/tree-stamp`); `git write-tree`
+# here is the tree this commit records. Any difference — partial staging, an
+# edit after the run, a newly added file — and the goldens run as before. The
+# fmt step above and the coverage check never skip.
+stamp_file="$(git rev-parse --git-path gate-stamp)"
+if [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$(git write-tree)" ]; then
+    echo "pre-commit: this exact tree passed 'scripts/ci-steps test' — goldens already verified"
+    exit "$fmt_rc"
 fi
 
 echo "pre-commit: engine/fixture/golden change staged — verifying goldens..."
