@@ -582,9 +582,13 @@ impl Updater {
         }
 
         let raw_event_edges = emit_event_flow_edges(&new_graph, &index, &surface);
+        // Links without routes have no LSP reader (no incoming ref, no
+        // fan-out, no outgoing item); the program report keeps them
+        // (spec §2, §6 2b). Same filter as `LspSnapshot::from_context`.
         let event_edges = Arc::new(
             raw_event_edges
                 .into_iter()
+                .filter(|edge| !edge.routes.is_empty())
                 .map(|edge| ClassifiedEdge {
                     obligation_id: ObligationId::Publisher(edge.from.clone()),
                     edge,

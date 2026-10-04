@@ -578,9 +578,13 @@ impl LspSnapshot {
             crate::census_hook::mark("6.resolve_workspace_files");
 
             let raw_event_edges = emit_event_flow_edges(&graph, &index, &surface);
+            // Links without routes have no LSP reader (no incoming ref, no
+            // fan-out, no outgoing item); the program report keeps them
+            // (spec §2, §6 2b).
             event_edges = Arc::new(
                 raw_event_edges
                     .into_iter()
+                    .filter(|edge| !edge.routes.is_empty())
                     .map(|edge| ClassifiedEdge {
                         obligation_id: ObligationId::Publisher(edge.from.clone()),
                         edge,
@@ -1090,6 +1094,12 @@ mod tests {
     procedure OnAfterProcess()
     begin
     end;
+
+    // A publisher nobody subscribes to: its event link has no routes.
+    [IntegrationEvent(false, false)]
+    procedure OnNobodyListens()
+    begin
+    end;
 }
 "#,
         )
@@ -1131,13 +1141,25 @@ mod tests {
         got.extend(snap.event_edges.iter().map(|ce| ce.edge.clone()));
         got.sort();
 
-        let mut want: Vec<Edge> = report.edges.into_iter().map(|ce| ce.edge).collect();
+        // The LSP keeps only event links with routes; the report keeps all.
+        let all: Vec<Edge> = report.edges.into_iter().map(|ce| ce.edge).collect();
+        let is_empty_link = |e: &Edge| e.kind == EdgeKind::EventFlow && e.routes.is_empty();
+        assert!(
+            all.iter().any(is_empty_link),
+            "the report must still hold route-less event links (not lost)"
+        );
+        let mut want: Vec<Edge> = all.into_iter().filter(|e| !is_empty_link(e)).collect();
         want.sort();
 
         assert_eq!(
             got, want,
             "build_full's edges_by_file + event_edges union must equal a \
-             direct resolve_full_program run (order-insensitive)"
+             direct resolve_full_program run minus route-less event links \
+             (order-insensitive)"
+        );
+        assert!(
+            snap.event_edges.iter().all(|ce| !ce.edge.routes.is_empty()),
+            "no route-less event link is stored in the LSP snapshot"
         );
         assert!(!got.is_empty(), "fixture must produce real edges");
     }
@@ -1402,6 +1424,17 @@ mod tests {
             "a publisher with ZERO real subscribers must have no \
              publisher_fanout entry — edge presence alone is never fan-out"
         );
+        // Its route-less link is not stored at all, and the lens count and
+        // the incoming index are unchanged (zero).
+        assert!(
+            snap.event_edges.iter().all(|ce| ce.edge.from != publisher),
+            "a route-less event link must not be stored in the LSP snapshot"
+        );
+        assert_eq!(
+            crate::lsp::lens::effective_incoming_count(&snap, &publisher),
+            0
+        );
+        assert!(!snap.incoming.contains_key(&publisher));
     }
 
     // ── build_incoming: one edge, 2 routes to the SAME target → 1 EdgeRef ──

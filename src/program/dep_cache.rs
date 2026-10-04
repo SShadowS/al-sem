@@ -729,7 +729,9 @@ mod tests {
         );
     }
 
-    /// Every LSP answer of a snapshot, order-independent, as text.
+    /// Every LSP answer of a snapshot, order-independent, as text. It
+    /// compares answers of the light view: `event_edges` holds only links
+    /// with routes, on both sides.
     fn answers(s: &LspSnapshot) -> String {
         use std::collections::BTreeMap;
         let sorted = |v: &[crate::program::resolve::full::ClassifiedEdge]| {
