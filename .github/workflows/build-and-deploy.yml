@@ -10,6 +10,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
+      - '.github/workflows/build-and-deploy.yml'
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -99,8 +100,13 @@ jobs:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          # The action requires rooted (absolute) paths
-          files: ${{ github.workspace }}\target\release\al-call-hierarchy.exe
+          # The action requires rooted (absolute) paths. `cargo build --release`
+          # builds every binary, so `alsem.exe` (the analyzer CLI the Go wrapper
+          # plugins also ship) is signed and deployed from this same build — it
+          # used to be built and signed by hand, which needed a local `az login`.
+          files: |
+            ${{ github.workspace }}\target\release\al-call-hierarchy.exe
+            ${{ github.workspace }}\target\release\alsem.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -109,7 +115,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: al-call-hierarchy-windows
-          path: target/release/al-call-hierarchy.exe
+          path: |
+            target/release/al-call-hierarchy.exe
+            target/release/alsem.exe
 
   build-linux:
     needs: test
@@ -132,11 +140,35 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --release
 
+      # `alsem` for the Linux Go wrapper plugin, built WITHOUT the default
+      # `telemetry` feature — the same way the hand-built binary it replaces was.
+      # Overwrites the default-feature `alsem` from the step above; the
+      # `al-call-hierarchy` binary is untouched.
+      - name: Build alsem (no telemetry)
+        env:
+          TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
+        run: cargo build --release --no-default-features --bin alsem
+
+      # The shipped Linux binaries must run on glibc 2.34 (e.g. Ubuntu 22.04).
+      # A runner-image upgrade can raise the floor silently; fail here instead.
+      - name: Check glibc floor
+        run: |
+          set -euo pipefail
+          for b in target/release/al-call-hierarchy target/release/alsem; do
+            v=$(objdump -T "$b" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+            echo "$b needs glibc $v"
+            if [ "$(printf '%s\n2.34\n' "$v" | sort -V | tail -1)" != "2.34" ]; then
+              echo "::error::$b needs glibc $v (> 2.34)"; exit 1
+            fi
+          done
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: al-call-hierarchy-linux
-          path: target/release/al-call-hierarchy
+          path: |
+            target/release/al-call-hierarchy
+            target/release/alsem
 
   build-macos:
     needs: test
@@ -250,6 +282,11 @@ jobs:
           cp binaries/linux/al-call-hierarchy claude-code-lsps/al-language-server-go-linux/bin/
           chmod +x claude-code-lsps/al-language-server-go-linux/bin/al-call-hierarchy
 
+          # alsem — ships only in the two Go wrapper plugins
+          cp binaries/windows/alsem.exe claude-code-lsps/al-language-server-go-windows/bin/
+          cp binaries/linux/alsem claude-code-lsps/al-language-server-go-linux/bin/
+          chmod +x claude-code-lsps/al-language-server-go-linux/bin/alsem
+
       - name: Commit and push
         working-directory: claude-code-lsps
         run: |
@@ -262,6 +299,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Update al-call-hierarchy binaries from ${{ github.repository }}@${{ github.sha }}"
+            git commit -m "Update al-call-hierarchy and alsem binaries from ${{ github.repository }}@${{ github.sha }}"
             git push
           fi

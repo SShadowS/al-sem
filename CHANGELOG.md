@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`alsem` is now built, signed and deployed by CI**, next to `al-call-hierarchy`:
+  `build-and-deploy.yml` signs `alsem.exe` with the same Azure Artifact Signing step,
+  builds Linux `alsem` without the `telemetry` feature, checks both Linux binaries
+  need at most glibc 2.34, and copies both into the Go wrapper plugins. Before, it was
+  built and signed by hand, which needed a local `az login`.
+
 ## [1.3.3] - 2026-10-04
 
 ### Changed
