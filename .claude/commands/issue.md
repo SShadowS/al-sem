@@ -168,8 +168,11 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     step 9 exit codes>' --body-hash <claim body_hash>` — `attest` cross-checks
     `--body-hash` against this run's `claim.json` and refuses (`error`: body-hash
     mismatch) if the issue body changed since claim, so pass the claim's
-    `body_hash` verbatim, never a freshly recomputed one. It refuses three more
+    `body_hash` verbatim, never a freshly recomputed one. It refuses four more
     things, all of which are conductor errors rather than surprises:
+    - a `--B`, `--H` or `--final-head` that is not a full 40-character SHA
+      (`sha-not-full`, listing the values) — `merge-gate` compares them with
+      `!=`, so an abbreviated SHA would later read as `head-moved`/`base-moved`;
     - no `claim.json` for this run (`no claim.json for this run`) — the run
       directory and `--run-id` must be the claim's;
     - `--gates` that is not all green (`gates-not-green`, listing the keys).

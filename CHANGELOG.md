@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`agentflow attest` refuses an abbreviated SHA** (#53, `scripts/agentflow/cli.py`).
+  `--B`, `--H` and `--final-head` were stored as typed, and `merge-gate` compares them
+  with `!=` against full 40-character SHAs, so a short SHA later read as `head-moved` or
+  `base-moved`. `attest` now refuses any of the three that is not a full lowercase SHA
+  (`sha-not-full`). Test: `test_attest_refuses_a_sha_that_is_not_full`, which fails
+  without the check.
+
 ## [1.4.0] - 2026-10-05
 
 ### Added
