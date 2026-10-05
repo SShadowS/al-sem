@@ -252,24 +252,22 @@ fn inventory_only_cbor_rejected() {
 // real `build_inventory_doc` path via `run_fingerprint_pipeline --inventory-only`.
 // ===========================================================================
 
-/// A scratch workspace under the OS temp dir (unique per process + nanos).
-fn scratch_ws(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "alsem-cli-p1-inv-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
+/// A scratch workspace under the OS temp dir. The `TempDir` removes it on drop
+/// (panics included), so keep it alive for the whole test.
+fn scratch_ws(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("alsem-cli-p1-inv-{tag}-"))
+        .tempdir()
+        .expect("create scratch ws");
+    let dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(dir.join("src")).expect("create scratch ws src dir");
-    dir
+    (tmp, dir)
 }
 
 /// Write a minimal one-app workspace (app.json + a single .al file) and run the
 /// inventory-only pipeline, returning the parsed envelope.
 fn inventory_doc_for(tag: &str, al_file: &str, al_source: &str) -> serde_json::Value {
-    let ws = scratch_ws(tag);
+    let (_tmp, ws) = scratch_ws(tag);
     std::fs::write(
         ws.join("app.json"),
         r#"{"id":"22222222-2222-2222-2222-222222222222","name":"E2 Inv","publisher":"PT","version":"1.0.0.0","dependencies":[]}"#,

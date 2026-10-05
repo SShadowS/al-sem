@@ -820,23 +820,21 @@ fn symbol_only_dep_warns_opaque_and_gates_exit_four() {
 /// probe has no golden of its own to keep in sync (its output is empty, by
 /// definition) — a throwaway temp workspace gets the same coverage without
 /// entangling this task with the OTHER golden families that path triggers.
-fn scratch_failclosed_ws() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "alsem-gate-prsummary-failclosed-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create scratch ws dir");
+///
+/// The `TempDir` removes the tree on drop (panics included); keep it alive.
+fn scratch_failclosed_ws() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::Builder::new()
+        .prefix("alsem-gate-prsummary-failclosed-")
+        .tempdir()
+        .expect("create scratch ws dir");
+    let dir = tmp.path().to_path_buf();
     std::fs::write(
         dir.join("app.json"),
         r#"{"name":"Fail Closed Probe","publisher":"probe","version":"1.0.0.0"}"#,
     )
     .expect("write app.json");
     std::fs::write(dir.join("Foo.al"), "codeunit 50100 Foo { }").expect("write Foo.al");
-    dir
+    (tmp, dir)
 }
 
 /// Run the analyze pipeline directly over an arbitrary workspace `Path` (not a
@@ -868,10 +866,9 @@ fn run_analyze_path(ws: &Path, require_dependencies: bool) -> (String, u8, Optio
 /// `--require-dependencies`.
 #[test]
 fn fail_closed_workspace_could_not_verify() {
-    let ws = scratch_failclosed_ws();
+    let (_tmp, ws) = scratch_failclosed_ws();
     let (_o1, exit_open, warning) = run_analyze_path(&ws, false);
     let (_o2, exit_required, _w2) = run_analyze_path(&ws, true);
-    let _ = std::fs::remove_dir_all(&ws);
 
     let w = warning.expect("fail-closed must warn, not silent-clean");
     assert!(w.contains("coverage could not be verified"), "got: {w}");

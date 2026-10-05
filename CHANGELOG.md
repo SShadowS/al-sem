@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `base-moved`. `attest` now refuses any of the three that is not a full lowercase SHA
   (`sha-not-full`). Test: `test_attest_refuses_a_sha_that_is_not_full`, which fails
   without the check.
+- **CLI tests no longer leave scratch dirs in `%TEMP%`** (#61). Five `tests/cli/` helpers
+  built workspaces under `std::env::temp_dir()` with unique names; two never removed them
+  and three removed them only when the test passed. On the dev box this had piled up
+  ~19k `alsem-*` dirs. They now return a `tempfile::TempDir`, which removes the tree on
+  drop, panics included. Running the five members left the `%TEMP%` count unchanged.
 
 ## [1.4.0] - 2026-10-05
 
