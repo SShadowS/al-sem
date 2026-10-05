@@ -197,6 +197,28 @@ zero unexplained differences, zero regressions, written golden triage.
 - **S2b — Program-backed model assembly** (G1-G6, G13, G15a). The model is assembled from
   program nodes + the moved body pipeline. Every populated model field compared. L3
   assembly leaves the analyze path.
+  S2b is cut into sub-steps, each its own commit with a harness comparison:
+  - **S2b.1 — Body pipeline into the program engine.** `src/engine/l2` moves to
+    `src/program/body` (pure move). `engine::l2` stays as a re-export alias
+    (`pub use crate::program::body as l2`) so the 92 files that name it keep
+    compiling unchanged; the alias and every `engine::l2` path are removed in S9.
+    Byte-identical.
+  - **S2b.2 — Model types and assembly into the program engine.** The detector model
+    types and the assembly passes (`l3_workspace` model half, `record_types`,
+    `extension_fields`, and what they need) move to `src/program/model`, the same
+    way. Byte-identical.
+  - **S2b.3 — Physical rows and occurrence order (G5, G6).** The program graph keeps
+    one physical declaration row per source occurrence, before dedup, with its
+    ingestion order, and the durable-id mapping (one-to-many, ambiguity refused).
+    Additive: a census proves every model row maps to exactly one physical row.
+  - **S2b.4 — Model rows from program rows.** Objects, tables and routines are minted
+    from the physical rows (plus G3/G4 metadata on program nodes), body facts from
+    the body pipeline. The IR-object walk in `project_ir` stops being the source of
+    the population. Byte-identical, or triaged.
+  - **S2b.5 — Dependency registry and readiness (G15a).** Separate from the detector
+    population; no output change.
+  - **S2b.6 — Site links (G13).** Program `SiteId` ↔ body `/csN`/`/opN`, every edge
+    kept, roles kept; consumed by S3.
 - **S3 — Adapter completion** (G8). Fallbacks removed; route accounting gate. Every
   dependency route keeps its target identity and boundary state (G15a registry) without
   traversing its body.
