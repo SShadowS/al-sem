@@ -451,7 +451,9 @@ ws-d60/src/Codeunit.al::0::UpgradeInLoopSetCurrentKey	096a861d116795b9
 ws-d60/src/Codeunit.al::0::UpgradeInLoopReset	ad11ca35eb565528
 ws-d60/src/Codeunit.al::0::UpgradeInLoopGet	951fd2fafce78b42
 ws-d60/src/Codeunit.al::0::UpgradeUnitStepAdvance	fa0fc14bc2d8fbac
-ws-d60/src/Codeunit.al::1::RegularLoop	8fed427b9b7ddecf
+ws-d60/src/Codeunit.al::0::UpgradeWithRename	0864189becf6d61e
+ws-d60/src/Codeunit.al::0::UpgradeWithValidate	f771b419b6f84fa3
+ws-d60/src/Codeunit.al::1::RegularLoop	bd537d2f87f4296d
 ws-d61/src/Codeunit.al::0::OnBeforePost	4b99d71738bd8a20
 ws-d61/src/Codeunit.al::0::OnBeforeLog	27cf4eccd27a8cfb
 ws-d61/src/Codeunit.al::1::Post	e54c3865cb8fd317

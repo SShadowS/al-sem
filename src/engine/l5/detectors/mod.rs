@@ -1066,10 +1066,9 @@ pub(crate) fn whole_set_break(
         // op that breaks traversal — which is why `Reset`/`Copy`/`Find*`/`Get`
         // are named here rather than left to a caller that does not check.
         // Write-class ops on the driver (`Delete`, `Insert`, `ModifyAll`,
-        // `DeleteAll`, `Validate`) are a DIFFERENT gap: d5 name-rejects them
-        // and d60 does not gate them at all. That is pre-existing and is
-        // recorded as such (issue #21 spec panel, B10) rather than widened
-        // here under cover of a traversal fix.
+        // `DeleteAll`, `Validate`, `Rename`) are a DIFFERENT question: d5
+        // name-rejects them via `ALLOWED_OTHER_OPS`, and d60 via its own
+        // `DRIVER_OPS_DATATRANSFER_CAN_REPLACE` allow-list (issue #16).
         _ => None,
     }
 }
