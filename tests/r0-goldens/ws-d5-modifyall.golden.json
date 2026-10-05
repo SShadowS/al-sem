@@ -47,6 +47,14 @@
       "canonicalSignatureText": "inlooploadfields():"
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#38fe1be505e9c37919d7486fbaf83587d8fc3fe5dde9d8825d2fb64b4d6ef185",
+      "name": "CompoundTerminator",
+      "kind": "procedure",
+      "signatureFingerprint": "38fe1be505e9c37919d7486fbaf83587d8fc3fe5dde9d8825d2fb64b4d6ef185",
+      "normalizedSignatureHash": "38fe1be505e9c37919d7486fbaf83587d8fc3fe5dde9d8825d2fb64b4d6ef185",
+      "canonicalSignatureText": "compoundterminator(boolean):"
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#446047540725c7f4d5a15369b7e74ae7db1e59a7827c54b85fb9364501172bc3",
       "name": "InLoopSetRange",
       "kind": "procedure",
@@ -63,12 +71,36 @@
       "canonicalSignatureText": "zerostepadvance():"
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+      "name": "DoneFlagAdvance",
+      "kind": "procedure",
+      "signatureFingerprint": "65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+      "normalizedSignatureHash": "65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+      "canonicalSignatureText": "doneflagadvance():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+      "name": "ReversedTerminator",
+      "kind": "procedure",
+      "signatureFingerprint": "680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+      "normalizedSignatureHash": "680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+      "canonicalSignatureText": "reversedterminator():"
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
       "name": "InLoopSetFilter",
       "kind": "procedure",
       "signatureFingerprint": "787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
       "normalizedSignatureHash": "787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
       "canonicalSignatureText": "inloopsetfilter():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#78afee75c1394a5e05d6906ddee06de72695ed18ecbfc52903df4692cc6443c9",
+      "name": "WrongPolarityTerminator",
+      "kind": "procedure",
+      "signatureFingerprint": "78afee75c1394a5e05d6906ddee06de72695ed18ecbfc52903df4692cc6443c9",
+      "normalizedSignatureHash": "78afee75c1394a5e05d6906ddee06de72695ed18ecbfc52903df4692cc6443c9",
+      "canonicalSignatureText": "wrongpolarityterminator():"
     },
     {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#8eede75440d2ac0e0a639ec4c4b9fea900368574a32a8c0a623b77c406ee274c",
@@ -117,6 +149,14 @@
       "signatureFingerprint": "f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d",
       "normalizedSignatureHash": "f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d",
       "canonicalSignatureText": "inloopvalidate():"
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#f85523505fbadc57290a02e79b544ab3b6784cbfc84432806c902309611917a1",
+      "name": "DoneFlagSetTwice",
+      "kind": "procedure",
+      "signatureFingerprint": "f85523505fbadc57290a02e79b544ab3b6784cbfc84432806c902309611917a1",
+      "normalizedSignatureHash": "f85523505fbadc57290a02e79b544ab3b6784cbfc84432806c902309611917a1",
+      "canonicalSignatureText": "doneflagsettwice(boolean):"
     },
     {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#fb7a8c745a9c558d5e375fbda79681bcc79c2beb5548e44eb977a6839fe1f5e1",

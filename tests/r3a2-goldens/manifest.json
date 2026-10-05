@@ -22,10 +22,10 @@
   ],
   "fixtureCount": 158,
   "matrix": {
-    "routineCount": 579,
+    "routineCount": 584,
     "routinesWithInheritedEffects": 56,
     "viaKinds": {
-      "direct": 311,
+      "direct": 326,
       "event-subscriber": 12,
       "implicit-trigger": 3,
       "inherited": 55

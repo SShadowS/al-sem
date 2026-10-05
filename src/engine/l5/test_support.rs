@@ -251,6 +251,7 @@ pub fn loop_def(id: &str) -> PLoop {
         id: id.to_string(),
         loop_type: "for".to_string(),
         source_anchor: dummy_anchor(),
+        exhausting_advance: None,
     }
 }
 

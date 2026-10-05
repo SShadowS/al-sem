@@ -3,7 +3,7 @@
   "detectors": [
     "d5-set-based-opportunity"
   ],
-  "findingCount": 3,
+  "findingCount": 5,
   "findings": [
     {
       "detector": "d5-set-based-opportunity",
@@ -95,6 +95,188 @@
         }
       ],
       "fingerprint": "f2ba58bdf33e98ad"
+    },
+    {
+      "detector": "d5-set-based-opportunity",
+      "id": "d5/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/loop0",
+      "rootCauseKey": "d5/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/loop0",
+      "title": "Loop-and-Modify could be ModifyAll",
+      "rootCause": "ReversedTerminator loops over Customer and Modifies each row with no conditional branches or inter-record DB calls — ModifyAll on the same filter would issue one SQL statement.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/codeunit.al",
+        "range": {
+          "startLine": 208,
+          "startColumn": 4,
+          "endLine": 208,
+          "endColumn": 21
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 205,
+              "startColumn": 5,
+              "endLine": 205,
+              "endColumn": 23
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+            "syntaxKind": "call_expression"
+          },
+          "note": "FindSet on Customer — loop entry",
+          "operationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/op1"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 206,
+              "startColumn": 3,
+              "endLine": 209,
+              "endColumn": 32
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop on Customer",
+          "loopId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 208,
+              "startColumn": 4,
+              "endLine": 208,
+              "endColumn": 21
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Modify on Customer — consider ModifyAll",
+          "operationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894/op2"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50a:Codeunit:50105"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d50a:Table:18"
+      ],
+      "fixOptions": [
+        {
+          "description": "Replace the FindSet+repeat+Modify pattern with ModifyAll on the same filter.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "66bda8f322282317"
+    },
+    {
+      "detector": "d5-set-based-opportunity",
+      "id": "d5/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/loop0",
+      "rootCauseKey": "d5/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/loop0",
+      "title": "Loop-and-Modify could be ModifyAll",
+      "rootCause": "DoneFlagAdvance loops over Customer and Modifies each row with no conditional branches or inter-record DB calls — ModifyAll on the same filter would issue one SQL statement.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/codeunit.al",
+        "range": {
+          "startLine": 220,
+          "startColumn": 4,
+          "endLine": 220,
+          "endColumn": 21
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 217,
+              "startColumn": 5,
+              "endLine": 217,
+              "endColumn": 23
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+            "syntaxKind": "call_expression"
+          },
+          "note": "FindSet on Customer — loop entry",
+          "operationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/op1"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 218,
+              "startColumn": 3,
+              "endLine": 222,
+              "endColumn": 13
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop on Customer",
+          "loopId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/codeunit.al",
+            "range": {
+              "startLine": 220,
+              "startColumn": 4,
+              "endLine": 220,
+              "endColumn": 21
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+            "syntaxKind": "call_expression"
+          },
+          "note": "Modify on Customer — consider ModifyAll",
+          "operationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51/op2"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d50a:Codeunit:50105"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d50a:Table:18"
+      ],
+      "fixOptions": [
+        {
+          "description": "Replace the FindSet+repeat+Modify pattern with ModifyAll on the same filter.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "ec92836eeaec66ee"
     },
     {
       "detector": "d5-set-based-opportunity",

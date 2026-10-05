@@ -30,6 +30,8 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.run_trigger`
+//!   - `PLoop.exhausting_advance`
+//!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
@@ -326,14 +328,39 @@ impl PartialEq for PRecordOperation {
 
 impl Eq for PRecordOperation {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PLoop {
     pub id: String,
     #[serde(rename = "type")]
     pub loop_type: String,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// #49 / #50: for a `repeat` loop whose `until` provably exhausts a cursor,
+    /// `(record variable lowercased, op id of that Next)`. Recognised shapes:
+    /// `until R.Next(args) = 0` (or `0 = R.Next(args)`, parentheses allowed), and
+    /// `until Done` where the loop assigns `Done` exactly once, as a top-level
+    /// body statement `Done := R.Next(args) = 0`. Anything else -- a compound
+    /// condition, `<> 0`, any other comparison -- is `None`: the loop is not
+    /// shown to visit the whole set.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`): never serialized, so no feature-level
+    /// golden moves; deserialized goldens default it to `None`.
+    #[serde(skip)]
+    pub exhausting_advance: Option<(String, String)>,
 }
+
+/// Excludes the serde-skipped `exhausting_advance`, like the other
+/// INTERNAL-ONLY fields: a deserialized golden or vector always holds `None`, so
+/// comparing it would fail every repeat loop against its own baseline.
+impl PartialEq for PLoop {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.loop_type == other.loop_type
+            && self.source_anchor == other.source_anchor
+    }
+}
+
+impl Eq for PLoop {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PRecordVariable {
@@ -373,7 +400,19 @@ pub struct PVariableSymbol {
     pub source_anchor: PAnchor,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// How a field access uses the field (#14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldAccessKind {
+    /// Read in value position -- the default for anything not an assignment target.
+    #[default]
+    Read,
+    /// The target of a plain `:=`: written, not read.
+    Write,
+    /// The target of a compound `+=` / `-=` / `*=` / `/=`: read, then written.
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PFieldAccess {
     #[serde(rename = "recordVariableName")]
     pub record_variable_name: String,
@@ -381,7 +420,26 @@ pub struct PFieldAccess {
     pub field_name: String,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// Read, write, or both (#14). Before this, an assignment target was
+    /// recorded exactly like a read, so "nothing reads this field" could not be
+    /// asked. `R.F := R.F + 1` gives TWO accesses (a Write and a Read).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`): never serialized, so no feature-level golden
+    /// moves; deserialized goldens default it to `Read`.
+    #[serde(skip)]
+    pub access: FieldAccessKind,
 }
+
+/// Excludes the serde-skipped `access`, like the other INTERNAL-ONLY fields.
+impl PartialEq for PFieldAccess {
+    fn eq(&self, other: &Self) -> bool {
+        self.record_variable_name == other.record_variable_name
+            && self.field_name == other.field_name
+            && self.source_anchor == other.source_anchor
+    }
+}
+
+impl Eq for PFieldAccess {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PVarAssignment {
@@ -666,7 +724,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 6, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 8, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 }

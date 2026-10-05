@@ -20,7 +20,7 @@ use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
-use crate::engine::l5::detectors::{advance_discipline_holds, whole_set_break};
+use crate::engine::l5::detectors::{whole_set_advance, whole_set_break};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -185,13 +185,14 @@ pub fn detect_d60(
                         && o.record_variable_name.to_lowercase() == var_lc
                 })
                 .collect();
-            if !advance_discipline_holds(&driver_ops_in_loop, &var_lc, loop_id) {
+            let Some(advance_id) = whole_set_advance(&driver_ops_in_loop, &var_lc, loop_info)
+            else {
                 skipped_traversal += 1;
                 continue;
-            }
-            let traversal_broken = driver_ops_in_loop
-                .iter()
-                .any(|o| o.id != op.id && whole_set_break(o, loop_id).is_some());
+            };
+            let traversal_broken = driver_ops_in_loop.iter().any(|o| {
+                o.id != op.id && o.id != advance_id && whole_set_break(o, loop_id).is_some()
+            });
             if traversal_broken {
                 skipped_traversal += 1;
                 continue;

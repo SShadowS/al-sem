@@ -21,18 +21,18 @@
 	],
 	"fixtureCount": 160,
 	"matrix": {
-		"routineCount": 590,
+		"routineCount": 595,
 		"routinesWithInheritedFacts": 145,
 		"factsWithMoreThan1HopWitness": 246,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 22,
 		"provenanceDistribution": {
-			"direct": 600,
+			"direct": 615,
 			"inherited": 252
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 758,
+			"static": 773,
 			"unresolved": 93
 		},
 		"opDistribution": {
@@ -41,9 +41,9 @@
 			"error-throw": 16,
 			"execute": 15,
 			"insert": 78,
-			"modify": 129,
+			"modify": 134,
 			"publish": 95,
-			"read": 200,
+			"read": 210,
 			"send": 42,
 			"store-write": 1,
 			"subscribe": 122,
@@ -56,15 +56,15 @@
 		"viaDistribution": {
 			"call": 198,
 			"event-dispatch": 54,
-			"self": 600
+			"self": 615
 		},
 		"directStatusDistribution": {
-			"complete": 577,
+			"complete": 582,
 			"partial": 12,
 			"unknown": 1
 		},
 		"inheritedStatusDistribution": {
-			"complete": 568,
+			"complete": 573,
 			"partial": 22
 		}
 	},

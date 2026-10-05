@@ -1032,7 +1032,7 @@ pub(crate) fn is_unit_advance(op: &L3RecordOperation) -> bool {
 /// `Next` is judged by [`is_unit_advance`] plus placement: an advance that is
 /// not the candidate loop's own terminator is an EXTRA advance, so the loop
 /// skips rows even when every advance is unit-step. Cardinality ("exactly one")
-/// is the caller's job — see [`advance_discipline_holds`] — because a
+/// is the caller's job — see [`whole_set_advance`] — because a
 /// per-op predicate cannot count.
 pub(crate) fn whole_set_break(
     op: &L3RecordOperation,
@@ -1073,22 +1073,37 @@ pub(crate) fn whole_set_break(
     }
 }
 
-/// Exactly one advance on `driver` inside `candidate_loop`, and it is that
-/// loop's own unit-step terminator.
+/// The op id of the loop's whole-set advance on `driver`, or `None` when the
+/// loop is not shown to visit every row of the driver's set.
+///
+/// All of: the loop's terminator EXHAUSTS the driver (`PLoop::exhausting_advance`:
+/// `until R.Next() = 0`, or `until Done` with `Done := R.Next() = 0` -- #49, #50),
+/// that terminator's `Next` is the ONLY advance on the driver in the loop, and
+/// it steps one row. A compound or wrong-polarity `until` has no exhausting
+/// advance and fails here, which is what silences those shapes (#49).
 ///
 /// Counting is separate from [`whole_set_break`] because a per-op predicate
-/// cannot see the other ops (issue #21, B10). Zero advances is also a failure:
-/// a loop with no advance on the driver is not a whole-set traversal.
-pub(crate) fn advance_discipline_holds(
-    ops_in_loop: &[&L3RecordOperation],
+/// cannot see the other ops (issue #21, B10). Zero advances is also a failure.
+/// The shared [`is_terminator_next`] is deliberately NOT strengthened: d1/d2
+/// ask whether an op is loop control, not whether the loop exhausts (#49).
+/// Callers exclude the returned op from their [`whole_set_break`] scan.
+pub(crate) fn whole_set_advance<'a>(
+    ops_in_loop: &[&'a L3RecordOperation],
     driver: &str,
-    candidate_loop: &str,
-) -> bool {
-    let advances: Vec<_> = ops_in_loop
+    lp: &crate::engine::l2::features::PLoop,
+) -> Option<&'a str> {
+    let (var, advance_id) = lp.exhausting_advance.as_ref()?;
+    if var != driver {
+        return None;
+    }
+    let advances: Vec<&&L3RecordOperation> = ops_in_loop
         .iter()
         .filter(|op| op.op == "Next" && op.record_variable_name.to_lowercase() == driver)
         .collect();
-    advances.len() == 1 && whole_set_break(advances[0], candidate_loop).is_none()
+    match advances.as_slice() {
+        [only] if only.id == *advance_id && is_unit_advance(only) => Some(only.id.as_str()),
+        _ => None,
+    }
 }
 
 /// `temp_state.kind === "known" && value === true`. A `None` temp_state (al-sem

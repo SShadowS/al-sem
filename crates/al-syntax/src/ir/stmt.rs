@@ -37,6 +37,9 @@ pub enum StmtKind {
     Assignment {
         target: ExprId,
         value: ExprId,
+        /// `+=`, `-=`, `*=` or `/=`: the target is READ as well as written (#14).
+        /// `false` for a plain `:=`.
+        compound: bool,
     },
     /// A call in statement position (`Foo();` / `Rec.SetRange(...);`).
     Call(ExprId),

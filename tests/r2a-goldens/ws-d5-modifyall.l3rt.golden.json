@@ -178,6 +178,43 @@
       ]
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#38fe1be505e9c37919d7486fbaf83587d8fc3fe5dde9d8825d2fb64b4d6ef185",
+      "name": "CompoundTerminator",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "r0/0045689a1b1695a81ab3d801ffac5c9586dd7ad452ce117b5722ef91d12428d7/op0",
+          "op": "SetRange",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/0045689a1b1695a81ab3d801ffac5c9586dd7ad452ce117b5722ef91d12428d7/op1",
+          "op": "FindSet",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/0045689a1b1695a81ab3d801ffac5c9586dd7ad452ce117b5722ef91d12428d7/op2",
+          "op": "Modify",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/0045689a1b1695a81ab3d801ffac5c9586dd7ad452ce117b5722ef91d12428d7/op3",
+          "op": "Next",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ]
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#446047540725c7f4d5a15369b7e74ae7db1e59a7827c54b85fb9364501172bc3",
       "name": "InLoopSetRange",
       "objectType": "Codeunit",
@@ -246,6 +283,80 @@
       ]
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#65f0a3b4654226fef75bf8f5f0b2eb3d0ed4deac0acdd85f89a20c28a50deb51",
+      "name": "DoneFlagAdvance",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "r0/8ae1f72532ba0c890338bf4e414f0cbd54a1e630f60bb7ecc1a9e19b3f3c079b/op0",
+          "op": "SetRange",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/8ae1f72532ba0c890338bf4e414f0cbd54a1e630f60bb7ecc1a9e19b3f3c079b/op1",
+          "op": "FindSet",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/8ae1f72532ba0c890338bf4e414f0cbd54a1e630f60bb7ecc1a9e19b3f3c079b/op2",
+          "op": "Modify",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/8ae1f72532ba0c890338bf4e414f0cbd54a1e630f60bb7ecc1a9e19b3f3c079b/op3",
+          "op": "Next",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ]
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#680a67e1230cd3fe377f5fb71b2030fe6e4bdd961c97a6e56b01521d6e946894",
+      "name": "ReversedTerminator",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "r0/d8a0331e6873c0e1f24bde3fb687e1d1246cba4fffb49362e97b544c914d2687/op0",
+          "op": "SetRange",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/d8a0331e6873c0e1f24bde3fb687e1d1246cba4fffb49362e97b544c914d2687/op1",
+          "op": "FindSet",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/d8a0331e6873c0e1f24bde3fb687e1d1246cba4fffb49362e97b544c914d2687/op2",
+          "op": "Modify",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/d8a0331e6873c0e1f24bde3fb687e1d1246cba4fffb49362e97b544c914d2687/op3",
+          "op": "Next",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ]
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#787116d0f1ac77ac48692374f69d1e2d7672df8fa1a1aa674cf6ba5c2fca2f09",
       "name": "InLoopSetFilter",
       "objectType": "Codeunit",
@@ -276,6 +387,43 @@
         },
         {
           "operationId": "r0/6abc1a3e2481d3e311b67c297c9fbb4ac2166d7b29a596f4a8cc51d41e3d812a/op3",
+          "op": "Next",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ]
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#78afee75c1394a5e05d6906ddee06de72695ed18ecbfc52903df4692cc6443c9",
+      "name": "WrongPolarityTerminator",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "r0/43694872cdf8b3ee85fb7c02de3001c3f9c0fa6c2ca932167339e79175b6fe0a/op0",
+          "op": "SetRange",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/43694872cdf8b3ee85fb7c02de3001c3f9c0fa6c2ca932167339e79175b6fe0a/op1",
+          "op": "FindSet",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/43694872cdf8b3ee85fb7c02de3001c3f9c0fa6c2ca932167339e79175b6fe0a/op2",
+          "op": "Modify",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/43694872cdf8b3ee85fb7c02de3001c3f9c0fa6c2ca932167339e79175b6fe0a/op3",
           "op": "Next",
           "recordVariableName": "customer",
           "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
@@ -490,6 +638,43 @@
         },
         {
           "operationId": "r0/e9b12f248a0d18aa4513e3e884e3e0b7f70cdad69a6981282aaab7a6a527aa46/op3",
+          "op": "Next",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ]
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#f85523505fbadc57290a02e79b544ab3b6784cbfc84432806c902309611917a1",
+      "name": "DoneFlagSetTwice",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "r0/1ad8406b5601b5844f35cb1b0db8c1bd210df74d499f1a3c7a9db7f024e843d4/op0",
+          "op": "SetRange",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/1ad8406b5601b5844f35cb1b0db8c1bd210df74d499f1a3c7a9db7f024e843d4/op1",
+          "op": "FindSet",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/1ad8406b5601b5844f35cb1b0db8c1bd210df74d499f1a3c7a9db7f024e843d4/op2",
+          "op": "Modify",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
+        },
+        {
+          "operationId": "r0/1ad8406b5601b5844f35cb1b0db8c1bd210df74d499f1a3c7a9db7f024e843d4/op3",
           "op": "Next",
           "recordVariableName": "customer",
           "tableId": "11111111-0000-0000-0000-00000000d50a:Table:18"
