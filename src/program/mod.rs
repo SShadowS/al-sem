@@ -3,6 +3,7 @@
 
 pub mod abi_ingest;
 pub mod attributes;
+pub mod body;
 pub mod build;
 pub mod dep_cache;
 pub mod dep_summary;

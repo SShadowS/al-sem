@@ -587,7 +587,7 @@ pub fn analyze_named_routine(
     // Owned-IR body projection → features (CFN skeleton + call/op sites + vars) +
     // parameters + lowercased attribute names.
     let (features, parameters, attr_names_lc) =
-        crate::engine::l2::l2_workspace::ir_features_for_named_routine(
+        crate::program::body::l2_workspace::ir_features_for_named_routine(
             source,
             routine_name,
             app_guid,

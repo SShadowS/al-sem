@@ -764,7 +764,7 @@ pub fn analyze_named_routine_order(
     source_unit_id: &str,
 ) -> Option<RoutineOperationOrder> {
     let (features, _parameters, attr_names_lc) =
-        crate::engine::l2::l2_workspace::ir_features_for_named_routine(
+        crate::program::body::l2_workspace::ir_features_for_named_routine(
             source,
             routine_name,
             app_guid,

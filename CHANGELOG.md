@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The body pipeline is part of the program engine** (engine-switch S2b.1).
+  `src/engine/l2`, the walker that turns a routine's syntax tree into body facts
+  (record operations, call sites, loops, statement tree, capabilities), moved to
+  `src/program/body`, file for file, with no code change. The 92 files that name
+  `engine::l2` keep compiling through a re-export alias in `engine/mod.rs`. The alias
+  and those paths are removed when L3 is deleted (spec S9). The moved files refer to
+  themselves as `program::body`, so the S1 guard (`program_has_no_legacy_engine_imports`)
+  still holds. The harness shows `s2a` and `s2b1` byte-identical on all 218 corpora.
+
 - **`alsem analyze` parses each workspace file once** (engine-switch S2a). Until now
   the program engine parsed every file, and then L3 assembly parsed it again. The L3
   model is now projected from the program engine's parse:

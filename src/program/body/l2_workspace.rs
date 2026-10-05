@@ -41,7 +41,7 @@ use crate::engine::ids::{
     ParamSpec, encode_object_id, normalized_signature_hash, to_stable_object_id,
     to_stable_routine_id_from_parts,
 };
-use crate::engine::l2::scope;
+use crate::program::body::scope;
 use std::path::Path;
 
 /// The intentional stable corpus/model-instance label (matches the golden's id
@@ -98,7 +98,7 @@ fn build_proutine(
     source: &str,
     source_unit_id: &str,
 ) -> Option<PRoutine> {
-    use crate::engine::l2::ir_walk;
+    use crate::program::body::ir_walk;
 
     let rname = ir_routine.name.clone();
     if rname.is_empty() {
@@ -163,7 +163,7 @@ fn build_proutine(
         .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
         .map(|n| n.to_lowercase())
         .collect();
-    crate::engine::l2::control_context::apply_control_contexts(
+    crate::program::body::control_context::apply_control_contexts(
         &mut features,
         &attr_names_lc,
         &parameters,
@@ -173,7 +173,7 @@ fn build_proutine(
     // Populates `order` on each op/callsite (absent when the walk produced none) —
     // including the error-call source-range post-pass over the op/callsite records —
     // and the routine's `scopeFrames`.
-    crate::engine::l2::operation_order::apply_operation_order(&mut features, &attr_names_lc);
+    crate::program::body::operation_order::apply_operation_order(&mut features, &attr_names_lc);
 
     let mut routine = PRoutine {
         stable_routine_id,
@@ -186,7 +186,7 @@ fn build_proutine(
         parse_incomplete,
         features,
         capability_facts_direct: Vec::new(),
-        capability_status: crate::engine::l2::capability::CoverageStatus::Complete,
+        capability_status: crate::program::body::capability::CoverageStatus::Complete,
         capability_reasons: Vec::new(),
         capability_diagnostics: Vec::new(),
     };
@@ -210,7 +210,7 @@ pub fn ir_features_for_named_routine(
     model_instance_id: &str,
     source_unit_id: &str,
 ) -> Option<(PFeatures, Vec<scope::ParameterSymbol>, Vec<String>)> {
-    use crate::engine::l2::ir_walk;
+    use crate::program::body::ir_walk;
     let ir_file = al_syntax::parse(source);
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = ir_walk::ir_object_type(&o.kind) else {
@@ -274,7 +274,7 @@ fn project_file(
     let ir_file = al_syntax::parse(source);
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         let object_number = o.id.unwrap_or(0);
@@ -284,7 +284,7 @@ fn project_file(
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (object_subtype, page_type, source_table_name, inherent_commit_behavior) =
-            crate::engine::l2::ir_walk::ir_object_metadata(o, object_type);
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type);
 
         objects.push(PObject {
             stable_object_id: stable_object_id.clone(),
@@ -335,7 +335,7 @@ fn project_file(
 ///     `CoverageReason` declaration order).
 ///   - `capabilityDiagnostics`: sort by `(sourceRef, message)`.
 fn apply_capabilities(routine: &mut PRoutine) {
-    let result = crate::engine::l2::capability::extract_capabilities(routine);
+    let result = crate::program::body::capability::extract_capabilities(routine);
 
     let mut reasons = result.reasons;
     // Match al-sem's `.sort()` (lexicographic on the serialized kebab string),
@@ -453,7 +453,7 @@ pub fn project_named_routine(
     let ir_file = al_syntax::parse(source);
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         let object_number = o.id.unwrap_or(0);
@@ -461,7 +461,7 @@ pub fn project_named_routine(
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (_, _, source_table_name, _) =
-            crate::engine::l2::ir_walk::ir_object_metadata(o, object_type);
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type);
 
         for ir_routine in &o.routines {
             if ir_routine.name != routine_name {

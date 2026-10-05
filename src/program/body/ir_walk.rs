@@ -263,7 +263,7 @@ struct SpineCtx<'a> {
     /// While walking an assignment's target: that target expression and how it
     /// is used (#14). Only a field access ON that exact expression is a write;
     /// one nested inside it (an index) is still a read.
-    assign_target: Option<(ExprId, crate::engine::l2::features::FieldAccessKind)>,
+    assign_target: Option<(ExprId, crate::program::body::features::FieldAccessKind)>,
 }
 
 impl<'a> SpineCtx<'a> {
@@ -748,7 +748,7 @@ impl<'a> SpineCtx<'a> {
                         rhs_identifier,
                     });
                 }
-                use crate::engine::l2::features::FieldAccessKind;
+                use crate::program::body::features::FieldAccessKind;
                 let kind = if *compound {
                     FieldAccessKind::ReadWrite
                 } else {
@@ -1125,7 +1125,7 @@ impl<'a> SpineCtx<'a> {
                     let source_anchor = self.anchor(&e.origin);
                     let access = match self.assign_target {
                         Some((t, kind)) if t == eid => kind,
-                        _ => crate::engine::l2::features::FieldAccessKind::Read,
+                        _ => crate::program::body::features::FieldAccessKind::Read,
                     };
                     self.field_accesses.push(PFieldAccess {
                         record_variable_name,
@@ -2660,7 +2660,7 @@ pub fn ir_routine_kind(routine: &RoutineDecl) -> &'static str {
 
 #[cfg(test)]
 mod stmt_position_tests {
-    use crate::engine::l2::l2_workspace::ir_features_for_named_routine;
+    use crate::program::body::l2_workspace::ir_features_for_named_routine;
 
     const SRC: &str = r#"
 codeunit 50001 T
@@ -2709,7 +2709,7 @@ codeunit 50001 T
     /// is no longer indistinguishable from a read.
     #[test]
     fn field_access_kind_read_write_readwrite() {
-        use crate::engine::l2::features::FieldAccessKind::{Read, ReadWrite, Write};
+        use crate::program::body::features::FieldAccessKind::{Read, ReadWrite, Write};
         const SRC: &str = r#"
 codeunit 50003 F
 {
