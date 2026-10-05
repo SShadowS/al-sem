@@ -2,7 +2,7 @@
 //! `src/detectors/d10-self-modifying-loop.ts`.
 //!
 //! Detects a mutating op (`Modify`, `ModifyAll`, `Validate`, `Delete`,
-//! `DeleteAll`) on the SAME record variable that is driving the loop cursor
+//! `DeleteAll`, `Rename`) on the SAME record variable that is driving the loop cursor
 //! (identified via `Next()` inside the loop body). The cursor's snapshot may
 //! be corrupted when the iterating record is mutated inside its own loop.
 //!
@@ -24,7 +24,15 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 const DETECTOR: &str = "d10-self-modifying-loop";
 
-const MUTATING_OPS: &[&str] = &["Modify", "ModifyAll", "Validate", "Delete", "DeleteAll"];
+// Rename moves the driving record to a new key, the strongest self-modify.
+const MUTATING_OPS: &[&str] = &[
+    "Modify",
+    "ModifyAll",
+    "Validate",
+    "Delete",
+    "DeleteAll",
+    "Rename",
+];
 
 pub fn detect_d10(
     resolved: &L3Resolved,

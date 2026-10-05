@@ -1,39 +1,8 @@
 //! Record-op name map + field-args op set (intraprocedural-body.ts).
 
-/// Canonical record-op name (lowercase) → properly-cased RecordOpType.
-pub fn record_op_type(method_lc: &str) -> Option<&'static str> {
-    Some(match method_lc {
-        "findset" => "FindSet",
-        "findfirst" => "FindFirst",
-        "findlast" => "FindLast",
-        "find" => "Find",
-        "get" => "Get",
-        "calcfields" => "CalcFields",
-        "calcsums" => "CalcSums",
-        "testfield" => "TestField",
-        "modify" => "Modify",
-        "modifyall" => "ModifyAll",
-        "insert" => "Insert",
-        "delete" => "Delete",
-        "deleteall" => "DeleteAll",
-        "setloadfields" => "SetLoadFields",
-        "addloadfields" => "AddLoadFields",
-        "setrange" => "SetRange",
-        "setfilter" => "SetFilter",
-        "setcurrentkey" => "SetCurrentKey",
-        "reset" => "Reset",
-        "copy" => "Copy",
-        "transferfields" => "TransferFields",
-        "validate" => "Validate",
-        "init" => "Init",
-        "next" => "Next",
-        "count" => "Count",
-        "countapprox" => "CountApprox",
-        "isempty" => "IsEmpty",
-        "locktable" => "LockTable",
-        _ => return None,
-    })
-}
+/// The record-op name map. It lives in [`crate::record_ops`] so the program
+/// extractor reads the same table (#9).
+pub use crate::record_ops::record_op_type;
 
 /// Record ops for which all field arguments are captured.
 pub const FIELD_ARGS_OPS: &[&str] = &[

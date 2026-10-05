@@ -23,6 +23,10 @@ fn map_op(op: &str) -> Option<&'static str> {
         "Delete" | "DeleteAll" => Some("delete"),
         // Init / SetRange / SetFilter / SetLoadFields / AddLoadFields /
         // SetCurrentKey / Reset / LockTable → not capability-relevant.
+        // Rename IS a write, but which TableData permission it needs is not
+        // measured yet (#9: Permissions Mock did not enforce in the test
+        // container), so it is deliberately unmapped here and in
+        // `capability_cone::map_table_op`, and so absent from the cone's writes.
         _ => None,
     }
 }

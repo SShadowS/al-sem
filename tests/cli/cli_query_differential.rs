@@ -492,3 +492,71 @@ fn invalid_query_format_is_rejected_with_exit_1() {
         "query effects: an invalid --format must exit 1, not fall through to human"
     );
 }
+
+/// #9: `Record.Rename()` is a write. Before the fix `record_op_type` had no
+/// "rename" arm, so a Rename produced no row in the db-effect store and every
+/// consumer under-reported it. A scratch workspace (no corpus fixture, so no
+/// golden family moves) driven through the shipped binary: the effect must name
+/// the renamed table with op `Rename`.
+#[test]
+fn query_effects_reports_a_rename_as_a_write_on_its_table() {
+    let tmp = tempfile::Builder::new()
+        .prefix("alsem-query-rename-")
+        .tempdir()
+        .expect("scratch ws");
+    let ws = tmp.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"99999999-0000-0000-0000-000000000009","name":"Rename Probe","publisher":"PT","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src").join("rename.al"),
+        r#"table 50300 "Rn Item"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; "Code") { }
+    }
+}
+
+codeunit 50301 "Rn Runner"
+{
+    procedure DoRename()
+    var
+        Item: Record "Rn Item";
+    begin
+        Item.Get('A');
+        Item.Rename('B');
+    end;
+}
+"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_string_lossy().to_string();
+    let (out, code) = run_alsem(
+        &["query", "effects", &ws_str, "--routine", "DoRename"],
+        "json",
+    );
+    assert_eq!(code, 0, "query effects failed: {out}");
+    let doc: serde_json::Value = serde_json::from_str(&out).expect("json");
+    let effects = doc["payload"]["effects"].as_array().expect("effects array");
+    let ops: Vec<(&str, &str)> = effects
+        .iter()
+        .map(|e| {
+            (
+                e["op"].as_str().unwrap_or(""),
+                e["tableName"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert!(
+        ops.contains(&("Rename", "Rn Item")),
+        "expected a Rename effect on Rn Item, got {ops:?}"
+    );
+}

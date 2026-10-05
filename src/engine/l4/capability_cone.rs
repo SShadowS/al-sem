@@ -168,6 +168,8 @@ fn map_table_op(op: &str) -> Option<&'static str> {
         "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" => Some("modify"),
         "Insert" => Some("insert"),
         "Delete" | "DeleteAll" => Some("delete"),
+        // Rename: unmapped until its permission is measured -- see
+        // `l2::capability::table_commit::map_op` (#9).
         _ => None,
     }
 }

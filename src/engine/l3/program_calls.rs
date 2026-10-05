@@ -225,7 +225,8 @@ pub struct SiteCensus {
     /// Call/run edges with no route at all.
     pub adapter_empty_route_sites: usize,
     /// Program trigger edges with a target L3's own trigger logic does not
-    /// give the op (`OnRename`, TableExtension triggers).
+    /// give the op (TableExtension triggers; L3 maps a base table's
+    /// `OnRename` itself since #9).
     pub adapter_trigger_edges_beyond_l3: usize,
     /// The `Rename` part of `adapter_trigger_edges_beyond_l3`.
     pub adapter_trigger_edges_beyond_l3_rename: usize,
@@ -829,7 +830,10 @@ fn adapter(
                         },
                     );
                 }
-            } else if matches!(op.op.as_str(), "Insert" | "Modify" | "Delete" | "Validate") {
+            } else if matches!(
+                op.op.as_str(),
+                "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
+            ) {
                 c.adapter_l3_trigger_ops += 1;
                 if let Some(e) = implicit_trigger_edge_for_op(r, op, &symbols) {
                     c.adapter_l3_trigger_edges += 1;
@@ -1338,7 +1342,7 @@ impl<'a> Converter<'a> {
     /// apply the site rules L3 and `implicit_trigger_route_applicable` apply,
     /// so they are applied here: an explicit `RunTrigger = false` fires
     /// nothing, and a `Validate` fires only its own field's `OnValidate`.
-    /// `Validate` → `Resolved`, every other op → `Maybe`
+    /// `Validate` and `Rename` → `Resolved`, every other op → `Maybe`
     /// (`implicit_edges::trigger_mapping`).
     fn triggers(
         &self,
@@ -1373,7 +1377,7 @@ impl<'a> Converter<'a> {
         tos.sort();
         tos.dedup();
         // Compare with L3's own answer for this op, so the edges the program
-        // engine adds (OnRename, TableExtension triggers) are counted.
+        // engine adds (TableExtension triggers) are counted.
         let l3_to = implicit_trigger_edge_for_op(r, op, self.symbols).and_then(|e| e.to);
         for to in &tos {
             if Some(to) != l3_to.as_ref() {
@@ -1391,7 +1395,9 @@ impl<'a> Converter<'a> {
                 let mut e = CallEdge::base(&r.id, &op.id, &op.id);
                 e.to = Some(to);
                 e.dispatch_kind = DispatchKind::ImplicitTrigger;
-                e.resolution = if is_validate {
+                // Same rule as `implicit_edges::trigger_mapping`: Validate and
+                // Rename always fire their trigger (Rename takes no RunTrigger).
+                e.resolution = if is_validate || op.op.fold_identifier() == "rename" {
                     Resolution::Resolved
                 } else {
                     Resolution::Maybe
@@ -2723,42 +2729,37 @@ mod adapter_tests {
         e
     }
 
-    /// `Rename` today: NEITHER engine treats `R.Rename(..)` as a record op.
-    /// L2 makes it a plain call site (no `L3RecordOperation`), and the
-    /// program extractor makes it a plain `Call` (its `RecordOp` list has no
-    /// rename; `resolve_implicit_trigger`'s `rename` arm is unreachable from
-    /// it). So no `OnRename` edge exists on either side, the site is adapted
-    /// as an ordinary call, and the Rename counter stays 0. If either
-    /// engine starts treating Rename as a record op, this test fails and the
-    /// counter becomes live.
+    /// `Rename` (#9): BOTH engines treat `R.Rename(..)` as a record op -- L2
+    /// emits an `L3RecordOperation`, and the program extractor (which reads
+    /// the same `record_op_type` table) classifies a `RecordOp` that
+    /// `resolve_implicit_trigger` routes to `OnRename`. The two pair up as a
+    /// matched implicit trigger, the edge is `Resolved` (Rename takes no
+    /// RunTrigger and always fires OnRename, measured on BC 28), L3's own
+    /// answer agrees, and nothing counts as "beyond L3". Before #9 neither
+    /// engine did this, and the site was an ordinary built-in call.
     #[test]
-    fn rename_has_no_trigger_edge_on_either_side() {
+    fn rename_fires_on_rename_on_both_sides() {
         let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n    trigger OnRename()\n    begin\n    end;\n}\n";
         let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        R: Record \"T\";\n    begin\n        R.Rename('NEW');\n    end;\n}\n";
         let a = adapt(&[("src/t.al", table), ("src/w.al", cu)], None);
         let caller = a.routine("Caller");
-        assert!(caller.record_operations.is_empty(), "L2: no record op");
-        let cs = a.site("Caller", "R.Rename");
-        let want = edge(caller, cs, None, DispatchKind::Builtin, Resolution::Builtin);
-        assert_eq!(a.edges(&cs.id), vec![want.clone()]);
-        assert_eq!(at(&a.old, &cs.id), vec![want], "L3 agrees");
-        let on_rename = &a.routine("OnRename").id;
-        assert!(
-            a.calls
-                .edges
-                .iter()
-                .all(|e| e.to.as_ref() != Some(on_rename)),
-            "no edge reaches OnRename"
-        );
+        let op = caller
+            .record_operations
+            .iter()
+            .find(|o| o.op == "Rename")
+            .expect("L2: Rename is a record op");
+        let mut want = trigger_edge(caller, op, a.routine("OnRename"));
+        want.resolution = Resolution::Resolved;
+        assert_eq!(a.edges(&op.id), vec![want.clone()]);
+        assert_eq!(at(&a.old, &op.id), vec![want], "L3 agrees");
         let c = &a.census;
         assert_eq!(
             (
-                c.adapter_program_sites,
                 c.implicit_trigger_matched,
                 c.implicit_trigger_unmatched,
                 c.adapter_trigger_edges_beyond_l3_rename
             ),
-            (1, 0, 0, 0),
+            (1, 0, 0),
             "{c:#?}"
         );
     }
