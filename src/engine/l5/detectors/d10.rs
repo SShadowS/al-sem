@@ -90,10 +90,7 @@ pub fn detect_d10(
 
             // G-13: skip Known(true) TEMPORARY records — no SQL cursor to
             // corrupt when the iterating record is in-memory (same gate as d33).
-            if let Some(ts) = &op.temp_state
-                && ts.kind == "known"
-                && ts.value == Some(true)
-            {
+            if super::is_known_temp(op) {
                 skipped_temp_record += 1;
                 continue;
             }

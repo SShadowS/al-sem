@@ -79,10 +79,7 @@ pub fn detect_d18(
             }
 
             // Skip temporary records.
-            if let Some(ts) = &op.temp_state
-                && ts.kind == "known"
-                && ts.value == Some(true)
-            {
+            if super::is_known_temp(op) {
                 skipped_temp_record += 1;
                 continue;
             }

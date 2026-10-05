@@ -193,6 +193,18 @@ pub enum SnapTempState {
     Unknown,
 }
 
+impl SnapTempState {
+    /// Projection onto `l2::features::known_temp_suppresses` (#34): `Some(value)`
+    /// when known, `None` for parameter-dependent or unknown.
+    #[must_use]
+    pub fn known_value(&self) -> Option<bool> {
+        match self {
+            SnapTempState::Known { value } => Some(*value),
+            _ => None,
+        }
+    }
+}
+
 fn snap_temp_state(ts: &crate::engine::l2::features::PTempState) -> SnapTempState {
     match ts.kind.as_str() {
         "known" => SnapTempState::Known {
@@ -2220,6 +2232,34 @@ pub fn project_r4f_snapshot(resolved: &L3Resolved, fixture_name: &str) -> String
     let mut s = serde_json::to_string_pretty(&doc).expect("serialize R4-F snapshot projection");
     s.push('\n');
     s
+}
+
+#[cfg(test)]
+mod temp_rule_tests {
+    use super::SnapTempState;
+    use crate::engine::l2::features::known_temp_suppresses;
+
+    /// #34: every SnapTempState variant reaches the one decision through its
+    /// projection; only `Known { value: true }` suppresses.
+    #[test]
+    fn temp_rule_truth_table_snaptempstate() {
+        let cases = [
+            (SnapTempState::Known { value: true }, true),
+            (SnapTempState::Known { value: false }, false),
+            (
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+                false,
+            ),
+            (SnapTempState::Unknown, false),
+        ];
+        for (state, want) in cases {
+            assert_eq!(
+                known_temp_suppresses(state.known_value()),
+                want,
+                "{state:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

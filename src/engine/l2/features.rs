@@ -82,6 +82,33 @@ pub struct PTempState {
     pub parameter_index: Option<u32>,
 }
 
+/// THE temp-record suppression decision (#34): only an exact known/true
+/// suppresses. Callers PROJECT their representation to `Option<bool>` --
+/// `Some(v)` when the temp state is KNOWN with value `v`, `None` for unknown,
+/// parameter-dependent or absent -- and never re-derive the rule. A copy of the
+/// rule elsewhere fails `temp_rule_lives_once` (`tests/l2_ir/temp_rule_lint.rs`).
+#[must_use]
+pub fn known_temp_suppresses(known_value: Option<bool>) -> bool {
+    known_value == Some(true)
+}
+
+impl PTempState {
+    /// Projection onto [`known_temp_suppresses`]: `Some(value)` when `kind` is
+    /// `"known"`, `None` otherwise. A known state with a missing value reads as
+    /// `Some(false)` -- the behaviour of every inline copy this replaced (they
+    /// all required `value == Some(true)`).
+    #[must_use]
+    pub fn known_value(&self) -> Option<bool> {
+        (self.kind == "known").then(|| self.value.unwrap_or(false))
+    }
+}
+
+/// [`known_temp_suppresses`] over an optional [`PTempState`]; absent = not temp.
+#[must_use]
+pub fn temp_state_suppresses(ts: Option<&PTempState>) -> bool {
+    known_temp_suppresses(ts.and_then(PTempState::known_value))
+}
+
 /// Structured Callee classification (matches `model/callee.ts`).
 ///
 /// Untagged so the bare / member / object-run / unknown shapes serialize as
@@ -581,6 +608,41 @@ pub struct L2Projection {
 
 #[cfg(test)]
 mod tests {
+    use super::{PTempState, known_temp_suppresses, temp_state_suppresses};
+
+    fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
+        PTempState {
+            kind: kind.to_string(),
+            value,
+            parameter_index: param,
+        }
+    }
+
+    /// #34: the one decision, and the PTempState projection onto it, over every
+    /// shape the string-keyed carrier can hold. Only an exact known/true
+    /// suppresses; a stray `value: true` on a non-known kind must not.
+    #[test]
+    fn temp_rule_truth_table_ptempstate() {
+        assert!(known_temp_suppresses(Some(true)));
+        assert!(!known_temp_suppresses(Some(false)));
+        assert!(!known_temp_suppresses(None));
+
+        let cases: [(Option<PTempState>, bool); 7] = [
+            (None, false),                                           // absent
+            (Some(ts("known", Some(true), None)), true),             // known/true
+            (Some(ts("known", Some(false), None)), false),           // known/false
+            (Some(ts("known", None, None)), false),                  // known, value missing
+            (Some(ts("unknown", None, None)), false),                // unknown
+            (Some(ts("unknown", Some(true), None)), false),          // unknown, stray true
+            (Some(ts("parameter-dependent", None, Some(0))), false), // param-dependent
+        ];
+        for (state, want) in cases {
+            assert_eq!(temp_state_suppresses(state.as_ref()), want, "{state:?}");
+        }
+        // The projection keeps known/missing distinguishable from "not known".
+        assert_eq!(ts("known", None, None).known_value(), Some(false));
+        assert_eq!(ts("unknown", Some(true), None).known_value(), None);
+    }
     /// The module doc's INTERNAL-ONLY list must name exactly the fields this file
     /// marks `#[serde(skip)]` / `#[serde(skip, ...)]` (#15), so it cannot drift.
     #[test]

@@ -1096,7 +1096,7 @@ pub(crate) fn advance_discipline_holds(
 /// (and mirrors d33's inline gate): an op provably on a temporary record does no
 /// physical-db work.
 pub(crate) fn is_known_temp(op: &L3RecordOperation) -> bool {
-    matches!(&op.temp_state, Some(ts) if ts.kind == "known" && ts.value == Some(true))
+    crate::engine::l2::features::temp_state_suppresses(op.temp_state.as_ref())
 }
 
 /// Anchor containment: `inner` sits fully inside `outer` (inclusive bounds).
@@ -1116,7 +1116,7 @@ pub(crate) fn anchor_within(inner: &PAnchor, outer: &PAnchor) -> bool {
 /// exclude a temp-buffer source (materialize-into-persisted is not a redundant
 /// cursor re-write).
 pub(crate) fn is_known_temp_var(rv: &crate::engine::l3::l3_workspace::L3RecordVariable) -> bool {
-    rv.temp_state.kind == "known" && rv.temp_state.value == Some(true)
+    crate::engine::l2::features::temp_state_suppresses(Some(&rv.temp_state))
 }
 
 /// `unquotedFieldName` from `model/expression.ts`:

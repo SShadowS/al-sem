@@ -176,26 +176,22 @@ pub fn decode_op_mask(mask: u8) -> Vec<&'static str> {
 /// `capability_cone::inherited_fact_key` calls it, so the key, the fold and the
 /// raw helpers cannot drift apart.
 ///
-/// ⟨issue 33⟩ It is NOT the only implementation of the `known/true` predicate
-/// in the repo, and the old "this is the ONE implementation" claim is why that
-/// was easy to miss. Do not read the list below as exhaustive either — there are
-/// **at least a dozen** copies, over four different carrier types. The L5
-/// snapshot layer has `digest::is_known_temp_state` over
-/// `Option<&SnapTempState>` and `digest::is_known_temp_snap` over a snapshot
-/// `Fact`, plus `ordering_engine`'s own `matches!` over an effect's temp state;
-/// the L5 detectors have `detectors::is_known_temp` /
-/// `detectors::is_known_temp_rv` over an OPERATION SITE's `PTempState` and
-/// inline re-spellings of the same test in d10 / d18 / d33 / d36 / d37 / d39 /
-/// d40; and `l3_workspace` tests `kind == "known"` in two more places. If this
-/// rule ever changes, find them with `grep -rn 'kind == "known"' src/` plus
-/// `grep -rn 'Known { value: true }' src/` — do not trust this paragraph to
-/// still be complete.
+/// The RULE itself lives once, in `l2::features::known_temp_suppresses` (#34):
+/// this function, `digest::is_known_temp_state`, `ordering_engine`'s
+/// physical-write classification, `detectors::is_known_temp` /
+/// `is_known_temp_var`, d3 and the d39/d40 binding gates all project their own
+/// carrier to `Option<bool>` and call it. `temp_rule_lives_once`
+/// (`tests/l2_ir/temp_rule_lint.rs`) fails if a copy reappears. Projection-only
+/// sites (`l3_workspace::temp_state_known_value`, `snapshot::snap_temp_state`)
+/// and the proof / propagation / encoding sites that use tuple-enum spellings
+/// (`TempStateKind::Known(true)`) are not copies of the decision.
 pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
-    matches!(
-        &f.extra,
-        Some(CapabilityExtra::Table { temp_state: Some(ts), .. })
-            if ts.kind == "known" && ts.value == Some(true)
-    )
+    match &f.extra {
+        Some(CapabilityExtra::Table { temp_state, .. }) => {
+            crate::engine::l2::features::temp_state_suppresses(temp_state.as_ref())
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------

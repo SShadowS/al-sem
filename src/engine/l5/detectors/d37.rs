@@ -89,10 +89,7 @@ pub fn detect_d37(
             candidates_considered += 1;
             let var_key = op.record_variable_name.to_lowercase();
             // op.tempState.kind === "known" && op.tempState.value === true
-            if let Some(ts) = &op.temp_state
-                && ts.kind == "known"
-                && ts.value == Some(true)
-            {
+            if super::is_known_temp(op) {
                 skipped_temp_record += 1;
                 continue;
             }

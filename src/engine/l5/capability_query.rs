@@ -178,6 +178,20 @@ mod tests {
         )));
         // No extra at all → not known-temp.
         assert!(!fact_is_known_temp(&fact("insert", "table", Some("t/A"))));
+        // #34: the rest of the CapabilityFact truth table.
+        assert!(!fact_is_known_temp(&temp_table_write_fact(
+            "t/A", "known", None
+        )));
+        assert!(!fact_is_known_temp(&temp_table_write_fact(
+            "t/A",
+            "unknown",
+            Some(true)
+        )));
+        assert!(!fact_is_known_temp(&temp_table_write_fact(
+            "t/A",
+            "parameter-dependent",
+            None
+        )));
     }
 
     #[test]

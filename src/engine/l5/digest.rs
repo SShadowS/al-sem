@@ -2574,7 +2574,7 @@ fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
 /// read as NOT known-temp, exactly as the L4 predicate treats them — so the
 /// class is TOTAL, never undefined.
 fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
-    matches!(ts, Some(SnapTempState::Known { value: true }))
+    crate::engine::l2::features::known_temp_suppresses(ts.and_then(SnapTempState::known_value))
 }
 
 /// `is_known_temp_state` over a whole snapshot fact.

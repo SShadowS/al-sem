@@ -140,10 +140,9 @@ pub fn detect_d39(
 
                 // G-13: skip Known(true) TEMPORARY source records — a temp
                 // record left dirty has no SQL consequence (same gate as d40).
-                if let Some(ts) = &binding.source_temp_state
-                    && ts.kind == "known"
-                    && ts.value == Some(true)
-                {
+                if crate::engine::l2::features::temp_state_suppresses(
+                    binding.source_temp_state.as_ref(),
+                ) {
                     skipped_temp_record += 1;
                     continue;
                 }

@@ -315,9 +315,11 @@ pub fn compute_ordering(
         if !is_db_write(&occ.effect_type) {
             continue;
         }
-        let is_known_temp = matches!(
-            &effects[i].temp_state,
-            Some(SnapTempState::Known { value: true })
+        let is_known_temp = crate::engine::l2::features::known_temp_suppresses(
+            effects[i]
+                .temp_state
+                .as_ref()
+                .and_then(SnapTempState::known_value),
         );
         let entry = known_temp_only.get(&occ.occurrence_id).copied();
         let merged = match entry {

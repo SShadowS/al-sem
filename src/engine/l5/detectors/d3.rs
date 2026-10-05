@@ -215,7 +215,7 @@ pub fn detect_d3(
             // CLOSED-WORLD PROVEN temp (`local` routine, all resolved callers
             // pass Known(true) temp) is treated exactly like Known(true).
             if let Some(rv) = rec_var
-                && (rv.temp_state_known_value() == Some(true)
+                && (crate::engine::l2::features::known_temp_suppresses(rv.temp_state_known_value())
                     || crate::engine::l5::closed_world_temp::pd_state_proven_temp(
                         Some(&rv.temp_state),
                         &routine.id,

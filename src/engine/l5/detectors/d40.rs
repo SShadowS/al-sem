@@ -99,10 +99,9 @@ pub fn detect_d40(
                     continue;
                 }
                 // sourceTempState known/true → temp record, no DB load concept.
-                if let Some(ts) = &binding.source_temp_state
-                    && ts.kind == "known"
-                    && ts.value == Some(true)
-                {
+                if crate::engine::l2::features::temp_state_suppresses(
+                    binding.source_temp_state.as_ref(),
+                ) {
                     skipped_temp_record += 1;
                     continue;
                 }
