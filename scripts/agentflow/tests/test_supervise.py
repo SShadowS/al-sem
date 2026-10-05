@@ -35,3 +35,27 @@ def test_run_times_out_and_kills(ctx, tmp_path):
     r = supervise.run(ctx, [sys.executable, "-c", "import time; time.sleep(30)"], cwd=tmp_path,
                       log_path=tmp_path / "z.log", timeout_s=0.5, beat_every=0.1)
     assert r.timed_out and r.exit_code != 0 and r.seconds < 10
+
+
+def _fail_with(ctx, tmp_path, text, code=101):
+    src = f"import sys; print({text!r}); raise SystemExit({code})"
+    return supervise.run(ctx, [sys.executable, "-c", src], cwd=tmp_path,
+                         log_path=tmp_path / "c.log", timeout_s=30)
+
+
+def test_contended_build_is_reported_distinctly(ctx, tmp_path):
+    # #60: another build holding target/ is environmental, not a gate verdict.
+    r = _fail_with(ctx, tmp_path, "rust-lld: error: failed to write output "
+                   "'U:/x/target/debug/deps/program_resolve_harness-1.exe': permission denied")
+    assert r.exit_code == 101 and r.contended_build
+
+
+def test_a_plain_test_failure_is_not_contention(ctx, tmp_path):
+    # The discrimination half of #60: a genuinely broken test stays a failure.
+    r = _fail_with(ctx, tmp_path, "test foo::bar ... FAILED")
+    assert r.exit_code == 101 and not r.contended_build
+
+
+def test_a_passing_run_is_never_contended(ctx, tmp_path):
+    r = _fail_with(ctx, tmp_path, "failed to write output 'x': permission denied", code=0)
+    assert r.exit_code == 0 and not r.contended_build

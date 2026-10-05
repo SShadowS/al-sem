@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency `Scope`, `InherentPermissions` and `InherentEntitlements` reach the ABI**
+  (#27). `AbiObject` gains `scope` / `inherent_permissions` / `inherent_entitlements` from
+  the object's `Properties`; `AbiRoutine` gains `scope()` / `inherent_permissions()` /
+  `inherent_entitlements()` over its already-parsed `Attributes` (the member form, seven
+  times more common). `Scope` keeps only `OnPrem` / `Cloud`: the same name carries
+  page-control layout values (`Repeater`, `Page`). Ingestion only; no consumer yet.
+- **Every corpus fixture's root classifications are observed by a golden** (#42, #19).
+  The per-fixture rootclass family lists 7 fixtures, so a classification change on any
+  other (the `ws-policy-api-*` API pages, 13 of 16 codeunit `OnRun` fixtures) moved
+  nothing. `tests/r4f-goldens/corpus.rootclass.summary.txt` holds one line per
+  classification for all 216 fixtures, discovered from the corpus directory. Adding a
+  real kind to every Page trigger leaves the old family green and fails the summary.
 - **A field access says whether it reads, writes or both** (#14). The lowerer dropped
   the assignment operator, so `R.F += 1` lowered exactly like `R.F := 1`, and the walker
   recorded an assignment target exactly like a read, so "nothing reads this field" could
@@ -48,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`agentflow run` writes one log per invocation and names a contended build** (#43,
+  #60). Logs were `logs/<name>.log`, so a re-run under the same name truncated the file a
+  killed run's children still wrote; each run now gets `logs/<name>/<stamp>-<rand>.log`.
+  A failure caused by another build holding `target/` (rust-lld `failed to write output
+  ... permission denied`) reports `failure: contended-build` instead of reading like a
+  broken test. Discovery filing refuses the whole batch when any `kind` is not
+  `bug`/`enhancement`, before filing anything.
 - **d5 and d60 require a loop terminator that exhausts the set** (#49, #50). They
   accepted any loop whose driver `Next` appeared in the `until`, so
   `until (R.Next() = 0) or Stop` and `until R.Next() <> 0` counted as whole-set

@@ -10,6 +10,7 @@ CARGO_TARGET_DIR set when the caller names one.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -29,6 +30,23 @@ class Result:
     log_path: Path
     timed_out: bool
     seconds: float
+    # A failure whose log shows another build holding this worktree's target/
+    # (#60), not a fault in the code under test. Re-run once nothing else builds.
+    contended_build: bool = False
+
+
+# Signatures of a build that lost a race for target/ to another process in the
+# same worktree (#60). Each was seen as a whole gate cycle wasted on diagnosis.
+_CONTENTION = (
+    re.compile(r"failed to write output .*: permission denied", re.IGNORECASE),
+    re.compile(r"being used by another process", re.IGNORECASE),
+    re.compile(r"failed to remove file .*Access is denied", re.IGNORECASE),
+)
+
+
+def contended(log_text: str) -> bool:
+    """True when a failed run's log carries a build-contention signature."""
+    return any(rx.search(log_text) for rx in _CONTENTION)
 
 
 def sanitized_env(base: dict, tree_sitter_path: str | None,
@@ -77,5 +95,9 @@ def run(ctx: Ctx, cmd: list[str], *, cwd: Path, log_path: Path, timeout_s: float
                     code = proc.wait()
                     timed_out = True
                     break
-    return Result(exit_code=code if not timed_out else (code or 124), log_path=log_path,
-                  timed_out=timed_out, seconds=time.monotonic() - start)
+    exit_code = code if not timed_out else (code or 124)
+    is_contended = False
+    if exit_code != 0 and not timed_out:
+        is_contended = contended(log_path.read_text(encoding="utf-8", errors="replace"))
+    return Result(exit_code=exit_code, log_path=log_path, timed_out=timed_out,
+                  seconds=time.monotonic() - start, contended_build=is_contended)

@@ -102,7 +102,20 @@ def reconcile_pending(ctx: Ctx, gh: Gh) -> list[dict]:
     return report
 
 
+KINDS = ("bug", "enhancement")
+
+
 def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -> list[dict]:
+    # #43: a bad `kind` is refused for the WHOLE batch before anything is filed.
+    # Checked per item at create time, it half-filed a batch, and the caller
+    # could not tell a bad kind from a transient GitHub failure.
+    bad = [d for d in discoveries if d.kind not in KINDS]
+    if bad:
+        return [{"fp": fingerprint(d.subsystem, d.locator, d.symptom),
+                 "status": "bad-kind" if d in bad else "batch-refused", "number": None,
+                 "error": f"kind {d.kind!r} is not one of {KINDS}" if d in bad
+                 else "another discovery in this batch has a bad kind"}
+                for d in discoveries]
     idx = _load_index(ctx)
     out = []
     for d in discoveries:
