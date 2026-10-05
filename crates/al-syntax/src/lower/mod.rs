@@ -378,20 +378,41 @@ fn collect_table_fields_keys(
     for child in node.named_children() {
         match child.kind() {
             RawKind::FieldDeclaration => fields.push(lower_field(child, source)),
-            RawKind::KeyDeclaration => {
-                let mut members = Vec::new();
-                if let Some(list) = child.field(FieldName::Fields) {
-                    for m in list.named_children() {
-                        if matches!(m.kind(), RawKind::Identifier | RawKind::QuotedIdentifier) {
-                            members.push(ident_text(m, source).fold_identifier());
-                        }
-                    }
-                }
-                keys.push(members);
+            RawKind::KeyDeclaration => keys.push(key_members(child, source)),
+            // A field or key whose HEADER differs per `#if` arm, with one shared body.
+            // The header fields (`id`/`name`/`type`, or `name`/`fields`) repeat once per
+            // arm on the node itself; `.field()` takes the first arm's, the
+            // first-branch-wins policy of every split header (`PreprocSplitDeclaration`).
+            // An arm may lead with complete fields/keys, which are ordinary children, so
+            // the node is also descended — first, to keep document order.
+            // `preproc_split_table_field_open` (grammar 2026-10) is the field whose BODY
+            // opens inside the `#if` and closes after `#endif`; `preproc_split_key`
+            // (2026-10) is the key analogue of `preproc_split_table_field`, which predates
+            // them and was not read here before either.
+            RawKind::PreprocSplitTableField | RawKind::PreprocSplitTableFieldOpen => {
+                collect_table_fields_keys(child, source, fields, keys);
+                fields.push(lower_field(child, source));
+            }
+            RawKind::PreprocSplitKey => {
+                collect_table_fields_keys(child, source, fields, keys);
+                keys.push(key_members(child, source));
             }
             _ => collect_table_fields_keys(child, source, fields, keys),
         }
     }
+}
+
+/// A key's member field names (unquoted, lowercased), from its `fields` list.
+fn key_members(key: RawNode, source: &str) -> Vec<String> {
+    let mut members = Vec::new();
+    if let Some(list) = key.field(FieldName::Fields) {
+        for m in list.named_children() {
+            if matches!(m.kind(), RawKind::Identifier | RawKind::QuotedIdentifier) {
+                members.push(ident_text(m, source).fold_identifier());
+            }
+        }
+    }
+    members
 }
 
 /// Lower a `field(<no>; <Name>; <Type>) { ... }` declaration.
@@ -409,9 +430,10 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         .map(|n| n.text(source).trim().to_string())
         .unwrap_or_default();
     // FieldClass property (in the field's declaration_body): FlowField / FlowFilter /
-    // Normal. Mirrors classify_field.
+    // Normal. Mirrors classify_field. Every `body` is read: a
+    // `preproc_split_table_field_open` has two, before and after its `#endif`.
     let mut field_class = "Normal".to_string();
-    if let Some(body) = node.field(FieldName::Body) {
+    for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
             if member.kind() != RawKind::Property {
                 continue;
@@ -633,7 +655,14 @@ fn collect_routines<'t>(
                 pending.clear();
                 collect_routines(child, dataitem_table, member, false, source, out);
             }
-            RawKind::ModifyModification | RawKind::ModifyActionModification => {
+            // `preproc_split_modify` (grammar 2026-10): `#if modify(A) #else modify(B)
+            // #endif { … }` — the target differs per arm, the body is shared. Its
+            // `target` repeats per arm; the first arm's is the member (first-branch-wins).
+            // It sits in a layout or an actions list, never a report dataset, so it is not
+            // added to the `in_dataset_modify_context` gate above.
+            RawKind::ModifyModification
+            | RawKind::ModifyActionModification
+            | RawKind::PreprocSplitModify => {
                 pending.clear();
                 // Both `modify_modification` (fields/dataset/layout) and
                 // `modify_action_modification` (an `actions` section) carry the modified
@@ -685,6 +714,16 @@ fn dataitem_table_name(node: RawNode, source: &str) -> Option<String> {
 fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     match node.kind() {
         RawKind::VarSection => extract_var_section(node, source, out),
+        // A `#if` arm that CONTINUES the var section before it and then starts
+        // procedures (grammar 2026-10; AOAIDeploymentsImpl.Codeunit.al). The var
+        // section ends inside the arm, so the node is the section's SIBLING; each
+        // arm's continued declarations are a `variables` field (a `var_body`). Its
+        // procedures are ordinary children, found by `collect_routines`.
+        RawKind::PreprocSplitVarSectionTail => {
+            for body in node.children_by_field(FieldName::Variables) {
+                extract_var_body(body, source, out);
+            }
+        }
         _ if is_preproc_wrapper(node) => {
             for c in node.named_children() {
                 collect_globals(c, source, out);
@@ -749,7 +788,9 @@ fn lower_routine<'t>(
             let name_node = m.field(FieldName::Name).or_else(|| {
                 if matches!(
                     m.kind(),
-                    RawKind::ModifyModification | RawKind::ModifyActionModification
+                    RawKind::ModifyModification
+                        | RawKind::ModifyActionModification
+                        | RawKind::PreprocSplitModify
                 ) {
                     m.field(FieldName::Target)
                 } else {
@@ -993,9 +1034,13 @@ fn lower_param(node: RawNode, source: &str) -> Param {
 /// A `var_section` → its `var_body` → one `VarDecl` per declared name (`A, B: T`
 /// yields two). `temporary` detection is refined in the parity step (false here).
 fn extract_var_section(section: RawNode, source: &str, out: &mut Vec<VarDecl>) {
-    let Some(body) = section.field(FieldName::Body) else {
-        return;
-    };
+    if let Some(body) = section.field(FieldName::Body) {
+        extract_var_body(body, source, out);
+    }
+}
+
+/// The declarations of one `var_body`.
+fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     for decl in body.named_children() {
         match decl.kind() {
             RawKind::VariableDeclaration => {
@@ -1067,6 +1112,15 @@ fn extract_var_section(section: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 /// `is_preproc_scaffold` first, since this sibling is walked directly rather than via
 /// `lower_stmt`'s catch-all) — folded flat into the SAME block, not wrapped in an extra
 /// synthetic statement.
+///
+/// The same holds for the other three split closings in `code_block`'s closing
+/// `choice`, each a flat run of statements around directive and `end`/`else`/`begin`
+/// keyword nodes (the keywords are skipped by `lower_block_child`):
+/// `preproc_split_else_begin_over_endif` (`end else begin … #endif end;`; it was in
+/// the closing choice before the 2026-10 grammar too, and its content was dropped
+/// here until then), and the 2026-10 `preproc_split_block_end_in_else` /
+/// `preproc_split_block_close_after_endif` pair, a procedure boundary inside an
+/// `#else` (`… #else C(); end; local procedure Q() begin … #endif end;`).
 fn lower_code_block(
     cb: RawNode,
     ir: &mut Ir,
@@ -1080,11 +1134,15 @@ fn lower_code_block(
             lower_block_child(child, ir, issues, source, &mut items, depth);
         }
     }
-    if let Some(split_end) = cb
-        .named_children()
-        .into_iter()
-        .find(|c| c.kind() == RawKind::PreprocSplitCodeBlockEnd)
-    {
+    if let Some(split_end) = cb.named_children().into_iter().find(|c| {
+        matches!(
+            c.kind(),
+            RawKind::PreprocSplitCodeBlockEnd
+                | RawKind::PreprocSplitElseBeginOverEndif
+                | RawKind::PreprocSplitBlockEndInElse
+                | RawKind::PreprocSplitBlockCloseAfterEndif
+        )
+    }) {
         push_unlowered_issue(split_end, "statement", issues);
         for c in structural_children(split_end) {
             if is_preproc_scaffold(c.kind()) {
@@ -1624,6 +1682,24 @@ fn collect_case_branches(
                     });
                 }
             }
+            // `else` / `else begin` alternating per `#if` arm as the case's else part
+            // (grammar 2026-10, `case_body` admits `preproc_split_open_statement`;
+            // MfgCarryOutAction.Codeunit.al, BC 29). Its arms open with `else`, so it
+            // is the case's else: lowered by the generic split-statement recovery. If
+            // an else was already found, it is still lowered — as a pattern-less
+            // branch — rather than dropped with its calls.
+            RawKind::PreprocSplitOpenStatement => {
+                let body = lower_branch(child, ir, issues, source, depth);
+                if else_block.is_none() {
+                    *else_block = Some(body);
+                } else {
+                    branches.push(CaseBranch {
+                        patterns: Vec::new(),
+                        body,
+                        origin: origin_of(child),
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -1795,16 +1871,9 @@ fn lower_expr(
         }
         RawKind::CallExpression => {
             let function = lower_opt_field(node, FieldName::Function, ir, issues, source, depth);
-            // H-8: a mid-argument comment (`P(a, /* c */ b)`) must never become a
-            // phantom `Unknown` argument — see `structural_children`'s doc.
             let args = node
                 .field(FieldName::Arguments)
-                .map(|al| {
-                    structural_children(al)
-                        .into_iter()
-                        .map(|a| lower_expr(a, ir, issues, source, depth + 1))
-                        .collect()
-                })
+                .map(|al| lower_arguments(al, ir, issues, source, depth))
                 .unwrap_or_default();
             ExprKind::Call { function, args }
         }
@@ -1864,6 +1933,53 @@ fn lower_expr(
         }
     };
     ir.add_expr(Expr { kind, origin })
+}
+
+/// An `argument_list`'s arguments, in document order.
+///
+/// - H-8: a mid-argument comment (`P(a, /* c */ b)`) must never become a phantom
+///   `Unknown` argument — see `structural_children`'s doc.
+/// - `preproc_conditional_arguments` (grammar `main`, 2026-10; an ERROR before): a
+///   `#if` at an argument separator, `P(a, #if X b, #endif c)`. Its arms' arguments
+///   are flat children between the directive nodes. They are UNION-read into the
+///   list, the same policy `preproc_split_call_statement` uses for a split argument
+///   list, so every call nested in any arm stays a reachable call site. The arity is
+///   then the union's, which may match no single build; a `SyntaxIssue` records that.
+/// - `preproc_conditional_expression_tail`: `_argument_expression` lets an argument
+///   continue across a `#if` (`P(1 #if X + 2 #endif)`), and the tail is a SIBLING of
+///   the argument it continues. It is not an argument, so it is not counted; lowering
+///   it would only add an `Unknown` argument, which carries no reachable call either.
+fn lower_arguments(
+    al: RawNode,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    depth: u32,
+) -> Vec<ExprId> {
+    let mut args = Vec::new();
+    for c in structural_children(al) {
+        match c.kind() {
+            RawKind::PreprocConditionalExpressionTail => {}
+            RawKind::PreprocConditionalArguments => {
+                issues.push(SyntaxIssue {
+                    message: "`#if` inside an argument list — every arm's arguments are \
+                              union-read (the per-build arity is not modelled)"
+                        .to_string(),
+                    origin: origin_of(c),
+                });
+                for a in structural_children(c) {
+                    if is_preproc_scaffold(a.kind())
+                        || a.kind() == RawKind::PreprocConditionalExpressionTail
+                    {
+                        continue;
+                    }
+                    args.push(lower_expr(a, ir, issues, source, depth + 1));
+                }
+            }
+            _ => args.push(lower_expr(c, ir, issues, source, depth + 1)),
+        }
+    }
+    args
 }
 
 fn binary_op(node: RawNode, source: &str) -> BinaryOp {
@@ -3467,5 +3583,322 @@ codeunit 50107 T
                 ExprKind::Literal(Literal::Int(_))
             ));
         }
+    }
+
+    // ---- grammar `main` 2026-10 shapes (each was an ERROR, or dropped, before) ----
+
+    /// The arguments of the first call to `name`, in the arena.
+    fn call_args(af: &crate::ir::AlFile, name: &str) -> Vec<crate::ir::ExprId> {
+        af.ir
+            .iter_exprs()
+            .find_map(|e| match &e.kind {
+                ExprKind::Call { function, args }
+                    if matches!(&af.ir.expr(*function).kind, ExprKind::Identifier(n) if n == name) =>
+                {
+                    Some(args.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} call must exist"))
+    }
+
+    fn routine_body(af: &crate::ir::AlFile, name: &str) -> crate::ir::BlockId {
+        af.objects[0]
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("routine {name} must exist"))
+            .body
+            .expect("routine must have a body")
+    }
+
+    /// `preproc_conditional_arguments`: every arm's arguments are real arguments in
+    /// some build, so they are union-read into the list (never one `Unknown` argument
+    /// standing for the whole `#if`, which hid the call nested in it).
+    #[test]
+    fn split_argument_list_union_reads_every_arm() {
+        let src = r#"
+codeunit 50110 T
+{
+    procedure P()
+    begin
+        DoWork(1,
+#if not C28
+            2
+#else
+            Inner()
+#endif
+            );
+    end;
+}
+"#;
+        let af = parse(src);
+        let args = call_args(&af, "DoWork");
+        assert_eq!(args.len(), 3, "1, then both arms' arguments");
+        assert!(matches!(
+            af.ir.expr(args[1]).kind,
+            ExprKind::Literal(Literal::Int(_))
+        ));
+        assert!(
+            matches!(af.ir.expr(args[2]).kind, ExprKind::Call { .. }),
+            "the #else arm's call is an argument, so the engine reaches it"
+        );
+    }
+
+    /// A `preproc_conditional_expression_tail` beside an argument continues that
+    /// argument (`DoWork(1 #if X + 2 #endif, 3)`); it is not a second argument.
+    #[test]
+    fn argument_expression_tail_is_not_an_argument() {
+        let src = r#"
+codeunit 50111 T
+{
+    procedure P()
+    begin
+        DoWork(1
+#if X
+            + 2
+#endif
+            , 3);
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(call_args(&af, "DoWork").len(), 2);
+    }
+
+    /// A procedure boundary inside an `#else`: P's block closes in
+    /// `preproc_split_block_end_in_else`, Q's in `preproc_split_block_close_after_endif`.
+    /// Both are siblings of the block's `body`, like `preproc_split_code_block_end`.
+    #[test]
+    fn split_procedure_boundary_closings_are_recovered() {
+        let src = r#"
+codeunit 50112 T
+{
+    procedure P()
+    begin
+        First();
+#if not C28
+        IfArm();
+#else
+        ElseArm();
+    end;
+
+    local procedure Q()
+    begin
+        InQ();
+#endif
+        AfterEndif();
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let p = routine_body(&af, "P");
+        for name in ["First", "IfArm", "ElseArm"] {
+            assert!(
+                call_reachable(&af, p, name),
+                "{name} must be reachable in P"
+            );
+        }
+        let q = routine_body(&af, "Q");
+        for name in ["InQ", "AfterEndif"] {
+            assert!(
+                call_reachable(&af, q, name),
+                "{name} must be reachable in Q"
+            );
+        }
+    }
+
+    /// `preproc_split_else_begin_over_endif` (in `code_block`'s closing choice since
+    /// before the 2026-10 grammar): its statements were dropped.
+    #[test]
+    fn split_else_begin_over_endif_content_is_recovered() {
+        let src = r#"
+codeunit 50113 T
+{
+    procedure P(A: Boolean; B: Boolean)
+    begin
+        if A then begin
+            First();
+#if not C28
+            InIf();
+        end else begin
+            InElse();
+#endif
+            Shared();
+        end;
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let p = routine_body(&af, "P");
+        for name in ["First", "InIf", "InElse", "Shared"] {
+            assert!(call_reachable(&af, p, name), "{name} must be reachable");
+        }
+    }
+
+    /// `preproc_split_open_statement` inside a `case_body`: `else` / `else begin`
+    /// alternating per arm is the case's else part. It fell to the `_` arm of
+    /// `collect_case_branches` and was dropped with every call in it.
+    #[test]
+    fn case_body_split_open_statement_is_the_case_else() {
+        let src = r#"
+codeunit 50114 T
+{
+    procedure P(K: Integer; H: Boolean)
+    begin
+        case K of
+            1:
+                One()
+#if C28
+            else
+#else
+            else begin
+                InElseBegin();
+#endif
+                Shared();
+#if not C28
+            end;
+#endif
+        end;
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let (_, else_block) = first_case(&af);
+        let else_block = else_block.expect("the split else is the case's else");
+        for name in ["InElseBegin", "Shared"] {
+            assert!(call_reachable(&af, else_block, name), "{name} in the else");
+        }
+    }
+
+    /// `preproc_split_var_section_tail`: a `#if` arm continues the global var section
+    /// and then starts procedures. Its declarations are globals.
+    #[test]
+    fn split_var_section_tail_declarations_are_globals() {
+        let src = r#"
+codeunit 50115 T
+{
+    var
+        A: Integer;
+#if not CLEAN25
+        B: Integer;
+
+    procedure P()
+    begin
+    end;
+#endif
+
+    procedure Q()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let obj = &af.objects[0];
+        let globals: Vec<&str> = obj.globals.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(globals, ["A", "B"]);
+        let routines: Vec<&str> = obj.routines.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(routines, ["P", "Q"]);
+    }
+
+    /// Split table fields and keys: a header that differs per arm with one shared body
+    /// (`preproc_split_table_field`, `preproc_split_key`) and a body opened inside the
+    /// `#if` (`preproc_split_table_field_open`). None was read; the field or key was
+    /// missing from the object. The FieldClass after the `#endif` is read too.
+    #[test]
+    fn split_table_fields_and_keys_are_collected() {
+        let src = r#"
+table 50116 T
+{
+    fields
+    {
+        field(1; A; Integer) { }
+#if not CLOUD
+        field(2; B; Text[2048])
+#else
+        field(2; B; Text[250])
+#endif
+        {
+        }
+#if not S31
+        field(3; C; Integer) { }
+        field(4; D; Decimal)
+        {
+            Caption = 'D';
+#endif
+            FieldClass = FlowField;
+        }
+    }
+    keys
+    {
+        key(PK; A) { }
+#if not C28
+        key(K2; B) { }
+        key(K3; C, B)
+#else
+        key(K2; C, B)
+#endif
+        {
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let obj = &af.objects[0];
+        let fields: Vec<(i64, &str, &str)> = obj
+            .fields
+            .iter()
+            .map(|f| (f.number, f.name.as_str(), f.field_class.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                (1, "A", "Normal"),
+                (2, "B", "Normal"),
+                (3, "C", "Normal"),
+                (4, "D", "FlowField"),
+            ]
+        );
+        assert_eq!(obj.fields[1].data_type, "Text[2048]", "first arm's header");
+        assert_eq!(obj.keys, [vec!["a"], vec!["b"], vec!["c", "b"]]);
+    }
+
+    /// `preproc_split_modify`: `#if modify(A) #else modify(B) #endif { … }`. A trigger
+    /// in its body belongs to the modified member (the first arm's target), as it does
+    /// for a plain `modify`.
+    #[test]
+    fn split_modify_target_is_the_enclosing_member() {
+        let src = r#"
+pageextension 50117 PE extends P
+{
+    layout
+    {
+#if not C28
+        modify(A)
+#else
+        modify(B)
+#endif
+        {
+            trigger OnAfterValidate()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let r = &af.objects[0].routines[0];
+        assert_eq!(r.name, "OnAfterValidate");
+        assert_eq!(
+            r.enclosing_member.as_ref().map(|(n, _)| n.as_str()),
+            Some("A")
+        );
+        assert!(!r.in_dataset_modify_context);
     }
 }
