@@ -59,6 +59,13 @@ pub struct FieldDecl {
     pub data_type: String,
     pub field_class: String,
     pub is_blob_like: bool,
+    /// The field's `ObsoleteState` value(s) as written (`Pending`, `Removed`, …),
+    /// one per textually present `#if` arm; empty = the field declares none.
+    /// More than one = the state differs by preprocessor branch: a consumer must
+    /// not pick one (the lowerer's superset rule, see `collect_properties`).
+    pub obsolete_state: Vec<String>,
+    /// The field's `ObsoleteReason` text(s), quotes stripped, same arm rule.
+    pub obsolete_reason: Vec<String>,
 }
 
 /// A single object-level `property` node (`name = value`). `name` is lowercased;
