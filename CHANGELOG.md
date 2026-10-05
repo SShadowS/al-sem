@@ -38,6 +38,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem analyze` parses each workspace file once** (engine-switch S2a). Until now
+  the program engine parsed every file, and then L3 assembly parsed it again. The L3
+  model is now projected from the program engine's parse:
+  - `l3_workspace::project_file` was split so `project_ir` takes an already-parsed
+    file;
+  - the new `assemble_and_resolve_workspace_from_program` is what
+    `build_analysis_model` calls.
+
+  The file set stays L3's own. L3 discovers files app-scoped (nested apps skipped),
+  while the program engine's workspace unit includes nested apps, so
+  `select_program_files` filters the program's files to the app-scoped set. If a file
+  is missing from the program's parse, the model is built from disk as before, with a
+  warning. When the program build fails, the failure is still classified by the old
+  disk assembly, so the empty-output and error outcomes do not move.
+
+  Guards:
+  - `analyze_model_selects_app_scoped_files_from_the_program_parse` builds a root app
+    with a nested app inside. It fails if selection takes the nested file, drops the
+    root one, or falls back to disk.
+  - `analysis_model_uses_the_program_parse` fails if `build_analysis_model` goes back
+    to the disk entry.
+
+  Discrimination: switching selection to the non-scoped walk fails the first guard;
+  calling the disk entry fails the second. Harness: `s1` and `s2a` are byte-identical
+  on all 218 corpora, and the `alsem analyze` JSON on CDO is byte-identical.
+
+  Measured on CDO with `release-fast`, warm, 3–4 runs per side using `ALSEM_TRACE`
+  spans:
+  - `l3.assemble_resolve` fell from 99–129 ms to 46–53 ms. The second parse (about
+    68 ms) is gone; selecting the files plus projecting them takes about 32 ms.
+  - Peak working set fell from 603–606 MB to 594–599 MB.
+  - End-to-end wall clock did not measurably improve: 3.18–3.44 s before, 3.38–3.51 s
+    after. Unchanged stages (`preflight.fresh_program`) drifted by about 200 ms
+    between the two batches, which is more than the saving. This step's value is
+    structural: the model now rests on the program engine's parse, as S2b requires.
+
 - **The program engine no longer imports the legacy engine** (engine-switch S1). Shared
   code moved out of L2/L3 into neutral homes:
   - the attribute model `engine::l3::al_attributes` → `program::attributes`;

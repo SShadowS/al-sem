@@ -39,7 +39,9 @@ use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::gate::version::driver_version;
 use crate::engine::l3::coverage::AnalysisCoverage;
-use crate::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_workspace};
+use crate::engine::l3::l3_workspace::{
+    L3Resolved, assemble_and_resolve_workspace_from_program, assemble_l3_workspace_from_disk,
+};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
 
@@ -205,21 +207,33 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             model: Err(ModelFailure::NoModelInstanceId),
         };
     };
+    let Some((ctx, report)) = program else {
+        // Classified exactly as before engine-switch S2a: a model that would not
+        // assemble from disk is the empty-output case, otherwise the failed program
+        // build is an error. (Assembly no longer runs on the success path's disk
+        // parse; only this failure path still reads the workspace through L3.)
+        let assembles = {
+            let _s = pt::span("l3", "l3.assemble_resolve");
+            assemble_l3_workspace_from_disk(ws_path, &model_instance_id)
+                .is_some_and(|w| !(w.objects.is_empty() && w.routines.is_empty()))
+        };
+        let model = if assembles {
+            let why = fresh.as_ref().err().cloned().unwrap_or_default();
+            Err(ModelFailure::ProgramBuildFailed(why))
+        } else {
+            Err(ModelFailure::AssemblyFailed)
+        };
+        return AnalysisModel { fresh, model };
+    };
+    // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
-        assemble_and_resolve_workspace(ws_path, &model_instance_id, false)
+        assemble_and_resolve_workspace_from_program(ws_path, &model_instance_id, false, &ctx)
     };
     let Some(mut resolved) = resolved else {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
-        };
-    };
-    let Some((ctx, report)) = program else {
-        let why = fresh.as_ref().err().cloned().unwrap_or_default();
-        return AnalysisModel {
-            fresh,
-            model: Err(ModelFailure::ProgramBuildFailed(why)),
         };
     };
     crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);

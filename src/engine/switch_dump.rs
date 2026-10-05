@@ -351,6 +351,80 @@ mod tests {
         }
     }
 
+    /// S2a: the analyze model is projected from the program engine's parse, and the
+    /// file set is L3's app-scoped one. Hand-stated precondition: a root app with a
+    /// nested app inside — the program walks the nested file, L3 must not. Fails if
+    /// selection falls back to disk (`Missing`), takes the nested file, or drops the
+    /// root one.
+    #[test]
+    fn analyze_model_selects_app_scoped_files_from_the_program_parse() {
+        use crate::engine::l3::l3_workspace::{ProgramFiles, select_program_files};
+        let root = std::env::temp_dir().join(format!("switch-s2a-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = |dir: &Path, id: &str| {
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("app.json"),
+                format!(
+                    r#"{{"id":"{id}","name":"N","publisher":"P","version":"1.0.0.0","dependencies":[]}}"#
+                ),
+            )
+            .unwrap();
+        };
+        app(&root, "11111111-0000-0000-0000-00000000a2a0");
+        app(&root.join("nested"), "11111111-0000-0000-0000-00000000a2a1");
+        std::fs::write(
+            root.join("src/Root.al"),
+            "codeunit 50100 Root { procedure A() begin end; }",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("nested/src/Inner.al"),
+            "codeunit 50101 Inner { procedure B() begin end; }",
+        )
+        .unwrap();
+
+        let (ctx, _report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&root).unwrap();
+        let program_paths: Vec<&str> = ctx
+            .parsed()
+            .iter()
+            .flat_map(|u| u.files.iter().map(|f| f.virtual_path.as_str()))
+            .collect();
+        assert!(
+            program_paths.contains(&"nested/src/Inner.al"),
+            "precondition: the program parse walks the nested app, got {program_paths:?}"
+        );
+        let selected: Vec<String> = match select_program_files(&root, &ctx) {
+            Some(ProgramFiles::Selected { files, .. }) => {
+                files.iter().map(|(p, _)| p.to_string()).collect()
+            }
+            Some(ProgramFiles::Missing(p)) => panic!("fell back to disk: {p} missing"),
+            None => panic!("failed closed"),
+        };
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(selected, vec!["src/Root.al".to_string()]);
+    }
+
+    /// `build_analysis_model` must build through the program-backed entry (S2a);
+    /// the disk entry may appear only on its failure path.
+    #[test]
+    fn analysis_model_uses_the_program_parse() {
+        let src = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine/gate/run.rs"),
+        )
+        .unwrap();
+        let start = src.find("pub fn build_analysis_model(").unwrap();
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert_eq!(
+            body.matches("assemble_and_resolve_workspace_from_program(")
+                .count(),
+            1
+        );
+        assert!(!body.contains("assemble_and_resolve_workspace("));
+    }
+
     #[test]
     fn write_then_read_round_trips() {
         let dir = std::env::temp_dir().join(format!("switch-dump-rt-{}", std::process::id()));

@@ -673,6 +673,37 @@ fn project_file(
     let ir_file = al_syntax::parse(source);
     let t_parsed = hot.then(std::time::Instant::now);
 
+    project_ir(
+        &ir_file,
+        source,
+        app_guid,
+        model_instance_id,
+        source_unit_id,
+        cols,
+        workspace,
+    );
+
+    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
+        let mut lc = pt::LocalCounters::new();
+        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
+        lc.add("projection_us", t1.elapsed().as_micros() as u64);
+        lc.flush("l3.parse_project");
+    }
+}
+
+/// Project one ALREADY-PARSED file into `workspace` — [`project_file`] without the
+/// parse. Engine-switch S2a: the analyze path hands in the program engine's parse
+/// of the same text (`al_syntax::parse` over the same `read_al_source` bytes), so
+/// each workspace file is parsed once.
+fn project_ir(
+    ir_file: &al_syntax::ir::AlFile,
+    source: &str,
+    app_guid: &str,
+    model_instance_id: &str,
+    source_unit_id: &str,
+    cols: &Utf16Cols,
+    workspace: &mut L3Workspace,
+) {
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
             continue;
@@ -827,7 +858,7 @@ fn project_file(
             // against a real table sharing that number (see `is_extension_stub`).
             workspace.tables.push(index_table_ir(
                 o,
-                &ir_file,
+                ir_file,
                 &object_id,
                 app_guid,
                 object_number,
@@ -872,7 +903,7 @@ fn project_file(
         // same source, same first-wins dedup, same lowercasing — minus the anchor,
         // which `L3Variable` does not carry. See [`RoutineVariables`].
         let object_globals: Arc<[L3Variable]> = Arc::from(
-            crate::engine::l2::ir_walk::ir_object_globals(&ir_file, oi, cols, source_unit_id)
+            crate::engine::l2::ir_walk::ir_object_globals(ir_file, oi, cols, source_unit_id)
                 .into_iter()
                 .map(|g| L3Variable {
                     name: g.name,
@@ -915,7 +946,7 @@ fn project_file(
                     model_instance_id,
                 );
                 let feats = crate::engine::l2::ir_walk::project_routine_features_ir(
-                    &ir_file,
+                    ir_file,
                     oi,
                     ir_routine,
                     &rid,
@@ -935,7 +966,7 @@ fn project_file(
             {
                 let cc_params = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
                 let attrs_json =
-                    crate::engine::l2::ir_walk::ir_attributes(ir_routine, &ir_file, source).1;
+                    crate::engine::l2::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
                 let attr_names_lc: Vec<String> = attrs_json
                     .iter()
                     .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
@@ -1007,7 +1038,7 @@ fn project_file(
             // Computed AFTER global promotion so a guarded object-global
             // receiver also qualifies.
             let entry_temp_guard_receiver =
-                crate::engine::l2::ir_walk::ir_entry_temp_guard_receiver(&ir_file, ir_routine)
+                crate::engine::l2::ir_walk::ir_entry_temp_guard_receiver(ir_file, ir_routine)
                     .filter(|receiver| {
                         receiver == "rec"
                             || receiver == "xrec"
@@ -1240,7 +1271,7 @@ fn project_file(
             // member) cannot drift from R1.
             let kind = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine).to_string();
             let attributes_parsed_json =
-                crate::engine::l2::ir_walk::ir_attributes(ir_routine, &ir_file, source).1;
+                crate::engine::l2::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
             let attributes_parsed: Vec<crate::program::attributes::AttributeInfo> =
                 attributes_parsed_json
                     .into_iter()
@@ -1301,13 +1332,6 @@ fn project_file(
                 entry_temp_guard_receiver,
             });
         }
-    }
-
-    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
-        let mut lc = pt::LocalCounters::new();
-        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
-        lc.add("projection_us", t1.elapsed().as_micros() as u64);
-        lc.flush("l3.parse_project");
     }
 }
 
@@ -1487,8 +1511,139 @@ pub fn assemble_and_resolve_workspace(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<L3Resolved> {
+    let ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
+    finish_resolved(ws, workspace, skip_roots_config)
+}
+
+/// [`assemble_and_resolve_workspace`] over the program engine's parse (engine-switch
+/// S2a): the same file set, text, order and passes, but each file is projected from
+/// `ctx`'s already-parsed tree instead of being parsed a second time.
+///
+/// The file set is L3's own: app-scoped discovery (nested apps skipped), while the
+/// program engine's workspace unit includes nested apps (`provider.rs`), so the
+/// program files are FILTERED to the app-scoped set. If any app-scoped file is
+/// missing from the program's parse (the two walks disagreeing, e.g. a file created
+/// between them), the model is built from disk exactly as before.
+pub fn assemble_and_resolve_workspace_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<L3Resolved> {
+    let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
+    finish_resolved(ws, workspace, skip_roots_config)
+}
+
+/// Which files the program-backed assembly projects.
+pub enum ProgramFiles<'c> {
+    /// Every app-scoped file, each from the program's parse, in discovery order.
+    Selected {
+        app_guid: String,
+        files: Vec<(&'c str, &'c crate::snapshot::parse::ParsedFile)>,
+    },
+    /// An app-scoped file the program did not parse (named): build from disk.
+    Missing(String),
+}
+
+/// Select L3's app-scoped file set from `ctx`'s parse. `None` on the disk path's
+/// fail-closed conditions (no root `app.json` id, unreadable workspace).
+pub fn select_program_files<'c>(
+    workspace: &std::path::Path,
+    ctx: &'c crate::program::resolve::full::ProgramContext,
+) -> Option<ProgramFiles<'c>> {
+    use crate::engine::l2::l2_workspace::{discover_al_files_app_scoped, read_root_app_guid};
+    use crate::snapshot::parse::ParsedFile;
+
+    let app_guid = read_root_app_guid(workspace)?;
+    let discovered = discover_al_files_app_scoped(workspace).ok()?;
+    let by_path: std::collections::HashMap<&str, &ParsedFile> = ctx
+        .parsed()
+        .iter()
+        .flat_map(|u| u.files.iter())
+        .map(|f| (f.virtual_path.as_str(), f))
+        .collect();
+    let mut files = Vec::with_capacity(discovered.len());
+    for f in &discovered {
+        match by_path.get(f.rel_posix.as_str()) {
+            // `virtual_path == rel_posix` (the lookup key): both come from
+            // `source_text::discover_al_files`.
+            Some(pf) => files.push((pf.virtual_path.as_str(), *pf)),
+            None => return Some(ProgramFiles::Missing(f.rel_posix.clone())),
+        }
+    }
+    Some(ProgramFiles::Selected { app_guid, files })
+}
+
+fn assemble_l3_workspace_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<L3Workspace> {
+    let selected = {
+        let _s = pt::span("l3", "l3.select_program_parse");
+        select_program_files(workspace, ctx)?
+    };
+    let (app_guid, files) = match selected {
+        ProgramFiles::Selected { app_guid, files } => (app_guid, files),
+        ProgramFiles::Missing(path) => {
+            log::warn!("program parse lacks {path}; building the L3 model from disk");
+            return assemble_l3_workspace_from_disk(workspace, model_instance_id);
+        }
+    };
+    if files.is_empty() {
+        return None;
+    }
+
+    let _s = pt::span("l3", "l3.project_parallel");
+    // Same deterministic order and fold as `assemble_workspace`.
+    let mut sorted = files;
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    use rayon::prelude::*;
+    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
+        sorted
+            .par_iter()
+            .map(|(fname, pf)| {
+                let source_unit_id = format!("ws:{fname}");
+                let cols = Utf16Cols::new(&pf.text);
+                let mut ws = L3Workspace {
+                    objects: Vec::new(),
+                    tables: Vec::new(),
+                    routines: Vec::new(),
+                };
+                project_ir(
+                    &pf.file,
+                    &pf.text,
+                    &app_guid,
+                    model_instance_id,
+                    &source_unit_id,
+                    &cols,
+                    &mut ws,
+                );
+                ws
+            })
+            .collect()
+    });
+    let mut workspace = L3Workspace {
+        objects: Vec::new(),
+        tables: Vec::new(),
+        routines: Vec::new(),
+    };
+    for mut frag in fragments {
+        workspace.objects.append(&mut frag.objects);
+        workspace.tables.append(&mut frag.tables);
+        workspace.routines.append(&mut frag.routines);
+    }
+    Some(workspace)
+}
+
+/// The finishing half shared by the disk-backed and program-backed entries:
+/// resolve, classify roots, read the primary app, and refuse an empty model.
+fn finish_resolved(
+    mut ws: L3Workspace,
+    workspace: &std::path::Path,
+    skip_roots_config: bool,
+) -> Option<L3Resolved> {
     let resolved = {
-        let mut ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`.
         // `workspace` is the root where the config lives (mirrors al-sem's
