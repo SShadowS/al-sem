@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and three removed them only when the test passed. On the dev box this had piled up
   ~19k `alsem-*` dirs. They now return a `tempfile::TempDir`, which removes the tree on
   drop, panics included. Running the five members left the `%TEMP%` count unchanged.
+- **The CLAUDE.md note on `condition_references` was half wrong** (#24). It said the
+  collection misses `if (X)`; `collect_cond_idents` has looked through parentheses since
+  it was written. What it misses is any QUOTED name, bare or as a member. The note and
+  d60's doc comment now say so, and `ir_walk`'s `condition_references_shapes` test pins
+  the recorded shapes (it fails if the parenthesis arm is removed or quoted members are
+  let through).
 
 ## [1.4.0] - 2026-10-05
 

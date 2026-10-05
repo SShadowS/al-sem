@@ -719,13 +719,16 @@ under `docs/superpowers/specs/`.
   building taxonomy for it.
 - **Detector substrate gotcha — "is there a branch in this loop?" uses
   `statement_tree`, NOT `condition_references`.** `L3Routine.condition_references`
-  (built by `ir_walk::collect_cond_idents`) records only PLAIN-identifier condition
-  references — it misses a parenthesized condition (`if (X)`) and a quoted-field
-  scrutinee (`case Rec."E-Mail" of`), exactly the shapes real BC code uses. Walk the
+  (built by `ir_walk::collect_cond_idents`) records unquoted IDENTIFIER names only: a
+  bare `X` or a member's `.Name`, looking through parentheses, calls and operators.
+  It never records a QUOTED name, bare (`if "My Var"`) or as a member
+  (`case Rec."E-Mail" of`), and real BC code quotes field names constantly. It also
+  carries identifiers, not structure: it cannot tell you a branch exists. Walk the
   control-flow tree `L3Routine.statement_tree` (`PCFNNode`; `if`/`case` kind nodes
   carry `source_range`) for a STRUCTURAL, shape-independent branch check — see d60's
-  `tree_has_branch_within`. This bit d60 (two paren/quoted conditions survived the
-  identifier-only guard) before the switch.
+  `tree_has_branch_within`. This bit d60 (a quoted-field scrutinee survived the
+  identifier-only guard) before the switch. `ir_walk`'s `condition_references_shapes`
+  test pins exactly which shapes are recorded (#24).
 - **al-sem retirement is COMPLETE.** `U:\Git\al-sem` was archived to
   `al-sem-OBOLETE`; nothing in this repo reads from it or writes into it at test
   time, and zero tests point at it any more. Every differential/golden is

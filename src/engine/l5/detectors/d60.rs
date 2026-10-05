@@ -41,8 +41,8 @@ fn range_within(r: (u32, u32, u32, u32), outer: &PAnchor) -> bool {
 
 /// True if the statement tree contains an `if`/`case` branch node whose source
 /// range is within `loop_anchor` — i.e. the loop body branches. Structural, so
-/// it catches conditions of ANY shape (parenthesized, quoted-field scrutinee)
-/// that the identifier-only `condition_references` collection misses. Recurses
+/// it catches conditions of ANY shape (e.g. a quoted-field scrutinee) that the
+/// identifier-only `condition_references` collection misses. Recurses
 /// every child group; the loop's own enclosing `if Rec.FindSet()` guard is NOT
 /// within the loop and so never matches.
 fn tree_has_branch_within(node: &PCFNNode, loop_anchor: &PAnchor) -> bool {

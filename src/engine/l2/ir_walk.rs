@@ -2573,4 +2573,40 @@ codeunit 50001 T
         assert_eq!(stmt_count, 1, "sites: {sites:?}");
         assert_eq!(expr_count, 2, "sites: {sites:?}");
     }
+
+    /// Which condition shapes `condition_references` records (#24, and the
+    /// detector-substrate note in CLAUDE.md that cites this test). Parentheses are
+    /// looked through; a QUOTED name -- bare or as a member -- is never recorded.
+    #[test]
+    fn condition_references_shapes() {
+        const SRC: &str = r#"
+codeunit 50002 C
+{
+    procedure Caller()
+    var
+        Rec: Record Customer;
+        Plain: Boolean;
+        Paren: Boolean;
+        "Quoted Var": Boolean;
+    begin
+        if Plain then;
+        if (Paren) then;
+        if Rec.Name <> '' then;
+        if "Quoted Var" then;
+        case Rec."E-Mail" of
+            '':
+                ;
+        end;
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+        let got: Vec<(&str, &str)> = features
+            .condition_references
+            .iter()
+            .map(|r| (r.identifier.as_str(), r.condition_kind.as_str()))
+            .collect();
+        assert_eq!(got, [("plain", "if"), ("paren", "if"), ("name", "if")]);
+    }
 }
