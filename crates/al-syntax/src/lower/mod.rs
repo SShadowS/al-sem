@@ -429,36 +429,11 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         .field(FieldName::Type)
         .map(|n| n.text(source).trim().to_string())
         .unwrap_or_default();
-    // FieldClass property (in the field's declaration_body): FlowField / FlowFilter /
-    // Normal. Mirrors classify_field. Every `body` is read: a
-    // `preproc_split_table_field_open` has two, before and after its `#endif`.
-    let mut field_class = "Normal".to_string();
-    for body in node.children_by_field(FieldName::Body) {
-        for member in body.named_children() {
-            if member.kind() != RawKind::Property {
-                continue;
-            }
-            let Some(pname) = member.field(FieldName::Name) else {
-                continue;
-            };
-            if !pname.text(source).trim().eq_ignore_ascii_case("fieldclass") {
-                continue;
-            }
-            let v = member
-                .field(FieldName::Value)
-                .map(|n| n.text(source).fold_identifier())
-                .unwrap_or_default();
-            if v.contains("flowfield") {
-                field_class = "FlowField".to_string();
-            } else if v.contains("flowfilter") {
-                field_class = "FlowFilter".to_string();
-            }
-        }
-    }
-    // ObsoleteState / ObsoleteReason (#26). BC writes obsoletion inside `#if`
-    // blocks (`#if not CLEAN24 Pending #else Removed #endif`), so read through
-    // `collect_properties`, which descends preproc wrappers and whole-value
-    // `#if` arms, rather than direct children only as FieldClass above does.
+    // Field properties, read through `collect_properties`, which descends preproc
+    // wrappers and whole-value `#if` arms (one value per arm). Every `body` is
+    // read: a `preproc_split_table_field_open` has two, before and after its
+    // `#endif`. Reading direct children only missed any `#if`-wrapped property
+    // (#26 for ObsoleteState, #62 for FieldClass).
     let mut props = Vec::new();
     for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
@@ -471,6 +446,29 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
             .filter(|p| p.name == name && !p.value.is_empty())
             .map(|p| p.value.trim_matches('\'').to_string())
             .collect()
+    };
+    // FieldClass: FlowField / FlowFilter / Normal. Mirrors classify_field.
+    // ponytail: arms that DISAGREE fall back to "Normal" (the old answer). Its
+    // consumers pull opposite ways (d1 wants "may be FlowField", d3/d22/d42
+    // "surely FlowField"), so the honest model carries every arm and each
+    // consumer picks any/all -- add that when a real workspace has the shape
+    // (0 in CDO and DO when #62 was fixed).
+    let classes: Vec<&str> = values_of("fieldclass")
+        .iter()
+        .map(|v| {
+            let v = v.fold_identifier();
+            if v.contains("flowfield") {
+                "FlowField"
+            } else if v.contains("flowfilter") {
+                "FlowFilter"
+            } else {
+                "Normal"
+            }
+        })
+        .collect();
+    let field_class = match classes.split_first() {
+        Some((first, rest)) if rest.iter().all(|c| c == first) => first.to_string(),
+        _ => "Normal".to_string(),
     };
     let obsolete_state = values_of("obsoletestate");
     let obsolete_reason = values_of("obsoletereason");
@@ -3935,12 +3933,30 @@ table 50120 T
             ObsoleteReason = 'Replaced.';
         }
         field(3; Live; Code[20]) { }
+        field(4; Amt; Decimal)
+        {
+#if not CLEAN24
+            FieldClass = FlowField;
+#endif
+        }
+        field(5; Split; Decimal)
+        {
+#if not CLEAN24
+            FieldClass = FlowField;
+#else
+            FieldClass = Normal;
+#endif
+        }
     }
 }
 "#;
         let af = parse(src);
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
         let f = &af.objects[0].fields;
+        // #62: an #if-wrapped FieldClass is read; disagreeing arms stay Normal.
+        assert_eq!(f[3].field_class, "FlowField", "#if-wrapped FieldClass");
+        assert_eq!(f[4].field_class, "Normal", "disagreeing arms");
+        assert_eq!(f[0].field_class, "Normal");
         assert_eq!(f[0].obsolete_state, ["Removed"]);
         assert_eq!(f[0].obsolete_reason, ["Use New instead."]);
         assert_eq!(f[1].obsolete_state, ["Pending", "Removed"], "both #if arms");
