@@ -510,6 +510,13 @@ fn build_block(
         let Some(right) = table_op_to_right(&f.op) else {
             continue;
         };
+        // #20: a provably temporary record needs no TableData permission. Per
+        // fact, before its right is merged into the table's line, so a physical
+        // access to the same table still contributes its own right (#33 keys
+        // temp and physical facts apart in the cone).
+        if f.is_known_temp() {
+            continue;
+        }
         let target_display = idx
             .stable_id_to_display
             .get(rid_res)

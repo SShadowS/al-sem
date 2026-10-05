@@ -663,6 +663,15 @@ fn derive_permissions(
                 let Some(right) = table_op_to_right(f.op) else {
                     continue;
                 };
+                // #13: a provably temporary record needs no TableData permission.
+                // Skipped BEFORE the `seen` dedup, so a physical access to the
+                // same table and right still claims the row (with its own
+                // witness). Safe since #33: the cone keys temp and physical facts
+                // apart, so a physical access is never hidden behind a temp one.
+                // Unknown / parameter-dependent temp state still requires.
+                if crate::engine::l4::cone_derived::fact_is_known_temp(f) {
+                    continue;
+                }
                 let stable_table = stable_table_from_internal(f.resource_id.as_deref().unwrap());
                 let key = format!("{stable_subject}|{stable_table}|{right}");
                 if !seen.insert(key) {

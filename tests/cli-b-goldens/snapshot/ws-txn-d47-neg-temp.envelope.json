@@ -159,21 +159,7 @@
         "startLine": 14
       }
     ],
-    "permissionFacts": [
-      {
-        "coverage": "complete",
-        "derivedFromCapability": {
-          "op": "insert"
-        },
-        "kind": "required",
-        "rights": [
-          "I"
-        ],
-        "subject": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba",
-        "target": "11111111-0000-0000-0000-0000000d4705:Table:50100",
-        "targetKind": "TableData"
-      }
-    ],
+    "permissionFacts": [],
     "rootClassifications": [
       {
         "confidence": "static",

@@ -762,6 +762,9 @@ ws-path-facts/src/Codeunit.al::0::ValidateThenEarlyExit	453cfae624ed2954
 ws-path-facts/src/Codeunit.al::0::ModifyAllAfterValidate	e7412cd03c2de26e
 ws-path-facts/src/Codeunit.al::0::SetLoadFieldsThenFindThenCall	c864994d4003a198
 ws-path-facts/src/Codeunit.al::0::ReadsName	3c6cc0341b33c208
+ws-perm-temp/src/Writer.Codeunit.al::0::Mixed	28fcbdb5e4c2f91b
+ws-perm-temp/src/Writer.Codeunit.al::0::ByParam	d64f3a0ff7d661d6
+ws-perm-temp/src/Writer.Codeunit.al::0::TempOnly	ac6c13c4de992155
 ws-policy-api-dynamic-dispatch/src/Page.al::0::OnAction	cdd23acfd12b931e
 ws-policy-api-isolated-storage/src/Page.al::0::OnAction	dbf0d6ea3d28cab0
 ws-policy-api-ledger-write/src/Page.al::0::OnAction	4e2f2075e8b6d9e9

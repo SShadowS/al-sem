@@ -1,0 +1,43 @@
+Rendering 3 root classifications.
+
+::ByParam  [public-procedure]
+  coverage:   complete
+  writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
+  permissions:
+    TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
+
+  witnesses:
+    insert table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
+      Path 1/1 shown:
+        direct R.Insert at ws:src/Writer.Codeunit.al:21:8
+
+
+::TempOnly  [public-procedure]
+  coverage:   complete
+  reads:      TableData "11111111-0000-0000-0000-00000000e130/table/50300"
+
+  witnesses:
+    modify table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
+      Path 1/1 shown:
+        direct TempRec.Modify at ws:src/Writer.Codeunit.al:30:12
+
+    read table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
+      Path 1/1 shown:
+        direct TempRec.Get at ws:src/Writer.Codeunit.al:29:11
+
+
+::Mixed  [public-procedure]
+  coverage:   complete
+  writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
+  permissions:
+    TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
+
+  witnesses:
+    insert table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
+      Path 1/1 shown:
+        direct TempRec.Insert at ws:src/Writer.Codeunit.al:12:8
+
+    insert table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
+      Path 1/1 shown:
+        direct Rec.Insert at ws:src/Writer.Codeunit.al:14:8
+

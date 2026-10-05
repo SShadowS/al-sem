@@ -100,15 +100,7 @@
         "mayCommit": {
           "presence": "no"
         },
-        "requiredPermissions": [
-          {
-            "coverage": "complete",
-            "rights": "W",
-            "targetDisplay": "11111111-0000-0000-0000-0000000d4705/table/50100",
-            "targetId": "11111111-0000-0000-0000-0000000d4705/table/50100",
-            "targetKind": "table"
-          }
-        ],
+        "requiredPermissions": [],
         "rootKinds": [
           "public-procedure"
         ],

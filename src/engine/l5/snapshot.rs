@@ -353,6 +353,24 @@ pub struct SnapshotCapabilityFact {
     pub extra: Option<SnapCapabilityExtra>,
 }
 
+impl SnapshotCapabilityFact {
+    /// The snapshot twin of `l4::cone_derived::fact_is_known_temp` (#20): the
+    /// same rule, `l2::features::known_temp_suppresses`, reached through this
+    /// carrier's projection. True only for a table fact whose temp state is
+    /// exactly known/true.
+    #[must_use]
+    pub fn is_known_temp(&self) -> bool {
+        match &self.extra {
+            Some(SnapCapabilityExtra::Table { temp_state, .. }) => {
+                crate::engine::l2::features::known_temp_suppresses(
+                    temp_state.as_ref().and_then(SnapTempState::known_value),
+                )
+            }
+            _ => false,
+        }
+    }
+}
+
 impl Serialize for SnapshotCapabilityFact {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
