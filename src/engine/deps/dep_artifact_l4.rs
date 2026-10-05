@@ -126,12 +126,11 @@ pub fn iterate_embedded_source(app_bytes: &[u8]) -> Vec<EmbeddedSourceFile> {
         else {
             continue;
         };
-        // UTF-8 decode (lossy — never panics on bad input). al-sem uses a strict
-        // TextDecoder("utf-8"), but embedded AL source is valid UTF-8 in practice;
-        // lossy keeps the engine-never-panics posture.
+        // The shared `.al` decoder (lossy, BOM dropped), so this text matches
+        // what the snapshot's embedded-source reader produces for the same entry.
         out.push(EmbeddedSourceFile {
             relative_path: name,
-            content: String::from_utf8_lossy(&bytes).into_owned(),
+            content: crate::source_text::decode_al_source(&bytes),
         });
     }
     out

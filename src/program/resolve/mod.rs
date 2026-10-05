@@ -17,7 +17,6 @@ pub mod framework_returns;
 pub mod full;
 pub mod index;
 pub mod member_catalog;
-pub mod preflight_cache;
 pub mod receiver;
 pub mod recordref_returns;
 pub mod resolver;

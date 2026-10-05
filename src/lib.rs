@@ -45,6 +45,8 @@ pub mod lsp;
 pub mod program;
 pub mod protocol;
 pub mod snapshot;
+/// The shared `.al` source decoder (lossy UTF-8, BOM dropped) — see the module doc.
+pub mod source_text;
 /// Per-user state locations, and the read-fallback that carries pre-rename installs.
 pub mod state_paths;
 pub mod telemetry;

@@ -48,74 +48,14 @@ use std::path::Path;
 /// prefixes `r0/…`). It does not enter the R1a stable comparison subset.
 const MODEL_INSTANCE_ID: &str = "r0";
 
-/// A discovered AL source file: its normalized workspace-relative POSIX path
-/// (used both for deterministic sort AND as the `ws:<path>` sourceUnitId) and
-/// the absolute path on disk.
-#[derive(Debug, Clone)]
-pub(crate) struct AlFile {
-    /// Lowercased? NO — the sourceUnitId keeps original case; we sort on it
-    /// lexicographically (matching al-sem's `ws:`-prefixed unit ids).
-    pub(crate) rel_posix: String,
-    pub(crate) abs_path: std::path::PathBuf,
-}
+/// A discovered workspace `.al` file (the shared walk's type).
+pub(crate) use crate::source_text::AlFile;
+use crate::source_text::NestedApps;
 
-/// Recursively discover `*.al` files under `workspace`, excluding dependency
-/// dirs (`.alpackages`, `.git`). Mirrors R0's `discover_al_files`.
+/// Every workspace `.al` file, nested apps included: the program engine's
+/// file set (`crate::source_text::discover_al_files`).
 pub(crate) fn discover_al_files(workspace: &Path) -> std::io::Result<Vec<AlFile>> {
-    let mut files = Vec::new();
-    let mut stack = vec![workspace.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                // Mirror al-sem `workspace.ts` SKIP_DIR_EXACT EXACTLY: skip
-                // `node_modules` and `.alpackages` by case-SENSITIVE exact match.
-                // `.git` is NOT skipped (al-sem walks it; the `.al` extension filter
-                // ignores its contents anyway). Matches the sibling `count_app_json`
-                // skip pair (modulo case — both walkers must agree on the pair).
-                let dname = entry.file_name().to_string_lossy().into_owned();
-                if dname == "node_modules" || dname == ".alpackages" {
-                    continue;
-                }
-                stack.push(path);
-            } else if file_type.is_file() {
-                let is_al = path
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_lowercase() == "al")
-                    .unwrap_or(false);
-                if is_al {
-                    let rel = path.strip_prefix(workspace).unwrap_or(&path);
-                    let rel_posix = rel
-                        .components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    files.push(AlFile {
-                        rel_posix,
-                        abs_path: path,
-                    });
-                }
-            }
-        }
-    }
-    // Deterministic order — by the workspace-relative POSIX path.
-    files.sort_by(|a, b| a.rel_posix.cmp(&b.rel_posix));
-    Ok(files)
-}
-
-/// True when `dir` directly contains an `app.json` (case-insensitive) — i.e. it is
-/// the root of a SEPARATE AL project. Used to stop discovery at nested-app
-/// boundaries.
-fn dir_has_app_json(dir: &Path) -> bool {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries.flatten().any(|e| {
-            e.file_name().to_string_lossy().to_lowercase() == "app.json"
-                && e.file_type().map(|t| t.is_file()).unwrap_or(false)
-        }),
-        Err(_) => false,
-    }
+    crate::source_text::discover_al_files(workspace, NestedApps::Walk)
 }
 
 /// Like [`discover_al_files`] but scoped to ONE app: a child directory that carries
@@ -124,57 +64,13 @@ fn dir_has_app_json(dir: &Path) -> bool {
 /// `workspace` root's own `app.json` does not stop the walk (it IS this app). This
 /// lets a root app whose tree contains nested sub-apps (a monorepo / `Modules/`
 /// layout) be analyzed in isolation, and lets each nested app be analyzed by
-/// pointing at its own root. `node_modules` / `.alpackages` are still skipped.
+/// pointing at its own root. Otherwise the same walk as [`discover_al_files`].
 pub(crate) fn discover_al_files_app_scoped(workspace: &Path) -> std::io::Result<Vec<AlFile>> {
-    let mut files = Vec::new();
-    let mut stack = vec![workspace.to_path_buf()];
-    let mut is_root = true;
-    while let Some(dir) = stack.pop() {
-        // A nested app.json (anywhere but the scoped root) is a project boundary.
-        if !is_root && dir_has_app_json(&dir) {
-            continue;
-        }
-        is_root = false;
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                let dname = entry.file_name().to_string_lossy().into_owned();
-                if dname == "node_modules" || dname == ".alpackages" {
-                    continue;
-                }
-                stack.push(path);
-            } else if file_type.is_file() {
-                let is_al = path
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_lowercase() == "al")
-                    .unwrap_or(false);
-                if is_al {
-                    let rel = path.strip_prefix(workspace).unwrap_or(&path);
-                    let rel_posix = rel
-                        .components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    files.push(AlFile {
-                        rel_posix,
-                        abs_path: path,
-                    });
-                }
-            }
-        }
-    }
-    files.sort_by(|a, b| a.rel_posix.cmp(&b.rel_posix));
-    Ok(files)
+    crate::source_text::discover_al_files(workspace, NestedApps::Skip)
 }
 
-/// Read a file as UTF-8, stripping a leading UTF-8 BOM if present (matches TS).
-pub(crate) fn read_al_source(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    Ok(String::from_utf8_lossy(bytes).into_owned())
-}
+/// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
+pub(crate) use crate::source_text::read_al_source;
 
 /// Read the workspace ROOT's `app.json` `id` field VERBATIM when it is a
 /// non-empty string. Mirrors `providers/workspace.ts` (GAP 2).
@@ -189,15 +85,15 @@ pub(crate) fn read_root_app_guid(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Count `app.json` files anywhere under `workspace`, EXCLUDING `node_modules`
-/// and `.alpackages` (case-insensitive). Mirrors al-sem `SKIP_DIR_EXACT`.
+/// Count `app.json` files anywhere under `workspace`, excluding the shared
+/// skip folders (`crate::source_text::SKIP_DIRS`, any case).
 pub(crate) fn count_app_json(workspace: &Path) -> usize {
     count_app_json_paths(workspace).len()
 }
 
 /// Collect the absolute paths of every `app.json` anywhere under `workspace`,
-/// EXCLUDING `node_modules` and `.alpackages` (case-insensitive). Mirrors al-sem
-/// `SKIP_DIR_EXACT`. Used by the gate's `workspace_diagnostics` to reproduce the
+/// excluding the shared skip folders (`crate::source_text::SKIP_DIRS`, any
+/// case). Used by the gate's `workspace_diagnostics` to reproduce the
 /// provider's multi-app fail-closed message (which sorts these paths).
 pub(crate) fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
@@ -211,8 +107,7 @@ pub(crate) fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> 
                 continue;
             };
             if ftype.is_dir() {
-                let dname_lc = entry.file_name().to_string_lossy().to_lowercase();
-                if dname_lc == "node_modules" || dname_lc == ".alpackages" {
+                if crate::source_text::is_skipped_dir_name(&entry.file_name()) {
                     continue;
                 }
                 stack.push(entry.path());

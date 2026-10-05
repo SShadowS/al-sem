@@ -690,6 +690,9 @@ fn compose_roles_only(
                 p.copies_into_param = join_presence(p.copies_into_param, EffectPresence::Unknown);
                 p.resets_filters_on_param =
                     join_presence(p.resets_filters_on_param, EffectPresence::Unknown);
+                p.loads_from_db_param =
+                    join_presence(p.loads_from_db_param, EffectPresence::Unknown);
+                p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
             } else {
                 let cr = callee_role.unwrap();
                 p.persists_current_record =
@@ -700,6 +703,15 @@ fn compose_roles_only(
                 p.copies_into_param = join_presence(p.copies_into_param, cr.copies_into_param);
                 p.resets_filters_on_param =
                     join_presence(p.resets_filters_on_param, cr.resets_filters_on_param);
+                // A helper that loads its `var` record loads the forwarder's too.
+                // A MAY fact (loads on some path), but its readers take it as MUST
+                // ("loaded after the call"): the walker's c1b (entry requirements,
+                // read by d40 and d42) and d39 (a load point resets the dirt, via
+                // `record_load_points`). That is lenient for all of them: it can
+                // only drop an entry requirement or a d39 finding, never invent one.
+                p.loads_from_db_param =
+                    join_presence(p.loads_from_db_param, cr.loads_from_db_param);
+                p.initialises_param = join_presence(p.initialises_param, cr.initialises_param);
             }
             p.mutates_param = join_presence(
                 join_presence(p.persists_current_record, p.validates_param),
@@ -805,8 +817,21 @@ pub(crate) fn substitute_pd_temp_state(
     if !matches!(edge.kind.as_str(), "direct" | "method" | "implicit-trigger") {
         return TempState::Unknown;
     }
+    pd_temp_state_at_callsite(routine, cs_id, callee_param_index)
+}
+
+/// Steps (3)-(4) of [`substitute_pd_temp_state`], without the edge-kind gate:
+/// the temp state the caller's `routine` hands to callee parameter
+/// `callee_param_index` at its call site `cs_id`. The capability cone
+/// (`capability_cone.rs`) applies the same substitution at its own call edges,
+/// behind its own edge-kind allowlist.
+pub(crate) fn pd_temp_state_at_callsite(
+    routine: &L3Routine,
+    cs_id: &str,
+    callee_param_index: u32,
+) -> TempState {
     // Find THIS edge's callsite among the caller's call sites.
-    let cs = match routine.call_sites.iter().find(|cs| cs.id == *cs_id) {
+    let cs = match routine.call_sites.iter().find(|cs| cs.id == cs_id) {
         Some(cs) => cs,
         None => return TempState::Unknown,
     };

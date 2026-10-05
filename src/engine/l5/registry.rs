@@ -459,6 +459,7 @@ pub(crate) fn run_detectors_cross_app(
         root_classifications: Vec::new(),
         primary_app: None,
         infra_diagnostics: Vec::new(),
+        precomputed_calls: None,
     };
     let (findings, diagnostics, detector_stats, d1_cohort_index) =
         run_each(&resolved, &ctx, detectors);
@@ -1007,6 +1008,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            precomputed_calls: None,
         }
     }
 

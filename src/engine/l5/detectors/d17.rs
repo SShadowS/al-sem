@@ -508,6 +508,7 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
+            precomputed_calls: None,
         }
     }
 

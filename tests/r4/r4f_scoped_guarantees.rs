@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::l5::digest::project_r4f_scoped_guarantees;
 
 use crate::regen;
@@ -64,7 +64,7 @@ fn run_rust(fixture: &str) -> String {
          (offline corpus incomplete)",
         fixture_dir.display()
     );
-    match assemble_and_resolve_workspace_default(&fixture_dir) {
+    match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
         Some(resolved) => project_r4f_scoped_guarantees(&resolved, fixture),
         None => format!(
             "{{\n  \"fixtureName\": \"{fixture}\",\n  \"entryCount\": 0,\n  \"entries\": []\n}}\n"

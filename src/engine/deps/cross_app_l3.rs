@@ -516,6 +516,7 @@ fn build_cross_app_l3_impl(
             // (it receives a pre-assembled workspace), so primary_app = None.
             primary_app: None,
             infra_diagnostics,
+            precomputed_calls: None,
         },
         declared_dep_app_guids: declared_dep_app_guids.to_vec(),
         fetched_app_guids,

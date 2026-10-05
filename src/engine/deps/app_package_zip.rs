@@ -32,7 +32,8 @@ pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 /// The reader behind an opened `.app` zip: the file itself, or the temp file
-/// holding the nested app of a Ready-to-Run package.
+/// (or, when temp storage fails, the buffer) holding the nested app of a
+/// Ready-to-Run package.
 pub type AppReader = Box<dyn ReadSeek + Send>;
 
 /// If `archive` is a Ready-to-Run package, return the bytes of the app it nests.
@@ -164,14 +165,98 @@ pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppRe
             return Err(e).with_context(|| format!("reading zip in .app: {}", path.display()));
         }
     };
-    let Some(app) = with_ready_to_run_app(&mut archive, |app| copy_nested_app_to_tempfile(app))
-        .with_context(|| format!("Ready-to-Run package: {}", path.display()))?
-    else {
-        return Ok(Some(archive));
-    };
-    let nested = zip::ZipArchive::new(Box::new(BufReader::new(app)) as AppReader)
+    let app: AppReader =
+        match with_ready_to_run_app(&mut archive, |app| copy_nested_app_to_tempfile(app)) {
+            Ok(None) => return Ok(Some(archive)),
+            Ok(Some(file)) => Box::new(BufReader::new(file)),
+            // The temp file only saves memory: never let a full temp disk
+            // turn into a missing app. Read the nested app into memory.
+            Err(e) if crate::capped_io::is_temp_storage_failure(&e) => {
+                log::warn!(
+                    "{}: temp storage failed ({e:#}); reading the nested app into memory",
+                    path.display()
+                );
+                let mut app = read_ready_to_run_app(&mut archive)
+                    .with_context(|| format!("Ready-to-Run package: {}", path.display()))?
+                    .with_context(|| format!("Ready-to-Run package: {}", path.display()))?;
+                let header = app.len() - strip_app_header(&app).len();
+                app.drain(..header);
+                Box::new(Cursor::new(app))
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Ready-to-Run package: {}", path.display()));
+            }
+        };
+    let nested = zip::ZipArchive::new(app)
         .with_context(|| format!("reading nested app in {}", path.display()))?;
     Ok(Some(nested))
+}
+
+/// One big zip entry's bytes: a read-only map of an anonymous temp file, or
+/// a heap buffer when temp storage failed. See [`read_large_entry`].
+pub enum LargeEntry {
+    // `map` is declared first so it is dropped before its file.
+    Mapped {
+        map: Option<memmap2::Mmap>,
+        _file: std::fs::File,
+    },
+    Memory(Vec<u8>),
+}
+
+impl std::ops::Deref for LargeEntry {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            LargeEntry::Mapped { map, .. } => map.as_deref().unwrap_or(&[]),
+            LargeEntry::Memory(v) => v,
+        }
+    }
+}
+
+/// Read the zip entry `name` (declared size and bytes capped at `cap`) for a
+/// caller that needs it whole, e.g. BaseApp's ~58 MB `SymbolReference.json`.
+///
+/// The entry goes into an anonymous temp file, mapped read-only: a file-backed
+/// mapping does not count against Windows commit, unlike one big heap buffer.
+/// When the temp file cannot be written (a full disk), the entry is read into
+/// memory instead, so the result never depends on the temp disk.
+pub fn read_large_entry<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+    cap: u64,
+) -> anyhow::Result<LargeEntry> {
+    use crate::capped_io::{CapReadError, check_declared_size, copy_capped_to_tempfile};
+    fn open<'a, R: Read + Seek>(
+        archive: &'a mut zip::ZipArchive<R>,
+        name: &str,
+        cap: u64,
+    ) -> anyhow::Result<zip::read::ZipFile<'a>> {
+        let entry = archive
+            .by_name(name)
+            .with_context(|| format!("{name} not found in app package"))?;
+        check_declared_size(entry.size(), cap)
+            .with_context(|| format!("{name} declared size exceeds cap"))?;
+        Ok(entry)
+    }
+    let to_file = copy_capped_to_tempfile(open(archive, name, cap)?, cap)
+        .map_err(anyhow::Error::from)
+        .and_then(|file| {
+            // SAFETY: the file is an anonymous temp file only this function
+            // can reach (no name, never shared), so nothing changes it while
+            // mapped; the mapping is dropped before the file.
+            let map = unsafe { crate::capped_io::map_read_only(&file) }
+                .map_err(CapReadError::TempStorage)?;
+            Ok(LargeEntry::Mapped { map, _file: file })
+        });
+    match to_file {
+        Err(e) if crate::capped_io::is_temp_storage_failure(&e) => {
+            log::warn!("{name}: temp storage failed ({e:#}); reading it into memory");
+            let bytes = crate::capped_io::read_capped(open(archive, name, cap)?, cap)
+                .with_context(|| format!("Failed to read {name}"))?;
+            Ok(LargeEntry::Memory(bytes))
+        }
+        r => r.with_context(|| format!("Failed to read {name}")),
+    }
 }
 
 /// Scan the first `≤4096` bytes of `bytes` for the ZIP local-file signature

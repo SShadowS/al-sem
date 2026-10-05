@@ -6,10 +6,10 @@ use crate::snapshot::cache::cached_source;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::identity::{AppId, TrustTier};
 use crate::snapshot::verify::{IdentityCheck, verify_local_source};
+use crate::source_text::{NestedApps, discover_al_files, read_al_source};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
-use walkdir::WalkDir;
 
 /// A resolved set of source files for one app, with its trust tier + hash.
 #[derive(Clone, Debug)]
@@ -27,41 +27,25 @@ pub trait SourceProvider {
     fn try_provide(&self, app: &AppId) -> Result<Option<SourceRoot>>;
 }
 
-/// Walk `root` for `.al` source (skipping dependency/output dirs), sorted +
-/// content-hashed for determinism. `Ok(None)` if no `.al` files.
+/// Read `root`'s `.al` source (the shared walk, `crate::source_text`, nested
+/// apps included), sorted + content-hashed for determinism. `Ok(None)` if no
+/// `.al` files.
 fn walk_al_source(root: &std::path::Path, tier: TrustTier) -> Result<Option<SourceRoot>> {
-    let mut files: Vec<SourceFile> = Vec::new();
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("al") {
-            continue;
-        }
-        // Skip dependency/output dirs.
-        if path.components().any(|c| {
-            matches!(
-                c.as_os_str().to_str(),
-                Some(".alpackages") | Some(".snapshots") | Some("node_modules")
-            )
-        }) {
-            continue;
-        }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading source {}", path.display()))?;
-        let virtual_path = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
+    let found = discover_al_files(root, NestedApps::Walk)
+        .with_context(|| format!("walking source {}", root.display()))?;
+    let mut files: Vec<SourceFile> = Vec::with_capacity(found.len());
+    for f in found {
+        let text = read_al_source(&f.abs_path)
+            .with_context(|| format!("reading source {}", f.abs_path.display()))?;
         files.push(SourceFile {
-            virtual_path,
+            virtual_path: f.rel_posix,
             text: text.into(),
         });
     }
     if files.is_empty() {
         return Ok(None);
     }
-    files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
-    // Hash over sorted file texts for determinism.
+    // Hash over sorted file texts (the walk sorts) for determinism.
     let mut hasher = blake3::Hasher::new();
     for f in &files {
         hasher.update(f.text.as_bytes());

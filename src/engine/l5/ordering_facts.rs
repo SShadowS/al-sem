@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::digest::{
-    DigestEntryResult, ProjectedEvidence, compute_digest_effects_for_ordering,
+    DigestEntryResult, ProjectedEvidence, compute_digest_effects_for_ordering_with,
 };
 use crate::engine::l5::ordering_engine::ScopedGuarantee;
 
@@ -209,101 +209,108 @@ pub fn to_source_anchor(
 
 /// Compute the per-routine ordering facts. Keyed by `StableRoutineId`. Only routines
 /// with ≥1 resolved fact appear in the map.
+///
+/// Each root's digest entry is reduced to its facts as soon as it is computed (on
+/// the worker that computed it), so the full set of entries — every effect's
+/// witness paths — is never held at once. On CDO with the B3 calls that set is
+/// 67 k effects over 1359 roots, while only roots with an ordering fact keep
+/// anything.
 pub fn compute_ordering_facts(resolved: &L3Resolved) -> HashMap<String, OrderingFacts> {
-    let entries: Vec<DigestEntryResult> = compute_digest_effects_for_ordering(resolved);
+    compute_digest_effects_for_ordering_with(resolved, |entry| ordering_facts_of_entry(&entry))
+        .into_iter()
+        .flatten()
+        .map(|of| (of.routine_id.clone(), of))
+        .collect()
+}
 
-    let mut out: HashMap<String, OrderingFacts> = HashMap::new();
-    for entry in &entries {
-        // occurrenceId → (anchor, type, detail). factId == occurrence id.
-        let mut anchor_by_id: HashMap<&str, &ProjectedEvidence> = HashMap::new();
-        let mut type_by_id: HashMap<&str, &str> = HashMap::new();
-        let mut detail_by_id: HashMap<&str, &Vec<(String, String)>> = HashMap::new();
-        for eff in &entry.effects {
-            anchor_by_id.insert(eff.fact_id.as_str(), &eff.evidence);
-            type_by_id.insert(eff.fact_id.as_str(), eff.effect_type.as_str());
-            detail_by_id.insert(eff.fact_id.as_str(), &eff.detail);
-        }
+/// One root's ordering facts, or `None` when it has none.
+fn ordering_facts_of_entry(entry: &DigestEntryResult) -> Option<OrderingFacts> {
+    // occurrenceId → (anchor, type, detail). factId == occurrence id.
+    let mut anchor_by_id: HashMap<&str, &ProjectedEvidence> = HashMap::new();
+    let mut type_by_id: HashMap<&str, &str> = HashMap::new();
+    let mut detail_by_id: HashMap<&str, &Vec<(String, String)>> = HashMap::new();
+    for eff in &entry.effects {
+        anchor_by_id.insert(eff.fact_id.as_str(), &eff.evidence);
+        type_by_id.insert(eff.fact_id.as_str(), eff.effect_type.as_str());
+        detail_by_id.insert(eff.fact_id.as_str(), &eff.detail);
+    }
 
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut facts: Vec<OrderingFact> = Vec::new();
-        for eff in &entry.effects {
-            for g in &eff.scoped_guarantees {
-                if !is_relevant_label(g.label) {
-                    continue;
-                }
-                // Resolve the IO occurrence: root scope sets io_occurrence_id;
-                // owning-routine scope rides on the carrier effect (factId).
-                let io_id: &str = g
-                    .io_occurrence_id
-                    .as_deref()
-                    .unwrap_or(eff.fact_id.as_str());
-                let Some(io_type) = type_by_id.get(io_id).copied() else {
-                    continue;
-                };
-                // Gate by label.
-                if g.label == "WRITE_PENDING_AT_UI" {
-                    if !is_ui_sink_type(io_type) {
-                        continue;
-                    }
-                } else if !is_io_type(io_type) {
-                    continue;
-                }
-                let Some(io_anchor) = anchor_by_id.get(io_id).copied() else {
-                    continue;
-                };
-
-                let key = format!(
-                    "{}|{}|{}|{}",
-                    g.label,
-                    g.write_occurrence_id.as_deref().unwrap_or(""),
-                    io_id,
-                    g.commit_occurrence_id.as_deref().unwrap_or(""),
-                );
-                if seen.contains(&key) {
-                    continue;
-                }
-                seen.insert(key.clone());
-
-                let io_detail: Vec<(String, String)> = detail_by_id
-                    .get(io_id)
-                    .map(|d| (*d).clone())
-                    .unwrap_or_default();
-                let write_anchor = g
-                    .write_occurrence_id
-                    .as_deref()
-                    .and_then(|w| anchor_by_id.get(w).map(|e| (*e).clone()));
-                let commit_anchor = g
-                    .commit_occurrence_id
-                    .as_deref()
-                    .and_then(|c| anchor_by_id.get(c).map(|e| (*e).clone()));
-
-                facts.push(OrderingFact {
-                    guarantee: g.clone(),
-                    key,
-                    io_type: io_type.to_string(),
-                    io_detail,
-                    io_anchor: io_anchor.clone(),
-                    write_anchor,
-                    commit_anchor,
-                });
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut facts: Vec<OrderingFact> = Vec::new();
+    for eff in &entry.effects {
+        for g in &eff.scoped_guarantees {
+            if !is_relevant_label(g.label) {
+                continue;
             }
-        }
+            // Resolve the IO occurrence: root scope sets io_occurrence_id;
+            // owning-routine scope rides on the carrier effect (factId).
+            let io_id: &str = g
+                .io_occurrence_id
+                .as_deref()
+                .unwrap_or(eff.fact_id.as_str());
+            let Some(io_type) = type_by_id.get(io_id).copied() else {
+                continue;
+            };
+            // Gate by label.
+            if g.label == "WRITE_PENDING_AT_UI" {
+                if !is_ui_sink_type(io_type) {
+                    continue;
+                }
+            } else if !is_io_type(io_type) {
+                continue;
+            }
+            let Some(io_anchor) = anchor_by_id.get(io_id).copied() else {
+                continue;
+            };
 
-        if !facts.is_empty() {
-            // al-sem sorts by `a.key.localeCompare(b.key)` (ICU). Match it exactly
-            // for the restricted key alphabet (see `locale_compare_key`); ordinal
-            // `str::cmp` diverges on the empty-vs-hex write-occurrence segment.
-            facts.sort_by(|a, b| locale_compare_key(&a.key, &b.key));
-            out.insert(
-                entry.routine_id.clone(),
-                OrderingFacts {
-                    routine_id: entry.routine_id.clone(),
-                    facts,
-                },
+            let key = format!(
+                "{}|{}|{}|{}",
+                g.label,
+                g.write_occurrence_id.as_deref().unwrap_or(""),
+                io_id,
+                g.commit_occurrence_id.as_deref().unwrap_or(""),
             );
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key.clone());
+
+            let io_detail: Vec<(String, String)> = detail_by_id
+                .get(io_id)
+                .map(|d| (*d).clone())
+                .unwrap_or_default();
+            let write_anchor = g
+                .write_occurrence_id
+                .as_deref()
+                .and_then(|w| anchor_by_id.get(w).map(|e| (*e).clone()));
+            let commit_anchor = g
+                .commit_occurrence_id
+                .as_deref()
+                .and_then(|c| anchor_by_id.get(c).map(|e| (*e).clone()));
+
+            facts.push(OrderingFact {
+                guarantee: g.clone(),
+                key,
+                io_type: io_type.to_string(),
+                io_detail,
+                io_anchor: io_anchor.clone(),
+                write_anchor,
+                commit_anchor,
+            });
         }
     }
-    out
+
+    if facts.is_empty() {
+        return None;
+    }
+    // al-sem sorts by `a.key.localeCompare(b.key)` (ICU). Match it exactly
+    // for the restricted key alphabet (see `locale_compare_key`); ordinal
+    // `str::cmp` diverges on the empty-vs-hex write-occurrence segment.
+    facts.sort_by(|a, b| locale_compare_key(&a.key, &b.key));
+    Some(OrderingFacts {
+        routine_id: entry.routine_id.clone(),
+        facts,
+    })
 }
 
 // ===========================================================================

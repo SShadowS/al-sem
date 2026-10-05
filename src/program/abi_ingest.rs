@@ -229,29 +229,19 @@ impl AbiCache {
 
 pub(crate) fn read_symbol_reference_from_app(path: &Path) -> anyhow::Result<SymbolReferenceAbi> {
     let mut archive = open_app_zip(path)?;
-    let sr_file = archive.by_name("SymbolReference.json")?;
     // T2.2: belt-and-suspenders cap — reject a hostile declared size before
     // decompressing, then bound the read itself (a lying central directory).
     // Errors here propagate through the SAME `abi.error` channel as a JSON
     // parse failure (see `get_or_load`'s `unwrap_or_else` above) — no new
-    // wiring needed.
-    crate::capped_io::check_declared_size(
-        sr_file.size(),
+    // wiring needed. BaseApp's entry is ~58 MB and `parse_symbol_reference`
+    // needs it as one `&str`: see `read_large_entry` for where it goes. The
+    // parse returns owned data, so the entry goes away when this returns.
+    let content = crate::engine::deps::app_package_zip::read_large_entry(
+        &mut archive,
+        "SymbolReference.json",
         crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
     )?;
-    // BaseApp's entry is ~58 MB and `parse_symbol_reference` needs it as one
-    // `&str`. Decompress it into an anonymous temp file and map that file
-    // read-only, instead of one big heap buffer: a read-only file-backed
-    // mapping does not count against Windows commit. The parse returns owned
-    // data, so the mapping and the file go away when this function returns.
-    let file = crate::capped_io::copy_capped_to_tempfile(
-        sr_file,
-        crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
-    )?;
-    // SAFETY: the file is an anonymous temp file only this function can reach
-    // (no name, never shared), so nothing changes it while mapped.
-    let map = unsafe { crate::capped_io::map_read_only(&file)? };
-    let content: &[u8] = map.as_deref().unwrap_or(&[]);
+    let content: &[u8] = &content;
     let json_str = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {
         std::str::from_utf8(&content[3..])?
     } else {

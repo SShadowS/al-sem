@@ -734,7 +734,8 @@ pub fn action_properties(params: SymbolPropertiesParams) -> Result<SymbolPropert
 fn read_source_from_uri(uri_str: &str) -> Result<String> {
     let uri: lsp_types::Uri = uri_str.parse().context("Invalid URI")?;
     let path = uri_to_path(&uri).ok_or_else(|| anyhow::anyhow!("Invalid file URI"))?;
-    std::fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))
+    crate::source_text::read_al_source(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))
 }
 
 /// Map the al-syntax facade result into the LSP response shape.

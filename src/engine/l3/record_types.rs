@@ -440,6 +440,18 @@ pub fn resolve_routine_record_types(
                 variable.temp_state = crate::engine::l2::scope::ts_known(true);
             }
         }
+        // ...and so must a call argument that passes the implicit Rec/xRec: a
+        // callee's `var` record param bound to it writes the temporary copy.
+        // L2 leaves such a binding without a temp state when no Rec variable
+        // is declared, which the L4 PD substitution and the capability cone
+        // read as Unknown (physical).
+        for cs in routine.call_sites.iter_mut() {
+            for b in cs.argument_bindings.iter_mut() {
+                if b.source_kind == "implicit-rec" {
+                    b.source_temp_state = Some(crate::engine::l2::scope::ts_known(true));
+                }
+            }
+        }
     }
 }
 

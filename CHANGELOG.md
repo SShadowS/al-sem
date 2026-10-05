@@ -5,6 +5,329 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The detectors on the program engine's call resolution** (B3 Phase A, task 7, first
+  behind a hidden `--b3-calls` flag; the flag was removed in task 8, see Changed;
+  `src/engine/gate/run.rs`). Analyze
+  keeps the preflight's program context and report (`fresh_coverage` was split into
+  `fresh_program_from_snapshot` + `reduce_fresh_coverage`, same preflight number;
+  `fresh_coverage` itself was later removed, see Removed), builds
+  the L3 workspace, runs the B3 adapter (without the harness's per-site notes), drops the
+  program model, and only then builds the detector context. A hidden flag,
+  `--no-inline-suppression`, existed so finding counts could be compared with the harness;
+  it was removed in the final fix wave (no test or `scripts/` tool used it; the tests set
+  `AnalyzeArgs.disable_inline_suppression` directly).
+  Tested against the B3 harness: on two r0 fixtures with a finding difference, analyze's
+  findings equal the harness's new side (`tests/cli/cli_analyze_program_calls.rs`, first
+  named `cli_b3_calls.rs` after the removed flag). Measured
+  on CDO with the flag (`--profile release-fast`, no preflight cache, default detectors, median of 3):
+  wall 3.2 s off / 3.1 s on; peak working set 511 MB off / 603 MB on (+92 MB: the L3
+  workspace and the adapter output sit on top of the ~365 MB program context and ~27 MB
+  report); peak commit ~1.0 GB both. With every detector and no inline suppression the
+  counts equal the harness (2237 off, 2402 on), but the flagged run takes 34 s and peaks
+  at 1.8 GB (off: 4.8 s, 508 MB), all of it in `context.ordering_facts`: fixed in task 7b
+  (see Changed). The 34 s here and the 54.0 s quoted in Changed are the same binary
+  measured in different sessions; task 7b's three runs of it gave 45.8-54.2 s (the machine
+  was busier then), so read the 7b "before" as a range, not a point.
+- **`aldump --b3 <workspace>`: join census between L3 call sites and the program engine's
+  call-site edges** (B3 Phase A, task 1; `src/engine/l3/program_calls.rs`). It pairs sites
+  on the exact span `(unit, start, end)` (both engines use byte columns) and checks the
+  callee fingerprint and the caller's declaration anchor. It prints matched and unmatched
+  counts by reason as JSON. No behaviour change. CDO: all 15,529 L3 call sites pair; 571 L3
+  bare implicit-`Rec` record ops are calls on the program side. See
+  `docs/2026-10-04-b3-site-census.md`.
+- **The program-to-L3 call adapter, stage 1** (B3 Phase A, task 3;
+  `resolved_calls_from_program` in `src/engine/l3/program_calls.rs`). It builds L3's
+  `ResolvedCalls` from the program engine's call-site edges, so detectors can later run on
+  the program engine's resolution unchanged. Workspace callees map to the L3 routine with
+  the same declaration anchor; dependency callees become to-less `ExternalTarget` edges
+  (bindings stay `"unresolved-callee"`); dispatch kind comes from the L2 callee shape.
+  Implicit-trigger edges apply the site rules (`RunTrigger = false`, field-specific
+  `OnValidate`) the program fan-out leaves out. Sites and record ops the program engine
+  does not pair with keep L3's own edge. Not wired into production: no behaviour change.
+  `aldump --b3` now also prints the adapter counts, including trigger edges L3 would not
+  give (CDO: 3, TableExtension triggers) and `ExternalTarget` edges by receiver kind (CDO:
+  67 record receivers, where L3 said `RecordTableProcedure` and the confidence cap now
+  changes; 609 object receivers, same as L3; a run through an object variable into a
+  workspace object with no entry trigger, e.g. `PageVar.RunModal()`, is `Opaque` with the
+  run dispatch kind, counted as `workspace-run-no-entry`: 55 sites on CDO, 31 of them
+  formerly `ExternalTarget`). CDO: all 15,529 call sites come from the
+  program engine; 193 bare trigger-capable record ops keep L3's trigger logic.
+  **Stage 2** (task 6): a new `upgrade_dependency_bindings` parameter (production `true`)
+  upgrades the argument bindings of an exact call into a dependency routine with that
+  routine's parameter `var`-ness, as for a workspace callee: from its declaration for a
+  source dependency (`DeclSurface`), from `AbiParams::Complete` for a symbol-only one.
+  `Missing` / `CollapsedUntrusted` parameters, overload sets and interface calls keep
+  `"unresolved-callee"` / `"ambiguous"`; a dependency callee still never gets a `to`. The
+  census counts sites where a binding actually changed, per source kind
+  (`adapter_dep_bindings_source` / `_symbol`), and the sites left alone because the
+  var-ness is untrusted (`_missing` / `_collapsed`) or no routine stands behind the route
+  (`_no_routine`: a run into a dependency page with no `OnOpenPage`). CDO: 66 / 0 / 0 / 0
+  / 6. `aldump --b3 <ws> --b3-deps --b3-triage <file.md>`
+  diffs the adapter without stage 2 against the adapter with it, so the effect is triaged
+  alone (`docs/b3-triage/cdo-deps.md`; r0 corpus: `r0-corpus-deps.md`, checked by
+  `--test r4`). CDO: 66 differing sites, no finding difference. The normal `--b3` CDO
+  table (`cdo.md`) keeps the same 858 finding differences; 56 more sites differ from L3
+  and some rows' attribution categories now include `dep-bindings-source`.
+- **The B3 detector difference harness** (B3 Phase A, task 4; `src/engine/l3/b3_diff.rs`).
+  `aldump --b3 <workspace> --b3-triage <file.md>` runs every registered detector (opt-in
+  included) twice over one `L3Resolved`, with L3's call resolution and with the adapter's,
+  diffs the findings by (detector, primary location, root cause key) into removed / added /
+  changed, and attributes each difference to the differing call sites in (or calling into)
+  the finding's routines, with the adapter's census category per site. It writes a markdown
+  triage table with an empty verdict column; the tables are under `docs/b3-triage/`.
+  `resolved_calls_with_notes` gives the per-site categories. Diagnostic only: no behaviour
+  change.
+
+### Changed
+
+- **`alsem` and `aldump` print warnings on stderr** (B3 final fix wave FW3;
+  `src/bin/alsem.rs`, `src/bin/aldump.rs`). Neither binary installed a logger, so every
+  `warn!` went nowhere; that is how a dependency dropped on a full temp disk stayed
+  invisible (see Fixed). Both now install `env_logger` at `warn` level, writing to stderr;
+  `RUST_LOG` overrides the level (`RUST_LOG=error` silences warnings, `RUST_LOG=debug`
+  shows more). stdout is unchanged and no golden moved. A healthy workspace prints
+  nothing extra; a skipped `.app` (for example one that is not a zip) now prints one
+  `WARN` line naming it. Pinned by `tests/cli/cli_stderr_logger.rs`.
+- **`alsem analyze` detectors now read the program engine's call resolution; the hidden
+  `--b3-calls` flag is gone** (B3 Phase A, task 8; `src/engine/gate/run.rs`,
+  `src/bin/alsem.rs`). The adapter path (see Added, below) is the only analyze path. The
+  program build is kept for the adapter (so the preflight verdict cache could no longer
+  serve a run and was removed, see Removed), and the program context + report and the L3 workspace are
+  resident together while the adapter runs; both are dropped before the detector context.
+  If the program build fails but the L3 workspace assembles, analyze exits with an error
+  instead of falling back to L3's calls (the inputs known to cause this, a non-UTF-8
+  `.al` file and a directory named `X.al`, are fixed, see Fixed). **Behaviour change vs
+  1.3.5:** a `.al` file the user cannot read (permissions, an exclusive lock) now makes
+  analyze exit with an error naming the file; before, analyze ran without that file and
+  only warned that coverage could not be verified. This is deliberate: a partial file set
+  would be analyzed as if it were the whole app. An unreadable workspace still gives the
+  could-not-verify output. **Default output moves:** with the default detector set (what
+  a plain `alsem analyze` runs), CDO findings go from 2066 to 2169 (+103; `t7-results.csv`
+  in the B3 SDD folder). Triage, over all 54 detectors with no inline suppression (2237 →
+  2402): 837 of 858 difference rows on CDO are fixes, 21 are opt-in d40 stated limits, 0
+  regressions, 0 unexplained (`docs/b3-triage/cdo-verdicts.md`). The DO runs (same counts)
+  are NOT independent evidence: the DO checkout measured was at the same commit as the
+  pinned CDO baseline, so the switching bar's DO leg is in effect a second CDO run.
+  The r4/r4f detector goldens run on the same path (`attach_program_calls`, shared with
+  analyze, via `assemble_and_resolve_workspace_with_program_calls`). **Only `analyze` moved.**
+  Every other consumer still reads L3's own calls, so it can answer differently from
+  `analyze` about the same routine (on any of the ~850 CDO sites that changed): `alsem
+  prove`, `policy check` / `policy explain`, `events fanout` / `events chains`, `digest`,
+  `fingerprint`, `diff` / snapshot, `query`, `run::compute_analyzer_diagnostics` (the
+  diagnostics channel of events/policy/digest/fingerprint), the cross-app projections, the
+  gap/temp_state tests, and the `aldump` L3 modes (`--l3-*`, `--r3a*`, `--r4-findings`,
+  `--r4f-*`). Moving them, each with its own golden triage, is a follow-up
+  (`docs/OUTSTANDING.md`). Golden moves: gate and cli-a did not move (those fixtures resolve the
+  same either way). `tests/r4-goldens/ws-member-call-resolution.r4.golden.json` gains one
+  d14 finding (`LocalHelper`): the `added` d14 row of `docs/b3-triage/r0-corpus.md`
+  (`LocalNotVisible`, verdict fixed). A comment-only edit of that r0 fixture (its comments
+  were stale since the program engine reports `LocalNotVisible`) moved
+  `tests/ir-l2-goldens/l2_features.snapshot` (2 routine hashes) and `r0-corpus.md`
+  (`:11` to `:10`); no engine change.
+- **The ordering-facts substrate (d47/d49/d51) no longer blows up on a denser call
+  graph** (B3 Phase A, task 7b; `src/engine/l5/digest.rs`, `ordering_engine.rs`,
+  `ordering_facts.rs`, `ordering_inter.rs`). Root cause: the witness BFS enumerates up to
+  256 simple paths per (root, inherited fact), and the code around it paid per path and
+  per root. With `--b3-calls` on CDO the program engine's extra resolved calls (mostly
+  method calls) raise the roots that need ordering from 465 to 1359, the BFS calls from
+  3.2 k to 22.5 k, the found paths from 28 k to 874 k and the BFS pushes from 105 k to
+  21.2 M. Every found path cloned all its hops and built two whole-path JSON strings
+  (sort, then merge); every root rebuilt the ordering engine's snapshot maps and scanned
+  the operation and callsite indexes once per effect; every BFS call re-ran the reverse
+  reachability walk; and every root's digest entries were all held until the end. Now:
+  hops are built once per graph edge per root and shared (`Rc`) by every path through
+  them; paths sort and dedupe hop by hop on per-hop JSON (byte-identical order: one hop's
+  JSON is never a proper prefix of another's); the ordering lookups are built once per
+  snapshot (`OrderingIndex`); `valid_nodes` is cached by the fact fields it reads
+  (`ValidNodesKey`, temp class included); each root's entry is reduced to its ordering
+  facts on the worker that built it. Behaviour-preserving: all-54-detector and
+  default-detector findings on CDO and DO byte-identical to before, flag on and off; no
+  golden moved. CDO, every detector, no inline suppression (`--profile release-fast`,
+  median of 3): flagged 54.0 s / 1817 MB peak working set → 6.5 s / 603 MB; unflagged
+  6.4 s → 5.0 s, 511 → 510 MB. The flagged peak now equals the default-detector flagged
+  peak (603 MB, set by the program model and L3 workspace overlap from task 7). Tests:
+  `witness_bfs_matches_reference_*` (paths in whole-JSON order, projections equal
+  `project_path`, shared caches equal fresh ones; r0 corpus plus two hand-made fixtures),
+  `merge_normalize_matches_the_json_reference_on_non_adjacent_duplicates`.
+
+### Removed
+
+- **The preflight verdict cache** (`src/program/resolve/preflight_cache.rs`,
+  `full::fresh_coverage`, `tests/cli/preflight_cache_identity.rs`; B3 final review I-1).
+  Since task 8 `alsem analyze` needs the program context itself, because the detectors
+  read its call resolution, so the cache could only be written, never read: every run
+  stored an entry nothing used. `full::build_program_with_coverage` is now the one
+  preflight build and always computes. **Cost on a repeated run** (the cache used to skip
+  the program build when nothing changed; `--profile release-fast`, default detectors,
+  median of 3, task 7 measurements): CDO 1.1 s / 279 MB peak working set → 3.2 s / 602 MB;
+  DO 1.0 s → 3.0 s. A first (cold) run does not change. `ALSEM_NO_PREFLIGHT_CACHE` and
+  `ALSEM_PREFLIGHT_CACHE_DIR` are now ignored. Entries an older build left in
+  `<os-cache>/alsem/preflight-v1/` (on Windows `%LOCALAPPDATA%\alsem\preflight-v1`) are no
+  longer read or written; `alsem cache prune` never managed that directory, so delete it by
+  hand. The preflight's own tests (opaque closure, recovered files, could-not-verify) now
+  run through `build_program_with_coverage`.
+
+### Fixed
+
+- **The `spawn_updater_rebuilds_context_after_rung2_escalation` test no longer flakes under
+  load.** It sent its three file saves 300 ms apart and expected three swaps. When the
+  updater thread's startup context build plus an apply took longer than that gap (a busy
+  parallel test run), two saves were already queued when the thread read the channel, and
+  the debounce correctly merged them into one batch: two swaps, not three. The updater was
+  right; the test assumed timing it could not guarantee. It is not new on this branch:
+  master `bcf799a6` failed 17 of 80 loaded runs, this branch 22 of 80. Each step now waits
+  for its own swap (a channel fed by `on_swap`) before the next save, so the batches are
+  separate by construction. 0 of 320 loaded runs fail after the fix (74 of 160 before, same
+  load).
+
+- **A full temp disk no longer drops dependencies and silently changes results** (B3 final
+  review I-3). Dependency `SymbolReference.json` files (BaseApp's is ~58 MB) and the nested
+  app of a Ready-to-Run package are unpacked into anonymous temp files to save memory. When
+  that write failed, the dependency loader took the failure for an unreadable `.app` and
+  dropped the dependency, with only a log warning that `alsem` and `aldump` never print. Same
+  binary, same input, exit 0, different results: on the pinned CDO workspace with the temp
+  directory unusable, 1073 unknown edges instead of 0 and all-detector findings 2402 -> 2396
+  (the 2396 seen once on 2026-10-04 with C: full). A temp-file failure is now its own error
+  (`CapReadError::TempStorage`, apart from a bad input) and both readers
+  (`app_package_zip::read_large_entry`, `open_app_file`) then read the entry into memory
+  instead, so the result no longer depends on the temp disk; a healthy run is byte-identical.
+  Pinned by `tests/cli/temp_storage_failure.rs` (real binaries, temp dir pointed at a file,
+  plain and Ready-to-Run dependency) and a `capped_io` unit test for a disk that fills part
+  way through a copy.
+- **One `.al` decoder for every engine; a non-UTF-8 file no longer fails `alsem analyze`**
+  (B3 final review C-1; new `src/source_text.rs`). The snapshot provider (program engine
+  and LSP) read workspace source strictly as UTF-8, while L2/L3 decoded lossily. One file
+  with a Windows-1252 byte (common in code that came from NAV through txt2al) failed the
+  program build, and analyze exited 2 with no output. Now every reader decodes the same
+  way: drop a leading UTF-8 BOM, then UTF-8 lossy (an invalid byte becomes U+FFFD). Users:
+  the snapshot provider, embedded `.app` source, L2/L3 (`read_al_source` had two copies),
+  L4 dependency artifacts, inline suppressions, the LSP updater and `fieldProperties`/
+  `actionProperties` re-reads, and the `--analyze` metrics path (which skipped such files).
+  Side effect: the program engine no longer keeps a BOM, so in a BOM file line-0 columns
+  now match L2/L3 and the editor (CDO has 58 BOM workspace files; line 0 holds only object
+  headers there, and the CDO goldens key sites by line). Pinned by
+  `tests/cli/cli_workspace_source.rs` and two census tests in `program_calls.rs`.
+- **The program engine and L2/L3 pick the same workspace `.al` files** (one walk,
+  `source_text::discover_al_files`; also used by the LSP's path checks, the watcher and the
+  `--analyze` metrics path). Before, they differed: the program engine matched only a
+  lower-case `.al` extension and read a directory named `X.al` as a file; L2 did not skip
+  `.snapshots`; both skipped `.alpackages`/`node_modules` only in lower case; the program
+  engine read a symlinked file that L2 ignored, and neither followed a linked directory.
+  A file only L3 saw kept L3's edges for its own call sites, but a call INTO it from a file
+  both saw took the program engine's answer, which had no target, so d14 reported the
+  called routine as dead (reproduced with `Callee.Codeunit.AL`). The rule now, after the AL
+  compiler (which reads every `*.al` under the project through the operating system):
+  extension in any case; `.alpackages`, `.snapshots`, `node_modules` skipped in any case;
+  symbolic links and junctions followed; a walk error (unreadable folder, link loop) fails
+  the walk instead of being skipped (the program engine used to skip it silently, L3
+  already failed); a dangling link is skipped. Kept on purpose: L3 still stops at a nested
+  `app.json` folder and the program engine walks it. No fixture, CDO or DO workspace has
+  any of these shapes.
+- **The L4 walker sees a by-value record loaded by a `var` helper** (`cfg_walker.rs`).
+  The loaded state after a call composed only when BOTH the routine's record and the
+  callee parameter were `var`. In `F(P: Record) { Loader(P); Reader(P) }` the local copy
+  `P` is loaded, yet `F`'s role said "requires loaded at entry", so d40 blamed `F`'s
+  callers. The loaded state now composes whenever the callee side is `var`; exit effects
+  (dirt, persists) still need both sides `var`. CDO: L4 digest, B3 harness and default
+  `alsem analyze` unchanged (dormant there).
+- **d40 hands a finding up to the owner only when the owner can be judged**
+  (`detectors/mod.rs::owner_is_judged`). The owner-decides skip hid findings when the
+  forwarding routine is public and has no caller in the workspace: the owner is outside,
+  so nobody was judged. The skip now needs the routine to be `local` / closed `internal`,
+  or to have a resolved workspace caller (the facts d14 uses). d39 does NOT use this gate:
+  its claim is that the write is discarded in this routine, and a `var` parameter returns
+  the dirt to the caller wherever that caller is. One shared definition of "loaded"
+  (`record_load_points`, `RecordRoleSummary::puts_in_loaded_state`): d40 uses it, the L4
+  walker's loaded rule uses it, and d39's "reload after the call" check now also counts a
+  reload through a `var` helper, but not one in the other arm of an `if` / `case` that
+  holds the call (outside loops; `branch_exclusive`). CDO: default `alsem analyze`
+  unchanged. B3 harness: public obsolete forwarders with no workspace caller fire d40 again
+  (+13 new-only rows); 19 old-side d40 rows vanish on the new side, where the new
+  resolution finds their callers; d39 rows stay at 0. r0 triage summary 386 -> 390.
+- **d39's owner-decides skip now judges the call site, not the whole routine**
+  (`d39.rs`). A forwarder doing `Leaf(Cust); Cust.Get(..); Cust.Validate(..)` loses
+  `Leaf`'s write at the reload, but its parameter is still dirty at exit (its own later
+  `Validate`), so it was skipped. The skip now applies only when no load / init / copy into
+  the record follows the call. The check is lexical like d39's persist check: a reload on a
+  branch the call is not on still keeps the forwarder flagged. CDO: no change (dormant).
+  Also corrected two `cfg_walker.rs` comments (the `exit` arm's known over-approximation).
+- **d40 (transitive load missing, opt-in) sees a load done by a helper, and lets the
+  record's owner decide** (`d40.rs`, `summary_runner.rs`). Two false-positive shapes the B3
+  resolution exposed on CDO. (a) A record loaded by a helper before the call, e.g.
+  `EMailTemplateLine.GetV2Line(Line)` doing `Line.Get(...)`: d40 counted only the routine's
+  own load ops. It now also counts an earlier call that hands the record `var` to a helper
+  whose parameter role loads it (`loads_from_db_param` / `initialises_param` /
+  `copies_into_param`). L4 now composes `loads_from_db_param` and `initialises_param`
+  through var-to-var forwarding like the other exit facts, so a helper two levels down
+  counts too. (b) A routine that forwards its own record parameter: the walker composes the
+  callee's entry requirement into that parameter's role, so d40 now skips it there and
+  judges the routine's callers (the d39 owner-decides rule). The caller-side check stays
+  lexical and branch-blind, as before. CDO: B3 harness d40 new-only rows 100 -> 8; old-path
+  `alsem --detector d40` 266 -> 96. The L4 change re-freezes the CDO digest (loads facts
+  only, plus one entry requirement that drops correctly). Default `alsem analyze` findings
+  are unchanged; one d42 skip counter moves (`calleeRequiresNone` +1, `callerFull` -1).
+- **d39 (record left dirty across chain) no longer blames a routine that only passes
+  its own `var` record through** (`d39.rs`, `cfg_walker.rs`). A `var` parameter hands the
+  record back to the caller's caller, so the dirt is not discarded there. d39 now skips a
+  `var`-parameter source when the forwarder's own parameter is dirty at exit, and judges
+  that parameter's callers instead (the owner of the record). A forwarder that drops the
+  dirt itself, for example by reloading after the call, still fires. For this to hold,
+  the L4 walker now passes a callee's `dirty_at_exit = yes` on to the caller's `var`
+  argument. Before, a callee that validated and persisted only on some paths came out
+  clean in the caller, because `Persisted` blocked the `validates` rule. On CDO this
+  removes 4 of the 6 d39 rows the B3 resolution added (`CDOMailManagement.Codeunit.al:41`,
+  `:56`, `CDOEMailTemplateManagement.Codeunit.al:1082`, `:1095`). Default `alsem analyze`
+  output is unchanged.
+- **The L4 walker now applies the calls inside `exit(...)`** (`cfg_walker.rs`). It recorded
+  the exit state from BEFORE the expression, so `exit(Helper(Rec))` lost every effect of
+  `Helper` on `Rec`: dirt, loads, and entry requirements. This removes the last 2 of the
+  6 d39 rows (`CDOEMailTemplateManagement.Codeunit.al:303`, `:907`). It also lets opt-in
+  d40 see entry requirements through such forwarders: on CDO the B3 harness gains 33 d40
+  rows on the new side and 6 on the old side, all forwarders whose record is loaded by a
+  helper on another record (`GetV2Line`) or passed through a parameter, the d40 limit
+  triage-E already reports. Default `alsem analyze` findings are unchanged; only d42 skip
+  counters move.
+- **d9 (transaction span summary) now gates on PHYSICAL written tables** (`d9.rs`; new
+  `TransactionSpan::writes_physical_tables_count`). It gated on, and printed as "writes N
+  known table(s)", the span's temp-INCLUSIVE `writes_tables`, so a span whose writes went
+  only to temporary records still counted as an interesting transaction. That is the
+  issue-23 bug class: gates read the physical count, witness sets the inclusive one.
+  `affectedTables` stays the inclusive witness. CDO default `alsem analyze`: 2069 -> 2066
+  findings, d9 33 -> 30 (`CDOSendCustStatementMgt.Codeunit.al:17`, `:77` x2 removed: each
+  span writes 3 tables but fewer than 2 physically), and 14 more d9 root causes print a
+  lower physical table count.
+- **A write into a caller's temporary record through a `var` parameter no longer counts as a
+  physical table write** (B3 Phase A, task 5c; `substitute_pd_entry` in
+  `src/engine/l4/capability_cone.rs`). A callee that writes through a plain `var Record X`
+  parameter records the write as "depends on parameter i". The L4 db-effect solver already
+  resolved that against the caller's argument; the capability cone did not, so
+  `writes_physical_tables_of` (read by d8, d43, d44, d45, d50) counted such a
+  write as physical at every caller. The cone now carries the fact across each
+  `direct-call` / `variable-typed-call` edge and resolves it with the caller's argument
+  binding: a temporary argument makes it temporary, a forwarded `var` parameter keeps it
+  dependent on the caller's own parameter, anything else keeps it physical. It stays
+  physical inside recursive SCCs and wherever a physical write shares the same table and
+  operation. Also, an implicit `Rec` passed from a `SourceTableTemporary = true` page now
+  binds as temporary (`src/engine/l3/record_types.rs`). A by-value record parameter is
+  still treated as physical. CDO: the three new d45 findings at `CDOEvents.Codeunit.al:753`
+  and the new d8 at `CDOeSealServiceMgt.Codeunit.al:25` are gone; default `alsem analyze`
+  keeps all 2069 findings and changes only the written-table count in five d8 root causes.
+- **Overload choice no longer gives up because of an argument that cannot tell the
+  overloads apart** (B3 Phase A, task 5a; `pick_candidate` in
+  `src/program/resolve/arg_dispatch.rs`). It used to need every argument typed and an exact
+  match at every position. So one argument it could not type (an option value like
+  `Rec.Type::"E-Doc"`), or one that was not an exact match (a `Label` passed to a `Text`
+  parameter), left the call ambiguous, even where every overload declares the same
+  parameter at that position. Now only the positions where the overloads differ decide;
+  the rules there are unchanged. CDO: `EMailLog.InitNewEntry(...)` in
+  `CDOLogManagement.Codeunit.al` (3 sites, `Integer` vs `Code[20]` at parameter 5) now
+  resolves to the `Integer` overload, as L3 does. `ambiguousResolved` 67 -> 23 in both
+  scopes, `resolvedSource` +44, `unknown` stays 0.
+
 ## [1.3.5] - 2026-10-04
 
 ### Changed

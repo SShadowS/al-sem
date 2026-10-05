@@ -7,6 +7,24 @@
 //! does NOT pass it from a by-value parameter, is flagged: the Validate's field write
 //! is silently discarded across the chain.
 //!
+//! A caller that forwards its OWN `var` parameter, and whose parameter is
+//! therefore dirty at exit too, discards nothing: the record goes back to its
+//! caller, which this same walk judges through that parameter's role. Only the
+//! routine that owns the record (or drops the dirt itself) is flagged.
+//! "Drops the dirt itself" is judged at the call site: a load / init / copy into
+//! the record after the call, by the caller or by a `var` helper whose role
+//! loads it (`record_load_points`, shared with d40), keeps the caller flagged.
+//! Unlike d40, the skip does NOT need visible callers (`owner_is_judged`): d39's
+//! claim is that the write is discarded IN this routine, and a `var` parameter
+//! returns the dirt to whoever called it, so the claim is false here even when
+//! that caller is outside the workspace. "After the call" is source order, minus
+//! a reset in the OTHER arm of an `if` / `case` that also holds the call (outside
+//! any loop; `branch_exclusive`): only one of the two runs. Known limits: a
+//! reload BEFORE the call on a loop back-edge (it runs after the call on the next
+//! iteration) is missed, a reload after an `exit` on the call's path still counts,
+//! and a whole-record assignment (`Cust := Other`) is not a record op, so it does
+//! not count as a reset.
+//!
 //! Reads the CORE `RoutineSummary.parameterRoles` via `ctx.parameter_roles_by_routine`
 //! (the `dirtyAtExit` fact), `ctx.reverse_call_graph`, and the post-upgrade per-callsite
 //! bindings via `ctx.upgraded_bindings_by_callsite` joined positionally with
@@ -21,7 +39,9 @@ use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, before_anchor, is_auto_persist_trigger_rec};
+use crate::engine::l5::detectors::{
+    anchor_of, before_anchor, branch_exclusive, is_auto_persist_trigger_rec, record_load_points,
+};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
@@ -40,6 +60,7 @@ pub fn detect_d39(
     let mut skipped_caller_persists = 0u64;
     let mut skipped_temp_record = 0u64;
     let mut skipped_auto_persist_trigger = 0u64;
+    let mut skipped_dirt_returned_to_caller = 0u64;
 
     for callee in &ws.routines {
         if !callee.body_available {
@@ -144,6 +165,46 @@ pub fn detect_d39(
                     continue;
                 }
 
+                // A `var` parameter hands the record back to the caller's caller.
+                // When the caller's OWN parameter is dirty at exit (the L4 walker
+                // composes the callee's dirt into it), nothing is discarded here:
+                // this loop judges that parameter's callers instead. A caller that
+                // drops the dirt itself (e.g. reloads after the call) is not
+                // dirty at exit and still falls through to be flagged. The role is
+                // a whole-routine fact, so a caller that reloads after THIS call
+                // and dirties the record again itself is dirty at exit too, yet it
+                // lost the callee's write: a load/init/copy into the source after
+                // the call keeps it flagged. Source order, like the persist check
+                // below, except that a reload in the other arm of a branch holding
+                // the call does not count (`branch_exclusive`). A reset is the shared
+                // "loaded" definition: own load ops and `var` helpers that load.
+                // No caller-visibility gate (see the module doc): the dirt goes back
+                // to the caller whether or not that caller is in the workspace.
+                if binding.source_kind == "parameter"
+                    && let Some(src_ix) = binding.source_parameter_index
+                    && ctx
+                        .parameter_roles_by_routine
+                        .get(&caller.id)
+                        .and_then(|rs| rs.iter().find(|r| r.parameter_index == src_ix))
+                        .is_some_and(|r| r.dirty_at_exit == EffectPresence::Yes)
+                    && !record_load_points(caller, ctx)
+                        .get(&source_name_lc)
+                        .is_some_and(|pts| {
+                            pts.iter().any(|p| {
+                                before_anchor(&cs.source_anchor, p.anchor)
+                                    && p.is_variable(binding.source_record_variable_id.as_deref())
+                                    && !branch_exclusive(
+                                        caller.statement_tree.as_ref(),
+                                        &cs.id,
+                                        p.node_id,
+                                    )
+                            })
+                        })
+                {
+                    skipped_dirt_returned_to_caller += 1;
+                    continue;
+                }
+
                 // Did caller persist the source variable after the callsite?
                 let persisted_after = caller.record_operations.iter().any(|op| {
                     PERSIST_OPS.contains(&op.op.as_str())
@@ -238,5 +299,6 @@ pub fn detect_d39(
     stats.add_skip("callerPersists", skipped_caller_persists);
     stats.add_skip("tempRecord", skipped_temp_record);
     stats.add_skip("autoPersistTriggerRec", skipped_auto_persist_trigger);
+    stats.add_skip("dirtReturnedToCaller", skipped_dirt_returned_to_caller);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

@@ -1,7 +1,7 @@
 //! R4 — L5 DETECTOR FINDINGS differential over the SOURCE-ONLY smoke corpus.
 //!
 //! For each committed al-sem golden under `tests/r4-goldens/<fixture>.r4.golden.json`,
-//! run the Rust source-only L0→L3→L5 pass (`assemble_and_resolve_workspace_default(...)`
+//! run the Rust source-only L0→L3→L5 pass (`assemble_and_resolve_workspace_with_program_calls(...)`
 //! → `engine::l5::finding::project_r4_findings(...)` over the REGISTERED detectors)
 //! over the matching `tests/r0-corpus/<fixture>` workspace.
 //!
@@ -29,7 +29,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::{
     R4FindingsProjection, project_r4_findings, project_r4_findings_cross_app,
@@ -1375,7 +1375,7 @@ fn run_rust(golden_name: &str, source_dir: &str, detector_names: &[&str]) -> R4F
     );
     let names: Vec<String> = detector_names.iter().map(|s| s.to_string()).collect();
     let detectors = registered_detectors();
-    match assemble_and_resolve_workspace_default(&fixture_dir) {
+    match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
         Some(resolved) => project_r4_findings(&resolved, &detectors, golden_name, &names),
         None => R4FindingsProjection {
             fixture_name: golden_name.to_string(),
@@ -1764,7 +1764,7 @@ fn differential_r4_findings_match_goldens() {
         );
         let detectors = registered_detectors();
         let names = vec![neg.detector.to_string()];
-        let rust = match assemble_and_resolve_workspace_default(&neutral_dir) {
+        let rust = match assemble_and_resolve_workspace_with_program_calls(&neutral_dir) {
             Some(resolved) => {
                 project_r4_findings(&resolved, &detectors, neg.neutral_fixture, &names)
             }

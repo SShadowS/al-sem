@@ -60,7 +60,6 @@ use crate::program::resolve::extract::{
 };
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::member_catalog::is_entry_dispatch_builtin;
-use crate::program::resolve::preflight_cache;
 use crate::program::resolve::receiver::{
     FrameworkKind, ReceiverType, infer_receiver_type, is_atomic_receiver_token,
 };
@@ -1185,11 +1184,6 @@ pub fn build_context_with(
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the
 /// snapshot BEFORE paying for parse + resolve.
-///
-/// The preflight verdict cache needs exactly this seam: its key is derived from
-/// the `AppSetSnapshot` (see `preflight_cache::cache_key` for why a cheaper
-/// pre-snapshot key would be unsound), so the snapshot must exist before the
-/// lookup, and everything after it must be skippable on a hit.
 pub fn build_snapshot_res(workspace_root: &Path) -> Result<AppSetSnapshot, String> {
     let _s = pt::span("preflight", "preflight.snapshot_build");
     (SnapshotBuilder {
@@ -1201,8 +1195,8 @@ pub fn build_snapshot_res(workspace_root: &Path) -> Result<AppSetSnapshot, Strin
 }
 
 /// Steps 2-3 of [`build_context_res`]: parse the snapshot, build the layered
-/// graph, and locate the primary app. Split from [`build_snapshot_res`] purely
-/// so the preflight cache can skip this half on a hit — behaviour is unchanged.
+/// graph, and locate the primary app. Split from [`build_snapshot_res`] so a
+/// caller can hold the snapshot first — behaviour is unchanged.
 pub fn build_context_from_snapshot(
     snap: AppSetSnapshot,
     profile: BuildProfile,
@@ -1335,8 +1329,7 @@ pub fn build_context(workspace_root: &Path) -> Option<ProgramContext> {
 /// complete" — every field is surfaced so a caller can distinguish "verified
 /// clean" from "the instrument itself can't vouch for this run" (instrument-
 /// honesty doctrine, CLAUDE.md "Resolution Coverage").
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreshCoverage {
     /// `primaryScoped` `unknown` — TRUE resolution failures (`ambiguousResolved`
     /// excluded), the `realUnknownRate` definition.
@@ -1423,33 +1416,12 @@ fn opaque_dependency_closure(snap: &AppSetSnapshot) -> Vec<String> {
     opaque.into_iter().map(|(name, _)| name).collect()
 }
 
-/// Compute [`FreshCoverage`] for `workspace_root`: build the fresh program
-/// context, resolve it once, and reduce the full [`ProgramReport`] down to the
-/// tiny preflight status a caller can hold onto cheaply.
-///
-/// The `ctx` (snapshot + graph + parsed files — the whole semantic model) is
-/// deliberately local to this function and dropped when it returns: callers
-/// hold only the small [`FreshCoverage`] value, never the whole-program model
-/// (spec §3's memory-sequencing requirement — `run_analyze` computes this
-/// FIRST and lets it go before assembling the separate L3 model, so the two
-/// semantic models are never resident together).
-pub fn fresh_coverage(workspace_root: &Path) -> Result<FreshCoverage, String> {
-    let snap = build_snapshot_res(workspace_root)?;
-
-    // The verdict cache sits HERE, between the snapshot and everything
-    // expensive: the key is derived from the snapshot (see
-    // `preflight_cache::cache_key`), and parse + dep_layer + assemble + resolve
-    // + teardown — 2,642 ms of a 3,171 ms DO run — are what a hit skips.
-    //
-    // `cache_key` returns `None` when any component of the key cannot be
-    // established; that runs uncached rather than keying on a weaker identity.
-    let cache_key = preflight_cache::cache_key(&snap);
-    if let Some(key) = &cache_key
-        && let Some(hit) = preflight_cache::lookup(key)
-    {
-        return Ok(hit);
-    }
-
+/// The preflight's program build: the context (`Summary` dependency
+/// profile) and its one resolve. [`build_program_with_coverage`] reduces it
+/// with [`reduce_fresh_coverage`] and keeps it for the B3 adapter.
+pub fn fresh_program_from_snapshot(
+    snap: AppSetSnapshot,
+) -> Result<(ProgramContext, ProgramReport), String> {
     // Reads no dependency body; it DOES read edge details, which a later step
     // will declare in the profile (spec §4).
     let profile = BuildProfile {
@@ -1460,39 +1432,37 @@ pub fn fresh_coverage(workspace_root: &Path) -> Result<FreshCoverage, String> {
         let _s = pt::span("preflight", "preflight.resolve_full");
         resolve_full_program_with(&ctx)
     };
+    Ok((ctx, report))
+}
+
+/// The one program build the detectors' call resolution starts from: snapshot,
+/// context + report, and the preflight status reduced from them. `alsem
+/// analyze` and the r4/r4f test helper both use it so the two cannot drift.
+///
+/// There is no verdict cache: the caller needs the context and report, which a
+/// cached verdict cannot give (the B3 removal of the preflight cache, see
+/// CHANGELOG).
+pub fn build_program_with_coverage(
+    workspace_root: &Path,
+) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
+    let snap = build_snapshot_res(workspace_root)?;
+    let (ctx, report) = fresh_program_from_snapshot(snap)?;
+    let fc = reduce_fresh_coverage(&ctx, &report);
+    Ok((ctx, report, fc))
+}
+
+/// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
+pub fn reduce_fresh_coverage(ctx: &ProgramContext, report: &ProgramReport) -> FreshCoverage {
     let opaque_apps = {
         let _s = pt::span("preflight", "preflight.opaque_closure");
         opaque_dependency_closure(&ctx.snap)
     };
-    let out = FreshCoverage {
+    FreshCoverage {
         unknown: report.primary_histogram.unknown,
         coverage_holds: coverage_holds(&report.coverage),
         recovered_files: report.recovered_files.len(),
         opaque_apps,
-    };
-    // Store only on the `Ok` path — which is the only path that reaches here.
-    // `Err` (could-not-verify) is NEVER cached: it captures TRANSIENT
-    // environment (a locked file, a dying disk), so persisting it would laminate
-    // a one-time I/O flake into a lasting verdict. Degraded `Ok`s ARE cached —
-    // they are as deterministic as clean ones, and the key moves on any edit.
-    if let Some(key) = &cache_key {
-        preflight_cache::store(key, &out);
     }
-
-    // ctx (snapshot + graph + parsed) drops HERE — callers hold only the tiny
-    // status struct, never the whole semantic model (spec §3 memory sequencing).
-    // Dropped EXPLICITLY, inside a span, for the same reason `gate.teardown`
-    // and `context.ctx_drop` are: this is the whole workspace semantic model
-    // being freed, it was already being freed at exactly this point, and
-    // leaving it unnamed is how 16.6 % of an 8020 run stayed invisible until
-    // `docs/2026-07-31-profile-attribution.md`. `ProgramReport` is owned (it
-    // borrows nothing from `ctx`), so the order below is free to choose.
-    {
-        let _s = pt::span("preflight", "preflight.ctx_drop");
-        drop(report);
-        drop(ctx);
-    }
-    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -2133,8 +2103,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Task 2: FreshCoverage + fresh_coverage(ws) + opaque dependency closure
+    // Task 2: FreshCoverage + opaque dependency closure, through the
+    // production build (`build_program_with_coverage`, what analyze runs)
     // -----------------------------------------------------------------------
+
+    fn fresh_coverage(ws: &Path) -> Result<FreshCoverage, String> {
+        build_program_with_coverage(ws).map(|(_, _, fc)| fc)
+    }
 
     #[test]
     fn fresh_coverage_matches_direct_resolve_on_neutral_fixture() {

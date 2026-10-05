@@ -49,7 +49,7 @@ fn usage() -> ExitCode {
          --r3a1-combined-graph | --r3a2-summary-core | --r3a3-cone-coverage | \
          --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
-         --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | \
+         --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
          <workspace-or-.app>"
     );
@@ -57,12 +57,16 @@ fn usage() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Warnings go to stderr (a dropped dependency was once only a `warn!` that
+    // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let mut l2 = false;
     let mut l3_record_types = false;
     let mut l3_call_graph = false;
     let mut l3_call_graph_stats = false;
     let mut l3_call_graph_stats_cross_app = false;
     let mut program_call_graph_stats = false;
+    let mut b3 = false;
     let mut graphify_export = false;
     let mut graphify_export_fragments = false;
     let mut integration_points = false;
@@ -85,8 +89,23 @@ fn main() -> ExitCode {
     let mut r4f_scoped_guarantees = false;
     let mut r4f_ordering_facts = false;
     let mut workspace_arg: Option<std::ffi::OsString> = None;
+    // `--b3-triage <file.md>`: with `--b3`, also run the detector diff and
+    // write its triage table there (the title is the file stem).
+    let mut b3_triage: Option<std::path::PathBuf> = None;
+    // `--b3-deps`: with `--b3-triage`, diff the adapter without its stage 2
+    // (dependency-callee bindings) against the adapter with it.
+    let mut b3_deps = false;
 
-    for arg in std::env::args_os().skip(1) {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--b3-triage" {
+            let Some(path) = args.next() else {
+                eprintln!("aldump: error: --b3-triage needs a file path");
+                return usage();
+            };
+            b3_triage = Some(path.into());
+            continue;
+        }
         // `--l2` / `--l3-record-types` / `--l3-call-graph` / `--l3-event-graph` /
         // `--l3-coverage` / `--r2.5a-merged-index` flags (anywhere); else the
         // single positional.
@@ -198,6 +217,14 @@ fn main() -> ExitCode {
             program_call_graph_stats = true;
             continue;
         }
+        if arg == "--b3" {
+            b3 = true;
+            continue;
+        }
+        if arg == "--b3-deps" {
+            b3_deps = true;
+            continue;
+        }
         if workspace_arg.is_some() {
             eprintln!("aldump: error: more than one workspace argument");
             return usage();
@@ -230,6 +257,7 @@ fn main() -> ExitCode {
         r4f_scoped_guarantees,
         r4f_ordering_facts,
         program_call_graph_stats,
+        b3,
         // T4-B: these three each guard their own dedicated `if`-block (like every
         // flag above) but were missing from this array — a combo like
         // `--graphify-export --l3-call-graph` silently ran whichever block's `if`
@@ -249,6 +277,7 @@ fn main() -> ExitCode {
              --l3-event-graph / --l3-coverage / --r2.5a-merged-index / --l3-cross-app / \
              --r3a1-combined-graph / --r3a2-summary-core / --r3a3-cone-coverage / \
              --r3a4-dep-hooks / --r3a5-cross-app-summary / --r4f-return-summaries / \
+             --program-call-graph-stats / --b3 / \
              --graphify-export / --graphify-export-fragments / --integration-points are mutually exclusive"
         );
         return usage();
@@ -1153,6 +1182,52 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("aldump: error: failed to serialize L3 projection: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if b3_deps && (!b3 || b3_triage.is_none()) {
+        eprintln!("aldump: error: --b3-deps needs --b3 and --b3-triage <file.md>");
+        return usage();
+    }
+    if b3 {
+        // B3 Phase A: the join census between L3 call sites and the program
+        // engine's call-site edges, plus the adapter's counts
+        // (`engine::l3::program_calls`). With `--b3-triage <file.md>`, also
+        // the detector diff (`engine::l3::b3_diff`, code map C10).
+        let census = match &b3_triage {
+            None => al_sem::engine::l3::program_calls::adapter_census_for_workspace(&workspace),
+            Some(out) => {
+                use al_sem::engine::l3::b3_diff::{
+                    carry_verdicts, detector_diff_for_workspace, triage_markdown,
+                };
+                detector_diff_for_workspace(&workspace, b3_deps).and_then(|d| {
+                    let title = out
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let census = d.census.clone();
+                    // Keep the verdicts already written into an existing table.
+                    let md = triage_markdown(&title, &[(title.clone(), d)], &[]);
+                    let md = match std::fs::read_to_string(out) {
+                        Ok(old) => carry_verdicts(&md, &old),
+                        Err(_) => md,
+                    };
+                    std::fs::write(out, md).map_err(|e| format!("{}: {e}", out.display()))?;
+                    Ok(census)
+                })
+            }
+        };
+        return match census
+            .and_then(|c| serde_json::to_string_pretty(&c).map_err(|e| e.to_string()))
+        {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("aldump: error: --b3: {e}");
                 ExitCode::FAILURE
             }
         };

@@ -21,9 +21,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::engine::l2::features::PCallSite;
-use crate::engine::l3::call_resolver::{
-    CallEdge, DeclaredDependency, UpgradedBinding, resolve_calls,
-};
+use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding, calls_for};
 use crate::engine::l3::event_graph::build_event_graph;
 use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
@@ -879,9 +877,8 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
     // `gate/run.rs`'s `gate.project_filter_scope_baseline_suppress`).
     let _symbols_span = pt::span("context", "context.symbols_resolve_calls");
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let mut calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+    // Owned: the body below drains `calls.edges`/`upgraded_bindings` by move.
+    let mut calls = calls_for(resolved, &symbols).into_owned();
     drop(_symbols_span);
 
     let _graph_span = pt::span("context", "context.event_combined_graph");
@@ -946,7 +943,14 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         );
 
         let _t_walk = cones_census::start();
-        let outcome = compose_cone_over_graph(&graph, &nodes, &direct_full, &coverage_in, mode);
+        let outcome = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_full,
+            &coverage_in,
+            &ws.routines,
+            mode,
+        );
         cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
         let mut cones = outcome.cones;
         cone_derived = outcome.derived;
@@ -1572,6 +1576,7 @@ pub(crate) fn build_detector_context_cross_app(
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
+        &base.ws_routines,
         ConeOutput::DerivedOnly,
     );
     let cones = outcome.cones;
@@ -1828,6 +1833,7 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
+            precomputed_calls: None,
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
@@ -1840,6 +1846,59 @@ mod tests {
         assert!(
             ctx.ordering_facts.get().is_some(),
             "first access must memoize"
+        );
+    }
+
+    /// The seam is USED, not just present: a hand-made `ResolvedCalls` attached to
+    /// an empty workspace (which on its own resolves ZERO edges) must show up in
+    /// BOTH the detector context and the ordering-facts substrate
+    /// (`compose_snapshot` → `build_r3a3_source_only_base`). Reverting either site
+    /// to `resolve_calls` makes its assertion fail.
+    #[test]
+    fn precomputed_calls_reach_detector_context_and_ordering_base() {
+        use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
+        use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
+        let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
+        edge.to = Some("to-r".to_string());
+        // Dynamic so the coverage path (`dynamic_dispatch_sites`) shows it too.
+        edge.dispatch_kind = DispatchKind::Dynamic;
+        edge.resolution = Resolution::Resolved;
+        let resolved = crate::engine::l3::l3_workspace::L3Resolved {
+            workspace: crate::engine::l3::l3_workspace::L3Workspace {
+                objects: Vec::new(),
+                tables: Vec::new(),
+                routines: Vec::new(),
+            },
+            root_classifications: Vec::new(),
+            primary_app: None,
+            infra_diagnostics: Vec::new(),
+            precomputed_calls: Some(std::sync::Arc::new(ResolvedCalls {
+                edges: vec![edge],
+                upgraded_bindings: HashMap::new(),
+                diagnostics: Vec::new(),
+            })),
+        };
+        let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
+        assert!(
+            ctx.resolved_call_edge_by_callsite
+                .contains_key("distinct-callsite"),
+            "build_detector_context ignored precomputed_calls"
+        );
+        let base = crate::engine::l4::capability_cone::build_r3a3_source_only_base(&resolved);
+        assert!(
+            base.calls
+                .edges
+                .iter()
+                .any(|e| e.callsite_id == "distinct-callsite"),
+            "the ordering-facts base ignored precomputed_calls"
+        );
+        let coverage = resolved.project_coverage(&[], &[]);
+        assert!(
+            coverage
+                .dynamic_dispatch_sites
+                .iter()
+                .any(|s| s.contains("distinct-op")),
+            "project_coverage ignored precomputed_calls"
         );
     }
 

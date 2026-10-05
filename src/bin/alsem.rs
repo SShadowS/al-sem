@@ -621,6 +621,9 @@ fn main() -> ExitCode {
     // thread-safe by contract, and this runs before the process starts any
     // thread of its own.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 0) };
+    // Warnings go to stderr (a dropped dependency was once only a `warn!` that
+    // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
     match cli.command {
         Commands::Analyze(a) => run_analyze_cmd(a),

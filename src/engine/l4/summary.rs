@@ -259,6 +259,18 @@ pub struct RecordRoleSummary {
     pub initialises_param: EffectPresence,
 }
 
+impl RecordRoleSummary {
+    /// The routine may leave this record in a loaded/initialised state: it loads
+    /// it from the database, initialises it, or copies into it (the
+    /// `loadsFromDb` / `initialises` / `copiesInto` record-flow roles). A MAY
+    /// fact, which the walker and d40 read leniently as "loaded".
+    pub fn puts_in_loaded_state(&self) -> bool {
+        self.loads_from_db_param == EffectPresence::Yes
+            || self.initialises_param == EffectPresence::Yes
+            || self.copies_into_param == EffectPresence::Yes
+    }
+}
+
 /// A field list value: a sorted list of field ids, or a sentinel.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub enum FieldList {

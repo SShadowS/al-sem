@@ -6,6 +6,15 @@
 //! caller has loaded the forwarded record before the callsite; otherwise emit at
 //! the caller's callsite.
 //!
+//! "Loaded before the callsite" is lexical and lenient (any earlier load, even on
+//! one branch): the routine's own Get/Find*/Next/Init/Copy/TransferFields on the
+//! record, or an earlier call that hands the record `var` to a helper whose
+//! parameter role loads it (`record_load_points`, shared with d39). A routine
+//! that forwards its own parameter is not blamed when that parameter's role
+//! requires it loaded at entry AND its callers are visible (`owner_is_judged`):
+//! the caller owns the load, and this detector judges the caller through that
+//! role instead. A public routine with no workspace caller keeps the finding.
+//!
 //! Severity `medium`, escalating to `high` when the callee mutates the unloaded
 //! record (`mutatesBeforeLoad === "yes"`).
 //!
@@ -20,33 +29,15 @@
 //! on the L3 binding directly; the post-upgrade `bindingResolution` lives on
 //! `ctx.upgraded_bindings_by_callsite` joined POSITIONALLY by index.
 
-use std::collections::HashMap;
-
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved};
+use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, before_anchor};
+use crate::engine::l5::detectors::{anchor_of, before_anchor, owner_is_judged, record_load_points};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 const DETECTOR: &str = "d40-transitive-load-missing";
-
-/// Record-op roles that put the record in a well-defined loaded/initialised state.
-/// Mirrors al-sem's `isLoadingOp` (loadsFromDb / initialises / copiesInto). The L5
-/// `recordFlowRoleOf` op classifier is reproduced here by op name (the set is
-/// closed: Get/Find*/Next load; Init initialises; Copy/TransferFields copy into).
-fn is_loading_op(op: &str) -> bool {
-    matches!(
-        op,
-        // loadsFromDb
-        "Get" | "FindFirst" | "FindLast" | "FindSet" | "Find" | "Next"
-        // initialises
-        | "Init"
-        // copiesInto
-        | "Copy" | "TransferFields"
-    )
-}
 
 pub fn detect_d40(
     resolved: &L3Resolved,
@@ -61,6 +52,7 @@ pub fn detect_d40(
     let mut skipped_temp_record = 0u64;
     let mut skipped_caller_loaded = 0u64;
     let mut skipped_callee_unknown = 0u64;
+    let mut skipped_caller_owns_load = 0u64;
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only ⇒ all primary.
@@ -71,17 +63,9 @@ pub fn detect_d40(
             continue;
         }
 
-        // Precompute load-op buckets per source variable (key = lowercase name).
-        let mut loads_by_source_lc: HashMap<String, Vec<&L3RecordOperation>> = HashMap::new();
-        for op in &routine.record_operations {
-            if !is_loading_op(&op.op) {
-                continue;
-            }
-            loads_by_source_lc
-                .entry(op.record_variable_name.to_lowercase())
-                .or_default()
-                .push(op);
-        }
+        // Every point where a source variable becomes loaded (own load ops and
+        // `var` helpers whose role loads it — the shared definition).
+        let loads_by_source_lc = record_load_points(routine, ctx);
 
         for cs in &routine.call_sites {
             let edge = match ctx.resolved_call_edge_by_callsite.get(&cs.id) {
@@ -146,20 +130,36 @@ pub fn detect_d40(
                     Some(n) => n.clone(),
                     None => continue,
                 };
-                let empty: Vec<&L3RecordOperation> = Vec::new();
-                let bucket = loads_by_source_lc.get(&source_name_lc).unwrap_or(&empty);
+                let bucket = loads_by_source_lc
+                    .get(&source_name_lc)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
                 let source_id = binding.source_record_variable_id.as_deref();
-                let loaded_before = bucket.iter().any(|op| {
-                    if !before_anchor(&op.source_anchor, &cs.source_anchor) {
-                        return false;
-                    }
-                    match (source_id, op.record_variable_id.as_deref()) {
-                        (Some(sid), Some(oid)) => oid == sid,
-                        _ => true, // name-match already established by bucket lookup
-                    }
+                let loaded_before = bucket.iter().any(|load| {
+                    before_anchor(load.anchor, &cs.source_anchor) && load.is_variable(source_id)
                 });
                 if loaded_before {
                     skipped_caller_loaded += 1;
+                    continue;
+                }
+
+                // The routine forwards its OWN parameter. The L4 walker composes
+                // the callee's entry requirement into that parameter's role (any
+                // var-ness: a by-value copy carries the caller's loaded state), so
+                // when the role says "requires loaded" the record's owner is one
+                // level up and this same loop judges the routine's callers — but
+                // only when those callers are visible (`owner_is_judged`): a public
+                // routine with no workspace caller keeps the finding.
+                if binding.source_kind == "parameter"
+                    && owner_is_judged(routine, ctx)
+                    && let Some(src_ix) = binding.source_parameter_index
+                    && ctx
+                        .parameter_roles_by_routine
+                        .get(&routine.id)
+                        .and_then(|rs| rs.iter().find(|r| r.parameter_index == src_ix))
+                        .is_some_and(|r| r.requires_loaded_at_entry == EffectPresence::Yes)
+                {
+                    skipped_caller_owns_load += 1;
                     continue;
                 }
 
@@ -250,5 +250,6 @@ pub fn detect_d40(
     stats.add_skip("tempRecord", skipped_temp_record);
     stats.add_skip("callerLoaded", skipped_caller_loaded);
     stats.add_skip("calleeUnknown", skipped_callee_unknown);
+    stats.add_skip("callerOwnsLoad", skipped_caller_owns_load);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

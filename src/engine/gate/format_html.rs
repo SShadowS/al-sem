@@ -1211,6 +1211,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            precomputed_calls: None,
         };
         let coverage = AnalysisCoverage {
             source_units_total: 1,
@@ -1265,6 +1266,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            precomputed_calls: None,
         };
         let coverage = AnalysisCoverage {
             source_units_total: 0,

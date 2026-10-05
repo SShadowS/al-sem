@@ -269,12 +269,7 @@ fn discover_al_files(workspace: &Path) -> std::io::Result<Vec<AlFile>> {
     Ok(files)
 }
 
-/// Read a file as UTF-8, stripping a leading UTF-8 BOM if present (matches TS).
-fn read_al_source(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    Ok(String::from_utf8_lossy(bytes).into_owned())
-}
+use crate::source_text::read_al_source;
 
 /// Read the workspace ROOT's `app.json` and return its `id` field VERBATIM (no
 /// case change) when present as a non-empty string. al-sem uses this as the

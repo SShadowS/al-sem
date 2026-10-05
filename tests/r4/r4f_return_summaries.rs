@@ -2,7 +2,7 @@
 //!
 //! For each committed al-sem golden under
 //! `tests/r4f-goldens/<fixture>.returnsummary.golden.json`, run the Rust
-//! source-only L0→L3 pass (`assemble_and_resolve_workspace_default(...)`) over
+//! source-only L0→L3 pass (`assemble_and_resolve_workspace_with_program_calls(...)`) over
 //! the matching `tests/r0-corpus/<fixture>` workspace, compute the return
 //! summaries (`project_r4f_return_summaries`), pretty-serialize (serde_json
 //! pretty + trailing newline — the exact on-disk golden form), and assert
@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::return_summary::{R4FReturnSummaryProjection, project_r4f_return_summaries};
 
 use crate::regen;
@@ -63,7 +63,7 @@ fn run_rust(fixture: &str) -> R4FReturnSummaryProjection {
          (offline corpus incomplete)",
         fixture_dir.display()
     );
-    match assemble_and_resolve_workspace_default(&fixture_dir) {
+    match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
         Some(resolved) => project_r4f_return_summaries(&resolved, fixture),
         None => R4FReturnSummaryProjection {
             fixture_name: fixture.to_string(),

@@ -864,7 +864,7 @@ fn q6(ws: PathBuf) {
     };
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
-        al_sem::program::resolve::full::fresh_coverage(&ws)
+        al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
     });
     println!("    fresh_coverage ok: {}", fresh.is_ok());
     drop(fresh);
@@ -918,6 +918,7 @@ fn q6(ws: PathBuf) {
         root_classifications,
         primary_app,
         infra_diagnostics,
+        precomputed_calls: _,
     } = resolved;
     let L3Workspace {
         objects,

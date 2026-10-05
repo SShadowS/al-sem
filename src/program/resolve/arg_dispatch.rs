@@ -20,13 +20,23 @@
 //! is NEVER filtered out of the competition to let the "provable" remainder
 //! resolve — its mere presence degrades the whole call.
 //!
+//! Skipping shared positions (below) assumes the call compiles: an argument
+//! at a shared position that fits no overload would make AL reject the call,
+//! but we would still resolve it. Fine for compiled code.
+//!
 //! # The hardened rule set (plan v2.1 Round-1 + Round-2 addenda — BINDING)
 //!
+//! - **Discriminating positions only** ([`pick_candidate`]): a position
+//!   where every candidate declares the IDENTICAL parameter (canonical type,
+//!   mode, full type text) cannot tell candidates apart, so it is skipped —
+//!   its argument may be untyped or inexact (an option value, an Option var
+//!   into an Integer param) without blocking a pick (b3 phase A, Task 5a).
 //! - **Call-level degradation** ([`pick_candidate`]): a pick requires ALL
-//!   supplied args typed (`ArgDispatchInfo::canonical` is `Some`) AND every
+//!   args at DISCRIMINATING positions typed (`ArgDispatchInfo::canonical` is
+//!   `Some`) AND every
 //!   candidate's full parameter type+mode metadata known
-//!   ([`candidate_param_infos`] returns `Some` for every candidate). ANY
-//!   untyped arg / missing candidate metadata / SymbolOnly candidate in the
+//!   ([`candidate_param_infos`] returns `Some` for every candidate). An
+//!   untyped arg at a DIFFERING position / missing candidate metadata / SymbolOnly candidate in the
 //!   set / degraded candidate (caller-side prevalidation) → NO PICK.
 //! - **Dispatch-canonical identity, not text identity** ([`CanonicalArgType`],
 //!   [`dispatch_canonical_type_text`]): Text/Code length brackets are
@@ -533,7 +543,9 @@ impl ArgDispatchInfo {
 /// side carries canonical type + mode"). Always fully populated (SOURCE tier
 /// `Param::by_ref` is a plain `bool`, never optional) — [`candidate_param_infos`]
 /// returns `None` for the WHOLE candidate rather than a partially-populated
-/// list when any position cannot be canonicalized.
+/// list when any position cannot be canonicalized. `PartialEq` decides
+/// whether a position is discriminating ([`pick_candidate`]).
+#[derive(PartialEq)]
 pub(crate) struct ParamDispatchInfo {
     pub canonical: CanonicalArgType,
     /// FULL normalized type text (length included) — see
@@ -1472,12 +1484,16 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
 /// same-arity, all-CONCRETE candidate set (every entry of `candidates` is
 /// parallel — by index — to the caller's own candidate `RoutineNodeId` list).
 ///
+/// Only positions where the candidates DIFFER decide; shared positions are
+/// skipped (see the module doc), so an untyped argument matters only at a
+/// differing position.
+///
 /// Returns `Some(index)` iff EXACTLY ONE candidate EXACTLY matches `args`
 /// AND every OTHER candidate is PROVABLY INCOMPATIBLE with `args` at some
 /// position — an "undecided" (same-soft-family, non-exact) competitor blocks
 /// the pick just like a second exact match would, since its presence means
 /// the closed candidate set is not provably narrowed to one. `None` for
-/// every other outcome (any untyped arg position, a Variant/Any param at a
+/// every other outcome (an untyped arg at a differing position, a Variant/Any param at a
 /// discriminating position, a literal-forbidden-family candidate present, 0
 /// or >1 exact matches, an undecided non-picked candidate) — the caller's
 /// existing `AmbiguousOverload` construction is UNCHANGED whenever this
@@ -1489,26 +1505,34 @@ pub(crate) fn pick_candidate(
     if args.is_empty() || candidates.len() < 2 {
         return None;
     }
-    // Call-level degradation: EVERY supplied arg must be typed.
-    if args.iter().any(|a| a.canonical.is_none()) {
+    if candidates.iter().any(|c| c.len() != args.len()) {
+        // Arity mismatch inside the candidate set — should not happen
+        // (every candidate here was already arity-filtered by the caller),
+        // but fail closed rather than index out of bounds.
         return None;
     }
-    for pos in 0..args.len() {
-        if candidates.iter().any(|c| pos >= c.len()) {
-            // Arity mismatch inside the candidate set — should not happen
-            // (every candidate here was already arity-filtered by the
-            // caller), but fail closed rather than index out of bounds.
-            return None;
-        }
-        // Variant/Any wildcard gate — "discriminating position" computed
-        // from the FULL candidate set BEFORE any compatibility filtering
-        // (I9).
+    // Only DISCRIMINATING positions take part in the pick. A position where
+    // every candidate declares the IDENTICAL parameter (canonical type, mode
+    // and full type text) affects every candidate the same way, so its
+    // argument can neither pick nor eliminate one: it is skipped, typed or
+    // not. Judging it anyway made one untyped or inexactly-typed argument
+    // there (an option value `Rec.Type::X`, an Option var into an Integer
+    // param) block a pick the real discriminating position proves (b3 phase
+    // A, Task 5a: CDO's `EMailLog.InitNewEntry`). The comparison is computed
+    // from the FULL candidate set BEFORE any compatibility filtering (I9).
+    let discriminating: Vec<usize> = (0..args.len())
+        .filter(|&pos| candidates.windows(2).any(|w| w[0][pos] != w[1][pos]))
+        .collect();
+    // Call-level degradation: EVERY argument at a discriminating position
+    // must be typed.
+    if discriminating.iter().any(|&p| args[p].canonical.is_none()) {
+        return None;
+    }
+    for &pos in &discriminating {
+        // Variant/Any wildcard gate.
         let types_at_pos: Vec<&CanonicalArgType> =
             candidates.iter().map(|c| &c[pos].canonical).collect();
-        let by_ref_at_pos: Vec<bool> = candidates.iter().map(|c| c[pos].by_ref).collect();
-        let discriminating = types_at_pos.windows(2).any(|w| w[0] != w[1])
-            || by_ref_at_pos.windows(2).any(|w| w[0] != w[1]);
-        if discriminating && types_at_pos.iter().any(|t| t.is_variant_or_any()) {
+        if types_at_pos.iter().any(|t| t.is_variant_or_any()) {
             return None;
         }
         // C6 literal-forbidden-family gate, stated verbatim (module doc):
@@ -1528,11 +1552,9 @@ pub(crate) fn pick_candidate(
 
     let mut exact_idx: Option<usize> = None;
     for (i, params) in candidates.iter().enumerate() {
-        if args.len() == params.len()
-            && args
-                .iter()
-                .zip(params.iter())
-                .all(|(a, p)| position_exact_match(a, p))
+        if discriminating
+            .iter()
+            .all(|&p| position_exact_match(&args[p], &params[p]))
         {
             if exact_idx.is_some() {
                 // A second exact match: ordinary ambiguity, never pick.
@@ -1549,10 +1571,9 @@ pub(crate) fn pick_candidate(
         if i == picked {
             continue;
         }
-        let eliminated = args
+        let eliminated = discriminating
             .iter()
-            .zip(params.iter())
-            .any(|(a, p)| position_provably_incompatible(a, p));
+            .any(|&p| position_provably_incompatible(&args[p], &params[p]));
         if !eliminated {
             return None;
         }
@@ -1917,6 +1938,19 @@ mod tests {
             vec![base_param("instream", false)],
         ];
         assert_eq!(pick_candidate(&args, &candidates), None);
+    }
+
+    /// An untyped argument at a NON-discriminating position (every candidate
+    /// declares the identical parameter there) does not block the pick the
+    /// discriminating position makes — the CDO `InitNewEntry` shape.
+    #[test]
+    fn pick_candidate_skips_untyped_argument_at_non_discriminating_position() {
+        let args = vec![ArgDispatchInfo::untyped(), base_arg("integer")];
+        let candidates = vec![
+            vec![base_param("integer", false), base_param("integer", false)],
+            vec![base_param("integer", false), base_param("code", false)],
+        ];
+        assert_eq!(pick_candidate(&args, &candidates), Some(0));
     }
 
     /// Zero compatible candidates (arg canonically matches neither) is a

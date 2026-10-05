@@ -23,10 +23,14 @@ use crate::engine::l5::ordering::{
     ordered_before,
 };
 use crate::engine::l5::ordering_inter::{
-    CallChain, CallsiteByIdMap, OccurrenceWithChain, error_escapes_chain, inter_hb, io_direction,
-    reconstruct_call_chains, reconstruct_frame_chain,
+    CallChain, CallsiteByIdMap, OccurrenceWithChain, ResolutionByCallsiteId, error_escapes_chain,
+    inter_hb, io_direction, reconstruct_call_chains, reconstruct_frame_chain,
+    resolution_by_callsite_id,
 };
-use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapCapabilityExtra, SnapTempState};
+use crate::engine::l5::snapshot::{
+    CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, SnapshotCallsiteEvidence,
+    SnapshotCallsiteResolution, SnapshotOperationEvidence,
+};
 use crate::engine::return_summary::RoutineReturnSummary;
 use serde_json::Value as JsonValue;
 
@@ -145,6 +149,97 @@ struct EffectOccurrence {
     ordered_op: Option<OrderedOp>,
 }
 
+/// The snapshot lookups `compute_ordering` needs, built ONCE per snapshot instead
+/// of once per root (or, for the id lookups, a linear scan per effect). On CDO
+/// with the B3 calls that is 1359 roots and 67 k effects, each scanning the whole
+/// snapshot. Every lookup keeps the semantics of the scan it replaces:
+/// `*_by_id` keep the FIRST match (`iter().find`), the per-routine lists keep
+/// index order, and `http_method_by_callsite_id` keeps the LAST insert.
+pub struct OrderingIndex<'s> {
+    op_by_id: HashMap<&'s str, &'s SnapshotOperationEvidence>,
+    cs_by_id: HashMap<&'s str, &'s SnapshotCallsiteEvidence>,
+    callsites_by_routine: HashMap<&'s str, Vec<&'s SnapshotCallsiteEvidence>>,
+    resolutions_by_from: HashMap<&'s str, Vec<&'s SnapshotCallsiteResolution>>,
+    callees_by_callsite_id: HashMap<&'s str, Vec<&'s str>>,
+    http_method_by_callsite_id: HashMap<&'s str, &'s str>,
+    background_kickoff_callsite_ids: HashSet<&'s str>,
+    resolution_by_callsite_id: ResolutionByCallsiteId<'s>,
+}
+
+impl<'s> OrderingIndex<'s> {
+    pub fn new(snap: &'s CapabilitySnapshot) -> Self {
+        let mut op_by_id = HashMap::new();
+        for o in &snap.operation_index {
+            op_by_id.entry(o.operation_id.as_str()).or_insert(o);
+        }
+        let mut cs_by_id = HashMap::new();
+        let mut callsites_by_routine: HashMap<&str, Vec<&SnapshotCallsiteEvidence>> =
+            HashMap::new();
+        for c in &snap.callsite_index {
+            cs_by_id.entry(c.callsite_id.as_str()).or_insert(c);
+            callsites_by_routine
+                .entry(c.routine.as_str())
+                .or_default()
+                .push(c);
+        }
+        let mut resolutions_by_from: HashMap<&str, Vec<&SnapshotCallsiteResolution>> =
+            HashMap::new();
+        for cr in &snap.callsite_resolutions {
+            resolutions_by_from
+                .entry(cr.from.as_str())
+                .or_default()
+                .push(cr);
+        }
+        let mut callees_by_callsite_id: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &snap.typed_edges {
+            let (Some(cs), Some(to)) = (edge.edge_callsite_id(), edge.edge_to()) else {
+                continue;
+            };
+            callees_by_callsite_id.entry(cs).or_default().push(to);
+        }
+        let mut http_method_by_callsite_id = HashMap::new();
+        let mut background_kickoff_callsite_ids = HashSet::new();
+        for f in &snap.capability_facts {
+            if f.resource_kind == "http"
+                && let Some(wc) = &f.witness_callsite_id
+                && let Some(SnapCapabilityExtra::Http { method, .. }) = &f.extra
+            {
+                http_method_by_callsite_id.insert(wc.as_str(), method.as_str());
+            }
+            if f.resource_kind == "background"
+                && f.op == "start"
+                && let Some(wc) = &f.witness_callsite_id
+            {
+                background_kickoff_callsite_ids.insert(wc.as_str());
+            }
+        }
+        OrderingIndex {
+            op_by_id,
+            cs_by_id,
+            callsites_by_routine,
+            resolutions_by_from,
+            callees_by_callsite_id,
+            http_method_by_callsite_id,
+            background_kickoff_callsite_ids,
+            resolution_by_callsite_id: resolution_by_callsite_id(snap),
+        }
+    }
+
+    fn callsites_of(&self, routine_id: &str) -> &[&'s SnapshotCallsiteEvidence] {
+        self.callsites_by_routine
+            .get(routine_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn resolutions_from(&self, routine_id: &str) -> &[&'s SnapshotCallsiteResolution] {
+        self.resolutions_by_from
+            .get(routine_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+}
+
 // ---------------------------------------------------------------------------
 // compute_ordering — order:false path.
 // ---------------------------------------------------------------------------
@@ -155,6 +250,7 @@ pub fn compute_ordering(
     effects: &[OrderingEffectInput],
     snap: &CapabilitySnapshot,
     callsite_by_id: &CallsiteByIdMap,
+    index: &OrderingIndex,
     routine_return_summaries: Option<&HashMap<String, RoutineReturnSummary>>,
     isolated_event_ids: Option<&HashSet<String>>,
 ) -> Vec<Vec<ScopedGuarantee>> {
@@ -165,10 +261,7 @@ pub fn compute_ordering(
             let mut ordered_op: Option<OrderedOp> = None;
 
             if let Some(op_id) = &eff.evidence_operation_id
-                && let Some(op_ev) = snap
-                    .operation_index
-                    .iter()
-                    .find(|o| &o.operation_id == op_id)
+                && let Some(op_ev) = index.op_by_id.get(op_id.as_str()).copied()
                 && let Some(order) = op_ev.order
             {
                 let owning_frames = snap
@@ -189,7 +282,7 @@ pub fn compute_ordering(
 
             if ordered_op.is_none()
                 && let Some(cs_id) = &eff.evidence_callsite_id
-                && let Some(cs_ev) = snap.callsite_index.iter().find(|c| &c.callsite_id == cs_id)
+                && let Some(cs_ev) = index.cs_by_id.get(cs_id.as_str()).copied()
                 && let Some(order) = cs_ev.order
             {
                 let owning_frames = snap
@@ -239,15 +332,12 @@ pub fn compute_ordering(
     // --- resolveOwningRoutine. ---
     let resolve_owning_routine = |eff: &OrderingEffectInput| -> Option<String> {
         if let Some(op_id) = &eff.evidence_operation_id
-            && let Some(op_ev) = snap
-                .operation_index
-                .iter()
-                .find(|o| &o.operation_id == op_id)
+            && let Some(op_ev) = index.op_by_id.get(op_id.as_str()).copied()
         {
             return Some(op_ev.routine.clone());
         }
         if let Some(cs_id) = &eff.evidence_callsite_id
-            && let Some(cs_ev) = snap.callsite_index.iter().find(|c| &c.callsite_id == cs_id)
+            && let Some(cs_ev) = index.cs_by_id.get(cs_id.as_str()).copied()
         {
             return Some(cs_ev.routine.clone());
         }
@@ -329,6 +419,7 @@ pub fn compute_ordering(
                 via_paths,
                 snap,
                 callsite_by_id,
+                &index.resolution_by_callsite_id,
                 via_paths_truncated,
                 isolated_event_ids,
             );
@@ -630,23 +721,12 @@ pub fn compute_ordering(
         "ok"
     };
 
-    // calleesByCallsiteId from typedEdges.
-    let mut callees_by_callsite_id: HashMap<String, Vec<String>> = HashMap::new();
-    for edge in &snap.typed_edges {
-        let (Some(cs), Some(to)) = (edge.edge_callsite_id(), edge.edge_to()) else {
-            continue;
-        };
-        callees_by_callsite_id
-            .entry(cs.to_string())
-            .or_default()
-            .push(to.to_string());
-    }
-
+    // calleesByCallsiteId from typedEdges: `index.callees_by_callsite_id`.
     let preceding_callsite_always_errors = |before_order_id: u32, frame_id: i64| -> bool {
         if routine_return_summaries.is_none() {
             return false;
         }
-        for cs in &snap.callsite_index {
+        for &cs in index.callsites_of(routine_id) {
             if cs.routine != routine_id {
                 continue;
             }
@@ -660,8 +740,8 @@ pub fn compute_ordering(
             if cs.control_context.as_deref() != Some("top-level") {
                 continue;
             }
-            if let Some(callees) = callees_by_callsite_id.get(&cs.callsite_id) {
-                for callee_id in callees {
+            if let Some(callees) = index.callees_by_callsite_id.get(cs.callsite_id.as_str()) {
+                for &callee_id in callees {
                     if check_callee_returnability(callee_id) == "no-edge" {
                         return true;
                     }
@@ -823,19 +903,7 @@ pub fn compute_ordering(
         })
         .collect();
 
-    // httpMethodByCallsiteId from capability facts.
-    let mut http_method_by_callsite_id: HashMap<String, String> = HashMap::new();
-    for f in &snap.capability_facts {
-        if f.resource_kind != "http" {
-            continue;
-        }
-        let Some(wc) = &f.witness_callsite_id else {
-            continue;
-        };
-        if let Some(SnapCapabilityExtra::Http { method, .. }) = &f.extra {
-            http_method_by_callsite_id.insert(wc.clone(), method.clone());
-        }
-    }
+    // httpMethodByCallsiteId from capability facts: `index.http_method_by_callsite_id`.
 
     // --- COMMIT-occurrence root labels (EXTERNAL_IO_BEFORE_COMMIT COMMIT-carried). ---
     for &commit_idx in &commit_with_chains {
@@ -944,32 +1012,17 @@ pub fn compute_ordering(
     }
 
     // --- Boundary machinery (rootBoundaryCallsites + boundaryBetween). ---
-    let mut order_by_callsite_id: HashMap<String, Option<u32>> = HashMap::new();
-    for cs in &snap.callsite_index {
-        if cs.routine != routine_id {
-            continue;
-        }
-        order_by_callsite_id.insert(cs.callsite_id.clone(), cs.order.map(|o| o.order_id));
+    let mut order_by_callsite_id: HashMap<&str, Option<u32>> = HashMap::new();
+    for &cs in index.callsites_of(routine_id) {
+        order_by_callsite_id.insert(cs.callsite_id.as_str(), cs.order.map(|o| o.order_id));
     }
     let is_object_run = |d: &str| matches!(d, "codeunit-run" | "page-run" | "report-run");
 
-    // Background-kickoff callsite ids.
-    let mut background_kickoff_callsite_ids: HashSet<String> = HashSet::new();
-    for f in &snap.capability_facts {
-        if f.resource_kind != "background" || f.op != "start" {
-            continue;
-        }
-        if let Some(wc) = &f.witness_callsite_id {
-            background_kickoff_callsite_ids.insert(wc.clone());
-        }
-    }
+    // Background-kickoff callsite ids: `index.background_kickoff_callsite_ids`.
 
     // rootBoundaryCallsites: (callsiteId, orderId option).
     let mut root_boundary_callsites: Vec<(String, Option<u32>)> = Vec::new();
-    for cr in &snap.callsite_resolutions {
-        if cr.from != routine_id {
-            continue;
-        }
+    for &cr in index.resolutions_from(routine_id) {
         let dispatch_kind = &cr.dispatch_kind;
         let status = &cr.status;
         if is_object_run(dispatch_kind) {
@@ -979,7 +1032,10 @@ pub fn compute_ordering(
             }
             root_boundary_callsites.push((
                 cr.callsite_id.clone(),
-                order_by_callsite_id.get(&cr.callsite_id).copied().flatten(),
+                order_by_callsite_id
+                    .get(cr.callsite_id.as_str())
+                    .copied()
+                    .flatten(),
             ));
             continue;
         }
@@ -987,12 +1043,18 @@ pub fn compute_ordering(
         if !is_opaque {
             continue;
         }
-        if background_kickoff_callsite_ids.contains(&cr.callsite_id) {
+        if index
+            .background_kickoff_callsite_ids
+            .contains(cr.callsite_id.as_str())
+        {
             continue;
         }
         root_boundary_callsites.push((
             cr.callsite_id.clone(),
-            order_by_callsite_id.get(&cr.callsite_id).copied().flatten(),
+            order_by_callsite_id
+                .get(cr.callsite_id.as_str())
+                .copied()
+                .flatten(),
         ));
     }
 
@@ -1261,9 +1323,10 @@ pub fn compute_ordering(
         let Some(io_callsite_id) = effects[io_idx].evidence_callsite_id.clone() else {
             continue;
         };
-        let http_method = http_method_by_callsite_id
-            .get(&io_callsite_id)
-            .cloned()
+        let http_method: String = index
+            .http_method_by_callsite_id
+            .get(io_callsite_id.as_str())
+            .map(|m| m.to_string())
             .unwrap_or_default();
         let file_op = ""; // (FILE not produced for IO_BEFORE_ESCAPING_ERROR in corpus)
         if io_direction(&io_occ.effect_type, &http_method, file_op) != "write" {

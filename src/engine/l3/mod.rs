@@ -14,6 +14,7 @@
 pub mod al_attributes;
 pub mod al_builtins;
 pub mod al_type;
+pub mod b3_diff;
 pub mod call_graph_projection;
 pub mod call_resolver;
 pub mod coverage;
@@ -23,6 +24,7 @@ pub mod global_builtins;
 pub mod implicit_edges;
 pub mod l3_workspace;
 pub mod member_builtins;
+pub mod program_calls;
 pub mod receiver;
 pub mod receiver_type;
 pub mod record_types;

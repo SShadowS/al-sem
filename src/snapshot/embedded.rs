@@ -60,7 +60,7 @@ pub fn extract_embedded_source(app_path: &Path) -> Result<Vec<SourceFile>> {
         .with_context(|| format!("embedded .al entry too large: {name}"))?;
         let raw = crate::capped_io::read_capped(entry, crate::capped_io::EMBEDDED_AL_SOURCE_CAP)
             .with_context(|| format!("failed to read embedded .al entry: {name}"))?;
-        let text = String::from_utf8_lossy(strip_bom(&raw)).into_owned();
+        let text = crate::source_text::decode_al_source(&raw);
         let virtual_path = percent_encoding::percent_decode_str(&name)
             .decode_utf8_lossy()
             .into_owned();
@@ -70,14 +70,6 @@ pub fn extract_embedded_source(app_path: &Path) -> Result<Vec<SourceFile>> {
         });
     }
     Ok(out)
-}
-
-fn strip_bom(b: &[u8]) -> &[u8] {
-    if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        &b[3..]
-    } else {
-        b
-    }
 }
 
 #[cfg(test)]

@@ -34,6 +34,8 @@
 //!   and EXCLUDED from this projection.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::rc::Rc;
 
 use serde::Serialize;
 
@@ -468,9 +470,12 @@ impl WitnessHop {
     }
 }
 
+/// A raw witness path. Hops are shared (`Rc`): the BFS's paths share long
+/// prefixes, and up to `HARD_PATH_CAP` paths walk the same arena nodes, so each
+/// hop is built once and every path through it holds a pointer.
 #[derive(Debug, Clone)]
 struct WitnessPath {
-    hops: Vec<WitnessHop>,
+    hops: Vec<Rc<WitnessHop>>,
 }
 
 /// Outcome of `reconstruct_witness_paths`: raw (un-projected) paths plus the
@@ -482,6 +487,11 @@ struct WitnessOutcomeExt {
     /// Internal diagnostics (kind, optional detail). Forwarded by
     /// `reconstruct_witness_paths_pub` as `WitnessDiagnosticPub`.
     diagnostics: Vec<(String, Option<String>)>,
+    /// BFS case only: `paths[i]` already projected — exactly
+    /// `project_path(&paths[i], root, root_display, idx)` — built from
+    /// per-arena-node memos (see `reconstruct_witness_paths`). `None`
+    /// for the other cases, whose paths the caller projects itself.
+    projected: Option<Vec<ProjPath>>,
 }
 
 /// `buildDirectTerminal` (witness.ts).
@@ -562,6 +572,20 @@ fn terminal_hop_from_fact(fact: &Fact, idx: &FingerprintIndexes) -> WitnessHop {
         source_file: None,
         line: None,
         column: None,
+    }
+}
+
+/// Whether [`edge_to_hop`] yields a hop for `edge` — the witness BFS's walkability
+/// test, answered without building the hop. `edge_to_hop` itself returns `None`
+/// exactly when this is false.
+fn edge_has_hop(edge: &SnapshotGraphEdge) -> bool {
+    match edge {
+        SnapshotGraphEdge::ObjectRunUnresolved { .. } => false,
+        SnapshotGraphEdge::DirectCall { .. }
+        | SnapshotGraphEdge::ObjectRunResolved { .. }
+        | SnapshotGraphEdge::EventDispatch { .. }
+        | SnapshotGraphEdge::VariableTypedCall { .. }
+        | SnapshotGraphEdge::InterfaceDispatch { .. } => true,
     }
 }
 
@@ -721,6 +745,106 @@ fn dispatch_object_type(f: &Fact) -> Option<&str> {
     }
 }
 
+/// One graph edge's witness hop, its projection and its raw JSON (built on
+/// first use), shared by every path through that edge.
+struct NodeMemo {
+    hop: Rc<WitnessHop>,
+    raw_json: std::cell::OnceCell<String>,
+    projected: Option<Rc<ProjHop>>,
+}
+
+impl NodeMemo {
+    fn raw_json(&self) -> &str {
+        self.raw_json.get_or_init(|| witness_hop_json(&self.hop))
+    }
+}
+
+/// [`NodeMemo`]s keyed by graph edge, kept across the witness BFS calls of one
+/// root. A hop and its projection depend only on the edge (see the
+/// `debug_assert` in `reconstruct_witness_paths`), and one root's BFS calls walk
+/// the same edges again and again — so each is built once per root.
+///
+/// Keyed by the edge's address. `'i` ties the cache to the borrow of the graph
+/// that owns the edges, so it cannot outlive them: a freed edge's address,
+/// reused by another edge, can never hit a stale memo.
+#[derive(Default)]
+struct HopCache<'i>(
+    HashMap<*const SnapshotGraphEdge, Rc<NodeMemo>>,
+    std::marker::PhantomData<&'i SnapshotGraphEdge>,
+);
+
+impl<'i> HopCache<'i> {
+    fn get_or_build(
+        &mut self,
+        edge: &'i SnapshotGraphEdge,
+        build: impl FnOnce() -> NodeMemo,
+    ) -> Rc<NodeMemo> {
+        Rc::clone(
+            self.0
+                .entry(edge as *const SnapshotGraphEdge)
+                .or_insert_with(|| Rc::new(build())),
+        )
+    }
+}
+
+/// Every field of an inherited fact that the witness BFS's `valid_nodes` seed
+/// reads: the `(op, resource_kind)` bucket, the temp class, and what
+/// `fact_equivalent(d, fact)` reads from `fact` (resource id, the
+/// `resourceArgSource` JSON it compares, and the dispatch object type, present
+/// exactly when the fact is a dispatch). Two facts with equal keys get the same
+/// `valid_nodes`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ValidNodesKey {
+    op: String,
+    resource_kind: String,
+    resource_id: Option<String>,
+    resource_arg_source_json: Option<String>,
+    dispatch_object_type: Option<String>,
+    known_temp: bool,
+}
+
+impl ValidNodesKey {
+    fn of(fact: &Fact) -> ValidNodesKey {
+        ValidNodesKey {
+            op: fact.op.clone(),
+            resource_kind: fact.resource_kind.clone(),
+            resource_id: fact.resource_id.clone(),
+            resource_arg_source_json: fact.resource_arg_source.as_ref().map(value_source_json),
+            dispatch_object_type: dispatch_object_type(fact).map(str::to_string),
+            known_temp: is_known_temp_snap(fact),
+        }
+    }
+}
+
+/// `valid_nodes` sets by [`ValidNodesKey`], shared by every root's witness BFS
+/// calls (a root's inherited facts mostly repeat across the roots above them).
+/// A miss builds outside the lock; two threads racing on one key build the same
+/// set, and the first insert wins.
+#[derive(Default)]
+struct ValidNodesCache<'i>(
+    std::sync::Mutex<HashMap<ValidNodesKey, std::sync::Arc<std::collections::HashSet<&'i str>>>>,
+);
+
+impl<'i> ValidNodesCache<'i> {
+    fn get_or_build(
+        &self,
+        key: ValidNodesKey,
+        build: impl FnOnce() -> std::collections::HashSet<&'i str>,
+    ) -> std::sync::Arc<std::collections::HashSet<&'i str>> {
+        if let Some(set) = self.0.lock().expect("valid_nodes cache lock").get(&key) {
+            return std::sync::Arc::clone(set);
+        }
+        let set = std::sync::Arc::new(build());
+        std::sync::Arc::clone(
+            self.0
+                .lock()
+                .expect("valid_nodes cache lock")
+                .entry(key)
+                .or_insert(set),
+        )
+    }
+}
+
 /// `reconstructWitnessPaths(req)` with `limit:"all"` (→ HARD_PATH_CAP).
 /// `reconstructWitnessPaths` (witness.ts) — the SINGLE witness-BFS implementation.
 ///
@@ -730,11 +854,16 @@ fn dispatch_object_type(f: &Fact) -> Option<&str> {
 /// (8 explicit + the `terminal-not-found` default-fallthrough) so the JSON
 /// projection and the digest path agree on witness shape. The `(kind, detail)`
 /// pairs mirror `projectFingerprintQuery`'s diag mapping (contracts/fingerprint-query.ts).
-fn reconstruct_witness_paths(
+///
+/// `hop_cache` must belong to `root_id` (its memos carry `root_id`'s display on
+/// the seed hops); `valid_cache` may be shared by every root over `idx`.
+fn reconstruct_witness_paths<'i>(
     root_id: &str,
     fact: &Fact,
-    idx: &FingerprintIndexes,
+    idx: &'i FingerprintIndexes,
     cap: usize,
+    hop_cache: &mut HopCache<'i>,
+    valid_cache: &ValidNodesCache<'i>,
 ) -> WitnessOutcomeExt {
     let mut diagnostics: Vec<(String, Option<String>)> = Vec::new();
 
@@ -748,10 +877,13 @@ fn reconstruct_witness_paths(
                 diagnostics.push(("missing-operation-evidence".to_string(), Some(wo.clone())));
             }
             return WitnessOutcomeExt {
-                paths: vec![WitnessPath { hops: vec![hop] }],
+                paths: vec![WitnessPath {
+                    hops: vec![Rc::new(hop)],
+                }],
                 truncated: false,
                 incomplete,
                 diagnostics,
+                projected: None,
             };
         }
         // Case B: only witnessCallsiteId → terminal "callsite".
@@ -763,16 +895,19 @@ fn reconstruct_witness_paths(
                 diagnostics.push(("missing-callsite-evidence".to_string(), Some(wc.clone())));
             }
             return WitnessOutcomeExt {
-                paths: vec![WitnessPath { hops: vec![hop] }],
+                paths: vec![WitnessPath {
+                    hops: vec![Rc::new(hop)],
+                }],
                 truncated: false,
                 incomplete,
                 diagnostics,
+                projected: None,
             };
         }
         // Direct with no witness anchor → synthetic + missing-witness-anchor (detail=subject).
         return WitnessOutcomeExt {
             paths: vec![WitnessPath {
-                hops: vec![WitnessHop::Terminal {
+                hops: vec![Rc::new(WitnessHop::Terminal {
                     evidence_kind: TerminalKind::Synthetic,
                     operation_id: None,
                     callsite_id: None,
@@ -780,7 +915,7 @@ fn reconstruct_witness_paths(
                     source_file: None,
                     line: None,
                     column: None,
-                }],
+                })],
             }],
             truncated: false,
             incomplete: true,
@@ -788,11 +923,11 @@ fn reconstruct_witness_paths(
                 "missing-witness-anchor".to_string(),
                 Some(fact.subject.clone()),
             )],
+            projected: None,
         };
     }
 
     // --- Case C: inherited fact (BFS) ---
-    let mut paths: Vec<WitnessPath> = Vec::new();
 
     let Some(witness_cs) = &fact.witness_callsite_id else {
         // first-hop-not-found (no witnessCallsiteId) → detail = via (callsiteId absent).
@@ -801,6 +936,7 @@ fn reconstruct_witness_paths(
             truncated: false,
             incomplete: true,
             diagnostics: vec![("first-hop-not-found".to_string(), Some(fact.via.clone()))],
+            projected: None,
         };
     };
 
@@ -818,6 +954,7 @@ fn reconstruct_witness_paths(
             truncated: false,
             incomplete: true,
             diagnostics: vec![("first-hop-not-found".to_string(), Some(witness_cs.clone()))],
+            projected: None,
         };
     }
 
@@ -829,72 +966,56 @@ fn reconstruct_witness_paths(
     //
     // Arena index 0 is never a real node (sentinel); real nodes start at index 1
     // so `parent: 0` can be used as "seed / no parent" sentinel.
-    struct Node {
-        routine: String,
-        hop: WitnessHop, // the edge-hop that led INTO `routine`
-        parent: usize,   // arena index of parent; 0 = seed (no parent)
-        depth: usize,    // number of hops from root to this node (seed = 1)
+    //
+    // A node keeps the EDGE that led into it, not the built `WitnessHop`: the
+    // hop (several owned strings) is built only for nodes that end up on a
+    // returned path (see `NodeMemo` below). On a dense graph most pushed nodes
+    // are never popped before the path cap is reached (CDO with the B3 calls,
+    // in total over ~22.5 k BFS calls: 21.2 M pushed, 4.7 M popped).
+    struct Node<'e> {
+        routine: &'e str,
+        edge: Option<&'e SnapshotGraphEdge>, // the edge INTO `routine`; None = sentinel
+        parent: usize,                       // arena index of parent; 0 = seed (no parent)
+        depth: usize,                        // number of hops from root to this node (seed = 1)
     }
 
     // Arena slot 0 is a sentinel placeholder (never popped or referenced as a real node).
-    let sentinel_hop = WitnessHop::Terminal {
-        evidence_kind: TerminalKind::Synthetic,
-        operation_id: None,
-        callsite_id: None,
-        display_text: String::new(),
-        source_file: None,
-        line: None,
-        column: None,
-    };
     let mut arena: Vec<Node> = vec![Node {
-        routine: String::new(),
-        hop: sentinel_hop,
+        routine: "",
+        edge: None,
         parent: 0,
         depth: 0,
     }];
 
-    // Collect seed (routine, hop) pairs so we can sort before pushing to arena.
-    let mut seed_pairs: Vec<(String, WitnessHop)> = Vec::new();
-    for edge in &first_edges {
-        let Some(hop) = edge_to_hop(edge, idx) else {
+    // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
+    let mut seed_pairs: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
+    for &edge in &first_edges {
+        if !edge_has_hop(edge) {
             continue;
-        };
+        }
         let Some(to) = edge_to(edge) else {
             continue;
         };
-        seed_pairs.push((to.to_string(), hop));
+        seed_pairs.push((to, edge));
     }
 
     // seed-sort by routine (`.cmp`, stable). witness.ts:276 uses `(a,b)=> a.routine<b.routine?-1:1`
     // — an empirical V8 2000-array stress test confirmed V8-stable-preserves-equal-key-order for
     // this `?-1:1` comparator, so Rust's stable `.cmp` (which returns Equal on a tie) is CORRECT
     // and preserves typedEdges-insertion order for equal-routine seeds. Do NOT change to `?-1:1`.
-    seed_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    seed_pairs.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-    for (routine, hop) in seed_pairs {
+    for (routine, edge) in seed_pairs {
         let idx_node = arena.len();
         arena.push(Node {
             routine,
-            hop,
+            edge: Some(edge),
             parent: 0, // seed: no parent
             depth: 1,
         });
         queue.push_back(idx_node);
     }
-
-    // Helper: walk the parent chain from `ni` and reconstruct the hop Vec (root→ni order).
-    // This is called only on terminal / boundary hits — rare — so allocation here is fine.
-    let reconstruct_hops = |arena: &Vec<Node>, ni: usize| -> Vec<WitnessHop> {
-        let mut rev = Vec::new();
-        let mut cur = ni;
-        while cur != 0 {
-            rev.push(arena[cur].hop.clone());
-            cur = arena[cur].parent;
-        }
-        rev.reverse();
-        rev
-    };
 
     // Helper: build the per-path visited set by walking the parent chain.
     // Uses &str references into arena strings — no String allocation.
@@ -906,6 +1027,10 @@ fn reconstruct_witness_paths(
     // The visited set must include `root_id` (same as original seeding: visited = {root, to}).
     // At expansion time we check: is `to` == root_id || is `to` on the parent chain?
 
+    // A found path, in discovery order: the arena node it ends at, plus the
+    // terminal hop for a terminal hit (always the LAST raw hop, never an arena
+    // node). Materialized into `WitnessPath`s after the walk.
+    let mut found: Vec<(usize, Option<WitnessHop>)> = Vec::new();
     let mut state_count = 0usize;
     let mut truncated = false;
     let mut incomplete = false;
@@ -935,7 +1060,11 @@ fn reconstruct_witness_paths(
     //
     // This eliminates the `fact_equivalent` hot-spot (previously ~750 k calls/root
     // on the CDO app) while visiting the identical set of nodes.
-    let valid_nodes: std::collections::HashSet<&str> = {
+    //
+    // The set depends only on the fields of `fact` that the seed reads (see
+    // `ValidNodesKey`), never on the root, so it is built once per key and
+    // shared by every BFS call that needs it (`valid_cache`).
+    let valid_nodes = valid_cache.get_or_build(ValidNodesKey::of(fact), || {
         let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut rev_queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
         // Seed: nodes that carry `fact` as a DIRECT fact. `fact_equivalent` REQUIRES
@@ -1000,9 +1129,9 @@ fn reconstruct_witness_paths(
             }
         }
         visited
-    };
+    });
 
-    while !queue.is_empty() && paths.len() < cap {
+    while !queue.is_empty() && found.len() < cap {
         let Some(ni) = queue.pop_front() else {
             break;
         };
@@ -1023,9 +1152,9 @@ fn reconstruct_witness_paths(
             continue;
         }
 
-        // Snapshot the routine string we need for lookups (avoids borrow conflicts
-        // when we later mutably push to arena).
-        let routine = arena[ni].routine.clone();
+        // The routine id borrows from the snapshot, not the arena, so it stays
+        // usable while children are pushed below.
+        let routine: &str = arena[ni].routine;
 
         // Terminal check: FIRST matching direct fact in insertion order.
         //
@@ -1073,7 +1202,7 @@ fn reconstruct_witness_paths(
         // before and after, and no CDO-gated ratchet covers the witness layer.
         let directs: &[&Fact] = idx
             .direct_facts_by_routine
-            .get(&routine)
+            .get(routine)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         let fact_kt = is_known_temp_snap(fact);
@@ -1082,34 +1211,29 @@ fn reconstruct_witness_paths(
             .find(|d| is_known_temp_snap(d) == fact_kt && fact_equivalent(d, fact))
         {
             let terminal = terminal_hop_from_fact(equivalent, idx);
-            let mut hops = reconstruct_hops(&arena, ni);
-            hops.push(terminal);
-            paths.push(WitnessPath { hops });
+            found.push((ni, Some(terminal)));
             continue;
         }
         // Opaque-or-unresolved-boundary: no out, no directs, coverage.directStatus=="unknown".
         let routine_out_len = idx
             .outgoing_edges
-            .get(&routine)
+            .get(routine)
             .map(|v| v.len())
             .unwrap_or(0);
         let cov_unknown = idx
             .coverage_by_routine
-            .get(&routine)
+            .get(routine)
             .map(|c| c.direct_status == "unknown")
             .unwrap_or(false);
         if routine_out_len == 0 && directs.is_empty() && cov_unknown {
             // opaque-or-unresolved-boundary (detail = routineId).
             diagnostics.push((
                 "opaque-or-unresolved-boundary".to_string(),
-                Some(routine.clone()),
+                Some(routine.to_string()),
             ));
-            // Original: if !state.hops.is_empty() — depth>=1 means always non-empty here.
-            // (Seeds have depth=1, so hops reconstructed are always ≥1 element.)
-            let hops = reconstruct_hops(&arena, ni);
-            if !hops.is_empty() {
-                paths.push(WitnessPath { hops });
-            }
+            // Original: if !state.hops.is_empty() — a popped node is never the
+            // sentinel (seeds have depth 1), so its path always has ≥1 hop.
+            found.push((ni, None));
             continue;
         }
         // Expand: out-edges are PRE-SORTED by `edge_compare` at index build, skip
@@ -1126,21 +1250,21 @@ fn reconstruct_witness_paths(
             v.push(root_id);
             let mut cur = ni;
             while cur != 0 {
-                v.push(arena[cur].routine.as_str());
+                v.push(arena[cur].routine);
                 cur = arena[cur].parent;
             }
             v
         };
         let cur_depth = arena[ni].depth;
 
-        // Collect expansions: (to_string, hop) pairs.  We build the list while
+        // Collect expansions: (to, edge) pairs.  We build the list while
         // `visited_routines` is still live (read-only arena access), then push to
         // arena after the borrow ends.
-        let mut expansions: Vec<(String, WitnessHop)> = Vec::new();
+        let mut expansions: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
         {
             let sorted = idx
                 .outgoing_edges
-                .get(&routine)
+                .get(routine)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
             for &edge in sorted {
@@ -1154,19 +1278,19 @@ fn reconstruct_witness_paths(
                 if !valid_nodes.contains(to) {
                     continue;
                 }
-                let Some(hop) = edge_to_hop(edge, idx) else {
+                if !edge_has_hop(edge) {
                     continue;
-                };
-                expansions.push((to.to_string(), hop));
+                }
+                expansions.push((to, edge));
             }
         }
         // Now push children to arena (mutable); `visited_routines` is still live here
         // but we only read `cur_depth` from it (a Copy value captured above).
-        for (to, hop) in expansions {
+        for (to, edge) in expansions {
             let child_idx = arena.len();
             arena.push(Node {
                 routine: to,
-                hop,
+                edge: Some(edge),
                 parent: ni,
                 depth: cur_depth + 1,
             });
@@ -1174,7 +1298,7 @@ fn reconstruct_witness_paths(
         }
     }
 
-    if paths.len() >= cap && !queue.is_empty() {
+    if found.len() >= cap && !queue.is_empty() {
         truncated = true;
         diagnostics.push(("path-limit-reached".to_string(), Some(format!("cap={cap}"))));
     }
@@ -1186,25 +1310,152 @@ fn reconstruct_witness_paths(
         ));
         incomplete = true;
     }
-    if paths.is_empty() && !incomplete {
+    if found.is_empty() && !incomplete {
         // terminal-not-found: TS flows through the projection `default` → kind only, NO detail.
         diagnostics.push(("terminal-not-found".to_string(), None));
         incomplete = true;
     }
 
-    // FINAL path sort: shortest-first, then JSON.stringify(raw WitnessHop[]) ordinal tiebreak.
-    paths.sort_by(|a, b| {
-        if a.hops.len() != b.hops.len() {
-            return a.hops.len().cmp(&b.hops.len());
+    // FINAL path sort: shortest-first, then JSON.stringify(raw WitnessHop[]) ordinal
+    // tiebreak; then materialize and project.
+    //
+    // Paths share prefixes: every path is an arena parent chain, and a 256-path
+    // outcome over a dense graph walks the same nodes hundreds of times. So each
+    // arena node's raw hop, projected hop and their JSON are built at most ONCE
+    // (`NodeMemo`; the JSON only when a comparison needs it), and paths share them.
+    // Byte-identical to sorting by `witness_hops_json(&hops)` and projecting with
+    // `project_path` + `query_hops_json`:
+    // - both serializers are `"[" + join(",", per-hop) + "]"` and one hop's JSON is
+    //   never a proper prefix of another's, so comparing hop by hop gives the
+    //   whole-string order (see `ProjPath`);
+    // - a projected hop depends only on its own raw hop and the routine it leaves
+    //   (the parent node's routine, or `root_id` for a seed);
+    // - the terminal hop, never an arena node, is the last raw hop and is skipped
+    //   by the projection exactly as `project_path` skips it.
+    let root_display: &str = idx
+        .routine_display_by_id
+        .get(root_id)
+        .map(String::as_str)
+        .unwrap_or(root_id);
+    // `slot[arena node]` = 1 + its index in `memo`, 0 = not looked up yet. Only
+    // nodes on a found path get one, and most arena nodes are never on one (CDO
+    // with the B3 calls: 21.2 M pushed in total over ~22.5 k BFS calls), so the
+    // per-node table holds a u32.
+    let mut slot: Vec<u32> = vec![0; arena.len()];
+    let mut memo: Vec<Rc<NodeMemo>> = Vec::new();
+    for &(tail, _) in &found {
+        let mut cur = tail;
+        while cur != 0 && slot[cur] == 0 {
+            let node = &arena[cur];
+            let edge = node.edge.expect("a real arena node has its in-edge");
+            let m = hop_cache.get_or_build(edge, || {
+                let hop = edge_to_hop(edge, idx)
+                    .expect("only edges with a hop are pushed (edge_has_hop)");
+                let from_id: &str = if node.parent == 0 {
+                    root_id
+                } else {
+                    arena[node.parent].routine
+                };
+                // Every edge leaves the routine it is filed under in
+                // `outgoing_edges`, so the hop's projection is a function of the
+                // edge alone — what makes `HopCache` sound.
+                debug_assert_eq!(from_id, edge_from(edge));
+                let from_display = if from_id == root_id {
+                    root_display.to_string()
+                } else {
+                    idx.routine_display_by_id
+                        .get(from_id)
+                        .cloned()
+                        .unwrap_or_else(|| from_id.to_string())
+                };
+                let projected = project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
+                NodeMemo {
+                    hop: Rc::new(hop),
+                    raw_json: std::cell::OnceCell::new(),
+                    projected,
+                }
+            });
+            memo.push(m);
+            slot[cur] = u32::try_from(memo.len()).expect("memo fits in u32");
+            cur = node.parent;
         }
-        witness_hops_json(&a.hops).cmp(&witness_hops_json(&b.hops))
+    }
+    struct Found {
+        /// The path's memo indices, root side first.
+        chain: Vec<usize>,
+        terminal: Option<WitnessHop>,
+        terminal_json: std::cell::OnceCell<String>,
+    }
+    impl Found {
+        fn hop_count(&self) -> usize {
+            self.chain.len() + usize::from(self.terminal.is_some())
+        }
+    }
+    let mut keyed: Vec<Found> = found
+        .into_iter()
+        .map(|(tail, terminal)| {
+            let mut chain: Vec<usize> = Vec::with_capacity(arena[tail].depth);
+            let mut cur = tail;
+            while cur != 0 {
+                chain.push(slot[cur] as usize - 1);
+                cur = arena[cur].parent;
+            }
+            chain.reverse();
+            Found {
+                chain,
+                terminal,
+                terminal_json: std::cell::OnceCell::new(),
+            }
+        })
+        .collect();
+    fn raw_elem<'a>(memo: &'a [Rc<NodeMemo>], k: &'a Found, i: usize) -> &'a str {
+        match k.chain.get(i) {
+            Some(&n) => memo[n].raw_json(),
+            None => k
+                .terminal_json
+                .get_or_init(|| witness_hop_json(k.terminal.as_ref().expect("terminal hop"))),
+        }
+    }
+    keyed.sort_by(|a, b| {
+        if a.hop_count() != b.hop_count() {
+            return a.hop_count().cmp(&b.hop_count());
+        }
+        for i in 0..a.hop_count() {
+            match (a.chain.get(i), b.chain.get(i)) {
+                // The same memo (same edge): the same JSON.
+                (Some(&x), Some(&y)) if Rc::ptr_eq(&memo[x], &memo[y]) => continue,
+                _ => {}
+            }
+            match raw_elem(&memo, a, i).cmp(raw_elem(&memo, b, i)) {
+                std::cmp::Ordering::Equal => {}
+                o => return o,
+            }
+        }
+        std::cmp::Ordering::Equal
     });
+    let mut paths: Vec<WitnessPath> = Vec::with_capacity(keyed.len());
+    let mut projected: Vec<ProjPath> = Vec::with_capacity(keyed.len());
+    for k in keyed {
+        let mut hops: Vec<Rc<WitnessHop>> = Vec::with_capacity(k.hop_count());
+        let mut proj: Vec<Rc<ProjHop>> = Vec::with_capacity(k.chain.len());
+        for &n in &k.chain {
+            let m = &memo[n];
+            hops.push(Rc::clone(&m.hop));
+            if let Some(q) = &m.projected {
+                proj.push(Rc::clone(q));
+            }
+        }
+        hops.extend(k.terminal.map(Rc::new));
+        paths.push(WitnessPath { hops });
+        projected.push(ProjPath(proj));
+    }
 
     WitnessOutcomeExt {
         paths,
         truncated,
         incomplete,
         diagnostics,
+        projected: Some(projected),
     }
 }
 
@@ -1231,6 +1482,68 @@ pub struct QueryWitnessHop {
     pub receiver_type: Option<String>,
     pub interface_name: Option<String>,
     pub candidate_count: Option<usize>,
+}
+
+/// One projected hop with its `query_hop_json`, built once and shared (`Rc`) by
+/// every path through the same witness-arena node.
+/// The JSON is built on first use: only a merge tiebreak between two
+/// different hops at the same position reads it.
+#[derive(Debug)]
+struct ProjHop {
+    hop: QueryWitnessHop,
+    json: std::cell::OnceCell<String>,
+}
+
+impl ProjHop {
+    fn new(hop: QueryWitnessHop) -> Rc<ProjHop> {
+        Rc::new(ProjHop {
+            hop,
+            json: std::cell::OnceCell::new(),
+        })
+    }
+
+    fn json(&self) -> &str {
+        self.json.get_or_init(|| query_hop_json(&self.hop))
+    }
+}
+
+/// A projected witness path as shared hops. It stands in for the pair
+/// `(Vec<QueryWitnessHop>, query_hops_json(..))` the digest merge used to carry
+/// per path: `key_cmp` is exactly `(len, query_hops_json)` order and equal keys
+/// are exactly equal JSON. That holds because `query_hops_json` is
+/// `"[" + join(",", query_hop_json) + "]"` and one hop's JSON text (a complete
+/// object with escaped strings) is never a proper prefix of another's, so the
+/// first differing hop decides the whole-string order.
+///
+/// Why it exists: on dense call graphs a root's paths share long prefixes, and
+/// materializing every path's hops and JSON string cost Σ(path length × hop
+/// size) in allocations (CDO with the B3 calls: 874 k paths, 11.9 M hops).
+#[derive(Debug, Clone)]
+struct ProjPath(Vec<Rc<ProjHop>>);
+
+impl ProjPath {
+    fn from_hops(hops: Vec<QueryWitnessHop>) -> ProjPath {
+        ProjPath(hops.into_iter().map(ProjHop::new).collect())
+    }
+
+    fn key_cmp(&self, other: &ProjPath) -> std::cmp::Ordering {
+        self.0.len().cmp(&other.0.len()).then_with(|| {
+            for (a, b) in self.0.iter().zip(&other.0) {
+                if Rc::ptr_eq(a, b) {
+                    continue;
+                }
+                match a.json().cmp(b.json()) {
+                    std::cmp::Ordering::Equal => {}
+                    o => return o,
+                }
+            }
+            std::cmp::Ordering::Equal
+        })
+    }
+
+    fn materialize(&self) -> Vec<QueryWitnessHop> {
+        self.0.iter().map(|h| h.hop.clone()).collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1421,7 +1734,7 @@ fn project_path(
     let mut hops: Vec<QueryWitnessHop> = Vec::new();
     let mut prev_destination: String = root_id.to_string();
 
-    for hop in &path.hops {
+    for hop in path.hops.iter().map(|h| &**h) {
         if matches!(hop, WitnessHop::Terminal { .. }) {
             continue;
         }
@@ -1454,6 +1767,12 @@ fn project_path(
 /// JSON-escape a string per V8 JSON.stringify (standard JSON escaping).
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
+    json_escape_into(&mut out, s);
+    out
+}
+
+/// [`json_escape`] appended to `out` — no intermediate `String` per field.
+fn json_escape_into(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -1469,7 +1788,16 @@ fn json_escape(s: &str) -> String {
         }
     }
     out.push('"');
-    out
+}
+
+/// `"key":` appended to `s`, with the comma when a field was already written.
+fn json_key_into(s: &mut String, written: &mut bool, key: &str) {
+    if *written {
+        s.push(',');
+    }
+    json_escape_into(s, key);
+    s.push(':');
+    *written = true;
 }
 
 /// `JSON.stringify(ValueSource)` — for factEquivalent's resourceArgSource compare.
@@ -1525,7 +1853,10 @@ fn value_source_json(vs: &SnapValueSource) -> String {
 /// `JSON.stringify(WitnessHop[])` — RAW witness hops, for the witness final-sort tiebreak.
 /// Field order = the TS WitnessHop union literal order per variant (witness.ts). Optional
 /// (undefined) fields OMITTED. Used ONLY for sort stability (never emitted to golden).
-fn witness_hops_json(hops: &[WitnessHop]) -> String {
+/// Production builds the same string per hop (`reconstruct_witness_paths`'s
+/// `NodeMemo`); this whole-path form is the tests' reference.
+#[cfg(test)]
+fn witness_hops_json(hops: &[Rc<WitnessHop>]) -> String {
     let mut s = String::from("[");
     for (i, hop) in hops.iter().enumerate() {
         if i > 0 {
@@ -1539,30 +1870,21 @@ fn witness_hops_json(hops: &[WitnessHop]) -> String {
 
 fn opt_num(s: &mut String, written: &mut bool, key: &str, v: Option<u32>) {
     if let Some(n) = v {
-        if *written {
-            s.push(',');
-        }
-        s.push_str(&format!("{}:{}", json_escape(key), n));
-        *written = true;
+        json_key_into(s, written, key);
+        let _ = write!(s, "{n}");
     }
 }
 
 fn opt_str(s: &mut String, written: &mut bool, key: &str, v: &Option<String>) {
     if let Some(val) = v {
-        if *written {
-            s.push(',');
-        }
-        s.push_str(&format!("{}:{}", json_escape(key), json_escape(val)));
-        *written = true;
+        json_key_into(s, written, key);
+        json_escape_into(s, val);
     }
 }
 
 fn req_str(s: &mut String, written: &mut bool, key: &str, v: &str) {
-    if *written {
-        s.push(',');
-    }
-    s.push_str(&format!("{}:{}", json_escape(key), json_escape(v)));
-    *written = true;
+    json_key_into(s, written, key);
+    json_escape_into(s, v);
 }
 
 fn witness_hop_json(hop: &WitnessHop) -> String {
@@ -1605,11 +1927,8 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             opt_str(&mut s, &mut w, "targetObjectId", target_object_id);
             opt_str(&mut s, &mut w, "targetDisplay", target_display);
             // resolved: boolean (always present)
-            if w {
-                s.push(',');
-            }
-            s.push_str(&format!("{}:{}", json_escape("resolved"), resolved));
-            w = true;
+            json_key_into(&mut s, &mut w, "resolved");
+            let _ = write!(s, "{resolved}");
             opt_str(&mut s, &mut w, "callsiteId", callsite_id);
             opt_str(&mut s, &mut w, "sourceFile", source_file);
             opt_num(&mut s, &mut w, "line", *line);
@@ -1662,15 +1981,8 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             req_str(&mut s, &mut w, "routineId", routine_id);
             req_str(&mut s, &mut w, "routineDisplay", routine_display);
             req_str(&mut s, &mut w, "interfaceName", interface_name);
-            if w {
-                s.push(',');
-            }
-            s.push_str(&format!(
-                "{}:{}",
-                json_escape("candidateCount"),
-                candidate_count
-            ));
-            w = true;
+            json_key_into(&mut s, &mut w, "candidateCount");
+            let _ = write!(s, "{candidate_count}");
             opt_str(&mut s, &mut w, "calleeDisplay", callee_display);
             req_str(&mut s, &mut w, "callsiteId", callsite_id);
             opt_str(&mut s, &mut w, "sourceFile", source_file);
@@ -1709,6 +2021,7 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
 /// + exact-dup dedupe. Field order = the QueryWitnessHop literal per projectHop variant.
 ///
 /// Optional (undefined) fields OMITTED.
+#[cfg(test)]
 fn query_hops_json(hops: &[QueryWitnessHop]) -> String {
     let mut s = String::from("[");
     for (i, hop) in hops.iter().enumerate() {
@@ -1807,11 +2120,8 @@ fn query_hop_json(hop: &QueryWitnessHop) -> String {
             opt_str(&mut s, &mut w, "edgeKind", &hop.edge_kind);
             opt_str(&mut s, &mut w, "interfaceName", &hop.interface_name);
             if let Some(cc) = hop.candidate_count {
-                if w {
-                    s.push(',');
-                }
-                s.push_str(&format!("{}:{}", json_escape("candidateCount"), cc));
-                w = true;
+                json_key_into(&mut s, &mut w, "candidateCount");
+                let _ = write!(s, "{cc}");
             }
             opt_anchor(&mut s, &mut w, "anchor", &hop.anchor);
         }
@@ -1823,20 +2133,16 @@ fn query_hop_json(hop: &QueryWitnessHop) -> String {
 
 fn opt_anchor(s: &mut String, written: &mut bool, key: &str, anchor: &Option<HopAnchor>) {
     if let Some(a) = anchor {
-        if *written {
-            s.push(',');
-        }
+        json_key_into(s, written, key);
         // SourceAnchorContract literal order: sourceKind, file, line, column (line/column
         // optional). normalizeAnchorPath produces { sourceKind:"source", file, line, column }.
-        let mut inner = String::from("{");
+        s.push('{');
         let mut iw = false;
-        req_str(&mut inner, &mut iw, "sourceKind", "source");
-        req_str(&mut inner, &mut iw, "file", &a.file);
-        opt_num(&mut inner, &mut iw, "line", a.line);
-        opt_num(&mut inner, &mut iw, "column", a.column);
-        inner.push('}');
-        s.push_str(&format!("{}:{}", json_escape(key), inner));
-        *written = true;
+        req_str(s, &mut iw, "sourceKind", "source");
+        req_str(s, &mut iw, "file", &a.file);
+        opt_num(s, &mut iw, "line", a.line);
+        opt_num(s, &mut iw, "column", a.column);
+        s.push('}');
     }
 }
 
@@ -1846,9 +2152,10 @@ fn opt_anchor(s: &mut String, written: &mut bool, key: &str, anchor: &Option<Hop
 // ===========================================================================
 
 /// The terminal hop of a path (LAST terminal in hops, scanning back).
-fn find_terminal(hops: &[WitnessHop]) -> Option<&WitnessHop> {
+fn find_terminal(hops: &[Rc<WitnessHop>]) -> Option<&WitnessHop> {
     hops.iter()
         .rev()
+        .map(|h| &**h)
         .find(|h| matches!(h, WitnessHop::Terminal { .. }))
 }
 
@@ -2122,7 +2429,7 @@ fn compute_path_conditionality(
     };
     let mut hop_contexts: Vec<crate::engine::l5::conditionality::EffectConditionality> = Vec::new();
     let mut terminal_ctx = UNKNOWN;
-    for hop in &path.hops {
+    for hop in path.hops.iter().map(|h| &**h) {
         match hop {
             WitnessHop::Terminal {
                 operation_id,
@@ -2163,7 +2470,7 @@ fn compute_path_conditionality(
 /// empty `via_paths` — the ordering engine ignores them at line ~294 of
 /// ordering_engine.rs (`if via_paths.is_empty() { if owner != routine_id { return
 /// None; } return Some(... chain: empty ...); }`).  This eliminates ~80% of the
-/// witness-reconstruction work from `compute_digest_effects_for_ordering`.
+/// witness-reconstruction work from `compute_digest_effects_for_ordering_with`.
 fn digest_query(
     snap: &CapabilitySnapshot,
     roots: &[String],
@@ -2171,7 +2478,34 @@ fn digest_query(
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
 ) -> Vec<DigestEntryResult> {
-    let idx = build_fingerprint_indexes(snap);
+    let mut entries = digest_query_with(
+        snap,
+        roots,
+        return_summaries,
+        isolated_event_ids,
+        ordering_witness_only,
+        |e| e,
+    );
+    // Sort entries by routineId.
+    entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    entries
+}
+
+/// [`digest_query`] with each root's entry passed through `reduce` on the worker
+/// that built it — a caller that keeps only a summary of each entry never holds
+/// every entry at once. Results are in `roots` order (unsorted).
+fn digest_query_with<T: Send>(
+    snap: &CapabilitySnapshot,
+    roots: &[String],
+    return_summaries: Option<&HashMap<String, crate::engine::return_summary::RoutineReturnSummary>>,
+    isolated_event_ids: Option<&std::collections::HashSet<String>>,
+    ordering_witness_only: bool,
+    reduce: impl Fn(DigestEntryResult) -> T + Sync,
+) -> Vec<T> {
+    let idx = {
+        let _s = crate::engine::perf_trace::span("digest", "digest.fingerprint_indexes");
+        build_fingerprint_indexes(snap)
+    };
 
     // callsiteById (&str-keyed) for the ordering engine's cross-hop substrate.
     let mut callsite_by_id_str: HashMap<&str, &SnapshotCallsiteEvidence> = HashMap::new();
@@ -2190,16 +2524,19 @@ fn digest_query(
         .iter()
         .map(|op| (op.operation_id.as_str(), op.control_context.as_deref()))
         .collect();
+    let ordering_index = crate::engine::l5::ordering_engine::OrderingIndex::new(snap);
+    let valid_cache = ValidNodesCache::default();
 
     // Per-root computation is embarrassingly parallel: every input below is an
     // immutable `&` reference (snap/idx/maps), each root's witness reconstruction +
     // ordering pass is independent and internally deterministic, and `roots` is
-    // deduped so `routine_id` keys are unique — the final `sort_by(routine_id)`
-    // below fully determines output order regardless of scheduling order. Runs on
+    // deduped so `routine_id` keys are unique — the indexed `par_iter` collects in
+    // `roots` order regardless of scheduling order. Runs on
     // the GLOBAL rayon pool (no AL-source lowering happens here — the big-stack pool
     // is only for the CST lowerer; witness BFS is heap-based with MAX_DEPTH = 64).
     use rayon::prelude::*;
-    let mut entries: Vec<DigestEntryResult> = roots
+    let _roots_span = crate::engine::perf_trace::span("digest", "digest.roots");
+    roots
         .par_iter()
         .filter_map(|rid| {
             digest_one_root(
@@ -2209,16 +2546,15 @@ fn digest_query(
                 &callsite_by_id_str,
                 &cs_ctx,
                 &op_ctx,
+                &ordering_index,
+                &valid_cache,
                 return_summaries,
                 isolated_event_ids,
                 ordering_witness_only,
             )
+            .map(&reduce)
         })
-        .collect();
-
-    // Sort entries by routineId.
-    entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
-    entries
+        .collect()
 }
 
 /// tempState of a fact's originating table-write (the physical-write filter's
@@ -2316,74 +2652,60 @@ fn merge_temp_state(
 /// dedupes by json (first occurrence wins), then caps `via_paths` at `max_paths` and
 /// ORs in `had_truncation`. This is byte-for-byte the inline logic the MERGE branch
 /// used to run — extracting it does not change any output.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+///
+/// Dedupe is adjacent-run: equal JSON implies equal length, so after the stable
+/// sort every set of equal paths is one contiguous run with its first occurrence
+/// first — the same survivor a first-wins `HashSet` over the JSON keeps.
+#[allow(clippy::type_complexity)]
 fn merge_normalize_via_paths(
-    existing_paths: &[Vec<QueryWitnessHop>],
+    existing_paths: &[ProjPath],
     existing_conds: &[crate::engine::l5::conditionality::EffectConditionality],
-    existing_jsons: &[String],
     existing_had_truncation: bool,
-    new_paths: &[Vec<QueryWitnessHop>],
+    new_paths: &[ProjPath],
     new_conds: &[crate::engine::l5::conditionality::EffectConditionality],
-    new_jsons: &[String],
     new_truncated: bool,
     max_paths: usize,
 ) -> (
     Vec<Vec<QueryWitnessHop>>,
     bool,
-    Vec<Vec<QueryWitnessHop>>,
+    Vec<ProjPath>,
     Vec<crate::engine::l5::conditionality::EffectConditionality>,
-    Vec<String>,
 ) {
     let mut merged: Vec<(
-        Vec<QueryWitnessHop>,
+        ProjPath,
         crate::engine::l5::conditionality::EffectConditionality,
-        String,
     )> = Vec::with_capacity(existing_paths.len() + new_paths.len());
     for (i, p) in existing_paths.iter().enumerate() {
         let c = existing_conds
             .get(i)
             .copied()
             .unwrap_or(crate::engine::l5::conditionality::UNKNOWN);
-        let j = existing_jsons
-            .get(i)
-            .cloned()
-            .unwrap_or_else(|| query_hops_json(p));
-        merged.push((p.clone(), c, j));
+        merged.push((p.clone(), c));
     }
-    for ((p, c), j) in new_paths
-        .iter()
-        .cloned()
-        .zip(new_conds.iter().copied())
-        .zip(new_jsons.iter().cloned())
-    {
-        merged.push((p, c, j));
+    for (p, c) in new_paths.iter().cloned().zip(new_conds.iter().copied()) {
+        merged.push((p, c));
     }
-    merged.sort_by(|a, b| {
-        if a.0.len() != b.0.len() {
-            return a.0.len().cmp(&b.0.len());
+    merged.sort_by(|a, b| a.0.key_cmp(&b.0));
+    let mut unique_paths: Vec<ProjPath> = Vec::with_capacity(merged.len());
+    let mut unique_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> =
+        Vec::with_capacity(merged.len());
+    for (p, c) in merged {
+        if unique_paths
+            .last()
+            .is_some_and(|last| last.key_cmp(&p) == std::cmp::Ordering::Equal)
+        {
+            continue;
         }
-        a.2.cmp(&b.2)
-    });
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut unique_paths: Vec<Vec<QueryWitnessHop>> = Vec::new();
-    let mut unique_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> = Vec::new();
-    let mut unique_jsons: Vec<String> = Vec::new();
-    for (p, c, j) in merged {
-        if seen.insert(j.clone()) {
-            unique_paths.push(p);
-            unique_conds.push(c);
-            unique_jsons.push(j);
-        }
+        unique_paths.push(p);
+        unique_conds.push(c);
     }
     let had_truncation = existing_had_truncation || new_truncated || unique_paths.len() > max_paths;
-    let via: Vec<Vec<QueryWitnessHop>> = unique_paths.iter().take(max_paths).cloned().collect();
-    (
-        via,
-        had_truncation,
-        unique_paths,
-        unique_conds,
-        unique_jsons,
-    )
+    let via: Vec<Vec<QueryWitnessHop>> = unique_paths
+        .iter()
+        .take(max_paths)
+        .map(ProjPath::materialize)
+        .collect();
+    (via, had_truncation, unique_paths, unique_conds)
 }
 
 /// Per-identity dedup state (see `effect_fact_loop_identity`'s doc and
@@ -2403,13 +2725,15 @@ enum IdentitySeen {
 /// `rayon::par_iter`. Pure over its immutable inputs; returns `None` when the root
 /// has no display entry (mirrors the original loop's early `continue`).
 #[allow(clippy::too_many_arguments)]
-fn digest_one_root(
+fn digest_one_root<'i>(
     rid: &str,
     snap: &CapabilitySnapshot,
-    idx: &FingerprintIndexes<'_>,
+    idx: &'i FingerprintIndexes<'_>,
     callsite_by_id_str: &HashMap<&str, &SnapshotCallsiteEvidence>,
     cs_ctx: &HashMap<&str, Option<&str>>,
     op_ctx: &HashMap<&str, Option<&str>>,
+    ordering_index: &crate::engine::l5::ordering_engine::OrderingIndex<'_>,
+    valid_cache: &ValidNodesCache<'i>,
     return_summaries: Option<&HashMap<String, crate::engine::return_summary::RoutineReturnSummary>>,
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
@@ -2445,15 +2769,12 @@ fn digest_one_root(
             evidence_callsite_id: Option<String>,
             via_paths: Vec<Vec<QueryWitnessHop>>,
             had_truncation: bool,
-            all_paths: Vec<Vec<QueryWitnessHop>>,
+            /// Every pre-capping path as shared hops; each hop's JSON is built once
+            /// and serves every later merge's sort tiebreak + dedupe (see `ProjPath`).
+            all_paths: Vec<ProjPath>,
             /// Per-path conditionality, parallel to `all_paths` (PRE-capping). Computed
             /// from each raw path's own terminal hop (#8).
             all_path_conds: Vec<crate::engine::l5::conditionality::EffectConditionality>,
-            /// `query_hops_json` of each `all_paths[i]`, parallel to `all_paths` —
-            /// computed once at projection/merge and reused for every later merge's
-            /// sort tiebreak + dedupe (removes the repeated re-serialization the
-            /// giant tail roots paid; see witness-investigation.md §3).
-            all_path_jsons: Vec<String>,
             /// S4-internal (NOT serialized in the digest-effects golden): the
             /// originating table-write fact's tempState (for the physical-write filter).
             temp_state: Option<SnapTempState>,
@@ -2474,6 +2795,8 @@ fn digest_one_root(
         // would otherwise have triggered — see review finding in
         // .superpowers/sdd/alsem-parallel/wit-task-2-fix-report.md.
         let mut identity_seen: HashMap<String, IdentitySeen> = HashMap::new();
+        // Built witness hops, shared by every BFS call of this root.
+        let mut hop_cache = HopCache::default();
 
         // Effect types the ordering engine grades (FIX 2). When `ordering_witness_only`
         // is set we skip witness reconstruction for effect types outside this set —
@@ -2531,13 +2854,11 @@ fn digest_one_root(
                     // and a stable sort never reorders equal-key ties — so they are
                     // always absorbed by the dedupe pass and never survive it.
                     let acc = &mut effect_map[pos].1;
-                    let (via, had_truncation, all_paths, all_path_conds, all_path_jsons) =
+                    let (via, had_truncation, all_paths, all_path_conds) =
                         merge_normalize_via_paths(
                             &acc.all_paths,
                             &acc.all_path_conds,
-                            &acc.all_path_jsons,
                             acc.had_truncation,
-                            &[],
                             &[],
                             &[],
                             false,
@@ -2547,7 +2868,6 @@ fn digest_one_root(
                     acc.had_truncation = had_truncation;
                     acc.all_paths = all_paths;
                     acc.all_path_conds = all_path_conds;
-                    acc.all_path_jsons = all_path_jsons;
                     // temp_state is NOT assumed idempotent (unlike the paths above):
                     // a different identity sharing this entry's dedupe_key may have
                     // mutated it since this identity's first occurrence, so it is
@@ -2570,9 +2890,17 @@ fn digest_one_root(
                     truncated: false,
                     incomplete: false,
                     diagnostics: Vec::new(),
+                    projected: None,
                 }
             } else {
-                reconstruct_witness_paths(rid, fact, idx, HARD_PATH_CAP)
+                reconstruct_witness_paths(
+                    rid,
+                    fact,
+                    idx,
+                    HARD_PATH_CAP,
+                    &mut hop_cache,
+                    valid_cache,
+                )
             };
 
             let shortest = outcome.paths.first();
@@ -2597,18 +2925,19 @@ fn digest_one_root(
             // Project all paths to QueryWitnessHop[][] AND compute each raw path's
             // conditionality from its OWN terminal hop (#8 — must be done before
             // projection, which strips terminals).
-            let projected_paths: Vec<Vec<QueryWitnessHop>> = outcome
-                .paths
-                .iter()
-                .map(|p| project_path(p, rid, &display, idx))
-                .collect();
+            let projected_paths: Vec<ProjPath> = match outcome.projected {
+                Some(pre) => pre,
+                None => outcome
+                    .paths
+                    .iter()
+                    .map(|p| ProjPath::from_hops(project_path(p, rid, &display, idx)))
+                    .collect(),
+            };
             let path_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> = outcome
                 .paths
                 .iter()
                 .map(|p| compute_path_conditionality(p, cs_ctx, op_ctx))
                 .collect();
-            let projected_jsons: Vec<String> =
-                projected_paths.iter().map(|p| query_hops_json(p)).collect();
 
             let key = dedupe_key(effect_type, terminal, fact, &detail);
 
@@ -2625,30 +2954,29 @@ fn digest_one_root(
                 // helper the identity-duplicate normalization path above uses, so the
                 // two can never drift apart.
                 let existing = &effect_map[pos].1;
-                let (via, had_truncation, all_paths, all_path_conds, all_path_jsons) =
-                    merge_normalize_via_paths(
-                        &existing.all_paths,
-                        &existing.all_path_conds,
-                        &existing.all_path_jsons,
-                        existing.had_truncation,
-                        &projected_paths,
-                        &path_conds,
-                        &projected_jsons,
-                        outcome.truncated,
-                        MAX_PATHS,
-                    );
+                let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
+                    &existing.all_paths,
+                    &existing.all_path_conds,
+                    existing.had_truncation,
+                    &projected_paths,
+                    &path_conds,
+                    outcome.truncated,
+                    MAX_PATHS,
+                );
                 let merged_temp = merge_temp_state(&existing.temp_state, &fact_temp_state);
                 let acc = &mut effect_map[pos].1;
                 acc.via_paths = via;
                 acc.had_truncation = had_truncation;
                 acc.all_paths = all_paths;
                 acc.all_path_conds = all_path_conds;
-                acc.all_path_jsons = all_path_jsons;
                 acc.temp_state = merged_temp;
                 pos
             } else {
-                let via: Vec<Vec<QueryWitnessHop>> =
-                    projected_paths.iter().take(MAX_PATHS).cloned().collect();
+                let via: Vec<Vec<QueryWitnessHop>> = projected_paths
+                    .iter()
+                    .take(MAX_PATHS)
+                    .map(ProjPath::materialize)
+                    .collect();
                 let had_truncation = outcome.truncated || projected_paths.len() > MAX_PATHS;
                 let pos = effect_map.len();
                 effect_index.insert(key.clone(), pos);
@@ -2669,7 +2997,6 @@ fn digest_one_root(
                         had_truncation,
                         all_paths: projected_paths,
                         all_path_conds: path_conds,
-                        all_path_jsons: projected_jsons,
                         temp_state: fact_temp_state,
                         fact_subject: fact.subject.clone(),
                     },
@@ -2806,6 +3133,7 @@ fn digest_one_root(
                 &ordering_inputs,
                 snap,
                 callsite_by_id_str,
+                ordering_index,
                 return_summaries,
                 isolated_event_ids,
             );
@@ -3128,8 +3456,18 @@ pub fn compute_digest_effects_with_ordering(resolved: &L3Resolved) -> Vec<Digest
 /// "every reportable root" down to "roots that actually do IO/UI". The general
 /// `compute_digest_effects_with_ordering` (consumed by the R4-F digest/scoped-guarantee
 /// projections) is left unfiltered so those projections are unaffected.
-pub fn compute_digest_effects_for_ordering(resolved: &L3Resolved) -> Vec<DigestEntryResult> {
-    let snap = compose_snapshot(resolved);
+///
+/// Each root's entry goes through `reduce` on the worker that built it (see
+/// [`digest_query_with`]); results are in sorted-root order.
+pub fn compute_digest_effects_for_ordering_with<T: Send>(
+    resolved: &L3Resolved,
+    reduce: impl Fn(DigestEntryResult) -> T + Sync,
+) -> Vec<T> {
+    use crate::engine::perf_trace as pt;
+    let snap = {
+        let _s = pt::span("ordering", "ordering.compose_snapshot");
+        compose_snapshot(resolved)
+    };
     let all_roots = reportable_roots(resolved);
 
     // Per the 5 ordering labels (`is_relevant_label`), a root can produce an ordering
@@ -3162,6 +3500,7 @@ pub fn compute_digest_effects_for_ordering(resolved: &L3Resolved) -> Vec<DigestE
             _ => {}
         }
     }
+    let all_roots_len = all_roots.len();
     let roots: Vec<String> = all_roots
         .into_iter()
         .filter(|r| {
@@ -3169,18 +3508,28 @@ pub fn compute_digest_effects_for_ordering(resolved: &L3Resolved) -> Vec<DigestE
             ext_io.contains(r) || (ui_sink.contains(r) && db_write.contains(r))
         })
         .collect();
-
-    let summaries = crate::engine::return_summary::compute_return_summaries(
-        &resolved.workspace.routines,
-        Some(&resolved.workspace.objects),
+    pt::counter("ordering.roots_all", all_roots_len as u64);
+    pt::counter("ordering.roots_kept", roots.len() as u64);
+    pt::counter(
+        "ordering.capability_facts",
+        snap.capability_facts.len() as u64,
     );
+
+    let summaries = {
+        let _s = pt::span("ordering", "ordering.return_summaries");
+        crate::engine::return_summary::compute_return_summaries(
+            &resolved.workspace.routines,
+            Some(&resolved.workspace.objects),
+        )
+    };
     let isolated = crate::engine::l3::event_graph::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
         None
     } else {
         Some(&isolated)
     };
-    digest_query(&snap, &roots, Some(&summaries), isolated_opt, true)
+    let _s = pt::span("ordering", "ordering.digest_query");
+    digest_query_with(&snap, &roots, Some(&summaries), isolated_opt, true, reduce)
 }
 
 /// Compute the per-root digest effects for the CLI-B digest pipeline.
@@ -3669,7 +4018,14 @@ pub fn reconstruct_witness_paths_pub(
         .unwrap_or_else(|| root_id.to_string());
 
     // Run the single witness BFS with the requested cap.
-    let outcome = reconstruct_witness_paths(root_id, fact, &private_idx, cap);
+    let outcome = reconstruct_witness_paths(
+        root_id,
+        fact,
+        &private_idx,
+        cap,
+        &mut HopCache::default(),
+        &ValidNodesCache::default(),
+    );
 
     // Project paths: strip terminal hops into query_hops; preserve terminal
     // separately for human rendering.
@@ -3679,9 +4035,10 @@ pub fn reconstruct_witness_paths_pub(
         .map(|p| {
             let query_hops = project_path(p, root_id, &root_display, &private_idx);
             // Human hops: the RAW non-terminal hops, carrying short eventDisplay etc.
-            let human_hops: Vec<HumanHop> = p.hops.iter().filter_map(raw_hop_to_human).collect();
+            let human_hops: Vec<HumanHop> =
+                p.hops.iter().filter_map(|h| raw_hop_to_human(h)).collect();
             // Extract the terminal hop (always the last hop in a WitnessPath, if any).
-            let terminal_hop = p.hops.last().and_then(|last| {
+            let terminal_hop = p.hops.last().map(|h| &**h).and_then(|last| {
                 if let WitnessHop::Terminal {
                     evidence_kind,
                     display_text,
@@ -3856,7 +4213,10 @@ mod tests {
                     line: None,
                     column: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(Rc::new)
+            .collect(),
         };
         // Path B: call to "routineZ" + same terminal. "g:Codeunit:1#zzz" > "g:Codeunit:1#aaa"
         // so path_a JSON < path_b JSON.
@@ -3880,7 +4240,10 @@ mod tests {
                     line: None,
                     column: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(Rc::new)
+            .collect(),
         };
 
         // Confirm JSON serialization order matches expectation.
@@ -3903,7 +4266,7 @@ mod tests {
 
         // The lex-smaller path (path_a, routineA) must be first.
         assert!(
-            matches!(&paths[0].hops[0], WitnessHop::Call { routine_id, .. } if routine_id == "g:Codeunit:1#aaa"),
+            matches!(&*paths[0].hops[0], WitnessHop::Call { routine_id, .. } if routine_id == "g:Codeunit:1#aaa"),
             "expected path_a (routineA) to sort first; got {:?}",
             paths[0].hops[0]
         );
@@ -4174,7 +4537,10 @@ mod tests {
                     line: None,
                     column: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(Rc::new)
+            .collect(),
         };
         let path_b = WitnessPath {
             hops: vec![
@@ -4196,7 +4562,10 @@ mod tests {
                     line: None,
                     column: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(Rc::new)
+            .collect(),
         };
 
         let ca = compute_path_conditionality(&path_a, &cs_ctx, &op_ctx);
@@ -4241,9 +4610,9 @@ mod tests {
     // byte-compare; the divergence itself lives entirely in this helper).
     // -----------------------------------------------------------------------
 
-    /// Minimal QueryWitnessHop for path-length/sort tests — content is irrelevant to
-    /// `merge_normalize_via_paths`'s logic (only `path.len()` and the caller-supplied
-    /// json string participate in its sort/dedupe), so every field is a placeholder.
+    /// Minimal QueryWitnessHop for path-length/sort tests. Only `from_routine_id`
+    /// varies, so the hop JSON (which `merge_normalize_via_paths` sorts and
+    /// dedupes by) orders exactly as the tags do.
     fn mk_hop(tag: &str) -> QueryWitnessHop {
         QueryWitnessHop {
             kind: "call",
@@ -4272,10 +4641,21 @@ mod tests {
         // first, then lexicographically by json).
         let terminal_path = vec![mk_hop("t1"), mk_hop("t2")]; // len 2
         let boundary_path = vec![mk_hop("b1")]; // len 1
-        let raw_paths = vec![terminal_path.clone(), boundary_path.clone()];
+        let raw_paths = vec![
+            ProjPath::from_hops(terminal_path.clone()),
+            ProjPath::from_hops(boundary_path.clone()),
+        ];
         let raw_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> =
             vec![crate::engine::l5::conditionality::UNCONDITIONAL; 2];
-        let raw_jsons = vec!["Z_terminal_json".to_string(), "A_boundary_json".to_string()];
+        let raw_jsons = vec![
+            query_hops_json(&terminal_path),
+            query_hops_json(&boundary_path),
+        ];
+        let jsons_of = |ps: &[ProjPath]| -> Vec<String> {
+            ps.iter()
+                .map(|p| query_hops_json(&p.materialize()))
+                .collect()
+        };
 
         // This IS the fresh-insert branch's stored state (`all_paths`/`had_truncation`
         // set directly from `outcome`/`projected_paths` — never sorted). Simulate it
@@ -4284,34 +4664,32 @@ mod tests {
         let existing_had_truncation = false;
 
         // --- Our fix: FIRST duplicate normalizes with an EMPTY new contribution. ---
-        let (via_dup, trunc_dup, all_paths_dup, conds_dup, jsons_dup) = merge_normalize_via_paths(
+        let (via_dup, trunc_dup, all_paths_dup, conds_dup) = merge_normalize_via_paths(
             &raw_paths,
             &raw_conds,
-            &raw_jsons,
             existing_had_truncation,
-            &[],
             &[],
             &[],
             false,
             3,
         );
+        let jsons_dup = jsons_of(&all_paths_dup);
 
         // --- Reference: OLD code's real MERGE branch, fed the duplicate's OWN
         // contribution as a genuine "new" fact (byte-identical to the existing
         // paths, since identical BFS inputs ⇒ identical outcome — see
         // `effect_fact_loop_identity`'s doc). This is what actually running BFS a
         // second time for the duplicate and merging it for real would have produced.
-        let (via_ref, trunc_ref, all_paths_ref, conds_ref, jsons_ref) = merge_normalize_via_paths(
+        let (via_ref, trunc_ref, all_paths_ref, conds_ref) = merge_normalize_via_paths(
             &raw_paths,
             &raw_conds,
-            &raw_jsons,
             existing_had_truncation,
             &raw_paths,
             &raw_conds,
-            &raw_jsons,
             false,
             3,
         );
+        let jsons_ref = jsons_of(&all_paths_ref);
 
         assert_eq!(
             jsons_dup, jsons_ref,
@@ -4330,7 +4708,7 @@ mod tests {
         // (len 2) path — the reverse of the raw insertion order above.
         assert_eq!(
             jsons_dup,
-            vec!["A_boundary_json".to_string(), "Z_terminal_json".to_string()],
+            vec![raw_jsons[1].clone(), raw_jsons[0].clone()],
             "normalization must re-sort the raw fresh-insert order by (len, json)"
         );
         assert_ne!(
@@ -4346,22 +4724,18 @@ mod tests {
         // a further identity-duplicate normalization pass (SECOND+ duplicates are
         // skipped outright in `digest_one_root`, but this proves WHY that is sound:
         // normalizing an already-normalized list with no new paths is a fixed point).
-        let sorted_paths = vec![vec![mk_hop("b1")], vec![mk_hop("t1"), mk_hop("t2")]];
+        let sorted_raw = vec![vec![mk_hop("b1")], vec![mk_hop("t1"), mk_hop("t2")]];
+        let sorted_jsons: Vec<String> = sorted_raw.iter().map(|p| query_hops_json(p)).collect();
+        let sorted_paths: Vec<ProjPath> = sorted_raw.into_iter().map(ProjPath::from_hops).collect();
         let sorted_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> =
             vec![crate::engine::l5::conditionality::UNCONDITIONAL; 2];
-        let sorted_jsons = vec!["A_boundary_json".to_string(), "Z_terminal_json".to_string()];
 
-        let (via, had_truncation, all_paths, conds, jsons) = merge_normalize_via_paths(
-            &sorted_paths,
-            &sorted_conds,
-            &sorted_jsons,
-            false,
-            &[],
-            &[],
-            &[],
-            false,
-            3,
-        );
+        let (via, had_truncation, all_paths, conds) =
+            merge_normalize_via_paths(&sorted_paths, &sorted_conds, false, &[], &[], false, 3);
+        let jsons: Vec<String> = all_paths
+            .iter()
+            .map(|p| query_hops_json(&p.materialize()))
+            .collect();
 
         assert_eq!(
             jsons, sorted_jsons,
@@ -4421,5 +4795,325 @@ mod tests {
         // Both known-temp=true → stays existing (unchanged, no downgrade).
         let both_true = merge_temp_state(&known_true, &known_true);
         assert!(temp_state_eq(&both_true, &known_true));
+    }
+
+    /// `merge_normalize_via_paths` keeps the old semantics: stable sort by
+    /// `(len, query_hops_json)`, then first-wins dedupe by that JSON. The
+    /// duplicates here are built from SEPARATE hop objects (no shared `Rc`) and are
+    /// NOT adjacent in the input, so only the sort can bring them together; each
+    /// carries a different conditionality, so the survivor is visible.
+    #[test]
+    fn merge_normalize_matches_the_json_reference_on_non_adjacent_duplicates() {
+        use crate::engine::l5::conditionality::{CONDITIONAL, LOOP_BODY, UNCONDITIONAL};
+        let raw: Vec<Vec<QueryWitnessHop>> = vec![
+            vec![mk_hop("c"), mk_hop("a")],
+            vec![mk_hop("b")],
+            vec![mk_hop("a"), mk_hop("z")],
+        ];
+        let new_raw: Vec<Vec<QueryWitnessHop>> = vec![
+            vec![mk_hop("b")], // dup of raw[1] (after it in input order)
+            vec![mk_hop("a"), mk_hop("a")],
+            vec![mk_hop("c"), mk_hop("a")], // dup of raw[0]
+        ];
+        let conds = vec![UNCONDITIONAL, CONDITIONAL, LOOP_BODY];
+        let new_conds = vec![LOOP_BODY, UNCONDITIONAL, CONDITIONAL];
+
+        // Reference: the pre-`ProjPath` algorithm, on JSON strings.
+        let mut reference: Vec<(String, usize, _)> = raw
+            .iter()
+            .zip(&conds)
+            .chain(new_raw.iter().zip(&new_conds))
+            .map(|(p, c)| (query_hops_json(p), p.len(), *c))
+            .collect();
+        reference.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        let mut seen = std::collections::HashSet::new();
+        reference.retain(|(j, _, _)| seen.insert(j.clone()));
+
+        let paths: Vec<ProjPath> = raw.into_iter().map(ProjPath::from_hops).collect();
+        let new_paths: Vec<ProjPath> = new_raw.into_iter().map(ProjPath::from_hops).collect();
+        let (via, trunc, all, all_conds) =
+            merge_normalize_via_paths(&paths, &conds, false, &new_paths, &new_conds, false, 3);
+
+        let got: Vec<(String, _)> = all
+            .iter()
+            .map(|p| query_hops_json(&p.materialize()))
+            .zip(all_conds.iter().copied())
+            .collect();
+        let want: Vec<(String, _)> = reference.iter().map(|(j, _, c)| (j.clone(), *c)).collect();
+        assert_eq!(got.len(), 4, "two of the six paths are duplicates");
+        assert_eq!(got, want);
+        assert!(trunc, "4 unique paths > max 3");
+        assert_eq!(via.len(), 3);
+        for (v, (j, _)) in via.iter().zip(&want) {
+            assert_eq!(&query_hops_json(v), j);
+        }
+    }
+
+    /// What [`check_witness_bfs`] saw: BFS calls, paths, equal-length path pairs
+    /// with different JSON, and path pairs that reach the same routine through
+    /// two different edges at the same depth (the shape a `HopCache` keyed by
+    /// anything coarser than the edge would merge).
+    #[derive(Default, Debug)]
+    struct BfsStats {
+        calls: usize,
+        paths: usize,
+        same_len_pairs: usize,
+        same_routine_other_edge: usize,
+    }
+
+    /// The checks of the two tests below, for every inherited fact of every root.
+    fn check_witness_bfs(resolved: &L3Resolved, label: &str, stats: &mut BfsStats) {
+        let outcome_key = |o: &WitnessOutcomeExt| {
+            (
+                o.paths
+                    .iter()
+                    .map(|p| witness_hops_json(&p.hops))
+                    .collect::<Vec<_>>(),
+                o.projected.as_ref().map(|ps| {
+                    ps.iter()
+                        .map(|p| query_hops_json(&p.materialize()))
+                        .collect::<Vec<_>>()
+                }),
+                o.truncated,
+                o.incomplete,
+                o.diagnostics.clone(),
+            )
+        };
+        let snap = compose_snapshot(resolved);
+        let idx = build_fingerprint_indexes(&snap);
+        let shared_valid = ValidNodesCache::default();
+        let mut roots: Vec<&String> = idx.routine_display_by_id.keys().collect();
+        roots.sort();
+        for rid in roots {
+            let display = &idx.routine_display_by_id[rid];
+            let mut root_hops = HopCache::default();
+            let facts = idx
+                .facts_by_routine
+                .get(rid.as_str())
+                .cloned()
+                .unwrap_or_default();
+            for fact in facts.iter().filter(|f| f.provenance != "direct") {
+                for cap in [HARD_PATH_CAP, 2] {
+                    let shared = reconstruct_witness_paths(
+                        rid,
+                        fact,
+                        &idx,
+                        cap,
+                        &mut root_hops,
+                        &shared_valid,
+                    );
+                    let fresh = reconstruct_witness_paths(
+                        rid,
+                        fact,
+                        &idx,
+                        cap,
+                        &mut HopCache::default(),
+                        &ValidNodesCache::default(),
+                    );
+                    let where_ = format!("{label} root {rid} cap {cap}");
+                    assert!(outcome_key(&shared) == outcome_key(&fresh), "{where_}");
+                    stats.calls += 1;
+                    let jsons: Vec<String> = shared
+                        .paths
+                        .iter()
+                        .map(|p| witness_hops_json(&p.hops))
+                        .collect();
+                    for (i, w) in shared.paths.windows(2).enumerate() {
+                        let (a, b) = (&w[0].hops, &w[1].hops);
+                        assert!(
+                            (a.len(), &jsons[i]) <= (b.len(), &jsons[i + 1]),
+                            "{where_}: paths {i},{} out of order",
+                            i + 1
+                        );
+                        if a.len() == b.len() && jsons[i] != jsons[i + 1] {
+                            stats.same_len_pairs += 1;
+                        }
+                        let same_routine_other_edge = a.iter().zip(b.iter()).any(|(x, y)| {
+                            x.routine_id().is_some()
+                                && x.routine_id() == y.routine_id()
+                                && witness_hop_json(x) != witness_hop_json(y)
+                        });
+                        if same_routine_other_edge {
+                            stats.same_routine_other_edge += 1;
+                        }
+                    }
+                    // `None` only on the early first-hop-not-found returns.
+                    let Some(projected) = shared.projected.as_ref() else {
+                        assert!(shared.paths.is_empty(), "{where_}");
+                        continue;
+                    };
+                    assert_eq!(projected.len(), shared.paths.len(), "{where_}");
+                    for (p, q) in shared.paths.iter().zip(projected) {
+                        assert_eq!(
+                            query_hops_json(&q.materialize()),
+                            query_hops_json(&project_path(p, rid, display, &idx)),
+                            "{where_}"
+                        );
+                    }
+                    stats.paths += shared.paths.len();
+                }
+            }
+        }
+    }
+
+    /// The witness BFS over every `tests/r0-corpus` fixture, checked against
+    /// reference re-derivations of what it used to compute directly:
+    /// - paths are in `(len, witness_hops_json)` order (the per-hop comparison
+    ///   must agree with the whole-path JSON);
+    /// - `projected[i]` is exactly `project_path(&paths[i])`;
+    /// - sharing one `HopCache` across a root's calls and one `ValidNodesCache`
+    ///   across all roots gives the same outcome as fresh caches per call.
+    #[test]
+    fn witness_bfs_matches_reference_on_r0_corpus() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut dirs: Vec<_> = std::fs::read_dir(&corpus)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        let mut stats = BfsStats::default();
+        for dir in &dirs {
+            if let Some(resolved) =
+                crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(dir)
+            {
+                check_witness_bfs(&resolved, &dir.display().to_string(), &mut stats);
+            }
+        }
+        // The checks above are vacuous without BFS calls, paths and equal-length
+        // pairs that the tiebreak has to order.
+        assert!(stats.calls > 100, "{stats:?}");
+        assert!(stats.paths > 100, "{stats:?}");
+        assert!(stats.same_len_pairs > 0, "{stats:?}");
+    }
+
+    /// The same checks on a hand-made diamond the corpus lacks: `Mid` calls
+    /// `Leaf` twice, so `Root`'s witness has two equal-length paths that reach
+    /// `Leaf` through two different edges. A hop cache keyed by the target
+    /// routine (not the edge) would give both paths the first edge's hop.
+    #[test]
+    fn witness_bfs_matches_reference_on_a_two_edge_diamond() {
+        let src = r#"table 50100 "T7b Tab"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+}
+
+codeunit 50100 "T7b Diamond"
+{
+    procedure Root()
+    begin
+        Mid();
+    end;
+
+    procedure Mid()
+    begin
+        Leaf();
+        Leaf();
+    end;
+
+    procedure Leaf()
+    var
+        Rec: Record "T7b Tab";
+    begin
+        Rec.Insert();
+    end;
+}
+"#;
+        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
+            &[("Diamond.al".to_string(), src.to_string())],
+            "00000000-0000-0000-0000-00000000d1a0",
+        );
+        let mut stats = BfsStats::default();
+        check_witness_bfs(&resolved, "diamond", &mut stats);
+        // The stated precondition: the diamond's two Leaf edges are walked.
+        assert!(stats.same_routine_other_edge > 0, "{stats:?}");
+        assert!(stats.same_len_pairs > 0, "{stats:?}");
+    }
+
+    /// `ValidNodesCache` must keep the temp classes apart: a temporary and a
+    /// physical insert into the same table have different carriers, so their
+    /// `valid_nodes` differ. Each sits two calls below its root, so the walk past
+    /// the seed depends on `valid_nodes`. Whichever root runs first fills the
+    /// shared cache; a key without the temp class would hand the other root's
+    /// fact that set, and its writer would never be reached.
+    #[test]
+    fn witness_bfs_valid_nodes_cache_separates_temp_classes() {
+        let src = r#"table 50101 "T7b Tab2"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+}
+
+codeunit 50101 "T7b Temp Classes"
+{
+    procedure RootA()
+    begin
+        MidA();
+    end;
+
+    procedure MidA()
+    begin
+        TempW();
+    end;
+
+    procedure TempW()
+    var
+        Rec: Record "T7b Tab2" temporary;
+    begin
+        Rec.Insert();
+    end;
+
+    procedure RootB()
+    begin
+        MidB();
+    end;
+
+    procedure MidB()
+    begin
+        PhysW();
+    end;
+
+    procedure PhysW()
+    var
+        Rec: Record "T7b Tab2";
+    begin
+        Rec.Insert();
+    end;
+}
+"#;
+        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
+            &[("TempClasses.al".to_string(), src.to_string())],
+            "00000000-0000-0000-0000-00000000d1a1",
+        );
+        // The stated precondition: one known-temp and one physical inherited
+        // insert whose keys differ ONLY in the temp class.
+        let snap = compose_snapshot(&resolved);
+        let inherited: Vec<&Fact> = snap
+            .capability_facts
+            .iter()
+            .filter(|f| f.provenance != "direct" && f.op == "insert")
+            .collect();
+        let rest = |f: &Fact| ValidNodesKey {
+            known_temp: false,
+            ..ValidNodesKey::of(f)
+        };
+        let pair = inherited.iter().enumerate().any(|(i, a)| {
+            inherited[i + 1..]
+                .iter()
+                .any(|b| is_known_temp_snap(a) != is_known_temp_snap(b) && rest(a) == rest(b))
+        });
+        assert!(
+            pair,
+            "no temp/physical inherited insert pair: {}",
+            inherited.len()
+        );
+        let mut stats = BfsStats::default();
+        check_witness_bfs(&resolved, "temp-classes", &mut stats);
+        assert!(stats.paths > 0, "{stats:?}");
     }
 }

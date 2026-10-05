@@ -1,7 +1,7 @@
 //! D9 — Transaction span summary. Port of al-sem
 //! `src/detectors/d9-transaction-span-summary.ts`.
 //!
-//! For each non-trivial ExplicitCommit transaction span (≥2 routines AND (≥2 tables OR
+//! For each non-trivial ExplicitCommit transaction span (≥2 routines AND (≥2 PHYSICAL tables OR
 //! !coverage_complete)), emit an info-level finding describing what the span covers.
 //! Aimed at code review / agent context, not a bug to fix.
 //!
@@ -46,7 +46,10 @@ pub fn detect_d9(
             continue;
         }
 
-        let table_count = span.writes_tables.len();
+        // ⟨issue 23 rule⟩ The gate and the count in the text read the PHYSICAL
+        // span count: writes to temporary records are not part of any
+        // transaction. `affected_tables` stays the temp-inclusive witness set.
+        let table_count = span.writes_physical_tables_count;
         let effects_are_interesting =
             table_count >= MIN_INTERESTING_TABLES || !span.coverage_complete;
         if !effects_are_interesting {
@@ -67,8 +70,8 @@ pub fn detect_d9(
 
         // tableDesc: "writes {n} known table(s)" if n>0 else ("writes tables (effect scope unknown)"
         // if !coverage_complete else "writes tables").
-        let table_desc = if !span.writes_tables.is_empty() {
-            format!("writes {} known table(s)", span.writes_tables.len())
+        let table_desc = if table_count > 0 {
+            format!("writes {table_count} known table(s)")
         } else if !span.coverage_complete {
             "writes tables (effect scope unknown)".to_string()
         } else {

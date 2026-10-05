@@ -1,6 +1,14 @@
 # Preflight verdict cache — spec
 
 **Status:** ready to implement. **Base:** master `90b5918`.
+
+> **Removed 2026-10-05 (B3 Phase A).** The cache was implemented
+> (`src/program/resolve/preflight_cache.rs`) and is now deleted. Since B3,
+> `alsem analyze` needs the program context itself (the detectors read its call
+> resolution), so a cached verdict could only be stored, never served. Old
+> entries under `<os-cache>/alsem/preflight-v1/` are no longer read or written;
+> `alsem cache prune` never managed that directory, so delete it by hand.
+> The text below is kept as the record of the design.
 **Measurement it is built on:** `docs/2026-07-31-preflight-census.md`.
 **Design pointers:** `docs/superpowers/notes/2026-08-01-preflight-cache-pointers.md`.
 

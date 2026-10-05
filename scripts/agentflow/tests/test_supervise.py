@@ -6,7 +6,7 @@ from agentflow import supervise
 def test_sanitized_env_drops_regen_and_sets_flags():
     env = supervise.sanitized_env({"REGEN_TEMP_GOLDENS": "1", "PATH": "p"}, tree_sitter_path="/g")
     assert "REGEN_TEMP_GOLDENS" not in env
-    assert env["ALSEM_NO_PREFLIGHT_CACHE"] == "1" and env["TREE_SITTER_AL_PATH"] == "/g" and env["PATH"] == "p"
+    assert env["TREE_SITTER_AL_PATH"] == "/g" and env["PATH"] == "p"
 
 
 def test_sanitized_env_drops_agentflow_now():

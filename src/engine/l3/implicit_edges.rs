@@ -26,7 +26,7 @@
 //! taxonomy is unchanged — a follow-up question, not this task's surface).
 
 use super::call_resolver::CallEdge;
-use super::l3_workspace::L3Workspace;
+use super::l3_workspace::{L3RecordOperation, L3Routine, L3Workspace};
 use super::symbol_table::SymbolTable;
 use super::taxonomy::{DispatchKind, Resolution};
 use crate::engine::l2::node_util::strip_quotes;
@@ -62,62 +62,65 @@ pub fn build_implicit_trigger_edges(
     let mut edges: Vec<CallEdge> = Vec::new();
     for routine in &workspace.routines {
         for op in &routine.record_operations {
-            let Some((trigger_name, resolution)) = trigger_mapping(&op.op) else {
-                continue;
-            };
-            // Precondition 1 — RunTrigger gate (applicability.rs:166-168): only an
-            // explicit `false` suppresses; `None` (absent → oracle `Guarded`) and
-            // `Some(true)` keep the edge.
-            if op.run_trigger == Some(false) {
-                continue;
-            }
-            let Some(table_id) = &op.table_id else {
-                continue; // table not resolved → cannot find its trigger
-            };
-            let Some(table) = symbols.table_by_id(table_id) else {
-                continue;
-            };
-            // Tables are objects too — look up by type + number.
-            let Some(table_object) = symbols.object_by_type_number("Table", table.table_number)
-            else {
-                continue;
-            };
-            // Precondition 2 — field-specific OnValidate (applicability.rs:184-195):
-            // a Validate targets the validated field's OWN OnValidate; every other
-            // op targets the table's object-level trigger (enclosing_member None).
-            let trigger = if op.op == "Validate" {
-                let Some(field_lc) = op
-                    .field_arguments
-                    .as_ref()
-                    .and_then(|fa| fa.first())
-                    .map(|f| normalize_field_name(f))
-                else {
-                    continue; // Validate with no captured field → no edge (oracle: ctx.field required)
-                };
-                symbols.trigger_in_object(&table_object.id, trigger_name, Some(&field_lc))
-            } else {
-                symbols.trigger_in_object(&table_object.id, trigger_name, None)
-            };
-            let Some(trigger) = trigger else {
-                continue;
-            };
-            edges.push(CallEdge {
-                from: routine.id.clone(),
-                to: Some(trigger.id.clone()),
-                callsite_id: op.id.clone(),
-                operation_id: op.id.clone(),
-                dispatch_kind: DispatchKind::ImplicitTrigger,
-                resolution,
-                candidates: None,
-                external_type_ref: None,
-                receiver_type: None,
-                dispatch_meta: None,
-                unknown_method_name: None,
-                receiver_shape: None,
-            });
+            edges.extend(implicit_trigger_edge_for_op(routine, op, symbols));
         }
     }
     edges
+}
+
+/// The implicit-trigger edge of ONE record op, if any. The per-op body of
+/// [`build_implicit_trigger_edges`], shared with the program adapter
+/// (`program_calls`), which keeps L3's edge for ops the program engine
+/// does not see as record ops.
+pub(crate) fn implicit_trigger_edge_for_op(
+    routine: &L3Routine,
+    op: &L3RecordOperation,
+    symbols: &SymbolTable,
+) -> Option<CallEdge> {
+    let (trigger_name, resolution) = trigger_mapping(&op.op)?;
+    // Precondition 1 — RunTrigger gate (applicability.rs:166-168): only an
+    // explicit `false` suppresses; `None` (absent → oracle `Guarded`) and
+    // `Some(true)` keep the edge.
+    if op.run_trigger == Some(false) {
+        return None;
+    }
+    // Table not resolved → cannot find its trigger.
+    let table = symbols.table_by_id(op.table_id.as_ref()?)?;
+    // Tables are objects too — look up by type + number.
+    let table_object = symbols.object_by_type_number("Table", table.table_number)?;
+    // Precondition 2 — field-specific OnValidate (applicability.rs:184-195):
+    // a Validate targets the validated field's OWN OnValidate; every other
+    // op targets the table's object-level trigger (enclosing_member None).
+    let trigger = if op.op == "Validate" {
+        // Validate with no captured field → no edge (oracle: ctx.field required).
+        let field_lc = validate_field_lc(op)?;
+        symbols.trigger_in_object(&table_object.id, trigger_name, Some(&field_lc))
+    } else {
+        symbols.trigger_in_object(&table_object.id, trigger_name, None)
+    }?;
+    Some(CallEdge {
+        from: routine.id.clone(),
+        to: Some(trigger.id.clone()),
+        callsite_id: op.id.clone(),
+        operation_id: op.id.clone(),
+        dispatch_kind: DispatchKind::ImplicitTrigger,
+        resolution,
+        candidates: None,
+        external_type_ref: None,
+        receiver_type: None,
+        dispatch_meta: None,
+        unknown_method_name: None,
+        receiver_shape: None,
+    })
+}
+
+/// The validated field of a `Validate` op, normalized and case-folded (the
+/// form a field trigger's `enclosing_member` matches against).
+pub(crate) fn validate_field_lc(op: &L3RecordOperation) -> Option<String> {
+    op.field_arguments
+        .as_ref()
+        .and_then(|fa| fa.first())
+        .map(|f| normalize_field_name(f))
 }
 
 #[cfg(test)]

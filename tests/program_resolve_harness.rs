@@ -2855,7 +2855,21 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
     // Driving this back down is real precision work (arg-type dispatch once took an
     // earlier population to 0) and is tracked separately. It is NOT a reason to keep
     // a ratchet pinned to a number nobody can reproduce.
-    const CDO_AMBIGUOUS_RESOLVED: usize = 67;
+    //
+    // 67 -> 23 on 2026-10-05 (b3 phase A, Task 5a), measured on the same pinned
+    // `bc3ccb18` baseline with `aldump --program-call-graph-stats`: both scopes
+    // ambiguousResolved 67 -> 23, resolvedSource +44 (9533 -> 9577 primary,
+    // 11416 -> 11460 whole-program), unknown 0 -> 0, total unchanged.
+    // `arg_dispatch::pick_candidate` now judges only DISCRIMINATING argument
+    // positions; an untyped or inexact argument where every overload declares
+    // the identical parameter no longer blocks the pick. All 44 new picks
+    // were hand-checked against source: each separates its overloads by a
+    // Record table, Codeunit-vs-Text, or Integer-vs-Code[20] parameter
+    // (`createedoclogentries/4`, `logmessage/3`, `insertmergefields/6`,
+    // `getvalue/5`, `initnewentry/14`, ...). To rebuild the list: diff the
+    // `task2_dump_argtype_dispatch_flips_on_cdo` dump at 39290e63 against
+    // a4a25894 on the SAME warm CDO snapshot (as for the Task 3 note above).
+    const CDO_AMBIGUOUS_RESOLVED: usize = 23;
     assert_eq!(
         ph.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
         "primary ambiguousResolved count {} != the re-derived 2026-09-14 value {}          for the pinned bc3ccb18 baseline (was 0 on the unreproducible 2026-07-04          workspace) — these are closed same-arity overload candidate sets, not          resolution holes; investigate before updating this ratchet",
@@ -6719,6 +6733,198 @@ fn ws_overload_field_discriminator_picks_integer_overload_via_member_field_arg()
         "picked routine must be the Integer overload (Rec.Amount is Integer); \
          got {decl_text:?}"
     );
+}
+
+/// The CDO `InitNewEntry` shape (b3 phase A, Task 5a): two overloads that
+/// differ ONLY at one position (`Integer` vs `Code[20]`), called with
+/// arguments that cannot be typed (an option value `Log.Kind::A`) or that do
+/// not EXACTLY match (an Option var into an `Integer` param) at positions
+/// where both overloads declare the SAME parameter. Those positions cannot
+/// tell the overloads apart, so they must not block the pick the
+/// discriminating position makes. Written to a temp dir, so no golden moves.
+fn non_discriminating_untyped_report() -> (tempfile::TempDir, ProgramReport) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-5a5a5a5a5a5a", "name": "ProbeNDU", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50150, "to": 50169 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Log.Table.al"),
+        r#"table 50150 "NDU Log"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+        field(2; Kind; Option) { OptionMembers = A,B; }
+    }
+    keys { key(PK; "Entry No.") { Clustered = true; } }
+
+    procedure InitNew(NewKind: Integer; LineNo: Integer; Note: Text)
+    begin
+    end;
+
+    procedure InitNew(NewKind: Integer; ValueCode: Code[20]; Note: Text)
+    begin
+    end;
+}
+"#,
+    )
+    .expect("write log table");
+    std::fs::write(
+        src.join("Line.Table.al"),
+        r#"table 50151 "NDU Line"
+{
+    fields
+    {
+        field(1; "Line No."; Integer) { }
+        field(2; "Value Code"; Code[20]) { }
+        field(3; Amount; Decimal) { }
+    }
+    keys { key(PK; "Line No.") { Clustered = true; } }
+}
+"#,
+    )
+    .expect("write line table");
+    std::fs::write(
+        src.join("Caller.Codeunit.al"),
+        r#"codeunit 50152 "NDU Caller"
+{
+    procedure RunIntField(Line: Record "NDU Line")
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(Log.Kind::A, Line."Line No.", '');
+    end;
+
+    procedure RunCodeField(Line: Record "NDU Line")
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(Log.Kind::A, Line."Value Code", '');
+    end;
+
+    procedure RunLocalRec()
+    var
+        Log: Record "NDU Log";
+        Line: Record "NDU Line";
+    begin
+        Log.InitNew(Log.Kind::A, Line."Line No.", '');
+    end;
+
+    procedure RunOptionVar(K: Option A,B; Line: Record "NDU Line")
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(K, Line."Line No.", '');
+    end;
+
+    procedure RunTextVar(T: Text)
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(Log.Kind::A, T, '');
+    end;
+
+    procedure RunDecimalField(Line: Record "NDU Line")
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(Log.Kind::A, Line.Amount, '');
+    end;
+
+    procedure RunUntypedDisc()
+    var
+        Log: Record "NDU Log";
+    begin
+        Log.InitNew(1, Log.Kind::A, '');
+    end;
+}
+"#,
+    )
+    .expect("write caller");
+    let report = resolve_full_program(tmp.path())
+        .expect("resolve_full_program must succeed on the non-discriminating fixture");
+    (tmp, report)
+}
+
+/// Assert `caller_name_lc`'s outer call picked the ONE `InitNew` overload
+/// whose declaration text contains `decl_marker`.
+fn assert_picks_init_new(
+    report: &ProgramReport,
+    root: &std::path::Path,
+    caller_name_lc: &str,
+    decl_marker: &str,
+) {
+    let edge = &outer_call_edge(report, caller_name_lc).edge;
+    assert_eq!(
+        edge.shape,
+        DispatchShape::Exact,
+        "{caller_name_lc}: got {edge:?}"
+    );
+    assert_eq!(
+        edge.routes.len(),
+        1,
+        "{caller_name_lc}: got {:?}",
+        edge.routes
+    );
+    let route = &edge.routes[0];
+    assert_eq!(
+        route.evidence,
+        Evidence::Source,
+        "{caller_name_lc}: {route:?}"
+    );
+    let RouteTarget::Routine(ref rid) = route.target else {
+        panic!("{caller_name_lc}: expected a Routine target; got {route:?}");
+    };
+    assert_eq!(rid.name_lc, "initnew");
+    let Witness::SourceSpan { ref file, span } = route.witness else {
+        panic!("{caller_name_lc}: expected SourceSpan witness; got {route:?}");
+    };
+    let src = std::fs::read_to_string(root.join(file)).expect("read witness file");
+    let decl_text = src[span.0 as usize..span.1 as usize].to_ascii_lowercase();
+    assert!(
+        decl_text.contains(decl_marker),
+        "{caller_name_lc}: picked the wrong overload; got {decl_text:?}"
+    );
+}
+
+/// CDO `CDOLogManagement.Codeunit.al:224/263/353`: an `Integer` field of a
+/// record PARAMETER at the discriminating position picks the `Integer`
+/// overload (AL has no implicit Integer -> Code conversion), even though an
+/// untyped option value sits at a shared position.
+#[test]
+fn non_discriminating_untyped_arg_does_not_block_integer_field_pick() {
+    let (tmp, report) = non_discriminating_untyped_report();
+    assert_picks_init_new(&report, tmp.path(), "runintfield", "lineno: integer");
+}
+
+/// Sibling cases of the same root cause: the reverse direction (a `Code`
+/// field picks the `Code[20]` overload), a field of a LOCAL record, and an
+/// Option var (not an exact `Integer` match) at a shared position.
+#[test]
+fn non_discriminating_untyped_arg_sibling_picks() {
+    let (tmp, report) = non_discriminating_untyped_report();
+    assert_picks_init_new(&report, tmp.path(), "runcodefield", "valuecode: code[20]");
+    assert_picks_init_new(&report, tmp.path(), "runlocalrec", "lineno: integer");
+    assert_picks_init_new(&report, tmp.path(), "runoptionvar", "lineno: integer");
+}
+
+/// Negatives the fix must keep: `Text` vs `Code[20]` stays ambiguous because
+/// a pick needs an EXACT match (a `Text` var matches neither overload
+/// exactly). `Text`->`Integer` is provably incompatible, so AL itself would
+/// bind `Code[20]`; this pins our conservative rule, not AL behaviour. A `Decimal` field
+/// exactly matches neither overload; and an untyped arg AT the discriminating
+/// position still degrades the whole call.
+#[test]
+fn non_discriminating_untyped_arg_negatives_stay_ambiguous() {
+    let (_tmp, report) = non_discriminating_untyped_report();
+    assert_stays_ambiguous_resolved(&report, "runtextvar");
+    assert_stays_ambiguous_resolved(&report, "rundecimalfield");
+    assert_stays_ambiguous_resolved(&report, "rununtypeddisc");
 }
 
 /// Test 23o (CORRECTED — pageext-merge-and-final-residual plan, Task 3: a

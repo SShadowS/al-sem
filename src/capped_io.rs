@@ -27,6 +27,24 @@ pub enum CapReadError {
     CapExceeded { cap: u64 },
     /// The underlying reader failed for a reason other than the cap.
     Io(std::io::Error),
+    /// Our own temp storage failed (a full disk, an unwritable temp dir): the
+    /// input was fine. Never a reason to treat the input as unreadable; see
+    /// [`is_temp_storage_failure`].
+    TempStorage(std::io::Error),
+}
+
+/// Whether `e` (anywhere in its chain) is a [`CapReadError::TempStorage`].
+///
+/// Callers that copy an entry to a temp file only to save memory use this to
+/// fall back to reading it into memory: the result must not depend on the
+/// state of the temp disk.
+pub fn is_temp_storage_failure(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        matches!(
+            c.downcast_ref::<CapReadError>(),
+            Some(CapReadError::TempStorage(_))
+        )
+    })
 }
 
 impl fmt::Display for CapReadError {
@@ -36,6 +54,7 @@ impl fmt::Display for CapReadError {
                 write!(f, "decompressed size exceeds the {cap}-byte cap")
             }
             CapReadError::Io(e) => write!(f, "read failed: {e}"),
+            CapReadError::TempStorage(e) => write!(f, "temp storage failed: {e}"),
         }
     }
 }
@@ -44,7 +63,7 @@ impl std::error::Error for CapReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CapReadError::CapExceeded { .. } => None,
-            CapReadError::Io(e) => Some(e),
+            CapReadError::Io(e) | CapReadError::TempStorage(e) => Some(e),
         }
     }
 }
@@ -77,22 +96,53 @@ pub fn read_capped<R: Read>(reader: R, cap: u64) -> Result<Vec<u8>, CapReadError
 /// Same cap rule: at most `cap + 1` bytes are ever copied, and more than `cap`
 /// is [`CapReadError::CapExceeded`]. The file has no name and is deleted when
 /// the returned handle is dropped.
+///
+/// A failure of the temp file itself is [`CapReadError::TempStorage`], kept
+/// apart from a failure of `reader` ([`CapReadError::Io`]).
 pub fn copy_capped_to_tempfile<R: Read>(
     reader: R,
     cap: u64,
 ) -> Result<std::fs::File, CapReadError> {
-    use std::io::{Seek, SeekFrom, Write};
-    let mut file = tempfile::tempfile().map_err(CapReadError::Io)?;
-    let mut writer = std::io::BufWriter::with_capacity(1 << 20, &mut file);
-    let copied = std::io::copy(&mut reader.take(cap.saturating_add(1)), &mut writer)
-        .map_err(CapReadError::Io)?;
-    writer.flush().map_err(CapReadError::Io)?;
-    drop(writer);
+    use std::io::{Seek, SeekFrom};
+    let mut file = tempfile::tempfile().map_err(CapReadError::TempStorage)?;
+    copy_capped(
+        reader,
+        std::io::BufWriter::with_capacity(1 << 20, &mut file),
+        cap,
+    )?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(CapReadError::TempStorage)?;
+    Ok(file)
+}
+
+/// The copy half of [`copy_capped_to_tempfile`]: `reader` failing is
+/// [`CapReadError::Io`], `writer` failing (a full disk) is
+/// [`CapReadError::TempStorage`].
+fn copy_capped<R: Read, W: std::io::Write>(
+    reader: R,
+    mut writer: W,
+    cap: u64,
+) -> Result<(), CapReadError> {
+    let mut reader = reader.take(cap.saturating_add(1));
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut copied = 0u64;
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(CapReadError::Io(e)),
+        };
+        writer
+            .write_all(&buf[..n])
+            .map_err(CapReadError::TempStorage)?;
+        copied += n as u64;
+    }
+    writer.flush().map_err(CapReadError::TempStorage)?;
     if copied > cap {
         return Err(CapReadError::CapExceeded { cap });
     }
-    file.seek(SeekFrom::Start(0)).map_err(CapReadError::Io)?;
-    Ok(file)
+    Ok(())
 }
 
 /// Map `file` read-only, or `None` when it is empty (mapping an empty file is
@@ -238,6 +288,52 @@ mod tests {
         assert!(matches!(err, CapReadError::CapExceeded { cap: 100 }));
         let err = copy_capped_to_tempfile(Unbounded, 4096).unwrap_err();
         assert!(matches!(err, CapReadError::CapExceeded { cap: 4096 }));
+    }
+
+    /// A writer that accepts `room` bytes and then fails like a full disk.
+    struct DiskFull {
+        room: usize,
+    }
+    impl std::io::Write for DiskFull {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.room == 0 {
+                return Err(std::io::Error::other(
+                    "There is not enough space on the disk",
+                ));
+            }
+            let n = buf.len().min(self.room);
+            self.room -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A full disk part way through the copy is temp storage failing, not the
+    /// input: callers fall back to memory on `TempStorage` (FW2) and must not
+    /// on `Io`, so the two must never be confused.
+    #[test]
+    fn copy_tells_a_full_disk_from_a_bad_input() {
+        let err = copy_capped(
+            Cursor::new(vec![7u8; 200_000]),
+            DiskFull { room: 100_000 },
+            1 << 20,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CapReadError::TempStorage(_)), "{err}");
+        let err = anyhow::Error::from(err).context("reading nested app x.app");
+        assert!(is_temp_storage_failure(&err), "{err:#}");
+
+        struct BadInput;
+        impl Read for BadInput {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("corrupt deflate stream"))
+            }
+        }
+        let err = copy_capped(BadInput, Vec::new(), 1 << 20).unwrap_err();
+        assert!(matches!(err, CapReadError::Io(_)), "{err}");
+        assert!(!is_temp_storage_failure(&anyhow::Error::from(err)));
     }
 
     #[test]

@@ -32,10 +32,7 @@ pub enum FileChange {
 /// index until the next server restart; see `src/server.rs`'s
 /// `ChangeEvent::DepsChanged` mapping, which this filter feeds).
 fn is_relevant_path(path: &Path) -> bool {
-    let is_al = path
-        .extension()
-        .map(|ext| ext.eq_ignore_ascii_case("al"))
-        .unwrap_or(false);
+    let is_al = crate::source_text::has_al_extension(path);
     let under_alpackages = path.components().any(|c| {
         c.as_os_str()
             .to_str()

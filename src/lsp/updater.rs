@@ -422,7 +422,7 @@ impl Updater {
                             // leaving the file's last-known-good state untouched
                             // satisfies that without discarding the rest of a
                             // legitimate batch.
-                            let Ok(text) = std::fs::read_to_string(path) else {
+                            let Ok(text) = crate::source_text::read_al_source(path) else {
                                 continue;
                             };
                             let provenance = self.file_provenance(cur, &vp);
@@ -1007,9 +1007,8 @@ enum PathClass {
     /// construction).
     Workspace(String),
     /// Outside `workspace_root` entirely, under a skipped dependency/output
-    /// directory (`.alpackages`/`.snapshots`/`node_modules` — the same list
-    /// `crate::snapshot::provider::walk_al_source` excludes from the
-    /// workspace's own source walk), or not a `.al` file at all.
+    /// directory (`crate::source_text::SKIP_DIRS`, any case — the list the
+    /// shared workspace walk skips), or not a `.al` file at all.
     NotWorkspaceSource,
 }
 
@@ -1043,13 +1042,11 @@ fn classify_path(
     let Ok(rel) = path.strip_prefix(workspace_root) else {
         return PathClass::NotWorkspaceSource;
     };
-    let is_al = path.extension().and_then(|e| e.to_str()) == Some("al");
-    let under_skip_dir = rel.components().any(|c| {
-        matches!(
-            c.as_os_str().to_str(),
-            Some(".alpackages") | Some(".snapshots") | Some("node_modules")
-        )
-    });
+    // The shared walk's name rules (`crate::source_text`), applied lexically.
+    let is_al = crate::source_text::has_al_extension(path);
+    let under_skip_dir = rel
+        .components()
+        .any(|c| crate::source_text::is_skipped_dir_name(c.as_os_str()));
     if !is_al || under_skip_dir {
         return PathClass::NotWorkspaceSource;
     }
@@ -2122,6 +2119,15 @@ mod tests {
     fn spawn_updater_rebuilds_context_after_rung2_escalation() {
         use std::sync::Mutex;
 
+        // Each step waits for ITS OWN swap before the next event is sent, so
+        // the three batches are isolated by construction. A fixed sleep
+        // between sends was not enough: under a loaded test run the thread's
+        // startup context build plus an apply took longer than the sleep, two
+        // events queued up, and `gather_batch` rightly merged them into one
+        // batch (2 swaps, not 3). The bound is a hang guard, never a pacing
+        // assumption.
+        const SWAP_TIMEOUT: Duration = Duration::from_secs(120);
+
         let dir = fixture_dir();
         let (snapshot, parsed) = build(dir.path());
         let base_generation = snapshot.generation;
@@ -2136,8 +2142,7 @@ mod tests {
         // that enum's own doc), so this test tracks the previous swap's
         // `graph`/`dep_layer` Arcs itself to keep its original finer-grained
         // rung classification, AND cross-checks it against `SwapScope`.
-        let events: Arc<Mutex<Vec<(u64, Rung)>>> = Arc::new(Mutex::new(Vec::new()));
-        let events2 = Arc::clone(&events);
+        let (swap_tx, swap_rx) = mpsc::channel::<(u64, Rung)>();
         let prev = Arc::new(Mutex::new((
             Arc::clone(&shared.get().graph),
             Arc::clone(&shared.get().dep_layer),
@@ -2173,10 +2178,14 @@ mod tests {
                         "SwapScope::Full must correspond to a rung-2/3 (graph or dep_layer) swap"
                     ),
                 }
-                events2.lock().unwrap().push((new.generation, rung));
+                swap_tx
+                    .send((new.generation, rung))
+                    .expect("the test thread holds swap_rx until join");
                 *prev_guard = (Arc::clone(&new.graph), Arc::clone(&new.dep_layer));
             },
         );
+
+        let mut events: Vec<(u64, Rung)> = Vec::new();
 
         // Step 1 (rung 1): Alpha gets a 2nd call to the already-existing
         // Beta.Process().
@@ -2197,7 +2206,11 @@ mod tests {
         .expect("edit 1 (rung 1)");
         tx.send(ChangeEvent::FileSaved(dir.path().join("Alpha.al")))
             .expect("send 1");
-        std::thread::sleep(Duration::from_millis(300));
+        events.push(
+            swap_rx
+                .recv_timeout(SWAP_TIMEOUT)
+                .expect("this step must publish a swap"),
+        );
 
         // Step 2 (rung 2): Gamma gains a brand-new routine — a
         // definition-surface change (the routine SET moves).
@@ -2221,7 +2234,11 @@ mod tests {
         .expect("edit 2 (rung 2)");
         tx.send(ChangeEvent::FileSaved(dir.path().join("Gamma.al")))
             .expect("send 2");
-        std::thread::sleep(Duration::from_millis(300));
+        events.push(
+            swap_rx
+                .recv_timeout(SWAP_TIMEOUT)
+                .expect("this step must publish a swap"),
+        );
 
         // Step 3 (rung 1 again, AFTER the rung-2 escalation): Alpha gets a
         // 3rd call to Beta.Process() — still fingerprint-equal.
@@ -2243,12 +2260,18 @@ mod tests {
         .expect("edit 3 (rung 1, post-rung-2)");
         tx.send(ChangeEvent::FileSaved(dir.path().join("Alpha.al")))
             .expect("send 3");
-        std::thread::sleep(Duration::from_millis(300));
+        events.push(
+            swap_rx
+                .recv_timeout(SWAP_TIMEOUT)
+                .expect("this step must publish a swap"),
+        );
 
         drop(tx);
         handle.join().expect("updater thread must exit cleanly");
 
-        let events = events.lock().unwrap();
+        // `on_swap` (and `swap_tx` with it) is dropped with the thread, so
+        // this drains any swap published after step 3 — there must be none.
+        events.extend(swap_rx.try_iter());
         assert_eq!(
             events.len(),
             3,

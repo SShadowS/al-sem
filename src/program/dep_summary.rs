@@ -485,12 +485,12 @@ codeunit 60002 "Plain Cu"
 
     /// Review Focus 1: a dependency file whose parse is `Recovered` is still
     /// reported after its tree was dropped, under both profiles, and counted
-    /// by `fresh_coverage` (which builds with `Summary`).
+    /// by `build_program_with_coverage` (which builds with `Summary`).
     #[test]
     fn a_recovered_dependency_file_is_reported_under_both_profiles() {
         use crate::engine::deps::app_package_zip::test_apps;
         use crate::program::resolve::full::{
-            build_context_from_snapshot, build_snapshot_res, fresh_coverage,
+            build_context_from_snapshot, build_program_with_coverage, build_snapshot_res,
             resolve_full_program_with,
         };
         let dir = tempfile::tempdir().expect("tempdir");
@@ -533,8 +533,9 @@ codeunit 60002 "Plain Cu"
             );
         }
         assert_eq!(
-            fresh_coverage(&root)
+            build_program_with_coverage(&root)
                 .expect("fresh coverage")
+                .2
                 .recovered_files,
             1
         );

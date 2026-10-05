@@ -30,13 +30,8 @@ fi
 
 export CDO_WS="$ws"
 export ENFORCE_CDO_WS=1
-# The preflight verdict cache must NEVER be consulted here. These are the
-# north-star zero-ratchets; a warm replay would measure a previous run's verdict
-# and report it as this run's, which is exactly the laundering the cache's own
-# soundness rules exist to prevent. Recompute, always.
-export ALSEM_NO_PREFLIGHT_CACHE=1
 
-echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1 ALSEM_NO_PREFLIGHT_CACHE=1"
+echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1"
 
 # ⟨2026-10-04, test tiers⟩ Built with `release-fast` (thin LTO, 4 codegen units),
 # not full-LTO `release`. This gate checks BEHAVIOUR — counts, digests, zero

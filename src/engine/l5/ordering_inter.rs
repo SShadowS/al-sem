@@ -175,19 +175,28 @@ pub fn derive_invocation_multiplicity(
 /// `indexes.callsiteById` analog: a callsiteId → evidence lookup.
 pub type CallsiteByIdMap<'a> = HashMap<&'a str, &'a SnapshotCallsiteEvidence>;
 
+/// callsiteId → ledger row (`callsite_resolutions`; the LAST row wins).
+pub type ResolutionByCallsiteId<'a> = HashMap<&'a str, &'a SnapshotCallsiteResolution>;
+
+/// Build [`ResolutionByCallsiteId`] once per snapshot. `reconstruct_call_chains`
+/// runs once per effect, and used to rebuild this map over every ledger row on
+/// each call.
+pub fn resolution_by_callsite_id(snap: &CapabilitySnapshot) -> ResolutionByCallsiteId<'_> {
+    let mut m: ResolutionByCallsiteId = HashMap::new();
+    for row in &snap.callsite_resolutions {
+        m.insert(row.callsite_id.as_str(), row);
+    }
+    m
+}
+
 pub fn reconstruct_call_chains(
     via_paths: &[Vec<QueryWitnessHop>],
     snap: &CapabilitySnapshot,
     callsite_by_id: &CallsiteByIdMap,
+    resolution_by_callsite_id: &ResolutionByCallsiteId,
     via_paths_capped: bool,
     isolated_event_ids: Option<&HashSet<String>>,
 ) -> Vec<CallChain> {
-    // callsiteId → ledger row.
-    let mut resolution_by_callsite_id: HashMap<&str, &SnapshotCallsiteResolution> = HashMap::new();
-    for row in &snap.callsite_resolutions {
-        resolution_by_callsite_id.insert(row.callsite_id.as_str(), row);
-    }
-
     via_paths
         .iter()
         .map(|hops| {

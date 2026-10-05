@@ -184,7 +184,7 @@ fn is_word_or_hyphen(b: u8) -> bool {
 
 /// Scan a source file on disk for directives. Missing/unreadable → empty (no error).
 pub fn load_inline_suppressions(absolute_path: &Path) -> Vec<InlineSuppression> {
-    match std::fs::read_to_string(absolute_path) {
+    match crate::source_text::read_al_source(absolute_path) {
         Ok(content) => parse_inline_suppressions_from_source(&content),
         Err(_) => Vec::new(),
     }

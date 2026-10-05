@@ -222,13 +222,28 @@ fn oracle_r3a3_inherited_keys_trace_to_a_direct_producer() {
     // Invariant 2 + 5: every inheritedFactKey present in ANY routine's inherited set
     // is produced as a DIRECT fact by at least one routine in the SAME fixture — the
     // cone invents no key (every inherited fact descends from some direct emit).
+    // One rewrite is allowed: a `parameter-dependent` direct fact becomes
+    // `known/true` (`…|kt`) once a caller passes a temporary record for that
+    // param (`capability_cone::substitute_pd_entry`), so its `kt` twin counts
+    // as produced too.
     let fixtures = discover_fixtures();
     for fx in &fixtures {
         let summaries = rust_projection(fx);
         let mut direct_keys: HashSet<String> = HashSet::new();
         for s in &summaries {
             for f in &s.capability_facts_direct {
-                direct_keys.insert(inherited_fact_key(f));
+                let k = inherited_fact_key(f);
+                let is_pd = f
+                    .extra
+                    .as_ref()
+                    .and_then(|e| e.get("tempState"))
+                    .and_then(|t| t.get("kind"))
+                    .and_then(|k| k.as_str())
+                    == Some("parameter-dependent");
+                if is_pd && let Some(base) = k.strip_suffix("|nt") {
+                    direct_keys.insert(format!("{base}|kt"));
+                }
+                direct_keys.insert(k);
             }
         }
         for s in &summaries {

@@ -138,8 +138,8 @@
 						"opSubtype": "Modify",
 						"recordVariableId": "r0/8e10df7eda3e5e9c8377e7baf4e7b93ced50078ea04953c405397c24df059ca0/rv/cust",
 						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
+							"kind": "known",
+							"value": true
 						}
 					}
 				}

@@ -15,7 +15,8 @@ mod watcher;
 // on that module). Re-export here so binary modules (server, watcher, etc.)
 // can keep referring to `crate::lsp::*` / ... without churn.
 pub use al_sem::{
-    analysis, app_package, big_stack, config, dependencies, lsp, protocol, snapshot, telemetry,
+    analysis, app_package, big_stack, config, dependencies, lsp, protocol, snapshot, source_text,
+    telemetry,
 };
 
 use lsp::snapshot::LspSnapshot;
@@ -181,28 +182,20 @@ fn report_index_stats(project: &Path, dependency_source: DependencySource) -> Re
 }
 
 /// Run code quality analysis on a project
-fn run_analysis(project: &PathBuf, format: &OutputFormat) -> Result<()> {
+fn run_analysis(project: &Path, format: &OutputFormat) -> Result<()> {
     use analysis::{AnalysisResult, ProcedureMetrics, build_summary, generate_findings};
     use rayon::prelude::*;
-    use std::fs;
     use std::time::Instant;
-    use walkdir::WalkDir;
 
     let start = Instant::now();
     info!("Analyzing project: {}", project.display());
 
-    // Collect all .al files
-    let al_files: Vec<PathBuf> = WalkDir::new(project)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext.eq_ignore_ascii_case("al"))
-                .unwrap_or(false)
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
+    // Collect all .al files (the shared workspace walk).
+    let al_files: Vec<PathBuf> =
+        source_text::discover_al_files(project, source_text::NestedApps::Walk)?
+            .into_iter()
+            .map(|f| f.abs_path)
+            .collect();
 
     info!("Found {} AL files", al_files.len());
 
@@ -213,7 +206,7 @@ fn run_analysis(project: &PathBuf, format: &OutputFormat) -> Result<()> {
     let all_metrics: Vec<ProcedureMetrics> = pool.install(|| {
         al_files
             .par_iter()
-            .flat_map(|path| match fs::read_to_string(path) {
+            .flat_map(|path| match source_text::read_al_source(path) {
                 Ok(source) => extract_metrics_ir(&source, path),
                 Err(_) => vec![],
             })

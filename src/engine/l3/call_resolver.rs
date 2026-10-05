@@ -167,7 +167,7 @@ pub struct UpgradedBinding {
 /// Per-callsite upgraded bindings. `upgraded` guards `upgrade_bindings` so it
 /// runs EXACTLY once per callsite (reproducing al-sem's double-upgrade guard).
 pub(crate) struct BindingState {
-    bindings: Vec<UpgradedBinding>,
+    pub(crate) bindings: Vec<UpgradedBinding>,
 }
 
 /// A diagnostic (the resolver only emits the double-upgrade warning).
@@ -185,7 +185,7 @@ pub struct Diagnostic {
 ///   - any other identifier (param / implicit-rec / unknown) → "non-record-arg"
 ///
 /// `calleeParameterIsVar` starts `false` (upgraded later).
-fn initial_binding_state(call_site: &PCallSite) -> BindingState {
+pub(crate) fn initial_binding_state(call_site: &PCallSite) -> BindingState {
     let bindings = call_site
         .argument_bindings
         .iter()
@@ -216,6 +216,21 @@ pub(crate) fn upgrade_bindings(
     callee: &L3Routine,
     callsite_id: &str,
 ) -> Option<Diagnostic> {
+    upgrade_bindings_with(
+        state,
+        |i| callee.parameters.get(i).map(|p| p.is_var),
+        callsite_id,
+    )
+}
+
+/// [`upgrade_bindings`] from the callee's per-parameter `var` flags alone
+/// (`None` past its last parameter), for a callee with no `L3Routine` (a
+/// dependency routine, B3 adapter).
+pub(crate) fn upgrade_bindings_with(
+    state: &mut BindingState,
+    param_is_var: impl Fn(usize) -> Option<bool>,
+    callsite_id: &str,
+) -> Option<Diagnostic> {
     for b in &state.bindings {
         if b.binding_resolution == "resolved" || b.binding_resolution == "ambiguous" {
             return Some(Diagnostic {
@@ -231,10 +246,10 @@ pub(crate) fn upgrade_bindings(
         if b.binding_resolution == "non-record-arg" {
             continue;
         }
-        let Some(param) = callee.parameters.get(i) else {
+        let Some(is_var) = param_is_var(i) else {
             continue; // arity mismatch — leave defaults
         };
-        b.callee_parameter_is_var = param.is_var;
+        b.callee_parameter_is_var = is_var;
         b.binding_resolution = "resolved".to_string();
     }
     None
@@ -348,7 +363,7 @@ pub(crate) fn resolve_by_name_and_arity_multi<'a>(
 }
 
 /// Map an object-run objectKind to its dispatch kind.
-fn object_run_dispatch_kind(object_kind: &str) -> DispatchKind {
+pub(crate) fn object_run_dispatch_kind(object_kind: &str) -> DispatchKind {
     match object_kind {
         "Page" => DispatchKind::PageRun,
         "Report" => DispatchKind::ReportRun,
@@ -788,11 +803,50 @@ pub(crate) fn sorted_ids(routines: &[&L3Routine]) -> Vec<String> {
 
 /// The full call-resolution result: every edge + the per-callsite upgraded
 /// bindings (keyed by internal callsite id) + diagnostics.
+#[derive(Clone)]
 pub struct ResolvedCalls {
     pub edges: Vec<CallEdge>,
     /// internal callsite id → upgraded argument bindings (in argument order).
     pub upgraded_bindings: HashMap<String, Vec<UpgradedBinding>>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// The call resolution every source-only consumer on the analyze path reads:
+/// `resolved.precomputed_calls` when set, else a fresh `resolve_calls` over the
+/// empty-dependency inputs those sites all use. The `None` path is today's code
+/// exactly (an owned value, no clone). A caller that must mutate the result
+/// calls `.into_owned()`, which clones only the `Some` case.
+pub fn calls_for<'a>(
+    resolved: &'a super::l3_workspace::L3Resolved,
+    symbols: &SymbolTable,
+) -> std::borrow::Cow<'a, ResolvedCalls> {
+    match &resolved.precomputed_calls {
+        Some(pre) => std::borrow::Cow::Borrowed(pre.as_ref()),
+        None => std::borrow::Cow::Owned(resolve_calls(&resolved.workspace, symbols, &[], &[])),
+    }
+}
+
+/// Resolve ONE call site: its edges and its (possibly upgraded) bindings.
+/// The per-site body of [`resolve_calls`], shared with the program adapter
+/// (`program_calls`), which uses it for the sites it cannot take from the
+/// program engine.
+pub(crate) fn resolve_one_call_site(
+    routine: &L3Routine,
+    call_site: &PCallSite,
+    symbols: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+    unfetched_declared_dependency: bool,
+) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
+    let mut state = initial_binding_state(call_site);
+    let edges = resolve_call_site(
+        routine,
+        call_site,
+        symbols,
+        diagnostics,
+        unfetched_declared_dependency,
+        &mut state,
+    );
+    (edges, state.bindings)
 }
 
 /// Resolve every call site in the workspace into CallEdges (+ implicit-trigger
@@ -817,22 +871,13 @@ pub fn resolve_calls(
 
     for routine in &workspace.routines {
         for call_site in &routine.call_sites {
-            let mut state = initial_binding_state(call_site);
-            let result = resolve_call_site(
-                routine,
-                call_site,
-                symbols,
-                &mut diagnostics,
-                unfetched,
-                &mut state,
-            );
-            for e in result {
-                edges.push(e);
-            }
+            let (result, bindings) =
+                resolve_one_call_site(routine, call_site, symbols, &mut diagnostics, unfetched);
+            edges.extend(result);
             // Capture the (possibly upgraded) bindings for this callsite. Only
             // callsites with ≥1 binding are meaningful; store all so the dump can
             // decide whether to emit.
-            upgraded_bindings.insert(call_site.id.clone(), state.bindings);
+            upgraded_bindings.insert(call_site.id.clone(), bindings);
         }
     }
 

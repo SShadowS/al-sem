@@ -45,7 +45,7 @@
 use std::collections::HashMap;
 
 use super::call_graph_projection::cmp_stable;
-use super::call_resolver::{CallEdge, DeclaredDependency, resolve_calls};
+use super::call_resolver::{CallEdge, DeclaredDependency, calls_for, resolve_calls};
 use super::l3_workspace::{L3Resolved, L3Routine};
 use super::symbol_table::SymbolTable;
 use super::taxonomy::{DispatchKind, Resolution};
@@ -242,9 +242,7 @@ impl L3Resolved {
     ) -> AnalysisCoverage {
         let ws = &self.workspace;
         let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-        let no_deps: Vec<DeclaredDependency> = Vec::new();
-        let no_fetched: Vec<String> = Vec::new();
-        let resolved = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+        let resolved = calls_for(self, &symbols);
 
         let by_internal: HashMap<String, String> = ws
             .routines

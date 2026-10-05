@@ -36,7 +36,7 @@ use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
-use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
+use crate::engine::l3::call_resolver::{DeclaredDependency, calls_for, resolve_calls};
 use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph};
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
 use crate::engine::l3::symbol_table::SymbolTable;
@@ -1411,6 +1411,99 @@ struct ConeFactEntry {
     /// The rep is immutable across merges, so the key is too.
     rep_key: Arc<str>,
     dist: usize,
+    /// `Some(i)`: every fact behind this key is a record op whose temp state is
+    /// `parameter-dependent(i)` in the frame of this cone's ONE routine (the
+    /// cone of a non-recursive singleton SCC), so a caller can resolve it
+    /// against the argument it passes for param `i` ([`substitute_pd_entry`]).
+    /// `None` everywhere else — that keeps the fact's own temp state, the
+    /// pre-substitution behaviour. The rep is not rewritten for a `PD -> PD`
+    /// re-anchor, so a rep's own `parameterIndex` can be stale; this field is
+    /// the frame-correct one.
+    pd: Option<u32>,
+}
+
+/// The `parameter-dependent` index of a table fact, if it has one.
+fn fact_pd_index(f: &CapabilityFact) -> Option<u32> {
+    use super::summary::TempState;
+    match &f.extra {
+        Some(CapabilityExtra::Table {
+            temp_state: Some(ts),
+            ..
+        }) => match TempState::from_p(ts) {
+            TempState::ParameterDependent(i) => Some(i),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Carry one PD cone entry of callee `edge.to` across `edge` into the caller's
+/// frame: the caller's argument for param `i` decides the temp state, exactly
+/// as the L4 db-effect solver's `substitute_pd_temp_state` does.
+///
+/// - `known(true)` → a NEW rep marked `known/true` (so it leaves the physical
+///   sets — [`fact_is_known_temp`]), under its new `kt` key.
+/// - `parameter-dependent(j)` (the caller forwards its own `var` param) → same
+///   rep and key, re-anchored to `j`.
+/// - anything else → same rep and key, no longer substitutable.
+///
+/// Only `direct-call` / `variable-typed-call` edges carry argument bindings
+/// keyed by the callee's parameter index (the typed twins of the solver's
+/// `direct` / `method`); every other edge kind keeps the fact as it is.
+///
+/// This allowlist is a CONSERVATIVE SUBSET of `substitute_pd_temp_state`'s
+/// (`summary_runner.rs`: `direct | method | implicit-trigger`): the typed graph
+/// carries no `implicit-trigger` edges (`combined_graph.rs` skips them), so a PD
+/// fact never crosses one here and stays physical. Keep the two in step.
+fn substitute_pd_entry(
+    key: &Arc<str>,
+    entry: &ConeFactEntry,
+    edge: &TypedOutEdge,
+    caller: Option<&L3Routine>,
+) -> (Arc<str>, ConeFactEntry) {
+    use super::summary::TempState;
+    let unchanged = |pd: Option<u32>| {
+        (
+            Arc::clone(key),
+            ConeFactEntry {
+                rep: Arc::clone(&entry.rep),
+                rep_key: Arc::clone(&entry.rep_key),
+                dist: entry.dist,
+                pd,
+            },
+        )
+    };
+    let (Some(i), Some(cs), Some(caller)) = (entry.pd, edge.callsite.as_deref(), caller) else {
+        return unchanged(None);
+    };
+    if !matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call") {
+        return unchanged(None);
+    }
+    match super::summary_runner::pd_temp_state_at_callsite(caller, cs, i) {
+        TempState::Known(true) => {
+            let mut rep = (*entry.rep).clone();
+            if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut rep.extra {
+                *temp_state = Some(crate::engine::l2::features::PTempState {
+                    kind: "known".to_string(),
+                    value: Some(true),
+                    parameter_index: None,
+                });
+            }
+            let new_key: Arc<str> = Arc::from(inherited_fact_key(&rep));
+            let rep_key: Arc<str> = Arc::from(rep_key(&rep));
+            (
+                new_key,
+                ConeFactEntry {
+                    rep: Arc::new(rep),
+                    rep_key,
+                    dist: entry.dist,
+                    pd: None,
+                },
+            )
+        }
+        TempState::ParameterDependent(j) => unchanged(Some(j)),
+        _ => unchanged(None),
+    }
 }
 
 /// A fact cone: dedup key → entry (min dist, tie-broken by canonical rep).
@@ -1452,8 +1545,21 @@ fn merge_cone(dst: &mut ConeFacts, key: &Arc<str>, entry: ConeFactEntry) {
             // min dist wins; equal dist → smaller canonical rep wins (mergeCone).
             let wins = entry.dist < existing.dist
                 || (entry.dist == existing.dist && entry.rep_key < existing.rep_key);
+            // Two facts under one key stay substitutable only when both agree
+            // on the SAME parameter; otherwise one of them may be physical
+            // whatever the caller passes, so the merged entry keeps its own
+            // temp state (sound: it stays in the physical sets).
+            let pd = if existing.pd == entry.pd {
+                entry.pd
+            } else {
+                None
+            };
             if wins {
-                dst.insert(Arc::clone(key), entry);
+                dst.insert(Arc::clone(key), ConeFactEntry { pd, ..entry });
+            } else if existing.pd != pd
+                && let Some(e) = dst.get_mut(&**key)
+            {
+                e.pd = pd;
             }
         }
     }
@@ -1527,13 +1633,14 @@ fn inherited_facts_for_singleton<'g>(
     g: &'g TypedEdgeGraph,
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
+    caller: Option<&L3Routine>,
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
-    struct Best<'g> {
-        rep: &'g CapabilityFact,
+    struct Best<'a> {
+        rep: &'a CapabilityFact,
         dist: usize,
-        edge: &'g TypedOutEdge,
+        edge: &'a TypedOutEdge,
     }
     // ⟨C1 Task 4 hardening⟩ A root SCC's cone is never built
     // (`compose_inherited_cones`'s `root_scc` skip) — the only thing keeping
@@ -1542,21 +1649,38 @@ fn inherited_facts_for_singleton<'g>(
     // SCC. Assert it: a silent `None` here (via the `let else` below) would
     // read as "no inherited facts from this hop" instead of the bug it is.
     let my_scc = scc_id_by_routine.get(subject).copied();
-    // Keys BORROW from `cones` (lifetime `'g`) instead of being cloned. The
+    let out_edges: &'g [TypedOutEdge] =
+        g.outgoing.get(subject).map(|v| v.as_slice()).unwrap_or(&[]);
+    // Parameter-dependent entries are carried across their edge into this
+    // routine's frame FIRST, per edge (`substitute_pd_entry`); the scan below
+    // skips them in the cone and reads these instead. Rare: only callee
+    // writes through a keyword-less `var` record param are PD.
+    let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
+        .iter()
+        .map(|edge| {
+            let Some(ycone) = scc_id_by_routine.get(&edge.to).and_then(|yj| cones.get(yj)) else {
+                return Vec::new();
+            };
+            ycone
+                .iter()
+                .filter(|(_, e)| e.pd.is_some())
+                .map(|(k, e)| substitute_pd_entry(k, e, edge, caller))
+                .collect()
+        })
+        .collect();
+    // Keys BORROW from `cones` (and `subst`) instead of being cloned. The
     // census counted 10,522,793 `best` insertions per 8020 run against only
     // 136,952 out-edges — i.e. the walk is cone-ENTRY-bound, and every one of
     // those insertions was allocating a fresh `String` copy of a key that
     // already lives in `cones` for the whole walk.
-    let mut best: BTreeMap<&'g str, Best<'g>> = BTreeMap::new();
-    let out_edges: &'g [TypedOutEdge] =
-        g.outgoing.get(subject).map(|v| v.as_slice()).unwrap_or(&[]);
+    let mut best: BTreeMap<&str, Best<'_>> = BTreeMap::new();
     // Census populations: plain locals, folded into the atomics ONCE per call.
     let mut c_edges: u64 = 0;
     let mut c_entries: u64 = 0;
     let mut c_wins: u64 = 0;
     let mut c_cone_edges: u64 = 0;
     let _scan_t = crate::engine::l5::detector_context::cones_census::start();
-    for edge in out_edges {
+    for (edge, edge_subst) in out_edges.iter().zip(&subst) {
         c_edges += 1;
         let Some(yj) = scc_id_by_routine.get(&edge.to) else {
             continue;
@@ -1573,7 +1697,11 @@ fn inherited_facts_for_singleton<'g>(
             continue;
         };
         c_cone_edges += 1;
-        for (key, entry) in ycone {
+        let entries = ycone
+            .iter()
+            .filter(|(_, e)| e.pd.is_none())
+            .chain(edge_subst.iter().map(|(k, e)| (k, e)));
+        for (key, entry) in entries {
             c_entries += 1;
             let cand_dist = entry.dist + 1;
             // min dist wins; equal dist → smaller edgeSortKey wins (the
@@ -1809,11 +1937,26 @@ fn fact_cone_for_scc(
     succ_ids: &BTreeSet<usize>,
     fact_cones: &HashMap<usize, ConeFacts>,
     direct: &RoutineDirectFacts,
+    pd: Option<PdAnchor<'_>>,
 ) -> ConeFacts {
     let mut cone: ConeFacts = BTreeMap::new();
     for m in members {
         if let Some(byk) = direct.get(m) {
             for (key, f) in byk {
+                // A direct PD fact stays substitutable only in a non-recursive
+                // singleton's cone (one frame), and only when EVERY raw fact
+                // deduped under this key is PD on the same param: the dedup
+                // keeps one rep, and a physical sibling under the same key
+                // must not be resolved away with it.
+                let entry_pd = match (&pd, fact_pd_index(f)) {
+                    (Some(a), Some(i)) => a
+                        .direct_raw
+                        .iter()
+                        .filter(|g| inherited_fact_key(g) == *key)
+                        .all(|g| fact_pd_index(g) == Some(i))
+                        .then_some(i),
+                    _ => None,
+                };
                 // The ONE place a cone key is minted: `direct`'s keys are
                 // `String`s owned by the per-routine dedup map, so a dist-0 entry
                 // allocates its `Arc<str>` here. That is once per direct fact
@@ -1826,8 +1969,27 @@ fn fact_cone_for_scc(
                         rep: Arc::new(f.clone()),
                         rep_key: Arc::from(rep_key(f)),
                         dist: 0,
+                        pd: entry_pd,
                     },
                 );
+            }
+        }
+    }
+    // A PD successor entry crosses into this cone per EDGE, through
+    // `substitute_pd_entry`; the per-SCC merge below then skips it.
+    if let Some(a) = &pd {
+        for edge in a.out_edges {
+            let Some(yc) = a
+                .scc_id_by_routine
+                .get(&edge.to)
+                .and_then(|yj| fact_cones.get(yj))
+            else {
+                continue;
+            };
+            for (key, entry) in yc.iter().filter(|(_, e)| e.pd.is_some()) {
+                let (k, mut e) = substitute_pd_entry(key, entry, edge, a.caller);
+                e.dist += 1;
+                merge_cone(&mut cone, &k, e);
             }
         }
     }
@@ -1846,6 +2008,9 @@ fn fact_cone_for_scc(
         );
         if let Some(yc) = fact_cones.get(y) {
             for (key, entry) in yc {
+                if pd.is_some() && entry.pd.is_some() {
+                    continue; // carried per edge above
+                }
                 merge_cone(
                     &mut cone,
                     key,
@@ -1853,12 +2018,28 @@ fn fact_cone_for_scc(
                         rep: Arc::clone(&entry.rep),
                         rep_key: Arc::clone(&entry.rep_key),
                         dist: entry.dist + 1,
+                        // Without an anchor (recursive / multi-member SCC) a
+                        // successor's PD frame means nothing here.
+                        pd: None,
                     },
                 );
             }
         }
     }
     cone
+}
+
+/// What [`fact_cone_for_scc`] needs to keep parameter-dependent facts
+/// substitutable: present only for a NON-RECURSIVE SINGLETON SCC, whose cone
+/// has exactly one frame (its member's parameters).
+struct PdAnchor<'a> {
+    /// The member's RAW (un-deduped) direct facts.
+    direct_raw: &'a [CapabilityFact],
+    /// The member's out-edges.
+    out_edges: &'a [TypedOutEdge],
+    scc_id_by_routine: &'a HashMap<String, usize>,
+    /// The member's L3 routine (its call sites carry the argument bindings).
+    caller: Option<&'a L3Routine>,
 }
 
 /// Build one SCC's coverage cone (includes self). Mirrors `coverageConeForScc`.
@@ -1938,6 +2119,7 @@ fn compose_inherited_cones(
     direct_raw: &HashMap<String, Vec<CapabilityFact>>,
     cov: &RoutineDirectCoverage,
     routine_ids: &BTreeSet<String>,
+    routines_by_id: &HashMap<&str, &L3Routine>,
     mode: ConeOutput,
 ) -> (HashMap<String, InheritedConeResult>, ConeDerivedStore) {
     let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
@@ -1985,7 +2167,17 @@ fn compose_inherited_cones(
         let root_scc = remaining_uses[i] == 0;
         if !root_scc {
             let _t_fc = crate::engine::l5::detector_context::cones_census::start();
-            let fcone = fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct);
+            let anchor = match scc_entry.members.as_slice() {
+                [m] if !scc_entry.recursive => Some(PdAnchor {
+                    direct_raw: direct_raw.get(m).map(|v| v.as_slice()).unwrap_or(&[]),
+                    out_edges: g.outgoing.get(m).map(|v| v.as_slice()).unwrap_or(&[]),
+                    scc_id_by_routine: &scc.scc_id_by_routine,
+                    caller: routines_by_id.get(m.as_str()).copied(),
+                }),
+                _ => None,
+            };
+            let fcone =
+                fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, anchor);
             fact_cones.insert(i, fcone);
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_NANOS,
@@ -2049,6 +2241,7 @@ fn compose_inherited_cones(
                     g,
                     &scc.scc_id_by_routine,
                     &fact_cones,
+                    routines_by_id.get(m.as_str()).copied(),
                     mode,
                     &mut derived,
                 )
@@ -2244,6 +2437,7 @@ pub fn compose_cone_over_graph(
     nodes: &[String],
     direct_in: &HashMap<String, Vec<CapabilityFact>>,
     coverage_in: &HashMap<String, (String, Vec<String>)>,
+    routines: &[L3Routine],
     mode: ConeOutput,
 ) -> ConeOutcome {
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
@@ -2309,8 +2503,18 @@ pub fn compose_cone_over_graph(
         _t_dedup,
     );
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
-    let (cones, derived) =
-        compose_inherited_cones(&g, &scc, &direct, direct_in, &cov, &routine_ids, mode);
+    let routines_by_id: HashMap<&str, &L3Routine> =
+        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    let (cones, derived) = compose_inherited_cones(
+        &g,
+        &scc,
+        &direct,
+        direct_in,
+        &cov,
+        &routine_ids,
+        &routines_by_id,
+        mode,
+    );
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::WALK_COMPOSE_NANOS,
         _t_compose,
@@ -3153,6 +3357,7 @@ pub fn project_r3a5_cross_app(
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
+        &base.ws_routines,
         ConeOutput::RawOnly,
     )
     .cones;
@@ -3328,9 +3533,7 @@ pub(crate) fn project_r3a5_from_parts(
 pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     let ws: &L3Workspace = &resolved.workspace;
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+    let calls = calls_for(resolved, &symbols);
     let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
@@ -3426,6 +3629,8 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
+    let routines_by_id: HashMap<&str, &L3Routine> =
+        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let (cones, _derived) = compose_inherited_cones(
         &g,
         &scc,
@@ -3433,6 +3638,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
         &direct_full,
         &cov,
         &routine_ids,
+        &routines_by_id,
         ConeOutput::RawOnly,
     );
 
@@ -3535,13 +3741,15 @@ pub struct R3a3SourceBase {
 /// assembly, returning the parts). Fail-closed callers get an empty base via the
 /// resolved workspace having zero routines.
 pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
+    use crate::engine::perf_trace as pt;
     let ws: &L3Workspace = &resolved.workspace;
+    let _s0 = pt::span("r3a3", "r3a3.calls_graph");
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+    let calls = calls_for(resolved, &symbols).into_owned();
     let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
+    drop(_s0);
+    let _s1 = pt::span("r3a3", "r3a3.direct_facts");
 
     // Publisher events indexed by routine (for the publisher-fact injection).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
@@ -3586,6 +3794,8 @@ pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
         direct_full.insert(r.id.clone(), facts);
     }
 
+    drop(_s1);
+    let _s2 = pt::span("r3a3", "r3a3.compose_cone");
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     // ⟨C1 Task 3⟩ `RawOnly` — the snapshot/digest/prove derivers read the RAW
     // cone off this base and never touch `ConeOutcome::derived` (see
@@ -3595,6 +3805,7 @@ pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
         &nodes,
         &direct_full,
         &direct_coverage,
+        &ws.routines,
         ConeOutput::RawOnly,
     )
     .cones;
@@ -3643,9 +3854,7 @@ pub struct R3a3RealMatrix {
 pub fn compute_r3a3_real_matrix(resolved: &L3Resolved) -> R3a3RealMatrix {
     let ws: &L3Workspace = &resolved.workspace;
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+    let calls = calls_for(resolved, &symbols);
     let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 

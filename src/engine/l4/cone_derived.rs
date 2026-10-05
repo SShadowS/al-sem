@@ -274,6 +274,19 @@ impl ResBitset {
         }
     }
 
+    pub fn insert(&mut self, id: ResId) {
+        self.insert_all(&[id]);
+    }
+
+    /// Number of ids in the set.
+    pub fn len(&self) -> usize {
+        self.words.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.iter().all(|w| *w == 0)
+    }
+
     /// Empty the set, KEEPING the allocation — the caller reuses one bitset across
     /// every span template in a run.
     pub fn clear(&mut self) {
@@ -533,6 +546,18 @@ impl ConeDerivedStore {
             &self.writes_all_pool,
             &self.row(routine_id).table_writes_all,
         )
+    }
+
+    /// The routine's PHYSICAL written-TableId window as interned ids (the ids of
+    /// [`Self::writes_physical_tables_of`], same interner as
+    /// [`Self::writes_table_ids_of`]). For span-level physical unions.
+    pub fn physical_write_ids_of(&self, routine_id: &str) -> impl Iterator<Item = ResId> + '_ {
+        window(
+            &self.phys_writes_pool,
+            &self.row(routine_id).physical_table_writes,
+        )
+        .iter()
+        .map(|(id, _)| *id)
     }
 
     /// The routine's published-EventId window as interned ids, BORROWED. Same
@@ -1005,8 +1030,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
         assert_eq!(
@@ -1110,8 +1141,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
         assert_eq!(
@@ -1165,8 +1202,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         let a_inherited = &out.cones.get("r/a").expect("a cone").inherited;
         assert_eq!(
@@ -1224,8 +1267,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
         let ops = out.derived.physical_table_write_ops_of("r/w");
         assert_eq!(ops.len(), 1);
         assert_eq!(ops["t/A"], vec!["delete", "insert", "modify"]);
@@ -1259,8 +1308,14 @@ mod tests {
         coverage_in.insert("r/complete".to_string(), ("complete".to_string(), vec![]));
         coverage_in.insert("r/partial".to_string(), ("partial".to_string(), vec![]));
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         // No facts ⇒ no flags; the tri-state then reads coverage.
         assert!(!out.derived.touches_table("r/complete"));
@@ -1364,13 +1419,20 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let both =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let both = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
         let derived_only = compose_cone_over_graph(
             &graph,
             &nodes,
             &direct_in,
             &coverage_in,
+            &[],
             ConeOutput::DerivedOnly,
         );
         let raw_only = compose_cone_over_graph(
@@ -1378,6 +1440,7 @@ mod tests {
             &nodes,
             &direct_in,
             &coverage_in,
+            &[],
             ConeOutput::RawOnly,
         );
 
@@ -1464,8 +1527,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         // Fixture preconditions: multiple distinct tables, and the two windows
         // are of different (non-0/1) lengths.
@@ -1537,8 +1606,14 @@ mod tests {
         );
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
-        let out =
-            compose_cone_over_graph(&graph, &nodes, &direct_in, &coverage_in, ConeOutput::Both);
+        let out = compose_cone_over_graph(
+            &graph,
+            &nodes,
+            &direct_in,
+            &coverage_in,
+            &[],
+            ConeOutput::Both,
+        );
 
         // `t/C` is a read, `t/Q`'s op is `publish` (not a write op) — neither is a
         // write. `e/X`'s kind is `event`, so it never reaches the table sets.

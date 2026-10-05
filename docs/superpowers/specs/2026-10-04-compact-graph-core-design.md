@@ -254,6 +254,12 @@ conditions) and **the call graph** (L3's resolution). The call graph is the weak
   already-parsed workspace syntax trees (no second parse). L3's call resolution is replaced by
   the program engine's edges, matched to each call site by exact source position. Detector
   code is unchanged.
+  > **Correction 2026-10-05 (as built).** Phase A swapped the call graph only. L2 body facts
+  > are still built from L2's OWN parse of the workspace, so `alsem analyze` parses each
+  > workspace file twice (once per engine) and the program context and the L3 workspace are
+  > both in memory while the adapter runs. Building L2 from the program engine's trees ("one
+  > parse") is a later step, not part of Phase A. Both engines read source through one
+  > decoder and one file walk (`src/source_text.rs`), so their texts and file sets match.
 - **Phase B, gradual.** The detector support layers (summaries, cones, d1's data flow) move
   onto program-graph ids one at a time, each with its own comparison.
 - **Phase C, following calls into dependencies (a new capability, not a by-product).**

@@ -45,7 +45,8 @@ pub struct PreflightResult {
 /// `evaluatePreflight(coverage, required)`, rewired onto [`FreshCoverage`].
 ///
 /// `fresh` is the fresh resolver's own coverage status for this run
-/// (`crate::program::resolve::full::fresh_coverage`) — `Err(e)` when the pipeline
+/// (`crate::program::resolve::full::build_program_with_coverage`, computed on
+/// every run; there is no verdict cache) — `Err(e)` when the pipeline
 /// itself could not produce one (could-not-verify, handled first and separately
 /// below, never laundered into "clean").
 pub fn evaluate_preflight(

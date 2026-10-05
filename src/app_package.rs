@@ -440,31 +440,16 @@ pub(crate) fn parse_first_json_value<T: serde::de::DeserializeOwned>(
 
 /// Parse SymbolReference.json to extract object definitions
 fn parse_symbols<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<Vec<ExternalObject>> {
-    let symbols_file = archive
-        .by_name("SymbolReference.json")
-        .context("SymbolReference.json not found in app package")?;
-
     // T2.2: belt-and-suspenders cap — reject a hostile declared size before
     // decompressing, then bound the read itself (a lying central directory).
-    crate::capped_io::check_declared_size(
-        symbols_file.size(),
-        crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
-    )
-    .context("SymbolReference.json declared size exceeds cap")?;
-    // BaseApp's entry is ~58 MB. Decompress it into an anonymous temp file
-    // and map that file read-only, instead of one big heap buffer: a
-    // read-only file-backed mapping does not count against Windows commit.
+    // BaseApp's entry is ~58 MB: see `read_large_entry` for where it goes.
     // Same route as `abi_ingest::read_symbol_reference_from_app`.
-    let file = crate::capped_io::copy_capped_to_tempfile(
-        symbols_file,
+    let content = crate::engine::deps::app_package_zip::read_large_entry(
+        archive,
+        "SymbolReference.json",
         crate::capped_io::SYMBOL_REFERENCE_JSON_CAP,
-    )
-    .context("Failed to read SymbolReference.json")?;
-    // SAFETY: the file is an anonymous temp file only this function can reach
-    // (no name, never shared), so nothing changes it while mapped.
-    let map = unsafe { crate::capped_io::map_read_only(&file) }
-        .context("Failed to read SymbolReference.json")?;
-    let content: &[u8] = map.as_deref().unwrap_or(&[]);
+    )?;
+    let content: &[u8] = &content;
 
     // Handle UTF-8 BOM if present
     let json_str = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {

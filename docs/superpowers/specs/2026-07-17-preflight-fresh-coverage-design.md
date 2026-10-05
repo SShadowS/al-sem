@@ -119,6 +119,16 @@ would roughly double peak memory on big workspaces). The duplicated `.app`
 discovery/unzip I/O between the two passes is real but ALREADY included in the
 measured ~3.8 s (full `aldump` wall time); accepted, see follow-ups.
 
+> **Superseded 2026-10-05 (B3 Phase A).** This sequencing no longer holds.
+> `alsem analyze` now keeps the `ProgramContext` and its report after the
+> preflight, because the detectors read the program engine's call resolution
+> (`full::build_program_with_coverage` → `program_calls::attach_program_calls`).
+> The two semantic models ARE resident together while the adapter runs; both
+> are dropped before the detector context is built. `fresh_coverage` and the
+> preflight verdict cache (`docs/superpowers/specs/2026-08-01-preflight-verdict-cache.md`)
+> were deleted: a cached verdict cannot give the context the adapter needs.
+> The text above is kept as the record of the original design.
+
 `gate/run.rs` then evaluates preflight from the retained `FreshCoverage`
 instead of `coverage.unresolved_callsites.len()` / `coverage.opaque_apps`.
 

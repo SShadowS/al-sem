@@ -1,6 +1,6 @@
 // CU 50201: Uses a codeunit-typed global variable to call MCR Helper.LocalHelper().
-// This is the only callsite for LocalHelper — the variable-typed-call edge makes
-// it reachable from OnRun (a root trigger).
+// LocalHelper is local, so this call is not visible from here: the program
+// engine leaves it unresolved (LocalNotVisible) and adds no edge.
 codeunit 50201 "MCR Caller"
 {
 	var
@@ -8,6 +8,6 @@ codeunit 50201 "MCR Caller"
 
 	trigger OnRun()
 	begin
-		Helper.LocalHelper(); // member call → resolves to MCR Helper.LocalHelper
+		Helper.LocalHelper(); // member call: LocalNotVisible
 	end;
 }

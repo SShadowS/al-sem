@@ -715,6 +715,7 @@ mod tests {
                     "seed".to_string(),
                 ],
                 writes_tables: vec![],
+                writes_physical_tables_count: 0,
                 publishes_events: vec![],
                 span_roots: vec!["manager".to_string()],
                 coverage_complete: false,
@@ -726,6 +727,7 @@ mod tests {
                 commit_routine_id: "committer".to_string(),
                 routines_in_span: vec!["committer".to_string()],
                 writes_tables: vec![],
+                writes_physical_tables_count: 0,
                 publishes_events: vec![],
                 span_roots: vec!["committer".to_string()],
                 coverage_complete: false,
@@ -797,6 +799,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: Vec::new(),
+            precomputed_calls: None,
         };
 
         let output = detect_d50(&resolved, &ctx).unwrap();

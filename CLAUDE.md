@@ -171,10 +171,24 @@ Workspace + .alpackages → snapshot::snapshot_workspace (AppSetSnapshot, identi
     (taxonomy'd edge counts) + per-edge Route report
 ```
 Driven via `aldump --program-call-graph-stats <workspace>` (the north-star metric command)
-or consumed programmatically by `src/engine/gate` (the `analyze` CLI's preflight).
-**`alsem analyze` runs the program engine only for its preflight count
-(`fresh_coverage`).** Its detectors (`src/engine/l4`/`l5`) still run on the separate L3
-model until spec step 3 (B3, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`).
+or consumed by `src/engine/gate` (the `analyze` CLI).
+**`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
+resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
+§7): `src/engine/l3/program_calls.rs` (`attach_program_calls`) converts the resolved
+edges into L3's call shape and sets `L3Resolved.precomputed_calls`. L3 still provides the
+body facts and the event graph, and the program context and the L3 workspace are both in
+memory while the adapter runs (dropped before the detector context). The r4/r4f detector
+goldens use the same path (`assemble_and_resolve_workspace_with_program_calls`).
+**Every other L3 consumer still uses L3's own resolver** (no `precomputed_calls`), so its
+answer can differ from `analyze`'s on the same routine: `alsem prove`, `policy check` /
+`policy explain`, `events fanout` / `events chains`, `digest`, `fingerprint`, `diff` /
+snapshot, `query` (which calls `resolve_calls` directly), the shared
+`run::compute_analyzer_diagnostics` behind events/policy/digest/fingerprint, the
+cross-app paths (`project_r3a5_cross_app`, `project_r4_findings_cross_app`,
+`project_coverage_cross_app`), the gap and temp_state tests, and the `aldump` L3 modes
+(`--l3-*`, `--r3a*`, `--r4-findings`, `--r4f-*`; note `aldump --r4-findings` is NOT the
+path the r4 goldens pin). Moving each onto `attach_program_calls`, with its own golden
+triage, is a follow-up in `docs/OUTSTANDING.md`. L3's resolver stays until then.
 
 **Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
 - `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`
@@ -630,6 +644,8 @@ under `docs/superpowers/specs/`.
   | Golden dir(s) | Test target |
   |------------|-------------|
   | `tests/r4-goldens/`, `tests/r4f-goldens/` | `--test r4` |
+  | `docs/b3-triage/r0-corpus.md` (B3 detector-diff triage table; verdict cells ignored, kept on regen) | `--test r4` |
+  | `docs/b3-triage/r0-corpus-deps.md` (B3 dependency-binding diff table; verdict cells ignored, kept on regen) | `--test r4` |
   | `tests/ir-l2-goldens/` (the `l2_features.snapshot`) | `--test l2_ir` |
   | `tests/cli-{a,b,c,c-events,c-policy,query}-goldens/`, `tests/gate-goldens/`, `tests/{al2,al}dump-smoke-goldens/` | `--test cli` |
   | `tests/r{0,1a,2a,2b,2c,2d}-goldens/` (r2c is the `l3eg` family, byte-compared only by `tests/differential.rs` — `--test l3`'s own `l3eg_oracles` is a *different*, non-golden check) | `--test differential` |

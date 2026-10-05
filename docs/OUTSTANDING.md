@@ -26,6 +26,30 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
+  `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
+  - **Move the other L3 consumers onto the program engine's calls.** Only `alsem
+    analyze` (and the r4/r4f goldens) reads them (`attach_program_calls`). Still on L3's
+    own resolver, so they can disagree with `analyze` about the same routine: `alsem
+    prove` (`l5/prove.rs`), `policy check`/`explain` (`gate/policy/pipeline.rs`),
+    `events fanout`/`chains` (`gate/events.rs`), `digest` (`l5/digest_cli.rs`),
+    `fingerprint` (`l5/fingerprint_cli.rs`), `diff`/snapshot (`gate/diff/cli.rs`),
+    `query` (`l4/effect_query_cli.rs`, which calls `resolve_calls` directly and would
+    ignore `precomputed_calls`), `run::compute_analyzer_diagnostics`, the cross-app
+    projections (`capability_cone.rs` `build_cross_app_base_from_cross`,
+    `project_coverage_cross_app`; these resolve against declared dependencies, so they
+    need a design, not just the call), the gap/temp_state tests, and the `aldump` L3
+    modes. One subcommand per change, each with its own golden triage (cli-b/cli-c/
+    query goldens will move where CDO-like call changes reach their fixtures).
+  - **`ProgramGraph::abi_ingest_errors` has no production reader** (FW2). ABI ingest
+    failures are collected and then never surfaced: not by the preflight, not by analyze,
+    not by `aldump`. Decide who reports them (likely the preflight's degraded state)
+    and pin it with a test that breaks a dependency's `SymbolReference.json`.
+  - **`calls_for(..).into_owned()` clones the whole `ResolvedCalls`**
+    (`detector_context.rs` and `capability_cone.rs` ordering base; final review
+    Minor 12). Fine at CDO's ~603 MB peak; fold into the ProgramContext byte-census
+    follow-up (borrow instead of clone if the census shows it matters).
+
 - [ ] **Fixture witnesses for the grammar-v4 semantic fixes** (from the 2026-08-12
   v4.0.0 upgrade's golden triage): the two semantically riskiest v4 changes have NO
   witness in `tests/r0-corpus/` — (a) a dangling `else` now binds to the inner `if`
@@ -257,6 +281,12 @@ sizings marked pre-arc).
     preflight is 83.4 % of a DO run and 10.8 % of 8020 - the first lever in this
     track worth ~10x more on a real customer workspace than on the synthetic
     corpus every prior arc was tuned against. Original scoping below.
+    **REMOVED 2026-10-05 (B3 Phase A, final review I-1):** `alsem analyze` now needs
+    the program context for the detectors' call resolution, so the cache could only
+    be written; it was deleted. Warm reruns cost again (CDO 1.1 s → 3.2 s, DO
+    1.0 s → 3.0 s; CHANGELOG Removed). The "LIGHT snapshot for the cache key" item
+    below is moot with it. A future warm-run lever must cache what analyze reads
+    (the context or the adapter's calls), not the four scalars.
   - ~~**Cache `FreshCoverage` itself** on a workspace+dependency CONTENT hash.~~
     Ceiling on DO: the whole **2.64 s / 83.4 %** per warm hit, minus a deliberate
     `snapshot_build` (~459 ms) floor — the sound key derives FROM the snapshot, and

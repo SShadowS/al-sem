@@ -198,14 +198,21 @@ pub fn run_analyze_with_exit(
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
     let ws_path = Path::new(&args.workspace);
-    // Fresh-resolver coverage status (Task 3 wiring) — computed up front so it is
-    // available to `evaluate_preflight` below regardless of which path this run
-    // takes; the fresh pipeline's own local `ctx` is dropped inside `fresh_coverage`
-    // before this function ever touches the separate L3 model (spec §3 memory
-    // sequencing — see `FreshCoverage`'s doc).
-    let fresh = {
-        let _s = pt::span("preflight", "preflight.fresh_coverage");
-        crate::program::resolve::full::fresh_coverage(ws_path)
+    // The program engine's build (B3 Phase A, spec §3/§7). It gives the
+    // preflight's `FreshCoverage` AND the call resolution the detectors read
+    // (the adapter, below, after the L3 workspace exists). The context and
+    // report are kept until then. While the adapter runs, the program context + report and the L3 workspace are
+    // resident together; both are dropped before the detector context is built.
+    //
+    // A failed build leaves `fresh` as `Err` (the could-not-verify path for an
+    // unreadable workspace). If the L3 workspace still assembles, the run is an
+    // error: detectors must never quietly fall back to L3's own calls.
+    let (fresh, mut program) = {
+        let _s = pt::span("preflight", "preflight.fresh_program");
+        match crate::program::resolve::full::build_program_with_coverage(ws_path) {
+            Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
+            Err(e) => (Err(e), None),
+        }
     };
     // Its own span: this is a SECOND full `discover_al_files` disk walk of the
     // workspace (plus a sort + SHA-256 over one `ws:<rel>` string per file), and
@@ -220,7 +227,7 @@ pub fn run_analyze_with_exit(
             None => return empty_output_result(args, &version, &fresh),
         }
     };
-    let resolved = {
+    let mut resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
         match assemble_and_resolve_workspace(ws_path, &model_instance_id, false) {
             Some(r) => r,
@@ -228,6 +235,15 @@ pub fn run_analyze_with_exit(
             None => return empty_output_result(args, &version, &fresh),
         }
     };
+    // Run the adapter (no per-site notes), then drop the program model BEFORE
+    // the detector context is built.
+    let Some((ctx, report)) = program.take() else {
+        let why = fresh.as_ref().err().cloned().unwrap_or_default();
+        return Err(format!(
+            "analysis failure — program engine build failed: {why}"
+        ));
+    };
+    crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
 
     // L4 + L5: run the selected detectors. Findings come pre-sorted by
     // (detector, primaryLocationKey, rootCauseKey) with dep-anchored findings already
@@ -627,6 +643,7 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
+                precomputed_calls: None,
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],
@@ -778,8 +795,13 @@ fn range_extent_cmp(
 ///   6. detectDiagnostics       (L5 detector-emitted, e.g. d43 substrate guard)
 ///
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
-/// channel (`projectDiagnostics`). Mirrors the `run_diagnostics` build in
-/// `run_analyze` so both paths emit byte-identical diagnostics.
+/// channel (`projectDiagnostics`). It follows the `run_diagnostics` build in
+/// `run_analyze`, but the output is the same only for the same `resolved`.
+/// Its callers (events, policy, digest, fingerprint) pass an `L3Resolved`
+/// without `precomputed_calls`, so the L4 cap-hit (3) and detector (6)
+/// diagnostics come from L3's own calls, while `run_analyze`'s come from the
+/// program engine's (B3 Phase A). They can differ on the same workspace until
+/// those subcommands move to `attach_program_calls` (docs/OUTSTANDING.md).
 pub fn compute_analyzer_diagnostics(
     ws_path: &Path,
     resolved: &crate::engine::l3::l3_workspace::L3Resolved,

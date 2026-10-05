@@ -1338,6 +1338,7 @@ pub fn assemble_and_resolve(
         root_classifications,
         primary_app: None,
         infra_diagnostics,
+        precomputed_calls: None,
     }
 }
 
@@ -1511,6 +1512,7 @@ pub fn assemble_and_resolve_workspace(
             root_classifications,
             primary_app,
             infra_diagnostics,
+            precomputed_calls: None,
         }
     };
     // Empty fail-closed model (no objects/routines) → treat as not-analyzable.
@@ -1687,6 +1689,20 @@ pub struct L3Resolved {
     /// `kinds-mismatch` warnings from `roots.config.json`). Empty for inline /
     /// cross-app paths that have no disk config. Propagated to the JSON envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+    /// An externally supplied call resolution. `Some` on the `alsem analyze` path
+    /// and in the r4/r4f test helper (both set by
+    /// `program_calls::attach_program_calls`: the program engine's calls); `None`
+    /// for every other consumer, which runs `resolve_calls` itself (CLAUDE.md lists
+    /// them). When `Some`, these sites read it via `call_resolver::calls_for`:
+    /// - on the `alsem analyze` path: the detector context
+    ///   (`build_detector_context`), the ordering-facts base
+    ///   (`build_r3a3_source_only_base`) and coverage (`project_coverage`);
+    /// - switched but NOT on the analyze path: `project_r3a3` and
+    ///   `compute_r3a3_real_matrix`;
+    /// - deliberately NOT switched: the cross-app resolve in `capability_cone.rs`
+    ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
+    ///   declared dependencies.
+    pub precomputed_calls: Option<std::sync::Arc<crate::engine::l3::call_resolver::ResolvedCalls>>,
 }
 
 // ---------------------------------------------------------------------------

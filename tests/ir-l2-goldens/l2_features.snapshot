@@ -614,8 +614,8 @@ ws-member-call-codeunit/src/GlobalReceivers.Codeunit.al::0::CallViaGlobalCodeuni
 ws-member-call-codeunit/src/GlobalReceivers.Codeunit.al::0::InsertViaGlobalRecord	cfce7717ce8dd562
 ws-member-call-codeunit/src/Unknown.Codeunit.al::0::CallOnUnknown	7662022675b4616b
 ws-member-call-resolution/src/Caller.Codeunit.al::0::OnRun	08fbdc288b05bb51
-ws-member-call-resolution/src/Helper.Codeunit.al::0::LocalHelper	ea6f6bb863a4ae9d
-ws-member-call-resolution/src/Helper.Codeunit.al::0::PublicEntry	f83422567a90056d
+ws-member-call-resolution/src/Helper.Codeunit.al::0::LocalHelper	63396868c8f20a19
+ws-member-call-resolution/src/Helper.Codeunit.al::0::PublicEntry	5ff04e7bd7ca2c01
 ws-multi-object/src/codeunit-and-table.al::0::DoWork	27514e517269d4db
 ws-object-interface-visibility/b1_bare_own_local/BareLocalSelf.al::0::DoFoo	cde6d9ae1ce7f679
 ws-object-interface-visibility/d10_run_named_member_cross_app_internal_excluded/RunNCaller.al::0::Trigger	cde6d9ae1ce7f679

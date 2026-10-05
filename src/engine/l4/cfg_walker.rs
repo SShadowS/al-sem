@@ -856,8 +856,33 @@ fn walk_cfg(
             (pre, Reach::Abrupt)
         }
         "exit" => {
-            exit_states.push(pre.clone());
-            (pre, Reach::Normal)
+            // `exit(Expr)` evaluates Expr (calls included) before it leaves, so
+            // its leaves apply first, exactly like `error` below.
+            let post = apply_condition_leaves(
+                pre,
+                node.condition_leaves.as_deref(),
+                param,
+                routine,
+                snapshot,
+                final_map,
+                upgraded_bindings,
+                graph,
+                body_avail_by_id,
+                idx,
+                exit_states,
+                loop_stack,
+                depth,
+            );
+            exit_states.push(post.clone());
+            // Known over-approximation: `exit` ends the path, but returning
+            // `Normal` lets this post-exit state also flow into the code after the
+            // enclosing join, as an infeasible extra path. Safe for soundness: an
+            // extra path is only ever JOINED in, and joins only widen facts (entry
+            // requirements accumulate, exit facts drift to Unknown/DirtyV), so no
+            // real effect is hidden. The cost is precision: that path can add a
+            // requirement no real path has (`if C then exit else Rec.Get(..);`
+            // then a read of `Rec`).
+            (post, Reach::Normal)
         }
         "error" => {
             let post = apply_condition_leaves(
@@ -1292,12 +1317,13 @@ fn apply_call(
         }
     }
 
-    // c1b — exit effects compose only when BOTH caller-source and callee-param are var.
-    if caller_is_var && callee_is_var {
-        if cr.loads_from_db_param == EffectPresence::Yes
-            || cr.initialises_param == EffectPresence::Yes
-            || cr.copies_into_param == EffectPresence::Yes
-        {
+    // The loaded state composes whenever the CALLEE side is var: a `var` callee
+    // loads this routine's own record variable, whether that is a `var` parameter
+    // or a by-value copy (`F(P: Record) { Loader(P); Reader(P) }` reads a loaded
+    // `P`). Only the EXIT effects below need the caller side var too, because
+    // only then do they reach the caller's caller.
+    if callee_is_var {
+        if cr.puts_in_loaded_state() {
             out.loaded = Loaded::Yes;
             out.current_loaded_fields = field_list_to_loaded(&cr.current_loaded_fields_at_exit);
             out.pending_narrow = PendingNarrow::None;
@@ -1309,7 +1335,10 @@ fn apply_call(
             out.current_loaded_fields = LoadedFields::Unknown;
             out.pending_narrow = PendingNarrow::Unknown;
         }
+    }
 
+    // c1b — exit effects compose only when BOTH caller-source and callee-param are var.
+    if caller_is_var && callee_is_var {
         if cr.persists_current_record == EffectPresence::Yes && out.dirty == Dirty::Pristine {
             out.dirty = Dirty::Persisted;
         }
@@ -1328,6 +1357,13 @@ fn apply_call(
             && (out.dirty == Dirty::Pristine || out.dirty == Dirty::Persisted)
         {
             out.dirty = Dirty::Unknown;
+        }
+        // The callee leaves the record dirty on at least one exit path, whatever
+        // it got (its walk starts Pristine, so some exit path ends DirtyV). The
+        // rules above miss it when the callee also persists on
+        // another path: `Persisted` then blocks the `validates` rule.
+        if cr.dirty_at_exit == EffectPresence::Yes {
+            out.dirty = Dirty::DirtyV;
         }
     }
 

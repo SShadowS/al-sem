@@ -67,6 +67,10 @@ pub struct TransactionSpan {
     pub routines_in_span: Vec<String>,
     /// Union of tables written by any routine in the span. SORTED + deduped.
     pub writes_tables: Vec<String>,
+    /// Number of distinct PHYSICAL (non-known-temp) tables written by any routine
+    /// in the span. ⟨issue 23 rule⟩ GATES read this; `writes_tables` (temp-
+    /// inclusive) is the WITNESS set.
+    pub writes_physical_tables_count: usize,
     /// Union of events published by any routine in the span. SORTED + deduped.
     pub publishes_events: Vec<String>,
     /// Span entry roots — routines in the span with no upstream caller. SORTED.
@@ -147,10 +151,12 @@ fn aggregate_span(
     cone_derived: &ConeDerivedStore,
     writes_bs: &mut ResBitset,
     events_bs: &mut ResBitset,
+    phys_bs: &mut ResBitset,
     census: &mut TxSpanCensus,
-) -> (Vec<String>, Vec<String>, bool) {
+) -> (Vec<String>, usize, Vec<String>, bool) {
     writes_bs.clear();
     events_bs.clear();
+    phys_bs.clear();
     let mut coverage_complete = true;
     for rid in visited {
         let Some(summary) = summaries.get(rid) else {
@@ -158,6 +164,9 @@ fn aggregate_span(
             continue;
         };
         writes_bs.insert_all(cone_derived.writes_table_ids_of(&summary.routine_id));
+        for id in cone_derived.physical_write_ids_of(&summary.routine_id) {
+            phys_bs.insert(id);
+        }
         events_bs.insert_all(cone_derived.event_ids_of(&summary.routine_id));
         if reachable_coverage(summary, None) != "complete" {
             coverage_complete = false;
@@ -165,7 +174,7 @@ fn aggregate_span(
     }
     let writes = resolve_sorted_ids(writes_bs, cone_derived, census);
     let events = resolve_sorted_ids(events_bs, cone_derived, census);
-    (writes, events, coverage_complete)
+    (writes, phys_bs.len(), events, coverage_complete)
 }
 
 /// Resolve a `ResId` set into the sorted-unique `Vec<String>` the old
@@ -201,6 +210,7 @@ fn span_roots_of(visited: &BTreeSet<String>, reverse: &ReverseCallGraph) -> Vec<
 struct SpanTemplate {
     routines_in_span: Vec<String>,
     writes_tables: Vec<String>,
+    writes_physical_tables_count: usize,
     publishes_events: Vec<String>,
     span_roots: Vec<String>,
     coverage_complete: bool,
@@ -279,6 +289,7 @@ struct SpanInputs<'a> {
 struct SpanScratch {
     writes: ResBitset,
     events: ResBitset,
+    phys_writes: ResBitset,
     census: TxSpanCensus,
 }
 
@@ -293,20 +304,23 @@ fn span_template<'c>(
         let visited = backward_cone(seed, inputs.commits_by_routine, inputs.reverse);
         scratch.census.templates += 1;
         scratch.census.visited_total += visited.len();
-        let (writes_tables, publishes_events, coverage_complete) = aggregate_span(
-            &visited,
-            inputs.summaries,
-            inputs.cone_derived,
-            &mut scratch.writes,
-            &mut scratch.events,
-            &mut scratch.census,
-        );
+        let (writes_tables, writes_physical_tables_count, publishes_events, coverage_complete) =
+            aggregate_span(
+                &visited,
+                inputs.summaries,
+                inputs.cone_derived,
+                &mut scratch.writes,
+                &mut scratch.events,
+                &mut scratch.phys_writes,
+                &mut scratch.census,
+            );
         let span_roots = span_roots_of(&visited, inputs.reverse);
         cache.insert(
             seed.to_string(),
             SpanTemplate {
                 routines_in_span: visited.iter().cloned().collect(),
                 writes_tables,
+                writes_physical_tables_count,
                 publishes_events,
                 span_roots,
                 coverage_complete,
@@ -372,6 +386,7 @@ pub fn compute_transaction_spans(
     let mut scratch = SpanScratch {
         writes: ResBitset::new(cone_derived.res_universe_len()),
         events: ResBitset::new(cone_derived.res_universe_len()),
+        phys_writes: ResBitset::new(cone_derived.res_universe_len()),
         census: TxSpanCensus::default(),
     };
 
@@ -398,6 +413,7 @@ pub fn compute_transaction_spans(
                 commit_routine_id: commit_routine_id.clone(),
                 routines_in_span: t.routines_in_span.clone(),
                 writes_tables: t.writes_tables.clone(),
+                writes_physical_tables_count: t.writes_physical_tables_count,
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
                 coverage_complete: t.coverage_complete,
@@ -437,6 +453,7 @@ pub fn compute_transaction_spans(
                 commit_routine_id: r.id.clone(),
                 routines_in_span: t.routines_in_span.clone(),
                 writes_tables: t.writes_tables.clone(),
+                writes_physical_tables_count: t.writes_physical_tables_count,
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
                 coverage_complete: t.coverage_complete,

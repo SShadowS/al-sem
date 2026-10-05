@@ -3,6 +3,63 @@
   "detectors": [
     "d14-dead-routine"
   ],
-  "findingCount": 0,
-  "findings": []
+  "findingCount": 1,
+  "findings": [
+    {
+      "detector": "d14-dead-routine",
+      "id": "d14/55555555-0000-0000-0000-0000000d14mc:Codeunit:50200#dd43e45aa64d386a900278524a3c80a7255222006bc7f52a4237daecb7b3bcd5",
+      "rootCauseKey": "d14/55555555-0000-0000-0000-0000000d14mc:Codeunit:50200#dd43e45aa64d386a900278524a3c80a7255222006bc7f52a4237daecb7b3bcd5",
+      "title": "Routine is unreachable from any entry point",
+      "rootCause": "LocalHelper on MCR Helper is not called from any page action, trigger, OnRun, web service, or event subscriber in this app — appears to be dead code.",
+      "severity": "info",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Helper.Codeunit.al",
+        "range": {
+          "startLine": 9,
+          "startColumn": 1,
+          "endLine": 11,
+          "endColumn": 5
+        },
+        "enclosingRoutineId": "55555555-0000-0000-0000-0000000d14mc:Codeunit:50200#dd43e45aa64d386a900278524a3c80a7255222006bc7f52a4237daecb7b3bcd5",
+        "syntaxKind": "procedure"
+      },
+      "evidencePath": [
+        {
+          "routineId": "55555555-0000-0000-0000-0000000d14mc:Codeunit:50200#dd43e45aa64d386a900278524a3c80a7255222006bc7f52a4237daecb7b3bcd5",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Helper.Codeunit.al",
+            "range": {
+              "startLine": 9,
+              "startColumn": 1,
+              "endLine": 11,
+              "endColumn": 5
+            },
+            "enclosingRoutineId": "55555555-0000-0000-0000-0000000d14mc:Codeunit:50200#dd43e45aa64d386a900278524a3c80a7255222006bc7f52a4237daecb7b3bcd5",
+            "syntaxKind": "procedure"
+          },
+          "note": "LocalHelper (no inbound edges from entry-point closure)"
+        }
+      ],
+      "affectedObjects": [
+        "55555555-0000-0000-0000-0000000d14mc:Codeunit:50200"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Remove the routine if truly unused, or wire it up to an entry point if intended to be invoked.",
+          "safety": "low"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "dcf31402c3773487"
+    }
+  ]
 }

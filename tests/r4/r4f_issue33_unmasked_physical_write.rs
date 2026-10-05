@@ -41,7 +41,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
 };
@@ -201,7 +201,7 @@ fn issue33_both_temp_classes_are_present_with_complete_witnesses() {
 /// right follow-up edit.
 #[test]
 fn issue33_the_unmasked_physical_write_does_not_fire_write_pending_at_external_io() {
-    let resolved = assemble_and_resolve_workspace_default(&fixture_dir())
+    let resolved = assemble_and_resolve_workspace_with_program_calls(&fixture_dir())
         .unwrap_or_else(|| panic!("{FIXTURE} must resolve"));
     let name_by_stable: HashMap<&str, &str> = resolved
         .workspace

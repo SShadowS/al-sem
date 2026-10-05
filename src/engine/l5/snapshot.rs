@@ -1012,7 +1012,12 @@ fn compute_routine_order(r: &L3Routine) -> RoutineOrder {
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
 pub fn compose_snapshot(resolved: &L3Resolved) -> CapabilitySnapshot {
-    let base = build_r3a3_source_only_base(resolved);
+    use crate::engine::perf_trace as pt;
+    let base = {
+        let _s = pt::span("snapshot", "snapshot.r3a3_base");
+        build_r3a3_source_only_base(resolved)
+    };
+    let _s = pt::span("snapshot", "snapshot.derive");
 
     let identities = derive_identity_table(resolved);
     let capability_facts = derive_capability_facts(&base);

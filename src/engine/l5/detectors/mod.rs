@@ -69,7 +69,7 @@ use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::{PAnchor, PCallSite, PCallee, PExpressionInfo};
+use crate::engine::l2::features::{PAnchor, PCFNNode, PCallSite, PCallee, PExpressionInfo};
 use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Table};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::SourceAnchor;
@@ -83,6 +83,165 @@ pub(crate) fn before_anchor(a: &PAnchor, b: &PAnchor) -> bool {
         return a.start_line < b.start_line;
     }
     a.start_column < b.start_column
+}
+
+/// One step down the `statement_tree` toward a leaf: the parent node, its kind,
+/// the arm taken (0 = condition / plain sequence, 1 = `if` then or first `case`
+/// branch, 2 = `if` else or second `case` branch, ...) and the child index.
+type ArmStep<'a> = (*const PCFNNode, &'a str, usize, usize);
+
+/// The steps from `node` down to the op/call leaf with id `target`.
+fn arm_path<'a>(node: &'a PCFNNode, target: &str, path: &mut Vec<ArmStep<'a>>) -> bool {
+    if node.operation_id.as_deref() == Some(target) || node.callsite_id.as_deref() == Some(target) {
+        return true;
+    }
+    let kind = node.kind.as_str();
+    let lists = [
+        (node.condition_leaves.as_deref(), false),
+        (node.children.as_deref(), true),
+        (node.else_children.as_deref(), false),
+    ];
+    for (li, (list, is_children)) in lists.into_iter().enumerate() {
+        for (ci, child) in list.into_iter().flatten().enumerate() {
+            let arm = match (kind, li, is_children) {
+                ("if", 1, _) => 1,
+                ("if", 2, _) => 2,
+                ("case", _, true) => ci + 1,
+                _ => 0,
+            };
+            path.push((node as *const PCFNNode, kind, arm, ci + li * 100_000));
+            if arm_path(child, target, path) {
+                return true;
+            }
+            path.pop();
+        }
+    }
+    false
+}
+
+/// True when the leaves `a` and `b` (op or call-site ids) sit in different arms of
+/// the same `if` / `case`, with no loop around that branch: on any one run of
+/// the routine at most one of them executes, so `b` can never follow `a`.
+/// Unknown leaves (no tree, id not found) are not exclusive.
+pub(crate) fn branch_exclusive(tree: Option<&PCFNNode>, a: &str, b: &str) -> bool {
+    let Some(tree) = tree else {
+        return false;
+    };
+    let (mut pa, mut pb) = (Vec::new(), Vec::new());
+    if !arm_path(tree, a, &mut pa) || !arm_path(tree, b, &mut pb) {
+        return false;
+    }
+    let mut in_loop = false;
+    for (sa, sb) in pa.iter().zip(&pb) {
+        if sa.0 != sb.0 {
+            return false;
+        }
+        if sa.2 != sb.2 {
+            return !in_loop && sa.2 != 0 && sb.2 != 0 && matches!(sa.1, "if" | "case");
+        }
+        if sa.3 != sb.3 {
+            return false;
+        }
+        in_loop |= matches!(sa.1, "while" | "for" | "foreach" | "repeat");
+    }
+    false
+}
+
+/// A point in a routine where a record variable is put in a loaded state.
+pub(crate) struct LoadPoint<'a> {
+    pub anchor: &'a PAnchor,
+    pub record_variable_id: Option<&'a str>,
+    /// The op id or call-site id: its leaf in the routine's `statement_tree`.
+    pub node_id: &'a str,
+}
+
+impl LoadPoint<'_> {
+    /// Same variable as a binding source: by id when both sides carry one; the
+    /// name already matched through the bucket key.
+    pub fn is_variable(&self, source_id: Option<&str>) -> bool {
+        match (source_id, self.record_variable_id) {
+            (Some(sid), Some(oid)) => oid == sid,
+            _ => true,
+        }
+    }
+}
+
+/// Every point in `routine` where a record variable becomes loaded, keyed by the
+/// lowercased variable name: its own load / init / copy-into ops (the
+/// `record_flow_role` classes), and every call that hands the variable `var` to a
+/// helper whose parameter role [`puts_in_loaded_state`]. The role fact is composed
+/// through var-to-var forwarding by L4, so a helper two levels down counts too.
+/// One definition of "loaded", shared by d39 (dirt reset after a call) and d40
+/// (loaded before a call).
+///
+/// [`puts_in_loaded_state`]: crate::engine::l4::summary::RecordRoleSummary::puts_in_loaded_state
+pub(crate) fn record_load_points<'a>(
+    routine: &'a L3Routine,
+    ctx: &DetectorContext,
+) -> HashMap<String, Vec<LoadPoint<'a>>> {
+    use crate::engine::l4::summary_runner::record_flow_role;
+    let mut out: HashMap<String, Vec<LoadPoint<'a>>> = HashMap::new();
+    for op in &routine.record_operations {
+        if !matches!(
+            record_flow_role(&op.op),
+            "loadsFromDb" | "initialises" | "copiesInto"
+        ) {
+            continue;
+        }
+        out.entry(op.record_variable_name.to_lowercase())
+            .or_default()
+            .push(LoadPoint {
+                anchor: &op.source_anchor,
+                node_id: &op.id,
+                record_variable_id: op.record_variable_id.as_deref(),
+            });
+    }
+    for cs in &routine.call_sites {
+        let Some(roles) = ctx
+            .resolved_call_edge_by_callsite
+            .get(&cs.id)
+            .and_then(|e| e.to.as_deref())
+            .and_then(|to| ctx.parameter_roles_by_routine.get(to))
+        else {
+            continue;
+        };
+        let upgraded = ctx.upgraded_bindings_by_callsite.get(&cs.id);
+        for (i, b) in cs.argument_bindings.iter().enumerate() {
+            let by_var = upgraded
+                .and_then(|u| u.get(i))
+                .is_some_and(|u| u.binding_resolution == "resolved" && u.callee_parameter_is_var);
+            let Some(name) = &b.source_variable_name else {
+                continue;
+            };
+            let loads = roles
+                .iter()
+                .find(|r| r.parameter_index == b.parameter_index)
+                .is_some_and(|r| r.puts_in_loaded_state());
+            if by_var && loads {
+                out.entry(name.to_lowercase()).or_default().push(LoadPoint {
+                    anchor: &cs.source_anchor,
+                    node_id: &cs.id,
+                    record_variable_id: b.source_record_variable_id.as_deref(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Whether every caller of `routine` is visible, so a detector that hands a
+/// finding up to the callers ("the owner decides") will actually judge them:
+/// either the routine has a resolved workspace caller, or it cannot be called
+/// from outside (`local`; `internal` when no app gets internal access — the same
+/// facts d14 uses). A public routine with no workspace caller has its owner
+/// outside the workspace, so the finding must stay on the routine itself.
+pub(crate) fn owner_is_judged(routine: &L3Routine, ctx: &DetectorContext) -> bool {
+    let access = routine.access_modifier.as_deref();
+    let closed = access == Some("local")
+        || (access == Some("internal") && !ctx.internal_reachable_externally);
+    closed
+        || !crate::engine::l5::reverse_call_graph::callers_of(&ctx.reverse_call_graph, &routine.id)
+            .is_empty()
 }
 
 /// G-12/G-15: the table's PRIMARY KEY (first key) field NAMES, lowercased.
