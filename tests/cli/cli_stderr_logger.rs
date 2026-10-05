@@ -27,6 +27,10 @@ fn copy_fixture(to: &Path) {
 fn run(bin: &str, args: &[&Path], level: Option<&str>) -> (String, String) {
     let mut cmd = Command::new(bin);
     cmd.args(args);
+    // The `cli_a_*` differentials in this same test binary set this process-wide
+    // (under `ENV_LOCK`, which this test does not hold). A child that inherits it
+    // prints a different `alsemVersion`, so the two runs compared below differed.
+    cmd.env_remove("ALCH_DRIVER_VERSION_OVERRIDE");
     match level {
         Some(l) => cmd.env("RUST_LOG", l),
         None => cmd.env_remove("RUST_LOG"),

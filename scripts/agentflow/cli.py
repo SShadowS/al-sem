@@ -553,7 +553,17 @@ def _substituted_roster(substitutes) -> tuple[dict | None, str | None]:
     return slots, None
 
 
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
 def cmd_attest(args, ctx, gh, git):
+    # merge-gate compares these with `!=` against GitHub's full head SHA and
+    # `rev-parse origin/master`, so an abbreviated SHA stored here would later
+    # read as head-moved / base-moved (#53). Refuse rather than store it.
+    short = {k: v for k, v in (("B", args.B), ("H", args.H), ("final_head", args.final_head))
+             if not _FULL_SHA.match(v)}
+    if short:
+        return _emit({"error": "sha-not-full", "values": short}, 1)
     # Fail closed on an absent claim: skipping the cross-check turned the
     # issue-revision pin into a comparison of a caller-supplied hash with
     # itself, which is a guard that silently degrades to a no-op.

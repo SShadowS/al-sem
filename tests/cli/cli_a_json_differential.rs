@@ -495,17 +495,14 @@ fn project_diagnostics_shape_oracle() {
 }
 
 /// Create a unique scratch dir for a fail-closed / malformed workspace oracle.
-fn scratch_ws(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "alsem-cli-a-json-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create scratch ws dir");
-    dir
+/// The `TempDir` removes it on drop (panics included); keep it alive for the test.
+fn scratch_ws(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("alsem-cli-a-json-{tag}-"))
+        .tempdir()
+        .expect("create scratch ws dir");
+    let dir = tmp.path().to_path_buf();
+    (tmp, dir)
 }
 
 /// Run the JSON pipeline directly over an arbitrary workspace path (not a corpus
@@ -543,7 +540,7 @@ fn run_json_path(ws: &Path, detector_csv: &str) -> String {
 #[test]
 fn fail_closed_multi_app_emits_discover_diagnostic() {
     let _env = crate::env_guard();
-    let ws = scratch_ws("multiapp");
+    let (_tmp, ws) = scratch_ws("multiapp");
     // Root app.json WITH a valid id (so the only fail-closed trigger is multi-app).
     std::fs::write(
         ws.join("app.json"),
@@ -568,7 +565,6 @@ fn fail_closed_multi_app_emits_discover_diagnostic() {
     let out = run_json_path(&ws, &default_csv);
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
-    let _ = std::fs::remove_dir_all(&ws);
 
     let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
     let diags = v["diagnostics"].as_array().expect("diagnostics array");
@@ -600,7 +596,7 @@ fn fail_closed_multi_app_emits_discover_diagnostic() {
 #[test]
 fn fail_closed_idless_app_json_emits_discover_diagnostic() {
     let _env = crate::env_guard();
-    let ws = scratch_ws("idless");
+    let (_tmp, ws) = scratch_ws("idless");
     std::fs::write(
         ws.join("app.json"),
         r#"{"name":"A","publisher":"P","version":"1.0.0.0"}"#,
@@ -615,7 +611,6 @@ fn fail_closed_idless_app_json_emits_discover_diagnostic() {
     let out = run_json_path(&ws, &default_csv);
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
-    let _ = std::fs::remove_dir_all(&ws);
 
     let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
     let diags = v["diagnostics"].as_array().expect("diagnostics array");
@@ -640,7 +635,7 @@ fn fail_closed_idless_app_json_emits_discover_diagnostic() {
 #[test]
 fn no_object_declaration_emits_index_diagnostic() {
     let _env = crate::env_guard();
-    let ws = scratch_ws("noobj");
+    let (_tmp, ws) = scratch_ws("noobj");
     std::fs::write(
         ws.join("app.json"),
         r#"{"id":"33333333-3333-3333-3333-333333333333","name":"A","publisher":"P","version":"1.0.0.0"}"#,
@@ -656,7 +651,6 @@ fn no_object_declaration_emits_index_diagnostic() {
     let out = run_json_path(&ws, &default_csv);
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
-    let _ = std::fs::remove_dir_all(&ws);
 
     let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
     let diags = v["diagnostics"].as_array().expect("diagnostics array");

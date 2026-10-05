@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`agentflow attest` refuses an abbreviated SHA** (#53, `scripts/agentflow/cli.py`).
+  `--B`, `--H` and `--final-head` were stored as typed, and `merge-gate` compares them
+  with `!=` against full 40-character SHAs, so a short SHA later read as `head-moved` or
+  `base-moved`. `attest` now refuses any of the three that is not a full lowercase SHA
+  (`sha-not-full`). Test: `test_attest_refuses_a_sha_that_is_not_full`, which fails
+  without the check.
+- **CLI tests no longer leave scratch dirs in `%TEMP%`** (#61). Five `tests/cli/` helpers
+  built workspaces under `std::env::temp_dir()` with unique names; two never removed them
+  and three removed them only when the test passed. On the dev box this had piled up
+  ~19k `alsem-*` dirs. They now return a `tempfile::TempDir`, which removes the tree on
+  drop, panics included. Running the five members left the `%TEMP%` count unchanged.
+- **The CLAUDE.md note on `condition_references` was half wrong** (#24). It said the
+  collection misses `if (X)`; `collect_cond_idents` has looked through parentheses since
+  it was written. What it misses is any QUOTED name, bare or as a member. The note and
+  d60's doc comment now say so, and `ir_walk`'s `condition_references_shapes` test pins
+  the recorded shapes (it fails if the parenthesis arm is removed or quoted members are
+  let through).
+- **Flaky `cli_stderr_logger` test** (`tests/cli/cli_stderr_logger.rs`). It runs `alsem`
+  twice and compares stdout, but other tests in the same binary set
+  `ALCH_DRIVER_VERSION_OVERRIDE` process-wide, so one child could print a different
+  `alsemVersion`. Seen once in a full-suite run. The children now run with that
+  variable removed.
+
 ## [1.4.0] - 2026-10-05
 
 ### Added

@@ -39,20 +39,18 @@ const APP_JSON: &str = r#"{
 "#;
 
 /// Write a unique scratch workspace (`app.json` + `src/<name>`) under the temp dir.
-/// Returns the workspace root. The caller may leave it on disk (cargo's temp dir).
-fn write_workspace(tag: &str, al_name: &str, al_src: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "alsem-e3-{}-{}-{:?}",
-        tag,
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    // Fresh tree each run.
-    let _ = std::fs::remove_dir_all(&root);
+/// Returns the guard and the workspace root; the `TempDir` removes the tree on drop
+/// (panics included), so keep it alive for the whole test.
+fn write_workspace(tag: &str, al_name: &str, al_src: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("alsem-e3-{tag}-"))
+        .tempdir()
+        .expect("create scratch ws");
+    let root = tmp.path().to_path_buf();
     std::fs::create_dir_all(root.join("src")).expect("create src dir");
     std::fs::write(root.join("app.json"), APP_JSON).expect("write app.json");
     std::fs::write(root.join("src").join(al_name), al_src).expect("write al source");
-    root
+    (tmp, root)
 }
 
 /// Build the analyze args for a workspace at `ws`, with `with_evidence` toggled.
@@ -146,7 +144,7 @@ fn two_field_with_evidence_distinct_member_per_finding() {
     // from the env-reading `driver_version()`, so hold the crate ENV_LOCK
     // against the `cli_a_*` writers of `ALCH_DRIVER_VERSION_OVERRIDE`.
     let _env = crate::env_guard();
-    let ws = write_workspace("twofield-we", "twofield.al", TWO_FIELD_TABLE);
+    let (_tmp, ws) = write_workspace("twofield-we", "twofield.al", TWO_FIELD_TABLE);
     let doc = parse(&run_json(&ws, true));
 
     // schemaVersion bumps to 1.1.0 under the flag (RE-8).
@@ -215,7 +213,7 @@ fn default_output_byte_identical_minus_evidence_keys() {
     // the same `ALCH_DRIVER_VERSION_OVERRIDE` state or `alsemVersion` differs
     // and the byte-identical assertion below flakes.
     let _env = crate::env_guard();
-    let ws = write_workspace("twofield-default", "twofield.al", TWO_FIELD_TABLE);
+    let (_tmp, ws) = write_workspace("twofield-default", "twofield.al", TWO_FIELD_TABLE);
     let plain = run_json(&ws, false);
     let evid = run_json(&ws, true);
 
@@ -302,7 +300,7 @@ codeunit 50101 "E3 Proc"
 fn finding_outside_member_trigger_has_no_member() {
     // Reader-side env serialization (see two_field test).
     let _env = crate::env_guard();
-    let ws = write_workspace("proc-only", "proc.al", PROCEDURE_ONLY);
+    let (_tmp, ws) = write_workspace("proc-only", "proc.al", PROCEDURE_ONLY);
     let doc = parse(&run_json(&ws, true));
 
     let findings = d1_findings(&doc);
@@ -374,7 +372,7 @@ page 50102 "E3 Card"
 fn page_field_trigger_finding_has_member() {
     // Reader-side env serialization (see two_field test).
     let _env = crate::env_guard();
-    let ws = write_workspace("page-field", "page.al", PAGE_FIELD_TRIGGER);
+    let (_tmp, ws) = write_workspace("page-field", "page.al", PAGE_FIELD_TRIGGER);
     let doc = parse(&run_json(&ws, true));
 
     let findings = d1_findings(&doc);

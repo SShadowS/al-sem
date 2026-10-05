@@ -266,10 +266,24 @@ CONVERGED = json.dumps([{"id": "F1", "severity": "important", "disposition": "fi
                          "reviews": {"astra": "accepted", "flash": "accepted"}}])
 
 
-def attest(capsys, root, register, *, gates=GREEN_GATES, body_hash="abc123", extra=()):
-    return run(capsys, root, "attest", "--issue", "8", "--B", "B", "--H", "H",
-               "--final-head", "F", "--register", str(register), "--gates", gates,
+def attest(capsys, root, register, *, gates=GREEN_GATES, body_hash="abc123", extra=(),
+           B="b" * 40, H="c" * 40, final_head="f" * 40):
+    return run(capsys, root, "attest", "--issue", "8", "--B", B, "--H", H,
+               "--final-head", final_head, "--register", str(register), "--gates", gates,
                "--body-hash", body_hash, *extra, gh_run=FakeRunner())
+
+
+@pytest.mark.parametrize("flag", ["B", "H", "final_head"])
+def test_attest_refuses_a_sha_that_is_not_full(capsys, root, tmp_path, flag):
+    # #53: merge-gate compares GitHub's 40-char head SHA and `rev-parse
+    # origin/master` to the stored strings with `!=`, so an abbreviated value
+    # would later read as head-moved / base-moved. Refuse it at attest time.
+    ctx = Ctx(Paths(root), run_id="run-test")
+    register = claimed_register(ctx, tmp_path)
+    code, out = attest(capsys, root, register, **{flag: "f0cc001e"})
+    assert code == 1 and out["error"] == "sha-not-full"
+    assert out["values"] == {flag: "f0cc001e"}
+    assert not (ctx.run_dir / "attestation.json").exists()
 
 
 def claimed_register(ctx, tmp_path, *, body_hash="abc123", contents=CONVERGED, name="wt"):

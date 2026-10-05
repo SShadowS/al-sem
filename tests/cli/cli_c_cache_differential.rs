@@ -289,14 +289,12 @@ fn dry_run_differential_vs_golden() {
 fn integration_real_prune_deletes_removed_files() {
     require_fixture_cache();
     // Copy the fixture cache to a temp dir so we can mutate it.
-    let tmp_dir = std::env::temp_dir().join(format!(
-        "al-sem-cache-prune-test-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+    // The `TempDir` guard removes the copy on drop, panics included.
+    let tmp = tempfile::Builder::new()
+        .prefix("al-sem-cache-prune-test-")
+        .tempdir()
+        .expect("create temp dir");
+    let tmp_dir = tmp.path().to_path_buf();
 
     // Copy all fixture files into the temp dir.
     let src_dir = fixture_cache_dir();
@@ -342,9 +340,6 @@ fn integration_real_prune_deletes_removed_files() {
             "removed file {f} should be deleted after real prune"
         );
     }
-
-    // Clean up.
-    let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,24 +410,22 @@ fn current_versions_json(extra_key: Option<(&str, &str)>) -> String {
     format!("{{{body}}}")
 }
 
-/// Make a unique temp dir for a synthetic-oracle test.
-fn synth_temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "al-sem-cache-synth-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create synth temp dir");
-    dir
+/// Make a unique temp dir for a synthetic-oracle test. The `TempDir` removes it
+/// on drop (panics included); keep it alive for the whole test.
+fn synth_temp_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("al-sem-cache-synth-{tag}-"))
+        .tempdir()
+        .expect("create synth temp dir");
+    let dir = tmp.path().to_path_buf();
+    (tmp, dir)
 }
 
 /// (item 3) A non-`.json`, non-hex64 file (`junk.txt`) classifies as
 /// `removed-bad-name` — the listing must NOT pre-filter by `.json` extension.
 #[test]
 fn oracle_junk_txt_is_bad_name() {
-    let dir = synth_temp_dir("junk");
+    let (_tmp, dir) = synth_temp_dir("junk");
     let path = dir.join("junk.txt");
     std::fs::write(&path, "not even json").unwrap();
     assert_eq!(
@@ -453,8 +446,6 @@ fn oracle_junk_txt_is_bad_name() {
         result.files_removed, 1,
         "junk.txt should be counted as removed"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (item 4) A valid artifact whose `versions` carries an EXTRA/unknown key
@@ -462,7 +453,7 @@ fn oracle_junk_txt_is_bad_name() {
 /// (a struct/map `==` would wrongly reject it).
 #[test]
 fn oracle_extra_version_key_still_kept() {
-    let dir = synth_temp_dir("extrakey");
+    let (_tmp, dir) = synth_temp_dir("extrakey");
     let key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     // Build the body with an extra version key, then compute the real content hash.
@@ -481,14 +472,13 @@ fn oracle_extra_version_key_still_kept() {
         PruneStatus::Kept,
         "artifact with an extra version key must still be kept (expected-keys-only compare)"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (item 5) A `<hex>.tmp.N.json` file is SKIPPED by prune_cache (substring
 /// `.tmp.` match) — it never appears in entries and is not classified/listed.
 #[test]
 fn oracle_tmp_file_is_skipped() {
-    let dir = synth_temp_dir("tmp");
+    let (_tmp, dir) = synth_temp_dir("tmp");
     let key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let tmp_name = format!("{key}.tmp.5.json");
     std::fs::write(dir.join(&tmp_name), "anything at all").unwrap();
@@ -500,14 +490,13 @@ fn oracle_tmp_file_is_skipped() {
     );
     assert_eq!(result.files_removed, 0, "no files should be removed");
     assert!(result.entries.is_empty(), "tmp-only dir → no entries");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (item 6) An artifact with an invalid `summaryMode` (not one of the 4 verbose
 /// literals) fails `isDependencyArtifact` → `removed-unreadable`, NOT a panic.
 #[test]
 fn oracle_wrong_summary_mode_is_unreadable() {
-    let dir = synth_temp_dir("summode");
+    let (_tmp, dir) = synth_temp_dir("summode");
     let key = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
     // Build a body with the BASE "structural-only" (a wrong/short value), keeping
@@ -530,14 +519,13 @@ fn oracle_wrong_summary_mode_is_unreadable() {
         PruneStatus::RemovedUnreadable,
         "wrong summaryMode must degrade to removed-unreadable (shape guard), not panic"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (item 6 precedence) When BOTH the shape is invalid AND the versions differ,
 /// the shape guard runs FIRST → `removed-unreadable` (NOT version-mismatch).
 #[test]
 fn oracle_shape_invalid_beats_version_mismatch() {
-    let dir = synth_temp_dir("precedence");
+    let (_tmp, dir) = synth_temp_dir("precedence");
     let key = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
     // Stale version (symbolReader "1") AND an invalid summaryMode. Shape guard
@@ -561,7 +549,6 @@ fn oracle_shape_invalid_beats_version_mismatch() {
         PruneStatus::RemovedUnreadable,
         "shape-invalid artifact is removed-unreadable even when versions also differ"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (item 6 negative control) A stale-version-ONLY artifact (valid shape) →
@@ -569,7 +556,7 @@ fn oracle_shape_invalid_beats_version_mismatch() {
 /// passing for the wrong reason.
 #[test]
 fn oracle_stale_version_only_is_version_mismatch() {
-    let dir = synth_temp_dir("staleonly");
+    let (_tmp, dir) = synth_temp_dir("staleonly");
     let key = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
     let mut stale = current_versions_json(None);
@@ -589,7 +576,6 @@ fn oracle_stale_version_only_is_version_mismatch() {
         PruneStatus::RemovedVersionMismatch,
         "valid-shape stale-version artifact must be removed-version-mismatch"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Local SHA-256 helper for the synthetic oracles (mirrors the engine's
