@@ -134,6 +134,68 @@ fn r4f_root_classifications_match_goldens() {
     }
 }
 
+/// #42 / #19: EVERY corpus fixture's root classifications in one golden, one
+/// line per classification (`<fixture>\t<compact JSON>`). The per-fixture
+/// family above observes only the fixtures listed in `FIXTURES`; a classification
+/// change on any other fixture (the four `ws-policy-api-*` API pages, most
+/// codeunit `OnRun` roots) used to move NO golden, so "goldens green" said nothing
+/// about it. Fixtures are discovered from the corpus directory, so a new fixture
+/// is observed automatically; a fixture with no classification still gets a
+/// `(none)` line, so dropping all of a fixture's roots is visible too.
+#[test]
+fn root_classifications_whole_corpus_summary() {
+    let mut fixtures: Vec<String> = std::fs::read_dir(corpus_dir())
+        .expect("read r0-corpus")
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    fixtures.sort();
+    assert!(
+        fixtures.len() > 100,
+        "corpus discovery found only {}",
+        fixtures.len()
+    );
+
+    let mut text = String::new();
+    for fixture in &fixtures {
+        let projection = run_rust(fixture);
+        if projection.classifications.is_empty() {
+            text.push_str(&format!("{fixture}\t(none)\n"));
+        }
+        for c in &projection.classifications {
+            let line = serde_json::to_string(c).expect("serialize classification");
+            text.push_str(&format!("{fixture}\t{line}\n"));
+        }
+    }
+
+    let golden_path = goldens_dir().join("corpus.rootclass.summary.txt");
+    if regen::regen_mode() {
+        std::fs::write(&golden_path, &text)
+            .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
+        eprintln!(
+            "REGEN whole-corpus rootclass summary: {}",
+            golden_path.display()
+        );
+        return;
+    }
+    let golden = std::fs::read_to_string(&golden_path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e} -- mint it with REGEN_TEMP_GOLDENS=1",
+            golden_path.display()
+        )
+    });
+    if golden.replace("\r\n", "\n") != text {
+        let (g, t): (Vec<&str>, Vec<&str>) = (golden.lines().collect(), text.lines().collect());
+        let gone: Vec<&&str> = g.iter().filter(|l| !t.contains(l)).take(10).collect();
+        let new: Vec<&&str> = t.iter().filter(|l| !g.contains(l)).take(10).collect();
+        panic!(
+            "root classifications moved (regenerate with REGEN_TEMP_GOLDENS=1 if intended)\n\
+             GONE:\n{gone:#?}\nNEW:\n{new:#?}"
+        );
+    }
+}
+
 #[test]
 fn anti_degenerate_jobqueue_has_job_queue_entrypoint() {
     let projection = run_rust("ws-d51-jobqueue");
