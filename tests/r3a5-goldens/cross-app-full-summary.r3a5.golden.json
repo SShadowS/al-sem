@@ -56,6 +56,10 @@
       "dbEffects": [],
       "uncertainties": [
         {
+          "kind": "opaque-body",
+          "routineId": "55555555-0005-0000-0000-000000000001:Codeunit:55300#ddc256ff3ee6e5336bafb4fefca8c26bf703619ff54aac40bf4caeed3a6be15f"
+        },
+        {
           "kind": "opaque-callee",
           "callsiteId": "33333333-0005-0000-0000-000000000003:Codeunit:71001#0248ed06c571be25bd3963f79fc18689e74807aebe0c397abe96e8a45e9dd0bd/cs0"
         }
@@ -81,7 +85,12 @@
       "routineId": "55555555-0005-0000-0000-000000000001:Codeunit:55300#ddc256ff3ee6e5336bafb4fefca8c26bf703619ff54aac40bf4caeed3a6be15f",
       "isDepRoutine": true,
       "dbEffects": [],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "opaque-body",
+          "routineId": "55555555-0005-0000-0000-000000000001:Codeunit:55300#ddc256ff3ee6e5336bafb4fefca8c26bf703619ff54aac40bf4caeed3a6be15f"
+        }
+      ],
       "parameterRoles": [],
       "inRecursiveCycle": false,
       "hasUnresolvedCalls": true,

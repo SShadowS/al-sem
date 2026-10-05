@@ -60,6 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A routine known only from symbols now says its effects are unknown** (#22). A
+  dependency routine with no body got an effect summary with empty `dbEffects` and empty
+  `uncertainties`: the same as a routine proven not to write, apart from an ambiguous
+  `hasUnresolvedCalls`. It now carries an `opaque-body` self-uncertainty naming the
+  routine, as `parse-incomplete` already did for a body that cannot be parsed. The marker
+  passes up to every caller and caps finding confidence as `opaque-callee`. Coverage
+  already said `unknown` / `opaque-dependency`; this closes the gap in the effect
+  summary. Only cross-app models contain bodyless routines, so source-only `alsem
+  analyze` cannot move. The one golden that moved is the r3a5 cross-app summary: the
+  symbol-only routine and its caller each gained the marker. New oracle O7 (r3a5) checks
+  the symbol-only routine, its caller, and the source-bearing dependency beside it, which
+  shows its real `Insert` and no marker. Discrimination: renaming the marker fails O7;
+  removing the confidence alias fails `opaque_body_caps_as_opaque_callee`.
+
 - **`agentflow run` writes one log per invocation and names a contended build** (#43,
   #60). Logs were `logs/<name>.log`, so a re-run under the same name truncated the file a
   killed run's children still wrote; each run now gets `logs/<name>/<stamp>-<rand>.log`.

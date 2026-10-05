@@ -357,14 +357,23 @@ pub fn base_intraprocedural_summary(
 ) -> RoutineSummary {
     let parameter_roles = compute_record_roles(routine, fields);
 
-    // Opaque (.app symbol, no body).
+    // Opaque (.app symbol, no body). #22: the empty `db_effects` means "not
+    // seen", not "proven not to write" — the `opaque-body` self-uncertainty
+    // says so, exactly as `parse-incomplete` does for a body we cannot read.
+    // It propagates to every ancestor like `parse-incomplete`.
     if !routine.body_available {
         return RoutineSummary {
             routine_id: routine.id.clone(),
             db_effects: Vec::new(),
             in_recursive_cycle: false,
             has_unresolved_calls: true,
-            uncertainties: Vec::new(),
+            uncertainties: vec![Uncertainty {
+                kind: "opaque-body".to_string(),
+                callsite_id: None,
+                operation_id: None,
+                routine_id: Some(routine.id.clone()),
+                interface_name: None,
+            }],
             parameter_roles,
         };
     }
