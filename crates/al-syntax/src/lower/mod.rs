@@ -455,6 +455,25 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
             }
         }
     }
+    // ObsoleteState / ObsoleteReason (#26). BC writes obsoletion inside `#if`
+    // blocks (`#if not CLEAN24 Pending #else Removed #endif`), so read through
+    // `collect_properties`, which descends preproc wrappers and whole-value
+    // `#if` arms, rather than direct children only as FieldClass above does.
+    let mut props = Vec::new();
+    for body in node.children_by_field(FieldName::Body) {
+        for member in body.named_children() {
+            collect_properties(member, source, &mut props);
+        }
+    }
+    let values_of = |name: &str| -> Vec<String> {
+        props
+            .iter()
+            .filter(|p| p.name == name && !p.value.is_empty())
+            .map(|p| p.value.trim_matches('\'').to_string())
+            .collect()
+    };
+    let obsolete_state = values_of("obsoletestate");
+    let obsolete_reason = values_of("obsoletereason");
     let dt_lc = data_type.to_ascii_lowercase();
     let is_blob_like = dt_lc == "blob" || dt_lc == "media" || dt_lc == "mediaset";
     crate::ir::FieldDecl {
@@ -463,6 +482,8 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         data_type,
         field_class,
         is_blob_like,
+        obsolete_state,
+        obsolete_reason,
     }
 }
 
@@ -3888,6 +3909,43 @@ table 50116 T
         );
         assert_eq!(obj.fields[1].data_type, "Text[2048]", "first arm's header");
         assert_eq!(obj.keys, [vec!["a"], vec!["b"], vec!["c", "b"]]);
+    }
+
+    /// #26: a field's ObsoleteState / ObsoleteReason reach the IR -- plain, and
+    /// in the `#if` form BC actually uses (every arm reported, none picked).
+    #[test]
+    fn field_obsolete_state_and_reason_reach_the_ir() {
+        let src = r#"
+table 50120 T
+{
+    fields
+    {
+        field(1; Gone; Code[20])
+        {
+            ObsoleteState = Removed;
+            ObsoleteReason = 'Use New instead.';
+        }
+        field(2; Moving; Code[20])
+        {
+#if not CLEAN24
+            ObsoleteState = Pending;
+#else
+            ObsoleteState = Removed;
+#endif
+            ObsoleteReason = 'Replaced.';
+        }
+        field(3; Live; Code[20]) { }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let f = &af.objects[0].fields;
+        assert_eq!(f[0].obsolete_state, ["Removed"]);
+        assert_eq!(f[0].obsolete_reason, ["Use New instead."]);
+        assert_eq!(f[1].obsolete_state, ["Pending", "Removed"], "both #if arms");
+        assert_eq!(f[1].obsolete_reason, ["Replaced."]);
+        assert!(f[2].obsolete_state.is_empty() && f[2].obsolete_reason.is_empty());
     }
 
     /// A whole-value `#if` property gives one `ObjectProperty` per nonempty arm,

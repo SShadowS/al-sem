@@ -186,6 +186,33 @@ codeunit 50934 "D60 Upgrade"
                 Item.Modify();
             until Item.Next(1) = 0;
     end;
+
+    // NOT FLAGGED (issue #16): DataTransfer cannot change a primary key. Before
+    // issue #9 the Rename was a call site and the body-has-call gate caught
+    // it; as a record op it needs the driver-op allow-list.
+    procedure UpgradeWithRename()
+    var
+        Item: Record "D60 Item";
+    begin
+        if Item.FindSet() then
+            repeat
+                Item.Rename(Item."No." + '-OLD');
+                Item.Modify();
+            until Item.Next() = 0;
+    end;
+
+    // NOT FLAGGED (issue #16): Validate runs the field's OnValidate trigger per
+    // row, which DataTransfer does not.
+    procedure UpgradeWithValidate()
+    var
+        Item: Record "D60 Item";
+    begin
+        if Item.FindSet() then
+            repeat
+                Item.Validate(Name, 'migrated');
+                Item.Modify();
+            until Item.Next() = 0;
+    end;
 }
 
 codeunit 50935 "D60 Normal"

@@ -28,6 +28,15 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 const DETECTOR: &str = "d60-upgrade-loop-should-be-datatransfer";
 
+/// The only ops the loop's DRIVER record may perform for the loop to be a
+/// DataTransfer candidate: the `Modify` being replaced, the `Next` advance
+/// (its step is checked separately), and column selection. Anything else on
+/// the driver -- `Rename` (DataTransfer cannot change a key), `Delete`,
+/// `Insert`, `ModifyAll`, `DeleteAll`, `Validate` (triggers), `TestField`
+/// (per-row errors) -- is per-row work DataTransfer cannot express.
+const DRIVER_OPS_DATATRANSFER_CAN_REPLACE: &[&str] =
+    &["Modify", "Next", "SetLoadFields", "AddLoadFields"];
+
 const CURSOR_OPS: &[&str] = &["FindSet", "Find", "FindFirst", "Next"];
 
 /// A CFG node's `source_range` sits fully inside `outer` (same 0-based/utf16
@@ -73,6 +82,7 @@ pub fn detect_d60(
     let mut skipped_body_other_record = 0u64;
     let mut skipped_body_conditional = 0u64;
     let mut skipped_traversal = 0u64;
+    let mut skipped_body_unsupported_op = 0u64;
 
     let lifecycle_objects: HashSet<&str> = ws
         .objects
@@ -186,6 +196,19 @@ pub fn detect_d60(
                 skipped_traversal += 1;
                 continue;
             }
+            // issue #16: PROVE every driver op is one DataTransfer can stand in
+            // for, rather than infer it from "no call site in the body". That
+            // inference broke when Rename became a record op (#9) instead of a
+            // call, and it never covered Delete/Insert/ModifyAll/DeleteAll/
+            // Validate on the driver either. After the traversal gates, so the
+            // ops those already reject keep their `traversal` attribution.
+            if driver_ops_in_loop
+                .iter()
+                .any(|o| !DRIVER_OPS_DATATRANSFER_CAN_REPLACE.contains(&o.op.as_str()))
+            {
+                skipped_body_unsupported_op += 1;
+                continue;
+            }
 
             let table_name = op
                 .table_id
@@ -259,5 +282,6 @@ pub fn detect_d60(
     stats.add_skip("bodyOtherRecordOp", skipped_body_other_record);
     stats.add_skip("bodyConditional", skipped_body_conditional);
     stats.add_skip("traversal", skipped_traversal);
+    stats.add_skip("bodyUnsupportedDriverOp", skipped_body_unsupported_op);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

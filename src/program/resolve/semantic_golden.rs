@@ -31,7 +31,7 @@
 //! three COMMITTED files under `tests/goldens/semantic-edges/`:
 //! `cdo-anon.json` (Member/Interface), `cdo-trigger-anon.json`
 //! (ImplicitTrigger), `cdo-event-anon.json` (EventFlow).
-//! [`run_cdo_semantic_audit`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
+//! [`run_cdo_semantic_audit_on`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
 //! LOAD these committed goldens and anonymize the FRESH side with the SAME
 //! function at audit time.
 //!
@@ -59,7 +59,7 @@
 //!
 //! # CDO audits
 //!
-//! [`run_cdo_semantic_audit`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
+//! [`run_cdo_semantic_audit_on`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
 //! run the load-frozen comparison over a real workspace (env-gated; the
 //! caller checks `CDO_WS` and applies the `ENFORCE_CDO_WS` hard-fail guard —
 //! see `tests/program_resolve_harness.rs`).
@@ -237,39 +237,65 @@ pub struct MintMetadata {
     /// `dirty: false` while the dependency symbols the resolver actually reads
     /// have been swapped wholesale. Cross-app resolution reads those bytes, so a
     /// golden pinned by git state alone is only HALF pinned -- and this repo has
-    /// already lost a baseline that looked pinned and was not. `None` for a golden
-    /// minted before this field existed, or a workspace with no `.alpackages`.
+    /// already lost a baseline that looked pinned and was not. Covers every
+    /// `.alpackages` the resolver reads, ancestors included, and is tagged with
+    /// its scheme (`closure-v2:<hex>`, or `closure-v2:empty` for no packages).
+    /// `None` only in a golden minted before this field existed, which the drift
+    /// check reports (#29).
     #[serde(default)]
     pub dependency_closure_sha256: Option<String>,
 }
 
-/// SHA-256 over the workspace `.alpackages` symbol closure: every file NAME and
-/// its BYTES, in sorted-name order.
+/// The tag of the current closure-digest scheme. A stamp from another scheme
+/// can never equal a current digest, so a scheme change reads as drift until
+/// the goldens are re-stamped (`mint-goldens --restamp`).
+pub const CLOSURE_SCHEME: &str = "closure-v2";
+
+/// SHA-256 over the dependency symbol closure the resolver ACTUALLY loads (#29):
+/// every `.app` file [`crate::dependencies::discover_app_files`] finds, in every
+/// scanned `.alpackages` (the workspace's own AND each ancestor's, up to the git
+/// boundary), keyed by its path relative to `workspace_root` with `/`
+/// separators (`.alpackages/x.app`, `../.alpackages/y.app`), sorted by that key.
+/// Each key and each file's bytes are length-prefixed (u64 LE), so no two
+/// closures frame identically.
 ///
-/// `None` when the directory is absent or empty -- a workspace without dependency
-/// symbols has no closure to pin, which is a legitimate state and must never be
-/// confused with "the closure changed".
-#[must_use]
-pub fn dependency_closure_digest(workspace_root: &Path) -> Option<String> {
-    let dir = workspace_root.join(".alpackages");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file())
-        .collect();
-    if files.is_empty() {
-        return None;
+/// `Ok("closure-v2:empty")` when no `.app` is found -- an explicitly tagged empty
+/// closure, never `None`. `Err` when a cache folder cannot be listed or a file
+/// cannot be read: a probe failure is not an empty closure.
+pub fn dependency_closure_digest(workspace_root: &Path) -> Result<String, String> {
+    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
+    if let Some((folder, e)) = unreadable.first() {
+        return Err(format!("cannot list {}: {e}", folder.display()));
     }
-    files.sort();
+    let mut keyed: Vec<(String, PathBuf)> = Vec::with_capacity(files.len());
+    for f in files {
+        // How many levels above `workspace_root` the cache sits (0 = its own).
+        let owner = f.folder.parent().unwrap_or(&f.folder);
+        let ups = workspace_root
+            .ancestors()
+            .position(|a| a == owner)
+            .ok_or_else(|| format!("{} is not an ancestor cache", f.folder.display()))?;
+        let name = f
+            .path
+            .file_name()
+            .ok_or_else(|| format!("no file name: {}", f.path.display()))?
+            .to_string_lossy();
+        keyed.push((format!("{}.alpackages/{name}", "../".repeat(ups)), f.path));
+    }
+    if keyed.is_empty() {
+        return Ok(format!("{CLOSURE_SCHEME}:empty"));
+    }
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
     let mut hasher = Sha256::new();
-    for f in &files {
-        let name = f.file_name()?.to_string_lossy().to_string();
-        hasher.update(name.as_bytes());
-        hasher.update([0u8]);
-        hasher.update(std::fs::read(f).ok()?);
-        hasher.update([0u8]);
+    for (key, path) in &keyed {
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        hasher.update((key.len() as u64).to_le_bytes());
+        hasher.update(key.as_bytes());
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
     }
-    Some(format!("{:x}", hasher.finalize()))
+    Ok(format!("{CLOSURE_SCHEME}:{:x}", hasher.finalize()))
 }
 
 /// Probe `workspace_root`'s git HEAD SHA + dirty state via the `git` CLI
@@ -331,13 +357,14 @@ pub type DriftHandler = fn(&str);
 fn workspace_drift(stamped: &MintMetadata, workspace_root: &Path) -> Option<String> {
     let (current_sha, current_dirty) = workspace_git_info(workspace_root);
     let current_closure = dependency_closure_digest(workspace_root);
-    // A stamp of `None` predates this field — do not report drift against a
-    // golden that never recorded a closure, or every older golden becomes
-    // permanently "drifted" and the signal is noise again.
-    let closure_drifted = stamped
-        .dependency_closure_sha256
-        .as_ref()
-        .is_some_and(|st| current_closure.as_ref() != Some(st));
+    // #29: every committed golden carries a stamp now, so a MISSING stamp is
+    // itself drift (the caller's handler decides; under ENFORCE_CDO_WS it
+    // fails), and so is a probe failure. A stamp from an older digest scheme
+    // never equals a current digest and reads as drift until re-stamped.
+    let closure_drifted = match (&stamped.dependency_closure_sha256, &current_closure) {
+        (Some(st), Ok(cur)) => st != cur,
+        _ => true,
+    };
     let git_drifted =
         current_sha != stamped.workspace_git_sha || current_dirty != stamped.workspace_dirty;
     if !git_drifted && !closure_drifted {
@@ -355,7 +382,7 @@ fn workspace_drift(stamped: &MintMetadata, workspace_root: &Path) -> Option<Stri
         current_sha,
         current_dirty,
         stamped.dependency_closure_sha256.as_deref(),
-        current_closure.as_deref(),
+        current_closure,
     ))
 }
 
@@ -1188,7 +1215,7 @@ pub fn merge_deanon_map(path: &Path, new_entries: &BTreeMap<String, String>) {
 
 /// Build the anonymized fresh-side site→targets map AND a reverse
 /// `AnonSiteKey -> GoldenSiteKey` index. The reverse index is what lets
-/// `run_cdo_semantic_audit` recover PLAINTEXT fresh identity for a failing
+/// `run_cdo_semantic_audit_on` recover PLAINTEXT fresh identity for a failing
 /// `fresh_wrong`/`genuine_wrong` site (for the deanon map and for
 /// `CdoSemanticAuditReport::genuine_wrong_sites`, which stays plaintext
 /// `GoldenSiteKey` because it only ever needs FRESH's own identity — see the
@@ -1464,7 +1491,7 @@ fn canonical_targets_to_golden(targets: &BTreeSet<CanonicalTarget>) -> BTreeSet<
 ///
 /// # 1B.3b: ported to the anonymized identity space
 ///
-/// `run_cdo_semantic_audit` no longer holds L3's plaintext target set (it
+/// `run_cdo_semantic_audit_on` no longer holds L3's plaintext target set (it
 /// LOADS the committed anonymized golden) — only [`AnonTarget`]s. The THREE
 /// CASES above are preserved EXACTLY; only the identity type changed, per
 /// `anon.rs`'s "re-hash-don't-decrypt" principle: `obj_lookup_anon` is built
@@ -2341,43 +2368,22 @@ pub fn run_unknown_include_sender_plus1_subscribers_preflight_on(
 /// to [`crate::program::l3_mint`] (OUTSIDE `src/program/resolve`), called
 /// only by [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] (the
 /// dev-mint tool's sanctioned callers; also Test 14's `REGEN_TEMP_GOLDENS`
-/// path) — `run_cdo_semantic_audit` itself touches neither.
+/// path) — this audit itself touches neither.
 ///
-/// Callers should gate this on `CDO_WS` env var before calling — this
-/// function still does a real fresh-resolution build, which is expensive on
-/// CDO-scale workspaces.
+/// Reads the program graph from `ctx` and the resolved edges from `report`
+/// (the caller builds them once and shares them across audits);
+/// `workspace_root` is still needed to check the golden's mint stamp for
+/// drift. Callers should gate this on `CDO_WS` — building `ctx`/`report` is a
+/// real fresh-resolution pass, expensive at CDO scale.
 ///
 /// Returns a [`CdoSemanticAuditReport`]. `golden_loaded == false` means
 /// `cdo-anon.json` is missing/invalid (the `ENFORCE_CDO_WS` guard in
 /// `tests/program_resolve_harness.rs` hard-fails on this).
-#[must_use]
-pub fn run_cdo_semantic_audit(
-    workspace_root: &Path,
-    on_drift: DriftHandler,
-) -> CdoSemanticAuditReport {
-    use crate::program::resolve::full::{build_context, resolve_full_program_with};
-
-    let Some(ctx) = build_context(workspace_root) else {
-        // Mirror the old snap-build/ws_ref-lookup failure arms: the golden
-        // is still loaded (and its counts reported) even though there is no
-        // fresh side to compare against.
-        let golden = load_anon_golden(&cdo_anon_golden_path());
-        let golden_loaded = golden.is_some();
-        let l3_total = golden.map(|g| g.entries.len()).unwrap_or_default();
-        return CdoSemanticAuditReport {
-            golden_loaded,
-            l3_total,
-            ..Default::default()
-        };
-    };
-    let report = resolve_full_program_with(&ctx);
-    run_cdo_semantic_audit_on(&ctx, &report, workspace_root, on_drift)
-}
-
-/// Substrate-taking core of [`run_cdo_semantic_audit`] — reads the program
-/// graph from `ctx` and the resolved edges from `report` instead of
-/// rebuilding the snapshot/graph/resolve pass internally. `workspace_root`
-/// is still needed to check the golden's mint stamp for drift.
+///
+/// A `&Path`-taking `run_cdo_semantic_audit` wrapper (build the context
+/// itself) existed and had no caller; it was removed (#47). Unlike the trigger
+/// and event wrappers it cannot be driven safely in a test: on the real
+/// fixture it merges sites into the developer's local `cdo-deanon-map.json`.
 #[must_use]
 pub fn run_cdo_semantic_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -3865,6 +3871,41 @@ codeunit 50808 "EvSub4"
         DRIFT_MSGS.lock().unwrap().push(msg.to_string());
     }
 
+    /// #29: the closure digest pins what the resolver LOADS. An `.app` dropped
+    /// into an ANCESTOR cache (inside the git boundary) changes it -- the swap
+    /// the old workspace-only digest missed -- while a non-`.app` file and a
+    /// cache above the boundary do not.
+    #[test]
+    fn issue29_closure_digest_covers_ancestor_caches_and_only_apps() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        let ws = repo.join("ws");
+        std::fs::create_dir_all(ws.join(".alpackages")).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap(); // the boundary
+        std::fs::write(ws.join(".alpackages").join("Dep_1.0.0.0.app"), b"v1").unwrap();
+        let base = dependency_closure_digest(&ws).expect("digest");
+        assert!(base.starts_with(&format!("{CLOSURE_SCHEME}:")), "{base}");
+
+        // Noise the loader ignores must not move the digest.
+        std::fs::write(ws.join(".alpackages").join("notes.txt"), b"x").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".alpackages")).unwrap(); // above .git
+        std::fs::write(tmp.path().join(".alpackages").join("Out_9.app"), b"x").unwrap();
+        assert_eq!(dependency_closure_digest(&ws).as_deref(), Ok(base.as_str()));
+
+        // The ancestor swap: a same-name higher-version package one level up.
+        std::fs::create_dir_all(repo.join(".alpackages")).unwrap();
+        std::fs::write(repo.join(".alpackages").join("Dep_2.0.0.0.app"), b"v2").unwrap();
+        let swapped = dependency_closure_digest(&ws).expect("digest");
+        assert_ne!(swapped, base, "an ancestor-cache .app must move the digest");
+
+        // A stamp minted before the swap is now drift.
+        let stamped = MintMetadata {
+            dependency_closure_sha256: Some(base),
+            ..MintMetadata::default()
+        };
+        assert!(workspace_drift(&stamped, &ws).is_some());
+    }
+
     /// A1 + A6: the helper REPORTS drift and decides nothing -- a value either
     /// way, never a panic and never a print.
     #[test]
@@ -3872,19 +3913,33 @@ codeunit 50808 "EvSub4"
         let tmp = tempfile::tempdir().expect("tempdir");
 
         // Hand-stated precondition: a bare temp directory is not a git checkout
-        // and has no `.alpackages`, so its CURRENT probe is (None, None)/None.
+        // and has no `.alpackages`, so its CURRENT probe is (None, None) and an
+        // explicitly tagged EMPTY closure (#29: never `None`).
         assert_eq!(
             workspace_git_info(tmp.path()),
             (None, None),
             "precondition: the temp dir must not be a git checkout"
         );
-        assert_eq!(dependency_closure_digest(tmp.path()), None);
-
-        // A6: a default stamp is EXACTLY that probe, so stamped == current.
+        let empty = format!("{CLOSURE_SCHEME}:empty");
         assert_eq!(
-            workspace_drift(&MintMetadata::default(), tmp.path()),
+            dependency_closure_digest(tmp.path()).as_deref(),
+            Ok(empty.as_str())
+        );
+
+        // A6: a stamp EXACTLY equal to that probe is not drift.
+        let matching = MintMetadata {
+            dependency_closure_sha256: Some(empty.clone()),
+            ..MintMetadata::default()
+        };
+        assert_eq!(
+            workspace_drift(&matching, tmp.path()),
             None,
             "a matching stamp is not drift"
+        );
+        // #29: a golden with NO closure stamp is drift, not a silent pass.
+        assert!(
+            workspace_drift(&MintMetadata::default(), tmp.path()).is_some(),
+            "a missing closure stamp must be reported"
         );
 
         // A1: a stamp naming a SHA differs, so this is drift -- and the call
@@ -3892,7 +3947,7 @@ codeunit 50808 "EvSub4"
         let stamped = MintMetadata {
             workspace_git_sha: Some("bc3ccb18".to_string()),
             workspace_dirty: Some(false),
-            dependency_closure_sha256: None,
+            dependency_closure_sha256: Some(empty),
         };
         let msg = workspace_drift(&stamped, tmp.path()).expect("a stamped SHA is drift here");
         assert!(

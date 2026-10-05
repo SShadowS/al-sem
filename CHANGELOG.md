@@ -7,7 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A table field's `ObsoleteState` and `ObsoleteReason` reach the IR** (#26).
+  `FieldDecl` gains `obsolete_state` and `obsolete_reason`, read through
+  `collect_properties` so the `#if not CLEAN… Pending #else Removed #endif` form BC uses
+  reports every arm. They are `Vec`s, not `Option`s: per the lowerer's superset rule a
+  consumer must not pick an arm. IR only; not projected into the L2 feature contract,
+  so no golden moved. (The existing `FieldClass` read still looks at direct children
+  only and misses a `#if`-wrapped value; not changed here.)
+- **`mint-goldens --restamp`** (#29) rewrites only the dependency-closure stamp of the
+  three CDO goldens, for a digest-scheme change on an unmoved baseline. It refuses if any
+  golden's git stamp differs from the workspace.
+
+### Removed
+
+- **`run_cdo_semantic_audit`** (#47), a `&Path` wrapper with no caller. Callers use
+  `run_cdo_semantic_audit_on`; the wrapper could not be driven safely in a test (it would
+  merge the real fixture's sites into the local de-anonymization map).
+
 ### Fixed
+
+- **d60 no longer recommends DataTransfer for a loop that renames or validates its
+  driver** (#16). d60 inferred that a loop body was DataTransfer-compatible from the
+  absence of call sites; #9 made `Rename` a record op instead of a call, so a loop with
+  `Rename` + `Modify` slipped through, and the inference never covered `Delete`,
+  `Insert`, `ModifyAll`, `DeleteAll` or `Validate` on the driver. Every driver op must
+  now be `Modify`, `Next`, `SetLoadFields` or `AddLoadFields`. `ws-d60` gains
+  `UpgradeWithRename` and `UpgradeWithValidate`, neither flagged; disabling the gate
+  makes the r4 golden report both. Dormant on CDO (no d60 findings either way).
+- **The CDO dependency-closure stamp covers every cache the resolver loads** (#29). It
+  hashed only `<workspace>/.alpackages`, while the loader also reads each ancestor
+  `.alpackages` up to the git boundary, so an ancestor-cache swap went unnoticed. It now
+  uses the loader's own discovery (`dependencies::discover_app_files`), hashes `.app`
+  files only, keys them by `../`-relative path, length-prefixes, and is tagged
+  (`closure-v2:<hex>`, or `closure-v2:empty`). A probe failure is an error; a missing
+  stamp is drift (fatal under `ENFORCE_CDO_WS`). The three CDO goldens were re-stamped:
+  only that value changed. Test: `issue29_closure_digest_covers_ancestor_caches_and_only_apps`,
+  which fails if ancestor caches are dropped.
+- **The cli-c cache classification golden was stale, and nothing checked it.** The test
+  compared only each entry's `status`, so the `bytes` the regen writes were never read:
+  the grammar-stamp commit a65dc010 grew two fixtures by 9 bytes and the golden kept the
+  old sizes. The test now compares the whole rendered golden, refreshed to 876/868.
 
 - **`Record.Rename()` is now a database write, in both engines** (#9, partly).
   Neither engine treated `Rec.Rename(..)` as a record op: L2's `record_op_type` had no
