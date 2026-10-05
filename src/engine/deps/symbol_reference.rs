@@ -279,6 +279,66 @@ pub struct AbiObject {
     /// Page controls (name, kind, target). kind ∈ {"part","usercontrol"}.
     /// target = subpage Page NUMBER (string) for parts, control-add-in NAME for usercontrols.
     pub page_controls: Vec<(String, String, String)>,
+    /// The object's `Scope` property, ONLY as an application scope: `"OnPrem"` or
+    /// `"Cloud"` (#27). The same property name carries page-control layout values
+    /// (`Repeater`, `Page`), which are not a scope and are dropped. `None` = absent.
+    pub scope: Option<String>,
+    /// The object's `InherentPermissions` property value, raw (#27).
+    pub inherent_permissions: Option<String>,
+    /// The object's `InherentEntitlements` property value, raw (#27).
+    pub inherent_entitlements: Option<String>,
+}
+
+/// `raw` as an application scope (`"OnPrem"` / `"Cloud"`), or `None` for any
+/// other value -- notably the page-control layout values that share the
+/// `Scope` name (#27). Accepts a quoted or `Scope::`-qualified spelling.
+fn application_scope(raw: &str) -> Option<String> {
+    let v = raw.trim().trim_matches('\'');
+    let v = v.rsplit("::").next().unwrap_or(v).trim();
+    if v.eq_ignore_ascii_case("onprem") {
+        Some("OnPrem".to_string())
+    } else if v.eq_ignore_ascii_case("cloud") {
+        Some("Cloud".to_string())
+    } else {
+        None
+    }
+}
+
+/// Fill the #27 object-level properties from a raw `Properties` array.
+fn apply_access_properties(abi_object: &mut AbiObject, properties: &Option<Vec<RawProperty>>) {
+    abi_object.scope = raw_object_property(properties, "Scope").and_then(|v| application_scope(&v));
+    abi_object.inherent_permissions = raw_object_property(properties, "InherentPermissions");
+    abi_object.inherent_entitlements = raw_object_property(properties, "InherentEntitlements");
+}
+
+impl AbiRoutine {
+    /// The routine's `[Scope('OnPrem'|'Cloud')]` attribute (#27), read from the
+    /// structured attributes. Any other value is not an application scope.
+    #[must_use]
+    pub fn scope(&self) -> Option<String> {
+        self.attribute_args("Scope")
+            .and_then(|args| args.first().and_then(|a| application_scope(a)))
+    }
+
+    /// The routine's `[InherentPermissions(...)]` attribute arguments, raw (#27).
+    #[must_use]
+    pub fn inherent_permissions(&self) -> Option<Vec<String>> {
+        self.attribute_args("InherentPermissions")
+    }
+
+    /// The routine's `[InherentEntitlements(...)]` attribute arguments, raw (#27).
+    #[must_use]
+    pub fn inherent_entitlements(&self) -> Option<Vec<String>> {
+        self.attribute_args("InherentEntitlements")
+    }
+
+    /// The raw argument texts of the first attribute named `name` (any case).
+    fn attribute_args(&self, name: &str) -> Option<Vec<String>> {
+        self.attributes_parsed
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name))
+            .map(|a| a.args.iter().map(|x| x.text.clone()).collect())
+    }
 }
 
 /// An ABI table — physical table layout.
@@ -1261,6 +1321,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                 abi_object.implemented_interfaces =
                     Some(ifaces.iter().map(|s| parse_abi_interface_name(s)).collect());
             }
+            apply_access_properties(&mut abi_object, &o.properties);
             if let Some(icb_raw) = raw_object_property(&o.properties, "InherentCommitBehavior") {
                 let member = match icb_raw.rfind("::") {
                     Some(sep) => icb_raw[sep + 2..].to_lowercase(),
@@ -1300,6 +1361,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             if let Some(target) = &o.target_object {
                 abi_object.extends_target_name = Some(unquote_abi_name(target));
             }
+            apply_access_properties(&mut abi_object, &o.properties);
             objects.push(abi_object);
             if object_type == "TableExtension" {
                 tables.push(AbiTable {
@@ -1350,7 +1412,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             // Task 6 (G7, RV-4): read the table-level `TableType = Temporary` marker.
             is_temporary: raw_table_is_temporary(&t.properties),
         });
-        objects.push(AbiObject {
+        let mut table_object = AbiObject {
             object_type: "Table".to_string(),
             object_number,
             name: t.name.clone().unwrap_or_default(),
@@ -1362,7 +1424,9 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                 .map(parse_method)
                 .collect(),
             ..Default::default()
-        });
+        };
+        apply_access_properties(&mut table_object, &t.properties);
+        objects.push(table_object);
     }
 
     // BARE
@@ -1396,6 +1460,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                 abi_object.implemented_interfaces =
                     Some(ifaces.iter().map(|s| parse_abi_interface_name(s)).collect());
             }
+            apply_access_properties(&mut abi_object, &o.properties);
             objects.push(abi_object);
         }
     }
@@ -1959,6 +2024,66 @@ mod tests {
     /// production path every other test in this module uses (`parse_method`)
     /// — wraps it in a minimal `RawMethod` envelope rather than inventing a
     /// second, divergent parsing route.
+    /// #27: Scope / InherentPermissions / InherentEntitlements reach the ABI, at
+    /// the object level (`Properties`) AND the member level (`Attributes`), and a
+    /// page-control layout value sharing the `Scope` name is NOT a scope.
+    #[test]
+    fn scope_and_inherent_properties_reach_the_abi() {
+        let json = r#"{
+            "AppId": "11111111-0000-0000-0000-000000000027",
+            "Name": "Dep",
+            "Codeunits": [{
+                "Id": 50100, "Name": "OnPremOnly",
+                "Properties": [
+                    {"Name": "Scope", "Value": "OnPrem"},
+                    {"Name": "InherentPermissions", "Value": "X"},
+                    {"Name": "InherentEntitlements", "Value": "X"}
+                ],
+                "Methods": [
+                    {"Name": "Elevated", "Parameters": [],
+                     "Attributes": [
+                        {"Name": "Scope", "Arguments": [{"Value": "OnPrem"}]},
+                        {"Name": "InherentPermissions",
+                         "Arguments": [{"Value": "PermissionObjectType::TableData"},
+                                       {"Value": "Database::\"Customer\""},
+                                       {"Value": "R"}]}
+                     ]},
+                    {"Name": "Plain", "Parameters": []}
+                ]
+            }],
+            "Pages": [{
+                "Id": 50101, "Name": "ListPart",
+                "Properties": [{"Name": "Scope", "Value": "Repeater"}]
+            }]
+        }"#;
+        let abi = parse_symbol_reference(json);
+        let cu = abi
+            .objects
+            .iter()
+            .find(|o| o.name == "OnPremOnly")
+            .expect("codeunit");
+        assert_eq!(cu.scope.as_deref(), Some("OnPrem"));
+        assert_eq!(cu.inherent_permissions.as_deref(), Some("X"));
+        assert_eq!(cu.inherent_entitlements.as_deref(), Some("X"));
+
+        let elevated = cu.routines.iter().find(|r| r.name == "Elevated").unwrap();
+        assert_eq!(elevated.scope().as_deref(), Some("OnPrem"));
+        assert_eq!(elevated.inherent_permissions().map(|a| a.len()), Some(3));
+        let plain = cu.routines.iter().find(|r| r.name == "Plain").unwrap();
+        assert_eq!(plain.scope(), None);
+        assert_eq!(plain.inherent_permissions(), None);
+
+        let page = abi
+            .objects
+            .iter()
+            .find(|o| o.name == "ListPart")
+            .expect("page");
+        assert_eq!(
+            page.scope, None,
+            "Repeater is page layout, not an application scope"
+        );
+    }
+
     fn parse_param_json(param_json: &str) -> AbiParameter {
         let wrapped = format!(r#"{{"Name":"Get","Parameters":[{param_json}]}}"#);
         let raw: RawMethod = serde_json::from_str(&wrapped).unwrap();
