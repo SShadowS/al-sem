@@ -70,6 +70,8 @@ const FINGERPRINT_CORPUS: &[&str] = &[
     "ws-d51-neg",
     "ws-d1-multi-caller",
     "ws-d14-dead-routine",
+    // #13 / #20: temp-only, mixed temp+physical, and parameter-dependent access.
+    "ws-perm-temp",
 ];
 
 const WITNESS_FIXTURE: &str = "ws-d8-commit-in-tx";

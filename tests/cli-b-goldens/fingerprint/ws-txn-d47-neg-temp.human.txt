@@ -4,8 +4,6 @@ Rendering 1 root classification.
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-0000000d4705/table/50100"
   http:       "https://example.test/ping"
-  permissions:
-    TableData "11111111-0000-0000-0000-0000000d4705/table/50100" W
 
   witnesses:
     insert table "11111111-0000-0000-0000-0000000d4705/table/50100" — 1 path shown

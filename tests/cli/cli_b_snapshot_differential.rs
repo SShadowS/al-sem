@@ -134,6 +134,10 @@ const SNAPSHOT_CORPUS: &[&str] = &[
     // (distinct `stableId` per OnAction body) end to end through a byte-compared
     // golden. See the fixture's own header comment for the full rationale.
     "ws-sibling-member-triggers",
+    // #13 / #20: a temporary record needs no TableData permission -- but a
+    // physical access to the same table (Mixed) and a parameter-dependent one
+    // (ByParam) still do. See the fixture's comments.
+    "ws-perm-temp",
 ];
 
 const SHARD_FIXTURE: &str = "ws-d8-commit-in-tx";
