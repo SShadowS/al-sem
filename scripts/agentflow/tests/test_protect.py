@@ -52,3 +52,31 @@ def test_check_diff_reasons():
     assert any(r.startswith("forbidden:ignore-attribute") for r in reasons)
     assert "cargo-version-changed" in reasons
     assert check_diff(["src/lib.rs"], "diff --git a/src/lib.rs b/src/lib.rs\n+fn ok() {}\n", issue=8) == []
+
+
+def _one_file_diff(path, *added):
+    body = "\n".join("+" + a for a in added)
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1,{len(added)} @@\n{body}\n"
+
+
+def test_forbidden_patterns_in_comments_pass_but_code_still_fails():
+    # #46: the guard must see code, not prose. A comment naming a pattern passes;
+    # the same pattern as real code -- including code with a trailing comment -- fails.
+    prose = [
+        ("src/a.rs", "// tests/common/regen.rs carries #[allow(dead_code)] for this reason"),
+        ("src/a.rs", "    /// a probe marked #[ignore] would hide a failure"),
+        ("src/a.rs", "//! never commit with --no-verify"),
+        ("scripts/x.py", "    # no #[ignore] here, and never --no-verify"),
+        ("scripts/x.sh", "# git commit --no-verify is forbidden"),
+    ]
+    for path, line in prose:
+        assert forbidden_additions(_one_file_diff(path, line)) == [], (path, line)
+    code = [
+        ("src/a.rs", "#[allow(dead_code)]", "allow-attribute"),
+        ("src/a.rs", "    #[ignore] // flaky on CI", "ignore-attribute"),
+        ("src/a.rs", '    let url = "https://x"; #![allow(unused)]', "allow-attribute"),
+        ("scripts/x.sh", "git commit --no-verify  # just this once", "no-verify"),
+        ("scripts/x.py", 'run(["git", "commit", "--no-verify"])', "no-verify"),
+    ]
+    for path, line, kind in code:
+        assert [k for _, k, _ in forbidden_additions(_one_file_diff(path, line))] == [kind], (path, line)
