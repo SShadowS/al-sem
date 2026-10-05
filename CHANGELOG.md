@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The temp-record suppression rule lives once** (#34). "Only an exact known/true
+  suppresses" was written out at 13 sites over three carriers (inline in seven
+  detectors, the named helpers, and `SnapTempState` matches in `digest` and
+  `ordering_engine`). It is now `l2::features::known_temp_suppresses`; each site projects
+  its carrier to `Option<bool>` (`PTempState::known_value`, `SnapTempState::known_value`)
+  and calls it. Projection, proof, propagation and encoding sites are untouched. Truth
+  tables pin every state per carrier, and `temp_rule_lives_once` fails on a copy of the
+  rule anywhere in non-test source. No behaviour change; no golden moved.
+
 ### Added
 
 - **A table field's `ObsoleteState` and `ObsoleteReason` reach the IR** (#26).
@@ -28,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No TableData permission is required for a provably temporary record** (#13, #20).
+  Microsoft documents that temporary tables need no permissions on the underlying table,
+  but both permission producers -- the full snapshot's `permissionFacts` and
+  `alsem fingerprint`'s `requiredPermissions` -- ignored temp state. Both now skip a
+  table fact whose temp state is exactly known/true, through the shared rule, before
+  their dedup/merge, so a physical access to the same table still produces its row.
+  This was blocked until #33 keyed temp and physical facts apart in the cone; before
+  that, a nearer temp fact could hide a physical one and the guard would have dropped
+  real permissions. Unknown and parameter-dependent temp state still require.
+  New fixture `ws-perm-temp` pins temp-only (none), mixed (the physical row survives
+  although the temp op comes first) and parameter-dependent (required); both guards
+  were broken to prove the goldens catch it. **On CDO:** required TableData rows
+  17,597 -> 15,844 (1,753 removed across 31 tables and 1,049 routines, none added; 85
+  rows keep their right but now cite the physical witness). Every removed row is backed
+  only by known-temp facts and every kept row by at least one non-temp fact.
 - **d60 no longer recommends DataTransfer for a loop that renames or validates its
   driver** (#16). d60 inferred that a loop body was DataTransfer-compatible from the
   absence of call sites; #9 made `Rename` a record op instead of a call, so a loop with
