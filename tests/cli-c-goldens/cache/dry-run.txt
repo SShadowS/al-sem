@@ -1,6 +1,6 @@
 al-sem cache: <CACHE_DIR>
   would remove 4 file(s) totalling 1.8 KB; kept 1.
-  - 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef.json  (0.8 KB)  removed-content-hash-mismatch
+  - 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef.json  (0.9 KB)  removed-content-hash-mismatch
   - babebabebabebabebabebabebabebabebabebabebabebabebabebabebabebabe.json  (0.8 KB)  removed-version-mismatch
   - deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json  (0.0 KB)  removed-unreadable
   - nothex.json  (0.0 KB)  removed-bad-name

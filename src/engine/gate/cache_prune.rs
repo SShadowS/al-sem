@@ -37,7 +37,12 @@ use crate::engine::ids::sha256_hex;
 // ---------------------------------------------------------------------------
 
 /// Grammar version tag (mirrors `GRAMMAR_VERSION` in al-sem `discover.ts`).
-pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v4.4.1-native";
+///
+/// Carries the grammar COMMIT as well as the package version: grammar `main`
+/// changed parse-tree shapes (B4/B5/G1-G11) without moving the package version
+/// off 4.4.1, and a cache minted under the old shapes must not be reused.
+/// `cache_version_grammar_tracks_the_linked_grammar` checks only the version part.
+pub const CACHE_VERSION_GRAMMAR: &str = "tree-sitter-al-v4.4.1-a7455b69-native";
 
 /// Symbol-reader schema version (al-sem `cache-versions.ts` `symbolReader`).
 /// Bumped 17→18 for the temp-state-tracking epoch (Task 16): the symbol-reader

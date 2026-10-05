@@ -197,6 +197,25 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocParenthesizedExpression
         | RawKind::PreprocSplitCodeBlockOverEndif
         | RawKind::PreprocSplitElseBeginOverEndif
+        // 2026-10 grammar `main` additions (still package v4.4.1). All carry
+        // structure, none is a keyword: `qualified_name` is a TableRelation target
+        // (B5), `namespace_value_list`/`namespace_pair` the name-keyed `Namespaces`
+        // value (B4), and the rest are preproc shapes the lowerer owns descent of
+        // (`preproc_conditional_property_value` is a whole-value `#if`, G6).
+        | RawKind::QualifiedName
+        | RawKind::NamespaceValueList
+        | RawKind::NamespacePair
+        | RawKind::PreprocConditionalArguments
+        | RawKind::PreprocConditionalPropertyValue
+        | RawKind::PreprocSplitBlockCloseAfterEndif
+        | RawKind::PreprocSplitBlockEndInElse
+        | RawKind::PreprocSplitContainerReopen
+        | RawKind::PreprocSplitKey
+        | RawKind::PreprocSplitModify
+        | RawKind::PreprocSplitOpenStatement
+        | RawKind::PreprocSplitPermissionsProperty
+        | RawKind::PreprocSplitTableFieldOpen
+        | RawKind::PreprocSplitVarSectionTail
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration
