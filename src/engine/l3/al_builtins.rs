@@ -11,7 +11,7 @@
 //! that matches the catalog gets "pure-terminal".  See `global_builtins.rs` for the
 //! soundness rationale.
 
-use super::global_builtins;
+use crate::program::resolve::global_builtins;
 
 /// Disposition of a recognized no-receiver global builtin, else `None`.
 /// The string variants match al-sem ("pure-terminal" | "control-terminating").

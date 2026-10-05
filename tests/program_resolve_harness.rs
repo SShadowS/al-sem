@@ -2905,10 +2905,10 @@ use al_sem::program::resolve::semantic_golden::{
     ANON_GOLDEN_SCHEMA_VERSION, AdjudicatedOverride, GoldenSiteKey, SemanticGolden,
     VERDICT_L3_ERROR_INTRINSIC, adjudicated_overrides_path, cdo_anon_golden_path,
     cdo_event_anon_golden_path, cdo_trigger_anon_golden_path, load_adjudicated_overrides,
-    load_anon_event_golden, load_anon_golden, mint_fresh_golden_for_kind, mint_l3_validated_golden,
-    run_cdo_event_audit_on, run_cdo_semantic_audit_on, run_cdo_semantic_audit_on_raw,
-    run_cdo_trigger_audit_on, run_route_applicability, run_route_applicability_on,
-    run_semantic_diff, run_unknown_include_sender_plus1_subscribers_preflight_on,
+    load_anon_event_golden, load_anon_golden, mint_fresh_golden_for_kind, run_cdo_event_audit_on,
+    run_cdo_semantic_audit_on, run_cdo_semantic_audit_on_raw, run_cdo_trigger_audit_on,
+    run_route_applicability, run_route_applicability_on, run_semantic_diff,
+    run_unknown_include_sender_plus1_subscribers_preflight_on,
 };
 
 // beyond-1B.3b Task 3: the INDEPENDENT adjudication test's inputs — the
@@ -3321,7 +3321,7 @@ fn fixture_semantic_golden_matches_l3() {
         .join("tests/goldens/semantic-edges/fixture.json");
 
     if regen::regen_mode() {
-        let golden = mint_l3_validated_golden(&fixture);
+        let golden = al_sem::engine::l3::l3_mint::mint_l3_validated_golden(&fixture);
         let mut json =
             serde_json::to_string_pretty(&golden).expect("golden must serialize to JSON");
         // Task T0.6 R1 fix: the committed golden carries a trailing newline (the
@@ -8795,73 +8795,69 @@ fn unknown_reason_breakdown_over_real_fixtures_sums_and_spans_reasons() {
 // guard) outside `builtins.rs`.
 // ---------------------------------------------------------------------------
 
-/// Fails if any `src/program/resolve/*.rs` file OTHER than `builtins.rs`
-/// contains a live `engine::l3`/`engine::l2` reference outside a `//`/`///`/
-/// `//!` comment. `builtins.rs` is the ONE sanctioned exception
-/// (`global_builtins` re-export, 1B.3b Task 3) and is skipped entirely — its
-/// own module doc explains and bounds that reuse.
+/// Engine-switch S1 guard: no file under `src/program` (recursively) and not
+/// `src/dependencies.rs` may reference the legacy engine (`engine::l3`,
+/// `engine::l2`, `cross_app_l3`) outside a `//`/`///`/`//!` comment. There are
+/// no exceptions: S1 moved the last two sanctioned reuses (the `global_builtins`
+/// catalog and `al_attributes`) into the program engine, and `l3_mint` out of
+/// it. The program engine is the one engine; the legacy one may depend on it,
+/// never the reverse.
 ///
 /// Comment-stripping is a simple "truncate at the first `//` on the line"
-/// pass — sufficient here because every file under this directory uses
-/// `//`-style (line/doc/module-doc) comments exclusively (no `/* */` block
-/// comments), verified at the time of writing. A future block comment would
-/// need this test upgraded; until then, a false NEGATIVE (missing a real
-/// import hidden after a `//` on the same line) is the only failure mode,
-/// never a false positive that would mask a real new dependency.
+/// pass — sufficient because these files use `//`-style comments exclusively
+/// (no `/* */` block comments). A false NEGATIVE (a real import hidden after a
+/// `//` on the same line) is the only failure mode, never a false positive.
 #[test]
-fn resolve_module_has_no_stray_engine_l3_l2_imports() {
-    let resolve_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/program/resolve");
+fn program_has_no_legacy_engine_imports() {
+    fn scan(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        if path.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+                .map(|e| e.expect("readable dir entry").path())
+                .collect();
+            entries.sort();
+            for p in entries {
+                scan(&p, files);
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            files.push(path.to_path_buf());
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    scan(&root.join("src/program"), &mut files);
+    scan(&root.join("src/dependencies.rs"), &mut files);
+
     let mut offenders: Vec<String> = Vec::new();
-    let mut scanned_files = 0usize;
-
-    let entries = std::fs::read_dir(&resolve_dir)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", resolve_dir.display()));
-    for entry in entries {
-        let entry = entry.expect("readable dir entry");
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        let file_name = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or_default()
-            .to_string();
-        // The ONE sanctioned exception — see this test's doc comment.
-        if file_name == "builtins.rs" {
-            continue;
-        }
-        scanned_files += 1;
-
-        let content = std::fs::read_to_string(&path)
+    for path in &files {
+        let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         for (i, raw_line) in content.lines().enumerate() {
             let code = match raw_line.find("//") {
                 Some(idx) => &raw_line[..idx],
                 None => raw_line,
             };
-            if code.contains("engine::l3") || code.contains("engine::l2") {
-                offenders.push(format!("{file_name}:{}: {}", i + 1, raw_line.trim()));
+            if ["engine::l3", "engine::l2", "cross_app_l3"]
+                .iter()
+                .any(|b| code.contains(b))
+            {
+                offenders.push(format!("{}:{}: {}", path.display(), i + 1, raw_line.trim()));
             }
         }
     }
 
     assert!(
-        scanned_files > 5,
-        "grep-guard scanned suspiciously few files ({scanned_files}) under \
-         {} — directory listing may be broken (test would pass vacuously)",
-        resolve_dir.display(),
+        files.len() > 30,
+        "guard scanned suspiciously few files ({}) — the walk may be broken \
+         (the test would pass vacuously)",
+        files.len()
     );
     assert!(
         offenders.is_empty(),
-        "engine::l3/engine::l2 reference(s) found in src/program/resolve \
-         OUTSIDE the sanctioned builtins.rs::global_builtins exception \
-         (1B.3b Task 3 / beyond-1B.3b Task 8 grep-guard) — this directory is \
-         meant to stay fully L3-INDEPENDENT except that one deliberate reuse. \
-         Either move the new code to use a different, non-L3 source, or (if \
-         the reuse is deliberate and bounded like builtins.rs's) extend this \
-         guard's exception list with the same justification:\n{:#?}",
-        offenders,
+        "legacy-engine reference(s) in the program engine (engine-switch S1 \
+         guard). Move the shared code into the program engine or a neutral \
+         module; the legacy engine may import the program engine, never the \
+         reverse:\n{offenders:#?}",
     );
 }
 

@@ -51,7 +51,7 @@ use crate::engine::deps::projection::{
 };
 use crate::engine::deps::symbol_reference::parse_symbol_reference;
 use crate::engine::ids::{encode_field_id, encode_table_id, to_stable_field_id};
-use crate::engine::l3::al_attributes::{AttributeArg, AttributeInfo};
+use crate::program::attributes::{AttributeArg, AttributeInfo};
 
 // ===========================================================================
 // Serializable projection — EXACT golden key order (mirrors the TS projectors).

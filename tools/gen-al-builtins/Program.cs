@@ -11,7 +11,7 @@ using System.Text.Json;
 
 // gen-al-builtins: Offline generator — extracts the complete AL platform global-builtin
 // catalog from the AL compiler DLL's embedded ClassDocumentationResources, then emits:
-//   src/engine/l3/global_builtins.rs  — a phf::phf_set! for bare-call reclassification
+//   src/program/resolve/global_builtins.rs  — a phf::phf_set! for bare-call reclassification
 //   tools/gen-al-builtins/out/member_builtins.json — full Type→[methods] map for Task 3
 //
 // Run manually (not in CI/cargo build) from the repo root:
@@ -113,7 +113,7 @@ class Program
             return 1;
         }
 
-        string rsOut = Path.Combine(repoRoot, "src", "engine", "l3", "global_builtins.rs");
+        string rsOut = Path.Combine(repoRoot, "src", "program", "resolve", "global_builtins.rs");
         string jsonOut = Path.Combine(repoRoot, "tools", "gen-al-builtins", "out", "member_builtins.json");
 
         Directory.CreateDirectory(Path.GetDirectoryName(rsOut));

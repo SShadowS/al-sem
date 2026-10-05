@@ -4,8 +4,8 @@
 //!
 //! # Golden floor
 //!
-//! [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] capture the
-//! L3-oracle target set per call site into a [`SemanticGolden`] (a sorted
+//! `engine::l3::l3_mint::{mint_l3_validated_golden, mint_l3_trigger_golden}`
+//! capture the L3-oracle target set per call site into a [`SemanticGolden`] (a sorted
 //! list keyed by column-ignoring [`GoldenSiteKey`]).
 //! [`assert_against_semantic_golden`] compares a fresh canonical edge batch
 //! against a (plaintext, in-repo-fixture-scale) golden and classifies every
@@ -22,8 +22,8 @@
 //! # 1B.3b: committed, anonymized, frozen — no live L3 in the gate path
 //!
 //! The CDO-scale golden is too large and too proprietary to mint live on
-//! every run. Instead: [`mint_l3_validated_golden`] / [`mint_l3_trigger_golden`]
-//! / `crate::program::l3_mint::project_l3_event_rows` run ONCE, on a dev
+//! every run. Instead: `engine::l3::l3_mint`'s `mint_l3_validated_golden` /
+//! `mint_l3_trigger_golden` / `project_l3_event_rows` run ONCE, on a dev
 //! machine with CDO access, via the dev-mint tool (`src/bin/mint-goldens.rs`,
 //! OUTSIDE `src/program/resolve`). The tool ANONYMIZES every identifying
 //! string (via [`anon::anon`] — see that module's docs for the full
@@ -39,10 +39,9 @@
 //! module nor `differential.rs` imports `engine::l3`/`engine::l2` at all —
 //! not even the three `run_cdo_*_audit` functions, nor [`route_applicability`].
 //! The ONLY surviving L3-oracle access point in the library is
-//! [`crate::program::l3_mint`] (OUTSIDE `src/program/resolve`), which
-//! [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] below delegate to —
-//! and which only the dev-mint tool and the opt-in `REGEN_TEMP_GOLDENS`
-//! fixture-regen test path ever call. The four live dual-run "fresh vs L3"
+//! `engine::l3::l3_mint` (moved out of `src/program` entirely in engine-switch
+//! S1, with its two `mint_l3_*` wrappers) — and only the dev-mint tool and the
+//! opt-in `REGEN_TEMP_GOLDENS` fixture-regen test path ever call it. The four live dual-run "fresh vs L3"
 //! comparison gates that used to validate the fresh resolver on every
 //! CDO-gated test run (`run_harness`/`run_site_harness`/
 //! `run_resolution_harness`/`run_member_resolution_harness`/
@@ -74,7 +73,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::program::graph::ProgramGraph;
-use crate::program::l3_mint::{project_l3, project_l3_implicit_trigger_in_scope};
 use al_syntax::IdentifierFoldExt;
 
 use crate::program::node::{AppRef, ObjKey, ObjectKind, ObjectNodeId};
@@ -1585,9 +1583,9 @@ fn build_obj_lookup_anon(
 
 /// Build a [`SemanticGolden`] from a batch of canonical edges. Oracle-
 /// agnostic — the caller decides whether `edges` came from L3 or from the
-/// fresh resolver. Shared by [`mint_l3_validated_golden`],
-/// [`mint_l3_trigger_golden`], and [`mint_fresh_golden_for_kind`].
-fn build_golden_from_canonical(edges: &[CanonicalEdge]) -> SemanticGolden {
+/// fresh resolver. Shared by `engine::l3::l3_mint`'s `mint_l3_validated_golden`
+/// and `mint_l3_trigger_golden`, and by [`mint_fresh_golden_for_kind`].
+pub fn build_golden_from_canonical(edges: &[CanonicalEdge]) -> SemanticGolden {
     let mut map: BTreeMap<GoldenSiteKey, BTreeSet<GoldenTarget>> = BTreeMap::new();
     for edge in edges {
         let key = canonical_to_golden_key(edge);
@@ -1597,39 +1595,13 @@ fn build_golden_from_canonical(edges: &[CanonicalEdge]) -> SemanticGolden {
     SemanticGolden::from_map(map)
 }
 
-/// **SANCTIONED L3 ORACLE USE (1B.3b: the dev-mint tool is the only caller
-/// post-freeze; the in-repo fixture's `REGEN_TEMP_GOLDENS` path also still
-/// calls this directly — see `tests/program_resolve_harness.rs` Test 14)**:
-/// mint the Member/Interface semantic golden from the L3 oracle.
-///
-/// Calls [`project_l3`] (`crate::program::l3_mint`, 1B.3b Task 3 — the sole
-/// remaining L3-oracle access point in the library) over `workspace_root`,
-/// collects per-site target sets into a [`SemanticGolden`] keyed by
-/// column-ignoring [`GoldenSiteKey`].
-///
-/// Empty target sets (L3 Unknown/Unresolved) are retained — they record sites
-/// that L3 extracted but could not resolve, so the golden covers them.
-#[must_use]
-pub fn mint_l3_validated_golden(workspace_root: &Path) -> SemanticGolden {
-    build_golden_from_canonical(&project_l3(workspace_root))
-}
-
-/// **SANCTIONED L3 ORACLE USE (1B.3b dev-mint tool only)**: mint the
-/// ImplicitTrigger semantic golden from L3's native `PRecordOperation`-keyed
-/// edges ([`project_l3_implicit_trigger_in_scope`], `crate::program::l3_mint`).
-/// Backs `cdo-trigger-anon.json`.
-#[must_use]
-pub fn mint_l3_trigger_golden(workspace_root: &Path) -> SemanticGolden {
-    build_golden_from_canonical(&project_l3_implicit_trigger_in_scope(workspace_root))
-}
-
 /// L3-INDEPENDENT: mint a [`SemanticGolden`] from the FRESH resolver's OWN
 /// output, filtered to one [`EdgeKind`]. Used to freeze fresh's own
 /// resolution as a committed regression baseline for dispatch kinds a small
 /// synthetic fixture exercises end-to-end without L3 at all (the
 /// ImplicitTrigger target-set fixture — 1B.3b Task 1 Step 4). NOT used for
 /// the CDO-derived goldens (those freeze the L3 VERDICT, not fresh's own
-/// output — see [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`]).
+/// output — see `engine::l3::l3_mint::mint_l3_validated_golden`).
 #[must_use]
 pub fn mint_fresh_golden_for_kind(workspace_root: &Path, kind: EdgeKind) -> SemanticGolden {
     use crate::program::resolve::full::{build_context, resolve_full_program_with};
@@ -2360,15 +2332,15 @@ pub fn run_unknown_include_sender_plus1_subscribers_preflight_on(
 /// CDO semantic audit: compare the fresh resolver against the COMMITTED,
 /// ANONYMIZED, FROZEN L3 verdict (`cdo-anon.json`) over a real workspace.
 ///
-/// 1B.3b Task 1: this NO LONGER calls [`project_l3`] (or builds an L3
+/// 1B.3b Task 1: this NO LONGER calls `project_l3` (or builds an L3
 /// workspace at all) — it LOADS the committed golden and anonymizes the
 /// fresh side with the SAME [`anon::anon`] so the two align. 1B.3b Task 3
 /// went further: `src/program/resolve` (this module + `differential.rs`) now
-/// has ZERO `engine::l3`/`engine::l2` imports — [`project_l3`] itself moved
-/// to [`crate::program::l3_mint`] (OUTSIDE `src/program/resolve`), called
-/// only by [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] (the
-/// dev-mint tool's sanctioned callers; also Test 14's `REGEN_TEMP_GOLDENS`
-/// path) — this audit itself touches neither.
+/// has ZERO `engine::l3`/`engine::l2` imports — `project_l3` lives in
+/// `engine::l3::l3_mint` (since engine-switch S1), called only by its
+/// `mint_l3_validated_golden`/`mint_l3_trigger_golden` (the dev-mint tool's
+/// sanctioned callers; also Test 14's `REGEN_TEMP_GOLDENS` path) — this audit
+/// itself touches neither.
 ///
 /// Reads the program graph from `ctx` and the resolved edges from `report`
 /// (the caller builds them once and shares them across audits);

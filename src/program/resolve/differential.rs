@@ -17,7 +17,7 @@
 //! L3-INDEPENDENT at gate time. The three L3-touching projections needed
 //! only to MINT those frozen goldens (`project_l3` /
 //! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) moved to
-//! [`crate::program::l3_mint`], the lone surviving L3-oracle access point in
+//! `engine::l3::l3_mint` (since engine-switch S1), the lone surviving L3-oracle access point in
 //! the library (used by the dev-mint tool, `src/bin/mint-goldens.rs`, and by
 //! the in-repo `REGEN_TEMP_GOLDENS` fixture-regen paths in
 //! `tests/program_resolve_harness.rs`).
@@ -28,7 +28,7 @@
 //! # `object_lc` encoding for `ObjKey::Id`
 //! When an object's key is numeric (`ObjKey::Id(n)`), `object_lc` is written
 //! as `format!("{n}")` — the decimal representation of the signed integer.
-//! [`crate::program::l3_mint`]'s L3-side projections mirror this choice
+//! `engine::l3::l3_mint`'s L3-side projections mirror this choice
 //! exactly so the two stay comparable.
 //!
 //! # `Unresolved`/`Unknown` routes
@@ -151,7 +151,7 @@ pub(crate) fn object_kind_str_to_tag(lc: &str) -> u8 {
 /// Build a [`CanonicalKey`] from pre-resolved, already-lowercased components.
 ///
 /// Both `project_fresh` (via [`routine_to_key`]) and
-/// `crate::program::l3_mint::project_l3` funnel through this so the key
+/// `engine::l3::l3_mint::project_l3` funnel through this so the key
 /// layout is identical on both sides.
 pub(crate) fn make_canonical_key(
     app_guid: String,
@@ -452,7 +452,7 @@ pub(crate) fn witness_contract_holds(route: &crate::program::resolve::edge::Rout
 //
 // [`CanonicalEventRow`] instead keys publisher/subscriber by the SAME
 // `CanonicalKey` (app_guid + object_kind + object_lc + routine_lc) shared
-// with `project_fresh` and [`crate::program::l3_mint`]'s L3-side projections.
+// with `project_fresh` and `engine::l3::l3_mint`'s L3-side projections.
 // `L3Routine` exposes `app_guid`/`object_type`/`object_number`/`name` directly,
 // so the L3 side builds the identical `CanonicalKey` shape WITHOUT going
 // through L3's stable-id hash at all. `publisher_arity` carries the resolved

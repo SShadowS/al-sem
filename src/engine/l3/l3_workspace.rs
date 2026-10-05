@@ -430,7 +430,7 @@ pub struct L3Routine {
     pub kind: String,
     /// Structured attributes (the grammar-derived AttributeInfo shape) — the event
     /// graph reads `[IntegrationEvent]`/`[BusinessEvent]`/`[EventSubscriber]` args.
-    pub attributes_parsed: Vec<super::al_attributes::AttributeInfo>,
+    pub attributes_parsed: Vec<crate::program::attributes::AttributeInfo>,
     /// Owning object's app guid — the EventEdge `subscriberAppId`.
     pub app_guid: String,
     /// Owning object's number — for the publisher's `publisherObjectId`.
@@ -1241,7 +1241,7 @@ fn project_file(
             let kind = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine).to_string();
             let attributes_parsed_json =
                 crate::engine::l2::ir_walk::ir_attributes(ir_routine, &ir_file, source).1;
-            let attributes_parsed: Vec<super::al_attributes::AttributeInfo> =
+            let attributes_parsed: Vec<crate::program::attributes::AttributeInfo> =
                 attributes_parsed_json
                     .into_iter()
                     .filter_map(|v| serde_json::from_value(v).ok())

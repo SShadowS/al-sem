@@ -123,6 +123,51 @@ pub fn read_al_source(path: &Path) -> std::io::Result<String> {
     Ok(decode_al_source(&std::fs::read(path)?))
 }
 
+/// Read the workspace ROOT's `app.json` `id` field VERBATIM when it is a
+/// non-empty string. Mirrors `providers/workspace.ts` (GAP 2). (Moved here from
+/// `engine::l2::l2_workspace` in engine-switch S1.)
+pub fn read_root_app_guid(workspace: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(workspace.join("app.json")).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let id = value.get("id")?.as_str()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// Collect the absolute paths of every `app.json` anywhere under `workspace`,
+/// excluding the shared skip folders ([`SKIP_DIRS`], any case). Used by the gate's
+/// `workspace_diagnostics` to reproduce the provider's multi-app fail-closed
+/// message (which sorts these paths). (Moved here from
+/// `engine::l2::l2_workspace` in engine-switch S1.)
+pub fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![workspace.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(ftype) = entry.file_type() else {
+                continue;
+            };
+            if ftype.is_dir() {
+                if is_skipped_dir_name(&entry.file_name()) {
+                    continue;
+                }
+                stack.push(entry.path());
+            } else if ftype.is_file()
+                && entry.file_name().to_string_lossy().to_lowercase() == "app.json"
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode_al_source;

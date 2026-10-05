@@ -27,10 +27,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::al_attributes::{AttributeInfo, bool_arg, find_attribute, qualified_arg, string_arg};
 use super::l3_workspace::{L3Parameter, L3Resolved, L3Routine};
 use super::symbol_table::SymbolTable;
 use crate::engine::ids::{sha256_hex, to_stable_object_id};
+use crate::program::attributes::{
+    AttributeInfo, bool_arg, find_attribute, qualified_arg, string_arg,
+};
 
 // ---------------------------------------------------------------------------
 // Internal event-graph model (NOT the serde projection shape).

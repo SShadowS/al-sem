@@ -8,14 +8,14 @@
 //! `unquote_abi_name`, `raw_object_property`, and InherentCommitBehavior parse.
 //!
 //! Reuses the shared `AttributeInfo`/`AttributeArg` shape from
-//! `crate::engine::l3::al_attributes` — the ABI path is a SECOND producer of the
+//! `crate::program::attributes` — the ABI path is a SECOND producer of the
 //! SAME shape (the native AST path is the first), so the event-graph resolver and
 //! attribute consumers traverse one normalized representation.
 //!
 //! Never panics: a JSON parse failure yields a DTO with empty objects/tables and
 //! an `error` string (the TS "never throws" / catch posture).
 
-use crate::engine::l3::al_attributes::{AttributeArg, AttributeInfo};
+use crate::program::attributes::{AttributeArg, AttributeInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

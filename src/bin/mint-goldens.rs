@@ -3,11 +3,11 @@
 //! 1B.3b Task 3 update: `src/program/resolve` (the gate module —
 //! `differential.rs` + `semantic_golden.rs`) now has ZERO `engine::l3`
 //! imports. The LAST sanctioned L3 oracle access point in the library is
-//! [`al_sem::program::l3_mint`] (OUTSIDE `src/program/resolve`),
-//! reached from here either directly ([`project_l3_event_rows`]) or via
-//! [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] (thin wrappers in
-//! `semantic_golden.rs` that delegate to `l3_mint::project_l3` /
-//! `l3_mint::project_l3_implicit_trigger_in_scope`). This binary is the ONLY
+//! [`al_sem::engine::l3::l3_mint`] (moved out of `src/program` in engine-switch
+//! S1), reached from here directly: [`project_l3_event_rows`] and the
+//! [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] wrappers over
+//! `l3_mint::project_l3` / `l3_mint::project_l3_implicit_trigger_in_scope`.
+//! This binary is the ONLY
 //! caller of those (plus the in-repo `REGEN_TEMP_GOLDENS` fixture-regen test
 //! path) — the runtime audits
 //! (`run_cdo_semantic_audit_on`/`run_cdo_trigger_audit`/`run_cdo_event_audit`)
@@ -56,14 +56,15 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use al_sem::program::l3_mint::project_l3_event_rows;
+use al_sem::engine::l3::l3_mint::{
+    mint_l3_trigger_golden, mint_l3_validated_golden, project_l3_event_rows,
+};
 use al_sem::program::resolve::anon::{self, ANON_KEY_ENV};
 use al_sem::program::resolve::semantic_golden::{
     MintMetadata, anonymize_event_rows_with_deanon, anonymize_golden_with_deanon,
     cdo_anon_golden_path, cdo_deanon_map_path, cdo_event_anon_golden_path,
     cdo_trigger_anon_golden_path, dependency_closure_digest, load_anon_event_golden,
-    load_anon_golden, merge_deanon_map, mint_l3_trigger_golden, mint_l3_validated_golden,
-    workspace_git_info,
+    load_anon_golden, merge_deanon_map, workspace_git_info,
 };
 
 fn usage() -> ExitCode {

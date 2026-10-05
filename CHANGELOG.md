@@ -38,6 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The program engine no longer imports the legacy engine** (engine-switch S1). Shared
+  code moved out of L2/L3 into neutral homes:
+  - the attribute model `engine::l3::al_attributes` → `program::attributes`;
+  - the generated builtin catalog `engine::l3::global_builtins` →
+    `program::resolve::global_builtins` (the `gen-al-builtins` generator now writes
+    there);
+  - the Microsoft implicit-dependency tier data → `src/dependencies.rs`;
+  - the gate's discovery helpers (`read_root_app_guid`, `count_app_json_paths`) →
+    `source_text`, each caller keeping its nested-app policy;
+  - the L3-oracle golden minting (`l3_mint` and the two `mint_l3_*` wrappers)
+    moved the other way, into `engine::l3`, since it is migration-only tooling
+    that is deleted with L3.
+
+  The old guard `resolve_module_has_no_stray_engine_l3_l2_imports` covered only
+  `src/program/resolve` and allowed one exception. It is replaced by
+  `program_has_no_legacy_engine_imports`, which covers all of `src/program`
+  (recursively) plus `src/dependencies.rs`, has no exceptions, and also bans
+  `cross_app_l3`. Discrimination: a legacy import added to `resolve/builtins.rs`, and
+  one added to `src/dependencies.rs`, each fail it. Behaviour-preserving: the
+  engine-switch harness shows S1 byte-identical to the frozen `s0-legacy` baseline on
+  all 218 corpora.
+
+  Found and left alone: `engine/snapshot.rs` has its own discovery helpers that skip
+  different folders from `source_text`. Unifying them is a policy change, now recorded
+  in the switch spec's population contract.
+
 - **The temp-record suppression rule lives once** (#34). "Only an exact known/true
   suppresses" was written out at 13 sites over three carriers (inline in seven
   detectors, the named helpers, and `SnapTempState` matches in `digest` and

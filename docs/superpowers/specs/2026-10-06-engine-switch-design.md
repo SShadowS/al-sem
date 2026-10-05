@@ -62,7 +62,11 @@ instance, editable/*Allowed, page controls, source table (+ temporary), object a
 order (`l3_workspace.rs:1373-1431`); the symbol table is last-wins (`symbol_table.rs:
 127-182`); program assembly sorts and dedups first-wins (`build.rs:293-311, 615-716`).
 Disk L3 excludes nested apps (`l3_workspace.rs:1537-1556`); program discovery includes
-them (`provider.rs:30-39`). The new builder keeps source occurrence and ingestion order
+them (`provider.rs:30-39`). A third discovery policy exists: `engine/snapshot.rs`
+(the R0 identity snapshot) has its own `discover_al_files` (skips `.alpackages`,
+`.git`), `read_root_app_guid` and `count_app_json` (skips `node_modules`,
+`.alpackages`), unlike `source_text::SKIP_DIRS` — found in S1, left unchanged there
+because unifying it is a policy change. The new builder keeps source occurrence and ingestion order
 separately from lookup order, states its duplicate-object/-routine/-field policy, and
 the harness compares populations as ordered rows or multisets, never maps keyed by
 identity alone. Nested-app and unreadable-file behaviour is decided per consumer and

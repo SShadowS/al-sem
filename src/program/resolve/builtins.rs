@@ -1,27 +1,19 @@
 //! Clean-room global-builtin catalog for the fresh resolver (Plan 1B.2 Phase 2 Task 3).
 //!
-//! # 1B.3b Task 3: the lone sanctioned `engine::l3` dependency in this directory
+//! # The membership catalog lives here (engine-switch S1)
 //!
-//! After 1B.3b Task 3 removed the L3 oracle from the fresh resolver's
-//! validation gates, this module's `use crate::engine::l3::global_builtins`
-//! (below) is the ONLY `engine::l3`/`engine::l2` import left anywhere under
-//! `src/program/resolve`. It is sanctioned because it is a DATA dependency,
-//! not an oracle/validation one — see "Clean-room boundary" below for why
-//! sourcing the membership *set* from the generated catalog is DRY-correct
-//! and carries no L3 disposition/resolution logic. The (separate) L3-oracle
-//! *projection* functions used to mint the frozen semantic goldens
-//! (`project_l3`/`project_l3_implicit_trigger_in_scope`/
-//! `project_l3_event_rows`) live in [`crate::program::l3_mint`], OUTSIDE
-//! `src/program/resolve` entirely.
+//! The generated catalog [`super::global_builtins`] used to live in
+//! `engine::l3` and was this directory's one sanctioned legacy import. Engine
+//! switch S1 moved it into the program engine: the legacy engine's
+//! `al_builtins` now reads it from here, and no file under `src/program`
+//! imports `engine::l3`/`engine::l2` (guard:
+//! `program_has_no_legacy_engine_imports` in `tests/program_resolve_harness.rs`).
 //!
 //! # Clean-room boundary
 //!
-//! The **membership data** (785 names) comes from the authoritative generated set in
-//! `crate::engine::l3::global_builtins` (choice **a** from the task spec): we call
-//! `l3::global_builtins::is_global_builtin` as the membership oracle.  That set is
-//! derived from the AL compiler DLL (`ClassDocumentationResources`) — it is *platform
-//! truth*, not L3 logic.  Sourcing it from the generator's authoritative output is
-//! DRY-correct and not a copy of L3 logic.
+//! The **membership data** (785 names) is the authoritative generated set in
+//! [`super::global_builtins`]. That set is derived from the AL compiler DLL
+//! (`ClassDocumentationResources`) — it is *platform truth*, not resolver logic.
 //!
 //! The **disposition → evidence mapping** (what a catalog hit *means* in this resolver:
 //! a `BuiltinId`, `Evidence::Catalog`, `Witness::CatalogEntry`) is written fresh here.
@@ -35,7 +27,7 @@
 //! ```sh
 //! dotnet run --project tools/gen-al-builtins/gen.csproj
 //! ```
-//! The generator rewrites `src/engine/l3/global_builtins.rs`; this module
+//! The generator rewrites `src/program/resolve/global_builtins.rs`; this module
 //! automatically picks up the new set on the next build.
 //!
 //! # Catalog version
@@ -45,7 +37,7 @@
 //! Embed this in `Witness::CatalogEntry { catalog_version }` so findings can cite
 //! the exact AL-ext snapshot they were produced against.
 
-use crate::engine::l3::global_builtins as l3_membership;
+use super::global_builtins as membership;
 use crate::program::resolve::edge::BuiltinId;
 
 /// The AL-extension provenance string for the current membership set.
@@ -61,10 +53,9 @@ pub fn catalog_version() -> &'static str {
 /// Returns `true` if `name_lc` (already lowercased) is an AL compiler-intrinsic global.
 ///
 /// Delegates to the authoritative generated membership set in
-/// `crate::engine::l3::global_builtins` — see module-level doc for the clean-room
-/// justification.
+/// [`super::global_builtins`] — see the module-level doc.
 pub fn is_global_builtin(name_lc: &str) -> bool {
-    l3_membership::is_global_builtin(name_lc)
+    membership::is_global_builtin(name_lc)
 }
 
 /// Returns `Some(BuiltinId)` for a recognized compiler-intrinsic global, else `None`.
@@ -82,7 +73,7 @@ pub fn global_builtin_id(name_lc: &str) -> Option<BuiltinId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::global_builtins::GLOBAL_BUILTIN_METHODS;
+    use crate::program::resolve::global_builtins::GLOBAL_BUILTIN_METHODS;
 
     #[test]
     fn fresh_catalog_covers_l3_catalog() {

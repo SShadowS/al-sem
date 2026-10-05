@@ -72,53 +72,13 @@ pub(crate) fn discover_al_files_app_scoped(workspace: &Path) -> std::io::Result<
 /// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
 pub(crate) use crate::source_text::read_al_source;
 
-/// Read the workspace ROOT's `app.json` `id` field VERBATIM when it is a
-/// non-empty string. Mirrors `providers/workspace.ts` (GAP 2).
-pub(crate) fn read_root_app_guid(workspace: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(workspace.join("app.json")).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-    let id = value.get("id")?.as_str()?;
-    if id.is_empty() {
-        None
-    } else {
-        Some(id.to_string())
-    }
-}
+/// The shared root-`app.json` reader (moved to `source_text` in engine-switch S1).
+pub(crate) use crate::source_text::read_root_app_guid;
 
 /// Count `app.json` files anywhere under `workspace`, excluding the shared
 /// skip folders (`crate::source_text::SKIP_DIRS`, any case).
 pub(crate) fn count_app_json(workspace: &Path) -> usize {
-    count_app_json_paths(workspace).len()
-}
-
-/// Collect the absolute paths of every `app.json` anywhere under `workspace`,
-/// excluding the shared skip folders (`crate::source_text::SKIP_DIRS`, any
-/// case). Used by the gate's `workspace_diagnostics` to reproduce the
-/// provider's multi-app fail-closed message (which sorts these paths).
-pub(crate) fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
-    let mut stack = vec![workspace.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(ftype) = entry.file_type() else {
-                continue;
-            };
-            if ftype.is_dir() {
-                if crate::source_text::is_skipped_dir_name(&entry.file_name()) {
-                    continue;
-                }
-                stack.push(entry.path());
-            } else if ftype.is_file()
-                && entry.file_name().to_string_lossy().to_lowercase() == "app.json"
-            {
-                paths.push(entry.path());
-            }
-        }
-    }
-    paths
+    crate::source_text::count_app_json_paths(workspace).len()
 }
 
 /// Build one fully-populated [`PRoutine`] from an IR routine (features →

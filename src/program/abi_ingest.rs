@@ -9,7 +9,7 @@ use crate::engine::deps::symbol_reference::{
     AbiEventKind as SrAbiEventKind, AbiRoutine, AbiTable, SymbolReferenceAbi,
     parse_symbol_reference,
 };
-use crate::engine::l3::al_attributes::{AttributeInfo, bool_arg, find_attribute};
+use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{
     AbiParamRetained, AbiParams, Access, FieldNode, ObjectNode, RoutineNode,
