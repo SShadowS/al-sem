@@ -31,7 +31,7 @@
 //! three COMMITTED files under `tests/goldens/semantic-edges/`:
 //! `cdo-anon.json` (Member/Interface), `cdo-trigger-anon.json`
 //! (ImplicitTrigger), `cdo-event-anon.json` (EventFlow).
-//! [`run_cdo_semantic_audit`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
+//! [`run_cdo_semantic_audit_on`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
 //! LOAD these committed goldens and anonymize the FRESH side with the SAME
 //! function at audit time.
 //!
@@ -59,7 +59,7 @@
 //!
 //! # CDO audits
 //!
-//! [`run_cdo_semantic_audit`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
+//! [`run_cdo_semantic_audit_on`]/[`run_cdo_trigger_audit`]/[`run_cdo_event_audit`]
 //! run the load-frozen comparison over a real workspace (env-gated; the
 //! caller checks `CDO_WS` and applies the `ENFORCE_CDO_WS` hard-fail guard —
 //! see `tests/program_resolve_harness.rs`).
@@ -1188,7 +1188,7 @@ pub fn merge_deanon_map(path: &Path, new_entries: &BTreeMap<String, String>) {
 
 /// Build the anonymized fresh-side site→targets map AND a reverse
 /// `AnonSiteKey -> GoldenSiteKey` index. The reverse index is what lets
-/// `run_cdo_semantic_audit` recover PLAINTEXT fresh identity for a failing
+/// `run_cdo_semantic_audit_on` recover PLAINTEXT fresh identity for a failing
 /// `fresh_wrong`/`genuine_wrong` site (for the deanon map and for
 /// `CdoSemanticAuditReport::genuine_wrong_sites`, which stays plaintext
 /// `GoldenSiteKey` because it only ever needs FRESH's own identity — see the
@@ -1464,7 +1464,7 @@ fn canonical_targets_to_golden(targets: &BTreeSet<CanonicalTarget>) -> BTreeSet<
 ///
 /// # 1B.3b: ported to the anonymized identity space
 ///
-/// `run_cdo_semantic_audit` no longer holds L3's plaintext target set (it
+/// `run_cdo_semantic_audit_on` no longer holds L3's plaintext target set (it
 /// LOADS the committed anonymized golden) — only [`AnonTarget`]s. The THREE
 /// CASES above are preserved EXACTLY; only the identity type changed, per
 /// `anon.rs`'s "re-hash-don't-decrypt" principle: `obj_lookup_anon` is built
@@ -2341,43 +2341,22 @@ pub fn run_unknown_include_sender_plus1_subscribers_preflight_on(
 /// to [`crate::program::l3_mint`] (OUTSIDE `src/program/resolve`), called
 /// only by [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] (the
 /// dev-mint tool's sanctioned callers; also Test 14's `REGEN_TEMP_GOLDENS`
-/// path) — `run_cdo_semantic_audit` itself touches neither.
+/// path) — this audit itself touches neither.
 ///
-/// Callers should gate this on `CDO_WS` env var before calling — this
-/// function still does a real fresh-resolution build, which is expensive on
-/// CDO-scale workspaces.
+/// Reads the program graph from `ctx` and the resolved edges from `report`
+/// (the caller builds them once and shares them across audits);
+/// `workspace_root` is still needed to check the golden's mint stamp for
+/// drift. Callers should gate this on `CDO_WS` — building `ctx`/`report` is a
+/// real fresh-resolution pass, expensive at CDO scale.
 ///
 /// Returns a [`CdoSemanticAuditReport`]. `golden_loaded == false` means
 /// `cdo-anon.json` is missing/invalid (the `ENFORCE_CDO_WS` guard in
 /// `tests/program_resolve_harness.rs` hard-fails on this).
-#[must_use]
-pub fn run_cdo_semantic_audit(
-    workspace_root: &Path,
-    on_drift: DriftHandler,
-) -> CdoSemanticAuditReport {
-    use crate::program::resolve::full::{build_context, resolve_full_program_with};
-
-    let Some(ctx) = build_context(workspace_root) else {
-        // Mirror the old snap-build/ws_ref-lookup failure arms: the golden
-        // is still loaded (and its counts reported) even though there is no
-        // fresh side to compare against.
-        let golden = load_anon_golden(&cdo_anon_golden_path());
-        let golden_loaded = golden.is_some();
-        let l3_total = golden.map(|g| g.entries.len()).unwrap_or_default();
-        return CdoSemanticAuditReport {
-            golden_loaded,
-            l3_total,
-            ..Default::default()
-        };
-    };
-    let report = resolve_full_program_with(&ctx);
-    run_cdo_semantic_audit_on(&ctx, &report, workspace_root, on_drift)
-}
-
-/// Substrate-taking core of [`run_cdo_semantic_audit`] — reads the program
-/// graph from `ctx` and the resolved edges from `report` instead of
-/// rebuilding the snapshot/graph/resolve pass internally. `workspace_root`
-/// is still needed to check the golden's mint stamp for drift.
+///
+/// A `&Path`-taking `run_cdo_semantic_audit` wrapper (build the context
+/// itself) existed and had no caller; it was removed (#47). Unlike the trigger
+/// and event wrappers it cannot be driven safely in a test: on the real
+/// fixture it merges sites into the developer's local `cdo-deanon-map.json`.
 #[must_use]
 pub fn run_cdo_semantic_audit_on(
     ctx: &crate::program::resolve::full::ProgramContext,

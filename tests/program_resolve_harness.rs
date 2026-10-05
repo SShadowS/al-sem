@@ -3045,10 +3045,11 @@ fn child_probe_library_under_enforcement() {
     );
 
     // The EVENT audit's check point too. Its path wrapper falls through to the
-    // check point on an empty directory, so it can be driven here; the semantic
-    // audit's returns before its check point on an empty directory, and driving
-    // it on the real `semantic-golden` fixture would merge that fixture's sites
-    // into the developer's local `cdo-deanon-map.json`, so it is not driven.
+    // check point on an empty directory, so it can be driven here. The semantic
+    // audit has no path wrapper any more (#47): it returned before its check
+    // point on an empty directory, and driving it on the real `semantic-golden`
+    // fixture would merge that fixture's sites into the developer's local
+    // `cdo-deanon-map.json`, so it was never driven and was removed.
     let report = al_sem::program::resolve::semantic_golden::run_cdo_event_audit(tmp.path(), record);
     assert!(
         report.golden_loaded,
@@ -3820,7 +3821,7 @@ fn cdo_unknown_include_sender_plus1_subscribers_preflight_is_zero() {
 /// COMMITTED, ANONYMIZED, FROZEN L3 verdict (`cdo-anon.json`) over the real
 /// CDO workspace.
 ///
-/// 1B.3b Task 1: this no longer mints L3 live — `run_cdo_semantic_audit`
+/// 1B.3b Task 1: this no longer mints L3 live — `run_cdo_semantic_audit_on`
 /// LOADS the committed golden. `audit.genuine_wrong_sites` stays PLAINTEXT
 /// `GoldenSiteKey` (fresh's OWN identity, recovered from the anonymized
 /// fresh-side comparison via the reverse index — see `anon.rs`'s
@@ -3973,7 +3974,7 @@ fn cdo_l3_semantic_audit_no_fresh_wrong() {
     // Task 4, then to 54 by argtype-dispatch-and-page-catalog plan Task 1's
     // 2 `PageInstanceVar` duplicate-trigger-name sites): ALL manifest
     // entries are now adjudicated `l3_error_intrinsic` and overlaid
-    // (`run_cdo_semantic_audit` applies `adjudicated-overrides.json` in-memory
+    // (`run_cdo_semantic_audit_on` applies `adjudicated-overrides.json` in-memory
     // before diffing) — fresh is compared against the ADJUDICATED target for
     // these sites, which fresh matches by construction (that agreement is
     // what the independent adjudication in
@@ -4594,7 +4595,7 @@ fn committed_goldens_metadata_is_valid() {
     }
     // Every `l3_error_intrinsic` manifest entry must have a matching overlay
     // entry (also verdict `l3_error_intrinsic`) — the overlay is what
-    // actually makes `run_cdo_semantic_audit` stop flagging these sites, so a
+    // actually makes `run_cdo_semantic_audit_on` stop flagging these sites, so a
     // manifest entry without a matching overlay entry would silently keep
     // failing the CDO gate despite claiming to be adjudicated.
     let override_intrinsic_keys: std::collections::HashSet<(String, u64, u64)> = overrides

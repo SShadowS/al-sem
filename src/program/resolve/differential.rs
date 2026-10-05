@@ -11,7 +11,7 @@
 //! `run_event_flow_gate`) that validated the fresh resolver against a LIVE L3
 //! build on every CDO-gated test run. 1B.3b Task 3 retired all of that: the
 //! fresh resolver is now validated against the COMMITTED, FROZEN, ANONYMIZED
-//! goldens in `semantic_golden.rs` (`run_cdo_semantic_audit` /
+//! goldens in `semantic_golden.rs` (`run_cdo_semantic_audit_on` /
 //! `run_cdo_trigger_audit` / `run_cdo_event_audit`) plus the ported fan-out
 //! applicability teeth (`semantic_golden::route_applicability`) — both
 //! L3-INDEPENDENT at gate time. The three L3-touching projections needed

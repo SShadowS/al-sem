@@ -10,7 +10,7 @@
 //! `l3_mint::project_l3_implicit_trigger_in_scope`). This binary is the ONLY
 //! caller of those (plus the in-repo `REGEN_TEMP_GOLDENS` fixture-regen test
 //! path) — the runtime audits
-//! (`run_cdo_semantic_audit`/`run_cdo_trigger_audit`/`run_cdo_event_audit`)
+//! (`run_cdo_semantic_audit_on`/`run_cdo_trigger_audit`/`run_cdo_event_audit`)
 //! LOAD the committed output instead.
 //!
 //! Mints + ANONYMIZES (via [`anon::anon`] — see that module's docs for the
