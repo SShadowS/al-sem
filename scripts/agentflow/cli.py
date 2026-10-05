@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -181,7 +182,11 @@ def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path, *,
     # load-bearing rather than incidental: it is what lets a gate run in a
     # worktree that has no grammar clone of its own. See `worktrees`.
     env = supervise.sanitized_env(os.environ.copy(), _grammar(ctx), cargo_target_dir)
-    log = ctx.run_dir / "logs" / f"{name}.log"
+    # One log PER INVOCATION, under the gate's name (#43): with `logs/<name>.log`,
+    # a re-run under the same name truncated the file a killed run's children
+    # were still writing, and the two runs' output interleaved. The result
+    # carries the path, so nothing needs to guess it.
+    log = ctx.run_dir / "logs" / name / f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}.log"
     # Here as well as at the `run` boundary, so every caller is covered rather
     # than only the one that happens to pass conductor-supplied argv.
     return supervise.run(ctx, _with_bash(cmd), cwd=cwd, log_path=log, timeout_s=minutes * 60,
@@ -433,9 +438,12 @@ def cmd_run(args, ctx, gh, git):
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
     r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
-    return _emit({"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
-                  "seconds": round(r.seconds, 1), "supervised": supervised},
-                 0 if r.exit_code == 0 else 1)
+    out = {"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
+           "seconds": round(r.seconds, 1), "supervised": supervised}
+    if r.contended_build:
+        # #60: another build held target/ -- environmental, not a gate verdict.
+        out["failure"] = "contended-build"
+    return _emit(out, 0 if r.exit_code == 0 else 1)
 
 
 def cmd_charge(args, ctx, gh, git):

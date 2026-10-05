@@ -167,3 +167,15 @@ def test_file_all_refuses_a_body_that_leaks_a_customer_path_and_files_the_rest(c
     assert out[1]["status"] == "filed" and out[1]["number"] == 80
     assert sum(c.startswith("issue create") for c in r.calls) == 1
     assert read_json(ctx.paths.discoveries_index, default={}).get(leak_fp, {}).get("status") != "filed"
+
+
+def test_a_bad_kind_refuses_the_whole_batch_before_filing(ctx):
+    # #43: validated up front, so a batch can never half-succeed; no gh call.
+    setup(ctx)
+    good = disc()
+    bad = discoveries.Discovery(**{**good.__dict__, "symptom": "other", "kind": "feature"})
+    r = FakeRunner()
+    out = discoveries.file_all(ctx, Gh(ctx, REPO, run=r), [good, bad], "https://s")
+    assert [o["status"] for o in out] == ["batch-refused", "bad-kind"]
+    assert "('bug', 'enhancement')" in out[1]["error"]
+    assert r.calls == []

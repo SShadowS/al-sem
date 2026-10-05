@@ -1577,12 +1577,13 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     calls = []
 
     def fake_run(ctx, cmd, *, cwd, log_path, timeout_s, beat=None, beat_every=60.0, env=None):
-        calls.append({"name": log_path.stem, "cwd": str(cwd), "env": dict(env or {})})
+        # The gate's name is the log's DIRECTORY since #43 (one file per run).
+        calls.append({"name": log_path.parent.name, "cwd": str(cwd), "env": dict(env or {})})
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("")
         # The verification gate says no -- the ONLY way into `rerun_all` -- and
         # on the revert only the final `ci-steps test` does. See the docstring.
-        red = log_path.stem in ("red", "ci-steps-test-on-revert")
+        red = log_path.parent.name in ("red", "ci-steps-test-on-revert")
         return supervise.Result(exit_code=1 if red else 0, log_path=log_path,
                                 timed_out=False, seconds=0.0)
 
@@ -2983,3 +2984,13 @@ def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):
     code, out = run(capsys, root, "run", "--name", "probe2", "--timeout", "1", "--",
                      sys.executable, "-c", "print('x')", gh_run=FakeRunner(), run_id="solo-run")
     assert code == 0 and out["supervised"] is False
+
+
+def test_each_gate_invocation_gets_its_own_log(ctx):
+    # #43: `logs/<name>.log` was shared by every run under one name, so a
+    # replacement run truncated a killed run's log and their output interleaved.
+    a = cli._run_gate(ctx, "probe", [sys.executable, "-c", "print('first')"], 1, ctx.paths.root)
+    b = cli._run_gate(ctx, "probe", [sys.executable, "-c", "print('second')"], 1, ctx.paths.root)
+    assert a.log_path != b.log_path
+    assert a.log_path.parent.name == b.log_path.parent.name == "probe"
+    assert "first" in a.log_path.read_text() and "second" in b.log_path.read_text()

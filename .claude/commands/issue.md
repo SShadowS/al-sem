@@ -124,7 +124,12 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    Each `run` result carries `"supervised": true|false`; it must be `true` here
    (this run holds the claim's lock) — `false` means the lock was lost or never
    held and the gate did not run under supervision, which is `blocked lock-lost`,
-   not a passed gate. A moved golden: dispatch `golden-diff-triager`; only when
+   not a passed gate. A result with `"failure": "contended-build"` means another
+   cargo build held this worktree's `target/` (a link step got `permission
+   denied`) — not a verdict on the code: wait until nothing else builds there
+   (no subagent, reviewer or proof running cargo in it) and run the gate again;
+   do not diagnose it as a test failure. Each run writes its own log under
+   `logs/<name>/`; read the path the result names. A moved golden: dispatch `golden-diff-triager`; only when
    every line is explained run
    `python scripts/agentflow run --name check-goldens-regen --timeout 45 --cwd <worktree> -- bash scripts/check-goldens --regen`
    and commit the regenerated files with the triage summary in the message;
