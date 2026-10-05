@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A field access says whether it reads, writes or both** (#14). The lowerer dropped
+  the assignment operator, so `R.F += 1` lowered exactly like `R.F := 1`, and the walker
+  recorded an assignment target exactly like a read, so "nothing reads this field" could
+  not be asked. `StmtKind::Assignment` now carries `compound` (`+=` `-=` `*=` `/=`), and
+  `PFieldAccess` a serde-skipped `access`: `Read`, `Write` (a `:=` target) or
+  `ReadWrite` (a compound target). Only the target expression itself is a write; a field
+  read nested inside it (an index) stays a read. `ir_first_assignment_in_stmt` now skips
+  a compound assignment, whose right-hand side is a delta, not a value. No serialized
+  golden moved; cdo-gate passes.
 - **A table field's `ObsoleteState` and `ObsoleteReason` reach the IR** (#26).
   `FieldDecl` gains `obsolete_state` and `obsolete_reason`, read through
   `collect_properties` so the `#if not CLEAN… Pending #else Removed #endif` form BC uses
@@ -39,6 +48,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **d5 and d60 require a loop terminator that exhausts the set** (#49, #50). They
+  accepted any loop whose driver `Next` appeared in the `until`, so
+  `until (R.Next() = 0) or Stop` and `until R.Next() <> 0` counted as whole-set
+  traversals, while `Done := R.Next() = 0; until Done` did not. The L2 walker now
+  records `PLoop.exhausting_advance` (serde-skipped): the driver and the `Next` op when
+  the `until` is exactly `R.Next(args) = 0` (either order, parentheses allowed), or a flag
+  assigned exactly once, at the body's top level, to that shape. `whole_set_advance`
+  replaces `advance_discipline_holds` for d5/d60; d1/d2's `is_terminator_next` is
+  unchanged. Fixtures cover compound, wrong-polarity and twice-set-flag loops (silent)
+  and reversed and flag forms (reported); every earlier true positive is kept. **On
+  CDO:** d5 23 -> 22, the one removal a loop that deliberately stops every 1,000 rows to
+  commit (a false positive); d60 unchanged.
+- **`FieldClass` inside `#if` is read** (#62). It was read from the field body's direct
+  children only, so a `#if`-wrapped `FieldClass = FlowField` lowered as `Normal`. It now
+  goes through `collect_properties`; arms that disagree keep `Normal` (consumers want
+  opposite answers there, and the shape occurs 0 times in CDO and DO).
 - **No TableData permission is required for a provably temporary record** (#13, #20).
   Microsoft documents that temporary tables need no permissions on the underlying table,
   but both permission producers -- the full snapshot's `permissionFacts` and
