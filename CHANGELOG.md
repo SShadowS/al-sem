@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   d60's doc comment now say so, and `ir_walk`'s `condition_references_shapes` test pins
   the recorded shapes (it fails if the parenthesis arm is removed or quoted members are
   let through).
+- **Flaky `cli_stderr_logger` test** (`tests/cli/cli_stderr_logger.rs`). It runs `alsem`
+  twice and compares stdout, but other tests in the same binary set
+  `ALCH_DRIVER_VERSION_OVERRIDE` process-wide, so one child could print a different
+  `alsemVersion`. Seen once in a full-suite run. The children now run with that
+  variable removed.
 
 ## [1.4.0] - 2026-10-05
 
