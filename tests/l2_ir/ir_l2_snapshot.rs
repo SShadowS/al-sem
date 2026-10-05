@@ -130,33 +130,65 @@ fn ir_l2_features_snapshot_over_r0_corpus() {
         return;
     }
 
-    // Drift: name the routines whose digest changed and show the current Debug repr.
-    let exp: std::collections::HashMap<&str, &str> = expected
-        .lines()
-        .filter_map(|l| l.split_once('\t'))
-        .collect();
-    let act: std::collections::HashMap<&str, &str> =
-        lines.lines().filter_map(|l| l.split_once('\t')).collect();
-    let mut drift: Vec<String> = Vec::new();
-    for (rid, dig) in &act {
-        if exp.get(rid) != Some(dig) {
-            let detail = repr_by_rid
-                .get(*rid)
-                .map(|j| j.as_str())
-                .unwrap_or("<none>");
-            drift.push(format!("  CHANGED {rid}\n    now: {detail}"));
-        }
-    }
-    for rid in exp.keys() {
-        if !act.contains_key(rid) {
-            drift.push(format!("  REMOVED {rid}"));
-        }
-    }
+    let (counts, drift) = drift_report(&expected, &lines, &repr_by_rid);
     panic!(
-        "IR L2 feature snapshot drifted on {} routine(s) (regenerate with REGEN_TEMP_GOLDENS=1 if intended):\n{}",
-        drift.len(),
+        "IR L2 feature snapshot drifted: {counts} (regenerate with REGEN_TEMP_GOLDENS=1 if intended):\n{}",
         drift.into_iter().take(20).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// Classify snapshot drift per routine (#38). ADDED = not in the golden (a new
+/// fixture licenses it); REMOVED = only in the golden; CHANGED = in both with a
+/// different digest -- the only kind that is a behaviour movement to explain.
+/// CHANGED lines come first, and each group is sorted, so the report is stable.
+fn drift_report(
+    expected: &str,
+    actual: &str,
+    repr_by_rid: &std::collections::BTreeMap<String, String>,
+) -> (String, Vec<String>) {
+    use std::collections::BTreeMap;
+    let parse = |s: &'_ str| -> BTreeMap<String, String> {
+        s.lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(r, d)| (r.to_string(), d.to_string()))
+            .collect()
+    };
+    let (exp, act) = (parse(expected), parse(actual));
+    let now = |rid: &str| repr_by_rid.get(rid).map_or("<none>", |j| j.as_str());
+    let (mut changed, mut added, mut removed) = (Vec::new(), Vec::new(), Vec::new());
+    for (rid, dig) in &act {
+        match exp.get(rid) {
+            None => added.push(format!("  ADDED {rid}")),
+            Some(old) if old != dig => {
+                changed.push(format!("  CHANGED {rid}\n    now: {}", now(rid)))
+            }
+            Some(_) => {}
+        }
+    }
+    for rid in exp.keys().filter(|r| !act.contains_key(*r)) {
+        removed.push(format!("  REMOVED {rid}"));
+    }
+    let counts = format!(
+        "{} changed, {} added, {} removed",
+        changed.len(),
+        added.len(),
+        removed.len()
+    );
+    (counts, [changed, removed, added].concat())
+}
+
+#[test]
+fn drift_report_separates_added_from_changed() {
+    let reprs = std::collections::BTreeMap::new();
+    let golden = "a\t01\nb\t02\nc\t03\n";
+    // A fixture-only addition: every old routine unchanged, two new ones.
+    let (counts, lines) = drift_report(golden, "a\t01\nb\t02\nc\t03\nd\t04\ne\t05\n", &reprs);
+    assert_eq!(counts, "0 changed, 2 added, 0 removed");
+    assert_eq!(lines, ["  ADDED d", "  ADDED e"]);
+    // A real movement on a pre-existing routine, plus one removal.
+    let (counts, lines) = drift_report(golden, "a\t01\nb\tff\n", &reprs);
+    assert_eq!(counts, "1 changed, 0 added, 1 removed");
+    assert_eq!(lines, ["  CHANGED b\n    now: <none>", "  REMOVED c"]);
 }
 
 /// PROOF the Debug-based digest catches `#[serde(skip)]` drift that a serde-JSON /
