@@ -236,6 +236,18 @@ fn classification_oracle_all_vs_golden_json() {
             "classification mismatch for {file}: got {actual_str:?}, want {expected_str:?}"
         );
     }
+
+    // The WHOLE golden, `bytes` included. The loop above reads only `status`, so
+    // the `bytes` the regen writes went unchecked: a grammar-stamp change
+    // (a65dc010) grew two fixtures by 9 bytes and the golden kept the old sizes.
+    let cache_dir = fixture_cache_dir();
+    let rendered =
+        classification_json_text(&prune_cache(Some(&cache_dir.to_string_lossy()), true).entries);
+    assert_eq!(
+        golden_text.replace("\r\n", "\n"),
+        rendered.replace("\r\n", "\n"),
+        "classification.json is stale (bytes or entries); regenerate with REGEN_TEMP_GOLDENS=1"
+    );
 }
 
 // ---------------------------------------------------------------------------

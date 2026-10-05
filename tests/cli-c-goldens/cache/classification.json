@@ -1,7 +1,7 @@
 [
   {
     "file": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef.json",
-    "bytes": 867,
+    "bytes": 876,
     "status": "removed-content-hash-mismatch"
   },
   {
@@ -11,7 +11,7 @@
   },
   {
     "file": "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe.json",
-    "bytes": 859,
+    "bytes": 868,
     "status": "kept"
   },
   {
