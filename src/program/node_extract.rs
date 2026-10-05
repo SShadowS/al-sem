@@ -1136,6 +1136,67 @@ codeunit 50107 "Conflicting TableNo"
         );
     }
 
+    /// A whole-value `#if` (`TableNo = #if X A; #else B; #endif`, grammar G6) is ONE
+    /// `property` node. Its arms must reach the degrade as separate values: as one
+    /// entry holding the directive text it parsed as a confident single name.
+    #[test]
+    fn conflicting_whole_value_preproc_properties_degrade_to_none() {
+        let src = r#"
+codeunit 50110 "Whole Value TableNo"
+{
+    TableNo =
+#if CLEAN25
+        Customer;
+#else
+        Vendor;
+#endif
+}
+
+page 50111 "Whole Value SourceTable"
+{
+    SourceTable =
+#if CLEAN25
+        Customer
+#elif CLEAN26
+#if CLEAN27
+        "Sales Header"
+#else
+        Item
+#endif
+#endif
+        ;
+
+    layout
+    {
+    }
+}
+"#;
+        let objs = extract_objs(src);
+        assert_eq!(objs[0].table_no, None, "TableNo arms conflict");
+        assert_eq!(objs[1].source_table, None, "SourceTable arms conflict");
+    }
+
+    /// Control: a whole-value `#if` whose arms agree keeps the value.
+    #[test]
+    fn agreeing_whole_value_preproc_property_keeps_the_value() {
+        let src = r#"
+codeunit 50112 "Agreeing TableNo"
+{
+    TableNo =
+#if CLEAN25
+        Customer;
+#else
+        CUSTOMER;
+#endif
+}
+"#;
+        let objs = extract_objs(src);
+        assert!(
+            matches!(&objs[0].table_no, Some(ObjectRef::Name { normalized_lc, .. }) if normalized_lc == "customer"),
+            "agreeing arms keep the value"
+        );
+    }
+
     #[test]
     fn identical_preproc_source_table_branches_are_not_a_conflict() {
         // Both #if/#else branches declare the SAME value — a textual

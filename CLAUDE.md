@@ -103,7 +103,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 
 - Rust 1.75+
 - tree-sitter-al grammar (currently **v4.4.1 + `main` at `bf72a2d0`**, see the Grammar
-  section — the package version did not move for ~330 shape-changing commits): a plain, gitignored clone of
+  section — the package version did not move for 353 commits, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
   against `main`, so they always use the same grammar.
@@ -355,7 +355,7 @@ EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never 
 ## Grammar (tree-sitter-al v4.4.1 + main `bf72a2d0`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
-committed `node-types.sha256` matches `main` at **`bf72a2d0`** (2026-10-05), ~335 commits
+committed `node-types.sha256` matches `main` at **`bf72a2d0`** (2026-10-05), 353 commits
 past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
 version is NOT a grammar identity any more** — name the commit. v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
@@ -389,8 +389,12 @@ since B8 its arms may also be `CalcFormula` formulas), and ten new preproc shape
 `preproc_split_block_end_in_else`/`_close_after_endif`, `preproc_split_var_section_tail`,
 `preproc_split_table_field_open`, `preproc_split_key`, `preproc_split_modify`,
 `preproc_split_container_reopen`, `preproc_split_permissions_property`). The engine reads
-property values as TEXT, so B4/B5/B5b/G6/B8 moved nothing; the preproc shapes needed lowerer
-arms (see CHANGELOG). Zero goldens moved from the grammar (the cache `dry-run.txt` moved
+property values as TEXT, so B4/B5/B5b/B8 move no IR. G6 does: a whole-value `#if` is one
+`property` node, and its raw text (directives included) reached `SourceTable`/`TableNo` as
+a confident table name, so `lower_property` now emits one entry per arm (this was also true
+of the old `preproc_conditional_table_relation` shape). Eight of the ten preproc shapes
+needed lowerer arms; `_container_reopen` and `_permissions_property` did not (see CHANGELOG).
+On CDO, nothing moved. Zero goldens moved from the grammar (the cache `dry-run.txt` moved
 only because the longer `CACHE_VERSION_GRAMMAR` stamp grew a fixture past 0.85 KB); CDO
 histogram byte-identical. Commits keep landing on `main` — it moved twice during the
 upgrade (`821c9147` -> `a7455b69` -> `bf72a2d0`); check `origin/main` again before you

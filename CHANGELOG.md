@@ -85,11 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Grammar: tree-sitter-al `main` at `bf72a2d0`** (package version still 4.4.1; was the
-  v4.4.1 commit `7819df5`). CI builds against `main`, which had moved ~335 commits and
+  v4.4.1 commit `7819df5`). CI builds against `main`, which had moved 353 commits and
   broke the `node-types.json` hash guard. 473 -> 487 named kinds, all triaged
   `Structural` in `kind_policy.rs`; the `table` field is gone (TableRelation now has one
   `target: (qualified_name …)`, B5). Property values are read as text, so the
-  B4/B5/B5b/G6/B8 property shape changes move no IR. `CACHE_VERSION_GRAMMAR` is now
+  B4/B5/B5b/B8 property shape changes move no IR; G6 (a whole-value `#if`) does, see
+  Fixed. `CACHE_VERSION_GRAMMAR` is now
   `tree-sitter-al-v4.4.1-bf72a2d0-native`: it names the commit, because the version alone
   no longer identifies the grammar. Measured old vs new: per-test outcomes identical apart
   from the new lowerer tests (see Fixed) and the cache `dry-run.txt` size line (the longer
@@ -185,8 +186,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The lowerer reads the ten new preproc shapes** of the `bf72a2d0` grammar (see Changed;
+- **A whole-value `#if` property (`TableNo = #if X Customer; #else Vendor; #endif`) gives
+  one `ObjectProperty` per arm** (`lower_property`, `crates/al-syntax/src/lower/mod.rs`).
+  It is one `property` node (`preproc_conditional_property_value`, G6; before this grammar
+  `preproc_conditional_table_relation`, same problem), and its raw text, directives
+  included, was stored as ONE value. `node_extract::singular_property_value` degrades only
+  at two or more entries, so the junk became a confident `ObjectRef::Name`: an implicit
+  `Rec` typed as a table that does not exist. Now a conflict between arms degrades to
+  `None`, as a `#if`-wrapped property already did. The legacy L2/L3 readers
+  (`ir_walk.rs`, `l3_workspace.rs`) take the first entry, so they now get the first arm.
+- **The lowerer reads eight new preproc shapes** of the `bf72a2d0` grammar (see Changed;
   `crates/al-syntax/src/lower/mod.rs`; each was an ERROR before, real BC 29 sites):
+  `preproc_conditional_arguments`, `preproc_split_block_end_in_else`,
+  `preproc_split_block_close_after_endif`, `preproc_split_open_statement` (in a
+  `case_body`), `preproc_split_var_section_tail`, `preproc_split_table_field_open`,
+  `preproc_split_key`, `preproc_split_modify`. The other two new shapes need nothing:
+  `preproc_split_container_reopen` (the generic walks find it) and
+  `preproc_split_permissions_property` (no consumer reads `Permissions`). Details:
   - `preproc_conditional_arguments` (`P(a, #if X b, #endif c)`): every arm's arguments
     are union-read into the call, as `preproc_split_call_statement` already did. Before,
     the whole `#if` was one `Unknown` argument and the calls in it were unreachable. A
@@ -195,7 +211,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `preproc_split_block_end_in_else` / `preproc_split_block_close_after_endif` (a
     procedure boundary inside an `#else`) are recovered like `preproc_split_code_block_end`.
     So is `preproc_split_else_begin_over_endif`, which predates this grammar: its
-    statements were silently dropped.
+    statements were silently dropped. The tree is the `#else` reading, so a statement
+    after the `#endif` is attributed to the following routine only; in the `#if` reading
+    it is also P's, and that edge from P is missed.
   - `preproc_split_open_statement` in a `case_body` (else / else-begin per arm) is the
     case's else; it was dropped with its calls. Elsewhere the generic split-statement
     recovery already kept its calls.
@@ -206,6 +224,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `preproc_split_modify`: a trigger in its body has the first arm's target as its
     enclosing member, as with `modify`.
   Each fix is pinned by a lowerer test with a recorded discrimination proof.
+  Known limits, not fixed: (1) a split argument list's arity is the union of every arm,
+  which may match no build's overload; (2) a split key or split field header is read from
+  the first arm only, so d56 (primary-key reasoning) sees only that arm's key fields;
+  (3) `preproc_split_permissions_property` is not surfaced as an `ObjectProperty`, and the
+  LSP `fieldProperties` request (`symbol_props.rs`) finds only `field_declaration`, so a
+  field inside a split table field has no properties.
 
 - **The `spawn_updater_rebuilds_context_after_rung2_escalation` test no longer flakes under
   load.** It sent its three file saves 300 ms apart and expected three swaps. When the

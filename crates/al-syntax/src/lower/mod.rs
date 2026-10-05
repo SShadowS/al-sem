@@ -487,23 +487,44 @@ fn collect_report_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, 
     }
 }
 
-/// Lower a `property` node (`name = value`). Name lowercased; value is the raw text
-/// of the value field (trimmed). None when the name is missing.
-fn lower_property(node: RawNode, source: &str) -> Option<crate::ir::ObjectProperty> {
-    let name = node
-        .field(FieldName::Name)?
-        .text(source)
-        .trim()
-        .fold_identifier();
-    let value = node
-        .field(FieldName::Value)
-        .map(|v| v.text(source).trim().to_string())
-        .unwrap_or_default();
-    Some(crate::ir::ObjectProperty {
-        name,
-        value,
-        origin: origin_of(node),
-    })
+/// Lower a `property` node (`name = value`) into `out`. Name lowercased; value is the
+/// raw text of the value field (trimmed). Nothing when the name is missing.
+///
+/// A whole-value `#if` (`TableNo = #if X Customer; #else Vendor; #endif`) is a
+/// `preproc_conditional_property_value` whose arms are its `value` fields (grammar
+/// G6). It gives ONE entry per nonempty arm, nested conditionals included — the
+/// one-per-branch contract of [`collect_properties`]. Its raw text, directives and
+/// all, is not a value: as one entry it reached `singular_property_value` as a
+/// confident single table name.
+fn lower_property(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
+    let Some(name_node) = node.field(FieldName::Name) else {
+        return;
+    };
+    let name = name_node.text(source).trim().fold_identifier();
+    let mut values = Vec::new();
+    match node.field(FieldName::Value) {
+        Some(v) => property_arm_values(v, source, &mut values),
+        None => values.push(String::new()),
+    }
+    for value in values {
+        out.push(crate::ir::ObjectProperty {
+            name: name.clone(),
+            value,
+            origin: origin_of(node),
+        });
+    }
+}
+
+/// The value text(s) of one property value node: itself, or every arm of a
+/// whole-value `#if`, recursively.
+fn property_arm_values(v: RawNode, source: &str, out: &mut Vec<String>) {
+    if v.kind() == RawKind::PreprocConditionalPropertyValue {
+        for arm in v.children_by_field(FieldName::Value) {
+            property_arm_values(arm, source, out);
+        }
+    } else {
+        out.push(v.text(source).trim().to_string());
+    }
 }
 
 /// Collect object-level `property` declarations, descending preproc wrappers
@@ -520,11 +541,7 @@ fn lower_property(node: RawNode, source: &str) -> Option<crate::ir::ObjectProper
 /// `node_extract::singular_property_value`.
 fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
     match node.kind() {
-        RawKind::Property => {
-            if let Some(p) = lower_property(node, source) {
-                out.push(p);
-            }
-        }
+        RawKind::Property => lower_property(node, source, out),
         _ if is_preproc_wrapper(node) => {
             for c in node.named_children() {
                 collect_properties(c, source, out);
@@ -1121,6 +1138,11 @@ fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 /// here until then), and the 2026-10 `preproc_split_block_end_in_else` /
 /// `preproc_split_block_close_after_endif` pair, a procedure boundary inside an
 /// `#else` (`… #else C(); end; local procedure Q() begin … #endif end;`).
+///
+/// That pair is the `#else` reading only. In the `#if` reading there is no Q and P
+/// runs on to the final `end`, so a statement after the `#endif` belongs to P there.
+/// Here it is attributed to Q alone: P has no edge to it (a missed edge, not a wrong
+/// one).
 fn lower_code_block(
     cb: RawNode,
     ir: &mut Ir,
@@ -3866,6 +3888,38 @@ table 50116 T
         );
         assert_eq!(obj.fields[1].data_type, "Text[2048]", "first arm's header");
         assert_eq!(obj.keys, [vec!["a"], vec!["b"], vec!["c", "b"]]);
+    }
+
+    /// A whole-value `#if` property gives one `ObjectProperty` per nonempty arm,
+    /// nested conditionals included, never one entry holding the directive text.
+    #[test]
+    fn whole_value_preproc_property_gives_one_entry_per_arm() {
+        let src = r#"
+page 50118 P
+{
+    SourceTable =
+#if A
+        Customer
+#elif B
+#if C
+        "Sales Header"
+#else
+        Item
+#endif
+#else
+#endif
+        ;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values: Vec<&str> = af.objects[0]
+            .properties
+            .iter()
+            .filter(|p| p.name == "sourcetable")
+            .map(|p| p.value.as_str())
+            .collect();
+        assert_eq!(values, ["Customer", "\"Sales Header\"", "Item"]);
     }
 
     /// `preproc_split_modify`: `#if modify(A) #else modify(B) #endif { … }`. A trigger
