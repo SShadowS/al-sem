@@ -744,16 +744,19 @@ under `docs/superpowers/specs/`.
   concrete cost: the semantic audit paired ZERO sites against it and still reported a
   pass for two months. **A baseline you cannot reconstruct is not a baseline.**
   Every golden stamps `workspace_git_sha`, `workspace_dirty` AND
-  `dependency_closure_sha256` (SHA-256 over each `.alpackages` file's name + bytes).
-  That third field exists because git state covers only TRACKED files — the symbol
-  closure is gitignored, so a workspace can report `dirty: false` while the
-  dependencies the resolver reads were swapped wholesale. Under `ENFORCE_CDO_WS=1`
-  any drift in these is a HARD FAILURE, not a warning; ungated developer runs still
-  only warn. Advancing the pin is deliberate: move the worktree, re-mint, re-triage.
-  **Known limit:** the closure digest covers only `<workspace>/.alpackages`, while
-  `dependencies.rs` walks EVERY `.alpackages` up the ancestor chain — a same-GUID
-  higher-version `.app` in an ancestor cache still moves dependency selection
-  invisibly. Do not read `dependency_closure_sha256` as "the closure is pinned".
+  `dependency_closure_sha256`. That third field exists because git state covers only
+  TRACKED files — the symbol closure is gitignored, so a workspace can report
+  `dirty: false` while the dependencies the resolver reads were swapped wholesale.
+  Since #29 it is computed from the SAME discovery the loader uses
+  (`dependencies::discover_app_files`): every `.app` in the workspace's own AND each
+  ancestor `.alpackages` up to the git boundary, keyed by `../`-relative path,
+  length-prefixed, tagged `closure-v2:<hex>` (`closure-v2:empty` for no packages).
+  Under `ENFORCE_CDO_WS=1` any drift in these is a HARD FAILURE, not a warning —
+  including a golden with no closure stamp, or a probe that cannot read a cache;
+  ungated developer runs still only warn. Advancing the pin is deliberate: move the
+  worktree, re-mint, re-triage. A digest-SCHEME change on an unmoved baseline is a
+  re-stamp, not a re-mint: `mint-goldens --restamp` rewrites only the closure stamp
+  and refuses if any golden's git stamp differs from the workspace.
 - **CDO ratchet tests skip silently by default, but can be made to fail loudly.**
   The north-star zero-ratchets (real-unknown rate, unknown count, `ambiguousResolved`
   pin, coverage contract) live in tests gated on the `CDO_WS` env var pointing at a

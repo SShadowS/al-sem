@@ -61,8 +61,9 @@ use al_sem::program::resolve::anon::{self, ANON_KEY_ENV};
 use al_sem::program::resolve::semantic_golden::{
     MintMetadata, anonymize_event_rows_with_deanon, anonymize_golden_with_deanon,
     cdo_anon_golden_path, cdo_deanon_map_path, cdo_event_anon_golden_path,
-    cdo_trigger_anon_golden_path, dependency_closure_digest, merge_deanon_map,
-    mint_l3_trigger_golden, mint_l3_validated_golden, workspace_git_info,
+    cdo_trigger_anon_golden_path, dependency_closure_digest, load_anon_event_golden,
+    load_anon_golden, merge_deanon_map, mint_l3_trigger_golden, mint_l3_validated_golden,
+    workspace_git_info,
 };
 
 fn usage() -> ExitCode {
@@ -87,7 +88,11 @@ fn usage() -> ExitCode {
          PIN CDO_WS to a clean/tagged ref at mint time — the mint-time git SHA\n\
          + dirty flag are stamped into each golden's metadata, so a later audit\n\
          can warn on workspace drift. Re-mint when intentionally advancing the\n\
-         pin."
+         pin.\n\
+         \n\
+         --restamp  rewrite ONLY the dependency-closure stamp of the three\n\
+                    goldens (a digest-scheme change on an unmoved baseline);\n\
+                    refuses if any golden's git stamp differs from the workspace."
     );
     ExitCode::FAILURE
 }
@@ -140,18 +145,25 @@ fn main() -> ExitCode {
     eprintln!("  workspace git: sha={workspace_git_sha:?} dirty={workspace_dirty:?}");
     // git state covers only TRACKED files; `.alpackages` is gitignored, so the
     // dependency symbols the resolver actually reads are invisible to `dirty`.
-    // Stamp them separately or the baseline is only half pinned.
-    let dependency_closure_sha256 = dependency_closure_digest(&workspace_root);
-    match &dependency_closure_sha256 {
-        Some(d) => eprintln!("  .alpackages closure: {d}"),
-        None => eprintln!(
-            "  .alpackages closure: NONE (no dependency symbols found) — cross-app              resolution will see nothing, and drift in this closure cannot be detected"
-        ),
+    // Stamp them separately or the baseline is only half pinned. A probe
+    // failure aborts: it is not an empty closure (#29).
+    let closure = match dependency_closure_digest(&workspace_root) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot digest the dependency closure: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!("  dependency closure: {closure}");
+
+    if args.iter().any(|a| a == "--restamp") {
+        return restamp(workspace_git_sha.as_deref(), workspace_dirty, &closure);
     }
+
     let mint_metadata = MintMetadata {
         workspace_git_sha,
         workspace_dirty,
-        dependency_closure_sha256,
+        dependency_closure_sha256: Some(closure),
     };
 
     eprintln!(
@@ -214,6 +226,51 @@ fn main() -> ExitCode {
     );
 
     eprintln!("mint-goldens: done.");
+    ExitCode::SUCCESS
+}
+
+/// `--restamp` (#29): rewrite ONLY the dependency-closure stamp of the three
+/// committed goldens, for a change of digest SCHEME on an unmoved baseline.
+/// Refuses unless every golden's git stamp equals the workspace's current one;
+/// a moved workspace needs a real re-mint, never a re-stamp.
+fn restamp(sha: Option<&str>, dirty: Option<bool>, closure: &str) -> ExitCode {
+    let check = |name: &str, m: &MintMetadata| -> bool {
+        let same = m.workspace_git_sha.as_deref() == sha && m.workspace_dirty == dirty;
+        if !same {
+            eprintln!(
+                "error: {name}: stamped git {:?}/dirty={:?} != current {sha:?}/dirty={dirty:?}; \
+                 the workspace moved, so re-mint instead of re-stamping",
+                m.workspace_git_sha, m.workspace_dirty
+            );
+        }
+        same
+    };
+    let (member_path, trigger_path, event_path) = (
+        cdo_anon_golden_path(),
+        cdo_trigger_anon_golden_path(),
+        cdo_event_anon_golden_path(),
+    );
+    let (Some(mut member), Some(mut trigger), Some(mut event)) = (
+        load_anon_golden(&member_path),
+        load_anon_golden(&trigger_path),
+        load_anon_event_golden(&event_path),
+    ) else {
+        eprintln!("error: a committed golden failed to load");
+        return ExitCode::FAILURE;
+    };
+    if !(check("cdo-anon", &member.metadata)
+        && check("cdo-trigger-anon", &trigger.metadata)
+        && check("cdo-event-anon", &event.metadata))
+    {
+        return ExitCode::FAILURE;
+    }
+    member.metadata.dependency_closure_sha256 = Some(closure.to_string());
+    trigger.metadata.dependency_closure_sha256 = Some(closure.to_string());
+    event.metadata.dependency_closure_sha256 = Some(closure.to_string());
+    write_minified(&member_path, &member);
+    write_minified(&trigger_path, &trigger);
+    write_minified(&event_path, &event);
+    eprintln!("re-stamped 3 goldens with {closure}");
     ExitCode::SUCCESS
 }
 

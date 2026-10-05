@@ -333,6 +333,55 @@ pub fn find_all_alpackages_folders(project_root: &Path) -> Vec<PathBuf> {
     folders
 }
 
+/// One `.app` file the dependency loader will consider, and the `.alpackages`
+/// folder it was found in.
+#[derive(Debug, Clone)]
+pub struct DiscoveredAppFile {
+    pub folder: PathBuf,
+    pub path: PathBuf,
+}
+
+/// Every `.app` file [`load_all_apps`] considers for `project_root`: each
+/// folder of [`find_all_alpackages_folders`] in walk order, `.app` files only,
+/// the same file reached twice (symlinks) kept once by canonical path. The
+/// second value lists folders whose listing failed.
+///
+/// The ONE discovery routine: `load_all_apps` and the CDO baseline's dependency
+/// closure digest both read it, so the digest pins exactly the files the
+/// resolver loads (#29: it used to hash only `<root>/.alpackages`, while the
+/// loader also reads every ancestor cache).
+pub fn discover_app_files(
+    project_root: &Path,
+) -> (Vec<DiscoveredAppFile>, Vec<(PathBuf, std::io::Error)>) {
+    let mut files = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for folder in find_all_alpackages_folders(project_root) {
+        let entries = match std::fs::read_dir(&folder) {
+            Ok(e) => e,
+            Err(e) => {
+                unreadable.push((folder, e));
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("app") {
+                continue;
+            }
+            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen_paths.insert(canonical) {
+                continue;
+            }
+            files.push(DiscoveredAppFile {
+                folder: folder.clone(),
+                path,
+            });
+        }
+    }
+    (files, unreadable)
+}
+
 fn paths_equal(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a2), Ok(b2)) => a2 == b2,
@@ -458,63 +507,48 @@ pub fn load_all_apps_with(
     project_root: &Path,
     cache: &DepCache,
 ) -> Result<(Vec<ResolvedDependency>, Vec<DroppedDuplicateDependency>)> {
-    let folders = find_all_alpackages_folders(project_root);
-    if folders.is_empty() {
+    let (files, unreadable) = discover_app_files(project_root);
+    for (folder, e) in &unreadable {
+        warn!(
+            "load_all_apps: read_dir({}) failed: {}",
+            folder.display(),
+            e
+        );
+    }
+    if files.is_empty() && unreadable.is_empty() {
         debug!(
-            "load_all_apps: no .alpackages folder at {} or any ancestor",
+            "load_all_apps: no .app under any .alpackages at {} or its ancestors",
             project_root.display()
         );
         return Ok((Vec::new(), Vec::new()));
     }
 
     let mut discovered: Vec<DiscoveredApp> = Vec::new();
-    let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
-    for alpackages in folders {
-        let entries = match std::fs::read_dir(&alpackages) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(
-                    "load_all_apps: read_dir({}) failed: {}",
-                    alpackages.display(),
-                    e
+    for DiscoveredAppFile {
+        folder: alpackages,
+        path,
+    } in files
+    {
+        // Stamp BEFORE the first read of this file's bytes (see `AppFileStamp`).
+        let stamp = AppFileStamp::of(&path);
+        // Phase 1: manifest-only discovery — never touches SymbolReference.json.
+        match crate::app_package::extract_app_metadata(&path) {
+            Ok(meta) => {
+                debug!(
+                    "load_all_apps: discovered {} v{} from {}",
+                    meta.name,
+                    meta.version,
+                    alpackages.display()
                 );
-                continue;
+                discovered.push(DiscoveredApp {
+                    app_path: path,
+                    meta,
+                    stamp,
+                });
             }
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("app") {
-                continue;
-            }
-            // Dedup by canonical path so the same .app file in two scanned
-            // folders (rare but possible via symlinks) doesn't get loaded twice.
-            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            if !seen_paths.insert(canonical) {
-                continue;
-            }
-
-            // Stamp BEFORE the first read of this file's bytes (see `AppFileStamp`).
-            let stamp = AppFileStamp::of(&path);
-            // Phase 1: manifest-only discovery — never touches SymbolReference.json.
-            match crate::app_package::extract_app_metadata(&path) {
-                Ok(meta) => {
-                    debug!(
-                        "load_all_apps: discovered {} v{} from {}",
-                        meta.name,
-                        meta.version,
-                        alpackages.display()
-                    );
-                    discovered.push(DiscoveredApp {
-                        app_path: path,
-                        meta,
-                        stamp,
-                    });
-                }
-                Err(e) => {
-                    warn!("{}", manifest_read_warning(&path, &e));
-                }
+            Err(e) => {
+                warn!("{}", manifest_read_warning(&path, &e));
             }
         }
     }
