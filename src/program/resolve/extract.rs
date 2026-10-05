@@ -207,41 +207,6 @@ pub enum WithState {
     Unknown,
 }
 
-/// The 28 record-operation method names (lowercased), copied verbatim from
-/// `src/engine/l2/record_op.rs` (`record_op_type` match arms).
-pub fn record_op_names() -> &'static [&'static str] {
-    &[
-        "findset",
-        "findfirst",
-        "findlast",
-        "find",
-        "get",
-        "calcfields",
-        "calcsums",
-        "testfield",
-        "modify",
-        "modifyall",
-        "insert",
-        "delete",
-        "deleteall",
-        "setloadfields",
-        "addloadfields",
-        "setrange",
-        "setfilter",
-        "setcurrentkey",
-        "reset",
-        "copy",
-        "transferfields",
-        "validate",
-        "init",
-        "next",
-        "count",
-        "countapprox",
-        "isempty",
-        "locktable",
-    ]
-}
-
 /// Returns `true` if the raw AL type string `ty` denotes a record type.
 ///
 /// Mirrors `ir_walk.rs::is_record_receiver_ty`: the string must start with
@@ -357,7 +322,8 @@ pub(crate) fn static_database_reference_target(
 /// from `ir_walk.rs`):
 ///
 /// 1. `Member` with `Identifier`/`QuotedIdentifier` receiver in `rvars` AND
-///    method in [`record_op_names`] → `RecordOp`.
+///    method a record op ([`crate::record_ops::record_op_type`], the table L2
+///    also reads) → `RecordOp`.
 /// 2. `Member` with `keyword_identifier` receiver (`codeunit`/`page`/`report`)
 ///    AND method `"run"` (any kind) OR `"runmodal"` (Page/Report only —
 ///    Codeunit has no RunModal member) → `ObjectRun`.
@@ -381,7 +347,8 @@ fn classify_call(
 
             // --- Check 1: RecordOp ------------------------------------------------
             // Receiver must be a simple Identifier/QuotedIdentifier in rvars AND
-            // method must be in record_op_names (mirrors L2 record-op filter).
+            // method must be an L2 record op -- the SAME table, so the two engines
+            // cannot drift (a hand copy here once lacked `rename`, #9).
             let recv_lc = match &obj.kind {
                 ExprKind::Identifier(r) | ExprKind::QuotedIdentifier(r) => {
                     Some(r.fold_identifier())
@@ -390,7 +357,7 @@ fn classify_call(
             };
             if let Some(ref r_lc) = recv_lc
                 && rvars.contains(r_lc)
-                && record_op_names().contains(&method_lc.as_str())
+                && crate::record_ops::record_op_type(&method_lc).is_some()
             {
                 let receiver_text = src[obj.origin.byte.clone()].to_string();
                 return CalleeShape::RecordOp {

@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Record.Rename()` is now a database write, in both engines** (#9, partly).
+  Neither engine treated `Rec.Rename(..)` as a record op: L2's `record_op_type` had no
+  `rename` arm, and the program extractor's hand-copied list (`record_op_names`) had
+  drifted the same way, so a Rename produced no db-effect row and no `OnRename` edge.
+  The table now lives once, in `src/record_ops.rs`, which both read (`program::resolve`
+  may not import `engine::l2`, so it sits at the crate root); `record_op_names` is
+  deleted. Rename is `DbWrite` in `op_classification`, db-touching and
+  `persistsCurrent` in the L4 summaries, an implicit `OnRename` edge marked `Resolved` in
+  L3 and in the analyze adapter, and a write in d1 (op in loop) and d10 (self-modifying
+  loop). d39, d61 and d62 already listed `Rename`; those entries were dead until now.
+  Measured on BC 28 with a probe app: Rename fires `OnRename` only, never `OnModify`.
+  **On CDO:** `alsem analyze` gains 4 d1 findings (CDODataUpgrade.Codeunit.al:428/440,
+  CDOEMailTemplateLine.Table.al:474/475), all real writes in a loop; the d1 ids of later
+  ops in `ReplacePermissionSet` renumber. The frozen L4 whole-program digest moved
+  (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`): 8 new Rename effects plus
+  that renumbering, nothing else; `scripts/cdo-gate` passes. **Not done:** which
+  TableData permission Rename needs is unmeasured (Permissions Mock did not enforce in
+  the test container, and OData codeunit actions were invisible to every new user), so
+  Rename is deliberately left out of the capability permission maps and therefore out of
+  `cone_derived`'s physical-write sets; #9 stays open for that. Tests:
+  `query_effects_reports_a_rename_as_a_write_on_its_table` (through the shipped binary)
+  fails without the arm; `rename_fires_on_rename_on_both_sides` fails if the extractor
+  drops `rename` again. No golden in the 9 `check-goldens` targets moved: the corpus has
+  no Rename.
+- **`agentflow check-diff` ignores forbidden patterns inside line comments** (#46). A
+  comment naming `#[allow(...)]`, `#[ignore]` or `--no-verify` was rejected as if it
+  used it. The trailing line comment (`//` in `.rs`/`.js`; `#` in `.py`/`.sh`/TOML/YAML,
+  outside double-quoted strings) is stripped before scanning. Block comments are still
+  scanned.
+- **The IR-L2 snapshot drift report separates ADDED from CHANGED** (#38). A routine
+  missing from the golden was reported CHANGED, so a fixture-only addition read as a
+  behaviour change. It now prints `N changed, N added, N removed`, sorted (it iterated a
+  `HashMap`, so the 20 lines shown were random).
+- **The serde-skipped L2 feature fields are listed** (#15). `aldump --l2` and the L2
+  goldens omit the six `#[serde(skip)]` fields, which led readers to conclude facts like
+  `run_trigger` were not modelled. `features.rs`'s module doc names them, and
+  `serde_skip_list_is_complete` fails if the list drifts.
+- **`/issue` step 10 names a review invocation that exists** (#37). `code-review` is a
+  Claude Code built-in skill, not a `.claude/skills/` entry; the step now names the
+  Skill-tool call and the `code-reviewer` agent as a recorded fallback.
 - **`agentflow attest` refuses an abbreviated SHA** (#53, `scripts/agentflow/cli.py`).
   `--B`, `--H` and `--final-head` were stored as typed, and `merge-gate` compares them
   with `!=` against full 40-character SHAs, so a short SHA later read as `head-moved` or

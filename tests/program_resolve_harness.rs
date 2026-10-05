@@ -5925,8 +5925,8 @@ fn ws_builtin_shadow_bare_source_shadows_catalog() {
 /// `R.FieldCaption(1)` (Record builtin), bare `Message('hi')` (global
 /// builtin), and `J.Add(...)` on a `JsonObject` (framework-member builtin).
 ///
-/// NOTE: deliberately NOT a `record_op_names()` method (`SetRange`/`Insert`/
-/// `Modify`/...) — those 28 names are classified `CalleeShape::RecordOp`
+/// NOTE: deliberately NOT a record-op method (`SetRange`/`Insert`/
+/// `Modify`/..., `record_op_type`) — those are classified `CalleeShape::RecordOp`
 /// (`extract.rs`) and resolved via the SEPARATE implicit-trigger path, not
 /// `resolve_member`'s Record arm; `FieldCaption` exercises the Record-arm
 /// catalog fallback this test targets.
@@ -8151,7 +8151,7 @@ fn edges_for_object_routine<'a>(
 /// - `Rec.FieldCaption(1)` — a genuine Record-catalog builtin — must STAY
 ///   `Evidence::Catalog` (table-independent per the `ReceiverType::Record` doc;
 ///   resolving the table must not disturb genuine builtins).
-/// - `Rec.SetRange(...)` — a `record_op_names` call — dispatches through the
+/// - `Rec.SetRange(...)` — a record-op (`record_op_type`) call — dispatches through the
 ///   SEPARATE implicit-trigger fan-out (`CalleeShape::RecordOp`), not
 ///   `resolve_member`'s catalog; `"setrange"` is not one of the
 ///   insert/modify/delete/validate/rename triggers that fan-out maps, so it
@@ -8443,7 +8443,7 @@ fn ws_codeunit_rec_report() -> ProgramReport {
 /// - `Rec.FieldCaption(1)` — a genuine Record-catalog builtin — must STAY
 ///   `Evidence::Catalog` (table-independent per the `ReceiverType::Record`
 ///   doc; resolving the table must not disturb genuine builtins).
-/// - `Rec.SetRange(...)` — a `record_op_names` call — dispatches through the
+/// - `Rec.SetRange(...)` — a record-op (`record_op_type`) call — dispatches through the
 ///   SEPARATE implicit-trigger fan-out (`CalleeShape::RecordOp`), not
 ///   `resolve_member`'s catalog; `"setrange"` is not one of the
 ///   insert/modify/delete/validate/rename triggers that fan-out maps, so it

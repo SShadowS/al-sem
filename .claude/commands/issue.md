@@ -137,8 +137,13 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    DEFAULT detector: run `/triage-wave` first; above 30% false positives it ships
    opt-in. Add the CHANGELOG entry under `## [Unreleased]`. Record every exit
    code and log path in the ledger.
-10. **Final panel.** Run the `code-review` skill at high on `master..HEAD`; its
-    findings enter `findings.json`. Then both reviewers over the diff, spec, and
+10. **Final panel.** Run the `code-review` skill at high on the issue branch:
+    the Skill tool with `skill: "code-review"`, `args: "high <issue branch>"`. It
+    is a Claude Code BUILT-IN skill, so it is not under `.claude/skills/`. If the
+    Skill tool does not offer it, spawn the `code-reviewer` agent over
+    `master..HEAD` instead and record the substitution in the ledger by name;
+    never let a stand-in read as the specified step. Either way its findings
+    enter `findings.json`. Then both reviewers over the diff, spec, and
     ledger, `charge final_rounds` per round (cap 3), same convergence rule.
     Source-verify every reviewer code claim before editing. Every fix returns to
     step 9's gates.

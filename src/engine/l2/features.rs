@@ -22,6 +22,17 @@
 //! `skip_serializing_if = "Option::is_none"` mirrors the TS pattern of only
 //! emitting a key when the value is defined — so the JSON shape matches the
 //! golden's "optional keys absent" convention exactly.
+//!
+//! INTERNAL-ONLY fields (`#[serde(skip)]`) ARE in the model and feed L4/L5, but
+//! never serialize, so `aldump --l2` and every L2 golden are a LOSSY view of the
+//! model: a fact missing from a dump may still be modelled (#15). The complete
+//! list (`serde_skip_list_is_complete` keeps it in sync):
+//!   - `PCallSite.in_statement_position`
+//!   - `PRecordOperation.in_until_condition`
+//!   - `PRecordOperation.run_trigger`
+//!   - `PVarAssignment.rhs_identifier`
+//!   - `PCFNNode.is_case_else`
+//!   - `PCFNNode.source_range`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -566,4 +577,34 @@ pub struct PObject {
 pub struct L2Projection {
     pub objects: Vec<PObject>,
     pub routines: Vec<PRoutine>,
+}
+
+#[cfg(test)]
+mod tests {
+    /// The module doc's INTERNAL-ONLY list must name exactly the fields this file
+    /// marks `#[serde(skip)]` / `#[serde(skip, ...)]` (#15), so it cannot drift.
+    #[test]
+    fn serde_skip_list_is_complete() {
+        let src = include_str!("features.rs");
+        let documented: Vec<&str> = src
+            .lines()
+            .filter_map(|l| l.strip_prefix("//!   - `"))
+            .filter_map(|l| l.strip_suffix('`'))
+            .filter(|l| l.starts_with('P') && l.contains('.'))
+            .collect();
+        let mut actual = Vec::new();
+        let (mut owner, mut pending) = ("", false);
+        for line in src.lines().map(str::trim) {
+            if let Some(rest) = line.strip_prefix("pub struct ") {
+                owner = rest.split([' ', '{']).next().unwrap();
+            } else if line.starts_with("#[serde(skip)") || line.starts_with("#[serde(skip,") {
+                pending = true;
+            } else if pending && let Some(rest) = line.strip_prefix("pub ") {
+                actual.push(format!("{owner}.{}", rest.split(':').next().unwrap()));
+                pending = false;
+            }
+        }
+        assert_eq!(actual.len(), 6, "scanner found {actual:?}");
+        assert_eq!(documented, actual);
+    }
 }

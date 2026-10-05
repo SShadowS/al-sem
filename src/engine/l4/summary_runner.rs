@@ -324,6 +324,7 @@ fn is_db_touching(op: &str) -> bool {
             | "Insert"
             | "Delete"
             | "DeleteAll"
+            | "Rename"
             | "LockTable"
     )
 }
@@ -332,7 +333,9 @@ pub(crate) fn record_flow_role(op: &str) -> &'static str {
     match op {
         "Get" | "FindFirst" | "FindLast" | "FindSet" | "Find" | "Next" => "loadsFromDb",
         "Init" => "initialises",
-        "Modify" | "Insert" => "persistsCurrent",
+        // Rename writes the current record back under its new key (d39 already
+        // counts it as a persist op).
+        "Modify" | "Insert" | "Rename" => "persistsCurrent",
         "ModifyAll" | "DeleteAll" => "setBasedWrite",
         "Validate" => "validates",
         "Copy" | "TransferFields" => "copiesInto",

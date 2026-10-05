@@ -49,6 +49,9 @@ fn trigger_mapping(op: &str) -> Option<(&'static str, Resolution)> {
         "Insert" => Some(("OnInsert", Resolution::Maybe)),
         "Modify" => Some(("OnModify", Resolution::Maybe)),
         "Delete" => Some(("OnDelete", Resolution::Maybe)),
+        // Rename takes no RunTrigger: measured on BC 28 (#9), it always fires
+        // OnRename and never OnModify.
+        "Rename" => Some(("OnRename", Resolution::Resolved)),
         _ => None,
     }
 }

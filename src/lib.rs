@@ -44,6 +44,8 @@ pub mod language;
 pub mod lsp;
 pub mod program;
 pub mod protocol;
+/// The AL record-operation table both engines read.
+pub mod record_ops;
 pub mod snapshot;
 /// The shared `.al` source decoder (lossy UTF-8, BOM dropped) — see the module doc.
 pub mod source_text;

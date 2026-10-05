@@ -68,6 +68,7 @@ pub fn classify_op(op: &str) -> OpEffectClass {
         "Insert" => OpEffectClass::DbWrite,
         "Delete" => OpEffectClass::DbWrite,
         "DeleteAll" => OpEffectClass::DbWrite,
+        "Rename" => OpEffectClass::DbWrite,
         "LockTable" => OpEffectClass::DbLock,
         "SetLoadFields" => OpEffectClass::StateOnly,
         "AddLoadFields" => OpEffectClass::StateOnly,
@@ -144,7 +145,14 @@ mod tests {
             );
             assert!(is_db_touching_class(classify_op(op)));
         }
-        for op in ["Modify", "ModifyAll", "Insert", "Delete", "DeleteAll"] {
+        for op in [
+            "Modify",
+            "ModifyAll",
+            "Insert",
+            "Delete",
+            "DeleteAll",
+            "Rename",
+        ] {
             assert_eq!(
                 classify_op(op),
                 OpEffectClass::DbWrite,
@@ -184,8 +192,9 @@ mod tests {
 
     #[test]
     fn unknown_op_falls_through_to_state_only() {
-        // An op al-sem's grammar never emits → state-only (not db-touching).
-        assert_eq!(classify_op("Rename"), OpEffectClass::StateOnly);
-        assert!(!is_db_touching_class(classify_op("Rename")));
+        // An op name no table lists → state-only (not db-touching). (This
+        // used `Rename` until #9 made Rename a real record op.)
+        assert_eq!(classify_op("NoSuchOp"), OpEffectClass::StateOnly);
+        assert!(!is_db_touching_class(classify_op("NoSuchOp")));
     }
 }

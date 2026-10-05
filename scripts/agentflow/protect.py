@@ -3,7 +3,7 @@
 The flow must not be able to change its own gates, commands, CI, or doctrine,
 and must not get green by ignoring tests, skipping hooks, or silencing lints.
 Markdown and other prose files may MENTION these strings; only code-like
-files are scanned for additions.
+files are scanned for additions, and a line comment in one may mention them too.
 """
 from __future__ import annotations
 
@@ -48,13 +48,42 @@ def _added_lines(diff_text: str):
             yield current, line[1:]
 
 
+_SLASH_COMMENT = (".rs", ".js")
+_HASH_COMMENT = (".py", ".sh", ".toml", ".yml", ".yaml")
+
+
+def _code_part(path: str, text: str) -> str:
+    """`text` with its trailing line comment removed, so a comment that NAMES a
+    forbidden pattern is not read as using it (#46). A marker inside a
+    double-quoted string (`"https://..."`) is not a comment. A `#` comment
+    must start the line or follow whitespace, so `${#x}` is not one.
+    ponytail: line comments only; a line inside a /* */ block is still scanned."""
+    marker = "//" if path.endswith(_SLASH_COMMENT) else "#" if path.endswith(_HASH_COMMENT) else None
+    if marker is None:
+        return text
+    in_str, i = False, 0
+    while i < len(text):
+        c = text[i]
+        if in_str and c == "\\":
+            i += 2
+            continue
+        if c == '"':
+            in_str = not in_str
+        elif not in_str and text.startswith(marker, i) and (
+                marker == "//" or i == 0 or text[i - 1].isspace()):
+            return text[:i]
+        i += 1
+    return text
+
+
 def forbidden_additions(diff_text: str) -> list[tuple[str, str, str]]:
     out = []
     for f, text in _added_lines(diff_text):
         if not f.endswith(CODE_SUFFIXES):
             continue
+        code = _code_part(f, text)
         for rx, kind in FORBIDDEN:
-            if rx.search(text):
+            if rx.search(code):
                 out.append((f, kind, text.strip()))
     return out
 
