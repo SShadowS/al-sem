@@ -2033,7 +2033,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "cff53fb8ae1f4737a6b94273feac8e05b330c89ef1d160349ab593a0fef3ee61";
+    "11ca16f180044452d5095ab8f8ee6b16f0c97acd2ded54513010a892243d7277";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
 pub const NAMED_KIND_COUNT: usize = 487;

@@ -84,13 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Grammar: tree-sitter-al `main` at `a7455b69`** (package version still 4.4.1; was the
-  v4.4.1 commit `7819df5`). CI builds against `main`, which had moved ~330 commits and
+- **Grammar: tree-sitter-al `main` at `bf72a2d0`** (package version still 4.4.1; was the
+  v4.4.1 commit `7819df5`). CI builds against `main`, which had moved ~335 commits and
   broke the `node-types.json` hash guard. 473 -> 487 named kinds, all triaged
   `Structural` in `kind_policy.rs`; the `table` field is gone (TableRelation now has one
-  `target: (qualified_name …)`, B5). Property values are read as text, so the B4/B5/B5b/G6
-  property shape changes move no IR. `CACHE_VERSION_GRAMMAR` is now
-  `tree-sitter-al-v4.4.1-a7455b69-native`: it names the commit, because the version alone
+  `target: (qualified_name …)`, B5). Property values are read as text, so the
+  B4/B5/B5b/G6/B8 property shape changes move no IR. `CACHE_VERSION_GRAMMAR` is now
+  `tree-sitter-al-v4.4.1-bf72a2d0-native`: it names the commit, because the version alone
   no longer identifies the grammar. Measured old vs new: per-test outcomes identical apart
   from the new lowerer tests (see Fixed) and the cache `dry-run.txt` size line (the longer
   stamp); CDO `--program-call-graph-stats` and `recoveredFiles` unchanged (CDO uses none of
@@ -185,7 +185,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The lowerer reads the ten new preproc shapes** of the `a7455b69` grammar (see Changed;
+- **The lowerer reads the ten new preproc shapes** of the `bf72a2d0` grammar (see Changed;
   `crates/al-syntax/src/lower/mod.rs`; each was an ERROR before, real BC 29 sites):
   - `preproc_conditional_arguments` (`P(a, #if X b, #endif c)`): every arm's arguments
     are union-read into the call, as `preproc_split_call_statement` already did. Before,

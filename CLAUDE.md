@@ -102,7 +102,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al grammar (currently **v4.4.1 + `main` at `a7455b69`**, see the Grammar
+- tree-sitter-al grammar (currently **v4.4.1 + `main` at `bf72a2d0`**, see the Grammar
   section — the package version did not move for ~330 shape-changing commits): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
@@ -352,10 +352,10 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.4.1 + main `a7455b69`)
+## Grammar (tree-sitter-al v4.4.1 + main `bf72a2d0`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
-committed `node-types.sha256` matches `main` at **`a7455b69`** (2026-10-05), ~330 commits
+committed `node-types.sha256` matches `main` at **`bf72a2d0`** (2026-10-05), ~335 commits
 past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
 version is NOT a grammar identity any more** — name the commit. v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
@@ -378,22 +378,23 @@ across the whole enclosing procedure. All 5 Base Application files parse clean o
 a STATEMENT, not an expression (grammar issues #26/#28; the lowerer already lowered its body
 as a branch), and contextual keywords lex as names at the start of a property value (#27).
 
-**`main` at `a7455b69` (2026-10-05, still "v4.4.1") moved the vocabulary 473 -> 487 named
+**`main` at `bf72a2d0` (2026-10-05, still "v4.4.1") moved the vocabulary 473 -> 487 named
 kinds (fields +`prefix`/`uri`/`continuation`/`variables`, −`table`) and changed shapes**:
 `TableRelation` is keyed by name with one `target: (qualified_name …)` (B5; the `table`
 field is gone), a dotted value of any other property is an expression (B5), the 13 ML
 properties and `Namespaces` are keyed by name (B4), link syntax lives only under the six
-link properties (B5b), a whole-value `#if` is `preproc_conditional_property_value` (G6),
-and ten new preproc shapes parse BC 29 code that was an ERROR before
+link properties (B5b), a whole-value `#if` is `preproc_conditional_property_value` (G6;
+since B8 its arms may also be `CalcFormula` formulas), and ten new preproc shapes parse BC 29 code that was an ERROR before
 (`preproc_conditional_arguments`, `preproc_split_open_statement`,
 `preproc_split_block_end_in_else`/`_close_after_endif`, `preproc_split_var_section_tail`,
 `preproc_split_table_field_open`, `preproc_split_key`, `preproc_split_modify`,
 `preproc_split_container_reopen`, `preproc_split_permissions_property`). The engine reads
-property values as TEXT, so B4/B5/B5b/G6 moved nothing; the preproc shapes needed lowerer
+property values as TEXT, so B4/B5/B5b/G6/B8 moved nothing; the preproc shapes needed lowerer
 arms (see CHANGELOG). Zero goldens moved from the grammar (the cache `dry-run.txt` moved
 only because the longer `CACHE_VERSION_GRAMMAR` stamp grew a fixture past 0.85 KB); CDO
-histogram byte-identical. Commits keep landing on `main` — this one moved again during the
-upgrade (`821c9147` -> `a7455b69`).
+histogram byte-identical. Commits keep landing on `main` — it moved twice during the
+upgrade (`821c9147` -> `a7455b69` -> `bf72a2d0`); check `origin/main` again before you
+commit, since CI builds whatever `main` is when it runs.
 
 **v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
 v4.3.0, which moved none.** The six additions are all preproc-split shapes
@@ -443,7 +444,7 @@ wrapper node.
    are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
    is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
    it** — run `cargo test -p al-sem --lib` too. The stamp carries the grammar COMMIT
-   (`tree-sitter-al-v4.4.1-a7455b69-native`) because `main` changes shapes without moving
+   (`tree-sitter-al-v4.4.1-bf72a2d0-native`) because `main` changes shapes without moving
    the package version; the guard checks only the version part, so a same-version bump
    passes it with a stale commit — update the commit by hand. A longer stamp can push
    `1234….json` across a 0.1 KB boundary in `tests/cli-c-goldens/cache/dry-run.txt`.
