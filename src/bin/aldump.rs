@@ -51,15 +51,85 @@ fn usage() -> ExitCode {
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
-         <workspace-or-.app>"
+         <workspace-or-.app>\n\
+         \x20      aldump --switch-dump <workspace> <out-dir>\n\
+         \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]"
     );
     ExitCode::FAILURE
+}
+
+/// `--switch-dump <workspace> <out-dir>`: write the engine-switch dump.
+fn switch_dump_cmd(args: &[String]) -> ExitCode {
+    let [ws, out] = args else {
+        return usage();
+    };
+    let dump = al_sem::engine::switch_dump::dump_lines(std::path::Path::new(ws));
+    if let Err(e) = al_sem::engine::switch_dump::write_dump(&dump, std::path::Path::new(out)) {
+        eprintln!("aldump: error: writing {out}: {e}");
+        return ExitCode::FAILURE;
+    }
+    let rows: usize = dump.values().map(Vec::len).sum();
+    println!("wrote {} files, {rows} rows to {out}", dump.len());
+    ExitCode::SUCCESS
+}
+
+/// `--switch-compare <A> <B> [--sample N] [--width N]`: diff two dumps. Exit 0 when
+/// identical, 1 when they differ, 2 on a usage or read error.
+fn switch_compare_cmd(args: &[String]) -> ExitCode {
+    let (mut sample, mut width) = (5usize, 400usize);
+    let mut dirs: Vec<&String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let slot = match a.as_str() {
+            "--sample" => &mut sample,
+            "--width" => &mut width,
+            _ => {
+                dirs.push(a);
+                continue;
+            }
+        };
+        match it.next().and_then(|v| v.parse().ok()) {
+            Some(v) => *slot = v,
+            None => {
+                eprintln!("aldump: error: {a} needs a number");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let [a, b] = dirs[..] else {
+        usage();
+        return ExitCode::from(2);
+    };
+    let read = |d: &String| {
+        al_sem::engine::switch_dump::read_dump(std::path::Path::new(d))
+            .map_err(|e| eprintln!("aldump: error: reading {d}: {e}"))
+    };
+    let (Ok(da), Ok(db)) = (read(a), read(b)) else {
+        return ExitCode::from(2);
+    };
+    let diffs = al_sem::engine::switch_dump::compare(&da, &db);
+    print!(
+        "{}",
+        al_sem::engine::switch_dump::render(&diffs, sample, width)
+    );
+    if diffs.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn main() -> ExitCode {
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // Engine-switch harness (`engine::switch_dump`): own argument shapes.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    match raw.first().map(String::as_str) {
+        Some("--switch-dump") => return switch_dump_cmd(&raw[1..]),
+        Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
+        _ => {}
+    }
     let mut l2 = false;
     let mut l3_record_types = false;
     let mut l3_call_graph = false;

@@ -18,3 +18,4 @@ pub mod perf_trace;
 pub mod return_summary;
 pub mod root_classification;
 pub mod snapshot;
+pub mod switch_dump;

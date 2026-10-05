@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Engine-switch difference harness** (S0 of
+  `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, the plan to move every
+  consumer onto the program engine and delete L3). `aldump --switch-dump <ws> <dir>`
+  writes what `alsem analyze` builds and finds as plain-text rows, one file each:
+  - model objects, tables, routines, root classifications, primary app and infra
+    diagnostics;
+  - call edges and upgraded bindings;
+  - the detector event graph;
+  - findings of every registered detector (opt-in ones too), detector stats,
+    diagnostics and coverage.
+
+  `aldump --switch-compare <A> <B>` diffs two dumps as ordered rows: lost duplicates
+  and reordering both count. `scripts/switch-baseline dump|compare <label>` does this
+  for CDO, DO and all 216 `r0-corpus` fixtures. Dumps live outside the repo, so a
+  baseline taken while L3 existed stays comparable after it is deleted. The frozen
+  pre-switch baseline is `s0-legacy`: 218 corpora in 29 s, 196 MB; on CDO 8 s, with
+  5,479 routines and 2,405 findings. Two dumps of CDO, of DO and of every fixture are
+  identical.
+
+  To make sure the harness measures production rather than a copy, `analyze`'s model
+  construction moved into `gate::run::build_analysis_model` and its coverage into
+  `gate::run::analysis_coverage`. `run_analyze_with_exit` and the harness both call
+  them, and `analyze_builds_through_the_dumped_functions` fails if the analyze path
+  builds a model or coverage any other way. The extraction moved no golden.
+  Discrimination: inlining the coverage call back into the analyze path fails the guard;
+  adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
+
 ### Changed
 
 - **The temp-record suppression rule lives once** (#34). "Only an exact known/true

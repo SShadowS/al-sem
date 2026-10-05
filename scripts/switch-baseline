@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Engine-switch harness (docs/superpowers/specs/2026-10-06-engine-switch-design.md, S0).
+#
+#   scripts/switch-baseline dump <label>            dump every corpus under <label>
+#   scripts/switch-baseline compare <labelA> <labelB>   compare two labels; exit 1 on any difference
+#
+# Corpora: CDO (pinned), DO, every tests/r0-corpus fixture. Dumps live OUTSIDE the
+# repo (CDO is private) under $SWITCH_BASELINES (default U:/Git/al-sem-switch-baselines),
+# as <root>/<corpus>/<label>/. Uses the release-fast aldump; build it first:
+#   cargo build --profile release-fast --bin aldump
+set -u
+ROOT="${SWITCH_BASELINES:-U:/Git/al-sem-switch-baselines}"
+ALDUMP="${ALDUMP:-target/release-fast/aldump.exe}"
+CDO="${CDO_WS_PIN:-U:/Git/DO-cdo-baseline/Cloud}"
+DO_WS="${DO_WS:-U:/Git/DO.Support-SlowDOSetup/DocumentOutput/Cloud}"
+
+corpora() {
+  echo "cdo|$CDO"
+  echo "do|$DO_WS"
+  for f in tests/r0-corpus/*/; do
+    f="${f%/}"
+    echo "fixtures/${f##*/}|$f"
+  done
+}
+
+case "${1:-}" in
+  dump)
+    label="${2:?label}"
+    fail=0
+    while IFS='|' read -r name ws; do
+      "$ALDUMP" --switch-dump "$ws" "$ROOT/$name/$label" > /dev/null || { echo "FAILED: $name"; fail=1; }
+    done < <(corpora)
+    echo "dumped under label $label (fail=$fail)"
+    exit $fail
+    ;;
+  compare)
+    a="${2:?labelA}"; b="${3:?labelB}"
+    differ=0; n=0
+    while IFS='|' read -r name _ws; do
+      n=$((n + 1))
+      out=$("$ALDUMP" --switch-compare "$ROOT/$name/$a" "$ROOT/$name/$b" --sample 3 --width 300)
+      rc=$?
+      if [ $rc -ne 0 ]; then
+        differ=$((differ + 1))
+        echo "=== $name (rc=$rc)"
+        echo "$out"
+      fi
+    done < <(corpora)
+    echo "compared $n corpora: $differ differ"
+    [ $differ -eq 0 ]
+    ;;
+  *)
+    sed -n '2,10p' "$0"; exit 2 ;;
+esac
