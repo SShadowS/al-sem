@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `a7455b69`** (package version still 4.4.1; was the
+  v4.4.1 commit `7819df5`). CI builds against `main`, which had moved ~330 commits and
+  broke the `node-types.json` hash guard. 473 -> 487 named kinds, all triaged
+  `Structural` in `kind_policy.rs`; the `table` field is gone (TableRelation now has one
+  `target: (qualified_name …)`, B5). Property values are read as text, so the B4/B5/B5b/G6
+  property shape changes move no IR. `CACHE_VERSION_GRAMMAR` is now
+  `tree-sitter-al-v4.4.1-a7455b69-native`: it names the commit, because the version alone
+  no longer identifies the grammar. Measured old vs new: per-test outcomes identical apart
+  from the new lowerer tests (see Fixed) and the cache `dry-run.txt` size line (the longer
+  stamp); CDO `--program-call-graph-stats` and `recoveredFiles` unchanged (CDO uses none of
+  the new shapes).
+
 - **`alsem` and `aldump` print warnings on stderr** (B3 final fix wave FW3;
   `src/bin/alsem.rs`, `src/bin/aldump.rs`). Neither binary installed a logger, so every
   `warn!` went nowhere; that is how a dependency dropped on a full temp disk stayed
@@ -172,6 +184,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run through `build_program_with_coverage`.
 
 ### Fixed
+
+- **The lowerer reads the ten new preproc shapes** of the `a7455b69` grammar (see Changed;
+  `crates/al-syntax/src/lower/mod.rs`; each was an ERROR before, real BC 29 sites):
+  - `preproc_conditional_arguments` (`P(a, #if X b, #endif c)`): every arm's arguments
+    are union-read into the call, as `preproc_split_call_statement` already did. Before,
+    the whole `#if` was one `Unknown` argument and the calls in it were unreachable. A
+    `preproc_conditional_expression_tail` beside an argument is no longer counted as an
+    argument (it was a phantom `Unknown` one, an older defect).
+  - `preproc_split_block_end_in_else` / `preproc_split_block_close_after_endif` (a
+    procedure boundary inside an `#else`) are recovered like `preproc_split_code_block_end`.
+    So is `preproc_split_else_begin_over_endif`, which predates this grammar: its
+    statements were silently dropped.
+  - `preproc_split_open_statement` in a `case_body` (else / else-begin per arm) is the
+    case's else; it was dropped with its calls. Elsewhere the generic split-statement
+    recovery already kept its calls.
+  - `preproc_split_var_section_tail`: its `variables` are globals (they were lost).
+  - `preproc_split_table_field_open`, `preproc_split_key`, and the older
+    `preproc_split_table_field`: the field or key is collected (first arm's header); every
+    field `body` is read for `FieldClass`.
+  - `preproc_split_modify`: a trigger in its body has the first arm's target as its
+    enclosing member, as with `modify`.
+  Each fix is pinned by a lowerer test with a recorded discrimination proof.
 
 - **The `spawn_updater_rebuilds_context_after_rung2_escalation` test no longer flakes under
   load.** It sent its three file saves 300 ms apart and expected three swaps. When the
