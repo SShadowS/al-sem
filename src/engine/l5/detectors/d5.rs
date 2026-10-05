@@ -12,7 +12,7 @@ use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
-use crate::engine::l5::detectors::{advance_discipline_holds, whole_set_break};
+use crate::engine::l5::detectors::{whole_set_advance, whole_set_break};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -127,12 +127,13 @@ pub fn detect_d5(
             //
             // Scoped to the DRIVER's ops: a filter on some other record
             // variable does not change this loop's selected set.
-            if !advance_discipline_holds(&ops_in_loop, &driver, &loop_info.id) {
+            let Some(advance_id) = whole_set_advance(&ops_in_loop, &driver, loop_info) else {
                 skipped_traversal += 1;
                 continue;
-            }
+            };
             let traversal_broken = ops_in_loop.iter().any(|op| {
                 op.id != modify.id
+                    && op.id != advance_id
                     && op.record_variable_name.to_lowercase() == driver
                     && whole_set_break(op, &loop_info.id).is_some()
             });

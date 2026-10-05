@@ -171,6 +171,72 @@ codeunit 50105 D5ModifyAll
 				Customer.Modify();
 			until Customer.Next() = 0;
 	end;
+
+	// ── issues #49 / #50: does the loop's TERMINATOR exhaust the set? ───
+
+	// #49: a compound `until` can stop before the last row. NOT reported.
+	procedure CompoundTerminator(Stop: Boolean)
+	var Customer: Record Customer;
+	begin
+		Customer.SetRange("Buy-from No.", '');
+		if Customer.FindSet() then
+			repeat
+				Customer.Blocked := Customer.Blocked::All;
+				Customer.Modify();
+			until (Customer.Next() = 0) or Stop;
+	end;
+
+	// #49: `<> 0` stops after the FIRST row. NOT reported.
+	procedure WrongPolarityTerminator()
+	var Customer: Record Customer;
+	begin
+		Customer.SetRange("Buy-from No.", '');
+		if Customer.FindSet() then
+			repeat
+				Customer.Blocked := Customer.Blocked::All;
+				Customer.Modify();
+			until Customer.Next() <> 0;
+	end;
+
+	// #49: parentheses and a reversed equality are the same exhausting test. REPORTED.
+	procedure ReversedTerminator()
+	var Customer: Record Customer;
+	begin
+		Customer.SetRange("Buy-from No.", '');
+		if Customer.FindSet() then
+			repeat
+				Customer.Blocked := Customer.Blocked::All;
+				Customer.Modify();
+			until (0 = (Customer.Next()));
+	end;
+
+	// #50: the advance flows into `until` through one local flag. REPORTED.
+	procedure DoneFlagAdvance()
+	var Customer: Record Customer; Done: Boolean;
+	begin
+		Customer.SetRange("Buy-from No.", '');
+		if Customer.FindSet() then
+			repeat
+				Customer.Blocked := Customer.Blocked::All;
+				Customer.Modify();
+				Done := Customer.Next() = 0;
+			until Done;
+	end;
+
+	// #50: the flag is also set elsewhere, so the loop can stop early. NOT reported.
+	procedure DoneFlagSetTwice(Stop: Boolean)
+	var Customer: Record Customer; Done: Boolean;
+	begin
+		Customer.SetRange("Buy-from No.", '');
+		if Customer.FindSet() then
+			repeat
+				Customer.Blocked := Customer.Blocked::All;
+				Customer.Modify();
+				Done := Customer.Next() = 0;
+				if Stop then
+					Done := true;
+			until Done;
+	end;
 }
 
 table 18 Customer

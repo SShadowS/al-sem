@@ -201,6 +201,44 @@ codeunit 50934 "D60 Upgrade"
             until Item.Next() = 0;
     end;
 
+    // NOT FLAGGED (#49): a compound `until` can stop before the last row.
+    procedure UpgradeCompoundTerminator(Stop: Boolean)
+    var
+        Item: Record "D60 Item";
+    begin
+        if Item.FindSet() then
+            repeat
+                Item.Name := 'migrated';
+                Item.Modify();
+            until (Item.Next() = 0) or Stop;
+    end;
+
+    // NOT FLAGGED (#49): `<> 0` stops after the first row.
+    procedure UpgradeWrongPolarity()
+    var
+        Item: Record "D60 Item";
+    begin
+        if Item.FindSet() then
+            repeat
+                Item.Name := 'migrated';
+                Item.Modify();
+            until Item.Next() <> 0;
+    end;
+
+    // STILL FLAGGED (#50): the advance reaches `until` through one local flag.
+    procedure UpgradeDoneFlag()
+    var
+        Item: Record "D60 Item";
+        Done: Boolean;
+    begin
+        if Item.FindSet() then
+            repeat
+                Item.Name := 'migrated';
+                Item.Modify();
+                Done := Item.Next() = 0;
+            until Done;
+    end;
+
     // NOT FLAGGED (issue #16): Validate runs the field's OnValidate trigger per
     // row, which DataTransfer does not.
     procedure UpgradeWithValidate()

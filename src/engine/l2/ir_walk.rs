@@ -256,6 +256,10 @@ struct SpineCtx<'a> {
     in_until: bool,
     call_sites: Vec<PCallSite>,
     cs_arg_exprs: Vec<Vec<ExprId>>,
+    /// Every assignment whose target is a bare variable, `(name lowercased,
+    /// value expr)`, in walk order. Read by `exhausting_advance` (#50) to see
+    /// how often a `repeat` body assigns its `until` flag.
+    bare_assigns: Vec<(String, ExprId)>,
 }
 
 impl<'a> SpineCtx<'a> {
@@ -534,9 +538,98 @@ impl<'a> SpineCtx<'a> {
             id,
             loop_type: loop_type.to_string(),
             source_anchor,
+            exhausting_advance: None,
         });
         self.loop_count += 1;
         self.cur_loops.push(n);
+    }
+
+    /// `e` with any parentheses removed.
+    fn unparen(&self, mut e: ExprId) -> ExprId {
+        while let ExprKind::Parenthesized(x) = &self.file.ir.expr(e).kind {
+            e = *x;
+        }
+        e
+    }
+
+    /// `R.Next(args) = 0` or `0 = R.Next(args)` (parentheses anywhere) ->
+    /// `(R lowercased, the Next call's expr)`. Any other shape -> `None`.
+    fn next_eq_zero(&self, e: ExprId) -> Option<(String, ExprId)> {
+        let ExprKind::Binary {
+            op: al_syntax::ir::BinaryOp::Eq,
+            lhs,
+            rhs,
+        } = &self.file.ir.expr(self.unparen(e)).kind
+        else {
+            return None;
+        };
+        let is_zero = |x: ExprId| {
+            matches!(&self.file.ir.expr(self.unparen(x)).kind,
+                ExprKind::Literal(al_syntax::ir::Literal::Int(v)) if v == "0")
+        };
+        let call = if is_zero(*rhs) {
+            self.unparen(*lhs)
+        } else if is_zero(*lhs) {
+            self.unparen(*rhs)
+        } else {
+            return None;
+        };
+        let ExprKind::Call { function, .. } = &self.file.ir.expr(call).kind else {
+            return None;
+        };
+        let ExprKind::Member { object, member, .. } = &self.file.ir.expr(*function).kind else {
+            return None;
+        };
+        if !member.eq_ignore_ascii_case("next") {
+            return None;
+        }
+        match &self.file.ir.expr(*object).kind {
+            ExprKind::Identifier(v) | ExprKind::QuotedIdentifier(v) => {
+                Some((v.to_ascii_lowercase(), call))
+            }
+            _ => None,
+        }
+    }
+
+    /// The `PLoop::exhausting_advance` of a `repeat` loop (#49 / #50), computed
+    /// after its body and `until` are walked (so the `Next` already has an op id).
+    /// `assigns_before` is `bare_assigns.len()` when the body began.
+    fn exhausting_advance(
+        &self,
+        body: BlockId,
+        until: ExprId,
+        assigns_before: usize,
+    ) -> Option<(String, String)> {
+        let (var, call) = match self.next_eq_zero(until) {
+            Some(found) => found,
+            None => {
+                // #50: `until Done`, with `Done := R.Next(args) = 0` the ONLY
+                // assignment to `Done` anywhere in the loop, and a top-level body
+                // statement (not under an `if`, which would make it conditional).
+                let ExprKind::Identifier(flag) = &self.file.ir.expr(self.unparen(until)).kind
+                else {
+                    return None;
+                };
+                let flag = flag.to_ascii_lowercase();
+                let mut assigns = self.bare_assigns[assigns_before..]
+                    .iter()
+                    .filter(|(n, _)| *n == flag);
+                let (Some((_, value)), None) = (assigns.next(), assigns.next()) else {
+                    return None;
+                };
+                let top_level = self.file.ir.block(body).items.iter().any(|item| {
+                    matches!(item, al_syntax::ir::BlockItem::Stmt(s)
+                        if matches!(&self.file.ir.stmt(*s).kind,
+                            StmtKind::Assignment { value: v, .. } if v == value))
+                });
+                if !top_level {
+                    return None;
+                }
+                self.next_eq_zero(*value)?
+            }
+        };
+        let op_id = self.op_id_by_expr.get(&call)?.clone();
+        Some((var, op_id))
     }
 
     /// The enclosing-loop id stack (`{routine}/loop{N}`) for a record-op snapshot.
@@ -625,6 +718,9 @@ impl<'a> SpineCtx<'a> {
         let st = self.file.ir.stmt(sid);
         match &st.kind {
             Assignment { target, value } => {
+                if let ExprKind::Identifier(name) = &self.file.ir.expr(*target).kind {
+                    self.bare_assigns.push((name.to_ascii_lowercase(), *value));
+                }
                 // PVarAssignment: lhs base name (identifier or member name), optional
                 // literal rhs, anchored on the assignment statement.
                 if let Some(lhs_name) = lhs_base_name(self.file, *target) {
@@ -696,11 +792,15 @@ impl<'a> SpineCtx<'a> {
             Repeat { body, until } => {
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*until, "repeat-until", &sa);
+                let loop_ix = self.loops.len();
+                let assigns_before = self.bare_assigns.len();
                 self.enter_loop("repeat", &st.origin);
                 self.walk_block(*body);
                 self.in_until = true;
                 self.walk_expr(*until);
                 self.in_until = false;
+                self.loops[loop_ix].exhausting_advance =
+                    self.exhausting_advance(*body, *until, assigns_before);
                 self.cur_loops.pop();
             }
             For {
@@ -1124,6 +1224,7 @@ pub fn walk_spine(
         in_until: false,
         call_sites: Vec::new(),
         cs_arg_exprs: Vec::new(),
+        bare_assigns: Vec::new(),
     };
     if let Some(b) = routine.body {
         ctx.walk_block(b);

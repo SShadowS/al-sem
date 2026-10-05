@@ -30,6 +30,7 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.run_trigger`
+//!   - `PLoop.exhausting_advance`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
@@ -326,14 +327,39 @@ impl PartialEq for PRecordOperation {
 
 impl Eq for PRecordOperation {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PLoop {
     pub id: String,
     #[serde(rename = "type")]
     pub loop_type: String,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// #49 / #50: for a `repeat` loop whose `until` provably exhausts a cursor,
+    /// `(record variable lowercased, op id of that Next)`. Recognised shapes:
+    /// `until R.Next(args) = 0` (or `0 = R.Next(args)`, parentheses allowed), and
+    /// `until Done` where the loop assigns `Done` exactly once, as a top-level
+    /// body statement `Done := R.Next(args) = 0`. Anything else -- a compound
+    /// condition, `<> 0`, any other comparison -- is `None`: the loop is not
+    /// shown to visit the whole set.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`): never serialized, so no feature-level
+    /// golden moves; deserialized goldens default it to `None`.
+    #[serde(skip)]
+    pub exhausting_advance: Option<(String, String)>,
 }
+
+/// Excludes the serde-skipped `exhausting_advance`, like the other
+/// INTERNAL-ONLY fields: a deserialized golden or vector always holds `None`, so
+/// comparing it would fail every repeat loop against its own baseline.
+impl PartialEq for PLoop {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.loop_type == other.loop_type
+            && self.source_anchor == other.source_anchor
+    }
+}
+
+impl Eq for PLoop {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PRecordVariable {
@@ -666,7 +692,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 6, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 7, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 }
