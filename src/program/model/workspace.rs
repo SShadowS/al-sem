@@ -24,8 +24,8 @@ use super::symbol_table::SymbolTable;
 use al_syntax::IdentifierFoldExt;
 
 use crate::engine::ids::{encode_object_id, to_stable_object_id, to_stable_routine_id_from_parts};
-use crate::engine::l2::node_util::{Utf16Cols, strip_quotes};
 use crate::engine::perf_trace as pt;
+use crate::program::body::node_util::{Utf16Cols, strip_quotes};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ pub struct L3Object {
     /// The object DECLARATION's own source anchor (native assembly only; dep
     /// objects `None`). Lets object-level detectors (d64) anchor findings on the
     /// object header instead of borrowing a routine anchor. Additive.
-    pub source_anchor: Option<crate::engine::l2::features::PAnchor>,
+    pub source_anchor: Option<crate::program::body::features::PAnchor>,
 }
 
 /// A page layout control relevant to member resolution: a `part`/`systempart`
@@ -216,7 +216,7 @@ pub struct L3RecordVariable {
     /// benefit for in-memory temp records). Additive L2→L3 forward — the L3
     /// record-type projection is field-allowlisted, so this never reaches an
     /// R0–R3 golden. Forwarded verbatim from `PRecordVariable.temp_state`.
-    pub temp_state: crate::engine::l2::features::PTempState,
+    pub temp_state: crate::program::body::features::PTempState,
     /// Variable scope: `"local"` | `"parameter"` | `"global"`. `None` when not
     /// yet populated. Additive — forwarded from `PRecordVariable.scope`;
     /// the L3 record-type projection is field-allowlisted, so this never reaches
@@ -246,7 +246,7 @@ pub struct L3RecordOperation {
     pub table_id: Option<String>,
     /// Temp-state of this operation (from L2 body walk). Required by the
     /// R3a-2 summary engine to derive DbEffect.tempState for base summaries.
-    pub temp_state: Option<crate::engine::l2::features::PTempState>,
+    pub temp_state: Option<crate::program::body::features::PTempState>,
     /// Field arguments for ops like Validate (from L2 body walk). Required
     /// by the R3a-2 summary engine for RecordRoleSummary.writesFields.
     pub field_arguments: Option<Vec<String>>,
@@ -254,7 +254,7 @@ pub struct L3RecordOperation {
     /// CFG walker to interleave record ops with field accesses by source
     /// position inside a block (mirrors al-sem `op.sourceAnchor.range`). L2 data
     /// that the L3 record-type projection drops, forwarded here for L4 only.
-    pub source_anchor: crate::engine::l2::features::PAnchor,
+    pub source_anchor: crate::program::body::features::PAnchor,
     /// The enclosing-loop id stack (from L2 body walk). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `op.loopStack.includes(loop.id)`). Additive — the L3 projections are
@@ -263,7 +263,7 @@ pub struct L3RecordOperation {
     /// Structured field-argument classification (from L2 body walk). L2 data that
     /// the L3 record-type projection drops, forwarded here for L5 detectors (d4
     /// reads `op.fieldArgumentInfos[0]` for the literal-key test). Additive.
-    pub field_argument_infos: Option<Vec<crate::engine::l2::features::PExpressionInfo>>,
+    pub field_argument_infos: Option<Vec<crate::program::body::features::PExpressionInfo>>,
     /// G-1: `true` when this op sits inside the `until` condition of its nearest
     /// enclosing `repeat` loop — the loop's OWN terminator expression (from L2 body
     /// walk, an exact structural proof). Forwarded for d1 to suppress the terminator
@@ -321,7 +321,7 @@ pub struct L3Variable {
 ///   over the same sequence and needs the globals last.
 /// * **the sequence is name-unique on the lowercased name.** A param/local shadows a
 ///   same-named global (recorded in `shadowed` below), and duplicate globals within an
-///   object are deduped first-wins by [`crate::engine::l2::ir_walk::ir_object_globals`].
+///   object are deduped first-wins by [`crate::program::body::ir_walk::ir_object_globals`].
 ///
 /// Nothing mutates a routine's variables after assembly (unlike `record_variables`,
 /// which `record_types.rs` upgrades per routine — see the L-6 hazard note in the
@@ -449,7 +449,7 @@ pub struct L3Routine {
     pub record_operations: Vec<L3RecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
-    pub field_accesses: Vec<crate::engine::l2::features::PFieldAccess>,
+    pub field_accesses: Vec<crate::program::body::features::PFieldAccess>,
     /// The routine's lexical scope (params → locals → non-shadowed object globals).
     /// Iterate with `.iter()`; see [`RoutineVariables`] for why the globals are shared
     /// rather than replicated per routine.
@@ -468,22 +468,22 @@ pub struct L3Routine {
     /// `inferCallExprReturnType` for overload arg-type disambiguation.
     pub return_type: Option<String>,
     /// The routine's call sites (L2 body-walk output), the resolver input.
-    pub call_sites: Vec<crate::engine::l2::features::PCallSite>,
+    pub call_sites: Vec<crate::program::body::features::PCallSite>,
     /// The routine's operation sites (L2 body-walk output). Required by the R3a-3
     /// L4 capability extraction (commit family reads `kind === "commit"`, error
     /// family reads `kind === "error-call"`), and the unreachable-exclusion pass
     /// (sites with `controlContext === "unreachable"` are dropped before family
     /// dispatch — mirrors al-sem `extractCapabilities`).
-    pub operation_sites: Vec<crate::engine::l2::features::POperationSite>,
+    pub operation_sites: Vec<crate::program::body::features::POperationSite>,
     /// The CFN statement-tree skeleton (L2 body-walk output). Required by the
     /// R3a-2 branch-aware CFG walker (`walkCFG` port) to join role state-sets at
     /// if/case/loop. `None` for opaque / TryFunction / bodyless routines (the
     /// walker then falls back to the straight-line pass, mirroring al-sem).
-    pub statement_tree: Option<crate::engine::l2::features::PCFNNode>,
+    pub statement_tree: Option<crate::program::body::features::PCFNNode>,
     /// The routine's loops (L2 body-walk output). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `routine.features.loops`). Additive — never reaches an R0–R3 golden.
-    pub loops: Vec<crate::engine::l2::features::PLoop>,
+    pub loops: Vec<crate::program::body::features::PLoop>,
     /// The routine's OWN declaration anchor (the procedure / trigger_declaration
     /// node range, with `syntax_kind` = "procedure" / "trigger_declaration").
     /// al-sem `routine-indexer.ts:419` builds this as the routine's `sourceAnchor`.
@@ -491,14 +491,14 @@ pub struct L3Routine {
     /// d19 (primaryLocation + evidence) and d29 (first evidence step). Additive —
     /// the L3 record-type projection is field-allowlisted so this never reaches an
     /// R0–R3 golden.
-    pub source_anchor: crate::engine::l2::features::PAnchor,
+    pub source_anchor: crate::program::body::features::PAnchor,
     /// Lowercased / sorted / deduped identifier references in the routine body
     /// (L2 features `identifierReferences`). Read by d19 to test parameter use.
     /// Additive — forwarded verbatim from L2.
     pub identifier_references: Vec<String>,
     /// Unreachable-after-exit statements recorded during the L2 body DFS
     /// (`features.unreachableStatements`). Read by d20. Additive — forwarded verbatim.
-    pub unreachable_statements: Vec<crate::engine::l2::features::PUnreachableStatement>,
+    pub unreachable_statements: Vec<crate::program::body::features::PUnreachableStatement>,
     /// Whether the routine body contains any branching (`features.hasBranching`).
     /// Read by d43's `classify_subscriber` / `publisher_branch_facts`. Additive —
     /// forwarded verbatim from L2; dep (bodyless) routines default `false`.
@@ -506,11 +506,11 @@ pub struct L3Routine {
     /// Variable assignments (`features.varAssignments`) — `lhsName` + optional
     /// `rhsLiteralValue`. Read by d43 to detect `IsHandled := true` setters.
     /// Additive — forwarded verbatim from L2.
-    pub var_assignments: Vec<crate::engine::l2::features::PVarAssignment>,
+    pub var_assignments: Vec<crate::program::body::features::PVarAssignment>,
     /// Condition references (`features.conditionReferences`) — identifiers used in
     /// guard positions, with their reference anchors. Read by `enumerate_dispatch_sites`
     /// (d43) to find post-call IsHandled guards. Additive — forwarded verbatim from L2.
-    pub condition_references: Vec<crate::engine::l2::features::PConditionReference>,
+    pub condition_references: Vec<crate::program::body::features::PConditionReference>,
     /// Field/control/action/dataitem member name for a member-trigger routine — the
     /// unescaped logical identifier (inner `""` collapsed to `"`) of the enclosing
     /// member wrapper (field_declaration / page_field / action_declaration /
@@ -530,7 +530,7 @@ pub struct L3Routine {
     /// finding-side position discriminator (E3) matches a finding's primaryLocation
     /// against. `None` for non-member routines. Additive — never reaches an R0–R3
     /// golden. (RE-2)
-    pub enclosing_member_range: Option<crate::engine::l2::features::PAnchor>,
+    pub enclosing_member_range: Option<crate::program::body::features::PAnchor>,
     /// G-2 Part 2 (runtime-implied tempness): the lowercased receiver name of a
     /// routine ENTRY guard `if not <X>.IsTemporary[()] then Error(...)` — the
     /// routine's FIRST executable statement, with `<X>` a record var/param
@@ -607,7 +607,7 @@ fn index_table_ir(
         .find(|p| p.name == "tabletype")
         .map(|p| p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
-        || crate::engine::l2::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
+        || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     L3Table {
         id: table_id,
         app_guid: app_guid.to_string(),
@@ -626,8 +626,8 @@ fn anchor_from_origin(
     origin: &al_syntax::ir::Origin,
     source_unit_id: &str,
     cols: &Utf16Cols,
-) -> crate::engine::l2::features::PAnchor {
-    crate::engine::l2::features::PAnchor {
+) -> crate::program::body::features::PAnchor {
+    crate::program::body::features::PAnchor {
         source_unit_id: source_unit_id.to_string(),
         start_line: origin.start.row,
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
@@ -705,7 +705,7 @@ fn project_ir(
     workspace: &mut L3Workspace,
 ) {
     for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         // Object metadata driven entirely by the owned IR (the loop iterates IR objects
@@ -870,7 +870,7 @@ fn project_ir(
         // Object-global RECORD vars (scope=global) — promoted (below) into each
         // routine's `record_variables`, honoring AL shadowing (a routine's own var wins).
         let object_global_record_vars =
-            crate::engine::l2::ir_walk::ir_object_global_record_vars(o, &object_id);
+            crate::program::body::ir_walk::ir_object_global_record_vars(o, &object_id);
 
         // Interface / ControlAddIn: al-sem's L3Workspace never modeled these objects'
         // signature-only members as routines — this frozen legacy pipeline (L2/L3/L4,
@@ -903,7 +903,7 @@ fn project_ir(
         // same source, same first-wins dedup, same lowercasing — minus the anchor,
         // which `L3Variable` does not carry. See [`RoutineVariables`].
         let object_globals: Arc<[L3Variable]> = Arc::from(
-            crate::engine::l2::ir_walk::ir_object_globals(ir_file, oi, cols, source_unit_id)
+            crate::program::body::ir_walk::ir_object_globals(ir_file, oi, cols, source_unit_id)
                 .into_iter()
                 .map(|g| L3Variable {
                     name: g.name,
@@ -929,12 +929,12 @@ fn project_ir(
             // `L3Routine.enclosing_member` field (further down): the two MUST be the
             // same string, and `ir_enclosing_member` is the single place that
             // unescapes it.
-            let enclosing_member = crate::engine::l2::ir_walk::ir_enclosing_member(ir_routine);
+            let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
 
             let (routine_id, mut features) = {
-                let kind_for_id = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine);
-                let params_for_id = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
-                let rid = crate::engine::l2::scope::compute_routine_id(
+                let kind_for_id = crate::program::body::ir_walk::ir_routine_kind(ir_routine);
+                let params_for_id = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
+                let rid = crate::program::body::scope::compute_routine_id(
                     app_guid,
                     object_type,
                     object_number,
@@ -945,7 +945,7 @@ fn project_ir(
                     ir_routine.return_type.as_deref(),
                     model_instance_id,
                 );
-                let feats = crate::engine::l2::ir_walk::project_routine_features_ir(
+                let feats = crate::program::body::ir_walk::project_routine_features_ir(
                     ir_file,
                     oi,
                     ir_routine,
@@ -964,15 +964,15 @@ fn project_ir(
             // "unreachable" emit no facts — mirrors al-sem `extractCapabilities`).
             // R3a-2's projection never reads control_context, so this is additive.
             {
-                let cc_params = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
+                let cc_params = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
                 let attrs_json =
-                    crate::engine::l2::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
+                    crate::program::body::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
                 let attr_names_lc: Vec<String> = attrs_json
                     .iter()
                     .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
                     .map(|n| n.to_lowercase())
                     .collect();
-                crate::engine::l2::control_context::apply_control_contexts(
+                crate::program::body::control_context::apply_control_contexts(
                     &mut features,
                     &attr_names_lc,
                     &cc_params,
@@ -1038,7 +1038,7 @@ fn project_ir(
             // Computed AFTER global promotion so a guarded object-global
             // receiver also qualifies.
             let entry_temp_guard_receiver =
-                crate::engine::l2::ir_walk::ir_entry_temp_guard_receiver(ir_file, ir_routine)
+                crate::program::body::ir_walk::ir_entry_temp_guard_receiver(ir_file, ir_routine)
                     .filter(|receiver| {
                         receiver == "rec"
                             || receiver == "xrec"
@@ -1111,7 +1111,7 @@ fn project_ir(
             // the matched IR routine (legacy extractors as a fallback). Reuses the SAME
             // ParameterSymbol shape the routine-id/signature-hash path uses so
             // arity/var-ness/type-text cannot drift.
-            let param_syms = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
+            let param_syms = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
             let parameters: Vec<L3Parameter> = param_syms
                 .iter()
                 .map(|p| L3Parameter {
@@ -1269,9 +1269,9 @@ fn project_ir(
             // SAME L2 attribute indexing that produces the L2 projection's
             // `attributesParsed`, so the AttributeInfo arg shape (kind/value/qualifier/
             // member) cannot drift from R1.
-            let kind = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine).to_string();
+            let kind = crate::program::body::ir_walk::ir_routine_kind(ir_routine).to_string();
             let attributes_parsed_json =
-                crate::engine::l2::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
+                crate::program::body::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
             let attributes_parsed: Vec<crate::program::attributes::AttributeInfo> =
                 attributes_parsed_json
                     .into_iter()
@@ -1551,7 +1551,7 @@ pub fn select_program_files<'c>(
     workspace: &std::path::Path,
     ctx: &'c crate::program::resolve::full::ProgramContext,
 ) -> Option<ProgramFiles<'c>> {
-    use crate::engine::l2::l2_workspace::{discover_al_files_app_scoped, read_root_app_guid};
+    use crate::program::body::l2_workspace::{discover_al_files_app_scoped, read_root_app_guid};
     use crate::snapshot::parse::ParsedFile;
 
     let app_guid = read_root_app_guid(workspace)?;
@@ -1686,7 +1686,7 @@ pub fn assemble_l3_workspace_from_disk(
     workspace: &std::path::Path,
     model_instance_id: &str,
 ) -> Option<L3Workspace> {
-    use crate::engine::l2::l2_workspace::{
+    use crate::program::body::l2_workspace::{
         discover_al_files_app_scoped, read_al_source, read_root_app_guid,
     };
 
@@ -1857,7 +1857,7 @@ pub struct L3Resolved {
     /// - deliberately NOT switched: the cross-app resolve in `capability_cone.rs`
     ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
     ///   declared dependencies.
-    pub precomputed_calls: Option<std::sync::Arc<crate::engine::l3::call_resolver::ResolvedCalls>>,
+    pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2664,7 +2664,7 @@ page 50814 "CP4 Wizard"
         );
 
         // --- L2 path -------------------------------------------------------
-        let l2 = crate::engine::l2::l2_workspace::project_named_routine(
+        let l2 = crate::program::body::l2_workspace::project_named_routine(
             src,
             "OnValidate",
             APP_GUID,
@@ -2724,14 +2724,14 @@ page 50814 "CP4 Wizard"
         // from the RAW (still-escaped) member text and assert it differs: without
         // this, both paths agreeing on a wrongly-escaped string would pass the
         // assertion above and the test would prove nothing about the normalization.
-        let params = crate::engine::l2::ir_walk::ir_parameter_symbols(
+        let params = crate::program::body::ir_walk::ir_parameter_symbols(
             al_syntax::parse(src).objects[1]
                 .routines
                 .iter()
                 .find(|r| r.name.eq_ignore_ascii_case("OnValidate"))
                 .expect("IR must carry the OnValidate trigger"),
         );
-        let raw_escaped_id = crate::engine::l2::scope::compute_routine_id(
+        let raw_escaped_id = crate::program::body::scope::compute_routine_id(
             APP_GUID,
             "Page",
             50814,

@@ -38,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The detector model is part of the program engine** (engine-switch S2b.2). The
+  model types and assembly passes moved from `engine::l3` to `program::model`:
+  - `l3_workspace` → `workspace`;
+  - `record_types`, `extension_fields`, `symbol_table` and `taxonomy`, unchanged;
+  - the call-resolution shape (`CallEdge`, `ResolvedCalls`, `UpgradedBinding`,
+    `UnknownReason`, `DispatchMeta`, `ExternalTypeRef`, `Diagnostic`,
+    `DeclaredDependency`), cut out of `engine::l3::call_resolver` into
+    `program::model::calls`.
+
+  The legacy resolver stays in `engine::l3` and re-exports the shape. `engine::l3`
+  keeps aliases for the moved modules, removed in S9. The model types keep their `L3*`
+  names until then. No code changed beyond paths. The S1 guard now also covers
+  `program/model`. The harness shows `s2b1` and `s2b2` byte-identical on all 218
+  corpora.
+
 - **The body pipeline is part of the program engine** (engine-switch S2b.1).
   `src/engine/l2`, the walker that turns a routine's syntax tree into body facts
   (record operations, call sites, loops, statement tree, capabilities), moved to

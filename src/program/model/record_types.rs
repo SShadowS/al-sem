@@ -18,11 +18,11 @@
 //!     index time (al-sem `extractExtendsTargetName` / SourceTable unquote), then
 //!     passed RAW to `table_by_name` / `object_by_type_name` (which lower-case).
 
-use super::l3_workspace::{L3Object, L3Routine};
 use super::symbol_table::SymbolTable;
+use super::workspace::{L3Object, L3Routine};
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::node_util::strip_quotes;
+use crate::program::body::node_util::strip_quotes;
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
 ///
@@ -285,14 +285,15 @@ pub fn resolve_routine_record_types(
                 .collect();
 
             // Scan call sites for GetTable / Open on RecordRef vars (unconditional only).
-            let mut recref_temp: HashMap<String, crate::engine::l2::features::PTempState> =
+            let mut recref_temp: HashMap<String, crate::program::body::features::PTempState> =
                 HashMap::new();
             for cs in &routine.call_sites {
                 // Must not be inside a loop.
                 if !cs.loop_stack.is_empty() {
                     continue;
                 }
-                let crate::engine::l2::features::PCallee::Member { receiver, method } = &cs.callee
+                let crate::program::body::features::PCallee::Member { receiver, method } =
+                    &cs.callee
                 else {
                     continue;
                 };
@@ -309,9 +310,9 @@ pub fn resolve_routine_record_types(
                         // RecRef.Open(no, <other>) → skip (Unknown, conservative)
                         let second_arg = cs.argument_texts.get(1).map(|t| t.trim().to_lowercase());
                         let ts = match second_arg.as_deref() {
-                            None => Some(crate::engine::l2::scope::ts_known(false)),
-                            Some("false") => Some(crate::engine::l2::scope::ts_known(false)),
-                            Some("true") => Some(crate::engine::l2::scope::ts_known(true)),
+                            None => Some(crate::program::body::scope::ts_known(false)),
+                            Some("false") => Some(crate::program::body::scope::ts_known(false)),
+                            Some("true") => Some(crate::program::body::scope::ts_known(true)),
                             Some(_) => None, // non-literal second arg → conservative Unknown
                         };
                         if let Some(ts) = ts {
@@ -336,8 +337,10 @@ pub fn resolve_routine_record_types(
                         else {
                             continue; // source var absent or not Known → Unknown
                         };
-                        recref_temp
-                            .insert(receiver_lc, crate::engine::l2::scope::ts_known(known_val));
+                        recref_temp.insert(
+                            receiver_lc,
+                            crate::program::body::scope::ts_known(known_val),
+                        );
                     }
                     _ => {}
                 }
@@ -374,7 +377,7 @@ pub fn resolve_routine_record_types(
         let Some(tid) = &op.table_id else { continue };
         let is_temp = symbols.table_by_id(tid).map(|t| t.is_temporary) == Some(true);
         if is_temp {
-            op.temp_state = Some(crate::engine::l2::scope::ts_known(true));
+            op.temp_state = Some(crate::program::body::scope::ts_known(true));
         }
     }
     for variable in routine.record_variables.iter_mut() {
@@ -383,7 +386,7 @@ pub fn resolve_routine_record_types(
         };
         let is_temp = symbols.table_by_id(tid).map(|t| t.is_temporary) == Some(true);
         if is_temp {
-            variable.temp_state = crate::engine::l2::scope::ts_known(true);
+            variable.temp_state = crate::program::body::scope::ts_known(true);
         }
     }
 
@@ -404,12 +407,12 @@ pub fn resolve_routine_record_types(
         let guard_receiver = guard_receiver.as_str();
         for op in routine.record_operations.iter_mut() {
             if op.record_variable_name.eq_fold_identifier(guard_receiver) {
-                op.temp_state = Some(crate::engine::l2::scope::ts_known(true));
+                op.temp_state = Some(crate::program::body::scope::ts_known(true));
             }
         }
         for variable in routine.record_variables.iter_mut() {
             if variable.name.eq_fold_identifier(guard_receiver) {
-                variable.temp_state = crate::engine::l2::scope::ts_known(true);
+                variable.temp_state = crate::program::body::scope::ts_known(true);
             }
         }
     }
@@ -428,7 +431,7 @@ pub fn resolve_routine_record_types(
         for op in routine.record_operations.iter_mut() {
             let name = op.record_variable_name.to_lowercase();
             if name == "rec" || name == "xrec" {
-                op.temp_state = Some(crate::engine::l2::scope::ts_known(true));
+                op.temp_state = Some(crate::program::body::scope::ts_known(true));
             }
         }
         // The implicit Rec/xRec record VARIABLE (d22 FN registration) must agree —
@@ -437,7 +440,7 @@ pub fn resolve_routine_record_types(
         for variable in routine.record_variables.iter_mut() {
             let name = variable.name.to_lowercase();
             if name == "rec" || name == "xrec" {
-                variable.temp_state = crate::engine::l2::scope::ts_known(true);
+                variable.temp_state = crate::program::body::scope::ts_known(true);
             }
         }
         // ...and so must a call argument that passes the implicit Rec/xRec: a
@@ -448,7 +451,7 @@ pub fn resolve_routine_record_types(
         for cs in routine.call_sites.iter_mut() {
             for b in cs.argument_bindings.iter_mut() {
                 if b.source_kind == "implicit-rec" {
-                    b.source_temp_state = Some(crate::engine::l2::scope::ts_known(true));
+                    b.source_temp_state = Some(crate::program::body::scope::ts_known(true));
                 }
             }
         }

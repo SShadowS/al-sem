@@ -10,6 +10,7 @@ pub mod dep_summary;
 pub mod graph;
 pub mod graphify_export;
 pub mod integration_report;
+pub mod model;
 pub mod node;
 pub mod node_extract;
 pub mod node_set;

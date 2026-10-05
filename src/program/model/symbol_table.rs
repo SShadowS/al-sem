@@ -15,7 +15,7 @@
 //! pre-sorted by routine id (byte-order). R2b's overload resolution relies on
 //! this exact key + sort — locked here in R2a.
 
-use super::l3_workspace::{L3Object, L3PageControl, L3Routine, L3Table};
+use super::workspace::{L3Object, L3PageControl, L3Routine, L3Table};
 use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
