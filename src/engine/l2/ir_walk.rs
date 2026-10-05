@@ -260,6 +260,10 @@ struct SpineCtx<'a> {
     /// value expr)`, in walk order. Read by `exhausting_advance` (#50) to see
     /// how often a `repeat` body assigns its `until` flag.
     bare_assigns: Vec<(String, ExprId)>,
+    /// While walking an assignment's target: that target expression and how it
+    /// is used (#14). Only a field access ON that exact expression is a write;
+    /// one nested inside it (an index) is still a read.
+    assign_target: Option<(ExprId, crate::engine::l2::features::FieldAccessKind)>,
 }
 
 impl<'a> SpineCtx<'a> {
@@ -717,7 +721,11 @@ impl<'a> SpineCtx<'a> {
         use StmtKind::*;
         let st = self.file.ir.stmt(sid);
         match &st.kind {
-            Assignment { target, value } => {
+            Assignment {
+                target,
+                value,
+                compound,
+            } => {
                 if let ExprKind::Identifier(name) = &self.file.ir.expr(*target).kind {
                     self.bare_assigns.push((name.to_ascii_lowercase(), *value));
                 }
@@ -740,7 +748,15 @@ impl<'a> SpineCtx<'a> {
                         rhs_identifier,
                     });
                 }
+                use crate::engine::l2::features::FieldAccessKind;
+                let kind = if *compound {
+                    FieldAccessKind::ReadWrite
+                } else {
+                    FieldAccessKind::Write
+                };
+                self.assign_target = Some((*target, kind));
                 self.walk_expr(*target);
+                self.assign_target = None;
                 self.walk_expr(*value);
             }
             Call(x) => {
@@ -1107,10 +1123,15 @@ impl<'a> SpineCtx<'a> {
                         member.clone()
                     };
                     let source_anchor = self.anchor(&e.origin);
+                    let access = match self.assign_target {
+                        Some((t, kind)) if t == eid => kind,
+                        _ => crate::engine::l2::features::FieldAccessKind::Read,
+                    };
                     self.field_accesses.push(PFieldAccess {
                         record_variable_name,
                         field_name,
                         source_anchor,
+                        access,
                     });
                 }
                 let object = *object;
@@ -1225,6 +1246,7 @@ pub fn walk_spine(
         call_sites: Vec::new(),
         cs_arg_exprs: Vec::new(),
         bare_assigns: Vec::new(),
+        assign_target: None,
     };
     if let Some(b) = routine.body {
         ctx.walk_block(b);
@@ -1593,7 +1615,7 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(vec![self.build_block(*body)]);
                 n
             }
-            Assignment { target, value } => {
+            Assignment { target, value, .. } => {
                 let mut leaves = self.harvest_vec(*target);
                 leaves.extend(self.harvest_vec(*value));
                 let mut n = cfn_node("other");
@@ -2244,8 +2266,16 @@ fn ir_first_assignment_in_stmt(
 ) -> Option<ExprId> {
     use StmtKind::*;
     match &file.ir.stmt(sid).kind {
-        Assignment { target, value } => {
-            if matches!(&file.ir.expr(*target).kind,
+        Assignment {
+            target,
+            value,
+            compound,
+        } => {
+            // A compound `X += v` does not DEFINE X's value -- `v` is a delta. It
+            // was indistinguishable from `X := v` until the IR kept the operator
+            // (#14).
+            if !compound
+                && matches!(&file.ir.expr(*target).kind,
                 ExprKind::Identifier(x) if x.eq_ignore_ascii_case(var_lc))
             {
                 return Some(*value);
@@ -2673,6 +2703,48 @@ codeunit 50001 T
             .count();
         assert_eq!(stmt_count, 1, "sites: {sites:?}");
         assert_eq!(expr_count, 2, "sites: {sites:?}");
+    }
+
+    /// #14: a field access says whether it reads, writes, or both. A pure write
+    /// is no longer indistinguishable from a read.
+    #[test]
+    fn field_access_kind_read_write_readwrite() {
+        use crate::engine::l2::features::FieldAccessKind::{Read, ReadWrite, Write};
+        const SRC: &str = r#"
+codeunit 50003 F
+{
+    procedure Caller()
+    var
+        R: Record Customer;
+        D: Decimal;
+        A: array[3] of Decimal;
+    begin
+        D := R.OldAmt;
+        R.NewAmt := D;
+        R.Cnt += 1;
+        R.Total := R.Total + 1;
+        A[R.Idx] := 0;
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+        let got: Vec<(&str, _)> = features
+            .field_accesses
+            .iter()
+            .map(|fa| (fa.field_name.as_str(), fa.access))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("OldAmt", Read),
+                ("NewAmt", Write),
+                ("Cnt", ReadWrite),
+                ("Total", Write),
+                ("Total", Read),
+                ("Idx", Read), // an index INSIDE a target is still a read
+            ]
+        );
     }
 
     /// Which condition shapes `condition_references` records (#24, and the

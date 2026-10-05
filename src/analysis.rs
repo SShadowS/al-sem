@@ -287,7 +287,7 @@ fn complexity_stmt(ir: &ir::Ir, sid: ir::StmtId, c: &mut u32) {
                 complexity_block(ir, *b, c);
             }
         }
-        StmtKind::Assignment { target, value } => {
+        StmtKind::Assignment { target, value, .. } => {
             complexity_expr(ir, *target, c);
             complexity_expr(ir, *value, c);
         }

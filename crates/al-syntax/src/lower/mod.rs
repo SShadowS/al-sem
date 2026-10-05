@@ -1362,7 +1362,16 @@ fn lower_stmt(
         RawKind::AssignmentStatement => {
             let target = lower_opt_field(node, FieldName::Left, ir, issues, source, depth);
             let value = lower_opt_field(node, FieldName::Right, ir, issues, source, depth);
-            StmtKind::Assignment { target, value }
+            // The `operator` field is an `assignment_operator` node: `:=`, or a
+            // compound `+=` / `-=` / `*=` / `/=` that also reads the target.
+            let compound = node
+                .field(FieldName::Operator)
+                .is_some_and(|op| op.text(source).trim() != ":=");
+            StmtKind::Assignment {
+                target,
+                value,
+                compound,
+            }
         }
         RawKind::CallExpression => StmtKind::Call(lower_expr(node, ir, issues, source, depth + 1)),
         // Parenless member / subscript call statements (`Rec.Find;`, `X[1];`) parse as a

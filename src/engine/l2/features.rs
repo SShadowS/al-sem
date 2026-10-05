@@ -31,6 +31,7 @@
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
+//!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
@@ -399,7 +400,19 @@ pub struct PVariableSymbol {
     pub source_anchor: PAnchor,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// How a field access uses the field (#14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldAccessKind {
+    /// Read in value position -- the default for anything not an assignment target.
+    #[default]
+    Read,
+    /// The target of a plain `:=`: written, not read.
+    Write,
+    /// The target of a compound `+=` / `-=` / `*=` / `/=`: read, then written.
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PFieldAccess {
     #[serde(rename = "recordVariableName")]
     pub record_variable_name: String,
@@ -407,7 +420,26 @@ pub struct PFieldAccess {
     pub field_name: String,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// Read, write, or both (#14). Before this, an assignment target was
+    /// recorded exactly like a read, so "nothing reads this field" could not be
+    /// asked. `R.F := R.F + 1` gives TWO accesses (a Write and a Read).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`): never serialized, so no feature-level golden
+    /// moves; deserialized goldens default it to `Read`.
+    #[serde(skip)]
+    pub access: FieldAccessKind,
 }
+
+/// Excludes the serde-skipped `access`, like the other INTERNAL-ONLY fields.
+impl PartialEq for PFieldAccess {
+    fn eq(&self, other: &Self) -> bool {
+        self.record_variable_name == other.record_variable_name
+            && self.field_name == other.field_name
+            && self.source_anchor == other.source_anchor
+    }
+}
+
+impl Eq for PFieldAccess {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PVarAssignment {
@@ -692,7 +724,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 7, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 8, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 }

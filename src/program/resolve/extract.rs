@@ -714,7 +714,7 @@ fn walk_stmt_v2(
     out: &mut Vec<RawSiteV2>,
 ) {
     match kind {
-        StmtKind::Assignment { target, value } => {
+        StmtKind::Assignment { target, value, .. } => {
             collect_calls_v2(file, src, *target, unit, caller, rvars, ctx, out);
             collect_calls_v2(file, src, *value, unit, caller, rvars, ctx, out);
         }
