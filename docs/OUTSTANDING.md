@@ -56,6 +56,26 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (recorded
+  2026-10-07; triage `g3-d8-triage.md` of the 28 pre-fix survivors). The real ones
+  are small intended Commits (setup wizard Finish, send-code migration batches,
+  `LogUsage`). The open false-positive causes are listed below.
+  - **Guards on local values derived from parameters.** `IsEmailPreview := not
+    UseSMTP` makes the preview branch dead when the caller passes
+    `UseSMTP = true`. `param_guard` reads parameters only.
+  - **Data-dependent guards.** `if DOFile.IsEmpty() then CreateDocuments(...)` is
+    skipped when the caller has just filled `DOFile`.
+  - **`var` record parameters.** A caller passes a temporary record, but the
+    callee's cone counts the writes as physical. `pending_writes` takes each
+    callee's folded cone, which has no call-site PD substitution.
+  - **A callee that always commits** should end the pending set, as a
+    `Commit()` statement does. That needs a must-commit fact; only may-commit
+    exists.
+  - **Commits before a modal page** (`Commit(); Page.RunModal()`) and Commits
+    inside upgrade triggers (does the platform honour them?) are unverified.
+  - **Decision pending:** whether d8 stays DEFAULT. Its verified false-positive
+    rate on the sample is still above 30%.
+
 - [ ] **Constant-argument guards: what S8 gap 2 does not cover** (recorded 2026-10-07,
   `src/engine/l4/param_guard.rs`). Each item keeps a fact that a literal argument
   makes impossible; none adds a false prune.

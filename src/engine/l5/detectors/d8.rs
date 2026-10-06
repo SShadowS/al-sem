@@ -3,7 +3,11 @@
 //!
 //! For each ExplicitCommit transaction span, if the span includes a
 //! transaction-managing routine (name matches `^(Post|Apply|Release)[A-Z]` OR writes
-//! ≥3 tables) AND the Commit is in a DIFFERENT routine, emit a high-severity finding.
+//! ≥3 physical tables BEFORE its call toward the Commit) AND the Commit is in a
+//! DIFFERENT routine, emit a high-severity finding. The write count is the routine's
+//! own pending part of the span (engine-switch S8 gap 3, `pending_writes`); its whole
+//! cone also holds the Commit routine's writes, writes after the Commit and sibling
+//! branches, and every cross-app finding on CDO/DO came from those.
 //!
 //! Dedup: same commit_operation_id → keep first, skip subsequent.
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
@@ -18,28 +22,30 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
-use crate::engine::l5::transaction_spans::SeedKind;
+use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 
 const DETECTOR: &str = "d8-commit-in-transaction";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 
 /// `isTransactionManaging` — name matches `^(Post|Apply|Release)[A-Z]` OR writes ≥3
-/// tables. Mirrors the al-sem regex `/^(Post|Apply|Release)[A-Z]/`.
-fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
+/// physical tables before its call toward the Commit. Mirrors the al-sem regex
+/// `/^(Post|Apply|Release)[A-Z]/`.
+fn is_transaction_managing(
+    routine_id: &str,
+    span: &TransactionSpan,
+    ctx: &DetectorContext,
+) -> bool {
     let Some(r) = ctx.routine_by_id.get(routine_id) else {
         return false;
     };
-    if posting_name_matches(&r.name) {
-        return true;
-    }
-    let Some(summary) = ctx.summaries.get(routine_id) else {
-        return false;
-    };
-    // ⟨C1 Task 2 fix M2⟩ The count alone — avoids resolving and allocating one
-    // `String` per table just to discard it.
-    ctx.cone_derived
-        .writes_physical_tables_count_of(&summary.routine_id)
-        >= TRANSACTION_THRESHOLD_TABLES
+    posting_name_matches(&r.name) || pending_count(routine_id, span) >= TRANSACTION_THRESHOLD_TABLES
+}
+
+fn pending_count(routine_id: &str, span: &TransactionSpan) -> usize {
+    span.pending_physical_by_routine
+        .get(routine_id)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Hand-rolled `^(Post|Apply|Release)[A-Z]` check: the name must start with
@@ -81,7 +87,7 @@ pub fn detect_d8(
             .routines_in_span
             .iter()
             .filter(|id| id.as_str() != span.commit_routine_id.as_str())
-            .filter(|id| is_transaction_managing(id, ctx))
+            .filter(|id| is_transaction_managing(id, span, ctx))
             .map(|id| id.as_str())
             .collect();
         if managers.is_empty() {
@@ -124,15 +130,7 @@ pub fn detect_d8(
             },
         ];
 
-        let write_count = ctx
-            .summaries
-            .get(manager_id)
-            .map(|s| {
-                ctx.cone_derived
-                    .writes_physical_tables_of(&s.routine_id)
-                    .len()
-            })
-            .unwrap_or(0);
+        let write_count = pending_count(manager_id, span);
 
         // affectedObjects: [commitRoutine.objectId, manager.objectId].sort()
         let mut affected_objects =
@@ -149,7 +147,7 @@ pub fn detect_d8(
             detector: DETECTOR.to_string(),
             title: "Commit inside a posting transaction span".into(),
             root_cause: format!(
-                "{} calls Commit while reachable from {}, which writes {} tables. \
+                "{} calls Commit while reachable from {}, which writes {} tables before it. \
                  A mid-transaction Commit breaks rollback semantics \u{2014} if the surrounding \
                  operation later fails, the data is left half-written.",
                 commit_routine.name, manager.name, write_count
@@ -160,7 +158,7 @@ pub fn detect_d8(
             evidence_path: path,
             additional_paths: None,
             affected_objects: id_list(affected_objects),
-            affected_tables: id_list(span.writes_tables.clone()),
+            affected_tables: id_list(span.pending_physical_tables.clone()),
             fix_options: vec![FixOption {
                 description: "Remove the Commit, or restructure so the surrounding transaction \
                               completes (returns control to its caller) before this code runs."

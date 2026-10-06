@@ -1,8 +1,10 @@
 //! D9 — Transaction span summary. Port of al-sem
 //! `src/detectors/d9-transaction-span-summary.ts`.
 //!
-//! For each non-trivial ExplicitCommit transaction span (≥2 routines AND (≥2 PHYSICAL tables OR
-//! !coverage_complete)), emit an info-level finding describing what the span covers.
+//! For each non-trivial ExplicitCommit transaction span (≥2 routines AND (≥2 PHYSICAL tables
+//! written before the Commit OR !coverage_complete)), emit an info-level finding describing
+//! what the transaction holds when it commits. The tables and events are the span's PENDING
+//! ones (engine-switch S8 gap 3, `pending_writes`), not everything the span can reach.
 //! Aimed at code review / agent context, not a bug to fix.
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
@@ -46,10 +48,10 @@ pub fn detect_d9(
             continue;
         }
 
-        // ⟨issue 23 rule⟩ The gate and the count in the text read the PHYSICAL
-        // span count: writes to temporary records are not part of any
-        // transaction. `affected_tables` stays the temp-inclusive witness set.
-        let table_count = span.writes_physical_tables_count;
+        // ⟨issue 23 rule⟩ The gate and the count read PHYSICAL tables only:
+        // writes to temporary records are not part of any transaction. Only the
+        // writes pending at the Commit are this transaction's (S8 gap 3).
+        let table_count = span.pending_physical_tables.len();
         let effects_are_interesting =
             table_count >= MIN_INTERESTING_TABLES || !span.coverage_complete;
         if !effects_are_interesting {
@@ -71,7 +73,7 @@ pub fn detect_d9(
         // tableDesc: "writes {n} known table(s)" if n>0 else ("writes tables (effect scope unknown)"
         // if !coverage_complete else "writes tables").
         let table_desc = if table_count > 0 {
-            format!("writes {table_count} known table(s)")
+            format!("writes {table_count} known table(s) before it")
         } else if !span.coverage_complete {
             "writes tables (effect scope unknown)".to_string()
         } else {
@@ -88,12 +90,12 @@ pub fn detect_d9(
             detector: DETECTOR.to_string(),
             title: "Transaction span summary".into(),
             root_cause: format!(
-                "Transaction ending at {}'s Commit spans {} routines, {}, publishes {} event(s). \
-                 Consider whether all of this needs to be atomic.",
+                "Transaction ending at {}'s Commit spans {} routines, {}, publishes {} event(s) \
+                 before it. Consider whether all of this needs to be atomic.",
                 commit_routine.name,
                 span.routines_in_span.len(),
                 table_desc,
-                span.publishes_events.len()
+                span.pending_events.len()
             ),
             severity: "info".to_string(),
             confidence,
@@ -101,7 +103,7 @@ pub fn detect_d9(
             evidence_path: path,
             additional_paths: None,
             affected_objects: vec![commit_routine.object_id.as_str().into()],
-            affected_tables: id_list(span.writes_tables.clone()),
+            affected_tables: id_list(span.pending_physical_tables.clone()),
             fix_options: vec![FixOption {
                 description: "If the span includes operations that are logically independent, \
                               split them into separate transactions with their own Commit boundaries."

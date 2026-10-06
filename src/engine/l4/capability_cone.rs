@@ -2181,10 +2181,7 @@ fn site_reqs<'f>(
 }
 
 /// Every routine's guard frame ([`super::param_guard`]), for the routines that
-/// have a usable guard parameter. A parameter passed to a call stays usable
-/// when the call's resolved callee takes it by value, or when the call has no
-/// edge at all (a platform method) other than `Evaluate` and `Clear`, which
-/// write their argument.
+/// have a usable guard parameter, over the typed graph's call edges.
 fn guard_frames(
     g: &TypedEdgeGraph,
     routines: &[L3Routine],
@@ -2193,33 +2190,14 @@ fn guard_frames(
     let mut out = HashMap::new();
     for r in routines {
         let edges: &[TypedOutEdge] = g.outgoing.get(&r.id).map_or(&[], Vec::as_slice);
-        let passes_by_value = |cs_id: &str, arg: u32| -> bool {
-            let mut targets = edges
+        let callees_at = |cs_id: &str| -> Vec<&str> {
+            edges
                 .iter()
                 .filter(|e| e.callsite.as_deref() == Some(cs_id))
-                .peekable();
-            if targets.peek().is_none() {
-                let callee_lc = r
-                    .call_sites
-                    .iter()
-                    .find(|c| c.id == cs_id)
-                    .map(|c| match &c.callee {
-                        PCallee::Bare { name } => name.to_ascii_lowercase(),
-                        PCallee::Member { method, .. } => method.to_ascii_lowercase(),
-                        _ => String::new(),
-                    })
-                    .unwrap_or_default();
-                // The platform methods that write a Boolean argument.
-                return !matches!(callee_lc.as_str(), "evaluate" | "clear");
-            }
-            targets.all(|e| {
-                routines_by_id
-                    .get(e.to.as_str())
-                    .and_then(|callee| callee.parameters.iter().find(|p| p.index == arg))
-                    .is_some_and(|p| !p.is_var)
-            })
+                .map(|e| e.to.as_str())
+                .collect()
         };
-        if let Some(f) = super::param_guard::frame_guards(r, passes_by_value) {
+        if let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) {
             out.insert(r.id.clone(), f);
         }
     }

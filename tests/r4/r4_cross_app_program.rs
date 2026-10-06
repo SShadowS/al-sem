@@ -1260,3 +1260,139 @@ fn a_dependency_write_behind_a_false_literal_is_not_reached() {
         assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
     }
 }
+
+/// One workspace: three physical tables, a `D8 Probe` codeunit whose `Caller`
+/// body is the case under test, `Committer` (commits; `own` decides whether it
+/// first writes all three tables), `W3` (writes all three), and `W3 CU`, whose
+/// `OnRun` writes all three.
+fn d8_workspace(dir: &Path, caller: &str, own: bool) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50499}}]}}"#
+        ),
+    );
+    let tables: String = (1..=3)
+        .map(|i| table(50400 + i, &format!("T{i}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(&dir.join("src/Tables.al"), &tables);
+    let writes = "        A.Insert();\n        B.Insert();\n        C.Insert();\n";
+    let vars = "    var\n        A: Record T1;\n        B: Record T2;\n        C: Record T3;\n";
+    let own_writes = if own { writes } else { "" };
+    write(
+        &dir.join("src/Probe.al"),
+        &format!(
+            "codeunit 50410 \"D8 Probe\"\n{{\n    procedure Caller(X: Boolean)\n    var\n        CU: Codeunit \"W3 CU\";\n    begin\n{caller}\n    end;\n\n    procedure Committer()\n{vars}    begin\n{own_writes}        Commit();\n    end;\n\n    procedure CommitIf(DoIt: Boolean)\n    begin\n        if not DoIt then\n            exit;\n        Commit();\n    end;\n\n    procedure W3()\n{vars}    begin\n{writes}    end;\n}}\n\ncodeunit 50411 \"W3 CU\"\n{{\n    trigger OnRun()\n{vars}    begin\n{writes}    end;\n}}\n"
+        ),
+    );
+}
+
+/// S8 engine gap 3 (triage C, d8 100% false positives cross-app): a routine is a
+/// transaction "manager" only by the physical tables it writes BEFORE its call
+/// toward the Commit, not by its whole cone. Each case is `Caller`'s body:
+/// - `commit-own-writes`: the Commit routine's own writes are not its caller's;
+/// - `after-commit`: writes after the call that commits;
+/// - `sibling-branch`: writes in the branch that does not commit;
+/// - `checked-run`: a checked `Codeunit.Run` writes in its own transaction;
+/// - `case-branch`: a `case` runs one branch, not the earlier ones too;
+/// - `earlier-commit`: a `Commit()` before the call commits what came before;
+/// - `exit-arm`: writes in an `if` arm that always exits never reach the call;
+/// - `checked-var-run`: `if CU.Run()` on a codeunit variable is a checked run;
+/// - `guarded-commit`: the Commit runs only when `DoIt`, and the caller passes
+///   `false`, so the caller is not in its transaction at all;
+/// - `before`, `loop` (an earlier iteration's writes) and `guarded-commit-true`:
+///   d8 reports.
+///
+/// Discrimination (2026-10-07), each break fails the named cases and passes
+/// restored, in `pending_writes.rs`: counting the call toward the Commit itself
+/// (`commit-own-writes`); collecting the statements after the target
+/// (`after-commit`, `sibling-branch`); collecting both branches of the `if`
+/// (`sibling-branch`, and with it `commit-own-writes`, `after-commit`); no
+/// checked-run skip (`checked-run`); no loop rule (`loop`). Then, also 2026-10-07:
+/// no `case` arm in `walk_node` (`case-branch`); no `out.clear()` at an earlier
+/// `Commit()` (`earlier-commit`); every `if` arm counted as reaching
+/// (`exit-arm`); no codeunit-variable `Run` in `is_checked_run`
+/// (`checked-var-run`); the span walk ignoring the caller's arguments
+/// (`guarded-commit`).
+#[test]
+fn d8_counts_only_the_writes_pending_at_the_commit() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let cases = [
+        ("commit-own-writes", "        Committer();", true, 0),
+        (
+            "after-commit",
+            "        Committer();\n        W3();",
+            false,
+            0,
+        ),
+        (
+            "sibling-branch",
+            "        if X then\n            W3()\n        else\n            Committer();",
+            false,
+            0,
+        ),
+        (
+            "checked-run",
+            "        if Codeunit.Run(Codeunit::\"W3 CU\") then;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "case-branch",
+            "        case X of\n            true:\n                W3();\n            false:\n                Committer();\n        end;",
+            false,
+            0,
+        ),
+        (
+            "earlier-commit",
+            "        W3();\n        Commit();\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "exit-arm",
+            "        if X then begin\n            W3();\n            exit;\n        end;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "checked-var-run",
+            "        if CU.Run() then;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "guarded-commit",
+            "        W3();\n        CommitIf(false);",
+            false,
+            0,
+        ),
+        (
+            "guarded-commit-true",
+            "        W3();\n        CommitIf(true);",
+            false,
+            1,
+        ),
+        ("before", "        W3();\n        Committer();", false, 1),
+        (
+            "loop",
+            "        while X do begin\n            Committer();\n            W3();\n        end;",
+            false,
+            1,
+        ),
+    ];
+    let names = vec!["d8-commit-in-transaction".to_string()];
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, caller, own, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        d8_workspace(dir.path(), caller, own);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        if p.finding_count != expected {
+            wrong.push(format!("{name}: {} (want {expected})", p.finding_count));
+        }
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
+}

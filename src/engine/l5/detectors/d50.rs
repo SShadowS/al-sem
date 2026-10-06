@@ -720,6 +720,9 @@ mod tests {
                 publishes_events: vec![],
                 span_roots: vec!["manager".to_string()],
                 coverage_complete: false,
+                pending_physical_tables: vec![],
+                pending_events: vec![],
+                pending_physical_by_routine: Default::default(),
             },
             TransactionSpan {
                 seed_kind: SeedKind::ExplicitCommit,
@@ -732,6 +735,9 @@ mod tests {
                 publishes_events: vec![],
                 span_roots: vec!["committer".to_string()],
                 coverage_complete: false,
+                pending_physical_tables: vec![],
+                pending_events: vec![],
+                pending_physical_by_routine: Default::default(),
             },
         ];
 

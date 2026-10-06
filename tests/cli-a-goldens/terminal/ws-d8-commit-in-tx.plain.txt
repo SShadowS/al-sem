@@ -1,7 +1,7 @@
 Analysed 3 routines (3 with bodies, 0 parse-incomplete); 2/2 source units parsed; 0 opaque app(s).
 
 HIGH (2):
-  [d8-commit-in-transaction] Commit inside a posting transaction span — HandlePosted calls Commit while reachable from PostSalesDoc, which writes 3 tables. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written.
+  [d8-commit-in-transaction] Commit inside a posting transaction span — HandlePosted calls Commit while reachable from PostSalesDoc, which writes 2 tables before it. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written.
     ws:src/subscriber.al:11:9 in D8BadSubscriber :: HandlePosted
     confidence: likely
     fix (low): Remove the Commit, or restructure so the surrounding transaction completes (returns control to its caller) before this code runs.
@@ -15,7 +15,7 @@ INFO (2):
     ws:src/posting.al:19:5 in D8PostingChain :: OnAfterPostSalesDoc
     confidence: likely
     fix (high): Treat 11111111-0000-0000-0000-00000000d80a/table/50100 as part of this event's effect surface for permission/transaction reasoning.
-  [d9-transaction-span-summary] Transaction span summary — Transaction ending at HandlePosted's Commit spans 3 routines, writes 3 known table(s), publishes 1 event(s). Consider whether all of this needs to be atomic.
+  [d9-transaction-span-summary] Transaction span summary — Transaction ending at HandlePosted's Commit spans 3 routines, writes 3 known table(s) before it, publishes 1 event(s) before it. Consider whether all of this needs to be atomic.
     ws:src/subscriber.al:4:5 in D8BadSubscriber :: HandlePosted
     confidence: possible
     fix (low): If the span includes operations that are logically independent, split them into separate transactions with their own Commit boundaries.

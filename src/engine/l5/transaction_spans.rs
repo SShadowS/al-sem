@@ -36,8 +36,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use crate::engine::l2::features::PCallee;
 use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ResBitset};
+use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, frame_guards_over};
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::engine::l5::pending_writes::{
+    ForwardSites, Pending, forward_sites, is_checked_run, pending_before, toward_sites,
+};
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 
 const MAX_DEPTH: usize = 50;
@@ -78,6 +82,15 @@ pub struct TransactionSpan {
     /// True iff EVERY routine in `routines_in_span` has a defined summary AND
     /// `reachable_coverage(summary) == "complete"`.
     pub coverage_complete: bool,
+    /// The physical tables written BEFORE the Commit (engine-switch S8 gap 3,
+    /// [`super::pending_writes`]): what this transaction leaves half-written.
+    /// SORTED. `writes_tables` above is everything the span can reach.
+    pub pending_physical_tables: Vec<String>,
+    /// The events published before the Commit. SORTED.
+    pub pending_events: Vec<String>,
+    /// Each span member other than the Commit routine -> how many physical
+    /// tables it writes before its call toward the Commit (d8's "manager" test).
+    pub pending_physical_by_routine: BTreeMap<String, usize>,
 }
 
 /// `roleOf(r) === "primary"` — true when NOT in the dependency universe.
@@ -89,35 +102,90 @@ fn is_primary(routine: &L3Routine, dep_routine_ids: &BTreeSet<String>) -> bool {
 /// committing routine (other than the seed) and at `MAX_DEPTH`. Returns the
 /// visited set (a `BTreeSet` for order-independence). Mirrors the inner while-loop
 /// in both al-sem seed passes verbatim.
+///
+/// A caller that reaches `id` only through a CHECKED run (`if Codeunit.Run(...)`)
+/// is not in its transaction: the run is its own (engine-switch S8 gap 3).
 fn backward_cone(
     seed: &str,
-    commits_by_routine: &BTreeMap<String, Vec<String>>,
-    reverse: &ReverseCallGraph,
+    seed_reqs: &[Req],
+    inputs: &SpanInputs<'_>,
+    frames: &mut HashMap<String, Option<FrameGuards>>,
 ) -> BTreeSet<String> {
-    let mut visited: BTreeSet<String> = BTreeSet::new();
+    // routine -> what its parameters must be for the Commit to run when it is
+    // entered (engine-switch S8 gap 3, [`crate::engine::l4::param_guard`]). A
+    // caller whose literal argument contradicts that cannot reach the Commit
+    // through this call, so it is not in the span. A routine reached again with
+    // different requirements keeps none (it may reach the Commit either way).
+    let mut reached: HashMap<String, Vec<Req>> = HashMap::new();
+    reached.insert(seed.to_string(), seed_reqs.to_vec());
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
     queue.push_back((seed.to_string(), 0));
     while let Some((id, depth)) = queue.pop_front() {
-        if visited.contains(&id) {
-            continue;
-        }
-        visited.insert(id.clone());
         if depth >= MAX_DEPTH {
             continue;
         }
         // Don't walk past another committing routine (prior span bounds the trace).
-        if id != seed && commits_by_routine.contains_key(&id) {
+        if id != seed && inputs.commits_by_routine.contains_key(&id) {
             continue;
         }
-        if let Some(callers) = reverse.get(&id) {
-            for caller in callers {
-                if !visited.contains(&caller.from) {
+        let reqs = reached[&id].clone();
+        let Some(callers) = inputs.reverse.get(&id) else {
+            continue;
+        };
+        for caller in callers {
+            let caller_routine = inputs.routine_by_id.get(caller.from.as_str()).copied();
+            let cs = caller.callsite_id.as_deref().and_then(|cs_id| {
+                caller_routine.and_then(|r| r.call_sites.iter().find(|c| c.id == cs_id))
+            });
+            // A checked run is its own transaction: its caller is not in this one.
+            if cs.is_some_and(|cs| {
+                is_checked_run(cs, inputs.routine_by_id.get(id.as_str()).copied())
+            }) {
+                continue;
+            }
+            let frame = caller_routine.and_then(|r| {
+                frames
+                    .entry(r.id.clone())
+                    .or_insert_with(|| {
+                        let callees_at = |cs_id: &str| -> Vec<&str> {
+                            inputs
+                                .fwd
+                                .get(r.id.as_str())
+                                .map_or(&[][..], Vec::as_slice)
+                                .iter()
+                                .filter(|(site, _)| *site == Some(cs_id))
+                                .map(|(_, to)| *to)
+                                .collect()
+                        };
+                        frame_guards_over(r, callees_at, inputs.routine_by_id)
+                    })
+                    .as_ref()
+            });
+            let across = match cs {
+                Some(cs) => across_edge(&reqs, cs, frame),
+                None => Some(Vec::new()),
+            };
+            let edge_reqs: &[Req] = match (frame, caller.callsite_id.as_deref()) {
+                (Some(f), Some(cs_id)) => f.by_site.get(cs_id).map_or(&[], Vec::as_slice),
+                _ => &[],
+            };
+            let Some(new) = across.and_then(|a| conjoin(&a, edge_reqs)) else {
+                continue; // a literal argument makes the Commit unreachable here
+            };
+            match reached.get_mut(&caller.from) {
+                None => {
+                    reached.insert(caller.from.clone(), new);
+                    queue.push_back((caller.from.clone(), depth + 1));
+                }
+                Some(old) if old.is_empty() || *old == new => {}
+                Some(old) => {
+                    old.clear();
                     queue.push_back((caller.from.clone(), depth + 1));
                 }
             }
         }
     }
-    visited
+    reached.into_keys().collect()
 }
 
 /// Aggregate the writes/events/coverage over a visited span. Mirrors al-sem
@@ -208,6 +276,10 @@ fn span_roots_of(visited: &BTreeSet<String>, reverse: &ReverseCallGraph) -> Vec<
 
 /// Everything about a span that depends only on the seed ROUTINE.
 struct SpanTemplate {
+    /// Pending writes of every member except the seed routine (whose part
+    /// depends on WHICH Commit), and each member's own count.
+    pending_others: Pending,
+    pending_by_routine: BTreeMap<String, usize>,
     routines_in_span: Vec<String>,
     writes_tables: Vec<String>,
     writes_physical_tables_count: usize,
@@ -281,27 +353,61 @@ struct SpanInputs<'a> {
     reverse: &'a ReverseCallGraph,
     summaries: &'a HashMap<String, FullRoutineSummary>,
     cone_derived: &'a ConeDerivedStore,
+    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
+    fwd: &'a ForwardSites<'a>,
 }
 
 /// Run-lifetime scratch: the two id bitsets the union fills and clears per
 /// template (allocated ONCE for the whole run — see `aggregate_span`) plus the
 /// census counters.
 struct SpanScratch {
+    /// Guard frames, computed on first use (`backward_cone`).
+    frames: HashMap<String, Option<FrameGuards>>,
     writes: ResBitset,
     events: ResBitset,
     phys_writes: ResBitset,
     census: TxSpanCensus,
 }
 
+/// What the seed routine's parameters must be for `site` (a Commit, or a
+/// checked run) to run.
+fn seed_reqs(
+    r: &L3Routine,
+    site: &str,
+    inputs: &SpanInputs<'_>,
+    scratch: &mut SpanScratch,
+) -> Vec<Req> {
+    let frame = scratch.frames.entry(r.id.clone()).or_insert_with(|| {
+        let callees_at = |cs_id: &str| -> Vec<&str> {
+            inputs
+                .fwd
+                .get(r.id.as_str())
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter(|(s, _)| *s == Some(cs_id))
+                .map(|(_, to)| *to)
+                .collect()
+        };
+        frame_guards_over(r, callees_at, inputs.routine_by_id)
+    });
+    frame
+        .as_ref()
+        .and_then(|f| f.by_site.get(site).cloned())
+        .unwrap_or_default()
+}
+
 fn span_template<'c>(
     seed: &str,
+    seed_reqs: &[Req],
     inputs: &SpanInputs<'_>,
     cache: &'c mut HashMap<String, SpanTemplate>,
     scratch: &mut SpanScratch,
 ) -> &'c SpanTemplate {
     scratch.census.template_calls += 1;
-    if !cache.contains_key(seed) {
-        let visited = backward_cone(seed, inputs.commits_by_routine, inputs.reverse);
+    // One template per seed routine AND the requirements its Commit needs.
+    let key = format!("{seed}|{seed_reqs:?}");
+    if !cache.contains_key(&key) {
+        let visited = backward_cone(seed, seed_reqs, inputs, &mut scratch.frames);
         scratch.census.templates += 1;
         scratch.census.visited_total += visited.len();
         let (writes_tables, writes_physical_tables_count, publishes_events, coverage_complete) =
@@ -315,9 +421,31 @@ fn span_template<'c>(
                 &mut scratch.census,
             );
         let span_roots = span_roots_of(&visited, inputs.reverse);
+        let mut pending_others = Pending::default();
+        let mut pending_by_routine: BTreeMap<String, usize> = BTreeMap::new();
+        for rid in visited.iter().filter(|r| r.as_str() != seed) {
+            let Some(r) = inputs.routine_by_id.get(rid.as_str()) else {
+                continue;
+            };
+            let (targets, unsited) = toward_sites(rid, |to| visited.contains(to), inputs.fwd);
+            let p = pending_before(
+                r,
+                &targets,
+                unsited,
+                inputs.fwd,
+                inputs.routine_by_id,
+                inputs.summaries,
+                inputs.cone_derived,
+            );
+            pending_by_routine.insert(rid.clone(), p.tables.len());
+            pending_others.tables.extend(p.tables);
+            pending_others.events.extend(p.events);
+        }
         cache.insert(
-            seed.to_string(),
+            key.clone(),
             SpanTemplate {
+                pending_others,
+                pending_by_routine,
                 routines_in_span: visited.iter().cloned().collect(),
                 writes_tables,
                 writes_physical_tables_count,
@@ -327,7 +455,7 @@ fn span_template<'c>(
             },
         );
     }
-    &cache[seed]
+    &cache[&key]
 }
 
 /// Compute transaction spans. For each primary-app routine that contains a Commit
@@ -375,15 +503,49 @@ pub fn compute_transaction_spans(
     // Everything about a span that depends only on the seed ROUTINE — cached
     // per distinct seed routine id (see `span_template` above `compute_transaction_spans`).
     let mut template_cache: HashMap<String, SpanTemplate> = HashMap::new();
+    let routine_by_id: HashMap<&str, &L3Routine> =
+        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    let fwd = forward_sites(reverse);
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,
         reverse,
         summaries,
         cone_derived,
+        routine_by_id: &routine_by_id,
+        fwd: &fwd,
+    };
+    // The seed routine's own pending part, up to ONE Commit (or checked run),
+    // joined with the template's.
+    let pending_at = |t: &SpanTemplate, seed: &L3Routine, at: &str| -> (Vec<String>, Vec<String>) {
+        let own = pending_before(
+            seed,
+            &[at],
+            false,
+            &fwd,
+            &routine_by_id,
+            summaries,
+            cone_derived,
+        );
+        let tables: BTreeSet<String> = t
+            .pending_others
+            .tables
+            .iter()
+            .cloned()
+            .chain(own.tables)
+            .collect();
+        let events: BTreeSet<String> = t
+            .pending_others
+            .events
+            .iter()
+            .cloned()
+            .chain(own.events)
+            .collect();
+        (tables.into_iter().collect(), events.into_iter().collect())
     };
     // ONE bitset pair for the whole run: `aggregate_span` clears and refills them
     // per template, so the union never allocates per routine or per element.
     let mut scratch = SpanScratch {
+        frames: HashMap::new(),
         writes: ResBitset::new(cone_derived.res_universe_len()),
         events: ResBitset::new(cone_derived.res_universe_len()),
         phys_writes: ResBitset::new(cone_derived.res_universe_len()),
@@ -392,15 +554,20 @@ pub fn compute_transaction_spans(
 
     // --- explicit-commit seeds ---
     for (commit_routine_id, commit_ops) in &commits_by_routine {
-        let t = span_template(
-            commit_routine_id,
-            &inputs,
-            &mut template_cache,
-            &mut scratch,
-        );
-        // clone the template fields once per OP (same values every op — was a
-        // full recompute per op before)
+        let seed = routine_by_id[commit_routine_id.as_str()];
+        // clone the template fields once per OP (one walk per distinct
+        // requirement list — usually one per routine)
         for commit_operation_id in commit_ops {
+            let reqs = seed_reqs(seed, commit_operation_id, &inputs, &mut scratch);
+            let t = span_template(
+                commit_routine_id,
+                &reqs,
+                &inputs,
+                &mut template_cache,
+                &mut scratch,
+            );
+            let (pending_physical_tables, pending_events) =
+                pending_at(t, seed, commit_operation_id);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -417,6 +584,9 @@ pub fn compute_transaction_spans(
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
                 coverage_complete: t.coverage_complete,
+                pending_physical_tables,
+                pending_events,
+                pending_physical_by_routine: t.pending_by_routine.clone(),
             });
         }
     }
@@ -438,7 +608,9 @@ pub fn compute_transaction_spans(
             if cs.object_run_return_used != Some(true) {
                 continue;
             }
-            let t = span_template(&r.id, &inputs, &mut template_cache, &mut scratch);
+            let reqs = seed_reqs(r, &cs.id, &inputs, &mut scratch);
+            let t = span_template(&r.id, &reqs, &inputs, &mut template_cache, &mut scratch);
+            let (pending_physical_tables, pending_events) = pending_at(t, r, &cs.id);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -457,6 +629,9 @@ pub fn compute_transaction_spans(
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
                 coverage_complete: t.coverage_complete,
+                pending_physical_tables,
+                pending_events,
+                pending_physical_by_routine: t.pending_by_routine.clone(),
             });
         }
     }

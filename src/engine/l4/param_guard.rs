@@ -110,6 +110,43 @@ pub(crate) fn frame_guards(
     })
 }
 
+/// [`frame_guards`] over a call graph: `callees_at(callsite_id)` lists the
+/// routines a call site reaches. A parameter passed to a call stays usable when
+/// every reached callee takes it by value, or when the call reaches nothing (a
+/// platform method) other than `Evaluate` and `Clear`, which write their
+/// argument.
+pub(crate) fn frame_guards_over<'a>(
+    r: &L3Routine,
+    callees_at: impl Fn(&str) -> Vec<&'a str>,
+    routines_by_id: &HashMap<&str, &L3Routine>,
+) -> Option<FrameGuards> {
+    use crate::program::body::features::PCallee;
+    let passes_by_value = |cs_id: &str, arg: u32| -> bool {
+        let targets = callees_at(cs_id);
+        if targets.is_empty() {
+            let callee_lc = r
+                .call_sites
+                .iter()
+                .find(|c| c.id == cs_id)
+                .map(|c| match &c.callee {
+                    PCallee::Bare { name } => name.to_ascii_lowercase(),
+                    PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            // The platform methods that write a Boolean argument.
+            return !matches!(callee_lc.as_str(), "evaluate" | "clear");
+        }
+        targets.iter().all(|to| {
+            routines_by_id
+                .get(to)
+                .and_then(|callee| callee.parameters.iter().find(|p| p.index == arg))
+                .is_some_and(|p| !p.is_var)
+        })
+    };
+    frame_guards(r, passes_by_value)
+}
+
 /// The requirement an `if` node's simple guard states for its THEN branch.
 fn then_req(node: &PCFNNode, usable: &[(String, u32)]) -> Option<Req> {
     let g = node.condition_guard.as_ref()?;

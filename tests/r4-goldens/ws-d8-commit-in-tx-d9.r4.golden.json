@@ -10,7 +10,7 @@
       "id": "d9/11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0/op2",
       "rootCauseKey": "d9/11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0/op2",
       "title": "Transaction span summary",
-      "rootCause": "Transaction ending at HandlePosted's Commit spans 3 routines, writes 3 known table(s), publishes 1 event(s). Consider whether all of this needs to be atomic.",
+      "rootCause": "Transaction ending at HandlePosted's Commit spans 3 routines, writes 3 known table(s) before it, publishes 1 event(s) before it. Consider whether all of this needs to be atomic.",
       "severity": "info",
       "confidence": {
         "level": "possible",

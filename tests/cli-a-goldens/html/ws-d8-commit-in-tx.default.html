@@ -107,7 +107,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
       <h3>Commit inside a posting transaction span</h3>
       <span class="conf" style="--conf:oklch(0.60 0.11 240)">likely</span>
     </header>
-    <p class="root-cause">HandlePosted calls Commit while reachable from PostSalesDoc, which writes 3 tables. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written.</p>
+    <p class="root-cause">HandlePosted calls Commit while reachable from PostSalesDoc, which writes 2 tables before it. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written.</p>
     <ol class="flow">
       <li class="flow-step">
         <span class="flow-rail"><span class="flow-dot"></span></span>
@@ -165,7 +165,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
       <h3>Transaction span summary</h3>
       <span class="conf" style="--conf:oklch(0.72 0.13 80)">possible</span>
     </header>
-    <p class="root-cause">Transaction ending at HandlePosted&#39;s Commit spans 3 routines, writes 3 known table(s), publishes 1 event(s). Consider whether all of this needs to be atomic.</p>
+    <p class="root-cause">Transaction ending at HandlePosted&#39;s Commit spans 3 routines, writes 3 known table(s) before it, publishes 1 event(s) before it. Consider whether all of this needs to be atomic.</p>
     <ol class="flow">
       <li class="flow-step is-terminal">
         <span class="flow-rail"><span class="flow-dot"></span></span>

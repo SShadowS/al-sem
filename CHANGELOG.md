@@ -978,6 +978,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **d8/d9 count only the writes still uncommitted at the Commit** (engine-switch
+  S8, triage C gap 3; new `src/engine/l5/pending_writes.rs`). A transaction span
+  unioned every member's whole forward cone. That union held the Commit routine's
+  own writes, writes after the Commit, sibling branches and checked runs. d8
+  called a routine a "manager" from it, and 10 of 10 sampled cross-app d8
+  findings were false positives. A span now also carries its PENDING writes:
+  for each member, the sites that may run before its call toward the Commit.
+  - **Which sites run before the call:** earlier statements; the conditions on
+    the way; only the `if` arm or `case` branch that holds the call; and an
+    enclosing loop's whole body (an earlier iteration).
+  - **Earlier sites that do not count:** an `if` arm or `case` branch that
+    always exits or raises; anything before a `Commit()` statement, which commits
+    it; a checked run (`if Codeunit.Run(...)`, and `if CU.Run()` reaching an
+    `OnRun`), which is its own transaction.
+  - **The call toward the Commit itself never counts**, even in a loop. What it
+    reaches is the member's to count. Its own raised event counts, as does a
+    publisher's `publish`, which has no site.
+  - A site's effects are its physical writes and events, plus a call's whole
+    callee cone. The combined graph includes implicit-trigger edges, so an
+    `Insert(true)` before a Commit now counts its `OnInsert` writes too.
+  - **The span walk changed too:** it stops at a checked run, and it carries the
+    Commit's constant-argument guards (`param_guard`). A caller whose literal
+    makes the Commit unreachable is not in the span at all, for example
+    `MoveEMailToFile(..., true)`, which exits before its Commit.
+  - **d8's "manager" test** reads the member's own pending count. d9 reads the
+    span's pending tables and events, and its text now says "before it". The
+    old cone-union fields stay for d50, digest and prove.
+  - **CDO/DO cross-app:** d8 36 -> 9 and 32 -> 9; d9 38 -> 34 and 34 -> 34.
+    Wall time and memory are unchanged.
+  - **Still open:** the remaining d8 findings are mostly small intended Commits,
+    and their known false-positive causes are in `OUTSTANDING.md`.
+  - **Tests:** pinned by `d8_counts_only_the_writes_pending_at_the_commit`
+    (13 cases, each rule shown to make it fail when broken). Only the
+    `ws-d8-commit-in-tx` goldens moved. The partial-baseline SARIF test gained
+    the regen hook its siblings have.
+
 - **A write behind a boolean parameter is pruned when the caller passes the
   opposite literal** (engine-switch S8, triage D gap 2). Continia Core writes its
   activation cache only under `if UpdateCache then`. Every route from a CDO/DO
