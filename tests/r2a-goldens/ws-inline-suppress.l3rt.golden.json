@@ -17,6 +17,13 @@
           "dataType": "Text[50]",
           "fieldClass": "Normal",
           "declaringObjectId": "aaaaaaaa-0000-0000-0000-000000000099:Table:50100"
+        },
+        {
+          "fieldNumber": 3,
+          "name": "City",
+          "dataType": "Text[50]",
+          "fieldClass": "Normal",
+          "declaringObjectId": "aaaaaaaa-0000-0000-0000-000000000099:Table:50100"
         }
       ]
     }

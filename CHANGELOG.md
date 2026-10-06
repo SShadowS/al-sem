@@ -326,6 +326,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cross-app detector fixes from the CDO/DO triage** (engine-switch S8.4/S8.5).
+  Each fix is pinned by a test in `tests/r4/r4_cross_app_program.rs` with a
+  discrimination proof.
+  - **d45** now roots a DEPENDENCY event publisher when a primary routine
+    subscribes to it (owner decision 2026-10-06). The finding anchors on that
+    primary subscriber. It is reported only for tables a primary subscriber
+    writes. The triage sample was 20 true / 20 false positives; the false ones
+    come from engine gaps fixed later in S8 (constant-argument
+    guards, temp var parameters).
+  - **Virtual-table gate** (`op_targets_virtual_system_table`): a resolved
+    table numbered below 2000000000 is physical. A resolved platform table is
+    decided by the name allowlist, which gains `License Permission`. The
+    cross-app model now resolves `Field`, `AllObjWithCaption` and similar, so
+    "it resolved" no longer means "it is a user table". This removed all 20
+    sampled d1 false positives.
+  - **d3** (61.5% false positives on the sample) emits no finding when:
+    (A) the table is a virtual system table; (B) every loadable field is read
+    anyway, so there is nothing to trim; (C) the member read is not a field of
+    the table (a parens-less method call such as `Field.Count`); or (D) the
+    record escapes to code d3 cannot read: an unresolved, interface or dynamic
+    callee, an event publisher, or a `Variant`/`RecordRef` parameter.
+  - **d13** skips a caller that the callee's app names in
+    `internalsVisibleTo` (a friend). The friend map runs from the snapshot to
+    `DetectorContext.friends`. All 20 sampled findings were friend calls.
+  - **d17** compares `major.minor` only, and moves from DEFAULT to OPT-IN
+    (owner decision 2026-10-06). It needs MinVersion symbols the model rarely
+    has: 100% of the sample were false positives. The default set is now 42
+    detectors and the opt-in set is 12.
+  - Fixtures: `ws-inline-suppress`'s table gains an unread field (`City`), so
+    its d3 stays genuine under fix B. `ws-d13-member-call`'s dependency drops
+    `InternalsVisibleTo` and marks `InternalMethod` `[InternalProc]`, so it
+    pins a non-friend call. `ws-d8-commit-in-tx` loses its d3 finding: `No.`
+    is the primary key and `Header` escapes to `OnAfterPostSalesDoc`.
+
 - **`alsem analyze` is cross-app by default; `--single-app` keeps the old
   analysis** (engine-switch S8.3, owner decision 2026-10-06).
   - **What the default analyses.** The workspace together with the dependency code

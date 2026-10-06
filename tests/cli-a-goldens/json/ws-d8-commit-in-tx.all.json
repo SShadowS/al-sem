@@ -14,37 +14,6 @@
     "findings": [
       {
         "affectedObjects": [
-          "11111111-0000-0000-0000-00000000d80a/Codeunit/50108"
-        ],
-        "affectedTables": [
-          "11111111-0000-0000-0000-00000000d80a/table/36"
-        ],
-        "confidence": {
-          "level": "likely"
-        },
-        "detector": "d3-missing-setloadfields",
-        "fingerprint": "aa64609e94d3aecf",
-        "fixHint": {
-          "description": "Add SetLoadFields(no.) before the retrieval.",
-          "safety": "high"
-        },
-        "id": "d3/323c302a83ac644b/825ec967c74345fb0413f0bb078ac538bb70100a89e09849a93faf10f875e96a/op0",
-        "pathCount": 1,
-        "primaryLocation": {
-          "column": 9,
-          "file": "ws:src/posting.al",
-          "line": 8,
-          "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108",
-          "objectName": "D8PostingChain",
-          "routineId": "323c302a83ac644b/825ec967c74345fb0413f0bb078ac538bb70100a89e09849a93faf10f875e96a",
-          "routineName": "PostSalesDoc"
-        },
-        "rootCause": "PostSalesDoc runs Get on Header and then accesses field(s) [no.] — no SetLoadFields was set.",
-        "severity": "medium",
-        "title": "Missing SetLoadFields before a record retrieval"
-      },
-      {
-        "affectedObjects": [
           "11111111-0000-0000-0000-00000000d80a/Codeunit/50108",
           "11111111-0000-0000-0000-00000000d80a/Codeunit/50109"
         ],
@@ -171,7 +140,6 @@
     ],
     "summary": {
       "byDetector": {
-        "d3-missing-setloadfields": 1,
         "d35-commit-in-event-subscriber": 1,
         "d45-event-transitive-table-exposure": 1,
         "d8-commit-in-transaction": 1,
@@ -179,8 +147,7 @@
       },
       "bySeverity": {
         "high": 2,
-        "info": 2,
-        "medium": 1
+        "info": 2
       },
       "detectorStats": [
         {
@@ -198,7 +165,7 @@
         {
           "candidatesConsidered": 3,
           "detector": "d3-missing-setloadfields",
-          "findingsEmitted": 1,
+          "findingsEmitted": 0,
           "skipped": {}
         },
         {
@@ -278,12 +245,6 @@
           "skipped": {
             "other": 2
           }
-        },
-        {
-          "candidatesConsidered": 0,
-          "detector": "d17-min-version-drift",
-          "findingsEmitted": 0,
-          "skipped": {}
         },
         {
           "candidatesConsidered": 3,
@@ -514,6 +475,12 @@
         },
         {
           "candidatesConsidered": 0,
+          "detector": "d17-min-version-drift",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
           "detector": "d61-ishandled-bypasses-critical-write",
           "findingsEmitted": 0,
           "skipped": {}
@@ -540,7 +507,7 @@
       "opaqueApps": [],
       "routinesAnalyzed": 3,
       "sourceUnitsParsed": 2,
-      "totalFindings": 5
+      "totalFindings": 4
     }
   },
   "schemaVersion": "1.0.0"

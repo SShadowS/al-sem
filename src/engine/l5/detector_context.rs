@@ -708,6 +708,9 @@ pub struct DetectorContext<'a> {
     /// d17 looks up the resolved version to compare against the declared minVersion.
     /// EMPTY for source-only runs (no dep .app parsed).
     pub app_versions: HashMap<String, String>,
+    /// `internalsVisibleTo`, lower-case app guids: exposing app -> its friend apps
+    /// (engine-switch S8.5). Empty single-app.
+    pub friends: HashMap<String, BTreeSet<String>>,
     /// R4-F Stage-5b — the L4.5 ordering facts the d47/d49/d51 detectors consume,
     /// keyed by `StableRoutineId`. Computed LAZILY on first `get_ordering_facts()`
     /// access and memoized — exactly al-sem's `ctx.getOrderingFacts()` semantics.
@@ -862,6 +865,7 @@ pub(crate) struct CrossAppInputs<'b> {
     pub injected_typed_edges: &'b [crate::engine::l4::combined_graph::TypedEdge],
     pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
     pub app_versions: &'b HashMap<String, String>,
+    pub friends: &'b HashMap<String, BTreeSet<String>>,
 }
 
 /// [`build_detector_context`], single-app (`cross: None`) or cross-app. One builder
@@ -1571,6 +1575,10 @@ pub(crate) fn build_detector_context_with<'a>(
         app_versions: cross
             .as_ref()
             .map(|c| c.app_versions.clone())
+            .unwrap_or_default(),
+        friends: cross
+            .as_ref()
+            .map(|c| c.friends.clone())
             .unwrap_or_default(),
         root_classifications_by_routine,
         ordering_facts: std::sync::OnceLock::new(),

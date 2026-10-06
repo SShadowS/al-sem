@@ -233,6 +233,17 @@ pub fn detect_d3(
                 Some(t) => *t,
                 None => continue,
             };
+            // A virtual system table (`Field`, `AllObjWithCaption`, ...) is served
+            // from metadata, not SQL: SetLoadFields saves nothing. It used to be
+            // skipped because it never resolved; the cross-app model resolves it
+            // (engine-switch S8.5 triage: 6 of 26 cross-app d3 findings).
+            if crate::engine::l5::detectors::op_targets_virtual_system_table(
+                state.retrieval_op,
+                routine,
+                &ctx.table_by_id,
+            ) {
+                continue;
+            }
             // fieldNameById: id → lowercased name.
             let field_name_by_id: HashMap<&str, String> = table
                 .fields
@@ -259,6 +270,18 @@ pub fn detect_d3(
             // are NOT excluded (suppression-direction: when unsure, keep firing).
             let excluded_field =
                 |name_lc: &String| pk_fields.contains(name_lc) || flowfield_names.contains(name_lc);
+            // A member that is not a field of the (resolved) table is a method
+            // called without parentheses (`Field.Count`), not a field read. With
+            // no fields known, keep every name (suppression-direction: keep firing).
+            let table_field_names: HashSet<String> = table
+                .fields
+                .iter()
+                .map(|f| normalize_load_field_arg(&f.name))
+                .collect();
+            let is_table_field = |name_lc: &str| {
+                table_field_names.is_empty()
+                    || table_field_names.contains(&normalize_load_field_arg(name_lc))
+            };
 
             let retrieval_anchor = &state.retrieval_op.source_anchor;
 
@@ -291,6 +314,12 @@ pub fn detect_d3(
             let mut access_steps: Vec<EvidenceStep> = Vec::new();
             let mut uncertainties: Vec<UncertaintyLite> = Vec::new();
             let mut bailout = false;
+            // The record ESCAPES to a consumer d3 cannot read (S8.5 triage): an
+            // unresolved / interface / dynamic callee or a platform method
+            // (`RecRef.GetTable(Rec)`), an event publisher (any subscriber can read
+            // any field), or a Variant / RecordRef parameter. That consumer may
+            // read every field, so no SetLoadFields advice is sound: no finding.
+            let mut escaped = false;
 
             // --- same-routine field accesses in the window ---
             for fa in &routine.field_accesses {
@@ -314,6 +343,9 @@ pub fn detect_d3(
                 // they don't count toward the "unloaded fields accessed" witness
                 // (the access step is still recorded as context for findings
                 // carried by OTHER, normal-field accesses).
+                if !is_table_field(&name_lc) {
+                    continue;
+                }
                 if !excluded_field(&name_lc) && !is_write_target {
                     accessed_fields.insert(name_lc);
                 }
@@ -350,17 +382,25 @@ pub fn detect_d3(
                 let edge = match edge {
                     Some(e) => e,
                     None => {
-                        bailout = true;
-                        uncertainties.push(UncertaintyLite::new("interface-dispatch", &cs.id));
-                        continue;
+                        escaped = true;
+                        break;
                     }
                 };
                 if edge.kind == "interface" || edge.kind == "dynamic" {
-                    bailout = true;
-                    uncertainties.push(UncertaintyLite::new("interface-dispatch", &cs.id));
-                    continue;
+                    escaped = true;
+                    break;
                 }
                 let callee = ctx.routine_by_id.get(edge.to.as_str()).copied();
+                if let Some(c) = callee
+                    && (c.kind == "event-publisher"
+                        || c.parameters.get(arg_index).is_some_and(|p| {
+                            let t = p.type_text.trim().to_ascii_lowercase();
+                            t == "variant" || t.starts_with("recordref")
+                        }))
+                {
+                    escaped = true;
+                    break;
+                }
                 let param_effect = callee.and_then(|c| {
                     ctx.parameter_roles_by_routine.get(&c.id).and_then(|roles| {
                         roles
@@ -436,6 +476,9 @@ pub fn detect_d3(
                 }
             }
 
+            if escaped {
+                continue;
+            }
             if accessed_fields.is_empty() {
                 // No concrete access — no witness, no emit. Also G-12
                 // refinement 3: an existence-check Get (no normal field read
@@ -477,6 +520,22 @@ pub fn detect_d3(
                 Some(k) => k,
                 None => continue, // loaded set covers all accesses — silent
             };
+            // Nothing to trim: every loadable field (not a key field, not a
+            // FlowField / FlowFilter) is read anyway, so SetLoadFields would load
+            // the same columns (S8.5 triage: `Printer Selection`, `Media
+            // Repository`). A table with no known fields is never "covered".
+            if kind == "missing" {
+                let loadable: Vec<String> = table
+                    .fields
+                    .iter()
+                    .filter(|f| f.field_class == "Normal")
+                    .map(|f| f.name.to_lowercase())
+                    .filter(|n| !excluded_field(n))
+                    .collect();
+                if !loadable.is_empty() && loadable.iter().all(|n| accessed_fields.contains(n)) {
+                    continue;
+                }
+            }
 
             let retrieval_step = EvidenceStep {
                 routine_id: routine.id.clone(),

@@ -10,12 +10,6 @@ HIGH (2):
     confidence: likely
     fix (medium): Remove the Commit from the subscriber path. If durable side effects are required, schedule them outside the publisher's transaction (e.g. a job-queue entry written without Commit, processed later).
 
-MEDIUM (1):
-  [d3-missing-setloadfields] Missing SetLoadFields before a record retrieval — PostSalesDoc runs Get on Header and then accesses field(s) [no.] — no SetLoadFields was set.
-    ws:src/posting.al:8:9 in D8PostingChain :: PostSalesDoc
-    confidence: likely
-    fix (high): Add SetLoadFields(no.) before the retrieval.
-
 INFO (2):
   [d45-event-transitive-table-exposure] Event subscribers expose table transitively from publisher — Publisher 323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete
     ws:src/posting.al:19:5 in D8PostingChain :: OnAfterPostSalesDoc

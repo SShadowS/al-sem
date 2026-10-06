@@ -406,6 +406,7 @@ pub fn minimal_ctx<'a>(
         dep_routine_ids: std::collections::BTreeSet::new(),
         declared_dependencies: Vec::new(),
         app_versions: HashMap::new(),
+        friends: HashMap::new(),
         root_classifications_by_routine: HashMap::new(),
         ordering_facts: std::sync::OnceLock::new(),
         ordering_source: None,

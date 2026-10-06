@@ -14,7 +14,7 @@
   {
     "candidatesConsidered": 3,
     "detector": "d3-missing-setloadfields",
-    "findingsEmitted": 1,
+    "findingsEmitted": 0,
     "skipped": {}
   },
   {
@@ -94,12 +94,6 @@
     "skipped": {
       "other": 2
     }
-  },
-  {
-    "candidatesConsidered": 0,
-    "detector": "d17-min-version-drift",
-    "findingsEmitted": 0,
-    "skipped": {}
   },
   {
     "candidatesConsidered": 3,
@@ -228,6 +222,12 @@
     "candidatesConsidered": 1,
     "detector": "d45-event-transitive-table-exposure",
     "findingsEmitted": 1,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d17-min-version-drift",
+    "findingsEmitted": 0,
     "skipped": {}
   }
 ]

@@ -34,6 +34,7 @@ pub fn detect_d13(
     let mut seen: HashSet<String> = HashSet::new();
     let mut candidates_considered = 0usize;
     let mut skipped_other = 0u64;
+    let mut skipped_friend = 0u64;
 
     // Deterministic walk: collect edges into a sorted order so candidate counting +
     // dedup are stable; final sort by id makes output order independent regardless.
@@ -69,6 +70,19 @@ pub fn detect_d13(
             let attrs = parse_routine_attributes(&callee.attributes_parsed);
             if !attrs.internal_proc && callee.access_modifier.as_deref() != Some("internal") {
                 skipped_other += 1;
+                continue;
+            }
+            // A caller the callee's app names in `<InternalsVisibleTo>` is a friend:
+            // the dependency's owner opened its internals to it on purpose, and a
+            // non-friend's call into an `internal` procedure does not compile at
+            // all (engine-switch S8.5 triage: 20 of 20 cross-app findings on
+            // CDO/DO were friend calls into Continia Delivery Network).
+            if ctx
+                .friends
+                .get(&callee_obj.app_guid.to_ascii_lowercase())
+                .is_some_and(|f| f.contains(&caller_obj.app_guid.to_ascii_lowercase()))
+            {
+                skipped_friend += 1;
                 continue;
             }
 
@@ -147,6 +161,7 @@ pub fn detect_d13(
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("other", skipped_other);
+    stats.add_skip("friend", skipped_friend);
     Ok(DetectorOutput {
         findings,
         stats,

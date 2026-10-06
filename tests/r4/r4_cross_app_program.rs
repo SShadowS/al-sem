@@ -487,22 +487,23 @@ fn d13_count(dir: &Path) -> usize {
     project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
 }
 
-/// S7.4, end to end through the program-backed cross-app base: d13 flags a call
-/// into a dependency's `internal` procedure that the workspace may make — as a
-/// friend; that is the only way such code compiles. Without the friend entry the
-/// call cannot compile, the program resolver refuses it (`InternalNotVisible`),
-/// and there is no edge for d13 to flag. (The legacy L3 resolver ignored
-/// visibility and flagged both; `ws-d13-member-call`'s dependency now names its
-/// workspace as a friend for this reason.)
+/// d13 and calls into a dependency's `internal` procedure, end to end through the
+/// cross-app base. A FRIEND (named in the dependency's `<InternalsVisibleTo>`) was
+/// let in on purpose: no finding (engine-switch S8.5; 20 of 20 such cross-app
+/// findings on CDO/DO were friend calls). A stranger's call cannot compile: the
+/// program resolver refuses it (`InternalNotVisible`), so there is no edge to flag.
+/// d13's remaining positive is the `[InternalProc]` shape (`ws-d13-internal-call`'s
+/// golden).
 ///
-/// Discrimination (2026-10-06): making `resolver::internal_visible_across` always
-/// true (the legacy resolver's blindness to visibility) fails the stranger case
-/// (`left: 1`); restored, it passes.
+/// Discrimination (2026-10-06): removing the friend skip in `detect_d13` reports
+/// the friend case (`left: 1`); making `resolver::internal_visible_across` always
+/// true (the legacy resolver's blindness to visibility) reports the stranger case.
+/// Each fails the test; restored, it passes.
 #[test]
-fn d13_flags_a_friend_call_into_an_internal_procedure() {
+fn d13_does_not_flag_a_call_the_dependency_allows() {
     let friend = tempfile::tempdir().unwrap();
     internal_call_workspace(friend.path(), true);
-    assert_eq!(d13_count(friend.path()), 1);
+    assert_eq!(d13_count(friend.path()), 0);
     let stranger = tempfile::tempdir().unwrap();
     internal_call_workspace(stranger.path(), false);
     assert_eq!(d13_count(stranger.path()), 0);
@@ -1027,4 +1028,137 @@ fn a_dependency_internal_edge_reaches_the_cone() {
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
     let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
     assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+}
+
+/// A workspace subscriber of a dependency event writes `Ws Log`.
+fn dep_publisher_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(&dir.join("src/Log.al"), &table(50290, "Ws Log"));
+    write(
+        &dir.join("src/Sub.al"),
+        "codeunit 50291 \"Ws Sub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnThing', '', false, false)]\n    local procedure OnThing()\n    var\n        Log: Record \"Ws Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Pub.al",
+            "codeunit 50171 \"Dep Pub\"\n{\n    procedure Raise()\n    begin\n        OnThing();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnThing()\n    begin\n    end;\n}\n",
+        )],
+        "",
+    );
+}
+
+/// S8.4 (owner decision): a DEPENDENCY publisher is a d45 root when a primary
+/// routine is in its subscriber chain, and the finding anchors on that workspace
+/// subscriber (the publisher's own location is dependency source).
+///
+/// Discrimination (2026-10-06): restoring the primary-publisher-only gate in
+/// `detect_d45` loses the finding (`left: 0`); restored, it passes.
+#[test]
+fn d45_reports_a_dependency_publisher_the_workspace_subscribes_to() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    dep_publisher_workspace(dir.path());
+    let names = vec!["d45-event-transitive-table-exposure".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+    assert_eq!(
+        p.findings[0].primary_location.source_unit_id,
+        "ws:src/Sub.al"
+    );
+}
+
+/// One workspace: tables `Wide` (key + 3 fields), `Narrow` (key + 1 field) and the
+/// platform `Field` (2000000041, declared so it RESOLVES, as the cross-app model
+/// resolves it), and one codeunit whose `body` is the procedure under test.
+fn d3_workspace(dir: &Path, body: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Tables.al"),
+        "table 50300 Wide\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n        field(2; A; Text[50]) { }\n        field(3; B; Text[50]) { }\n        field(4; C; Text[50]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n}\n\ntable 50301 Narrow\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n        field(2; A; Text[50]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n}\n\ntable 2000000041 Field\n{\n    fields\n    {\n        field(1; TableNo; Integer) { }\n        field(2; \"No.\"; Integer) { }\n        field(3; FieldName; Text[30]) { }\n        field(4; Type; Integer) { }\n    }\n    keys { key(PK; TableNo, \"No.\") { Clustered = true; } }\n}\n",
+    );
+    write(
+        &dir.join("src/Main.al"),
+        &format!("codeunit 50302 \"D3 Probe\"\n{{\n{body}\n}}\n"),
+    );
+}
+
+fn d3_count(dir: &Path) -> usize {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d3-missing-setloadfields".to_string()];
+    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+}
+
+/// S8.5 triage fixes to d3 (61.5% false positives on the cross-app sample). Each
+/// procedure is a shape that must NOT be reported; the last one must be:
+/// - A: a virtual system table (`Field`) that RESOLVES — SetLoadFields saves
+///   nothing on metadata; the exemption assumed it never resolves.
+/// - B: every loadable field is read anyway — nothing to trim.
+/// - C: `Rec.Count` without parentheses is a method, not a field.
+/// - D: the record escapes to an event publisher, or into a RecordRef
+///   (`GetTable`) — the consumer may read any field.
+/// - real: `Wide.Get` then reading one of three fields.
+///
+/// Discrimination (2026-10-06), one break each, each fails the test: the gate
+/// treating any resolved table as physical (A); removing the nothing-to-trim skip
+/// (B); removing the table-field check (C); treating the publisher / platform
+/// callee as an analysable callee (D). Restored, it passes.
+#[test]
+fn d3_skips_what_setloadfields_cannot_help() {
+    let cases = [
+        (
+            "A",
+            "    procedure P()\n    var\n        F: Record Field;\n    begin\n        F.Get(18, 1);\n        Message(F.FieldName);\n    end;",
+            0,
+        ),
+        (
+            "B",
+            "    procedure P()\n    var\n        N: Record Narrow;\n    begin\n        N.Get('X');\n        Message(N.A);\n    end;",
+            0,
+        ),
+        (
+            "C",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(Format(W.Count));\n    end;",
+            0,
+        ),
+        (
+            "D-publisher",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(W.A);\n        OnAfterGet(W);\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnAfterGet(W: Record Wide)\n    begin\n    end;",
+            0,
+        ),
+        (
+            "D-recordref",
+            "    procedure P()\n    var\n        W: Record Wide;\n        R: RecordRef;\n    begin\n        W.Get('X');\n        Message(W.A);\n        R.GetTable(W);\n    end;",
+            0,
+        ),
+        (
+            "real",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(W.A);\n    end;",
+            1,
+        ),
+    ];
+    for (name, body, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        d3_workspace(dir.path(), body);
+        assert_eq!(d3_count(dir.path()), expected, "case {name}");
+    }
 }

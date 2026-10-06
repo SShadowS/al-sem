@@ -2973,6 +2973,8 @@ pub struct R3a5CrossAppBase {
     /// The program build's dependency coverage and ledger (`alsem analyze`'s
     /// preflight, engine-switch S8.3).
     pub coverage: crate::program::resolve::full::FreshCoverage,
+    /// `internalsVisibleTo`, lower-case guids: exposing app -> friend apps (d13).
+    pub friends: HashMap<String, BTreeSet<String>>,
     /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
     /// combined graph's (workspace callers only). The detectors get it as their
     /// `resolved`, and the context reads its root classifications and ordering
@@ -3171,6 +3173,7 @@ pub(crate) fn build_cross_app_base(
     Some(R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
+        friends: x.friends.clone(),
         resolved,
         dep_routine_ids,
         graph,

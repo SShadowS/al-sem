@@ -935,6 +935,7 @@ const VIRTUAL_SYSTEM_TABLES: &[&str] = &[
     "Session",
     "Integer",
     "Date",
+    "License Permission",
 ];
 
 /// True iff `name` EXACTLY matches (case-insensitive) a known BC virtual/system
@@ -958,10 +959,15 @@ pub(crate) fn op_targets_virtual_system_table(
     routine: &L3Routine,
     table_by_id: &HashMap<&str, &L3Table>,
 ) -> bool {
-    // A type that resolved to a workspace table is a user-defined physical table
-    // (the source-only pipeline never loads platform tables) — never virtual.
+    // A type that resolved to a table numbered below the platform range is a
+    // physical table (a user's, or a dependency's) — never virtual. A resolved
+    // PLATFORM table (2000000000+) can be virtual: the cross-app model resolves
+    // `Field`, `AllObjWithCaption`, ... (engine-switch S8.5), so "it resolved" no
+    // longer means "it is a user table"; the name allowlist below decides (the
+    // platform also has physical tables, e.g. `Company`).
     if let Some(tid) = op.table_id.as_deref()
-        && table_by_id.contains_key(tid)
+        && let Some(t) = table_by_id.get(tid)
+        && t.table_number < 2_000_000_000
     {
         return false;
     }
@@ -1203,10 +1209,10 @@ where
 /// `detectorStats` array for the `all` slot; the `default` slot is a subset in this
 /// same order (as `select_detectors` filters by name while preserving registry order).
 ///
-/// DEFAULT order (43): d1, d2, d3, d4, d5, d7, d8, d9, d10, d11, d12, d13, d14,
-///   d16, d17, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
+/// DEFAULT order (42): d1, d2, d3, d4, d5, d7, d8, d9, d10, d11, d12, d13, d14,
+///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
 ///   d39, d41, d42, d43, d44, d45, d52, d53, d54, d55, d56, d57, d58, d59, d60.
-/// OPT_IN order (11):  d40, d46, d47, d48, d49, d50, d51, d61, d62, d63, d64.
+/// OPT_IN order (12):  d40, d46, d47, d48, d49, d50, d51, d17, d61, d62, d63, d64.
 pub fn registered_detectors() -> Vec<Detector> {
     // `requires` bits (W1.0): derived from the per-detector `ctx.<field>` audit +
     // the indirect-consumption grep (helpers reading substrate fields are attributed
@@ -1289,11 +1295,6 @@ pub fn registered_detectors() -> Vec<Detector> {
         Detector {
             name: "d16-obsolete-routine-call".to_string(),
             run: d16::detect_d16,
-            requires: 0,
-        },
-        Detector {
-            name: "d17-min-version-drift".to_string(),
-            run: d17::detect_d17,
             requires: 0,
         },
         Detector {
@@ -1498,6 +1499,16 @@ pub fn registered_detectors() -> Vec<Detector> {
             name: "d51-retry-side-effect-duplication".to_string(),
             run: d51::detect_d51,
             requires: substrate::ORDERING_FACTS,
+        },
+        // d17: OPT-IN since engine-switch S8.5 (min-version-drift). It knows the
+        // resolved version, not the MinVersion symbols, so it cannot tell whether
+        // a called API is missing at MinVersion: 10 of 10 cross-app findings on
+        // CDO/DO were false (8 build drift, now ignored; 2 calls that exist at
+        // MinVersion). Wake: a MinVersion symbol package to compare against.
+        Detector {
+            name: "d17-min-version-drift".to_string(),
+            run: d17::detect_d17,
+            requires: 0,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
         Detector {

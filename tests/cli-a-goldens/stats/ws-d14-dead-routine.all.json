@@ -94,12 +94,6 @@
     }
   },
   {
-    "candidatesConsidered": 0,
-    "detector": "d17-min-version-drift",
-    "findingsEmitted": 0,
-    "skipped": {}
-  },
-  {
     "candidatesConsidered": 3,
     "detector": "d18-constant-filter-in-loop",
     "findingsEmitted": 0,
@@ -310,6 +304,12 @@
   {
     "candidatesConsidered": 0,
     "detector": "d51-retry-side-effect-duplication",
+    "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d17-min-version-drift",
     "findingsEmitted": 0,
     "skipped": {}
   },

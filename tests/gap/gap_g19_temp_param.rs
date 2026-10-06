@@ -67,6 +67,9 @@ table 50190 "G19 Line"
     {
         field(1; "No."; Code[20]) { }
         field(2; Description; Text[100]) { }
+        // Never read: gives d3 a column to trim (S8.5's "nothing to trim" rule
+        // silences a table whose every loadable field is read).
+        field(3; Amount; Decimal) { }
     }
     keys { key(PK; "No.") { } }
 }

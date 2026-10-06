@@ -457,6 +457,7 @@ pub(crate) fn run_detectors_cross_app(
                 injected_typed_edges: &base.injected_typed_edges,
                 declared_dependencies: &base.declared_dependencies,
                 app_versions: &base.resolved_app_versions,
+                friends: &base.friends,
             }),
         )
     };

@@ -738,6 +738,9 @@ pub struct CrossAppProgram {
     pub dependency_apps: Vec<crate::program::model::workspace::DependencyApp>,
     /// The build's dependency coverage and ledger.
     pub coverage: crate::program::resolve::full::FreshCoverage,
+    /// `internalsVisibleTo`, lower-case guids: exposing app -> its friend apps
+    /// (engine-switch S8.5, d13).
+    pub friends: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
 }
 
 /// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
@@ -761,6 +764,18 @@ pub fn assemble_and_resolve_cross_app_program(
         )
         .ok()?
     };
+    let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for u in &ctx.snapshot().apps {
+        for f in &u.internals_visible_to {
+            if !f.app_id.is_empty() {
+                friends
+                    .entry(u.id.guid.to_ascii_lowercase())
+                    .or_default()
+                    .insert(f.app_id.to_ascii_lowercase());
+            }
+        }
+    }
     let dependency = {
         let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
         ctx.resolve_dependency_bodies()
@@ -834,6 +849,7 @@ pub fn assemble_and_resolve_cross_app_program(
         declared_dependencies,
         dependency_apps,
         coverage,
+        friends,
     })
 }
 
