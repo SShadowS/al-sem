@@ -1431,6 +1431,11 @@ pub struct FreshCoverage {
     /// (and whether the primary needs them) is unknown: `"{path}: {error}"`,
     /// sorted.
     pub unidentified_packages: Vec<String>,
+    /// The primary app's `[EventSubscriber]`s that bound to no publisher
+    /// (ambiguous, orphaned, or publisher object not found; engine-switch
+    /// S5.2b). Such a subscriber's dispatch is unknown, yet it is no call edge,
+    /// so `unknown` does not count it.
+    pub unbound_subscriptions: usize,
 }
 
 /// One dependency in the primary app's reachable declared closure: what an app
@@ -1600,7 +1605,19 @@ pub fn reduce_fresh_coverage(
         .map(|u| format!("{}: {}", u.path.display(), u.error))
         .collect();
     unidentified_packages.sort();
+    let unbound_subscriptions = {
+        use crate::program::resolve::index::{SubscriberIndex, SubscriptionOutcome};
+        SubscriberIndex::build(&ctx.graph)
+            .subscriptions()
+            .iter()
+            .filter(|s| {
+                s.subscriber.object.app == ctx.primary_app_ref
+                    && !matches!(s.outcome, SubscriptionOutcome::Bound(_))
+            })
+            .count()
+    };
     FreshCoverage {
+        unbound_subscriptions,
         unknown: report.primary_histogram.unknown,
         coverage_holds: coverage_holds(&report.coverage),
         recovered_files: report.recovered_files.len(),

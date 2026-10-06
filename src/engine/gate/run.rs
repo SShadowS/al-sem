@@ -255,6 +255,49 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
     }
 }
 
+/// One `dependencies`-stage warning per problem in the program build's dependency
+/// ledger (engine-switch S5.2b, spec G14), in ledger (guid) order, then one per
+/// package whose manifest could not be read. Missing and older dependencies do not
+/// degrade the preflight on their own (a call into one is already an unknown
+/// edge); an unreadable one does, there.
+pub fn dependency_diagnostics(
+    fc: &crate::program::resolve::full::FreshCoverage,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
+    let warn = |message: String| crate::engine::l5::registry::Diagnostic {
+        severity: "warning".to_string(),
+        stage: "dependencies".to_string(),
+        message,
+    };
+    let mut out = Vec::new();
+    for e in &fc.ledger {
+        let what = format!(
+            "dependency \"{}\" ({}), declared by \"{}\" at version {}",
+            e.name, e.guid, e.declared_by, e.declared_version
+        );
+        match (&e.found, &e.unreadable) {
+            (None, Some(err)) => out.push(warn(format!("{what}, could not be read: {err}"))),
+            (None, None) => out.push(warn(format!("{what}, is missing"))),
+            (Some(f), _) => {
+                if let Some(err) = &f.ingest_error {
+                    out.push(warn(format!("{what}, could not be read: {err}")));
+                }
+                if e.below_declared_version() {
+                    out.push(warn(format!(
+                        "{what}, is present only at version {}",
+                        f.version
+                    )));
+                }
+            }
+        }
+    }
+    out.extend(
+        fc.unidentified_packages
+            .iter()
+            .map(|p| warn(format!("dependency package could not be read: {p}"))),
+    );
+    out
+}
+
 /// The analysis coverage `alsem analyze` reports for `resolved`.
 ///
 /// One dependency universe (spec §3): the formatter-visible opaqueApps follows the
@@ -365,10 +408,12 @@ pub fn run_analyze_with_exit(
         all.extend(
             crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path),
         );
-        // (2) depArtifacts.diagnostics — TRACKED GAP: the gate's source-only pipeline
-        //     does not resolve `.app` dependency artifacts, so this source is always
-        //     empty here. (When dep resolution is wired into the gate, emit it in this
-        //     slot so a dep diagnostic lands in TS order before summarize.)
+        // (2) dependency diagnostics — the program build's dependency ledger
+        //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
+        //     unidentified dependency packages.
+        if let Ok(fc) = &fresh {
+            all.extend(dependency_diagnostics(fc));
+        }
         // (3) summarizeDiagnostics — WIRED: L4 `compute_summaries*` (run inside
         //     `run_detectors`'s `DetectorContext` build) now surfaces the JACOBI
         //     fixed-point cap-hit here. Empty whenever every SCC converges.

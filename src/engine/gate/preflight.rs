@@ -80,6 +80,32 @@ pub fn evaluate_preflight(
                     fc.opaque_apps.join(", ")
                 ));
             }
+            // Engine-switch S5.2b: a subscription that binds to no publisher
+            // is a dispatch the analysis cannot follow, like an unknown edge.
+            if fc.unbound_subscriptions > 0 {
+                clauses.push(format!(
+                    "{} unbound event subscription(s)",
+                    fc.unbound_subscriptions
+                ));
+            }
+            // A dependency the primary needs whose package could not be read:
+            // it looks empty (or absent) to every other check.
+            let unreadable: Vec<&str> = fc
+                .ledger
+                .iter()
+                .filter(|e| {
+                    e.unreadable.is_some()
+                        || e.found.as_ref().is_some_and(|f| f.ingest_error.is_some())
+                })
+                .map(|e| e.name.as_str())
+                .collect();
+            if !unreadable.is_empty() {
+                clauses.push(format!(
+                    "{} unreadable dependency app(s): {}",
+                    unreadable.len(),
+                    unreadable.join(", ")
+                ));
+            }
             let degraded = !clauses.is_empty();
             let message = if degraded {
                 format!("analysis coverage degraded — {}", clauses.join(", "))
@@ -101,7 +127,7 @@ pub fn evaluate_preflight(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::resolve::full::FreshCoverage;
+    use crate::program::resolve::full::{FreshCoverage, LedgerApp, LedgerEntry};
 
     fn clean() -> FreshCoverage {
         FreshCoverage {
@@ -111,6 +137,7 @@ mod tests {
             opaque_apps: vec![],
             ledger: vec![],
             unidentified_packages: vec![],
+            unbound_subscriptions: 0,
         }
     }
 
@@ -185,16 +212,59 @@ mod tests {
             coverage_holds: false,
             recovered_files: 2,
             opaque_apps: vec!["Dep".into()],
-            ledger: vec![],
+            ledger: vec![entry("Broken", None, Some("bad zip"))],
             unidentified_packages: vec![],
+            unbound_subscriptions: 3,
         };
         let pf = evaluate_preflight(&Ok(fc), false);
         assert_eq!(
             pf.message,
             "analysis coverage degraded — 1 unknown resolution edge(s), \
              coverage contract violated, 2 recovered file(s), \
-             1 symbol-only dependency app(s): Dep"
+             1 symbol-only dependency app(s): Dep, \
+             3 unbound event subscription(s), \
+             1 unreadable dependency app(s): Broken"
         );
+    }
+
+    fn entry(name: &str, found: Option<LedgerApp>, unreadable: Option<&str>) -> LedgerEntry {
+        LedgerEntry {
+            guid: format!("{name}-guid"),
+            name: name.to_string(),
+            declared_by: "Primary".to_string(),
+            declared_version: "1.0.0.0".to_string(),
+            ms_tier: false,
+            found,
+            unreadable: unreadable.map(str::to_string),
+        }
+    }
+
+    /// S5.2b policy: a dependency whose symbols failed to ingest degrades; a
+    /// missing or older dependency alone does not (calls into it already
+    /// degrade as unknown edges; it is reported as a diagnostic instead).
+    #[test]
+    fn ingest_error_degrades_but_missing_or_older_alone_does_not() {
+        let found = |error: Option<&str>| LedgerApp {
+            version: "0.5.0.0".to_string(),
+            tier: crate::snapshot::TrustTier::SymbolOnly,
+            abi_objects: Some(0),
+            ingest_error: error.map(str::to_string),
+        };
+        let quiet = FreshCoverage {
+            ledger: vec![
+                entry("Missing", None, None),
+                entry("Old", Some(found(None)), None),
+            ],
+            ..clean()
+        };
+        assert!(!evaluate_preflight(&Ok(quiet), true).degraded);
+        let broken = FreshCoverage {
+            ledger: vec![entry("Bad", Some(found(Some("parse error"))), None)],
+            ..clean()
+        };
+        let pf = evaluate_preflight(&Ok(broken), true);
+        assert!(pf.degraded && pf.failed);
+        assert!(pf.message.ends_with("1 unreadable dependency app(s): Bad"));
     }
 
     #[test]

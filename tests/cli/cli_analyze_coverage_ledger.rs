@@ -4,7 +4,10 @@
 
 use std::path::Path;
 
-use al_sem::engine::gate::run::{analysis_coverage, build_analysis_model};
+use al_sem::engine::gate::filter::Scope;
+use al_sem::engine::gate::run::{
+    AnalyzeArgs, OutputFormat, analysis_coverage, build_analysis_model, run_analyze_with_exit,
+};
 
 use crate::symbol_app::write_symbol_app;
 
@@ -133,5 +136,91 @@ fn ledger_records_missing_older_and_unreadable_dependencies() {
             (BROKEN, false, false, true),
         ],
         "the corrupt package is unreadable, not absent"
+    );
+}
+
+fn analyze_args(ws: &Path) -> AnalyzeArgs {
+    AnalyzeArgs {
+        workspace: ws.to_string_lossy().to_string(),
+        min_severity: None,
+        detector: None,
+        preset: None,
+        scope: Scope::Primary,
+        limit: None,
+        format: OutputFormat::Json,
+        sarif_version_override: None,
+        fail_on: None,
+        require_dependencies: true,
+        baseline: None,
+        update_baseline: false,
+        disable_inline_suppression: true,
+        group_by: None,
+        deterministic: true,
+        with_evidence: false,
+    }
+}
+
+/// S5.2b: through `alsem analyze`, an unreadable declared dependency degrades the
+/// preflight (and fails it under `--require-dependencies`, exit 4); the missing
+/// and the older dependency are reported as `dependencies` diagnostics.
+#[test]
+fn analyze_degrades_on_an_unreadable_dependency_and_reports_the_others() {
+    let dir = tempfile::tempdir().unwrap();
+    ledger_workspace(dir.path());
+    let (out, exit, warning) =
+        run_analyze_with_exit(&analyze_args(dir.path()), "test").expect("analyze runs");
+    let warning = warning.expect("degraded");
+    assert!(
+        warning.contains("1 unreadable dependency app(s): LedgerBroken"),
+        "{warning}"
+    );
+    assert_eq!(exit, 4, "--require-dependencies fails a degraded preflight");
+
+    let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+    let deps: Vec<String> = v["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter(|d| d["code"] == "DIAG-dependencies")
+        .map(|d| d["message"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        deps.iter()
+            .any(|m| m.contains("LedgerMissing") && m.contains("missing")),
+        "{deps:?}"
+    );
+    assert!(
+        deps.iter()
+            .any(|m| m.contains("LedgerOld") && m.contains("2.0.0.0")),
+        "{deps:?}"
+    );
+}
+
+/// S5.2b: a workspace subscriber to an object that does not exist binds to
+/// nothing; no call edge is unknown, yet the preflight must not say "verified".
+#[test]
+fn analyze_degrades_on_an_unbound_event_subscription() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &app_json("aaaa5555-0000-0000-0000-000000000053", "SubWs"),
+    );
+    write(
+        &ws.join("src/Sub.al"),
+        r#"codeunit 50003 "Sub Cu"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"No Such Codeunit", 'OnAfterX', '', false, false)]
+    local procedure Handle()
+    begin
+    end;
+}
+"#,
+    );
+    let (_, _, warning) = run_analyze_with_exit(&analyze_args(ws), "test").expect("analyze runs");
+    let warning = warning.expect("degraded");
+    assert!(
+        warning.contains("1 unbound event subscription(s)"),
+        "{warning}"
     );
 }

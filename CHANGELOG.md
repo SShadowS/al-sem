@@ -152,6 +152,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The preflight no longer says "verified" over an unbound event subscription or an
+  unreadable dependency** (engine-switch S5.2b, spec G9/G14). Two holes the unknown-edge
+  count cannot see:
+  - A workspace `[EventSubscriber]` that binds to no publisher is no call edge, so
+    `unknown` stayed 0. `FreshCoverage::unbound_subscriptions` counts the primary
+    app's unbound subscriptions; the preflight adds "N unbound event subscription(s)".
+  - A declared dependency whose package could not be read looked empty or absent. The
+    preflight adds "N unreadable dependency app(s): …" for a ledger entry that is
+    unreadable on disk or failed ABI ingestion. `ProgramGraph::abi_ingest_errors` now
+    has this production reader.
+
+  Missing dependencies, dependencies older than declared, and packages whose manifest
+  could not be read do not degrade on their own (a call into a missing dependency is
+  already an unknown edge). They are now reported: `alsem analyze`'s diagnostics slot
+  (2), a tracked gap until now, carries one `dependencies` warning per ledger problem
+  (`gate::run::dependency_diagnostics`; JSON `code: "DIAG-dependencies"`).
+
+  Measured: CDO and DO unchanged (no unbound subscription, no ledger problem). Golden
+  move: `tests/gate-goldens/exit-codes.json`, `ws-d35` under `--require-dependencies`
+  0 -> 4 (its three `Codeunit, 50` subscribers bind to nothing). Tests: preflight unit
+  rows for both clauses and for "missing or older alone does not degrade"; through
+  `run_analyze_with_exit`, an unreadable dependency fails `--require-dependencies` with
+  the clause and the missing/older diagnostics, and a subscriber to a nonexistent
+  codeunit degrades. Discrimination: unwiring slot (2), forcing the unbound count to 0,
+  and dropping the unreadable clause each fail their test.
+
 - **Coverage counts only the files the analysis read** (engine-switch S5.1, spec
   G5/G9). `coverage_source_units_for_workspace` walked into a child directory with its
   own `app.json` (another app), while the model analyses the root app only
