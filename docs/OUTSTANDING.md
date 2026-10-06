@@ -26,6 +26,18 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
+  S3.4, which moved the existing rule into the program resolver UNCHANGED —
+  `applicability::TriggerSiteRule`). Two open questions, both changing findings:
+  - `Insert(false)` is not read: the body pipeline (`ir_walk`'s `run_trigger`) and
+    `TriggerSiteRule` read the run-trigger literal for `Modify`/`Delete` only, so
+    `Insert(false)` still "may fire" `OnInsert`. AL's `Insert` has the same parameter.
+  - No argument means "may fire" on both engines (`Maybe`). AL's documented default for
+    `Insert`/`Modify`/`Delete` is `RunTrigger = false`, i.e. `Rec.Modify()` would NOT run
+    `OnModify`. If true, every argument-less write currently inherits its table
+    trigger's effects. MEASURE in BC (`bc-measure`) before changing it; then fix both
+    the body pipeline and `TriggerSiteRule` together and triage the finding delta.
+
 - [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
   - **Move the other L3 consumers onto the program engine's calls.** Only `alsem

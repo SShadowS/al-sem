@@ -222,8 +222,10 @@ pub struct SiteCensus {
     /// Dependency implementer objects an interface site reaches (S3.2): one
     /// to-less `ExternalTarget` edge each.
     pub adapter_interface_dependency_impls: usize,
-    /// Trigger routes dropped by the site rules the program fan-out does not
-    /// apply: `RunTrigger = false`, or another field's `OnValidate`.
+    /// Program trigger routes the model's own record operation says cannot fire
+    /// (`RunTrigger = false`, or another field's `OnValidate`). Since engine-switch
+    /// S3.4 the program resolver applies these rules itself, so this is an
+    /// agreement check (expected 0) and nothing is filtered here.
     pub adapter_trigger_routes_filtered: usize,
     /// Call/run edges with more than one route outside an interface or
     /// ambiguous shape (only the first route is used).
@@ -1487,11 +1489,13 @@ impl<'a> Converter<'a> {
                 c.adapter_routes_dropped += 1;
                 continue;
             };
+            // S3.4: the program resolver applies the site rules
+            // (`TriggerSiteRule`); this only cross-checks that it agrees with the
+            // model's own record operation (expected 0), and filters nothing.
             let applies = op.run_trigger != Some(false)
                 && (!is_validate || (field_lc.is_some() && id.enclosing_member_lc == field_lc));
             if !applies {
                 c.adapter_trigger_routes_filtered += 1;
-                continue;
             }
             match self.l3_routine(id) {
                 Some(t) => tos.push(t.id.clone()),
@@ -2902,8 +2906,11 @@ mod adapter_tests {
         assert_eq!(a.edges(&op("Modify").id), vec![]);
         assert!(!a.calls.upgraded_bindings.contains_key(&op("Insert").id));
         assert_eq!(a.census.adapter_program_trigger_ops, 3, "{:#?}", a.census);
+        // Engine-switch S3.4: the program resolver already dropped the two
+        // routes (field B's `OnValidate`, `Modify(false)`'s `OnModify`) that the
+        // adapter used to filter; its agreement check finds none left.
         assert_eq!(
-            a.census.adapter_trigger_routes_filtered, 2,
+            a.census.adapter_trigger_routes_filtered, 0,
             "{:#?}",
             a.census
         );

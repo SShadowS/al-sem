@@ -396,6 +396,9 @@ fn resolve_call_site_obligation(
     // Engine-switch S3.2: set to the interface's folded name when this is a
     // member call on an `Interface`-typed receiver (the only arm that knows it).
     interface_out: &mut Option<String>,
+    // Engine-switch S3.4: the file's source text, so a record operation's
+    // `Validate` field argument can be read (`TriggerSiteRule`).
+    text: &str,
 ) -> (
     EdgeKind,
     DispatchShape,
@@ -588,7 +591,20 @@ fn resolve_call_site_obligation(
             };
 
             let (shape, completeness, routes) = if let Some(table_node) = table_node_opt {
-                resolve_implicit_trigger(&op_lc, table_node, graph, index, surface)
+                let (shape, completeness, mut routes) =
+                    resolve_implicit_trigger(&op_lc, table_node, graph, index, surface);
+                // S3.4: emit only the triggers this site can fire (a literal
+                // `RunTrigger = false` fires none; `Validate` fires its field's
+                // `OnValidate` only). Non-routine routes (an honest unknown for a
+                // collapse-marked trigger) are kept.
+                let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
+                    &op_lc, call_args, file, text,
+                );
+                routes.retain(|r| match &r.target {
+                    RouteTarget::Routine(id) => rule.admits(id),
+                    _ => true,
+                });
+                (shape, completeness, routes)
             } else {
                 // No table resolved: honest-empty Multicast (open-world, no
                 // known triggers, but we cannot say there are none).
@@ -729,6 +745,7 @@ pub(crate) fn resolve_file_obligations(
                     &pf.file,
                     &site.args,
                     &mut interface,
+                    &pf.text,
                 );
                 if let Some(name_lc) = interface {
                     interface_sites.push((obl_id.clone(), name_lc));

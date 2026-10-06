@@ -112,6 +112,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The program resolver applies the implicit-trigger site rules** (engine-switch
+  S3.4). A record operation's trigger fan-out used to list every trigger of the
+  operation's name on the table and its extensions, and the B3 adapter filtered out
+  what the site could not fire. The resolver now applies the rules itself
+  (`applicability::TriggerSiteRule`, read from the site's arguments exactly as the body
+  pipeline reads them):
+  - a literal `RunTrigger = false` on `Modify`/`Delete` fires nothing;
+  - a `Validate` fires only its own field's `OnValidate`.
+
+  The adapter's check is now only an agreement counter (`adapter_trigger_routes_filtered`).
+  It is 0 on CDO and DO, so the two derivations agree on every site.
+
+  Program engine (north star, CDO): 71 edges move from `resolvedSource` to
+  `honestEmpty` in both scopes (primary 9,577 → 9,506 / 4,451 → 4,522; whole program
+  11,460 → 11,389 / 27,632 → 27,703). These are trigger sites where nothing can fire.
+  Real-unknown stays 0. Detector model: the harness shows `s3-3` and `s3-4`
+  byte-identical on all 218 corpora (the filter moved, nothing else did). Goldens: none
+  moved.
+
+  `implicit_trigger_edges_carry_only_what_the_site_can_fire` runs a full program build
+  (`Modify(false)` → none, `Modify()` → `OnModify`, `Validate(A)` → A's `OnValidate`).
+  Discrimination: removing the resolver's filter fails it.
+
+  The two `RunTrigger` questions this surfaced (`Insert(false)` is not read; a missing
+  argument "may fire" while AL documents `false` as the default) are in
+  `docs/OUTSTANDING.md`. They change findings and need a BC measurement first.
+
 - **Calls into dependencies keep their target's identity and body state**
   (engine-switch S3.3). A call into a dependency routine is still a to-less edge, since
   the model holds workspace routines only. `ResolvedCalls::external_targets` now
