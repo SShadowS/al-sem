@@ -152,6 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem query` reads the program engine** (engine-switch S6.7).
+  `QuerySubstrate::build` uses the program-backed model, and `from_resolved` builds its
+  combined graph from the model's own calls and events (`calls_for`/`events_for`)
+  instead of calling L3's `resolve_calls`/`build_event_graph` directly; a model with
+  nothing attached (the differential's) resolves exactly as before. Goldens unchanged.
+  `query_follows_the_program_engines_calls` (`query effects --routine Run6` lists the
+  insert reached through `MyPage.RunModal()`); discrimination: the L3 builder, and
+  separately `resolve_calls` inside `from_resolved`, each fail it.
+
 - **`alsem policy check` reads the program engine** (engine-switch S6.6; `policy
   explain` builds no model). Goldens unchanged.
   `policy_check_follows_the_program_engines_calls`: an event subscriber commits only

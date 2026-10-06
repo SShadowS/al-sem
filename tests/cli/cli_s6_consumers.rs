@@ -296,3 +296,24 @@ codeunit 50622 "S6 Pol Sub"
         .map(|r| r["findingsEmitted"].as_i64().unwrap_or(-1));
     assert_eq!(emitted, Some(1), "{text}");
 }
+
+/// S6.7 `alsem query effects --routine Run6`: the insert into "S6 Log" is in
+/// Run6's transitive effects.
+#[test]
+fn query_follows_the_program_engines_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    page_run_workspace(dir.path());
+    let r = al_sem::engine::l4::effect_query_cli::run_query_effects_pipeline(
+        dir.path(),
+        "Run6",
+        "s6",
+        true,
+    )
+    .expect("query runs");
+    assert!(
+        r.json_text
+            .contains("aaaa6666-0000-0000-0000-000000000006/table/50600"),
+        "{}",
+        r.json_text
+    );
+}
