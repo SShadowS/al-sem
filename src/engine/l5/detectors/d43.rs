@@ -301,13 +301,38 @@ fn classify_subscriber(
     if !r.has_branching {
         return SetterClassification::MustSetTrue;
     }
-    // If ANY setter is at top level (not nested), the routine guarantees true.
+    // A top-level setter guarantees true unless an `exit` before it can leave the
+    // routine first: `if not Applies then exit; ... IsHandled := true;` sets it on
+    // some paths only (engine-switch S7.4 triage: CDO's eDocs Sending Profile
+    // subscriber, reported "confirmed"/"always sets" though it overrides one
+    // channel only).
     for setter in &sets {
-        if !is_assignment_nested_in_tree(&setter.source_anchor, r.statement_tree.as_ref()) {
+        let a = &setter.source_anchor;
+        if !is_assignment_nested_in_tree(a, r.statement_tree.as_ref())
+            && !exit_before(r.statement_tree.as_ref(), (a.start_line, a.start_column))
+        {
             return SetterClassification::MustSetTrue;
         }
     }
     SetterClassification::MaySetTrue
+}
+
+/// Whether the tree holds an `exit` that starts before `pos` (line, column).
+fn exit_before(tree: Option<&PCFNNode>, pos: (u32, u32)) -> bool {
+    fn visit(node: &PCFNNode, pos: (u32, u32)) -> bool {
+        if node.kind == "exit"
+            && let Some((sl, sc, _, _)) = node.source_range
+            && (sl, sc) < pos
+        {
+            return true;
+        }
+        node.children
+            .iter()
+            .chain(node.else_children.iter())
+            .flatten()
+            .any(|c| visit(c, pos))
+    }
+    tree.is_some_and(|t| visit(t, pos))
 }
 
 /// `classifyConfidence` — the confidence ladder. Faithful port.

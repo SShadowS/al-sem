@@ -24,6 +24,36 @@ sizings marked pre-arc).
   may hide cross-slice event pairs) → stays opt-in. Promotion wake for all three:
   a triaged true-positive population
 
+- [ ] **Make `alsem analyze` cross-app?** (recorded 2026-10-06, engine-switch S7). The
+  program-backed cross-app model (`assemble_and_resolve_cross_app_program`) runs every
+  detector over the workspace plus the dependencies it requires. On CDO it reports
+  79 d13, 71 d16 and 3 d17 findings that `alsem analyze` (single-app) can never
+  report; the CDO cross-app findings run peaks at ~6.0 GB (not compared with
+  single-app analyze's peak). Owner
+  decision, together with S8's world growth. Before turning it on, the detector
+  limits below (S7.4 triage) need answers.
+- [ ] **Detector precision once dependency bodies are in view** (S7.4 triage,
+  2026-10-06; all bindings verified correct, these are detector limits):
+  d43 (26 FP on CDO+DO): a subscriber that replaces Base App `Document Sending
+  Profile.Send` for one channel; the caller's skipped writes belong to channels that
+  profile cannot have. Table identity cannot see it. d35 (2 FP): a Commit on an
+  inactive-app activation branch reached through `Page.Run` from a UI "start wizard"
+  hook with no transaction. d44 (2 FP): table 1518 reached through Base App
+  `InstructionMgt`, which writes only for one Microsoft notification id. The
+  per-finding triage is summarised in the S7.4 CHANGELOG entry.
+- [ ] **Cone propagation inside a dependency stops at the admitted edges** (S7.4).
+  A dependency's own edges reach the cone only as R3a-4 intra-app edges (direct,
+  resolved method, interface). `CODEUNIT.Run` inside a dependency, triggers, and an
+  event raised in one dependency with a subscriber in another are not followed, so
+  real writes behind them are missed (the d44/d45 triage found five writes dropped
+  "by luck" this way). Feeding every program edge to the cone grew CDO's r3a5
+  projection from 329 MB to 9.8 GB. S8 decides the demand policy.
+- [ ] **`aldump --r3a5-cross-app-summary` on CDO exceeds 2 GB** (S7.4). It projects
+  every model routine; the cross-app model now holds every parsed dependency
+  routine (local procedures and triggers too), where the legacy symbol-only base held
+  only the public ABI surface (329 MB). Fixtures are unaffected (golden byte-equal).
+  Decide whether the projection should cover workspace routines only.
+
 ## Open — buildable backlog (no blocker, pick up any time)
 
 - [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
@@ -90,9 +120,9 @@ sizings marked pre-arc).
     single-app consumers in engine-switch S6 (2026-10-06): prove, digest, fingerprint,
     diff/snapshot, events, policy check, query, the HTML report, the r3a1/r3a2
     projections, `compute_analyzer_diagnostics` (through its callers) and `aldump`'s
-    `--r3a*`/`--r4-findings`/`--r4f-*` modes. Remaining: the cross-app projections
-    (`capability_cone.rs` `build_cross_app_base_from_cross`, `recover_dep_retained`,
-    `project_coverage_cross_app`, `aldump --r3a4/--r3a5`) in S7; the gap/temp_state
+    `--r3a*`/`--r4-findings`/`--r4f-*` modes. The cross-app base and the R3a-4
+    dependency artifacts DONE in engine-switch S7.4/S7.5 (2026-10-06). Remaining:
+    `project_coverage_cross_app` and the `--l3-*` cross-app modes, the gap/temp_state
     tests and `aldump --l3-*` modes go with L3 in S9.
   - **`ProgramGraph::abi_ingest_errors` has no production reader** (FW2). ABI ingest
     failures are collected and then never surfaced: not by the preflight, not by analyze,

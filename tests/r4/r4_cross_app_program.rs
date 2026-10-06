@@ -360,7 +360,9 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
     use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
-    let (m, _) = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+        .expect("model")
+        .resolved;
     let calls = m.precomputed_calls.clone().expect("calls attached");
     let mut resolved: Vec<String> = calls
         .edges
@@ -418,7 +420,9 @@ fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
     use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
-    let (m, _) = assemble_and_resolve_cross_app_program(&ws, MI, false).expect("model");
+    let m = assemble_and_resolve_cross_app_program(&ws, MI, false)
+        .expect("model")
+        .resolved;
     let calls = m.precomputed_calls.clone().expect("calls attached");
     let bodyless: Vec<&str> = m
         .workspace
@@ -434,4 +438,300 @@ fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
         .filter(|e| e.to.as_deref().is_some_and(|t| bodyless.contains(&t)))
         .count();
     assert!(landed > 0, "no call landed on a symbol-only model row");
+}
+
+/// A workspace calling a dependency's `internal` procedure; `friend` decides whether
+/// the dependency's manifest lists the workspace in `<InternalsVisibleTo>`.
+fn internal_call_workspace(dir: &Path, friend: bool) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Main.al"),
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Secret\";\n    begin\n        D.Hidden();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50110,"Name":"Dep Secret","Methods":[{{"Name":"Hidden","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    let friends = if friend {
+        format!(
+            r#"<InternalsVisibleTo><Module Id="{WS_GUID}" Name="XWs" Publisher="probe" /></InternalsVisibleTo>"#
+        )
+    } else {
+        String::new()
+    };
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Secret.al",
+            "codeunit 50110 \"Dep Secret\"\n{\n    internal procedure Hidden()\n    begin\n    end;\n}\n",
+        )],
+        &friends,
+    );
+}
+
+fn d13_count(dir: &Path) -> usize {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d13-cross-app-internal-call".to_string()];
+    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+}
+
+/// S7.4, end to end through the program-backed cross-app base: d13 flags a call
+/// into a dependency's `internal` procedure that the workspace may make — as a
+/// friend; that is the only way such code compiles. Without the friend entry the
+/// call cannot compile, the program resolver refuses it (`InternalNotVisible`),
+/// and there is no edge for d13 to flag. (The legacy L3 resolver ignored
+/// visibility and flagged both; `ws-d13-member-call`'s dependency now names its
+/// workspace as a friend for this reason.)
+///
+/// Discrimination (2026-10-06): making `resolver::internal_visible_across` always
+/// true (the legacy resolver's blindness to visibility) fails the stranger case
+/// (`left: 1`); restored, it passes.
+#[test]
+fn d13_flags_a_friend_call_into_an_internal_procedure() {
+    let friend = tempfile::tempdir().unwrap();
+    internal_call_workspace(friend.path(), true);
+    assert_eq!(d13_count(friend.path()), 1);
+    let stranger = tempfile::tempdir().unwrap();
+    internal_call_workspace(stranger.path(), false);
+    assert_eq!(d13_count(stranger.path()), 0);
+}
+
+/// An API page with no write-surface property: d64's shape B.
+fn api_page(number: u32, name: &str, table: &str) -> String {
+    format!(
+        "page {number} \"{name}\"\n{{\n    PageType = API;\n    APIPublisher = 'probe';\n    APIGroup = 'probe';\n    APIVersion = 'v1.0';\n    EntityName = 'thing{number}';\n    EntitySetName = 'things{number}';\n    SourceTable = \"{table}\";\n\n    layout\n    {{\n        area(Content)\n        {{\n            field(Code; Rec.Code) {{ }}\n        }}\n    }}\n}}\n"
+    )
+}
+
+fn table(number: u32, name: &str) -> String {
+    format!(
+        "table {number} \"{name}\"\n{{\n    fields\n    {{\n        field(1; Code; Code[20]) {{ }}\n    }}\n}}\n"
+    )
+}
+
+/// S7.4: the cross-app model holds dependency OBJECTS, and an object-anchored
+/// finding (d64 names its page) is scoped by the object's app: a dependency's API
+/// page is not reported, the workspace's is. On DO, three Microsoft "System
+/// Application Test Library" mock API pages were reported before this.
+///
+/// Discrimination (2026-10-06): dropping the object entries from
+/// `run_detectors_cross_app`'s role map reports the dependency page too
+/// (`left: 2`); restored, it passes.
+#[test]
+fn an_object_finding_in_a_dependency_is_out_of_scope() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(&ws.join("src/Table.al"), &table(50210, "Ws Thing"));
+    write(
+        &ws.join("src/Api.al"),
+        &api_page(50211, "Ws Api", "Ws Thing"),
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    let (dep_table, dep_page) = (
+        table(50120, "Dep Thing"),
+        api_page(50121, "Dep Api", "Dep Thing"),
+    );
+    write_source_app(
+        &ws.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[("src/Table.al", &dep_table), ("src/Api.al", &dep_page)],
+        "",
+    );
+    let names = vec!["d64-api-page-write-surface".to_string()];
+    let p = project_r4_findings_cross_app(ws, "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+    assert!(
+        p.findings[0]
+            .primary_location
+            .source_unit_id
+            .starts_with("ws:"),
+        "{:#?}",
+        p.findings[0]
+    );
+}
+
+/// A dependency's `Send` skips its table write when a subscriber sets IsHandled; the
+/// workspace subscriber sets it, after an early `exit` when `early_exit`.
+fn ishandled_workspace(dir: &Path, early_exit: bool) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let guard = if early_exit {
+        "        if Skip() then\n            exit;\n"
+    } else {
+        ""
+    };
+    write(
+        &dir.join("src/Subs.al"),
+        &format!(
+            "codeunit 50230 \"Ws Subs\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Sender\", 'OnBeforeSend', '', false, false)]\n    local procedure HandleSend(var IsHandled: Boolean)\n    begin\n{guard}        IsHandled := true;\n    end;\n\n    local procedure Skip(): Boolean\n    begin\n        exit(false);\n    end;\n}}\n"
+        ),
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50130, "Dep Log")),
+            (
+                "src/Sender.al",
+                "codeunit 50131 \"Dep Sender\"\n{\n    procedure Send()\n    var\n        IsHandled: Boolean;\n        Log: Record \"Dep Log\";\n    begin\n        IsHandled := false;\n        OnBeforeSend(IsHandled);\n        if IsHandled then\n            exit;\n        Log.Insert();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnBeforeSend(var IsHandled: Boolean)\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+}
+
+fn d43_confidence(dir: &Path) -> Vec<String> {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d43-event-ishandled-skip".to_string()];
+    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names)
+        .findings
+        .iter()
+        .map(|f| f.confidence.level.clone())
+        .collect()
+}
+
+/// S7.4 triage fix: d43 reaches a dependency caller that skips its write on
+/// IsHandled. A subscriber that sets IsHandled unconditionally is "confirmed"; one
+/// that can `exit` before the setter sets it on some paths only, so "likely" —
+/// `classify_subscriber` called every top-level setter "always sets" (CDO's eDocs
+/// Sending Profile subscriber, 26 findings on CDO and DO).
+///
+/// Discrimination (2026-10-06): removing the `exit_before` condition in
+/// `classify_subscriber` makes the early-exit case "confirmed"; restored, it passes.
+#[test]
+fn d43_does_not_call_a_setter_after_an_early_exit_certain() {
+    let plain = tempfile::tempdir().unwrap();
+    ishandled_workspace(plain.path(), false);
+    assert_eq!(d43_confidence(plain.path()), vec!["confirmed"]);
+    let early = tempfile::tempdir().unwrap();
+    ishandled_workspace(early.path(), true);
+    assert_eq!(d43_confidence(early.path()), vec!["likely"]);
+}
+
+/// S7.4: the cross-app world is the workspace and the dependencies it requires. An
+/// app that depends ON the workspace — a test app — is loaded by the snapshot (DO's
+/// ancestor `.alpackages` holds one) but is not one of them; its subscribers made
+/// two d45 false positives and hid four dead-event d12 findings on DO.
+///
+/// Discrimination (2026-10-06): making `ProgramContext::is_required_dependency`
+/// accept every app but the workspace puts the test app's routine in the model and
+/// fails the test; restored, it passes.
+#[test]
+fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = tempfile::tempdir().unwrap();
+    friend_workspace(dir.path(), true);
+    let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let apps: std::collections::BTreeSet<&str> = x
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .map(|r| r.app_guid.as_str())
+        .collect();
+    assert_eq!(apps.into_iter().collect::<Vec<_>>(), vec![WS_GUID]);
+    assert!(x.dependency_apps.is_empty(), "{:?}", x.dependency_apps);
+}
+
+/// Several dependency subscribers and one workspace subscriber of a dependency
+/// event all write one table.
+fn shared_subscribers_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let sub = |n: u32, name: &str| {
+        format!(
+            "codeunit {n} \"{name}\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Hub\", 'OnRegister', '', false, false)]\n    local procedure Handle{n}()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}}\n"
+        )
+    };
+    write(&dir.join("src/Sub.al"), &sub(50240, "Ws Sub"));
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    let dep_subs: Vec<(String, String)> = (0..20)
+        .map(|i| {
+            (
+                format!("src/Sub{i}.al"),
+                sub(50140 + i, &format!("Dep Sub {i}")),
+            )
+        })
+        .collect();
+    let mut sources: Vec<(&str, &str)> = dep_subs
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let log = table(50130, "Dep Log");
+    sources.push(("src/Log.al", &log));
+    sources.push((
+        "src/Hub.al",
+        "codeunit 50139 \"Dep Hub\"\n{\n    [IntegrationEvent(false, false)]\n    procedure OnRegister()\n    begin\n    end;\n}\n",
+    ));
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &sources,
+        "",
+    );
+}
+
+/// S7.4 triage fix: d44 anchors a finding on a WORKSPACE subscriber when the event
+/// has one. It took the first subscriber in id order, which in cross-app mode can
+/// be a dependency's; the scope filter then dropped the finding (14 lost on CDO and
+/// DO for OnRegisterManualSetup).
+///
+/// Discrimination (2026-10-06): making `d44::anchor_subscriber` return the first
+/// subscriber drops the finding (`left: 0`); restored, it passes.
+#[test]
+fn d44_anchors_on_the_workspace_subscriber() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    shared_subscribers_workspace(dir.path());
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+    assert_eq!(
+        p.findings[0].primary_location.source_unit_id,
+        "ws:src/Sub.al"
+    );
 }

@@ -726,24 +726,32 @@ pub fn assemble_and_resolve_workspace_program(
     Some(resolved)
 }
 
+/// The CROSS-APP detector model and what the cross-app base reads besides it.
+pub struct CrossAppProgram {
+    /// The model, with calls and events attached for every body in it.
+    pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
+    /// The workspace's declared dependencies: app.json's, plus the implicit
+    /// Microsoft tier the snapshot adds (d17's MinVersion side).
+    pub declared_dependencies: Vec<crate::program::model::workspace::DeclaredDependencyDecl>,
+    /// Every dependency app in the snapshot, `.app` path order (d17's resolved
+    /// versions; the R3a-4 artifacts).
+    pub dependency_apps: Vec<crate::program::model::workspace::DependencyApp>,
+    /// The build's dependency coverage and ledger.
+    pub coverage: crate::program::resolve::full::FreshCoverage,
+}
+
 /// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
 /// dependency in the snapshot (`assemble_and_resolve_cross_app_from_program`), from
 /// one `FULL` program build, with the program engine's calls attached for EVERY
 /// body in it — the workspace's, and each dependency's resolved from its own app
 /// (`ProgramContext::resolve_dependency_bodies`) — and its event graph over all of
-/// them. Also returns the build's [`FreshCoverage`] (the dependency ledger). `None`
-/// when the program build or the model assembly fails.
-///
-/// [`FreshCoverage`]: crate::program::resolve::full::FreshCoverage
+/// them. `None` when the program build or the model assembly fails.
 #[must_use]
 pub fn assemble_and_resolve_cross_app_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     skip_roots_config: bool,
-) -> Option<(
-    crate::engine::l3::l3_workspace::L3Resolved,
-    crate::program::resolve::full::FreshCoverage,
-)> {
+) -> Option<CrossAppProgram> {
     let (ctx, mut report, coverage) =
         crate::program::resolve::full::build_program_with_coverage_profiled(
             workspace,
@@ -757,11 +765,54 @@ pub fn assemble_and_resolve_cross_app_program(
             skip_roots_config,
             &ctx,
         )?;
+    let snap = ctx.snapshot();
+    let declared_dependencies = snap
+        .apps
+        .iter()
+        .find(|u| u.id == snap.workspace_app)
+        .map(|u| {
+            u.declared_deps
+                .iter()
+                .filter(|d| !d.app_id.is_empty())
+                .map(
+                    |d| crate::program::model::workspace::DeclaredDependencyDecl {
+                        app_guid: d.app_id.clone(),
+                        name: d.name.clone(),
+                        min_version: if d.version.is_empty() {
+                            "0.0.0.0".to_string()
+                        } else {
+                            d.version.clone()
+                        },
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut deps: Vec<&crate::snapshot::AppUnit> = snap
+        .apps
+        .iter()
+        .filter(|u| ctx.is_required_dependency(&u.id))
+        .collect();
+    deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
+    let dependency_apps = deps
+        .into_iter()
+        .map(|u| crate::program::model::workspace::DependencyApp {
+            guid: u.id.guid.clone(),
+            name: u.id.name.clone(),
+            version: u.id.version.clone(),
+            has_source: u.source.is_some(),
+        })
+        .collect();
     let dependency = ctx.resolve_dependency_bodies();
     report.edges.extend(dependency.edges);
     report.site_facts.extend(dependency.site_facts);
     attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
-    Some((resolved, coverage))
+    Some(CrossAppProgram {
+        resolved,
+        declared_dependencies,
+        dependency_apps,
+        coverage,
+    })
 }
 
 /// The edge for a call site the program engine gave no usable edge for: one

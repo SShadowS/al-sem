@@ -465,7 +465,11 @@ pub(crate) fn run_detectors_cross_app(
     let (findings, diagnostics, detector_stats, d1_cohort_index) =
         run_each(&resolved, &ctx, detectors);
 
-    // role_by_routine: dep routines → "dependency", else "primary".
+    // role_by_routine: dep routines → "dependency", else "primary". An
+    // object-anchored finding (d64 names its page) carries the OBJECT id there, so
+    // objects are roled by their app too (engine-switch S7.4: the cross-app model
+    // holds dependency objects, and a Microsoft test library's API page is not the
+    // workspace's to fix).
     let role_by_routine: std::collections::HashMap<&str, &str> = base
         .ws_routines
         .iter()
@@ -477,6 +481,14 @@ pub(crate) fn run_detectors_cross_app(
             };
             (r.id.as_str(), role)
         })
+        .chain(base.objects.iter().map(|o| {
+            let role = if o.app_guid.to_ascii_lowercase() == base.primary_app_guid {
+                "primary"
+            } else {
+                "dependency"
+            };
+            (o.id.as_str(), role)
+        }))
         .collect();
     let scoped = role_scope_and_sort(findings, &role_by_routine);
 

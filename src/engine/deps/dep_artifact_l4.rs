@@ -46,13 +46,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 
-use crate::engine::deps::app_manifest::parse_app_manifest_xml;
-use crate::engine::deps::app_package_zip::{app_zip_bytes, extract_navx_manifest_xml};
+use crate::engine::deps::app_package_zip::app_zip_bytes;
 use crate::engine::l2::operation_order::apply_operation_order;
-use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-use crate::engine::l3::event_graph::{EventSymbol, build_event_graph};
-use crate::engine::l3::l3_workspace::{L3Routine, L3Workspace, assemble_workspace_units, resolve};
-use crate::engine::l3::symbol_table::SymbolTable;
+use crate::engine::l3::event_graph::EventSymbol;
+use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::engine::l4::capability_cone::direct_facts_for_routine;
 use crate::program::attributes::{AttributeInfo, find_attribute, has_attribute};
@@ -280,133 +277,97 @@ pub struct DependencyArtifactL4 {
 }
 
 // ===========================================================================
-// The PRODUCER — build_dep_artifact_l4.
+// The PRODUCER — from the cross-app model (engine-switch S7.5).
 // ===========================================================================
 
-/// Build the R3a-4 dep artifact from a `.app`'s raw bytes (the embedded-source
-/// PRODUCER). Returns `None` (fail-closed) when the archive is unreadable / lacks
-/// a usable manifest `<App>` Id. Never panics.
+/// The R3a-4 artifact of every dependency of a cross-app model
+/// (`assemble_and_resolve_cross_app_program`), in its `dependency_apps` order.
 ///
-/// `model_instance_id` is the dep model's modelInstanceId. al-sem uses
-/// `dep:<artifactKey>` (a content hash that embeds the cache-version tuple +
-/// devFingerprint, which is intentionally NOT reproduced here — the R3a-4 vector
-/// surface is COUNT + structural, the exact id-string differential is Task 3). The
-/// caller threads whatever id it wants; it appears only inside the dep's own
-/// routine ids, never compared in the vectors.
-pub fn build_dep_artifact_l4(
-    app_bytes: &[u8],
-    model_instance_id: &str,
-) -> Option<DependencyArtifactL4> {
-    // --- manifest identity (the dep app guid is the entity namespace) ---
-    let manifest_xml = extract_navx_manifest_xml(app_bytes)?;
-    let manifest = parse_app_manifest_xml(&manifest_xml);
-    if manifest.error.is_some() || manifest.identity.app_guid.is_empty() {
-        return None;
-    }
-    let app_guid = manifest.identity.app_guid.clone();
-    let includes_source = manifest.includes_source;
+/// Engine-switch S7.5: the dependency's routines are the model's own rows, its
+/// calls the program engine's (each body resolved from its own app, S7.1) and its
+/// events the model's event graph. Before, every `.app` was opened and its
+/// embedded source parsed into an isolated L3 model and resolved with L3's
+/// resolver, once per product (this producer, `recover_dep_retained`, the R3a-4
+/// id stabilizer). A symbol-only dependency's artifact has no routines, as before.
+pub fn dep_artifacts_from_model(
+    x: &crate::engine::l3::program_calls::CrossAppProgram,
+) -> Vec<DependencyArtifactL4> {
+    let empty_calls: &[crate::program::model::calls::CallEdge] = &[];
+    let calls = x
+        .resolved
+        .precomputed_calls
+        .as_ref()
+        .map_or(empty_calls, |c| c.edges.as_slice());
+    let events = x.resolved.precomputed_events.as_ref().map(|e| &e.graph);
+    x.dependency_apps
+        .iter()
+        .map(|app| artifact_from_model(app, &x.resolved.workspace.routines, calls, events))
+        .collect()
+}
 
-    // --- materialize the embedded `.al` files (sorted by path) ---
-    let embedded = iterate_embedded_source(app_bytes);
-
-    // summaryMode: source-bearing + at least one parsed body → "full". A
-    // symbol-only dep (no embedded source) or a source-bearing dep whose `.al`
-    // files all fail to parse → no parsed body → barrier (no order index).
-    // (The Rust producer does not model the resource-guard / parser-unavailable /
-    // no-dep-summaries modes — those need a workspace-level orchestrator; the
-    // R3a-4 corpus is source-bearing "full".)
-    let summary_mode = if includes_source && !embedded.is_empty() {
+fn artifact_from_model(
+    app: &crate::program::model::workspace::DependencyApp,
+    routines: &[L3Routine],
+    calls: &[crate::program::model::calls::CallEdge],
+    events: Option<&crate::engine::l3::event_graph::EventGraph>,
+) -> DependencyArtifactL4 {
+    let app_guid = &app.guid;
+    let mut own: Vec<L3Routine> = if app.has_source {
+        routines
+            .iter()
+            .filter(|r| &r.app_guid == app_guid)
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // summaryMode: source-bearing with parsed routines -> "full"; otherwise the
+    // order index is absent (a barrier on the consumer side).
+    let summary_mode = if app.has_source && !own.is_empty() {
         "full"
     } else {
-        // No parsed body — structural-only-ish; the order index will be absent.
         "structural-only-parser-unavailable"
     };
 
-    // --- assemble + resolve the ISOLATED dep model ---
-    // Each embedded `.al` carries the al-sem source-unit id `dep:<appGuid>:<relpath>`
-    // so op/callsite anchors (the cited-evidence `sourceFile`) match al-sem's
-    // embedded-source path.
-    let units: Vec<(String, String)> = embedded
-        .iter()
-        .map(|f| {
-            (
-                format!("dep:{app_guid}:{}", f.relative_path),
-                f.content.clone(),
-            )
-        })
-        .collect();
-
-    let mut ws: L3Workspace = assemble_workspace_units(&units, &app_guid, model_instance_id);
-    resolve(&mut ws);
-
-    // --- run the dep call graph (intraAppCallEdges source) ---
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(&ws, &symbols, &no_deps, &no_fetched);
-    let event_graph = build_event_graph(&ws.routines, &symbols);
-
-    // --- apply the operation-order walk per routine (order index source) ---
-    // L3 assembly does NOT run apply_operation_order (it is L4-only data the
-    // R3a-2 walker normally consumes inline). Run it here so each op/callsite
-    // carries `order` + the routine carries `scope_frames` — exactly the data
-    // al-sem reads from `r.features.scopeFrames` / `op.order` / `cs.order`.
+    // The operation-order walk per routine (order index source): each op/callsite
+    // carries `order`, the routine its `scope_frames`.
     let mut scope_frames_by_routine: HashMap<String, Vec<DepScopeFrame>> = HashMap::new();
-    for r in &mut ws.routines {
+    for r in &mut own {
         let frames = apply_dep_operation_order(r);
         scope_frames_by_routine.insert(r.id.clone(), frames);
     }
+    let own_routine_ids: HashSet<String> = own.iter().map(|r| r.id.clone()).collect();
 
-    // own-app routine ids (membership for the intraAppCallEdges own→own filter).
-    let own_routine_ids: HashSet<String> = ws
-        .routines
-        .iter()
-        .filter(|r| r.app_guid == app_guid)
-        .map(|r| r.id.clone())
-        .collect();
-
-    // ── intraAppCallEdges ───────────────────────────────────────────────────
-    // own-app→own-app resolved direct / method(resolved) / interface(maybe) edges,
-    // dedup by from|to (first-wins in sorted order), sort by (from, to).
-    // (al-sem dependency-pipeline.ts:668-684.)
-    let mut raw_edges: Vec<DepCallEdge> = Vec::new();
-    for ce in &calls.edges {
+    // intraAppCallEdges: own-app -> own-app admitted edges, dedup by from|to
+    // (first-wins in model order), sorted by (from, to).
+    let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
+    let mut intra_app_call_edges: Vec<DepCallEdge> = Vec::new();
+    for ce in calls {
         let Some(to) = &ce.to else {
             continue;
         };
         if !own_routine_ids.contains(&ce.from) || !own_routine_ids.contains(to) {
             continue;
         }
-        let admit = ce.dispatch_kind == DispatchKind::Direct
-            || (ce.dispatch_kind == DispatchKind::Method && ce.resolution == Resolution::Resolved)
-            || (ce.dispatch_kind == DispatchKind::Interface && ce.resolution == Resolution::Maybe);
-        if !admit {
+        if !admitted_intra_app_edge(ce) {
             continue;
         }
-        raw_edges.push(DepCallEdge {
-            from: ce.from.clone(),
-            to: to.clone(),
-            callsite_id: Some(ce.callsite_id.clone()),
-        });
-    }
-    // Dedup by (from, to), keeping the FIRST occurrence (al-sem `findIndex(...) === i`).
-    let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
-    let mut intra_app_call_edges: Vec<DepCallEdge> = Vec::new();
-    for e in raw_edges {
-        if seen_pairs.insert((e.from.clone(), e.to.clone())) {
-            intra_app_call_edges.push(e);
+        if seen_pairs.insert((ce.from.clone(), to.clone())) {
+            intra_app_call_edges.push(DepCallEdge {
+                from: ce.from.clone(),
+                to: to.clone(),
+                callsite_id: Some(ce.callsite_id.clone()),
+            });
         }
     }
     intra_app_call_edges.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
 
-    // ── citedOperationEvidence ──────────────────────────────────────────────
-    // For each own routine's DIRECT capability facts with a witnessOperationId,
-    // emit the matching operationSite / recordOperation anchor. operationSites
-    // first (displayText = op.kind), recordOperations overwrite (displayText =
-    // `${rv}.${op}`, controlContext from the matching operationSite).
-    // (al-sem dependency-pipeline.ts:445-506.)
+    // citedOperationEvidence: for each own routine's DIRECT capability facts with a
+    // witnessOperationId, the matching operationSite / recordOperation anchor.
+    // operationSites first (displayText = op.kind), recordOperations overwrite
+    // (displayText = `${rv}.${op}`, controlContext from the matching operationSite).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
-    for evt in &event_graph.events {
+    for evt in events.map_or(&[][..], |g| g.events.as_slice()) {
         if let Some(pr) = &evt.publisher_routine_id {
             publisher_events_by_routine
                 .entry(pr.clone())
@@ -416,15 +377,9 @@ pub fn build_dep_artifact_l4(
     }
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     let mut evidence_by_id: BTreeMap<String, DepOperationEvidence> = BTreeMap::new();
-    for r in &ws.routines {
-        if r.app_guid != app_guid {
-            continue;
-        }
+    for r in &own {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (direct_facts, _status, _reasons) = direct_facts_for_routine(r, pubs);
-        if direct_facts.is_empty() {
-            continue;
-        }
         let cited_op_ids: HashSet<String> = direct_facts
             .iter()
             .filter_map(|f| f.witness_operation_id.clone())
@@ -432,7 +387,6 @@ pub fn build_dep_artifact_l4(
         if cited_op_ids.is_empty() {
             continue;
         }
-        // operationSites first (displayText = op.kind).
         for op in &r.operation_sites {
             if !cited_op_ids.contains(&op.id) {
                 continue;
@@ -452,8 +406,6 @@ pub fn build_dep_artifact_l4(
                 },
             );
         }
-        // recordOperations overwrite (richer displayText `${rv}.${op}`;
-        // controlContext from the matching operationSite by id).
         for ro in &r.record_operations {
             if !cited_op_ids.contains(&ro.id) {
                 continue;
@@ -479,22 +431,14 @@ pub fn build_dep_artifact_l4(
             );
         }
     }
-    // al-sem sorts by operationId.localeCompare; BTreeMap already yields sorted-by-key
-    // (byte order). localeCompare on these hash-bearing ascii ids matches byte order
-    // for the corpus; we sort explicitly to be unambiguous.
     let mut cited_operation_evidence: Vec<DepOperationEvidence> =
         evidence_by_id.into_values().collect();
     cited_operation_evidence.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
 
-    // ── depOrderIndex ───────────────────────────────────────────────────────
-    // Only in "full" mode AND when at least one own routine has a parsed body.
-    // Per summarized routine: a return summary (always), plus an order entry when
-    // the routine has scope frames AND ≥1 effect-bearing op or dispatch-relevant
-    // callsite. (al-sem dependency-pipeline.ts:508-616.)
     let dep_order_index = build_dep_order_index(
-        &ws,
-        &app_guid,
-        &manifest.identity.version,
+        &own,
+        app_guid,
+        &app.version,
         summary_mode,
         &scope_frames_by_routine,
     );
@@ -502,12 +446,12 @@ pub fn build_dep_artifact_l4(
     let mut routines_ids: Vec<String> = own_routine_ids.into_iter().collect();
     routines_ids.sort();
 
-    Some(DependencyArtifactL4 {
+    DependencyArtifactL4 {
         header: DepArtifactHeader {
             app_guid: app_guid.clone(),
-            name: manifest.identity.name,
-            version: manifest.identity.version,
-            source_kind: if includes_source {
+            name: app.name.clone(),
+            version: app.version.clone(),
+            source_kind: if app.has_source {
                 "app-source".to_string()
             } else {
                 "symbol-only".to_string()
@@ -521,7 +465,15 @@ pub fn build_dep_artifact_l4(
             cited_operation_evidence,
             dep_order_index,
         },
-    })
+    }
+}
+
+/// The intra-app edge admission rule (al-sem dependency-pipeline.ts:668-684): a
+/// direct call, a resolved method call, or an interface `Maybe` edge.
+pub fn admitted_intra_app_edge(ce: &crate::program::model::calls::CallEdge) -> bool {
+    ce.dispatch_kind == DispatchKind::Direct
+        || (ce.dispatch_kind == DispatchKind::Method && ce.resolution == Resolution::Resolved)
+        || (ce.dispatch_kind == DispatchKind::Interface && ce.resolution == Resolution::Maybe)
 }
 
 /// Apply the operation-order walk to a routine's op/callsite records (populating
@@ -585,7 +537,7 @@ fn apply_dep_operation_order(r: &mut L3Routine) -> Vec<DepScopeFrame> {
 /// dependency-pipeline.ts:508-616). Returns `None` when not "full" mode, when no
 /// own routine has a parsed body, or when there is no useful order data.
 fn build_dep_order_index(
-    ws: &L3Workspace,
+    own: &[L3Routine],
     app_guid: &str,
     version: &str,
     summary_mode: &str,
@@ -594,10 +546,7 @@ fn build_dep_order_index(
     if summary_mode != "full" {
         return None;
     }
-    let has_any_parsed_body = ws
-        .routines
-        .iter()
-        .any(|r| r.app_guid == app_guid && r.body_available);
+    let has_any_parsed_body = own.iter().any(|r| r.body_available);
     if !has_any_parsed_body {
         return None;
     }
@@ -605,10 +554,7 @@ fn build_dep_order_index(
     let mut routine_entries: Vec<DepRoutineOrderEntry> = Vec::new();
     let mut return_summary_list: Vec<DepReturnSummaryRecord> = Vec::new();
 
-    for r in &ws.routines {
-        if r.app_guid != app_guid {
-            continue;
-        }
+    for r in own {
         // FAITHFUL gate (al-sem `if (r.summary === undefined) continue`): `runSummaries`
         // assigns a summary to EVERY non-leaf dep-own routine — body-available OR not
         // (a bodyless routine's `computeRoutineReturnSummary` yields unknown/partial).

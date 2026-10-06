@@ -1585,7 +1585,8 @@ pub fn assemble_and_resolve_workspace_from_program(
 
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
 /// [`assemble_and_resolve_workspace_from_program`] builds them, then every dependency
-/// in the snapshot appended: first each symbol-only dependency's ABI rows (bodyless,
+/// the workspace requires (its declared closure, S7.4: not an app that depends on
+/// the workspace) appended: first each symbol-only dependency's ABI rows (bodyless,
 /// [`crate::program::model::abi_rows`]), then each source-bearing dependency's files
 /// projected whole from the program's own parse, as source unit
 /// `dep:<appGuid>:<path>`. Dependencies are taken in `.app` path order, files in path
@@ -1603,6 +1604,27 @@ pub fn assemble_and_resolve_cross_app_from_program(
     let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
     let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx);
     Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
+}
+
+/// One dependency app in a cross-app model's snapshot (engine-switch S7.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyApp {
+    /// The app guid as its manifest spells it (the model rows' `app_guid`).
+    pub guid: String,
+    pub name: String,
+    pub version: String,
+    /// Whether the snapshot holds its source (embedded or local).
+    pub has_source: bool,
+}
+
+/// One dependency the workspace declares `{appGuid, name, minVersion}`, explicit or
+/// the implicit Microsoft Application/Platform tier: the d17-relevant subset of a
+/// manifest dependency. A missing `version` reads as `"0.0.0.0"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredDependencyDecl {
+    pub app_guid: String,
+    pub name: String,
+    pub min_version: String,
 }
 
 /// Program routine id -> model routine id, for the symbol-only dependency rows of a
@@ -1623,7 +1645,7 @@ fn append_dependency_rows(
     let mut deps: Vec<&crate::snapshot::AppUnit> = snap
         .apps
         .iter()
-        .filter(|u| u.id != snap.workspace_app)
+        .filter(|u| ctx.is_required_dependency(&u.id))
         .collect();
     deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
 
@@ -2019,9 +2041,11 @@ pub struct L3Resolved {
     ///   (`build_r3a3_source_only_base`) and coverage (`project_coverage`);
     /// - switched but NOT on the analyze path: `project_r3a3` and
     ///   `compute_r3a3_real_matrix`;
-    /// - deliberately NOT switched: the cross-app resolve in `capability_cone.rs`
-    ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
-    ///   declared dependencies.
+    /// - the cross-app base (`capability_cone::build_cross_app_base`, engine-switch
+    ///   S7.4) reads the cross-app model's, set by
+    ///   `program_calls::assemble_and_resolve_cross_app_program`;
+    /// - still L3's own resolver: `project_coverage_cross_app` and the `--l3-*`
+    ///   cross-app modes, which measure L3 (S9).
     pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
     /// The detector event graph built from the program engine's subscription
     /// inventory (engine-switch S4.2). Set together with `precomputed_calls`, by

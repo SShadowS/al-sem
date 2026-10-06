@@ -4,13 +4,12 @@
 //! ## What this is
 //!
 //! Given a workspace (a root `app.json` + `.alpackages` deps), this:
-//!   1. builds each dep `.app`'s R3a-4 producer artifact (`build_dep_artifact_l4`,
-//!      the embedded-source path),
+//!   1. builds each dependency's R3a-4 artifact from the cross-app model
+//!      (`dep_artifacts_from_model`, engine-switch S7.5),
 //!   2. drives the consumer hooks (`inject_intra_app_call_edges` /
 //!      `collect_cited_dep_evidence` / `collect_dep_order_index`) over a merged
-//!      model whose routine membership = the workspace's own routines + every dep's
-//!      own routines (mirrors al-sem's `withDependencyArtifacts` merge — both ends
-//!      of an intra-dep edge are dep routines, so they are present),
+//!      model whose routine membership = every routine of that cross-app model
+//!      (both ends of an intra-dep edge are dep routines, so they are present),
 //!   3. STABLE-PROJECTS every id-bearing field internal→stable via [`DepIdStabilizer`],
 //!   4. emits the SAME stable JSON shape/key-order as al-sem's
 //!      `cross-app-dep-hooks.r3a4.golden.json`.
@@ -37,12 +36,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::deps::dep_artifact_l4::{
     ConsumerModel, DepCallEdge, DepOperationEvidence, DepReturnSummaryRecord, DepRoutineOrderEntry,
-    DependencyArtifactL4, InjectedTypedEdge, TriBool, build_dep_artifact_l4,
-    collect_cited_dep_evidence, collect_dep_order_index, inject_intra_app_call_edges,
-    is_dep_order_index_stamp_fresh,
+    DependencyArtifactL4, InjectedTypedEdge, TriBool, collect_cited_dep_evidence,
+    collect_dep_order_index, inject_intra_app_call_edges, is_dep_order_index_stamp_fresh,
 };
-use crate::engine::deps::merged_index::collect_app_paths;
-use crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 
 /// modelInstanceId for the R3a-4 dep producer (the emitted ids are stable-projected
 /// → modelInstanceId-INDEPENDENT; pinned to match the al-sem capture's `r0`).
@@ -415,46 +411,46 @@ fn project_consumed_effect(model: &ConsumerModel, stab: &DepIdStabilizer) -> PCo
 /// Run the R3a-4 producer + consumer hooks over a workspace and project both
 /// surfaces in the stable golden shape. Port of al-sem `projectR3a4`.
 ///
-/// The merged-model routine membership (the injection both-ends guard) = the
-/// workspace's own routines + every dep's own routines. Engine-never-throws: a
-/// fail-closed / dep-less workspace yields an empty projection.
+/// Engine-switch S7.5: one cross-app model (`assemble_and_resolve_cross_app_program`)
+/// is the source of every artifact (`dep_artifacts_from_model`), of the routine
+/// membership (the injection both-ends guard: every model routine) and of the
+/// internal -> stable id map (the model's own rows; it re-parsed each `.app` before).
+/// Engine-never-throws: a fail-closed workspace yields an empty projection.
 pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4Projection {
-    // --- build each dep `.app`'s R3a-4 producer artifact ---
-    let alpackages = workspace.join(".alpackages");
-    let app_paths = collect_app_paths(&alpackages);
-    let mut artifacts: Vec<DependencyArtifactL4> = Vec::new();
-    for p in &app_paths {
-        let Ok(bytes) = std::fs::read(p) else {
-            continue;
-        };
-        if let Some(a) = build_dep_artifact_l4(&bytes, R3A4_MODEL_INSTANCE_ID) {
-            artifacts.push(a);
-        }
-    }
-
-    // --- merged-model routine membership: workspace own routines + dep own routines.
-    // The workspace native routines (so a future cross-app edge with a workspace end
-    // would be admitted) + each dep's own routines (both ends of an intra-dep edge).
-    let mut routine_ids: Vec<String> = Vec::new();
-    if let Some(resolved) = assemble_and_resolve_workspace_default(workspace) {
-        for r in &resolved.workspace.routines {
-            routine_ids.push(r.id.clone());
-        }
-    }
-    for a in &artifacts {
-        for id in &a.abi.routines_ids {
-            routine_ids.push(id.clone());
-        }
-    }
+    let model = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+        workspace,
+        R3A4_MODEL_INSTANCE_ID,
+        false,
+    );
+    let (artifacts, routine_ids, pairs): (
+        Vec<DependencyArtifactL4>,
+        Vec<String>,
+        Vec<(String, String)>,
+    ) = match &model {
+        Some(x) => (
+            crate::engine::deps::dep_artifact_l4::dep_artifacts_from_model(x),
+            x.resolved
+                .workspace
+                .routines
+                .iter()
+                .map(|r| r.id.clone())
+                .collect(),
+            x.resolved
+                .workspace
+                .routines
+                .iter()
+                .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
+                .collect(),
+        ),
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
 
     let mut model = ConsumerModel::with_routine_ids(routine_ids);
     inject_intra_app_call_edges(&mut model, &artifacts);
     collect_cited_dep_evidence(&mut model, &artifacts);
     collect_dep_order_index(&mut model, &artifacts);
 
-    // --- build the internal→stable dep-id mapper from every dep's own routines.
-    // Each carries (internal id, stable_routine_id) — both cache-INDEPENDENT.
-    let stab = build_stabilizer(&artifacts, &app_paths);
+    let stab = DepIdStabilizer::new(pairs);
 
     // --- producer payloads (sorted by appGuid) ---
     let mut artifact_payloads: Vec<PDepArtifactPayload> = artifacts
@@ -492,52 +488,4 @@ pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4
         dep_order_index_present,
         freshness_stamp_fresh,
     }
-}
-
-/// Build the internal→stable id mapper from every dep producer's own routines.
-/// Re-derives each dep's L3 routine table (the producer discards it; we re-run the
-/// embedded-source assemble+resolve to recover `(id, stable_routine_id)` pairs).
-fn build_stabilizer(
-    artifacts: &[DependencyArtifactL4],
-    app_paths: &[std::path::PathBuf],
-) -> DepIdStabilizer {
-    use crate::engine::deps::app_manifest::parse_app_manifest_xml;
-    use crate::engine::deps::app_package_zip::extract_navx_manifest_xml;
-    use crate::engine::deps::dep_artifact_l4::iterate_embedded_source;
-    use crate::engine::l3::l3_workspace::{L3Workspace, assemble_workspace_units, resolve};
-
-    let _ = artifacts; // membership of stab is derived from the same .app bytes.
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    for p in app_paths {
-        let Ok(bytes) = std::fs::read(p) else {
-            continue;
-        };
-        let Some(manifest_xml) = extract_navx_manifest_xml(&bytes) else {
-            continue;
-        };
-        let manifest = parse_app_manifest_xml(&manifest_xml);
-        if manifest.error.is_some() || manifest.identity.app_guid.is_empty() {
-            continue;
-        }
-        let app_guid = manifest.identity.app_guid.clone();
-        let embedded = iterate_embedded_source(&bytes);
-        let units: Vec<(String, String)> = embedded
-            .iter()
-            .map(|f| {
-                (
-                    format!("dep:{app_guid}:{}", f.relative_path),
-                    f.content.clone(),
-                )
-            })
-            .collect();
-        let mut ws: L3Workspace =
-            assemble_workspace_units(&units, &app_guid, R3A4_MODEL_INSTANCE_ID);
-        resolve(&mut ws);
-        for r in &ws.routines {
-            if r.app_guid == app_guid {
-                pairs.push((r.id.clone(), r.stable_routine_id.clone()));
-            }
-        }
-    }
-    DepIdStabilizer::new(pairs)
 }

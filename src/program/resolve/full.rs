@@ -1262,6 +1262,28 @@ impl ProgramContext {
         self.profile
     }
 
+    /// The app-set snapshot the graph was built from.
+    #[must_use]
+    pub fn snapshot(&self) -> &AppSetSnapshot {
+        &self.snap
+    }
+
+    /// Whether `app` is a dependency the workspace app requires, directly or
+    /// transitively (its declared closure, the workspace itself excluded). An app
+    /// that depends ON the workspace (a test app in an ancestor `.alpackages`) is
+    /// loaded too, but is not part of the workspace's world (engine-switch S7.4).
+    #[must_use]
+    pub fn is_required_dependency(&self, app: &crate::snapshot::AppId) -> bool {
+        self.graph.apps.find(app).is_some_and(|r| {
+            r != self.primary_app_ref
+                && self
+                    .graph
+                    .topology
+                    .closure(self.primary_app_ref)
+                    .contains(&r)
+        })
+    }
+
     /// The assembled whole-program graph (shared-substrate consumers only).
     #[must_use]
     pub fn graph(&self) -> &ProgramGraph {

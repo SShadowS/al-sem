@@ -107,7 +107,7 @@ pub fn detect_d44(
         let sub_list: Vec<&str> = unique_subs.iter().copied().collect();
         let op_union: BTreeSet<&str> = writes.iter().map(|w| w.op).collect();
         let op_union: Vec<&str> = op_union.into_iter().collect();
-        let Some(first_id) = sub_list.first().copied() else {
+        let Some(first_id) = anchor_subscriber(&sub_list, ctx) else {
             continue;
         };
         let Some(first) = ctx.routine_by_id.get(first_id).copied() else {
@@ -220,7 +220,7 @@ pub fn detect_d44(
         let (event_id, table_id) = split_once_pipe(key);
         let writer_list: Vec<&str> = writers.iter().map(|s| s.as_str()).collect();
         let reader_list: Vec<&str> = distinct_readers; // already sorted (BTreeSet iter + filter)
-        let Some(first_id) = writer_list.first().copied() else {
+        let Some(first_id) = anchor_subscriber(&writer_list, ctx) else {
             continue;
         };
         let Some(first) = ctx.routine_by_id.get(first_id).copied() else {
@@ -334,4 +334,17 @@ fn split_once_pipe(key: &str) -> (&str, &str) {
         Some((a, b)) => (a, b),
         None => (key, ""),
     }
+}
+
+/// The subscriber a finding anchors on: the first in id order that is not a
+/// dependency routine, else the first. In cross-app mode an event's subscribers
+/// include dependency routines (engine-switch S7.4); anchoring on one put the
+/// finding in the dependency, where the scope filter dropped it (CDO's
+/// OnRegisterManualSetup pairs: Base App, Core and System App subscribers sort
+/// before the workspace's).
+fn anchor_subscriber<'a>(subs: &[&'a str], ctx: &DetectorContext) -> Option<&'a str> {
+    subs.iter()
+        .copied()
+        .find(|s| !ctx.dep_routine_ids.contains(*s))
+        .or_else(|| subs.first().copied())
 }
