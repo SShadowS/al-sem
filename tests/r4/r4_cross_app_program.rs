@@ -971,6 +971,16 @@ fn the_cross_app_model_holds_the_demanded_dependency_routines() {
 /// which calls `B.Write`, which writes `Dep Log`: the write is two dependency hops
 /// away, behind a dependency-internal edge.
 fn transitive_dep_write_workspace(dir: &Path) {
+    transitive_dep_write_workspace_with(
+        dir,
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n    begin\n        B.Write();\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+}
+
+/// [`transitive_dep_write_workspace`] with the dependency's `Dep A` / `Dep B`
+/// codeunit sources given.
+fn transitive_dep_write_workspace_with(dir: &Path, dep_a: &str, dep_b: &str) {
     write(
         &dir.join("app.json"),
         &format!(
@@ -999,14 +1009,8 @@ fn transitive_dep_write_workspace(dir: &Path) {
         &symbols,
         &[
             ("src/Log.al", &table(50180, "Dep Log")),
-            (
-                "src/A.al",
-                "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n    begin\n        B.Write();\n    end;\n}\n",
-            ),
-            (
-                "src/B.al",
-                "codeunit 50182 \"Dep B\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
-            ),
+            ("src/A.al", dep_a),
+            ("src/B.al", dep_b),
         ],
         "",
     );
@@ -1160,5 +1164,52 @@ fn d3_skips_what_setloadfields_cannot_help() {
         let dir = tempfile::tempdir().unwrap();
         d3_workspace(dir.path(), body);
         assert_eq!(d3_count(dir.path()), expected, "case {name}");
+    }
+}
+
+/// S8 engine gap 1 (triage D, d44 Group B): a dependency writes a record its
+/// own caller made `temporary`. No physical row is written, so the two workspace
+/// subscribers do not overlap. The Core shapes from the triage, each a case:
+/// - `var-param`: the helper writes its `var` parameter;
+/// - `forwarded`: the `var` parameter is forwarded once more before the write;
+/// - `table-method`: a table procedure writes `Rec` (`Buf.ClearBuffer()`);
+/// - `physical`: the control — a non-temporary local, so d44 reports.
+///
+/// `var-param` and `forwarded` already held; `table-method` was the gap: a table
+/// method's `Rec` was `Known(false)`. Discrimination (2026-10-06): seeding `Rec`
+/// `Known(false)` again in `ir_record_variables`, or reading only the argument
+/// bindings in `pd_temp_state_at_callsite` (ignoring the receiver), fails case
+/// `table-method` (`left: 1`); restored, it passes.
+#[test]
+fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let run2 = |decl: &str, call: &str| {
+        format!(
+            "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Buf: Record {decl};\n    begin\n        {call};\n    end;\n}}\n"
+        )
+    };
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure Write(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n\n    procedure Mid(var Log: Record \"Dep Log\")\n    begin\n        Write(Log);\n    end;\n}\n\ntable 50183 \"Dep Buf\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n\n    procedure ClearBuffer()\n    begin\n        DeleteAll();\n    end;\n}\n";
+    let cases = [
+        (
+            "var-param",
+            run2("\"Dep Log\" temporary", "B.Write(Buf)"),
+            0,
+        ),
+        ("forwarded", run2("\"Dep Log\" temporary", "B.Mid(Buf)"), 0),
+        (
+            "table-method",
+            run2("\"Dep Buf\" temporary", "Buf.ClearBuffer()"),
+            0,
+        ),
+        ("physical", run2("\"Dep Log\"", "B.Mid(Buf)"), 1),
+    ];
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    for (name, a, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        transitive_dep_write_workspace_with(dir.path(), &a, b);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
     }
 }

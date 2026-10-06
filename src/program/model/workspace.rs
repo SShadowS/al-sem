@@ -1265,6 +1265,20 @@ fn project_ir(
                                 _ => {}
                             }
                         }
+                        // The call's receiver may be an object-global record too
+                        // (`TempBuf.ClearBuffer()`), with the same shadowing rule.
+                        if cs.receiver_temp_state.is_none()
+                            && let crate::program::body::features::PCallee::Member {
+                                receiver, ..
+                            } = &cs.callee
+                        {
+                            let lc = receiver.trim().trim_matches('"').to_lowercase();
+                            if let Some(g) = global_rv_by_lc.get(&lc)
+                                && innermost_scope_by_lc.get(lc.as_str()).copied() == Some("global")
+                            {
+                                cs.receiver_temp_state = Some(g.temp_state.clone());
+                            }
+                        }
                     }
                 }
             }

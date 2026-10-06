@@ -124,10 +124,7 @@ fn classify_edge_param(
     let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs_id) else {
         return EdgeParamOutcome::Const(ParamTemp::Unknown);
     };
-    let Some(binding) = cs.argument_bindings.iter().find(|b| b.parameter_index == p) else {
-        return EdgeParamOutcome::Const(ParamTemp::Unknown);
-    };
-    match &binding.source_temp_state {
+    match cs.source_temp_state_for(p) {
         Some(ts) => match TempStateKind::from_p_temp_state(ts) {
             TempStateKind::Known(true) => EdgeParamOutcome::Const(ParamTemp::Temp),
             TempStateKind::Known(false) => EdgeParamOutcome::Const(ParamTemp::Physical),

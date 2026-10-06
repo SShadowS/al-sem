@@ -189,6 +189,7 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         control_context: None,
         order: None,
         in_statement_position: false,
+        receiver_temp_state: None,
     }
 }
 
@@ -275,6 +276,7 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         control_context: None,
         order: None,
         in_statement_position: false,
+        receiver_temp_state: None,
     }
 }
 

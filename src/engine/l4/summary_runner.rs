@@ -847,15 +847,9 @@ pub(crate) fn pd_temp_state_at_callsite(
         Some(cs) => cs,
         None => return TempState::Unknown,
     };
-    // (3) the binding for the callee param the PD refers to.
-    let binding = match cs
-        .argument_bindings
-        .iter()
-        .find(|b| b.parameter_index == callee_param_index)
-    {
-        Some(b) => b,
-        None => return TempState::Unknown,
-    };
+    // (3) the binding for the callee param the PD refers to (the call's
+    // receiver for a table method's `Rec`, `RECEIVER_PARAM_INDEX`).
+    let source_temp_state = cs.source_temp_state_for(callee_param_index);
     // (4) substitution table over the binding's captured source temp state.
     //
     // A record-typed PARAMETER is present in the caller's
@@ -879,7 +873,7 @@ pub(crate) fn pd_temp_state_at_callsite(
     // ONLY because its source param IS Known(true). Around a recursive cycle a
     // PD chasing itself stays PD (monotone) and the fixed point converges — the
     // effect_key includes the PD index, so the state space stays finite.
-    match &binding.source_temp_state {
+    match source_temp_state {
         Some(ts) => match TempState::from_p(ts) {
             TempState::Known(v) => TempState::Known(v),
             // Caller's-own-param source (forwarded keyword-less by-var param):

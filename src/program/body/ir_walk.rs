@@ -1079,6 +1079,7 @@ impl<'a> SpineCtx<'a> {
                     control_context: None,
                     order: None,
                     in_statement_position: self.in_stmt_position,
+                    receiver_temp_state: None,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }
@@ -1748,6 +1749,19 @@ pub fn routine_features_partial(
         .collect();
     let mut call_sites = spine.call_sites;
     for (cs, arg_exprs) in call_sites.iter_mut().zip(spine.cs_arg_exprs.iter()) {
+        // The record the call is made on (a table method's `Rec`): the member
+        // receiver, or the implicit `Rec` for a bare call. Object globals are
+        // filled at L3 (`workspace.rs`), as for argument bindings.
+        let receiver_lc = match &cs.callee {
+            super::features::PCallee::Member { receiver, .. } => {
+                Some(receiver.trim().trim_matches('"').to_ascii_lowercase())
+            }
+            super::features::PCallee::Bare { .. } => Some("rec".to_string()),
+            _ => None,
+        };
+        cs.receiver_temp_state = receiver_lc
+            .and_then(|lc| rv_by_lc.get(&lc))
+            .map(|rv| rv.temp_state.clone());
         cs.argument_bindings = arg_exprs
             .iter()
             .enumerate()
@@ -1998,11 +2012,23 @@ pub fn ir_record_variables(
     ) || (o.kind == ObjectKind::Page && source_table_name.is_some())
         || direct_rec_table.is_some();
     if has_implicit_rec && !out.iter().any(|v| v.name.eq_ignore_ascii_case("Rec")) {
+        // A table (extension) PROCEDURE runs on the record it is called on, so its
+        // `Rec` is as temporary as the caller's receiver: parameter-dependent on
+        // the reserved receiver index, substituted at each call site from
+        // `PCallSite::receiver_temp_state`. Triggers keep `Known(false)`: the
+        // platform invokes them, and no call site carries their receiver.
+        let rec_temp_state = if matches!(o.kind, ObjectKind::Table | ObjectKind::TableExtension)
+            && routine.kind == al_syntax::ir::RoutineKind::Procedure
+        {
+            ts_param_dependent(super::features::RECEIVER_PARAM_INDEX)
+        } else {
+            ts_known(false)
+        };
         out.push(PRecordVariable {
             id: format!("{}/rv/rec", routine_id),
             name: "Rec".to_string(),
             table_name: direct_rec_table,
-            temp_state: ts_known(false),
+            temp_state: rec_temp_state,
             is_parameter: false,
             parameter_index: None,
             scope: None,

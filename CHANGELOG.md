@@ -978,6 +978,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A table method's `Rec` is as temporary as the record it is called on**
+  (engine-switch S8, triage D gap 1). A Table/TableExtension procedure's
+  implicit `Rec` was seeded `Known(false)`, so `Buf.ClearBuffer()` on a
+  `temporary` buffer counted as a physical `DeleteAll`. On CDO this was 7 of 16
+  cross-app d44 findings (Continia Core activation buffers). `Rec` is now
+  parameter-dependent on a reserved receiver index (`RECEIVER_PARAM_INDEX`).
+  Each call site records its receiver's temp state
+  (`PCallSite::receiver_temp_state`: the member receiver, an object global, or
+  the caller's own `Rec` for a bare call). Every PD substitution reads it through
+  `PCallSite::source_temp_state_for`: the L4 solver, the capability cone,
+  d1's temp and liveness passes and `path_temp_resolve`. Table triggers keep
+  `Known(false)`: the platform invokes them, and no call site carries their
+  receiver. A `var` parameter that is written, or forwarded once more, was
+  already substituted correctly. Pinned by
+  `a_dependency_write_to_a_temporary_argument_is_not_physical`, with a
+  discrimination proof.
+
 - **`Temp Blob` is matched by its exact name** (engine-switch S7.6). The IO
   classifier took any type containing "temp blob", so `Codeunit "Temp Blob
   Impl."` counted too. Once dependency bodies were analysed, the System
