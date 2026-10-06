@@ -61,7 +61,7 @@ fn usage() -> ExitCode {
          --l3-call-graph-stats-cross-app | --l3-unknown-breakdown | --l3-unknown-breakdown-cross-app | \
          --l3-event-graph | --l3-coverage | --r2.5a-merged-index | --l3-cross-app | \
          --r3a1-combined-graph | --r3a2-summary-core | --r3a3-cone-coverage | \
-         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | \
+         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
@@ -166,6 +166,7 @@ fn main() -> ExitCode {
     let mut r3a4_dep_hooks = false;
     let mut r3a5_cross_app_summary = false;
     let mut r4_findings = false;
+    let mut r4_findings_cross_app = false;
     let mut r4f_root_classifications = false;
     let mut r4f_return_summaries = false;
     let mut r4f_snapshot = false;
@@ -273,6 +274,10 @@ fn main() -> ExitCode {
             r4_findings = true;
             continue;
         }
+        if arg == "--r4-findings-cross-app" {
+            r4_findings_cross_app = true;
+            continue;
+        }
         if arg == "--r4f-root-classifications" {
             r4f_root_classifications = true;
             continue;
@@ -334,6 +339,7 @@ fn main() -> ExitCode {
         r3a4_dep_hooks,
         r3a5_cross_app_summary,
         r4_findings,
+        r4_findings_cross_app,
         r4f_root_classifications,
         r4f_return_summaries,
         r4f_snapshot,
@@ -552,6 +558,35 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("aldump: error: failed to serialize R4 findings projection: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if r4_findings_cross_app {
+        // Every registered detector in CROSS-APP mode over the workspace and the
+        // dependency `.app`s it finds (engine-switch S7.0: the before/after surface for
+        // the cross-app replacement; `project_r4_findings_cross_app`).
+        let fixture_name = workspace
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let detectors = al_sem::engine::l5::detectors::registered_detectors();
+        let detector_names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
+        let projection = al_sem::engine::l5::finding::project_r4_findings_cross_app(
+            &workspace,
+            al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+            &detectors,
+            &fixture_name,
+            &detector_names,
+        );
+        return match serde_json::to_string_pretty(&projection) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("aldump: error: failed to serialize cross-app R4 findings: {e}");
                 ExitCode::FAILURE
             }
         };

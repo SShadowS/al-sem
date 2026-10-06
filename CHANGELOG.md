@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`aldump --r4-findings-cross-app <workspace>`** (engine-switch S7.0): every registered
+  detector in cross-app mode (`project_r4_findings_cross_app`), the before/after surface
+  for replacing the L3 cross-app pipeline. Baseline on the old path: CDO 2529 findings
+  (79 d13, 60 d16, 3 d17 — `alsem analyze` reports none of these three, its single-app
+  model holds no dependency routines), DO 2334 (68 d13, 47 d16, 7 d17). ~2 minutes each.
+
 - **Dependency ledger** (engine-switch S5.2a, spec G14). `FreshCoverage::ledger` lists
   every dependency in the primary app's reachable declared closure: who declared it, the
   declared minimum version, whether it is a Microsoft Application/Platform-tier app,
