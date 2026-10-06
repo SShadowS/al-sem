@@ -174,6 +174,9 @@ pub struct AnalysisModel {
     /// The program graph's workspace physical rows (engine-switch S2b.3), kept
     /// past the program context's drop; `None` when the model was not built.
     pub physical: Option<crate::program::physical::PhysicalIndex>,
+    /// `census::object_fact_census` over the model and the program graph
+    /// (engine-switch S5.4); `None` when the model was not built.
+    pub object_facts: Option<Vec<String>>,
 }
 
 /// THE production model builder for `alsem analyze` — and the one the engine-switch
@@ -209,6 +212,7 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model: Err(ModelFailure::NoModelInstanceId),
             physical: None,
+            object_facts: None,
         };
     };
     let Some((ctx, report)) = program else {
@@ -231,6 +235,7 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model,
             physical: None,
+            object_facts: None,
         };
     };
     // Engine-switch S2a: the model is projected from the program engine's parse.
@@ -243,16 +248,82 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
             physical: None,
+            object_facts: None,
         };
     };
     // Taken before the adapter consumes (and drops) the program context.
     let physical = Some(ctx.graph().workspace_rows.clone());
+    let object_facts = Some(crate::program::model::census::object_fact_census(
+        &resolved.workspace,
+        ctx.graph(),
+    ));
     crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
     AnalysisModel {
         fresh,
         model: Ok(resolved),
         physical,
+        object_facts,
     }
+}
+
+/// `--scope primary`'s dependency test (engine-switch S5.3): a finding's object is a
+/// dependency object when the model object's app is not the primary app. It used to
+/// be `|_| false`. The analyze model holds the primary app only until S7/S8 add
+/// dependency routines, so today this keeps every finding, as before; it is the
+/// rule those steps rely on. With no primary app identity (no `app.json` id) nothing
+/// is treated as a dependency.
+pub fn dependency_object_predicate<'a>(
+    resolved: &'a L3Resolved,
+    idx: &'a ProjectionIndex<'a>,
+) -> impl Fn(&str) -> bool + 'a {
+    let primary = resolved.primary_app.as_ref().map(|a| a.app_guid.as_str());
+    move |obj_id: &str| match (primary, idx.objects_by_id.get(obj_id)) {
+        (Some(p), Some(o)) => !o.app_guid.eq_ignore_ascii_case(p),
+        _ => false,
+    }
+}
+
+/// One `dependencies`-stage warning per problem in the program build's dependency
+/// ledger (engine-switch S5.2b, spec G14), in ledger (guid) order, then one per
+/// package whose manifest could not be read. Missing and older dependencies do not
+/// degrade the preflight on their own (a call into one is already an unknown
+/// edge); an unreadable one does, there.
+pub fn dependency_diagnostics(
+    fc: &crate::program::resolve::full::FreshCoverage,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
+    let warn = |message: String| crate::engine::l5::registry::Diagnostic {
+        severity: "warning".to_string(),
+        stage: "dependencies".to_string(),
+        message,
+    };
+    let mut out = Vec::new();
+    for e in &fc.ledger {
+        let what = format!(
+            "dependency \"{}\" ({}), declared by \"{}\" at version {}",
+            e.name, e.guid, e.declared_by, e.declared_version
+        );
+        match (&e.found, &e.unreadable) {
+            (None, Some(err)) => out.push(warn(format!("{what}, could not be read: {err}"))),
+            (None, None) => out.push(warn(format!("{what}, is missing"))),
+            (Some(f), _) => {
+                if let Some(err) = &f.ingest_error {
+                    out.push(warn(format!("{what}, could not be read: {err}")));
+                }
+                if e.below_declared_version() {
+                    out.push(warn(format!(
+                        "{what}, is present only at version {}",
+                        f.version
+                    )));
+                }
+            }
+        }
+    }
+    out.extend(
+        fc.unidentified_packages
+            .iter()
+            .map(|p| warn(format!("dependency package could not be read: {p}"))),
+    );
+    out
 }
 
 /// The analysis coverage `alsem analyze` reports for `resolved`.
@@ -365,10 +436,12 @@ pub fn run_analyze_with_exit(
         all.extend(
             crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path),
         );
-        // (2) depArtifacts.diagnostics — TRACKED GAP: the gate's source-only pipeline
-        //     does not resolve `.app` dependency artifacts, so this source is always
-        //     empty here. (When dep resolution is wired into the gate, emit it in this
-        //     slot so a dep diagnostic lands in TS order before summarize.)
+        // (2) dependency diagnostics — the program build's dependency ledger
+        //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
+        //     unidentified dependency packages.
+        if let Ok(fc) = &fresh {
+            all.extend(dependency_diagnostics(fc));
+        }
         // (3) summarizeDiagnostics — WIRED: L4 `compute_summaries*` (run inside
         //     `run_detectors`'s `DetectorContext` build) now surfaces the JACOBI
         //     fixed-point cap-hit here. Empty whenever every SCC converges.
@@ -429,8 +502,9 @@ pub fn run_analyze_with_exit(
     // --- scope: primary drops dependency-anchored findings. Source-only ⇒ keep all. ---
     {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let is_dependency = dependency_object_predicate(&resolved, &idx);
         let kept_ids: std::collections::HashSet<String> =
-            scope_filter(summaries, args.scope, |_obj_id| false)
+            scope_filter(summaries, args.scope, is_dependency)
                 .into_iter()
                 .map(|s| s.id)
                 .collect();

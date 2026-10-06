@@ -258,6 +258,15 @@ zero unexplained differences, zero regressions, written golden triage.
 - **S5 — Coverage, roots, ledger** (G9, G10, G14), including real dependency-role
   attribution in production scope filtering (today `gate/run.rs:343` passes
   `|_obj_id| false`).
+  *As built (2026-10-06, plan `docs/superpowers/plans/2026-10-06-engine-switch-s5.md`):*
+  coverage units app-scoped; dependency ledger (`FreshCoverage::ledger`) with unreadable
+  packages recorded by the loader; preflight degrades on unbound primary subscriptions
+  and unreadable dependencies, other ledger problems become `dependencies`
+  diagnostics; scope predicate from the model object's app; the S2b.4 double object-fact
+  derivation unified behind a census (model now keeps `extends` for every extension
+  kind). G10 needed nothing (roots read only the program-assembled model). The adapter's
+  L3 receiver inference (the remaining analyze-path `SymbolTable` use) is proposed as
+  the first step of S6.
 - **S6 — Every other consumer**, one subcommand per change, nested rebuilds and error
   paths included: prove, digest, fingerprint, diff/snapshot, events, policy, query,
   `compute_analyzer_diagnostics`, `format_html`, the L4 projection's event rebuild,

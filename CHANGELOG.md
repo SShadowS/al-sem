@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency ledger** (engine-switch S5.2a, spec G14). `FreshCoverage::ledger` lists
+  every dependency in the primary app's reachable declared closure: who declared it, the
+  declared minimum version, whether it is a Microsoft Application/Platform-tier app,
+  and what the snapshot holds (version, trust tier, ABI object count, ABI ingest
+  error) — or that it is missing, or present on disk but unreadable.
+  `FreshCoverage::unidentified_packages` names packages whose manifest could not be
+  read. Found while building it: a `.app` whose every copy failed symbol extraction was
+  dropped by `load_all_apps` with only a log line, so it looked exactly like an app that
+  was never there. `load_all_apps` now returns `DependencyLoadReport { dropped,
+  unreadable }` (was the dropped-duplicates list alone), and
+  `SnapshotBuilder::build_with_diagnostics` passes it on. Data only: preflight and
+  output do not change yet (S5.2b decides the policy). The switch dump gains a `ledger`
+  file.
+
+  Measured: CDO's ledger has 11 dependencies and DO's 10, all found, none unreadable,
+  none below the declared version. Fixtures: 25 lack the two Platform-tier apps their
+  app.json's `platform` field implies (no `.alpackages`), 3 lack an explicit
+  dependency (`ws-d1-dep-terminal`, `ws-preflight-missingdep`, `ws-r2b-opaque`).
+
+  `ledger_records_missing_older_and_unreadable_dependencies` (tests/cli) states three
+  dependencies on disk (older than declared, absent, corrupt symbols). Discrimination:
+  the loader not recording an all-copies-failed GUID, an inverted version comparison,
+  and recording only found dependencies each fail it. The `.app` writer moved to
+  `tests/common/symbol_app.rs` (shared by the cli and r4 umbrellas).
+
 - **Every event subscription is kept, bound or not** (engine-switch S4.1, spec G7).
   `SubscriberIndex::subscriptions()` lists each parsed `[EventSubscriber]` attribute, in
   routine order then attribute order, with its outcome: `Bound` (the publisher routine),
@@ -126,6 +151,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
 
 ### Changed
+
+- **The model's object facts come from the resolver's derivation** (engine-switch S5.4,
+  spec G3/G4; deferred from S2b.4). Object facts were derived twice from the same IR:
+  `node_extract` for the resolver's `ObjectNode` and the model assembly for `L3Object`.
+  A census (`program::model::census::object_fact_census`, now in the switch dump as
+  `census.object_facts`) compared name, number, `extends`, Page `SourceTable` and
+  interfaces on every corpus first. It found one disagreement class: the model kept
+  `extends` only for table and page extensions, so report and enum extensions had none
+  (CDO 3, DO 3, `ws-report-dataitem` 1) although L3's resolver expects it
+  (`extension_base_type` maps both). Now the model takes `extends` for every extension
+  kind and `SourceTable` through `node_extract::singular_object_ref_text`: a value
+  that differs between `#if` branches is `None`, as in the resolver, instead of the
+  first branch's (no corpus has one). After: the census reports no disagreement
+  anywhere; findings, calls, events and every golden unchanged; the 7 extension
+  objects' model rows gain their `extends` target.
+  `model_object_facts_match_the_program_derivation` (tests/cli) states a conflicting
+  `#if SourceTable` and a report extension; discrimination: first-branch `SourceTable`
+  and the old table/page-only `extends` each fail it.
+
+- **`--scope primary` asks which app a finding's object belongs to** (engine-switch
+  S5.3). The scope filter got `|_| false`, so no finding could ever be treated as
+  dependency-anchored. `gate::run::dependency_object_predicate` answers from the model
+  object's `app_guid` against the primary app's id. Dormant: the analyze model holds the
+  primary app only until S7/S8 add dependency routines, so no output changes today.
+  `scope_primary_drops_a_finding_on_another_apps_object` moves one object of a real
+  model to another app by assignment; discrimination: the old constant-false predicate
+  fails it. Stated limit: the test pins the predicate and the filter, not the call
+  site that joins them.
+
+- **The preflight no longer says "verified" over an unbound event subscription or an
+  unreadable dependency** (engine-switch S5.2b, spec G9/G14). Two holes the unknown-edge
+  count cannot see:
+  - A workspace `[EventSubscriber]` that binds to no publisher is no call edge, so
+    `unknown` stayed 0. `FreshCoverage::unbound_subscriptions` counts the primary
+    app's unbound subscriptions; the preflight adds "N unbound event subscription(s)".
+  - A declared dependency whose package could not be read looked empty or absent. The
+    preflight adds "N unreadable dependency app(s): …" for a ledger entry that is
+    unreadable on disk or failed ABI ingestion. `ProgramGraph::abi_ingest_errors` now
+    has this production reader.
+
+  Missing dependencies, dependencies older than declared, and packages whose manifest
+  could not be read do not degrade on their own (a call into a missing dependency is
+  already an unknown edge). They are now reported: `alsem analyze`'s diagnostics slot
+  (2), a tracked gap until now, carries one `dependencies` warning per ledger problem
+  (`gate::run::dependency_diagnostics`; JSON `code: "DIAG-dependencies"`).
+
+  Measured: CDO and DO unchanged (no unbound subscription, no ledger problem). Golden
+  move: `tests/gate-goldens/exit-codes.json`, `ws-d35` under `--require-dependencies`
+  0 -> 4 (its three `Codeunit, 50` subscribers bind to nothing). Tests: preflight unit
+  rows for both clauses and for "missing or older alone does not degrade"; through
+  `run_analyze_with_exit`, an unreadable dependency fails `--require-dependencies` with
+  the clause and the missing/older diagnostics, and a subscriber to a nonexistent
+  codeunit degrades. Discrimination: unwiring slot (2), forcing the unbound count to 0,
+  and dropping the unreadable clause each fail their test.
+
+- **Coverage counts only the files the analysis read** (engine-switch S5.1, spec
+  G5/G9). `coverage_source_units_for_workspace` walked into a child directory with its
+  own `app.json` (another app), while the model analyses the root app only
+  (`NestedApps::Skip`, S2a). So `sourceUnitsTotal`/`sourceUnitsParsed` counted the
+  nested app's files as parsed although none of their routines was analysed. The unit
+  walk now uses the same app-scoped discovery. Dormant on CDO, DO and all 218 harness
+  corpora (byte-identical `s4-3` -> `s5-1`): none nests an app under a root app.
+  `coverage_counts_only_the_files_the_model_analysed` (tests/cli) states a root and a
+  nested app on disk; discrimination: the nested walk fails it with `(2, 2)`.
 
 - **Event subscribers that name the publisher by number now bind** (engine-switch
   S4.3b, spec G7). `[EventSubscriber(ObjectType::Codeunit, 80, 'OnAfterX', …)]` is valid

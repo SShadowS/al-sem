@@ -9,6 +9,9 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+#[path = "../common/symbol_app.rs"]
+mod symbol_app;
+
 #[path = "../common/regen.rs"]
 mod regen;
 
@@ -28,6 +31,7 @@ mod cli_a_json_differential;
 mod cli_a_stats_differential;
 mod cli_a_terminal_differential;
 mod cli_a_with_evidence;
+mod cli_analyze_coverage_ledger;
 mod cli_analyze_program_calls;
 mod cli_b_diff_differential;
 mod cli_b_digest_differential;

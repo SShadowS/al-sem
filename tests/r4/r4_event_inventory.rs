@@ -10,8 +10,9 @@
 //! (`assemble_and_resolve_workspace_with_program_calls` -> the detector context).
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
+
+use crate::symbol_app::write_symbol_app;
 
 use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::l5::detector_context::build_detector_context;
@@ -26,27 +27,6 @@ const DEP_GUID: &str = "bbbb2222-0000-0000-0000-000000000057";
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
-}
-
-/// A symbol-only `.app`: NAVX header + zip of the manifest and `SymbolReference.json`.
-fn write_symbol_app(path: &Path, guid: &str, name: &str, symbols: &str) {
-    let manifest = format!(
-        r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{guid}" Name="{name}" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
-    );
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    {
-        let mut zip = zip::ZipWriter::new(&mut bytes);
-        let opts = zip::write::SimpleFileOptions::default();
-        zip.start_file("NavxManifest.xml", opts).unwrap();
-        zip.write_all(manifest.as_bytes()).unwrap();
-        zip.start_file("SymbolReference.json", opts).unwrap();
-        zip.write_all(symbols.as_bytes()).unwrap();
-        zip.finish().unwrap();
-    }
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut out = std::fs::File::create(path).unwrap();
-    out.write_all(&[0u8; 40]).unwrap();
-    out.write_all(bytes.get_ref()).unwrap();
 }
 
 fn app_json(dependencies: &str) -> String {
@@ -73,6 +53,7 @@ fn dependency_publisher_workspace(dir: &Path) {
         &dir.join(".alpackages/probe_EvDep_1.0.0.0.app"),
         DEP_GUID,
         "EvDep",
+        "1.0.0.0",
         &format!(
             r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":60570,"Name":"Ev Dep Pub","Methods":[{},{}]}}],"AppId":"{DEP_GUID}","Name":"EvDep","Publisher":"probe","Version":"1.0.0.0"}}"#,
             event("OnAfterPost"),

@@ -81,6 +81,27 @@ pub struct DroppedDuplicateDependency {
     pub dropped_path: PathBuf,
 }
 
+/// A dependency `.app` the loader could not use (engine-switch S5.2): its
+/// manifest could not be read (identity unknown), or every copy of its GUID
+/// failed symbol extraction. It does not become an app unit, so without this
+/// record it would look exactly like an app that was never there.
+#[derive(Debug, Clone)]
+pub struct UnreadableDependency {
+    pub path: PathBuf,
+    /// `None` when the manifest itself could not be read.
+    pub guid: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub error: String,
+}
+
+/// What [`load_all_apps`] set aside rather than loaded.
+#[derive(Debug, Clone, Default)]
+pub struct DependencyLoadReport {
+    pub dropped: Vec<DroppedDuplicateDependency>,
+    pub unreadable: Vec<UnreadableDependency>,
+}
+
 /// One `.app` discovered on disk with ONLY its manifest read — the
 /// pre-symbol-extraction identity `load_all_apps` dedups on
 /// (perf safe-wins Task 3).
@@ -518,11 +539,12 @@ pub fn find_matching_app(alpackages: &Path, dep: &AppDependency) -> Option<PathB
 /// [`dedup_by_guid_keep_highest_version`]'s doc for the defect this closes)
 /// BEFORE the caller ever sees them, so every downstream consumer (this
 /// function has more than one caller) is protected uniformly. The second
-/// return value names every dropped duplicate; callers that don't need it
-/// can ignore it, but it is never silently discarded here.
+/// return value names every dropped duplicate and every unreadable package;
+/// callers that don't need it can ignore it, but it is never silently
+/// discarded here.
 pub fn load_all_apps(
     project_root: &Path,
-) -> Result<(Vec<ResolvedDependency>, Vec<DroppedDuplicateDependency>)> {
+) -> Result<(Vec<ResolvedDependency>, DependencyLoadReport)> {
     load_all_apps_with(project_root, &DepCache::default())
 }
 
@@ -531,7 +553,7 @@ pub fn load_all_apps(
 pub fn load_all_apps_with(
     project_root: &Path,
     cache: &DepCache,
-) -> Result<(Vec<ResolvedDependency>, Vec<DroppedDuplicateDependency>)> {
+) -> Result<(Vec<ResolvedDependency>, DependencyLoadReport)> {
     let (files, unreadable) = discover_app_files(project_root);
     for (folder, e) in &unreadable {
         warn!(
@@ -545,10 +567,11 @@ pub fn load_all_apps_with(
             "load_all_apps: no .app under any .alpackages at {} or its ancestors",
             project_root.display()
         );
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), DependencyLoadReport::default()));
     }
 
     let mut discovered: Vec<DiscoveredApp> = Vec::new();
+    let mut unreadable_apps: Vec<UnreadableDependency> = Vec::new();
 
     for DiscoveredAppFile {
         folder: alpackages,
@@ -574,6 +597,13 @@ pub fn load_all_apps_with(
             }
             Err(e) => {
                 warn!("{}", manifest_read_warning(&path, &e));
+                unreadable_apps.push(UnreadableDependency {
+                    path,
+                    guid: None,
+                    name: None,
+                    version: None,
+                    error: format!("{e:#}"),
+                });
             }
         }
     }
@@ -599,6 +629,7 @@ pub fn load_all_apps_with(
     let mut dropped: Vec<DroppedDuplicateDependency> = Vec::new();
     for group in groups {
         let mut winner_idx: Option<usize> = None;
+        let mut first_error: Option<String> = None;
         for (i, candidate) in group.iter().enumerate() {
             let loaded = cache.package(&candidate.app_path, candidate.stamp, || {
                 crate::app_package::extract_app_symbols(&candidate.app_path).map(|objects| {
@@ -631,6 +662,7 @@ pub fn load_all_apps_with(
                     break;
                 }
                 Err(e) => {
+                    first_error.get_or_insert_with(|| format!("{e:#}"));
                     let has_fallback = i + 1 < group.len();
                     warn!(
                         "load_all_apps: failed to parse {} v{}: {:#}{}",
@@ -645,6 +677,19 @@ pub fn load_all_apps_with(
                     );
                 }
             }
+        }
+        // No copy of this GUID could be read: record the best one, so the
+        // dependency is reported unreadable rather than simply absent (S5.2).
+        if winner_idx.is_none()
+            && let (Some(best), Some(error)) = (group.first(), first_error)
+        {
+            unreadable_apps.push(UnreadableDependency {
+                path: best.app_path.clone(),
+                guid: Some(best.meta.app_id.clone()),
+                name: Some(best.meta.name.clone()),
+                version: Some(best.meta.version.clone()),
+                error,
+            });
         }
         // Every candidate ranked BELOW the winner (if one was found) is a
         // genuine dedup drop against the ACTUAL kept version — not
@@ -689,7 +734,13 @@ pub fn load_all_apps_with(
             ))
     });
 
-    Ok((out, dropped))
+    Ok((
+        out,
+        DependencyLoadReport {
+            dropped,
+            unreadable: unreadable_apps,
+        },
+    ))
 }
 
 /// The warning `load_all_apps` logs when a `.app`'s manifest cannot be read.
@@ -1204,7 +1255,8 @@ mod tests {
             r#"{"Codeunits":[{"Id":50100,"Name":"DupCU","Methods":[{"Name":"DoIt","Id":1}]}]}"#,
         );
 
-        let (kept, dropped) = load_all_apps(dir.path()).expect("load_all_apps");
+        let (kept, report) = load_all_apps(dir.path()).expect("load_all_apps");
+        let dropped = report.dropped;
 
         assert_eq!(kept.len(), 1, "exactly the 25.0 winner must survive");
         assert_eq!(kept[0].dependency.version, "25.0.0.0");
@@ -1247,7 +1299,8 @@ mod tests {
             r#"{"Codeunits":[{"Id":50100,"Name":"DupCU","Methods":[{"Name":"DoIt","Id":1}]}]}"#,
         );
 
-        let (kept, dropped) = load_all_apps(dir.path()).expect("load_all_apps");
+        let (kept, report) = load_all_apps(dir.path()).expect("load_all_apps");
+        let dropped = report.dropped;
 
         assert_eq!(
             kept.len(),
@@ -1291,7 +1344,8 @@ mod tests {
             "{ still not JSON",
         );
 
-        let (kept, dropped) = load_all_apps(dir.path()).expect("load_all_apps");
+        let (kept, report) = load_all_apps(dir.path()).expect("load_all_apps");
+        let dropped = report.dropped;
 
         assert!(
             !kept.iter().any(|k| k.dependency.app_id == guid),

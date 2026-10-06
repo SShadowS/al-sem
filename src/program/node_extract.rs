@@ -474,6 +474,20 @@ fn strip_temporary_marker(s: &str) -> (&str, bool) {
 /// implicit-Rec table decision (`receiver::infer_implicit_rec`), so silently
 /// picking either conflicting branch would fabricate a false single-target
 /// confidence — the thing the degrade exists to prevent.
+/// [`singular_property_value`] as the model's text (engine-switch S5.4): a name
+/// reference as written (unquoted), a number as its digits. The detector model's
+/// `SourceTable` comes from here, so it and the resolver's `ObjectNode` are one
+/// derivation (both degrade a conflicting `#if` pair to `None`).
+pub(crate) fn singular_object_ref_text(
+    obj: &al_syntax::ir::ObjectDecl,
+    name: &str,
+) -> Option<String> {
+    singular_property_value(obj, name).map(|(r, _)| match r {
+        ObjectRef::Name { raw, .. } => raw,
+        ObjectRef::Id(n) => n.to_string(),
+    })
+}
+
 fn singular_property_value(
     obj: &al_syntax::ir::ObjectDecl,
     name: &str,

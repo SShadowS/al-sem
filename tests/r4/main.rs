@@ -3,6 +3,8 @@
 
 #[path = "../common/regen.rs"]
 mod regen;
+#[path = "../common/symbol_app.rs"]
+mod symbol_app;
 
 mod b3_triage_r0;
 mod r4_differential;

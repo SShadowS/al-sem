@@ -51,6 +51,14 @@ sizings marked pre-arc).
     d40/d41/d42/d53/d55/d61 and the by-var-argument helpers. Analysing every
     implementer is more complete; measure the finding delta before choosing.
 
+- [ ] **Adapter receiver typing from the program engine** (recorded 2026-10-06,
+  engine-switch S5; proposed as the first step of S6). The B3 adapter still runs L3's
+  `infer_receiver_type` over the model `SymbolTable` for `CallEdge::receiver_type`
+  (typed edges -> witness hops, digest, fingerprint), the dependency-member decline when
+  a route has no `receiver_tier`, `external_type_ref` naming, and census counters (plus
+  `implicit_trigger_edge_for_op` for an agreement counter). Needs the program resolver
+  to report each member site's receiver declaration. Must be gone before S9.
+
 - [ ] **Event inventory follow-ups** (recorded 2026-10-06, engine-switch S4).
   - **d45 with a dependency publisher** — owner decision, spec "Decisions (owner)" 4;
     implemented in S8.

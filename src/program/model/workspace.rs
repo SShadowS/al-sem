@@ -25,7 +25,7 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::engine::ids::{encode_object_id, to_stable_object_id, to_stable_routine_id_from_parts};
 use crate::engine::perf_trace as pt;
-use crate::program::body::node_util::{Utf16Cols, strip_quotes};
+use crate::program::body::node_util::Utf16Cols;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -770,17 +770,18 @@ fn project_ir(
         };
 
         // Object metadata (object-indexer.ts parity).
+        // Engine-switch S5.4: the same derivation as the resolver's `ObjectNode`
+        // (`node_extract`): a `SourceTable` that differs between `#if`
+        // branches is `None`, never the first branch's value, and every
+        // extension kind keeps its `extends` target (Report/Enum extensions
+        // lost theirs; the object-fact census found them on CDO, DO and
+        // ws-report-dataitem).
         let source_table_name = if object_type == "Page" || object_type == "PageExtension" {
-            ir_prop("sourcetable").map(|s| strip_quotes(&s).to_string())
+            crate::program::node_extract::singular_object_ref_text(o, "sourcetable")
         } else {
             None
         };
-        let extends_target_name =
-            if object_type == "TableExtension" || object_type == "PageExtension" {
-                o.extends_target.clone()
-            } else {
-                None
-            };
+        let extends_target_name = o.extends_target.clone();
         let implements_interfaces =
             if object_type == "Codeunit" || object_type == "Enum" || object_type == "Interface" {
                 Some(o.implements.clone())

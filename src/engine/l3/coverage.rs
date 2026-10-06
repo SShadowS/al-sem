@@ -354,9 +354,14 @@ impl L3Resolved {
 /// rel-posix-sorted discovery order. Used by the disk-backed coverage capture so
 /// `sourceUnitsTotal` matches al-sem's unit count. Returns an empty list on any
 /// discovery failure (fail-closed — never throws).
+///
+/// App-scoped (engine-switch S5.1): a child directory with its own `app.json` is
+/// another app, and the model analyses only the root app's files
+/// (`select_program_files`, the disk L3 path). Counting the nested app's files here
+/// reported them as parsed although no routine of theirs was analysed.
 pub fn coverage_source_units_for_workspace(workspace: &std::path::Path) -> Vec<CoverageUnit> {
-    use crate::engine::l2::l2_workspace::discover_al_files;
-    let Ok(discovered) = discover_al_files(workspace) else {
+    use crate::engine::l2::l2_workspace::discover_al_files_app_scoped;
+    let Ok(discovered) = discover_al_files_app_scoped(workspace) else {
         return Vec::new();
     };
     discovered

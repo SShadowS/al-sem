@@ -107,13 +107,11 @@ impl SnapshotBuilder {
     /// `load_all_apps` GUID-level dedup dropped (H-2) — two or more `.app`
     /// files discovered under `.alpackages` shared a real GUID (a stale
     /// ancestor-folder copy, or the identical file present under two scanned
-    /// folders) and only the highest-version survivor became an `AppUnit`.
+    /// folders) and only the highest-version survivor became an `AppUnit` —
+    /// and every package that could not be read at all (engine-switch S5.2).
     pub fn build_with_diagnostics(
         &self,
-    ) -> Result<(
-        AppSetSnapshot,
-        Vec<crate::dependencies::DroppedDuplicateDependency>,
-    )> {
+    ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
         self.build_with_options(DependencySource::default(), &DepCache::default())
     }
 
@@ -123,10 +121,7 @@ impl SnapshotBuilder {
         &self,
         dependency_source: DependencySource,
         cache: &DepCache,
-    ) -> Result<(
-        AppSetSnapshot,
-        Vec<crate::dependencies::DroppedDuplicateDependency>,
-    )> {
+    ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
         let ws = &self.workspace_root;
 
         // ------------------------------------------------------------------
@@ -429,6 +424,7 @@ mod tests {
             local_providers: vec![],
         })
         .build_with_diagnostics()
+        .map(|(s, r)| (s, r.dropped))
         .expect("snapshot build");
 
         let base: Vec<_> = snap.apps.iter().filter(|u| u.id.guid == guid).collect();
@@ -523,6 +519,7 @@ mod tests {
             local_providers: vec![],
         })
         .build_with_diagnostics()
+        .map(|(s, r)| (s, r.dropped))
         .expect("snapshot build");
 
         let dup_units: Vec<_> = snap.apps.iter().filter(|u| u.id.guid == guid).collect();
@@ -590,6 +587,7 @@ mod tests {
             local_providers: vec![],
         })
         .build_with_diagnostics()
+        .map(|(s, r)| (s, r.dropped))
         .expect("snapshot build");
 
         let dup_units: Vec<_> = snap.apps.iter().filter(|u| u.id.guid == guid).collect();
@@ -648,6 +646,7 @@ mod tests {
             local_providers: vec![],
         })
         .build_with_diagnostics()
+        .map(|(s, r)| (s, r.dropped))
         .expect("snapshot build");
 
         // RE-DERIVED 2026-09-14 for the pinned `bc3ccb18` baseline: 12 -> 0.
