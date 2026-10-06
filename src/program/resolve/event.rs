@@ -58,23 +58,21 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
     // Arg 1: `Codeunit::"Pub"` — several IR shapes depending on grammar parse path.
     let publisher_name = resolve_publisher_name(ir, attr.args[1])?;
 
-    // Arg 2: `'OnAfterX'` → Literal::Text (raw text, single-quoted in AL).
-    let event_name = match &ir.expr(attr.args[2]).kind {
-        ExprKind::Literal(Literal::Text(s)) => strip_al_string(s).fold_identifier(),
-        _ => return None,
-    };
+    // Arg 2: the event name, as a text literal (`'OnAfterX'`) or as an
+    // identifier (`OnAfterX`, `"On After X"`); AL accepts both, and real code
+    // uses both (35 of CDO's 96 subscriptions name the event as an identifier).
+    let event_name = name_arg_text(ir, attr.args[2])?;
     if event_name.is_empty() {
         return None;
     }
 
-    // Arg 3 (optional): element filter — absent or empty string literal → None.
-    let element = attr.args.get(3).and_then(|&id| match &ir.expr(id).kind {
-        ExprKind::Literal(Literal::Text(s)) => {
-            let v = strip_al_string(s).fold_identifier();
-            if v.is_empty() { None } else { Some(v) }
-        }
-        _ => None,
-    });
+    // Arg 3 (optional): element filter, in the same two forms — absent or empty
+    // → None.
+    let element = attr
+        .args
+        .get(3)
+        .and_then(|&id| name_arg_text(ir, id))
+        .filter(|v| !v.is_empty());
 
     // Arg 4 (optional): skip_on_missing_license; absent → false.
     let skip_on_missing_license = attr
@@ -96,6 +94,17 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
         skip_on_missing_license,
         skip_on_missing_permission,
     })
+}
+
+/// The text of an event-name or element argument, unquoted and folded: a text
+/// literal (`'OnAfterX'`) or an identifier (`OnAfterX` / `"On After X"`).
+fn name_arg_text(ir: &Ir, id: ExprId) -> Option<String> {
+    match &ir.expr(id).kind {
+        ExprKind::Literal(Literal::Text(s))
+        | ExprKind::Identifier(s)
+        | ExprKind::QuotedIdentifier(s) => Some(strip_al_string(s).fold_identifier()),
+        _ => None,
+    }
 }
 
 /// Resolve arg 1 of an `[EventSubscriber]` attribute to the publisher object
@@ -405,6 +414,51 @@ mod tests {
         let result = parse_event_subscriber_ir(attr, &af.ir).expect("should parse");
         assert!(!result.skip_on_missing_license, "absent arg 4 → false");
         assert!(!result.skip_on_missing_permission, "absent arg 5 → false");
+    }
+
+    // Engine-switch S4.3a: AL also accepts the event name and the element as
+    // identifiers (real CDO shapes: `OnOpenPageEvent`, and
+    // `OnAfterValidateEvent, EnabledFeature`). Neither engine read them before.
+    #[test]
+    fn identifier_event_name_and_element_parse() {
+        let src = r#"codeunit 50106 Sub
+{
+    [EventSubscriber(ObjectType::Page, Page::"Pub Page", OnAfterValidateEvent, EnabledFeature, true, true)]
+    local procedure A()
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Page, Page::"Pub Page", OnOpenPageEvent, '', true, true)]
+    local procedure B()
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Pub", "On After X", "My Field", false, false)]
+    local procedure C()
+    begin
+    end;
+}"#;
+        let af = al_syntax::parse(src);
+        let got: Vec<(String, Option<String>)> = af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                let a = parse_event_subscriber_ir(&r.attributes_parsed[0], &af.ir)
+                    .expect("identifier forms parse");
+                (a.event_name, a.element)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "onaftervalidateevent".to_string(),
+                    Some("enabledfeature".to_string())
+                ),
+                ("onopenpageevent".to_string(), None),
+                ("on after x".to_string(), Some("my field".to_string())),
+            ]
+        );
     }
 
     #[test]

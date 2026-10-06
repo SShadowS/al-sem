@@ -89,7 +89,8 @@ fn dependency_publisher_workspace(dir: &Path) {
 
 codeunit 50571 "Ev Sub A"
 {
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Ev Dep Pub", 'OnAfterPost', '', false, false)]
+    // The event named as an identifier, not a text literal (S4.3a).
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Ev Dep Pub", OnAfterPost, '', false, false)]
     local procedure HandleAfterPost()
     var
         Log: Record "Ev Log";

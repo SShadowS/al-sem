@@ -127,6 +127,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Event subscribers that name the event as an identifier now bind** (engine-switch
+  S4.3a, spec G7). AL accepts `[EventSubscriber(ObjectType::Page, Page::"X",
+  OnOpenPageEvent, '', true, true)]` as well as the `'OnOpenPageEvent'` text form, and
+  an identifier element (`OnAfterValidateEvent, EnabledFeature`). Both engines read only
+  the text form, so 35 of CDO's 96 subscriptions were dropped before resolution (neither
+  bound nor recorded). `parse_event_subscriber_ir` now reads both forms.
+
+  Measured on CDO: the analyze event graph binds 91 of 95 model subscribers' subscriptions
+  (was 56; +22 dependency, +13 platform publishers); the 4 left name the publisher by
+  number (`Codeunit, 50`), next step. `--program-call-graph-stats`: real-unknown stays
+  0; whole program 46,150 -> 46,302 obligations (new platform publishers on dependency
+  tables), `resolvedSource` 11,470 -> 11,695, `conditionalResolved` 189 -> 266,
+  `honestEmpty` 28,193 -> 28,043; primary scope `resolvedSource` 9,587 -> 9,592. The
+  dependency registry gains the same 147 synthetic publishers. Findings unchanged on CDO,
+  DO and every fixture; the new CDO co-subscriber pairs (Customer `OnAfterDeleteEvent`,
+  `OnRoleCenterOpen`) write different tables or none, read in source.
+
+  `identifier_event_name_and_element_parse` (the parser) and the r4 dependency-event test
+  (one subscriber now uses the identifier form, so the production path is pinned) both
+  fail when the parser reads text literals only.
+
 - **`alsem analyze`'s event graph comes from the program engine** (engine-switch S4.2,
   spec G7, issue #57). L3 built the detectors' event graph from the workspace symbol
   table alone, so a subscriber to a dependency publisher was an `unknown` edge, and the
