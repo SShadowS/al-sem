@@ -73,8 +73,8 @@ pub fn build_implicit_trigger_edges(
 
 /// The implicit-trigger edge of ONE record op, if any. The per-op body of
 /// [`build_implicit_trigger_edges`], shared with the program adapter
-/// (`program_calls`), which keeps L3's edge for ops the program engine
-/// does not see as record ops.
+/// (`program_calls`), which since engine-switch S3.5 reads it only for its
+/// agreement counters (`adapter_trigger_edges_beyond_l3`/`_l3_only`).
 pub(crate) fn implicit_trigger_edge_for_op(
     routine: &L3Routine,
     op: &L3RecordOperation,

@@ -35,10 +35,10 @@
 //! - any other record op, or a `Commit`: `operation_site` (no L3 call
 //!   analogue; L3 keeps these as operation sites, code map A6);
 //! - a call or run with an L3 operation site at the same span:
-//!   `op_shape_mismatch` (L3 says record op, the program says call: today
-//!   the bare implicit-`Rec` op, which `program::resolve::extract` documents
-//!   as an approximation). No L3 call site is involved, but an adapter that
-//!   takes implicit-trigger edges from the program loses them for these;
+//!   `op_shape_mismatch` (L3 says record op, the program says call; until
+//!   engine-switch S3.5 the bare implicit-`Rec` op, 571 sites on CDO, now 0).
+//!   No L3 call site is involved, but the adapter takes implicit-trigger
+//!   edges from the program, so these would get none;
 //! - otherwise `program_only_site`.
 //!
 //! Per L3 operation site (not `error-call`, which is also a call site) with no
@@ -100,15 +100,12 @@
 //!   in `adapter_trigger_edges_beyond_l3`. `Rename` reaches no trigger on
 //!   either side today: both engines treat `R.Rename(..)` as a plain call.
 //!
-//! **Fallback to L3** (controller rulings 1-2). The adapter calls L3's own
-//! per-site resolver (`resolve_one_call_site`) for every L3 call site the
-//! join did not match, and for a matched site whose workspace callee has no
-//! L3 routine. It calls L3's own per-op trigger logic
-//! (`implicit_trigger_edge_for_op`) for every record op with no matched
-//! program `ImplicitTrigger` edge (on CDO: the bare implicit-`Rec` ops the
-//! program engine sees as plain calls). Per-site calls rather than one
-//! whole `resolve_calls` run: no edge regrouping by id is needed, and
-//! routine-id collisions cannot mix two sites' edges.
+//! **No fallback to L3** (engine-switch S3.1, S3.5; controller rulings 1-2
+//! as they stood before). An L3 call site the program engine gave no usable
+//! edge gets one `Unknown(NoProgramSite)` edge. A trigger-capable record op
+//! with no matched program `ImplicitTrigger` edge gets no edge, and is counted
+//! in `adapter_l3_trigger_ops`. Since S3.5 the program engine classifies
+//! bare implicit-receiver ops as record ops too, so on CDO both counts are 0.
 //!
 //! **Order** is `resolve_calls`'s: call sites in routine order, then the
 //! trigger edges in routine/op order.
@@ -208,12 +205,11 @@ pub struct SiteCensus {
     pub adapter_callee_outside_l3: usize,
     /// L3 record ops whose trigger edges came from the program engine.
     pub adapter_program_trigger_ops: usize,
-    /// Trigger-capable L3 record ops (Insert/Modify/Delete/Validate) with no
-    /// matched program `ImplicitTrigger` edge, which keep L3's own trigger
-    /// logic (controller ruling 1).
+    /// Trigger-capable L3 record ops (Insert/Modify/Delete/Validate/Rename)
+    /// with no matched program `ImplicitTrigger` edge. They get no edge. Until
+    /// engine-switch S3.5 they kept L3's own trigger logic (controller ruling
+    /// 1); the name is kept for the census's continuity.
     pub adapter_l3_trigger_ops: usize,
-    /// Edges L3's own trigger logic gave those ops.
-    pub adapter_l3_trigger_edges: usize,
     /// Interface or trigger routes not into an L3 workspace routine
     /// (dependency, ABI boundary, unresolved): dropped. Since engine-switch
     /// S3.2 interface routes into dependencies are kept instead (see
@@ -831,16 +827,13 @@ fn adapter(
                 op.op.as_str(),
                 "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
             ) {
+                // S3.5: no legacy fallback.
                 c.adapter_l3_trigger_ops += 1;
-                if let Some(e) = implicit_trigger_edge_for_op(r, op, &symbols) {
-                    c.adapter_l3_trigger_edges += 1;
-                    edges.push(e);
-                }
                 if want_notes {
                     notes.insert(
                         key(),
                         SiteNote {
-                            categories: vec!["l3-trigger-fallback".to_string()],
+                            categories: vec!["no-program-trigger".to_string()],
                             program: None,
                         },
                     );
@@ -1896,18 +1889,18 @@ mod tests {
         );
     }
 
-    /// A bare implicit-`Rec` record op in a table: L3 makes it a record op,
-    /// the program engine a bare call (`extract.rs` module doc,
-    /// "Approximations"). The dominant shape on CDO (571 sites).
+    /// A bare implicit-`Rec` record op in a table: both engines make it a
+    /// record op (S3.5; before, the program engine made it a bare call, the
+    /// 571 `op_shape_mismatch` sites on CDO).
     #[test]
-    fn bare_implicit_rec_op_is_op_shape_mismatch() {
+    fn bare_implicit_rec_op_is_a_record_op_in_both_engines() {
         let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
         let c = census(&[("src/t.al", table.as_bytes())]);
         assert_eq!(
             counts(&c),
             SiteCensus {
                 program_sites: 1,
-                op_shape_mismatch: 1,
+                implicit_trigger_matched: 1,
                 l3_record_operations: 1,
                 l3_operation_sites: 1,
                 ..Default::default()
@@ -3012,10 +3005,11 @@ mod adapter_tests {
         assert_eq!(a.census.adapter_routes_dropped, 1, "{:#?}", a.census);
     }
 
-    /// Ruling 1: a bare implicit-`Rec` record op (a plain call to the program
-    /// engine) keeps L3's own trigger edge.
+    /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to
+    /// the program engine too, and takes its trigger edge from it, the same
+    /// edge L3 gives.
     #[test]
-    fn bare_record_op_keeps_l3_trigger_edge() {
+    fn bare_record_op_takes_the_program_trigger_edge() {
         let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
         let a = adapt(&[("src/t.al", table)], None);
         let op = &a.routine("P").record_operations[0];
@@ -3026,8 +3020,25 @@ mod adapter_tests {
             Some(a.routine("OnModify").id.as_str())
         );
         assert_eq!(a.edges(&op.id), want);
+        assert_eq!(a.census.adapter_program_trigger_ops, 1, "{:#?}", a.census);
+        assert_eq!(a.census.adapter_l3_trigger_ops, 0, "{:#?}", a.census);
+    }
+
+    /// S3.5, precondition by assignment: the op is moved off its span, so it
+    /// pairs with no program edge. It used to keep L3's own trigger edge; it
+    /// now gets none.
+    #[test]
+    fn unmatched_record_op_gets_no_l3_trigger_edge() {
+        let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
+        let a = adapt_with(&[("src/t.al", table)], None, |ws| {
+            let r = ws.routines.iter_mut().find(|r| r.name == "P").unwrap();
+            r.record_operations[0].source_anchor.start_column += 100;
+        });
+        let op = &a.routine("P").record_operations[0];
+        assert_eq!(at(&a.old, &op.id).len(), 1, "precondition: L3 has an edge");
+        assert_eq!(a.edges(&op.id), vec![]);
         assert_eq!(a.census.adapter_l3_trigger_ops, 1, "{:#?}", a.census);
-        assert_eq!(a.census.adapter_l3_trigger_edges, 1, "{:#?}", a.census);
+        assert_eq!(a.census.adapter_program_trigger_ops, 0, "{:#?}", a.census);
     }
 
     /// Ruling 2 as replaced by engine-switch S3.1, precondition by assignment:

@@ -149,6 +149,19 @@ fn has_implicit_rec(o: &al_syntax::ir::ObjectDecl, source_table_name: Option<&st
         || codeunit_tableno
 }
 
+/// [`has_implicit_rec`] with the page's `SourceTable` read from `o` itself, the
+/// way [`ir_object_metadata`] reads it. The program extractor's base implicit
+/// frame (`program::resolve::extract`), so the two engines agree on which bare
+/// calls are record operations.
+pub(crate) fn object_has_implicit_rec(o: &al_syntax::ir::ObjectDecl) -> bool {
+    let source_table = o
+        .properties
+        .iter()
+        .find(|p| p.name == "sourcetable")
+        .map(|p| p.value.as_str());
+    has_implicit_rec(o, source_table)
+}
+
 /// Build the per-routine scope (record receiver sets) for `object`/`routine`. The
 /// bool result is whether an implicit `Rec` is in scope (drives the base
 /// implicit-receiver frame's is-record).

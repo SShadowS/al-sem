@@ -112,6 +112,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bare record operations are record operations in the program engine too**
+  (engine-switch S3.5). A bare `Modify()` in a table, or `Insert()` inside
+  `with Cust do`, has an implicit receiver. The body pipeline (L2) always made these
+  record operations; the program extractor made them plain calls, which resolved to the
+  builtin catalog and never reached the record's triggers. The B3 adapter covered the
+  gap with L3's own per-operation trigger logic. The extractor now follows L2's rule
+  (`ImplicitRecv` in `program::resolve::extract`): the object's implicit `Rec`
+  (`ir_walk::object_has_implicit_rec`, the same test L2 uses), replaced inside a `with`
+  by its receiver when that is a record variable and by nothing when it is not. A bare
+  name that is also one of the object's own routines stays a call. The adapter's
+  per-operation L3 fallback is removed; an operation with no program edge now gets no
+  edge (`adapter_l3_trigger_ops`, 0 on CDO).
+
+  Program engine (north star, CDO): the 571 bare operations move out of
+  `resolvedCatalog` (primary 6,727 → 6,156). 490 become `honestEmpty` (operations with
+  no trigger, or a trigger that cannot fire) and 81 `resolvedSource` (their triggers):
+  primary 4,522 → 5,012 and 9,506 → 9,587; whole program 27,703 → 28,193 and 11,389 →
+  11,470. Totals and real-unknown (0) are unchanged. Adapter census on CDO:
+  `op_shape_mismatch` 571 → 0, program trigger operations 608 → 801, L3 trigger
+  operations 193 → 0. The program gives the same trigger targets L3 did
+  (`adapter_trigger_edges_beyond_l3` stays 3, `_l3_only` stays 0); 3 more routes reach
+  dependency triggers and are dropped (`adapter_routes_dropped` 46 → 49, S3.6).
+  Detector model: the harness shows `s3-4` and `s3-5` byte-identical on all 218 corpora.
+
+  Tests: `bare_record_ops_follow_the_implicit_receiver` (table `Rec`, a record `with`,
+  a non-record `with`, a name colliding with a procedure, a codeunit with and without
+  `TableNo`); `unmatched_record_op_gets_no_l3_trigger_edge` moves an operation off its
+  span by assignment. Discrimination: dropping the procedure-name check, letting a
+  non-record `with` keep the outer `Rec`, and restoring the L3 fallback each fail a test.
+
 - **The program resolver applies the implicit-trigger site rules** (engine-switch
   S3.4). A record operation's trigger fan-out used to list every trigger of the
   operation's name on the table and its extensions, and the B3 adapter filtered out
