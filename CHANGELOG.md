@@ -112,6 +112,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **No more per-call fallback to the legacy resolver** (engine-switch S3.1). When the
+  program engine gives no usable edge for a model call site, the B3 adapter used to ask
+  L3's resolver (`resolve_one_call_site`). That covers no edge at the span, a
+  shape/callee/caller mismatch, or a workspace callee with no model routine. The site
+  now gets one to-less `Unknown(NoProgramSite)` edge (new `UnknownReason`), and its
+  bindings stay in their initial state.
+
+  The fallback fired zero times on all 218 corpora (CDO, DO, every fixture), so no
+  output moved. The harness shows `s2b6` and `s3-1` byte-identical. The two adapter
+  tests that pinned the old ruling now pin the new one:
+  `unmatched_site_is_unknown_not_l3` and `interface_implementer_outside_l3_is_unknown`.
+  The new `a_site_without_a_program_edge_is_unknown_not_legacy_resolved` moves a real
+  fixture call site off its span. Discrimination: restoring the fallback fails it.
+  The per-operation trigger fallback is still live (CDO 193 ops) and is removed in S3.5.
+
 - **The analyze model's population comes from the program graph** (engine-switch S2b.4).
   `project_ir` now takes the declarations to project as input (`FilePopulation`: each
   object's index with its routine indices, document order) instead of walking

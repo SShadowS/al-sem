@@ -70,6 +70,11 @@ pub enum UnknownReason {
     /// is RUNTIME-determined. Emitted with `dispatch_kind == Dynamic` so it classifies
     /// `dynamic` (NOT real-`unknown`): genuinely indeterminate, not a failure.
     DynamicReceiver,
+    /// The program engine produced no usable edge for this call site (no edge at
+    /// its span, a shape/callee/caller mismatch, or a workspace callee the model
+    /// has no routine for). Engine-switch S3: these used to fall back to the legacy
+    /// resolver; now they are an honest unknown.
+    NoProgramSite,
 }
 
 impl UnknownReason {
@@ -87,6 +92,7 @@ impl UnknownReason {
             UnknownReason::InterfaceNoImpl => "interface-no-impl",
             UnknownReason::DynamicObjectRunTarget => "dynamic-objectrun-target",
             UnknownReason::DynamicReceiver => "dynamic-receiver",
+            UnknownReason::NoProgramSite => "no-program-site",
         }
     }
 }

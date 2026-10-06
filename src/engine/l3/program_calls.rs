@@ -122,7 +122,7 @@ use crate::engine::l2::features::{PCallSite, PCallee};
 use crate::engine::l3::call_resolver::{
     BindingState, CallEdge, DispatchMeta, ExternalTypeRef, ResolvedCalls,
     UnknownReason as L3Reason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
-    object_run_dispatch_kind, resolve_one_call_site, upgrade_bindings, upgrade_bindings_with,
+    object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
 use crate::engine::l3::implicit_edges::{implicit_trigger_edge_for_op, validate_field_lc};
 use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Workspace};
@@ -197,11 +197,13 @@ pub struct SiteCensus {
     ///
     /// L3 call sites whose edges came from the program engine.
     pub adapter_program_sites: usize,
-    /// L3 call sites whose edges came from L3's own resolver: every
-    /// unmatched site plus `adapter_callee_outside_l3`.
+    /// L3 call sites the program engine gave no usable edge for: every
+    /// unmatched site plus `adapter_callee_outside_l3`. Since engine-switch
+    /// S3.1 each gets one `Unknown(NoProgramSite)` edge (it used to fall back to
+    /// L3's own resolver). The name is kept for the census's continuity.
     pub adapter_l3_fallback_sites: usize,
     /// Matched call sites whose workspace callee has no L3 routine (no
-    /// declaration-anchor join); they fall back to L3.
+    /// declaration-anchor join); counted in `adapter_l3_fallback_sites`.
     pub adapter_callee_outside_l3: usize,
     /// L3 record ops whose trigger edges came from the program engine.
     pub adapter_program_trigger_ops: usize,
@@ -568,6 +570,16 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
     Some(resolved)
 }
 
+/// The edge for a call site the program engine gave no usable edge for: one
+/// to-less `Unknown(NoProgramSite)` edge, bindings in their initial state (a
+/// record argument stays `"unresolved-callee"`). Engine-switch S3.1 — this used to
+/// be the legacy resolver's answer.
+fn no_program_edge(r: &L3Routine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
+    let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+    e.resolution = Resolution::Unknown(L3Reason::NoProgramSite);
+    (vec![e], initial_binding_state(cs).bindings)
+}
+
 /// How the adapter produced one site's edges, for the B3 detector-diff
 /// harness's attribution (`b3_diff`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -735,7 +747,9 @@ fn adapter(
 
     let mut edges: Vec<CallEdge> = Vec::new();
     let mut upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
-    let mut diagnostics = Vec::new();
+    // The adapter emits no resolver diagnostics (the legacy resolver's
+    // double-upgrade warning had no program-engine analogue to fire).
+    let diagnostics = Vec::new();
     // Same order as `resolve_calls`: call sites in routine order, then the
     // implicit-trigger edges in routine/op order.
     for (ri, r) in ws.routines.iter().enumerate() {
@@ -759,8 +773,10 @@ fn adapter(
                     x
                 }
                 None => {
+                    // S3.1: no legacy fallback. The program engine gave nothing
+                    // usable here, and that is reported as such.
                     c.adapter_l3_fallback_sites += 1;
-                    resolve_one_call_site(r, cs, &symbols, &mut diagnostics, false)
+                    no_program_edge(r, cs)
                 }
             };
             if want_notes {
@@ -2079,10 +2095,10 @@ mod adapter_tests {
 
     /// Minor 5, precondition by assignment: the workspace implementer's L3
     /// declaration anchor is moved, so its program route joins no L3
-    /// routine. The whole interface site falls back to L3 (as an exact or
-    /// ambiguous edge does) and is counted.
+    /// routine. Since engine-switch S3.1 the site is one honest
+    /// `Unknown(NoProgramSite)` edge (it used to fall back to L3) and is counted.
     #[test]
-    fn interface_implementer_outside_l3_falls_back() {
+    fn interface_implementer_outside_l3_is_unknown() {
         let ws_impl = "codeunit 50103 \"WsImpl\" implements IDep\n{\n    procedure Go(var C: Record Customer)\n    begin\n    end;\n}\n";
         let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IDep;\n        C: Record Customer;\n    begin\n        X.Go(C);\n    end;\n}\n";
         let a = adapt_with(
@@ -2094,7 +2110,12 @@ mod adapter_tests {
             },
         );
         let cs = a.site("Caller", "X.Go");
-        assert_eq!(a.edges(&cs.id), at(&a.old, &cs.id));
+        let got = a.edges(&cs.id);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(
+            got[0].resolution,
+            Resolution::Unknown(L3Reason::NoProgramSite)
+        );
         let c = &a.census;
         assert_eq!(
             (
@@ -2804,18 +2825,29 @@ mod adapter_tests {
         assert_eq!(a.census.adapter_l3_trigger_edges, 1, "{:#?}", a.census);
     }
 
-    /// Ruling 2, precondition by assignment: the L3 site is moved off its
-    /// span, so it pairs with no program edge and keeps L3's own edge.
+    /// Ruling 2 as replaced by engine-switch S3.1, precondition by assignment:
+    /// the L3 site is moved off its span, so it pairs with no program edge. It
+    /// used to keep L3's own (resolved) edge; it is now one honest
+    /// `Unknown(NoProgramSite)` edge.
     #[test]
-    fn unmatched_site_keeps_l3_edge() {
+    fn unmatched_site_is_unknown_not_l3() {
         let cu = "codeunit 50101 \"W\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n    end;\n}\n";
         let a = adapt_with(&[("src/w.al", cu)], None, |ws| {
             let r = ws.routines.iter_mut().find(|r| r.name == "Caller").unwrap();
             r.call_sites[0].source_anchor.start_column += 100;
         });
         let cs = a.site("Caller", "Foo");
-        assert_eq!(a.edges(&cs.id), at(&a.old, &cs.id));
-        assert_eq!(a.edges(&cs.id).len(), 1);
+        assert!(
+            at(&a.old, &cs.id).iter().any(|e| e.to.is_some()),
+            "precondition: L3 resolves it"
+        );
+        let got = a.edges(&cs.id);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].to, None);
+        assert_eq!(
+            got[0].resolution,
+            Resolution::Unknown(L3Reason::NoProgramSite)
+        );
         assert_eq!(a.census.adapter_l3_fallback_sites, 1, "{:#?}", a.census);
         assert_eq!(a.census.adapter_program_sites, 0, "{:#?}", a.census);
     }
@@ -3052,5 +3084,56 @@ mod adapter_tests {
             "the corpus exercised no comparable site"
         );
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod no_fallback_tests {
+    use super::*;
+
+    /// S3.1: a call site the program engine gives no edge for is an honest
+    /// `Unknown(NoProgramSite)` — never the legacy resolver's answer. Hand-stated:
+    /// one model call site is moved to a span no program edge has. That site
+    /// would otherwise resolve (it is an ordinary workspace call).
+    #[test]
+    fn a_site_without_a_program_edge_is_unknown_not_legacy_resolved() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let (ctx, report, mut l3) = build_models(&ws).unwrap();
+        let (ri, ci) = l3
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .find_map(|(ri, r)| (!r.call_sites.is_empty()).then_some((ri, 0)))
+            .unwrap();
+        let cs_id = l3.workspace.routines[ri].call_sites[ci].id.clone();
+        let before = resolved_calls_from_program(&report, &ctx, &l3.workspace, true).0;
+        let resolved_before: Vec<_> = before
+            .edges
+            .iter()
+            .filter(|e| e.callsite_id == cs_id)
+            .collect();
+        assert!(
+            resolved_before.iter().any(|e| e.to.is_some()),
+            "precondition: the site resolves while its program edge is found: {resolved_before:?}"
+        );
+
+        l3.workspace.routines[ri].call_sites[ci]
+            .source_anchor
+            .start_line += 9999;
+        let (calls, census) = resolved_calls_from_program(&report, &ctx, &l3.workspace, true);
+        let site: Vec<_> = calls
+            .edges
+            .iter()
+            .filter(|e| e.callsite_id == cs_id)
+            .collect();
+        assert_eq!(site.len(), 1, "{site:?}");
+        assert_eq!(site[0].to, None);
+        assert_eq!(
+            site[0].resolution,
+            Resolution::Unknown(L3Reason::NoProgramSite)
+        );
+        assert_eq!(census.adapter_l3_fallback_sites, 1);
     }
 }
