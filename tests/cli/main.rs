@@ -9,6 +9,9 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+#[path = "../common/symbol_app.rs"]
+mod symbol_app;
+
 #[path = "../common/regen.rs"]
 mod regen;
 

@@ -61,6 +61,9 @@ pub fn dump_lines(ws: &Path) -> Dump {
         );
     }
     let built = build_analysis_model(ws);
+    if let Ok(fc) = &built.fresh {
+        d.insert("ledger".into(), rows(&fc.ledger));
+    }
     d.insert(
         "status".into(),
         vec![

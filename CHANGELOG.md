@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency ledger** (engine-switch S5.2a, spec G14). `FreshCoverage::ledger` lists
+  every dependency in the primary app's reachable declared closure: who declared it, the
+  declared minimum version, whether it is a Microsoft Application/Platform-tier app,
+  and what the snapshot holds (version, trust tier, ABI object count, ABI ingest
+  error) — or that it is missing, or present on disk but unreadable.
+  `FreshCoverage::unidentified_packages` names packages whose manifest could not be
+  read. Found while building it: a `.app` whose every copy failed symbol extraction was
+  dropped by `load_all_apps` with only a log line, so it looked exactly like an app that
+  was never there. `load_all_apps` now returns `DependencyLoadReport { dropped,
+  unreadable }` (was the dropped-duplicates list alone), and
+  `SnapshotBuilder::build_with_diagnostics` passes it on. Data only: preflight and
+  output do not change yet (S5.2b decides the policy). The switch dump gains a `ledger`
+  file.
+
+  Measured: CDO's ledger has 11 dependencies and DO's 10, all found, none unreadable,
+  none below the declared version. Fixtures: 25 lack the two Platform-tier apps their
+  app.json's `platform` field implies (no `.alpackages`), 3 lack an explicit
+  dependency (`ws-d1-dep-terminal`, `ws-preflight-missingdep`, `ws-r2b-opaque`).
+
+  `ledger_records_missing_older_and_unreadable_dependencies` (tests/cli) states three
+  dependencies on disk (older than declared, absent, corrupt symbols). Discrimination:
+  the loader not recording an all-copies-failed GUID, an inverted version comparison,
+  and recording only found dependencies each fail it. The `.app` writer moved to
+  `tests/common/symbol_app.rs` (shared by the cli and r4 umbrellas).
+
 - **Every event subscription is kept, bound or not** (engine-switch S4.1, spec G7).
   `SubscriberIndex::subscriptions()` lists each parsed `[EventSubscriber]` attribute, in
   routine order then attribute order, with its outcome: `Bound` (the publisher routine),

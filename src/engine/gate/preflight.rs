@@ -109,6 +109,8 @@ mod tests {
             coverage_holds: true,
             recovered_files: 0,
             opaque_apps: vec![],
+            ledger: vec![],
+            unidentified_packages: vec![],
         }
     }
 
@@ -183,6 +185,8 @@ mod tests {
             coverage_holds: false,
             recovered_files: 2,
             opaque_apps: vec!["Dep".into()],
+            ledger: vec![],
+            unidentified_packages: vec![],
         };
         let pf = evaluate_preflight(&Ok(fc), false);
         assert_eq!(

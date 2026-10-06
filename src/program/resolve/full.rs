@@ -1424,6 +1424,64 @@ pub struct FreshCoverage {
     /// Display identity = `AppId.name`; deduped, sorted (name, then guid) for
     /// deterministic messages.
     pub opaque_apps: Vec<String>,
+    /// Every dependency of the primary app's reachable declared closure, as
+    /// declared and as found (engine-switch S5.2, spec G14). Sorted by guid.
+    pub ledger: Vec<LedgerEntry>,
+    /// Dependency packages whose manifest could not be read, so their identity
+    /// (and whether the primary needs them) is unknown: `"{path}: {error}"`,
+    /// sorted.
+    pub unidentified_packages: Vec<String>,
+}
+
+/// One dependency in the primary app's reachable declared closure: what an app
+/// asked for, and what the snapshot holds for it (engine-switch S5.2, G14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerEntry {
+    /// Lowercase app guid.
+    pub guid: String,
+    /// The name the declaration gives.
+    pub name: String,
+    /// The app that declared it (first in breadth-first order from the primary).
+    pub declared_by: String,
+    /// The declared minimum version (an AL dependency version is a minimum).
+    pub declared_version: String,
+    /// A Microsoft Application/Platform-tier app. For the primary app these
+    /// come from app.json's `application`/`platform` fields, added by
+    /// `dependencies::append_implicit_ms_tier_deps`, and may legitimately be
+    /// absent (e.g. "Business Foundation" before BC 25).
+    pub ms_tier: bool,
+    /// The app found in the snapshot, `None` when it is missing.
+    pub found: Option<LedgerApp>,
+    /// Not found because its package is on disk but could not be read (the
+    /// loader's error). `None` when found, or when no package was there.
+    pub unreadable: Option<String>,
+}
+
+/// What the snapshot holds for a [`LedgerEntry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerApp {
+    pub version: String,
+    /// The trust tier of its source (`SymbolOnly` when it has none).
+    pub tier: crate::snapshot::TrustTier,
+    /// Objects its `SymbolReference.json` declares (`None`: no ABI parsed).
+    pub abi_objects: Option<usize>,
+    /// Its `SymbolReference.json` could not be read or parsed
+    /// (`ProgramGraph::abi_ingest_errors`); the app then looks empty.
+    pub ingest_error: Option<String>,
+}
+
+impl LedgerEntry {
+    /// The found version is below the declared minimum.
+    pub fn below_declared_version(&self) -> bool {
+        let parse = |v: &str| -> Vec<u64> {
+            v.split('.')
+                .map(|p| p.trim().parse().unwrap_or(0))
+                .collect()
+        };
+        self.found
+            .as_ref()
+            .is_some_and(|f| parse(&f.version) < parse(&self.declared_version))
+    }
 }
 
 /// Symbol-only dep app names in the primary app's reachable declared-dependency
@@ -1506,24 +1564,132 @@ pub fn fresh_program_from_snapshot(
 pub fn build_program_with_coverage(
     workspace_root: &Path,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
-    let snap = build_snapshot_res(workspace_root)?;
+    let (snap, load) = {
+        let _s = pt::span("preflight", "preflight.snapshot_build");
+        (SnapshotBuilder {
+            workspace_root: workspace_root.to_path_buf(),
+            local_providers: vec![],
+        })
+        .build_with_diagnostics()
+        .map_err(|e| format!("snapshot build failed: {e:#}"))?
+    };
     let (ctx, report) = fresh_program_from_snapshot(snap)?;
-    let fc = reduce_fresh_coverage(&ctx, &report);
+    let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
     Ok((ctx, report, fc))
 }
 
 /// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
-pub fn reduce_fresh_coverage(ctx: &ProgramContext, report: &ProgramReport) -> FreshCoverage {
+/// `unreadable` is the dependency loader's list of packages it could not read
+/// (`DependencyLoadReport::unreadable`).
+pub fn reduce_fresh_coverage(
+    ctx: &ProgramContext,
+    report: &ProgramReport,
+    unreadable: &[crate::dependencies::UnreadableDependency],
+) -> FreshCoverage {
     let opaque_apps = {
         let _s = pt::span("preflight", "preflight.opaque_closure");
         opaque_dependency_closure(&ctx.snap)
     };
+    let ledger = {
+        let _s = pt::span("preflight", "preflight.ledger");
+        dependency_ledger(&ctx.snap, &ctx.graph, unreadable)
+    };
+    let mut unidentified_packages: Vec<String> = unreadable
+        .iter()
+        .filter(|u| u.guid.is_none())
+        .map(|u| format!("{}: {}", u.path.display(), u.error))
+        .collect();
+    unidentified_packages.sort();
     FreshCoverage {
         unknown: report.primary_histogram.unknown,
         coverage_holds: coverage_holds(&report.coverage),
         recovered_files: report.recovered_files.len(),
         opaque_apps,
+        ledger,
+        unidentified_packages,
     }
+}
+
+/// The primary app's reachable declared dependencies, as declared and as found
+/// (engine-switch S5.2, G14): the same breadth-first walk as
+/// [`opaque_dependency_closure`], keeping every declaration, including one whose
+/// app is missing from the snapshot. A missing app's own dependencies are unknown,
+/// so the walk does not continue through it.
+fn dependency_ledger(
+    snap: &AppSetSnapshot,
+    graph: &ProgramGraph,
+    unreadable: &[crate::dependencies::UnreadableDependency],
+) -> Vec<LedgerEntry> {
+    let unreadable_by_guid: HashMap<String, &str> = unreadable
+        .iter()
+        .filter_map(|u| Some((u.guid.as_ref()?.to_ascii_lowercase(), u.error.as_str())))
+        .collect();
+    use std::collections::{HashMap, VecDeque};
+    let by_guid: HashMap<String, &AppUnit> = snap
+        .apps
+        .iter()
+        .map(|u| (u.id.guid.to_ascii_lowercase(), u))
+        .collect();
+    let errors: HashMap<String, &str> = graph
+        .abi_ingest_errors
+        .iter()
+        .map(|e| {
+            (
+                graph.apps.resolve(e.app).guid.to_ascii_lowercase(),
+                e.message.as_str(),
+            )
+        })
+        .collect();
+    let ms_tier: HashSet<String> = crate::dependencies::MS_APPLICATION_TIER
+        .iter()
+        .chain(crate::dependencies::MS_PLATFORM_TIER)
+        .map(|(g, _)| g.to_ascii_lowercase())
+        .collect();
+    let primary_guid = snap.workspace_app.guid.to_ascii_lowercase();
+    let mut entries: HashMap<String, LedgerEntry> = HashMap::new();
+    let mut queue: VecDeque<&AppUnit> = VecDeque::new();
+    if let Some(primary) = by_guid.get(&primary_guid) {
+        queue.push_back(primary);
+    }
+    while let Some(unit) = queue.pop_front() {
+        for dep in &unit.declared_deps {
+            let guid = dep.app_id.to_ascii_lowercase();
+            if guid == primary_guid || entries.contains_key(&guid) {
+                continue;
+            }
+            let found = by_guid.get(&guid).map(|u| {
+                queue.push_back(u);
+                LedgerApp {
+                    version: u.id.version.clone(),
+                    tier: u
+                        .source
+                        .as_ref()
+                        .map_or(crate::snapshot::TrustTier::SymbolOnly, |s| s.tier),
+                    abi_objects: u.abi.as_ref().map(|a| a.objects.len()),
+                    ingest_error: errors.get(&guid).map(|m| m.to_string()),
+                }
+            });
+            entries.insert(
+                guid.clone(),
+                LedgerEntry {
+                    unreadable: if found.is_none() {
+                        unreadable_by_guid.get(&guid).map(|m| m.to_string())
+                    } else {
+                        None
+                    },
+                    ms_tier: ms_tier.contains(&guid),
+                    guid,
+                    name: dep.name.clone(),
+                    declared_by: unit.id.name.clone(),
+                    declared_version: dep.version.clone(),
+                    found,
+                },
+            );
+        }
+    }
+    let mut ledger: Vec<LedgerEntry> = entries.into_values().collect();
+    ledger.sort_by(|a, b| a.guid.cmp(&b.guid));
+    ledger
 }
 
 // ---------------------------------------------------------------------------
