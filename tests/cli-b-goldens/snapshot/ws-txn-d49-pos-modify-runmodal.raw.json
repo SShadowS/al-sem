@@ -32,10 +32,10 @@
     {
       "calleeDisplay": "Page.RunModal",
       "callsiteId": "f0deb5e0a238c365/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/cs0",
-      "dispatchKind": "unresolved",
+      "dispatchKind": "page-run",
       "from": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
       "resolvedEdges": [],
-      "status": "builtin"
+      "status": "unfetched-dependency"
     }
   ],
   "capabilityFacts": [
@@ -132,8 +132,10 @@
   "coverage": [
     {
       "directStatus": "complete",
-      "inheritedStatus": "complete",
-      "reasons": [],
+      "inheritedStatus": "partial",
+      "reasons": [
+        "object-run-unresolved"
+      ],
       "subject": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
       "unknownTargets": []
     }
@@ -197,7 +199,7 @@
   ],
   "permissionFacts": [
     {
-      "coverage": "complete",
+      "coverage": "partial",
       "derivedFromCapability": {
         "op": "modify"
       },
@@ -210,7 +212,7 @@
       "targetKind": "TableData"
     },
     {
-      "coverage": "complete",
+      "coverage": "partial",
       "derivedFromCapability": {
         "op": "read"
       },
@@ -277,6 +279,28 @@
     }
   ],
   "schemaVersion": 3,
-  "typedEdges": [],
+  "typedEdges": [
+    {
+      "callsiteId": "f0deb5e0a238c365/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/cs0",
+      "edgeId": "bc73004c945ea07d",
+      "from": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
+      "kind": "object-run-unresolved",
+      "objectType": "Page",
+      "sourceAnchor": {
+        "enclosingRoutineId": "f0deb5e0a238c365/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda",
+        "range": {
+          "endColumn": 41,
+          "endLine": 14,
+          "startColumn": 8,
+          "startLine": 14
+        },
+        "sourceUnitId": "ws:src/Sender.Codeunit.al",
+        "syntaxKind": "call_expression"
+      },
+      "targetIdSource": {
+        "kind": "unknown"
+      }
+    }
+  ],
   "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
 }

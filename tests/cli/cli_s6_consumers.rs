@@ -123,3 +123,40 @@ fn fingerprint_follows_the_program_engines_calls() {
         "Run6's cone holds the \"S6 Log\" insert: {text}"
     );
 }
+
+/// S6.4 `alsem diff` (workspace mode): from a page that writes nothing to one that
+/// inserts into "S6 Log", `Run6` gains that write through `MyPage.RunModal()`.
+#[test]
+fn diff_workspace_mode_follows_the_program_engines_calls() {
+    use al_sem::engine::gate::diff::CoveragePolicy;
+    use al_sem::engine::gate::diff::cli::{DiffCliOptions, run_diff};
+    let old = tempfile::tempdir().unwrap();
+    let new = tempfile::tempdir().unwrap();
+    page_run_workspace(old.path());
+    page_run_workspace(new.path());
+    // The old page's trigger writes nothing.
+    let src = old.path().join("src/S6.al");
+    let text = std::fs::read_to_string(&src).unwrap();
+    std::fs::write(&src, text.replace("Log.Insert();", "")).unwrap();
+
+    let (old_s, new_s) = (
+        old.path().to_string_lossy().to_string(),
+        new.path().to_string_lossy().to_string(),
+    );
+    let out = run_diff(&DiffCliOptions {
+        old_arg: &old_s,
+        new_arg: &new_s,
+        format: "json",
+        out: None,
+        coverage_policy: CoveragePolicy::Strict,
+        renames_path: None,
+        fail_on: None,
+        strict: false,
+        deterministic: true,
+        driver_version: "s6",
+    });
+    let json = out.output.expect("diff output");
+    let v: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let run6_changes = json.matches("Run6").count();
+    assert!(run6_changes > 0, "Run6 gains the S6 Log write: {v:#}");
+}

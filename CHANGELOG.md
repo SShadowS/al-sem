@@ -152,6 +152,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem diff`'s workspace mode (the snapshot) reads the program engine**
+  (engine-switch S6.4); the snapshot golden test builds the same model. Golden moves,
+  `tests/cli-b-goldens/snapshot/` (cbor, cbor.gz, raw/envelope JSON):
+  - `ws-d35`: three `eventDeclarations` for its `Codeunit, 50` subscribers, bound to
+    `unknown:codeunit:0:50` (L3 could not parse a numbered publisher; S4.3b).
+  - `ws-txn-d49-pos-modify-runmodal`: the unresolved `Page.RunModal` of S6.2/S6.3 is a
+    `page-run` / `unfetched-dependency` call with an `object-run-unresolved` typed edge,
+    and coverage is `partial`.
+  `diff_workspace_mode_follows_the_program_engines_calls` diffs two workspaces whose
+  page trigger gains the write; discrimination: with the L3 builder `Run6` shows no
+  change.
+
 - **`alsem fingerprint` reads the program engine** (engine-switch S6.3). Golden move,
   `tests/cli-b-goldens/fingerprint/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`:
   the same unresolved `Page.RunModal` as S6.2, so the coverage fields go `complete` ->

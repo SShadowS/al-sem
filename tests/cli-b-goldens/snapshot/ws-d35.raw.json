@@ -245,7 +245,68 @@
       "unknownTargets": []
     }
   ],
-  "eventDeclarations": [],
+  "eventDeclarations": [
+    {
+      "binding": {
+        "eventName": "onbeforeprint",
+        "publisherObject": "unknown:codeunit:0:50"
+      },
+      "eventId": "unknown:codeunit:0:50::onbeforeprint::8b2aa33a2d2ffd699d1d1eb35bee95ad5f2be578a5e1dd32ba841345e0e95b6b",
+      "kind": "subscriber",
+      "routine": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93",
+      "sourceAnchor": {
+        "enclosingRoutineId": "2ffd4af23d76aec9/58178599514de937957bc1686ca743094359942310ab109977806b3091ab2536",
+        "range": {
+          "endColumn": 8,
+          "endLine": 21,
+          "startColumn": 4,
+          "startLine": 18
+        },
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "binding": {
+        "eventName": "onafterpost",
+        "publisherObject": "unknown:codeunit:0:50"
+      },
+      "eventId": "unknown:codeunit:0:50::onafterpost::65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "kind": "subscriber",
+      "routine": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f",
+      "sourceAnchor": {
+        "enclosingRoutineId": "2ffd4af23d76aec9/54db1217a95bcf580507f08e916cf526fdca91452213bbb8d2649e65c4a3495e",
+        "range": {
+          "endColumn": 8,
+          "endLine": 7,
+          "startColumn": 4,
+          "startLine": 4
+        },
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "binding": {
+        "eventName": "onaftervalidate",
+        "publisherObject": "unknown:codeunit:0:50"
+      },
+      "eventId": "unknown:codeunit:0:50::onaftervalidate::b291d202b0480a07fe776a01bd7eee7ced9b9e5cdd709b9ef16428c5c04b24c3",
+      "kind": "subscriber",
+      "routine": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050",
+      "sourceAnchor": {
+        "enclosingRoutineId": "2ffd4af23d76aec9/939ecc3af3daa4cb1820b33d65e175d7c8af0fca371ac5e9ec5bf0648dceb282",
+        "range": {
+          "endColumn": 8,
+          "endLine": 14,
+          "startColumn": 4,
+          "startLine": 11
+        },
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    }
+  ],
   "generatedAt": "1970-01-01T00:00:00Z",
   "identities": {
     "displayNames": [
