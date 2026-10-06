@@ -21,8 +21,12 @@ use serde::{Deserialize, Serialize};
 pub struct ParsedSubscriberArgs {
     /// Publisher object type, lowercased (e.g. `"codeunit"`).
     pub publisher_object_type: String,
-    /// Publisher object name, unquoted and lowercased.
+    /// Publisher object name, unquoted and lowercased. Empty when the attribute
+    /// names the publisher by number (`publisher_id`).
     pub publisher_name: String,
+    /// The publisher's object number when the attribute names it that way
+    /// (`[EventSubscriber(ObjectType::Codeunit, 50, …)]`; engine-switch S4.3b).
+    pub publisher_id: Option<i64>,
     /// Event procedure name, unquoted and lowercased.
     pub event_name: String,
     /// Optional element filter — `None` when absent or when the arg is an empty
@@ -55,8 +59,12 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
         _ => return None,
     };
 
-    // Arg 1: `Codeunit::"Pub"` — several IR shapes depending on grammar parse path.
-    let publisher_name = resolve_publisher_name(ir, attr.args[1])?;
+    // Arg 1: `Codeunit::"Pub"` — several IR shapes depending on grammar parse
+    // path — or the object number (`50`), which AL also accepts.
+    let (publisher_name, publisher_id) = match &ir.expr(attr.args[1]).kind {
+        ExprKind::Literal(Literal::Int(n)) => (String::new(), Some(n.trim().parse().ok()?)),
+        _ => (resolve_publisher_name(ir, attr.args[1])?, None),
+    };
 
     // Arg 2: the event name, as a text literal (`'OnAfterX'`) or as an
     // identifier (`OnAfterX`, `"On After X"`); AL accepts both, and real code
@@ -89,6 +97,7 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
     Some(ParsedSubscriberArgs {
         publisher_object_type,
         publisher_name,
+        publisher_id,
         event_name,
         element,
         skip_on_missing_license,
@@ -376,6 +385,7 @@ mod tests {
             Some(ParsedSubscriberArgs {
                 publisher_object_type: "codeunit".into(),
                 publisher_name: "pub".into(),
+                publisher_id: None,
                 event_name: "onafterx".into(),
                 element: None,
                 skip_on_missing_license: true,
@@ -461,6 +471,23 @@ mod tests {
         );
     }
 
+    // Engine-switch S4.3b: AL also accepts the publisher's object number (4 of
+    // CDO's 96 subscriptions, e.g. `ObjectType::Codeunit, 80`).
+    #[test]
+    fn numeric_publisher_parses_to_an_id() {
+        let src = r#"codeunit 50107 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, 80, 'OnAfterX', '', false, false)]
+    local procedure A()
+    begin
+    end;
+}"#;
+        let af = al_syntax::parse(src);
+        let a = parse_event_subscriber_ir(&af.objects[0].routines[0].attributes_parsed[0], &af.ir)
+            .expect("numeric publisher parses");
+        assert_eq!((a.publisher_name.as_str(), a.publisher_id), ("", Some(80)));
+    }
+
     #[test]
     fn malformed_too_few_args_returns_none() {
         let src = r#"codeunit 50103 Sub
@@ -527,6 +554,7 @@ mod tests {
             Some(ParsedSubscriberArgs {
                 publisher_object_type: "codeunit".into(),
                 publisher_name: "pub".into(),
+                publisher_id: None,
                 event_name: "onafterx".into(),
                 element: None,
                 skip_on_missing_license: false,

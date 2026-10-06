@@ -464,9 +464,13 @@ pub fn program_event_graph(
                 }
                 SubscriptionOutcome::ObjectUnresolved => {
                     c.object_unresolved += 1;
-                    // L3's sentinel shape: `unknown/{type}/0:{name}`.
-                    let sentinel =
-                        format!("unknown/{}/0:{}", s.publisher_object_type, s.publisher_name);
+                    // L3's sentinel shape: `unknown/{type}/0:{name}`; the
+                    // number stands in for the name when the attribute uses one.
+                    let reference = match s.publisher_id {
+                        Some(n) => n.to_string(),
+                        None => s.publisher_name.clone(),
+                    };
+                    let sentinel = format!("unknown/{}/0:{reference}", s.publisher_object_type);
                     let id = encode_event_id(&sentinel, &s.event_name_lc);
                     synth(
                         &mut events,

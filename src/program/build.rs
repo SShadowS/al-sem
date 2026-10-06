@@ -3,8 +3,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use al_syntax::ir::ObjectKind;
-
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
@@ -523,15 +521,21 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             // field validate / page lifecycle / record / action) that have no
             // publisher routine in source. Everything else resolves through the
             // normal `[IntegrationEvent]` publisher path.
-            let pub_kind = match args.publisher_object_type.as_str() {
-                "table" if is_platform_table_event(&args.event_name) => ObjectKind::Table,
-                "page" if is_platform_page_event(&args.event_name) => ObjectKind::Page,
-                _ => continue,
+            let is_platform = match args.publisher_object_type.as_str() {
+                "table" => is_platform_table_event(&args.event_name),
+                "page" => is_platform_page_event(&args.event_name),
+                _ => false,
             };
-            // Resolve the publisher object from the subscriber's app (fail-closed).
-            let Some(pub_obj) =
-                graph.resolve_object(sub.id.object.app, pub_kind, &args.publisher_name)
-            else {
+            if !is_platform {
+                continue;
+            }
+            // Resolve the publisher object from the subscriber's app (fail-closed),
+            // by name or number, as the subscriber wiring does.
+            let Some(pub_obj) = crate::program::resolve::index::resolve_subscription_publisher(
+                graph,
+                sub.id.object.app,
+                args,
+            ) else {
                 continue;
             };
             let synth_id = RoutineNodeId {
@@ -758,6 +762,7 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use al_syntax::ir::ObjectKind;
 
     // -----------------------------------------------------------------------
     // T3 (LSP-migration arc) Task 5: layered dep/workspace graph split.

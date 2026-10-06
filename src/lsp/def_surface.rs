@@ -445,6 +445,13 @@ fn write_opt_publisher_kind(h: &mut Hasher, k: &Option<PublisherKind>) {
 fn write_subscriber(h: &mut Hasher, s: &ParsedSubscriberArgs) {
     write_str(h, &s.publisher_object_type);
     write_str(h, &s.publisher_name);
+    match s.publisher_id {
+        Some(n) => {
+            write_tag(h, 1);
+            write_i64(h, n);
+        }
+        None => write_tag(h, 0),
+    }
     write_str(h, &s.event_name);
     write_opt_str(h, &s.element);
     write_bool(h, s.skip_on_missing_license);

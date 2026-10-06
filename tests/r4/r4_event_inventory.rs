@@ -110,6 +110,18 @@ codeunit 50572 "Ev Sub B"
         Log.Modify();
     end;
 }
+
+codeunit 50573 "Ev Sub C"
+{
+    // The publisher named by object number, not by name (S4.3b).
+    [EventSubscriber(ObjectType::Codeunit, 60570, 'OnBeforePost', '', false, false)]
+    local procedure HandleBeforePost()
+    var
+        Log: Record "Ev Log";
+    begin
+        Log.Delete();
+    end;
+}
 "#,
     );
 }
@@ -135,6 +147,13 @@ fn d44_sees_workspace_subscribers_of_a_dependency_event() {
             .any(|id| id.starts_with(&format!("d44/{event_id}|"))),
         "two subscribers of the dependency event write \"Ev Log\": d44 must report \
          the overlap; findings: {ids:?}"
+    );
+    // `OnBeforePost`'s second subscriber names the publisher by number.
+    let before_prefix = format!("d44/{DEP_GUID}/Codeunit/60570/event/onbeforepost|");
+    assert!(
+        ids.iter().any(|id| id.starts_with(&before_prefix)),
+        "HandleBoth and the by-number HandleBeforePost both write \"Ev Log\" on \
+         OnBeforePost; findings: {ids:?}"
     );
 
     // The dependency publisher is a symbol with no model routine, and the

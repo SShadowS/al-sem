@@ -4,7 +4,7 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 use std::collections::{BTreeSet, HashMap};
 
-use crate::program::node::{AppRef, AppRegistry};
+use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId};
 use crate::program::node_extract::{ObjectNode, RoutineNode};
 use crate::program::node_set::NodeSet;
 use crate::program::topology::DependencyGraph;
@@ -131,6 +131,42 @@ impl ProgramGraph {
                     return None; // >1 dependency declares this (kind, name) — decline.
                 }
                 found = Some(idx);
+            }
+        }
+        found.map(|i| &self.objects[i])
+    }
+
+    /// [`Self::resolve_object`] for an object named by NUMBER (an
+    /// `[EventSubscriber(ObjectType::Codeunit, 50, …)]`; engine-switch S4.3b):
+    /// `from`'s own object wins, else exactly one app in `from`'s dependency
+    /// closure; more than one declines.
+    pub fn resolve_object_by_number(
+        &self,
+        from: AppRef,
+        kind: ObjectKind,
+        number: i64,
+    ) -> Option<&ObjectNode> {
+        let find = |app: AppRef| {
+            let id = ObjectNodeId {
+                app,
+                kind,
+                key: ObjKey::Id(number),
+            };
+            self.objects.binary_search_by(|o| o.id.cmp(&id)).ok()
+        };
+        if let Some(i) = find(from) {
+            return Some(&self.objects[i]);
+        }
+        let mut found: Option<usize> = None;
+        for &app in &self.topology.closure(from) {
+            if app == from {
+                continue;
+            }
+            if let Some(i) = find(app) {
+                if found.is_some() {
+                    return None; // >1 dependency declares this (kind, number) — decline.
+                }
+                found = Some(i);
             }
         }
         found.map(|i| &self.objects[i])
@@ -299,6 +335,12 @@ mod tests {
             make_obj(c, Some(101), "Shared"),
             make_obj(a, Some(200), "OwnShadow"),
             make_obj(b, Some(201), "OwnShadow"),
+            // By-number collisions (S4.3b): 300 in two dependencies; 301 in A
+            // and in a dependency.
+            make_obj(b, Some(300), "NumB"),
+            make_obj(c, Some(300), "NumC"),
+            make_obj(a, Some(301), "NumA"),
+            make_obj(b, Some(301), "NumB2"),
         ];
         objects.sort_by(|x, y| x.id.cmp(&y.id));
 
@@ -344,5 +386,20 @@ mod tests {
             "own-app declaration must shadow a colliding dependency"
         );
         assert_ne!(resolved.id.app, b);
+    }
+
+    #[test]
+    fn resolve_object_by_number_prefers_own_app_and_declines_on_collision() {
+        let g = build_three_app_ambiguous_fixture();
+        let a = g.app_ref_by_name("AppA");
+        let b = g.app_ref_by_name("AppB");
+        let by = |n| {
+            g.resolve_object_by_number(a, ObjectKind::Table, n)
+                .map(|o| o.id.app)
+        };
+        assert_eq!(by(301), Some(a), "own app wins over a dependency");
+        assert_eq!(by(201), Some(b), "one dependency declares 201");
+        assert_eq!(by(300), None, "two dependencies declare 300: decline");
+        assert_eq!(by(999), None);
     }
 }

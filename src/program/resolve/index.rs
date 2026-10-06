@@ -105,8 +105,11 @@ pub struct Subscription {
     pub ordinal: usize,
     /// Publisher object type as written, lowercased (e.g. `"codeunit"`).
     pub publisher_object_type: String,
-    /// Publisher object name as written, unquoted and lowercased.
+    /// Publisher object name as written, unquoted and lowercased; empty when the
+    /// attribute names the publisher by number (`publisher_id`).
     pub publisher_name: String,
+    /// The publisher's object number, when the attribute names it that way.
+    pub publisher_id: Option<i64>,
     /// Lowercased event name from the attribute.
     pub event_name_lc: String,
     /// Element filter from the attribute, if present.
@@ -263,22 +266,16 @@ impl SubscriberIndex {
                         ordinal,
                         publisher_object_type: args.publisher_object_type.clone(),
                         publisher_name: args.publisher_name.clone(),
+                        publisher_id: args.publisher_id,
                         event_name_lc: args.event_name.fold_identifier(),
                         element: entry.element.clone(),
                         conditions: entry.conditions.clone(),
                         outcome,
                     });
                 };
-                // (a) Map publisher_object_type → ObjectKind; an unknown type is
-                // recorded, not dropped.
-                let Some(kind) = kind_from_object_type_str(&args.publisher_object_type) else {
-                    record(SubscriptionOutcome::ObjectUnresolved);
-                    continue;
-                };
-
-                // (b) Resolve the publisher object; unresolvable is recorded too.
-                let Some(pub_obj) = graph.resolve_object(sub_app, kind, &args.publisher_name)
-                else {
+                // (a) + (b) The publisher object, by name or number. An unknown
+                // object type or an unresolvable object is recorded, not dropped.
+                let Some(pub_obj) = resolve_subscription_publisher(graph, sub_app, args) else {
                     record(SubscriptionOutcome::ObjectUnresolved);
                     continue;
                 };
@@ -1051,6 +1048,24 @@ fn build_entry(
     }
 }
 
+/// The publisher object an `[EventSubscriber]` names, as seen from the
+/// subscriber's app `from`: by name, or by number (`Codeunit, 50`;
+/// engine-switch S4.3b). `None` when the type is not one events are published
+/// on, or no single object matches (both lookups fail closed on a cross-app
+/// collision). The one resolver for subscriber wiring, the platform-publisher
+/// injection and the IncludeSender preflight.
+pub(crate) fn resolve_subscription_publisher<'g>(
+    graph: &'g ProgramGraph,
+    from: AppRef,
+    args: &ParsedSubscriberArgs,
+) -> Option<&'g ObjectNode> {
+    let kind = kind_from_object_type_str(&args.publisher_object_type)?;
+    match args.publisher_id {
+        Some(n) => graph.resolve_object_by_number(from, kind, n),
+        None => graph.resolve_object(from, kind, &args.publisher_name),
+    }
+}
+
 /// Map a lowercased publisher-object-type string (as written in an
 /// `[EventSubscriber]` attribute) to the corresponding [`ObjectKind`].
 /// Returns `None` for unrecognised strings.
@@ -1109,10 +1124,7 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
         let sub_params = sub_routine.id.params_count;
 
         for args in &sub_routine.event_subscribers {
-            let Some(kind) = kind_from_object_type_str(&args.publisher_object_type) else {
-                continue;
-            };
-            let Some(pub_obj) = graph.resolve_object(sub_app, kind, &args.publisher_name) else {
+            let Some(pub_obj) = resolve_subscription_publisher(graph, sub_app, args) else {
                 continue;
             };
             let event_name_lc = args.event_name.fold_identifier();
@@ -1286,6 +1298,7 @@ mod tests {
         ParsedSubscriberArgs {
             publisher_object_type: "codeunit".to_string(),
             publisher_name: pub_name.to_string(),
+            publisher_id: None,
             event_name: event.to_string(),
             element: None,
             skip_on_missing_license: false,

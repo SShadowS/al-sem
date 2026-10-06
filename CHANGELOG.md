@@ -127,6 +127,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Event subscribers that name the publisher by number now bind** (engine-switch
+  S4.3b, spec G7). `[EventSubscriber(ObjectType::Codeunit, 80, 'OnAfterX', …)]` is valid
+  AL; both engines dropped it. `ParsedSubscriberArgs::publisher_id` carries the number
+  (`PACK_SCHEMA` 2 -> 3, so cached dependency packs are rebuilt), and
+  `index::resolve_subscription_publisher` is now the one publisher lookup for subscriber
+  wiring, platform-publisher injection and the IncludeSender preflight: by name through
+  `ProgramGraph::resolve_object`, by number through the new
+  `ProgramGraph::resolve_object_by_number` (own app first, else one dependency; two
+  dependencies decline, like the name lookup). The differential event verifier matches a
+  numbered attribute on the publisher's number; the LSP definition fingerprint hashes it.
+  An unresolved numbered publisher's sentinel event id carries the number
+  (`unknown/codeunit/0:50/event/onfoo`), so two different numbers stay two events.
+
+  Measured: CDO's analyze event graph now binds all 95 subscriptions (`subscribers_
+  without_subscription` 4 -> 0); `--program-call-graph-stats` whole-program
+  `resolvedSource` 11,695 -> 11,699, `honestEmpty` 28,043 -> 28,039, primary unchanged,
+  real-unknown 0. Findings unchanged on CDO, DO and every fixture; `ws-d19`, `ws-d29`
+  and `ws-d35` gain `unknown` edges for their `Codeunit, 50` subscribers (no codeunit 50
+  there), which d38 now counts as `unresolved`. Golden move:
+  `tests/cli-a-goldens/json/ws-d35.{default,all}.json` gain d38 `skipped.unresolved: 3`.
+
+  Tests: `numeric_publisher_parses_to_an_id`;
+  `resolve_object_by_number_prefers_own_app_and_declines_on_collision` (discrimination:
+  dropping the own-app check, or the collision decline, fails it); the r4
+  dependency-event test gains a by-number subscriber that makes a second d44 overlap
+  (discrimination: the helper ignoring numbers fails it). The `resolve_object` call-site
+  allowlist now names the helper's two branches instead of the two old index.rs lines.
+
 - **Event subscribers that name the event as an identifier now bind** (engine-switch
   S4.3a, spec G7). AL accepts `[EventSubscriber(ObjectType::Page, Page::"X",
   OnOpenPageEvent, '', true, true)]` as well as the `'OnOpenPageEvent'` text form, and

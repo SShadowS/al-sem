@@ -64,7 +64,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// this is not a soundness hole; it is only not the whole story.
 /// 2: parameter names + `temporary` in `AbiParamRetained` / `ParamMeta`
 /// (engine-switch S2b.5).
-pub const PACK_SCHEMA: u32 = 2;
+/// 3: `ParsedSubscriberArgs::publisher_id` (engine-switch S4.3b).
+pub const PACK_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {

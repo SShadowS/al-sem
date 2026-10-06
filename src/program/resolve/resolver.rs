@@ -5416,6 +5416,7 @@ codeunit 50612 "MixedCU2"
             event_subscribers: vec![crate::program::resolve::event::ParsedSubscriberArgs {
                 publisher_object_type: "codeunit".into(),
                 publisher_name: "dep evt pub".into(),
+                publisher_id: None,
                 event_name: "onafterx".into(),
                 element: None,
                 skip_on_missing_license: false,
