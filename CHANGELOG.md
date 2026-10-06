@@ -127,6 +127,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem analyze`'s event graph comes from the program engine** (engine-switch S4.2,
+  spec G7, issue #57). L3 built the detectors' event graph from the workspace symbol
+  table alone, so a subscriber to a dependency publisher was an `unknown` edge, and the
+  event-flow indexes keep only `resolved` edges: d43/d44/d45 never saw it. On CDO that
+  was 54 of 56 subscriptions. `program::model::events::program_event_graph` now builds
+  the graph from `SubscriberIndex::subscriptions()`; `attach_program_calls` stores it in
+  `L3Resolved::precomputed_events`, and the four builders that read `calls_for` read it
+  through `event_graph::events_for` (detector context, ordering-facts base,
+  `project_r3a3`, `compute_r3a3_real_matrix`). Every other consumer keeps L3's builder
+  until S6.
+  - Each subscription of a model subscriber routine is one edge: bound -> `resolved`,
+    ambiguous overload -> `ambiguous` (new), publisher object without the event ->
+    `maybe`, object not found -> `unknown`. L3 read only a routine's FIRST
+    `[EventSubscriber]`.
+  - A dependency publisher, or the platform's own table/page event, has no model
+    routine: its symbol has `publisher_routine_id: None` and a new
+    `EventSymbol::publisher_ref` (`Dependency { target, body }` or `Platform { target }`).
+    So the combined graph, cones, fan-out, d43 and d45 do not change; the workspace
+    subscribers of such events reach `subscribers_by_event`, which d44 reads.
+  - A platform field or action event (`OnAfterValidateEvent` with an element) is one
+    event per element (`…/event/onaftervalidateevent/{field}`). Without this, d44 would
+    pair two CDO subscribers of Sales Header that validate different fields.
+  - Unresolved-event sentinels are lowercase now (`unknown/codeunit/0:sales-post`); the
+    program engine folds the attribute text.
+
+  Measured (harness `s3-6` -> `s4-2`, CDO): 56 subscriptions, all bound (2 workspace, 44
+  dependency, 10 platform), none unmapped; findings unchanged (2,405). d44 still finds
+  nothing on CDO: the five events with two subscribers write only through dependency
+  calls (not analysed before S7/S8) or temporary records. d38's skip reason for the 54
+  moves from `unresolved` to `noPublisherRoutine`. Fixtures: one new finding, `ws-d29`
+  d44-rw (Customer `OnAfterModifyEvent`: one subscriber modifies Customer, another reads
+  it), correct by d44's definition; no golden moves (the r4 golden keeps only d29's own
+  findings). `--program-call-graph-stats` on CDO is byte-identical.
+
+  Tests (`tests/r4/r4_event_inventory.rs`), each with its precondition as source text:
+  two workspace subscribers of a symbol-only dependency event -> d44 finding, and one
+  routine with two `[EventSubscriber]`s -> two edges; an ambiguous subscription stays in
+  the graph and keeps fan-out `partial`; same-field vs different-field validate
+  subscribers. Discrimination: not setting `precomputed_events` fails the first two;
+  mapping a bound dependency publisher to `unknown` fails the first; dropping unbound
+  subscriptions fails the second, at the edge assertion and, with that removed, at the
+  coverage assertion; dropping the element scoping fails the third.
+
 - **The event model moved into the program engine** (engine-switch S4.2a, pure move).
   `EventGraph`, `EventSymbol`, `EventEdge`, `Evidence`, `build_event_symbol` and
   `encode_event_id` now live in `program::model::events`; `engine::l3::event_graph`

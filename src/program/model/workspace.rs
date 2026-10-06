@@ -1410,6 +1410,7 @@ pub fn assemble_and_resolve(
         primary_app: None,
         infra_diagnostics,
         precomputed_calls: None,
+        precomputed_events: None,
     }
 }
 
@@ -1728,6 +1729,7 @@ fn finish_resolved(
             primary_app,
             infra_diagnostics,
             precomputed_calls: None,
+            precomputed_events: None,
         }
     };
     // Empty fail-closed model (no objects/routines) → treat as not-analyzable.
@@ -1918,6 +1920,12 @@ pub struct L3Resolved {
     ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
     ///   declared dependencies.
     pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
+    /// The detector event graph built from the program engine's subscription
+    /// inventory (engine-switch S4.2). Set together with `precomputed_calls`, by
+    /// the same function, for the same consumers; they read it through
+    /// `event_graph::events_for`. `None` everywhere else, which builds L3's
+    /// source-only event graph.
+    pub precomputed_events: Option<std::sync::Arc<super::events::ProgramEvents>>,
 }
 
 // ---------------------------------------------------------------------------

@@ -589,6 +589,7 @@ mod tests {
                 source: "test".to_string(),
                 note: None,
             }],
+            publisher_ref: None,
         }
     }
 

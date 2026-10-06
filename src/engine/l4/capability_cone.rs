@@ -37,7 +37,7 @@ use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
 use crate::engine::l3::call_resolver::{DeclaredDependency, calls_for, resolve_calls};
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph};
+use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph, events_for};
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
 use crate::engine::l3::symbol_table::SymbolTable;
 
@@ -3536,7 +3536,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     let ws: &L3Workspace = &resolved.workspace;
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     let calls = calls_for(resolved, &symbols);
-    let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
+    let event_graph = events_for(resolved, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
     // Typed-edge graph (cone substrate) + Tarjan SCC over it.
@@ -3748,7 +3748,7 @@ pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
     let _s0 = pt::span("r3a3", "r3a3.calls_graph");
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     let calls = calls_for(resolved, &symbols).into_owned();
-    let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
+    let event_graph: EventGraph = events_for(resolved, &symbols).into_owned();
     let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_s0);
     let _s1 = pt::span("r3a3", "r3a3.direct_facts");
@@ -3857,7 +3857,7 @@ pub fn compute_r3a3_real_matrix(resolved: &L3Resolved) -> R3a3RealMatrix {
     let ws: &L3Workspace = &resolved.workspace;
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     let calls = calls_for(resolved, &symbols);
-    let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
+    let event_graph = events_for(resolved, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();

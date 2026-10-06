@@ -800,6 +800,7 @@ mod tests {
             primary_app: None,
             infra_diagnostics: Vec::new(),
             precomputed_calls: None,
+            precomputed_events: None,
         };
 
         let output = detect_d50(&resolved, &ctx).unwrap();

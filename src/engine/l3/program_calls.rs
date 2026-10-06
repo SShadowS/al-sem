@@ -592,7 +592,9 @@ pub fn resolved_calls_from_program(
 
 /// The production step that points the detectors at the program engine's
 /// calls: run the adapter (no per-site notes, dependency bindings upgraded),
-/// drop the program model, and set `resolved.precomputed_calls`. `alsem
+/// build the event graph from the program engine's subscriptions (S4.2), drop
+/// the program model, and set `resolved.precomputed_calls` and
+/// `resolved.precomputed_events`. `alsem
 /// analyze` and [`assemble_and_resolve_workspace_with_program_calls`] both
 /// use it, so a test cannot drift from the production path.
 pub fn attach_program_calls(
@@ -605,6 +607,12 @@ pub fn attach_program_calls(
         let _s = pt::span("b3", "b3.adapter");
         resolved_calls_from_program(&report, &ctx, &resolved.workspace, true).0
     };
+    // Engine-switch S4.2: the detector event graph, from the same program build.
+    let events = {
+        let _s = pt::span("b3", "b3.events");
+        crate::program::model::events::program_event_graph(&ctx, &resolved.workspace)
+    };
+    resolved.precomputed_events = Some(std::sync::Arc::new(events));
     {
         let _s = pt::span("b3", "b3.report_drop");
         drop(report);
@@ -1373,16 +1381,7 @@ impl<'a> Converter<'a> {
         let Some(id) = Self::route_routine_id(route) else {
             return false;
         };
-        // A field trigger (`OnValidate`) is named by its field too.
-        let name = match &id.enclosing_member_lc {
-            Some(member) => format!("{member}::{}", id.name_lc),
-            None => id.name_lc.clone(),
-        };
-        let target = format!(
-            "{}::{name}/{}",
-            self.model_object_id(&id.object),
-            id.params_count
-        );
+        let target = crate::program::model::model_routine_key(self.graph, &id);
         let body = self.registry.target(&id).map(|t| t.body);
         self.targets
             .borrow_mut()
@@ -1394,17 +1393,9 @@ impl<'a> Converter<'a> {
         true
     }
 
-    /// The model's object id for a program object (`encode_object_id`'s
-    /// `"{app guid}/{type}/{number}"`; a numberless object has number 0, as the
-    /// model writes it).
+    /// The model's object id for a program object.
     fn model_object_id(&self, id: &ObjectNodeId) -> String {
-        let guid = &self.graph.apps.resolve(id.app).guid;
-        let ty = crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Unknown");
-        let number = match id.key {
-            ObjKey::Id(n) => n,
-            ObjKey::Name(_) => 0,
-        };
-        crate::engine::ids::encode_object_id(guid, ty, number)
+        crate::program::model::model_object_id(self.graph, id)
     }
 
     /// An interface (Polymorphic) edge, converted from the PROGRAM engine alone

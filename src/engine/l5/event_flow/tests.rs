@@ -28,6 +28,7 @@ fn ev(id: &str, publisher_routine: Option<&str>, name: &str, kind: &str) -> Even
             source: "tree-sitter".to_string(),
             note: None,
         }],
+        publisher_ref: None,
     }
 }
 

@@ -1876,7 +1876,7 @@ pub fn project_routine_features_ir(
 /// Table name from a `Record …` type string (`Record Customer` /
 /// `Record "Sales Header"` / `Record Customer temporary`). None if not a record /
 /// no subtype.
-fn parse_record_table_name(ty: &str) -> Option<String> {
+pub(crate) fn parse_record_table_name(ty: &str) -> Option<String> {
     let t = ty.trim();
     if !is_record_type_str(t) {
         return None;
@@ -1901,7 +1901,7 @@ fn parse_record_table_name(ty: &str) -> Option<String> {
 /// the backfill — the L3 RecordRef-flow divergence). The discriminator: after the
 /// `record` prefix the next char must be whitespace or `"` (a table follows), or the
 /// type is exactly `record`.
-fn is_record_type_str(ty: &str) -> bool {
+pub(crate) fn is_record_type_str(ty: &str) -> bool {
     let lc = ty.trim().to_ascii_lowercase();
     match lc.strip_prefix("record") {
         Some(rest) => rest.is_empty() || rest.starts_with(' ') || rest.starts_with('"'),

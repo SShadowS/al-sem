@@ -85,9 +85,10 @@ impl PhysicalCensus {
     }
 }
 
-type Key = (String, Pos, Pos);
+pub(crate) type Key = (String, Pos, Pos);
 
-fn anchor_key(a: &crate::program::body::features::PAnchor) -> Key {
+/// A model anchor as a physical-row key: `(file, start, end)`.
+pub(crate) fn anchor_key(a: &crate::program::body::features::PAnchor) -> Key {
     let file = a
         .source_unit_id
         .strip_prefix("ws:")

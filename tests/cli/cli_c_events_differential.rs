@@ -633,6 +633,7 @@ fn cycle_native_oracle() {
                     source: "test".to_string(),
                     note: None,
                 }],
+                publisher_ref: None,
             },
             EventSymbol {
                 id: "E2".to_string(),
@@ -649,6 +650,7 @@ fn cycle_native_oracle() {
                     source: "test".to_string(),
                     note: None,
                 }],
+                publisher_ref: None,
             },
         ],
         edges: vec![

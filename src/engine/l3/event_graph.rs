@@ -170,6 +170,7 @@ pub fn build_event_graph(routines: &[L3Routine], symbols: &SymbolTable) -> Event
                         parameters: Vec::new(),
                         isolated: None,
                         provenance: vec![Evidence::with_note("publisher not indexed")],
+                        publisher_ref: None,
                     };
                     event_by_id.insert(id.clone(), events.len());
                     events.push(symbol);
@@ -201,6 +202,7 @@ pub fn build_event_graph(routines: &[L3Routine], symbols: &SymbolTable) -> Event
                     parameters: Vec::new(),
                     isolated: None,
                     provenance: vec![Evidence::with_note("target object not in indexed source")],
+                    publisher_ref: None,
                 };
                 event_by_id.insert(id.clone(), events.len());
                 events.push(symbol);
@@ -219,6 +221,20 @@ pub fn build_event_graph(routines: &[L3Routine], symbols: &SymbolTable) -> Event
     }
 
     EventGraph { events, edges }
+}
+
+/// The event graph every analyze-path consumer reads (the twin of
+/// `call_resolver::calls_for`): the program engine's graph when
+/// `resolved.precomputed_events` is set (engine-switch S4.2), else L3's
+/// source-only `build_event_graph`.
+pub fn events_for<'a>(
+    resolved: &'a L3Resolved,
+    symbols: &SymbolTable,
+) -> std::borrow::Cow<'a, EventGraph> {
+    match &resolved.precomputed_events {
+        Some(pre) => std::borrow::Cow::Borrowed(&pre.graph),
+        None => std::borrow::Cow::Owned(build_event_graph(&resolved.workspace.routines, symbols)),
+    }
 }
 
 // ---------------------------------------------------------------------------

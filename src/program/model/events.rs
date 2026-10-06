@@ -58,6 +58,25 @@ pub struct EventSymbol {
     pub parameters: Vec<L3Parameter>,
     pub isolated: Option<bool>,
     pub provenance: Vec<Evidence>,
+    /// The publisher when it is not a model routine (engine-switch S4.2): then
+    /// `publisher_routine_id` is `None` although subscriptions to the event are
+    /// bound. `None` for a model publisher and for a synthesized symbol.
+    pub publisher_ref: Option<PublisherRef>,
+}
+
+/// A bound event publisher that is not a routine of the detector model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublisherRef {
+    /// A dependency routine. `target` is [`super::model_routine_key`]; `body` is
+    /// the registry's body state (`None` when the registry has no entry).
+    Dependency {
+        target: String,
+        body: Option<crate::program::registry::BodyState>,
+    },
+    /// The platform raises the event itself (a table's `OnAfterInsertEvent`, a
+    /// page's `OnOpenPageEvent`, …); no routine declares it. `target` names the
+    /// program engine's synthetic publisher.
+    Platform { target: String },
 }
 
 /// One EventEdge. Ids in INTERNAL form.
@@ -144,5 +163,334 @@ pub fn build_event_symbol(routine: &L3Routine) -> EventSymbol {
             None
         },
         provenance: vec![Evidence::tree_sitter()],
+        publisher_ref: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The detector event graph from the program engine (engine-switch S4.2, G7).
+// ---------------------------------------------------------------------------
+
+/// How [`program_event_graph`] built its graph. `unmapped_subscribers` and
+/// `bound_model_missing` lose or degrade a subscription and are expected to be 0.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventCensus {
+    /// Model routines of kind `event-subscriber`.
+    pub model_subscribers: usize,
+    /// Model subscribers with no physical row, so no program node: their
+    /// subscriptions are not in the graph.
+    pub unmapped_subscribers: usize,
+    /// Model subscribers whose program node has no parsed subscription (an
+    /// attribute neither engine can read).
+    pub subscribers_without_subscription: usize,
+    pub bound_model: usize,
+    pub bound_dependency: usize,
+    pub bound_platform: usize,
+    /// Bound to a workspace publisher that has no model publisher symbol; the edge
+    /// degrades to `maybe`.
+    pub bound_model_missing: usize,
+    pub ambiguous: usize,
+    pub orphaned: usize,
+    pub object_unresolved: usize,
+}
+
+impl EventCensus {
+    /// One `name\tcount` row per counter.
+    pub fn lines(&self) -> Vec<String> {
+        [
+            ("model_subscribers", self.model_subscribers),
+            ("unmapped_subscribers", self.unmapped_subscribers),
+            (
+                "subscribers_without_subscription",
+                self.subscribers_without_subscription,
+            ),
+            ("bound_model", self.bound_model),
+            ("bound_dependency", self.bound_dependency),
+            ("bound_platform", self.bound_platform),
+            ("bound_model_missing", self.bound_model_missing),
+            ("ambiguous", self.ambiguous),
+            ("orphaned", self.orphaned),
+            ("object_unresolved", self.object_unresolved),
+        ]
+        .iter()
+        .map(|(k, v)| format!("{k}\t{v}"))
+        .collect()
+    }
+}
+
+/// The detector event graph built from the program engine, and how.
+#[derive(Debug, Clone)]
+pub struct ProgramEvents {
+    pub graph: EventGraph,
+    pub census: EventCensus,
+}
+
+/// Build the detector event graph from the program engine's subscription
+/// inventory (`SubscriberIndex::subscriptions`) for the model `ws`.
+///
+/// - Symbols for the model's publisher routines come first, exactly as L3's
+///   `build_event_graph` makes them.
+/// - Edges: for each model subscriber routine (model order), one edge per
+///   subscription of its program node (attribute order). Bound -> `resolved`;
+///   ambiguous overload -> `ambiguous`; publisher object found but no publisher
+///   routine -> `maybe`; publisher object not found -> `unknown`. Only `resolved`
+///   is a proven subscriber; every consumer tests `!= "resolved"`.
+/// - A platform event with an element filter (a field's `OnAfterValidateEvent`,
+///   an action's `OnAfterActionEvent`) is one event per element: its id gains
+///   `/{element}` and the symbol carries `element_name`.
+/// - A publisher that is not a model routine (a dependency routine, or the
+///   platform's own table/page event) gets one symbol with
+///   `publisher_routine_id: None` and a [`PublisherRef`]. Consumers that key on the
+///   publisher routine (combined graph, cones, fan-out, d43, d45) therefore do not
+///   change; `subscribers_by_event` gains the workspace subscribers of such events.
+pub fn program_event_graph(
+    ctx: &crate::program::resolve::full::ProgramContext,
+    ws: &super::workspace::L3Workspace,
+) -> ProgramEvents {
+    use crate::engine::ids::sha256_hex;
+    use crate::program::node::RoutineNodeId;
+    use crate::program::registry::TargetParams;
+    use crate::program::resolve::event::PublisherKind;
+    use crate::program::resolve::index::{SubscriberIndex, Subscription, SubscriptionOutcome};
+    use std::collections::{HashMap, HashSet};
+
+    let graph = ctx.graph();
+    let primary = ctx.primary_app_ref;
+    let registry = ctx.registry();
+    let index = SubscriberIndex::build(graph);
+    let mut subs_by_node: HashMap<&RoutineNodeId, Vec<&Subscription>> = HashMap::new();
+    for s in index.subscriptions() {
+        subs_by_node.entry(&s.subscriber).or_default().push(s);
+    }
+    let mut node_by_span: HashMap<super::census::Key, &RoutineNodeId> = HashMap::new();
+    for row in &graph.workspace_rows.routines {
+        node_by_span
+            .entry((row.file.clone(), row.start, row.end))
+            .or_insert(&row.node);
+    }
+    let mut routine_by_id = HashMap::new();
+    for r in &graph.routines {
+        routine_by_id.entry(&r.id).or_insert(r);
+    }
+
+    let mut c = EventCensus::default();
+    let mut events: Vec<EventSymbol> = Vec::new();
+    let mut event_ix: HashMap<String, usize> = HashMap::new();
+    let mut real: HashSet<String> = HashSet::new();
+    for r in &ws.routines {
+        if r.kind == "event-publisher" {
+            let s = build_event_symbol(r);
+            real.insert(s.id.clone());
+            event_ix.insert(s.id.clone(), events.len());
+            events.push(s);
+        }
+    }
+    // A symbol for an event no bound publisher stands behind (L3's synthesized
+    // `maybe`/`unknown` symbols).
+    fn synth(
+        events: &mut Vec<EventSymbol>,
+        event_ix: &mut HashMap<String, usize>,
+        id: &str,
+        publisher_object_id: String,
+        s: &Subscription,
+        note: &str,
+    ) {
+        if event_ix.contains_key(id) {
+            return;
+        }
+        event_ix.insert(id.to_string(), events.len());
+        events.push(EventSymbol {
+            id: id.to_string(),
+            publisher_object_id,
+            publisher_routine_id: None,
+            publisher_stable_routine_id: None,
+            event_name: s.event_name_lc.clone(),
+            event_kind: "unknown".to_string(),
+            element_name: s.element.clone(),
+            signature_hash: sha256_hex(id),
+            parameters: Vec::new(),
+            isolated: None,
+            provenance: vec![Evidence::with_note(note)],
+            publisher_ref: None,
+        });
+    }
+
+    let mut edges: Vec<EventEdge> = Vec::new();
+    for r in &ws.routines {
+        if r.kind != "event-subscriber" {
+            continue;
+        }
+        c.model_subscribers += 1;
+        let Some(node) = node_by_span.get(&super::census::anchor_key(&r.source_anchor)) else {
+            c.unmapped_subscribers += 1;
+            continue;
+        };
+        let subs = subs_by_node.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        if subs.is_empty() {
+            c.subscribers_without_subscription += 1;
+        }
+        for s in subs {
+            let (event_id, resolution) = match &s.outcome {
+                SubscriptionOutcome::Bound(pid) => {
+                    let node = routine_by_id.get(pid);
+                    let platform =
+                        node.is_some_and(|n| n.publisher_kind == Some(PublisherKind::Platform));
+                    let object_id = super::model_object_id(graph, &pid.object);
+                    let mut id = encode_event_id(&object_id, &s.event_name_lc);
+                    // A platform field or action event fires per element:
+                    // `OnAfterValidateEvent` for 'No.' never fires when 'Name'
+                    // is validated. Each element is its own event, so two
+                    // subscribers of different fields are not co-subscribers
+                    // (d44 would otherwise pair them).
+                    let element = if platform { s.element.clone() } else { None };
+                    if let Some(e) = &element {
+                        id = format!("{id}/{e}");
+                    }
+                    if pid.object.app == primary && !platform {
+                        if real.contains(&id) {
+                            c.bound_model += 1;
+                            (id, "resolved")
+                        } else {
+                            c.bound_model_missing += 1;
+                            synth(
+                                &mut events,
+                                &mut event_ix,
+                                &id,
+                                object_id,
+                                s,
+                                "publisher not indexed",
+                            );
+                            (id, "maybe")
+                        }
+                    } else {
+                        if platform {
+                            c.bound_platform += 1;
+                        } else {
+                            c.bound_dependency += 1;
+                        }
+                        if !event_ix.contains_key(&id) {
+                            let target = super::model_routine_key(graph, pid);
+                            let dep = registry.target(pid);
+                            let parameters = match dep.as_ref().map(|t| &t.params) {
+                                Some(TargetParams::Known(ps)) => ps
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, p)| {
+                                        let ty = p.ty.clone().unwrap_or_default();
+                                        L3Parameter {
+                                            index: i as u32,
+                                            name: p.name.clone(),
+                                            is_var: p.by_ref,
+                                            is_record: crate::program::body::ir_walk::is_record_type_str(&ty),
+                                            table_name: crate::program::body::ir_walk::parse_record_table_name(&ty),
+                                            type_text: ty,
+                                        }
+                                    })
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                            let (publisher_ref, note) = if platform {
+                                (PublisherRef::Platform { target }, "platform event")
+                            } else {
+                                (
+                                    PublisherRef::Dependency {
+                                        target,
+                                        body: dep.as_ref().map(|t| t.body),
+                                    },
+                                    "dependency publisher",
+                                )
+                            };
+                            let event_kind = match node.and_then(|n| n.publisher_kind) {
+                                Some(PublisherKind::Integration) => "integration",
+                                Some(PublisherKind::Business) => "business",
+                                Some(PublisherKind::Internal) => "internal",
+                                Some(PublisherKind::Platform) => "trigger",
+                                None => "unknown",
+                            };
+                            event_ix.insert(id.clone(), events.len());
+                            events.push(EventSymbol {
+                                id: id.clone(),
+                                publisher_object_id: object_id,
+                                publisher_routine_id: None,
+                                publisher_stable_routine_id: None,
+                                event_name: node
+                                    .map(|n| n.name.clone())
+                                    .unwrap_or_else(|| s.event_name_lc.clone()),
+                                event_kind: event_kind.to_string(),
+                                element_name: element,
+                                signature_hash: sha256_hex(&id),
+                                parameters,
+                                // Not read from dependency attributes yet.
+                                isolated: None,
+                                provenance: vec![Evidence {
+                                    source: "program".to_string(),
+                                    note: Some(note.to_string()),
+                                }],
+                                publisher_ref: Some(publisher_ref),
+                            });
+                        }
+                        (id, "resolved")
+                    }
+                }
+                SubscriptionOutcome::Ambiguous {
+                    publisher_object, ..
+                } => {
+                    c.ambiguous += 1;
+                    let object_id = super::model_object_id(graph, publisher_object);
+                    let id = encode_event_id(&object_id, &s.event_name_lc);
+                    synth(
+                        &mut events,
+                        &mut event_ix,
+                        &id,
+                        object_id,
+                        s,
+                        "publisher overload ambiguous",
+                    );
+                    (id, "ambiguous")
+                }
+                SubscriptionOutcome::Orphaned { publisher_object } => {
+                    c.orphaned += 1;
+                    let object_id = super::model_object_id(graph, publisher_object);
+                    let id = encode_event_id(&object_id, &s.event_name_lc);
+                    synth(
+                        &mut events,
+                        &mut event_ix,
+                        &id,
+                        object_id,
+                        s,
+                        "publisher not indexed",
+                    );
+                    (id, "maybe")
+                }
+                SubscriptionOutcome::ObjectUnresolved => {
+                    c.object_unresolved += 1;
+                    // L3's sentinel shape: `unknown/{type}/0:{name}`.
+                    let sentinel =
+                        format!("unknown/{}/0:{}", s.publisher_object_type, s.publisher_name);
+                    let id = encode_event_id(&sentinel, &s.event_name_lc);
+                    synth(
+                        &mut events,
+                        &mut event_ix,
+                        &id,
+                        sentinel,
+                        s,
+                        "target object not in indexed source",
+                    );
+                    (id, "unknown")
+                }
+            };
+            edges.push(EventEdge {
+                event_id,
+                subscriber_routine_id: r.id.clone(),
+                subscriber_stable_routine_id: r.stable_routine_id.clone(),
+                subscriber_app_id: r.app_guid.clone(),
+                resolution: resolution.to_string(),
+                provenance: vec![Evidence::tree_sitter()],
+            });
+        }
+    }
+    ProgramEvents {
+        graph: EventGraph { events, edges },
+        census: c,
     }
 }

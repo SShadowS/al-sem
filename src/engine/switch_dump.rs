@@ -118,6 +118,9 @@ pub fn dump_lines(ws: &Path) -> Dump {
         d.insert("events.symbols".into(), rows(&ctx.event_graph.events));
         d.insert("events.edges".into(), rows(&ctx.event_graph.edges));
     }
+    if let Some(events) = &resolved.precomputed_events {
+        d.insert("events.census".into(), events.census.lines());
+    }
 
     let run = run_detectors(&resolved, &registered_detectors());
     d.insert("findings".into(), rows(&run.findings));
