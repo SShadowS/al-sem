@@ -152,6 +152,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem fingerprint` reads the program engine** (engine-switch S6.3). Golden move,
+  `tests/cli-b-goldens/fingerprint/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`:
+  the same unresolved `Page.RunModal` as S6.2, so the coverage fields go `complete` ->
+  `partial` (`object-run-unresolved`), and the human renderer adds the lines it prints
+  only for a partial cone. No fact, permission or witness changes; CBOR goldens
+  unchanged. `fingerprint_follows_the_program_engines_calls`; discrimination: the L3
+  builder fails it.
+
 - **`alsem digest` reads the program engine** (engine-switch S6.2), through
   `assemble_and_resolve_workspace_program` like `prove`. Golden move,
   `tests/cli-b-goldens/digest/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`: its

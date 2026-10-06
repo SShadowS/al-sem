@@ -10,9 +10,11 @@
         "classificationSource": "ast",
         "coverage": {
           "directStatus": "complete",
-          "inheritedStatus": "complete",
-          "reasons": [],
-          "status": "complete",
+          "inheritedStatus": "partial",
+          "reasons": [
+            "object-run-unresolved"
+          ],
+          "status": "partial",
           "unknownTargets": []
         },
         "dispatch": {
@@ -28,7 +30,7 @@
         },
         "families": [
           {
-            "coneCoverage": "complete",
+            "coneCoverage": "partial",
             "resourceKind": "table",
             "resources": [
               {
@@ -102,7 +104,7 @@
             ]
           },
           {
-            "coneCoverage": "complete",
+            "coneCoverage": "partial",
             "resourceKind": "ui",
             "resources": [
               {
@@ -139,7 +141,7 @@
         },
         "requiredPermissions": [
           {
-            "coverage": "complete",
+            "coverage": "partial",
             "rights": "MR",
             "targetDisplay": "11111111-0000-0000-0000-0000000d4902/table/50100",
             "targetId": "11111111-0000-0000-0000-0000000d4902/table/50100",

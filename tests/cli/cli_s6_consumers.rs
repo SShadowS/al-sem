@@ -87,3 +87,39 @@ fn digest_follows_the_program_engines_calls() {
     .expect("digest runs");
     assert!(r.json_text.contains("S6 Log"), "{}", r.json_text);
 }
+
+/// S6.3 `alsem fingerprint`: Run6's query output names the write.
+#[test]
+fn fingerprint_follows_the_program_engines_calls() {
+    use al_sem::engine::l5::fingerprint_cli::{
+        FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
+    };
+    use al_sem::engine::l5::fingerprint_query::WitnessLimit;
+    let dir = tempfile::tempdir().unwrap();
+    page_run_workspace(dir.path());
+    let opts = FingerprintOptions {
+        workspace: dir.path(),
+        driver_version: "s6",
+        format: FingerprintFormat::Json,
+        out: None,
+        shard: None,
+        witness_limit: Some(WitnessLimit::Capped(3)),
+        roots: None,
+        routine_selectors: vec!["Run6".to_string()],
+        include_inherited: true,
+        is_query_requested: true,
+        deterministic: true,
+        strict: false,
+        verbosity: "compact",
+        inventory_only: false,
+        no_roots_config: false,
+    };
+    let r = run_fingerprint_pipeline(&opts).expect("fingerprint runs");
+    let FingerprintOutput::Text(text) = r.output else {
+        panic!("query output is text")
+    };
+    assert!(
+        text.contains("aaaa6666-0000-0000-0000-000000000006/table/50600"),
+        "Run6's cone holds the \"S6 Log\" insert: {text}"
+    );
+}
