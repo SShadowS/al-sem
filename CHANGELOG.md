@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem prove` reads the program engine** (engine-switch S6.1). It built the
+  disk-only L3 model and resolved calls and events with L3. It now uses
+  `program_calls::assemble_and_resolve_workspace_program`, the program-backed model
+  `alsem analyze` uses (program calls and event graph attached), which every S6
+  consumer moves onto. Goldens unchanged (`tests/cli-b-goldens/prove`: the corpus has no
+  site where the engines disagree). `prove_follows_the_program_engines_calls`
+  (tests/cli/cli_s6_consumers.rs) states a workspace whose only path to a table write is
+  `MyPage.RunModal()` (L3: member not found; program: the page's `OnOpenPage`);
+  discrimination: the L3 builder answers it wrongly.
+
 - **The model's object facts come from the resolver's derivation** (engine-switch S5.4,
   spec G3/G4; deferred from S2b.4). Object facts were derived twice from the same IR:
   `node_extract` for the resolver's `ObjectNode` and the model assembly for `L3Object`.

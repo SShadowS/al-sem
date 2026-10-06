@@ -640,6 +640,31 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
     Some(resolved)
 }
 
+/// The program-backed model every consumer moves onto in engine-switch S6: the
+/// model projected from one program build (as `alsem analyze` builds it,
+/// `gate::run::build_analysis_model`), with the program engine's calls and event
+/// graph attached. Same signature as
+/// `l3_workspace::assemble_and_resolve_workspace`, which it replaces consumer by
+/// consumer. `None` when the program build or the model assembly fails.
+#[must_use]
+pub fn assemble_and_resolve_workspace_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Option<crate::engine::l3::l3_workspace::L3Resolved> {
+    let (ctx, report, _) =
+        crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
+    let mut resolved =
+        crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_from_program(
+            workspace,
+            model_instance_id,
+            skip_roots_config,
+            &ctx,
+        )?;
+    attach_program_calls(&mut resolved, ctx, report);
+    Some(resolved)
+}
+
 /// The edge for a call site the program engine gave no usable edge for: one
 /// to-less `Unknown(NoProgramSite)` edge, bindings in their initial state (a
 /// record argument stays `"unresolved-callee"`). Engine-switch S3.1 — this used to
