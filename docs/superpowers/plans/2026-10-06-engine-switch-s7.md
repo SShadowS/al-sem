@@ -106,3 +106,13 @@ Branch: `engine-switch/s7-cross-app`, from master `819fc0c5` (S6 merged).
 - Making `alsem analyze` cross-app (live d13/d16/d17): an owner decision; it belongs
   with the S8 world growth.
 - d43/d45 decisions (S8).
+
+## As built (2026-10-06)
+
+Commits: S7.0 `f66d4c00`, S7.1 `5fa55aca`, S7.2 `eae331e5`, S7.3 `8fdb1d33`,
+S7.4+S7.5 `03489d02` (one commit: the base consumes the artifacts), S7.6 `72c59439`.
+Decision 3 changed in S7.4: the population is the workspace's REQUIRED dependency
+closure, not every loaded app (DO's test app depends on the workspace). Decision 5
+changed: d17's declared list and versions come from the snapshot (the ledger's
+source), keeping the legacy guid spelling. The CDO/DO triage reports are summarised
+in the CHANGELOG; open detector limits in `docs/OUTSTANDING.md`.
