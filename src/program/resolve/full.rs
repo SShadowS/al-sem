@@ -109,8 +109,49 @@ pub(crate) struct FileResolution {
     pub edges: Vec<ClassifiedEdge>,
     pub flagged: Vec<FlaggedBuiltinDispatchSite>,
     pub indeterminate: Vec<IndeterminateBuiltinDispatchSite>,
-    /// See [`ProgramReport::interface_sites`].
-    pub interface_sites: Vec<(ObligationId, String)>,
+    /// See [`ProgramReport::site_facts`].
+    pub site_facts: Vec<(ObligationId, SiteFacts)>,
+}
+
+/// What the resolver knew about one call site beyond its edge, for the B3
+/// adapter (engine-switch S3.2 interfaces, S6.0 receivers). Only member call
+/// sites get an entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SiteFacts {
+    /// The interface (folded name) an interface-receiver call dispatched over.
+    pub interface: Option<String>,
+    /// The member call's receiver as the resolver typed it.
+    pub receiver: Option<ReceiverFact>,
+}
+
+/// A member call's receiver (engine-switch S6.0): what the adapter used to ask
+/// L3's receiver inference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiverFact {
+    /// The receiver's type text: the declaration's, canonicalized like the
+    /// model's variable types (`program::body::scope::canonicalize_type_text`),
+    /// when the receiver is a parameter, local, named return value or object
+    /// global; otherwise (implicit `Rec`, a `CurrPage` part, a dataitem, a call
+    /// result) rendered from the resolved object, `Record <table>` /
+    /// `<Kind> <object>`, with the object's own name. `None` when neither exists.
+    pub type_text: Option<String>,
+    pub ty: ReceiverFactType,
+}
+
+/// The receiver's type, as far as the adapter needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiverFactType {
+    /// An object (`Codeunit`, `Page`, …): its kind, and its name as the
+    /// declaration writes it (unquoted), else folded.
+    Object {
+        kind: ObjectKind,
+        name: String,
+    },
+    /// A record; `table` is the resolved table, if any.
+    Record {
+        table: Option<ObjectNodeId>,
+    },
+    Other,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +260,10 @@ pub struct ProgramReport {
     /// doc. ADDITIVE diagnostic: never consulted by `histogram`/
     /// `classify_obligation`, does not change any route/edge.
     pub builtin_dispatch_audit: BuiltinDispatchAudit,
-    /// Engine-switch S3.2: the interface (folded name) each interface-receiver
-    /// call site dispatched over, keyed by its obligation. The edge itself does
-    /// not carry it; detector consumers need it for the dispatch metadata.
-    pub interface_sites: HashMap<ObligationId, String>,
+    /// Per member call site, keyed by its obligation: the interface it
+    /// dispatched over (engine-switch S3.2) and its receiver (S6.0). The edge
+    /// itself does not carry them; the B3 adapter needs them.
+    pub site_facts: HashMap<ObligationId, SiteFacts>,
 }
 
 // ---------------------------------------------------------------------------
@@ -393,9 +434,9 @@ fn resolve_call_site_obligation(
     // `resolve_member_with_args` so `resolve_in_object`'s fail-closed pick
     // has real argument evidence to work with.
     call_args: &[al_syntax::ir::ExprId],
-    // Engine-switch S3.2: set to the interface's folded name when this is a
-    // member call on an `Interface`-typed receiver (the only arm that knows it).
-    interface_out: &mut Option<String>,
+    // Engine-switch S3.2 / S6.0: the member arm fills the interface (for an
+    // `Interface`-typed receiver) and the receiver fact.
+    facts_out: &mut SiteFacts,
     // Engine-switch S3.4: the file's source text, so a record operation's
     // `Validate` field argument can be read (`TriggerSiteRule`).
     text: &str,
@@ -481,8 +522,17 @@ fn resolve_call_site_obligation(
                     Some((surface, with_state)),
                 );
                 if let ReceiverType::Interface { name_lc } = &recv {
-                    *interface_out = Some(name_lc.clone());
+                    facts_out.interface = Some(name_lc.clone());
                 }
+                facts_out.receiver = Some(receiver_fact(
+                    &recv,
+                    &receiver_lc,
+                    routine,
+                    &obj.globals,
+                    obj_node,
+                    graph,
+                    index,
+                ));
                 let (s, r) = resolve_member_with_args(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info,
                 );
@@ -683,7 +733,7 @@ pub(crate) fn resolve_file_obligations(
     let mut edges: Vec<ClassifiedEdge> = Vec::new();
     let mut flagged: Vec<FlaggedBuiltinDispatchSite> = Vec::new();
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
-    let mut interface_sites: Vec<(ObligationId, String)> = Vec::new();
+    let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
@@ -729,7 +779,7 @@ pub(crate) fn resolve_file_obligations(
                     callee_fp: fp,
                 };
 
-                let mut interface: Option<String> = None;
+                let mut facts = SiteFacts::default();
                 let (kind, shape, completeness, routes, finding) = resolve_call_site_obligation(
                     &site.shape,
                     site.arity,
@@ -744,11 +794,11 @@ pub(crate) fn resolve_file_obligations(
                     site.with_state,
                     &pf.file,
                     &site.args,
-                    &mut interface,
+                    &mut facts,
                     &pf.text,
                 );
-                if let Some(name_lc) = interface {
-                    interface_sites.push((obl_id.clone(), name_lc));
+                if facts != SiteFacts::default() {
+                    site_facts.push((obl_id.clone(), facts));
                 }
 
                 match finding {
@@ -793,7 +843,90 @@ pub(crate) fn resolve_file_obligations(
         edges,
         flagged,
         indeterminate,
-        interface_sites,
+        site_facts,
+    }
+}
+
+/// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
+/// (engine-switch S6.0). An object's name is the declaration's as written when
+/// the receiver is a declared variable naming that object, else the folded name.
+fn receiver_fact(
+    recv: &ReceiverType,
+    receiver_lc: &str,
+    routine: &al_syntax::ir::RoutineDecl,
+    object_globals: &[al_syntax::ir::VarDecl],
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ReceiverFact {
+    use crate::program::node_extract::ObjectRef;
+    use crate::program::resolve::index::ObjectRefResolution;
+    use crate::program::resolve::receiver::{
+        ParsedType, classify_type_text, receiver_declared_type,
+    };
+    let declared = receiver_declared_type(receiver_lc, routine, object_globals);
+    // The object's own name, by id or by a unique name in the caller's closure.
+    let node_name =
+        |id: Option<&ObjectNodeId>, kind: ObjectKind, name_lc: &str| -> Option<String> {
+            let id = match id {
+                Some(id) => id.clone(),
+                None => match index.resolve_object_ref(
+                    graph,
+                    from_object.id.clone(),
+                    kind,
+                    &ObjectRef::Name {
+                        raw: name_lc.to_string(),
+                        normalized_lc: name_lc.to_string(),
+                    },
+                ) {
+                    ObjectRefResolution::Unique(id) => id,
+                    _ => return None,
+                },
+            };
+            let i = graph.objects.binary_search_by(|o| o.id.cmp(&id)).ok()?;
+            Some(graph.objects[i].name.clone())
+        };
+    // AL spelling: quoted when the name is not a plain identifier.
+    let al_name = |n: &str| {
+        if n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            n.to_string()
+        } else {
+            format!("\"{n}\"")
+        }
+    };
+    let rendered = match recv {
+        ReceiverType::Object { kind, name_lc, id } => {
+            node_name(id.as_ref(), *kind, name_lc).map(|n| format!("{kind:?} {}", al_name(&n)))
+        }
+        ReceiverType::Record { table: Some(id) } => {
+            node_name(Some(id), ObjectKind::Table, "").map(|n| format!("Record {}", al_name(&n)))
+        }
+        _ => None,
+    };
+    let ty = match recv {
+        ReceiverType::Object { kind, name_lc, .. } => {
+            let written = declared.and_then(|t| match classify_type_text(t) {
+                ParsedType::Object {
+                    kind: k,
+                    object_ref: ObjectRef::Name { raw, .. },
+                } if k == *kind => Some(raw),
+                _ => None,
+            });
+            ReceiverFactType::Object {
+                kind: *kind,
+                name: written.unwrap_or_else(|| name_lc.clone()),
+            }
+        }
+        ReceiverType::Record { table } => ReceiverFactType::Record {
+            table: table.clone(),
+        },
+        _ => ReceiverFactType::Other,
+    };
+    ReceiverFact {
+        type_text: declared
+            .map(crate::program::body::scope::canonicalize_type_text)
+            .or(rendered),
+        ty,
     }
 }
 
@@ -830,9 +963,9 @@ fn resolve_full_program_from_parts(
     Vec<ClassifiedEdge>,
     Coverage,
     BuiltinDispatchAudit,
-    HashMap<ObligationId, String>,
+    HashMap<ObligationId, SiteFacts>,
 ) {
-    let mut interface_sites: HashMap<ObligationId, String> = HashMap::new();
+    let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
     let obj_node_map = workspace_object_map(graph, primary_app_ref);
 
@@ -898,7 +1031,7 @@ fn resolve_full_program_from_parts(
         classified_edges.extend(file_res.edges);
         flagged.extend(file_res.flagged);
         indeterminate.extend(file_res.indeterminate);
-        interface_sites.extend(file_res.interface_sites);
+        site_facts.extend(file_res.site_facts);
     }
 
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
@@ -955,7 +1088,7 @@ fn resolve_full_program_from_parts(
         classified_edges,
         coverage,
         builtin_dispatch_audit,
-        interface_sites,
+        site_facts,
     )
 }
 
@@ -1007,14 +1140,13 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit, interface_sites) =
-        resolve_full_program_from_parts(
-            graph,
-            parsed,
-            &ctx.decl_surface(),
-            primary_app_ref,
-            ws_file_set,
-        );
+    let (edges, coverage, builtin_dispatch_audit, site_facts) = resolve_full_program_from_parts(
+        graph,
+        parsed,
+        &ctx.decl_surface(),
+        primary_app_ref,
+        ws_file_set,
+    );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -1062,7 +1194,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
         event_flow_dual_publisher_alias_skips,
         recovered_files,
         builtin_dispatch_audit,
-        interface_sites,
+        site_facts,
     }
 }
 
@@ -1078,14 +1210,13 @@ pub fn resolve_full_program_for_export(
     workspace_root: &Path,
 ) -> Option<(ProgramGraph, Vec<ClassifiedEdge>, AppRef)> {
     let ctx = build_context(workspace_root)?;
-    let (edges, _coverage, _builtin_dispatch_audit, _interface_sites) =
-        resolve_full_program_from_parts(
-            &ctx.graph,
-            &ctx.parsed,
-            &ctx.decl_surface(),
-            ctx.primary_app_ref,
-            &ctx.ws_file_set,
-        );
+    let (edges, _coverage, _builtin_dispatch_audit, _site_facts) = resolve_full_program_from_parts(
+        &ctx.graph,
+        &ctx.parsed,
+        &ctx.decl_surface(),
+        ctx.primary_app_ref,
+        &ctx.ws_file_set,
+    );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
 

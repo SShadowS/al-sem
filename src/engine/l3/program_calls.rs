@@ -123,7 +123,6 @@ use crate::engine::l3::call_resolver::{
 };
 use crate::engine::l3::implicit_edges::{implicit_trigger_edge_for_op, validate_field_lc};
 use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Workspace};
-use crate::engine::l3::receiver_type::{InferredReceiver, ReceiverType, infer_receiver_type};
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::program::abi_ingest::object_kind_from_abi_type;
@@ -836,6 +835,12 @@ fn adapter(
         .iter()
         .map(|o| (object_key(&o.id), o))
         .collect();
+    let primary_objects = graph
+        .objects
+        .iter()
+        .filter(|o| o.id.app == report.primary_app_ref)
+        .map(|o| (o.id.kind, o.name.fold_identifier()))
+        .collect();
     let conv = Converter {
         primary: report.primary_app_ref,
         upgrade_dependency_bindings,
@@ -843,8 +848,9 @@ fn adapter(
         surface: &surface,
         by_decl,
         objects,
+        primary_objects,
         symbols: &symbols,
-        interface_sites: &report.interface_sites,
+        site_facts: &report.site_facts,
         registry: ctx.registry(),
         targets: std::cell::RefCell::new(Vec::new()),
     };
@@ -970,9 +976,15 @@ struct Converter<'a> {
     /// L3 routines by declaration anchor `(unit, line, column)`.
     by_decl: HashMap<(&'a str, u32, u32), &'a L3Routine>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
+    /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
+    /// receiver object ours?".
+    primary_objects: std::collections::HashSet<(al_syntax::ir::ObjectKind, String)>,
+    /// L3's symbol table, for the census's L3 trigger comparison only
+    /// (`implicit_trigger_edge_for_op`); no converted edge reads it (S6.0). It
+    /// goes with the B3 harness in S9.
     symbols: &'a SymbolTable<'a>,
-    /// `ProgramReport::interface_sites` (S3.2).
-    interface_sites: &'a HashMap<ObligationId, String>,
+    /// `ProgramReport::site_facts`: interfaces (S3.2) and receivers (S6.0).
+    site_facts: &'a HashMap<ObligationId, crate::program::resolve::full::SiteFacts>,
     /// The dependency target registry (S3.3): body state per dependency routine.
     registry: crate::program::registry::DependencyRegistry<'a>,
     /// The dependency targets reached so far, in edge order (S3.3). Pushed only
@@ -999,19 +1011,21 @@ impl<'a> Converter<'a> {
         })
     }
 
-    /// The receiver's type as L3 reads it from the routine's declarations.
-    fn receiver(&self, r: &L3Routine, cs: &PCallSite) -> Option<InferredReceiver> {
-        match &cs.callee {
-            PCallee::Member { receiver, .. } => {
-                Some(infer_receiver_type(receiver, r, self.symbols))
-            }
-            _ => None,
-        }
+    /// The member call's receiver as the program resolver typed it (S6.0; it
+    /// used to come from L3's receiver inference).
+    fn receiver(
+        &self,
+        ce: &ClassifiedEdge,
+    ) -> Option<&'a crate::program::resolve::full::ReceiverFact> {
+        self.site_facts
+            .get(&ce.obligation_id)
+            .and_then(|f| f.receiver.as_ref())
     }
 
     /// The type a call into an object absent from the graph names: the
     /// object-typed receiver, or the `Kind::Name` of an object run.
-    fn named_type_ref(&self, r: &L3Routine, cs: &PCallSite) -> Option<ExternalTypeRef> {
+    fn named_type_ref(&self, cs: &PCallSite, ce: &ClassifiedEdge) -> Option<ExternalTypeRef> {
+        use crate::program::resolve::full::ReceiverFactType;
         match &cs.callee {
             PCallee::ObjectRun {
                 object_kind,
@@ -1021,10 +1035,10 @@ impl<'a> Converter<'a> {
                 kind: object_kind.clone(),
                 name: t.clone(),
             }),
-            PCallee::Member { .. } => match self.receiver(r, cs)?.ty {
-                ReceiverType::Object { kind, name } => Some(ExternalTypeRef {
-                    kind: kind.as_str().to_string(),
-                    name,
+            PCallee::Member { .. } => match &self.receiver(ce)?.ty {
+                ReceiverFactType::Object { kind, name } => Some(ExternalTypeRef {
+                    kind: format!("{kind:?}"),
+                    name: name.clone(),
                 }),
                 _ => None,
             },
@@ -1154,7 +1168,7 @@ impl<'a> Converter<'a> {
                                     e.dispatch_kind = DispatchKind::CodeunitRun;
                                 } else if e.dispatch_kind == DispatchKind::Method {
                                     e.receiver_type =
-                                        self.receiver(r, cs).map(|rt| rt.declared_type);
+                                        self.receiver(ce).and_then(|f| f.type_text.clone());
                                 }
                             }
                         }
@@ -1201,8 +1215,8 @@ impl<'a> Converter<'a> {
                                 Evidence::Unknown(reason) => reason,
                                 _ => PReason::IndexIntegrationGap,
                             };
-                            let member_decline = member_reason(reason)
-                                && self.receiver_outside_workspace(r, cs, route);
+                            let member_decline =
+                                member_reason(reason) && self.receiver_outside_workspace(ce, route);
                             if member_decline {
                                 c.adapter_external_member_decline += 1;
                             }
@@ -1214,7 +1228,7 @@ impl<'a> Converter<'a> {
                                 || member_decline
                             {
                                 e.resolution = external;
-                                e.external_type_ref = self.named_type_ref(r, cs);
+                                e.external_type_ref = self.named_type_ref(cs, ce);
                             } else {
                                 e.resolution = map_unknown(reason);
                                 // L3 spells an unresolved bare call `Unresolved`.
@@ -1236,9 +1250,10 @@ impl<'a> Converter<'a> {
             // L3 gives a record receiver's dependency callee
             // `Unknown(RecordTableProcedure)` ("unresolved-call"); an
             // object receiver's is already `ExternalTarget`. Count both.
-            match self.receiver(r, cs).map(|rt| rt.ty) {
-                Some(ReceiverType::Record { .. }) => c.adapter_external_record_receiver += 1,
-                Some(ReceiverType::Object { .. }) => c.adapter_external_object_receiver += 1,
+            use crate::program::resolve::full::ReceiverFactType;
+            match self.receiver(ce).map(|f| &f.ty) {
+                Some(ReceiverFactType::Record { .. }) => c.adapter_external_record_receiver += 1,
+                Some(ReceiverFactType::Object { .. }) => c.adapter_external_object_receiver += 1,
                 _ => c.adapter_external_other += 1,
             }
         }
@@ -1356,20 +1371,22 @@ impl<'a> Converter<'a> {
     }
 
     /// True when a member-lookup decline happened on an object outside the
-    /// workspace: the route's receiver tier says so, or the L2 receiver type
-    /// names an object (or a table) L3's workspace does not hold. Such a
-    /// callee is a dependency callee (L3 agrees for object receivers; for a
-    /// record receiver L3 says `RecordTableProcedure`).
-    fn receiver_outside_workspace(&self, r: &L3Routine, cs: &PCallSite, route: &Route) -> bool {
+    /// workspace: the route's receiver tier says so, or the resolver's receiver
+    /// fact (S6.0) names an object the primary app does not declare, or a table
+    /// that is unresolved or not the primary app's. Such a callee is a
+    /// dependency callee.
+    fn receiver_outside_workspace(&self, ce: &ClassifiedEdge, route: &Route) -> bool {
+        use crate::program::resolve::full::ReceiverFactType;
         if let Some(tier) = route.receiver_tier {
             return tier != TrustTier::Workspace;
         }
-        match self.receiver(r, cs).map(|rt| rt.ty) {
-            Some(ReceiverType::Object { kind, name }) => self
-                .symbols
-                .object_by_type_name(kind.as_str(), &name)
-                .is_none(),
-            Some(ReceiverType::Record { table_object_id }) => table_object_id.is_none(),
+        match self.receiver(ce).map(|f| &f.ty) {
+            Some(ReceiverFactType::Object { kind, name }) => !self
+                .primary_objects
+                .contains(&(*kind, name.fold_identifier())),
+            Some(ReceiverFactType::Record { table }) => {
+                table.as_ref().is_none_or(|t| t.app != self.primary)
+            }
             _ => false,
         }
     }
@@ -1486,9 +1503,9 @@ impl<'a> Converter<'a> {
         c.adapter_interface_dependency_impls += dependency.len();
 
         let name_lc = self
-            .interface_sites
+            .site_facts
             .get(&ce.obligation_id)
-            .cloned()
+            .and_then(|f| f.interface.clone())
             .unwrap_or_default();
         let interface_name = self
             .graph
@@ -2199,6 +2216,46 @@ mod adapter_tests {
     }
 
     const TABLE: &str = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; A; Code[20])\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n        field(2; B; Code[20])\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n    }\n\n    trigger OnInsert()\n    begin\n    end;\n\n    trigger OnModify()\n    begin\n    end;\n}\n";
+
+    /// Engine-switch S6.0: a resolved member call's `receiver_type` is the
+    /// program resolver's receiver text: a declared variable's canonical type,
+    /// else the resolved object rendered (implicit `Rec` -> the page's source
+    /// table, which L3 rendered as `Record rec`).
+    #[test]
+    fn receiver_type_comes_from_the_program_resolver() {
+        let helper =
+            "codeunit 50110 \"My Helper\"\n{\n    procedure Ping()\n    begin\n    end;\n}\n";
+        let table = "table 50111 \"Rt Cust\"\n{\n    fields\n    {\n        field(1; A; Code[20]) { }\n    }\n\n    procedure Touch()\n    begin\n    end;\n}\n";
+        let page = "page 50112 \"Rt Page\"\n{\n    SourceTable = \"Rt Cust\";\n\n    trigger OnOpenPage()\n    var\n        H: Codeunit \"My Helper\";\n        Tmp: Record \"Rt Cust\" temporary;\n    begin\n        H.Ping();\n        Rec.Touch();\n        Tmp.Touch();\n    end;\n}\n";
+        let a = adapt(
+            &[
+                ("src/h.al", helper),
+                ("src/t.al", table),
+                ("src/p.al", page),
+            ],
+            None,
+        );
+        let recv = |text: &str| {
+            let cs = a.site("OnOpenPage", text);
+            a.edges(&cs.id)
+                .into_iter()
+                .map(|e| e.receiver_type)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            recv("H.Ping"),
+            vec![Some("Codeunit \"My Helper\"".to_string())]
+        );
+        assert_eq!(
+            recv("Rec.Touch"),
+            vec![Some("Record \"Rt Cust\"".to_string())]
+        );
+        // A declaration's own text wins over the rendered object.
+        assert_eq!(
+            recv("Tmp.Touch"),
+            vec![Some("Record \"Rt Cust\" temporary".to_string())]
+        );
+    }
 
     /// Row "Call, Exact, Routine route in workspace": a bare call is
     /// `Direct`, a member call `Method` (with the receiver's declared type);
@@ -3420,12 +3477,19 @@ mod adapter_tests {
             // is not compared; the dependency-implementer edges S3.2 adds (to-less
             // `Interface`+`ExternalTarget`) have no L3 counterpart and are dropped
             // from the adapter side before comparing (`comparable` below).
+            // Engine-switch S6.0: `receiver_type` is the program resolver's
+            // receiver text now. For a receiver with no declaration it renders
+            // the resolved object (`Record Customer`, quoted multi-word names)
+            // where L3 synthesized its own (`Record rec`, unquoted), so it is
+            // not compared here; `receiver_type_comes_from_the_program_resolver`
+            // pins it.
             let key = |e: &CallEdge| {
                 let mut e = e.clone();
                 e.candidates = None;
                 e.unknown_method_name = None;
                 e.receiver_shape = None;
                 e.dispatch_meta = None;
+                e.receiver_type = None;
                 e
             };
             let comparable = |e: &CallEdge| {

@@ -653,6 +653,33 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
 /// no-op, resolution-neutral exactly like `receiver_expr` for those callers.
 ///
 /// [`CalleeShape::Member`]: crate::program::resolve::extract::CalleeShape::Member
+/// Step 2's caller-scope lookup key: an atomic (possibly quoted) receiver token
+/// unquoted, anything else as is.
+fn step2_lookup_key(receiver_lc: &str) -> String {
+    if is_atomic_receiver_token(receiver_lc) {
+        unquote_identifier(receiver_lc)
+    } else {
+        receiver_lc.to_string()
+    }
+}
+
+/// The declared type text Step 2 of [`infer_receiver_type`] types a receiver
+/// from (a parameter, local, named return value or object global), raw as
+/// declared; `None` when the receiver is no such declaration (implicit `Rec`,
+/// `CurrPage`, a chain, …) or the declaration has no type. Engine-switch S6.0:
+/// the B3 adapter's `CallEdge::receiver_type`, which it used to ask L3's
+/// receiver inference for.
+pub(crate) fn receiver_declared_type<'a>(
+    receiver_lc: &str,
+    routine: &'a RoutineDecl,
+    object_globals: &'a [VarDecl],
+) -> Option<&'a str> {
+    match caller_scope_symbol(&step2_lookup_key(receiver_lc), routine, object_globals) {
+        CallerScopeSymbol::Found(Some(ty)) => Some(ty),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // 6 pre-existing params + `bare_ctx` (Task 3); each is a distinct identity/lookup input, grouping would obscure call sites (mirrors `resolve_in_object`'s precedent).
 pub fn infer_receiver_type(
     receiver_lc: &str,
@@ -771,11 +798,7 @@ pub fn infer_receiver_type(
     // its own documented "bare identifier" scope).
     // -----------------------------------------------------------------------
 
-    let lookup_lc: String = if is_atomic_receiver_token(receiver_lc) {
-        unquote_identifier(receiver_lc)
-    } else {
-        receiver_lc.to_string()
-    };
+    let lookup_lc: String = step2_lookup_key(receiver_lc);
 
     match caller_scope_symbol(&lookup_lc, routine, object_globals) {
         // SAME-SCOPE malformed duplicate (T3 round-2 closer): the routine's

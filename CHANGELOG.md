@@ -152,6 +152,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The B3 adapter no longer runs L3's receiver inference** (engine-switch S6.0). It
+  asked L3's `infer_receiver_type` over the model `SymbolTable` for three outputs:
+  `CallEdge::receiver_type` (into typed edges, witness hops, digest, fingerprint,
+  snapshot), the dependency-member decline when a route has no `receiver_tier`, and
+  `external_type_ref` naming. The program resolver now reports each member site's
+  receiver (`ProgramReport::site_facts`, which replaces `interface_sites`:
+  `SiteFacts { interface, receiver }`; `ReceiverFact { type_text, ty }`). `type_text` is
+  the declaration's canonical type when the receiver is a declared name
+  (`receiver::receiver_declared_type`, Step 2's own lookup), else the resolved object
+  rendered with its own name. The adapter's L3 symbol table remains only for the
+  census's L3 trigger comparison, which goes with the B3 harness in S9.
+
+  Measured (harness `s5-4` -> `s6-0`): only `calls.edges` changes, in `receiver_type`;
+  findings and program stats unchanged. CDO 365 edges / DO 353: L3 called an implicit
+  page/table `Rec` `Record rec` (the variable's own name); it is now the real table
+  (`Record "Service Header"`, …); a `TableNo` receiver `Record 6175277` now names the
+  table; page parts are quoted (`Page "CDO Local Print Service Part"`). Fixtures:
+  ws-compound-call-result, ws-compound-receiver, ws-cross-object-chain, ws-page-rec,
+  ws-report-dataitem the same way. The B3 triage table (`docs/b3-triage/r0-corpus.md`)
+  moves with the `recv` text and census categories (call-result receivers are typed
+  objects now); one ws-cross-object-chain site, a member declined on a dependency
+  codeunit reached through a call result, converts to `ExternalTarget` like a
+  declared-variable receiver of that codeunit already did. Known limit: an object absent
+  from the graph and reached through a call result has no declared spelling, so its
+  external type name is folded (fixtures only; no reader but the triage doc). The
+  adapter-vs-L3 parity test no longer compares `receiver_type`;
+  `receiver_type_comes_from_the_program_resolver` pins it (discrimination: preferring the
+  rendered text over a declaration, and not rendering at all, each fail it).
+
 - **`aldump`'s detector-output modes read the program engine** (engine-switch S6.9):
   `--r3a1-combined-graph`, `--r3a2-summary-core`, `--r3a3-cone-coverage`,
   `--r4-findings` and the six `--r4f-*` modes project the program-backed model
