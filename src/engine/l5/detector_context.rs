@@ -1543,16 +1543,15 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
 /// (d17), and the eager indexes; the path-walker substrate (uncertainties /
 /// summaries) is built identically for any future cross-app detector.
 ///
-/// `root_classifications` are EMPTY here; `ordering_source` is `None` here (ordering
-/// facts lazily resolve to EMPTY — d13/d16/d17 never read them; the base does not
-/// carry the resolved-model classifier inputs). A future cross-app ordering detector
-/// would thread them additively.
+/// Since engine-switch S7.6 the call-site index, the root classifications and the
+/// ordering facts come from the base's cross-app model (`base.resolved`); they were
+/// empty, which left the call-site, root and ordering detectors blind cross-app.
 pub(crate) fn build_detector_context_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> DetectorContext<'_> {
     use crate::engine::l4::summary_runner::compute_summaries_v2_bundle_with_leaves;
 
-    let ws_routines = &base.ws_routines;
+    let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
     let graph = base.graph.clone();
 
@@ -1570,7 +1569,7 @@ pub(crate) fn build_detector_context_cross_app(
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
-        &base.ws_routines,
+        base.ws_routines(),
         ConeOutput::DerivedOnly,
     );
     let cones = outcome.cones;
@@ -1600,10 +1599,10 @@ pub(crate) fn build_detector_context_cross_app(
     let routine_by_id: HashMap<&str, &L3Routine> =
         ws_routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let objects_by_id: HashMap<&str, &L3Object> =
-        base.objects.iter().map(|o| (o.id.as_str(), o)).collect();
+        base.objects().iter().map(|o| (o.id.as_str(), o)).collect();
     // G-5: REAL table wins an id collision with a tableextension stub.
     let table_by_id: HashMap<&str, &L3Table> =
-        crate::engine::l3::l3_workspace::table_by_id_preferring_real(&base.tables);
+        crate::engine::l3::l3_workspace::table_by_id_preferring_real(base.tables());
 
     let reverse_call_graph = build_reverse_call_graph(&graph);
 
@@ -1659,17 +1658,19 @@ pub(crate) fn build_detector_context_cross_app(
     let cross_extension_subscribers =
         crate::engine::l5::event_flow::build_cross_extension_subscribers(
             &base.event_graph,
-            &base.objects,
+            base.objects(),
         );
 
-    // Resolved-call-edge-by-callsite index: EMPTY for the cross-app context. The
-    // cross-app build does not retain the raw resolver `calls.edges`, and d13/d16/d17
-    // read edges directly off `ctx.graph` (the combined graph). Future cross-app
-    // detectors that need this index would thread `calls` through `R3a5CrossAppBase`.
-    let resolved_call_edge_by_callsite: HashMap<
-        String,
-        crate::engine::l3::call_resolver::CallEdge,
-    > = HashMap::new();
+    // Resolved-call-edge-by-callsite index (engine-switch S7.6; it was EMPTY here,
+    // so d40/d41/d42/d53/d55/d61 were blind cross-app): the model's calls, the
+    // workspace callers' (the base cut them to the combined graph's).
+    let resolved_call_edge_by_callsite = first_resolved_edge_per_callsite(
+        base.resolved
+            .precomputed_calls
+            .as_ref()
+            .map(|c| c.edges.clone())
+            .unwrap_or_default(),
+    );
 
     let mut uncertainty_edges_by_from: HashMap<
         String,
@@ -1753,7 +1754,7 @@ pub(crate) fn build_detector_context_cross_app(
     // borrow source for every other eager index above, so anchoring the fingerprint
     // index to it too keeps the lifetime honest — the same 'a the whole ctx uses.
     let fingerprint_index =
-        crate::engine::l5::fingerprint::FingerprintIndex::build(&base.ws_routines, &base.objects);
+        crate::engine::l5::fingerprint::FingerprintIndex::build(base.ws_routines(), base.objects());
 
     let app_versions: HashMap<String, String> = base.resolved_app_versions.clone();
     let declared_dependencies: Vec<DeclaredDep> = base
@@ -1793,9 +1794,14 @@ pub(crate) fn build_detector_context_cross_app(
         dep_routine_ids: dep_routine_ids.clone(),
         declared_dependencies,
         app_versions,
-        root_classifications_by_routine: HashMap::new(),
+        root_classifications_by_routine: base
+            .resolved
+            .root_classifications
+            .iter()
+            .map(|rc| (rc.routine_id.clone(), rc.clone()))
+            .collect(),
         ordering_facts: std::sync::OnceLock::new(),
-        ordering_source: None,
+        ordering_source: Some(&base.resolved),
         closed_world_temp_params,
         summarize_diagnostics,
         db_effect_bundle: Some(db_effect_bundle),

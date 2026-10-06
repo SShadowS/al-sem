@@ -9,13 +9,15 @@
 //!     ishandled/handled;
 //!  2. caller: routine with a RESOLVED call to that publisher, binding a local
 //!     var to the IsHandled param; a post-call `if` guard on that var
-//!     (condition_references) whose statement contains a record write op;
+//!     (condition_references) whose statement contains a record write op — not
+//!     in the branch a simple guard runs when the var is TRUE (`if X then
+//!     <write>` runs the write when the subscriber sets the flag);
 //!  3. subscriber: an event-graph subscriber of the same event assigning
 //!     literal `true` to its own ishandled/handled param.
 //!
 //! Finding per (caller callsite × subscriber). Severity: high. Confidence:
 //! likely when the subscriber body has NO branching (unconditional claim),
-//! else possible. Inert on the cross-app context (resolver join empty).
+//! else possible.
 
 use std::collections::HashMap;
 
@@ -53,6 +55,60 @@ fn anchor_within(inner: &PAnchor, outer: &PAnchor) -> bool {
     starts_ok && ends_ok
 }
 
+/// Whether `write` can be skipped by the flag. `false` only when the guard is a
+/// SIMPLE one (`if X`, `if not X`, `if X = false`: the `if` node's
+/// `conditionGuard`) and the write is in the branch that runs when X is TRUE (the
+/// THEN of `if X`, the ELSE of `if not X`) — then setting the flag runs the
+/// write rather than bypassing it. A compound condition (`if A and not X`) has no
+/// `conditionGuard`, and its structure is not recorded, so it stays a candidate.
+fn write_skipped_when_flag_set(
+    caller: &L3Routine,
+    guard: &crate::engine::l2::features::PConditionReference,
+    write: &PAnchor,
+) -> bool {
+    use crate::engine::l2::features::PCFNNode;
+    fn find(n: &PCFNNode, at: (u32, u32)) -> Option<&PCFNNode> {
+        if n.kind == "if" && n.source_range.map(|r| (r.0, r.1)) == Some(at) {
+            return Some(n);
+        }
+        n.children
+            .iter()
+            .chain(n.else_children.iter())
+            .flatten()
+            .find_map(|c| find(c, at))
+    }
+    let within = |branch: &Option<Vec<PCFNNode>>| {
+        branch.iter().flatten().any(|c| {
+            c.source_range.is_some_and(|(sl, sc, el, ec)| {
+                let outer = PAnchor {
+                    start_line: sl,
+                    start_column: sc,
+                    end_line: el,
+                    end_column: ec,
+                    ..write.clone()
+                };
+                anchor_within(write, &outer)
+            })
+        })
+    };
+    let a = &guard.statement_anchor;
+    let Some(node) = caller
+        .statement_tree
+        .as_ref()
+        .and_then(|t| find(t, (a.start_line, a.start_column)))
+    else {
+        return true;
+    };
+    match node.condition_guard.as_ref() {
+        Some(g) if g.identifier == guard.identifier => match g.polarity.as_str() {
+            "positive" => !within(&node.children),
+            "negative" => !within(&node.else_children),
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
 pub fn detect_d61(
     resolved: &L3Resolved,
     ctx: &DetectorContext,
@@ -62,6 +118,7 @@ pub fn detect_d61(
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
     let mut skipped_no_critical_write = 0u64;
+    let mut skipped_write_runs_when_handled = 0u64;
     let mut skipped_no_flipping_subscriber = 0u64;
 
     // Leg 1: IsHandled-pattern publishers → (param index, event id).
@@ -181,6 +238,15 @@ pub fn detect_d61(
                 skipped_no_critical_write += 1;
                 continue;
             };
+            // The write must sit in the branch that runs when the flag is FALSE:
+            // `if not IsHandled then <write>` or `if IsHandled then .. else <write>`.
+            // A write that runs when the subscriber set the flag is not bypassed
+            // (engine-switch S7.6 triage: `if IsReportLayoutSelected then ..
+            // Modify()` after OnSelectReportLayout, 5 false positives on CDO/DO).
+            if !write_skipped_when_flag_set(caller, guard, &write.source_anchor) {
+                skipped_write_runs_when_handled += 1;
+                continue;
+            }
             let Some(flippers) = flippers_by_event.get(event_id) else {
                 skipped_no_flipping_subscriber += 1;
                 continue;
@@ -270,6 +336,7 @@ pub fn detect_d61(
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("noCriticalWrite", skipped_no_critical_write);
+    stats.add_skip("writeRunsWhenHandled", skipped_write_runs_when_handled);
     stats.add_skip("noFlippingSubscriber", skipped_no_flipping_subscriber);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

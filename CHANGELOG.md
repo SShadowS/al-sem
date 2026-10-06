@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cross-app detector context is complete** (engine-switch S7.6). It got no
+  call-site index, root classifications or ordering facts, so d40/d41/d42/d47/d49/
+  d50/d51/d53/d55/d61 were blind in cross-app mode. The base now keeps the cross-app
+  model itself (`R3a5CrossAppBase::resolved`, its calls cut to the combined graph's).
+  The context reads all three from it, and the detectors receive it as their
+  `resolved`: before, they got a throwaway copy without calls, so a detector calling
+  `calls_for` there fell back to L3's resolver.
+
+  Contract test: on all 195 r0 fixtures without dependencies, cross-app mode reports
+  exactly what single-app mode reports (18 differed with the empty index).
+
+  On CDO/DO the unblinded detectors match single-app except 39 d33 findings (true
+  positives: Base Application writes with no filter, which single-app cannot see)
+  and 2+2 correct d40/d42 drops (the dependency body shows the load). The run also
+  found 7 false positives from engine and detector bugs (see Fixed).
+
 - **The cross-app base and the dependency artifacts read the program engine**
   (engine-switch S7.4 + S7.5, one commit: the base consumes the artifacts).
   `capability_cone::build_cross_app_base` replaces the two L3 bases
@@ -858,6 +874,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **`Temp Blob` is matched by its exact name** (engine-switch S7.6). The IO
+  classifier took any type containing "temp blob", so `Codeunit "Temp Blob
+  Impl."` counted too. Once dependency bodies were analysed, the System
+  Application's own `Temp Blob.CreateOutStream` got a FILE effect and d47 reported
+  CDO's stream twice. There was one copy of the predicate in
+  `program::body::capability::io` and one in `capability_cone`; it is now one
+  definition.
+- **d61 no longer flags a write that runs because the flag is set.** `if IsHandled
+  then Rec.Modify()` (the subscriber produced a result, e.g. Base App's
+  `OnSelectReportLayout`) was reported as a bypass, behind a hard-coded
+  `if not IsHandled` text: 5 false positives on CDO/DO. A simple guard whose
+  TRUE branch holds the write is now skipped. A compound guard (`if A and not
+  IsHandled`) has no recorded structure and stays a candidate.
+- **A cross-app finding located in dependency source is out of scope.** A finding
+  whose enclosing routine is the workspace's but whose primary location is a `dep:`
+  unit survived the role filter (d47 located an IO fact inside `Temp Blob`).
 
 - **d44 anchors a finding on a workspace subscriber** (engine-switch S7.4). It took
   the first subscriber in id order. In cross-app mode an event's subscribers include

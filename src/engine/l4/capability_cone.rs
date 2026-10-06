@@ -237,11 +237,7 @@ fn parse_data_scope(text: &str) -> String {
     }
 }
 
-/// True when a declared type names a TempBlob (al-sem `isTempBlobType`).
-fn is_temp_blob_type(t: &str) -> bool {
-    let lc = t.to_lowercase();
-    lc.contains("temp blob") || lc == "tempblob"
-}
+use crate::program::body::capability::io::is_temp_blob_type;
 
 /// True when a declared type names a Page or Report (al-sem
 /// `ui-window-open.ts` `isPageOrReportType`).
@@ -2974,7 +2970,12 @@ pub(crate) struct R3a5CrossAppBase {
     /// The workspace app's guid, lowercase (engine-switch S7.4): the role of an
     /// object-anchored finding.
     pub primary_app_guid: String,
-    pub ws_routines: Vec<L3Routine>,
+    /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
+    /// combined graph's (workspace callers only). The detectors get it as their
+    /// `resolved`, and the context reads its root classifications and ordering
+    /// facts from it. [`Self::ws_routines`], [`Self::objects`] and [`Self::tables`]
+    /// are views onto it.
+    pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
     pub dep_routine_ids: BTreeSet<String>,
     /// The combined graph WITH the injected dep intra-app typed edges folded in
     /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
@@ -2984,8 +2985,6 @@ pub(crate) struct R3a5CrossAppBase {
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
     pub upgraded_bindings: HashMap<String, Vec<crate::engine::l3::call_resolver::UpgradedBinding>>,
     pub event_graph: EventGraph,
-    pub objects: Vec<crate::engine::l3::l3_workspace::L3Object>,
-    pub tables: Vec<crate::engine::l3::l3_workspace::L3Table>,
     /// Fixed-leaf (dep) RETAINED summaries.
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Per-routine direct capability facts (full, ordered).
@@ -3000,6 +2999,21 @@ pub(crate) struct R3a5CrossAppBase {
     /// Resolved dep `.app` versions keyed by appGuid (`model.apps[].version`). The d17
     /// resolved-version side. ADDITIVE — same gate-additivity note as above.
     pub resolved_app_versions: HashMap<String, String>,
+}
+
+impl R3a5CrossAppBase {
+    /// Every model routine: the workspace's, then each dependency's.
+    pub fn ws_routines(&self) -> &Vec<L3Routine> {
+        &self.resolved.workspace.routines
+    }
+
+    pub fn objects(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Object> {
+        &self.resolved.workspace.objects
+    }
+
+    pub fn tables(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Table> {
+        &self.resolved.workspace.tables
+    }
 }
 
 /// The cross-app L4 BASE (engine-switch S7.4): every intermediate the R3a-5
@@ -3033,7 +3047,7 @@ pub(crate) fn build_cross_app_base(
     model_instance_id: &str,
 ) -> Option<R3a5CrossAppBase> {
     use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
-    let x = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+    let mut x = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
         workspace,
         model_instance_id,
         false,
@@ -3136,27 +3150,30 @@ pub(crate) fn build_cross_app_base(
         direct_full.insert(r.id.clone(), facts);
     }
 
+    let upgraded_bindings = calls.upgraded_bindings.clone();
+    let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
+    let resolved_app_versions = x
+        .dependency_apps
+        .iter()
+        .map(|a| (a.guid.clone(), a.version.clone()))
+        .collect();
+    let mut resolved = x.resolved;
+    resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
     Some(R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
-        ws_routines: ws.routines.clone(),
+        resolved,
         dep_routine_ids,
-        objects: ws.objects.clone(),
-        tables: ws.tables.clone(),
         graph,
         combined_scc,
         field_index,
-        upgraded_bindings: calls.upgraded_bindings.clone(),
+        upgraded_bindings,
         event_graph: event_graph.clone(),
         leaf_summaries,
         direct_full,
         direct_coverage,
         nodes,
-        declared_dependencies: x.declared_dependencies,
-        resolved_app_versions: x
-            .dependency_apps
-            .iter()
-            .map(|a| (a.guid.clone(), a.version.clone()))
-            .collect(),
+        declared_dependencies,
+        resolved_app_versions,
     })
 }
 
@@ -3183,7 +3200,7 @@ pub fn project_r3a5_cross_app(
     let Some(base) = build_cross_app_base(workspace, model_instance_id) else {
         return empty;
     };
-    let ws_routines = &base.ws_routines;
+    let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
     let graph = &base.graph;
     let event_graph = &base.event_graph;
@@ -3209,7 +3226,7 @@ pub fn project_r3a5_cross_app(
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
-        &base.ws_routines,
+        base.ws_routines(),
         ConeOutput::RawOnly,
     )
     .cones;

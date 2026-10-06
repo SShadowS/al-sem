@@ -450,20 +450,13 @@ pub(crate) fn run_detectors_cross_app(
         .iter()
         .map(from_summarize_diagnostic)
         .collect();
-    // The detectors close over `(resolved, ctx)`. Build a throwaway L3Resolved view
-    // over the merged routines so the `resolved.workspace` arg is consistent with the
-    // ctx (detectors read `resolved.workspace.routines`/`.objects` for the fingerprint
-    // index + role map; for d13/d16/d17 those are the merged sets in `base`).
-    let resolved = L3Resolved {
-        workspace: merged_workspace_view(base),
-        root_classifications: Vec::new(),
-        primary_app: None,
-        infra_diagnostics: Vec::new(),
-        precomputed_calls: None,
-        precomputed_events: None,
-    };
+    // The detectors close over `(resolved, ctx)`: the base's own cross-app model
+    // (engine-switch S7.6), with its program calls and root classifications. It
+    // used to be a throwaway copy without calls, so a detector reading
+    // `calls_for(resolved)` fell back to L3's resolver.
+    let resolved = &base.resolved;
     let (findings, diagnostics, detector_stats, d1_cohort_index) =
-        run_each(&resolved, &ctx, detectors);
+        run_each(resolved, &ctx, detectors);
 
     // role_by_routine: dep routines → "dependency", else "primary". An
     // object-anchored finding (d64 names its page) carries the OBJECT id there, so
@@ -471,7 +464,7 @@ pub(crate) fn run_detectors_cross_app(
     // holds dependency objects, and a Microsoft test library's API page is not the
     // workspace's to fix).
     let role_by_routine: std::collections::HashMap<&str, &str> = base
-        .ws_routines
+        .ws_routines()
         .iter()
         .map(|r| {
             let role = if base.dep_routine_ids.contains(&r.id) {
@@ -481,7 +474,7 @@ pub(crate) fn run_detectors_cross_app(
             };
             (r.id.as_str(), role)
         })
-        .chain(base.objects.iter().map(|o| {
+        .chain(base.objects().iter().map(|o| {
             let role = if o.app_guid.to_ascii_lowercase() == base.primary_app_guid {
                 "primary"
             } else {
@@ -489,6 +482,20 @@ pub(crate) fn run_detectors_cross_app(
             };
             (o.id.as_str(), role)
         }))
+        .collect();
+    // A finding whose primary location is in dependency source (`dep:` unit) is
+    // out of scope even when its enclosing routine is the workspace's: the user
+    // cannot change that line (engine-switch S7.6 triage: d47 anchored an IO fact
+    // inside the System Application's `Temp Blob`). An actionable anchor in the
+    // workspace keeps it.
+    let findings: Vec<Finding> = findings
+        .into_iter()
+        .filter(|f| {
+            !f.primary_location.source_unit_id.starts_with("dep:")
+                || f.actionable_anchor
+                    .as_ref()
+                    .is_some_and(|a| !a.source_unit_id.starts_with("dep:"))
+        })
         .collect();
     let scoped = role_scope_and_sort(findings, &role_by_routine);
 
@@ -498,20 +505,6 @@ pub(crate) fn run_detectors_cross_app(
         detector_stats,
         summarize_diagnostics,
         d1_cohort_index,
-    }
-}
-
-/// Build an `L3Workspace` view over the merged base routines/objects/tables — the
-/// `resolved.workspace` arg every detector receives. The cross-app detectors read
-/// `routines` (role map + fingerprint index) and `objects` (fingerprint index);
-/// the merged sets come straight from `base`.
-fn merged_workspace_view(
-    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
-) -> crate::engine::l3::l3_workspace::L3Workspace {
-    crate::engine::l3::l3_workspace::L3Workspace {
-        objects: base.objects.clone(),
-        tables: base.tables.clone(),
-        routines: base.ws_routines.clone(),
     }
 }
 
@@ -786,6 +779,57 @@ fn tokenize(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Cross-app scope: a finding located in dependency source is out
+    // -----------------------------------------------------------------------
+
+    static DEP_LOCATED: std::sync::OnceLock<Finding> = std::sync::OnceLock::new();
+
+    fn dep_located_probe(
+        _: &L3Resolved,
+        _: &DetectorContext,
+    ) -> Result<DetectorOutput, DetectorError> {
+        let f = DEP_LOCATED.get().expect("template set").clone();
+        Ok(DetectorOutput::no_diag(
+            vec![f],
+            DetectorStats::new("probe", 1, 1),
+        ))
+    }
+
+    /// Engine-switch S7.6 triage fix, hand-stated: a finding whose ENCLOSING
+    /// routine is the workspace's but whose primary location is dependency source
+    /// (`dep:` unit) is dropped by `run_detectors_cross_app` — the user cannot
+    /// change that line (CDO d47 located an IO fact inside the System
+    /// Application's `Temp Blob`). The finding is a real d13 finding with only its
+    /// location moved.
+    ///
+    /// Discrimination (2026-10-06): removing the `dep:` location filter keeps the
+    /// probe's finding (`left: 1`); restored, it passes.
+    #[test]
+    fn cross_app_scope_drops_a_finding_located_in_dependency_source() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-d13-internal-call");
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(&ws, "r0")
+            .expect("cross-app base");
+        let d13 = crate::engine::l5::detectors::registered_detectors()
+            .into_iter()
+            .find(|d| d.name == "d13-cross-app-internal-call")
+            .unwrap();
+        let real = run_detectors_cross_app(&base, std::slice::from_ref(&d13));
+        assert_eq!(real.findings.len(), 1, "the fixture's d13 finding");
+        let mut moved = real.findings[0].clone();
+        assert!(moved.primary_location.source_unit_id.starts_with("ws:"));
+        moved.primary_location.source_unit_id = "dep:dddd:src/Lib.al".to_string();
+        DEP_LOCATED.set(moved).unwrap();
+        let probe = Detector {
+            name: "probe".to_string(),
+            run: dep_located_probe,
+            requires: d13.requires,
+        };
+        let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe));
+        assert_eq!(out.findings.len(), 0);
+    }
 
     // -----------------------------------------------------------------------
     // Parallel detector execution must not change ORDER

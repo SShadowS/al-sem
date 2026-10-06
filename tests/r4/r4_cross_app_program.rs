@@ -735,3 +735,160 @@ fn d44_anchors_on_the_workspace_subscriber() {
         "ws:src/Sub.al"
     );
 }
+
+/// S7.6 contract: with no dependency, cross-app mode IS single-app mode. On every
+/// r0 corpus fixture without a `.alpackages` folder, every registered detector
+/// reports the same findings through `project_r4_findings_cross_app` as through the
+/// single-app `project_r4_findings` over the program-backed model. Before S7.6 the
+/// cross-app context had no call-site index, root classifications or ordering
+/// facts, so the detectors reading them (d40/d41/d42/d47/d49/d50/d51/d53/d55/d61)
+/// were blind there.
+///
+/// Discrimination (2026-10-06): restoring the EMPTY call-site index in
+/// `build_detector_context_cross_app` makes fixtures differ; restored, it passes.
+#[test]
+fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::{project_r4_findings, project_r4_findings_cross_app};
+    let detectors = registered_detectors();
+    let names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut dirs: Vec<_> = std::fs::read_dir(&corpus)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir() && !p.join(".alpackages").exists())
+        .collect();
+    dirs.sort();
+    let (mut compared, mut differ) = (0, Vec::new());
+    for ws in &dirs {
+        let Some(single) = assemble_and_resolve_workspace_with_program_calls(ws) else {
+            continue;
+        };
+        let ids = |p: al_sem::engine::l5::finding::R4FindingsProjection| {
+            p.findings.into_iter().map(|f| f.id).collect::<Vec<_>>()
+        };
+        let a = ids(project_r4_findings(&single, &detectors, "x", &names));
+        let b = ids(project_r4_findings_cross_app(
+            ws, "r0", &detectors, "x", &names,
+        ));
+        compared += 1;
+        if a != b {
+            differ.push(ws.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(compared > 150, "compared only {compared} fixtures");
+    assert!(differ.is_empty(), "cross-app != single-app on {differ:?}");
+}
+
+/// S7.6 triage fix, through the cross-app base: the dependency's own
+/// `Temp Blob.CreateOutStream`, which calls `TempBlobImpl.CreateOutStream` on a
+/// `Codeunit "Temp Blob Impl."`, gets no FILE fact (an in-memory stream). The
+/// substring match took `Temp Blob Impl.` for `Temp Blob`, and CDO's d47 then
+/// reported the same stream twice, once inside the System Application.
+///
+/// Discrimination (2026-10-06): restoring `contains("temp blob")` in
+/// `capability::io::is_temp_blob_type` gives `CreateOutStream` a FILE fact and
+/// fails the test; restored, it passes.
+#[test]
+fn temp_blob_impl_is_not_file_io() {
+    use al_sem::engine::l4::capability_cone::project_r3a5_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &ws.join("src/Main.al"),
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        B: Codeunit \"Temp Blob\";\n        S: OutStream;\n    begin\n        B.CreateOutStream(S);\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &ws.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            (
+                "src/TempBlob.al",
+                "codeunit 50150 \"Temp Blob\"\n{\n    procedure CreateOutStream(var OutStream: OutStream)\n    var\n        TempBlobImpl: Codeunit \"Temp Blob Impl.\";\n    begin\n        TempBlobImpl.CreateOutStream(OutStream);\n    end;\n}\n",
+            ),
+            (
+                "src/TempBlobImpl.al",
+                "codeunit 50151 \"Temp Blob Impl.\"\n{\n    procedure CreateOutStream(var OutStream: OutStream)\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+    let p = project_r3a5_cross_app(ws, "r0", "x");
+    let dep_file_facts: Vec<String> = p
+        .summaries
+        .iter()
+        .filter(|s| s.is_dep_routine)
+        .flat_map(|s| s.capability_facts_direct.iter())
+        .filter(|f| f.resource_kind == "file")
+        .map(|f| f.op.clone())
+        .collect();
+    assert!(dep_file_facts.is_empty(), "{dep_file_facts:?}");
+    // Not hollow: the workspace's own `Temp Blob` call is still classified.
+    let ws_file = p
+        .summaries
+        .iter()
+        .filter(|s| !s.is_dep_routine)
+        .flat_map(|s| s.capability_facts_direct.iter())
+        .any(|f| f.resource_kind == "file");
+    assert!(ws_file, "the workspace's Temp Blob call has its FILE fact");
+}
+
+/// A routine raises an IsHandled event and writes inside `guard`; a subscriber
+/// sets the flag.
+fn d61_workspace(dir: &Path, guard: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}]}}"#
+        ),
+    );
+    write(&dir.join("src/Log.al"), &table(50250, "Ws Log"));
+    write(
+        &dir.join("src/Mgr.al"),
+        &format!(
+            "codeunit 50251 \"Ws Mgr\"\n{{\n    procedure Go(var Log: Record \"Ws Log\")\n    var\n        IsHandled: Boolean;\n    begin\n        IsHandled := false;\n        OnBeforeGo(Log, IsHandled);\n        {guard}\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnBeforeGo(var Log: Record \"Ws Log\"; var IsHandled: Boolean)\n    begin\n    end;\n}}\n\ncodeunit 50252 \"Ws Handler\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Ws Mgr\", 'OnBeforeGo', '', false, false)]\n    local procedure H(var Log: Record \"Ws Log\"; var IsHandled: Boolean)\n    begin\n        IsHandled := true;\n    end;\n}}\n"
+        ),
+    );
+}
+
+fn d61_count(dir: &Path) -> usize {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d61-ishandled-bypasses-critical-write".to_string()];
+    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+}
+
+/// S7.6 triage fix: d61 flags a write the flag can SKIP, never one that runs
+/// because the subscriber set it. `if IsHandled then Log.Modify()` is the
+/// "a result was produced" shape (CDO/DO `OnSelectReportLayout`, 5 false
+/// positives once the Base Application subscriber was in view); `if not IsHandled
+/// then` and `if IsHandled then exit else` are the bypass. A compound guard
+/// (`ws-event-ishandled-nested-guard`) stays flagged.
+///
+/// Discrimination (2026-10-06): making `write_skipped_when_flag_set` always true
+/// flags the first case (`left: 1`); restored, it passes.
+#[test]
+fn d61_does_not_flag_a_write_that_runs_when_handled() {
+    for (guard, expected) in [
+        ("if IsHandled then Log.Modify();", 0),
+        ("if not IsHandled then Log.Modify();", 1),
+        ("if IsHandled then exit else Log.Modify();", 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        d61_workspace(dir.path(), guard);
+        assert_eq!(d61_count(dir.path()), expected, "{guard}");
+    }
+}

@@ -1038,7 +1038,7 @@ pub fn project_r4_findings_cross_app(
     let detector_name_set: std::collections::HashSet<&str> =
         detector_names.iter().map(|s| s.as_str()).collect();
 
-    let map = crate::engine::l4::summary::build_routine_stable_map(&base.ws_routines);
+    let map = crate::engine::l4::summary::build_routine_stable_map(base.ws_routines());
     let stable_finding_id = make_stable_finding_id_fn(&map);
 
     let mut stable: Vec<StableFinding> = findings
