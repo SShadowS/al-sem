@@ -477,6 +477,12 @@ struct AnalyzeCli {
     /// OFF by default — the default analyze output is byte-identical to today.
     #[arg(long = "with-evidence", default_value_t = false)]
     with_evidence: bool,
+
+    /// Analyse the workspace alone. The default analyses it with the dependencies it
+    /// requires (their code the workspace reaches, and around the dependency events it
+    /// subscribes to): cross-app findings such as d13/d16/d17, at more memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `ProveCli` — arguments for `alsem prove <ws> <routine> <question>`.
@@ -1502,6 +1508,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
         group_by,
         deterministic: a.deterministic,
         with_evidence: a.with_evidence,
+        single_app: a.single_app,
     };
 
     // `default_version` is the engine's default (unpinned) SARIF `driver.version`.
@@ -1595,6 +1602,7 @@ mod tests {
                 group_by: None,
                 deterministic: false,
                 with_evidence: false,
+                single_app: false,
             };
             let result = run_analyze_with_exit(&args, "test");
             assert!(
@@ -1621,6 +1629,7 @@ mod tests {
                 group_by: None,
                 deterministic: false,
                 with_evidence: false,
+                single_app: false,
             };
             let result = run_analyze_with_exit(&args, "test");
             assert!(

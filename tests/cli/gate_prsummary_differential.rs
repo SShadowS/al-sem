@@ -191,6 +191,7 @@ fn make_args(
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     }
 }
 
@@ -714,6 +715,7 @@ fn oracle_parse_fail_on_error_is_err() {
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     };
     // The pipeline itself does NOT validate fail_on — the bin/CLI does (parse_fail_on).
     // However compute_finding_exit with an unknown severity falls back to sev_rank=0,
@@ -857,6 +859,7 @@ fn run_analyze_path(ws: &Path, require_dependencies: bool) -> (String, u8, Optio
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     };
     run_analyze_with_exit(&args, "engine-default").expect("run_analyze_with_exit")
 }

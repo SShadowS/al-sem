@@ -1046,7 +1046,7 @@ pub fn project_r4_findings_cross_app(
         ..
     } = {
         let _s = crate::engine::perf_trace::span("crossapp", "crossapp.run_detectors");
-        run_detectors_cross_app(&base, detectors)
+        run_detectors_cross_app(&base, detectors, true)
     };
 
     let _s_project = crate::engine::perf_trace::span("crossapp", "crossapp.project");

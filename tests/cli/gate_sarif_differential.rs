@@ -174,6 +174,7 @@ fn run_gate(workspace: &str, preset: Option<&str>, detector: Option<&str>) -> St
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     };
     run_analyze(&args, "engine-default").expect("run_analyze")
 }

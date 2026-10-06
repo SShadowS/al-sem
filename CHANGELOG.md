@@ -326,6 +326,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem analyze` is cross-app by default; `--single-app` keeps the old
+  analysis** (engine-switch S8.3, owner decision 2026-10-06).
+  - **What the default analyses.** The workspace together with the dependency code
+    it demands (S8.2): one `FULL` program build and the cross-app base, so
+    d13/d16/d17 and every detector see dependency bodies, events and versions.
+  - **The model builder.** `build_analysis_model(ws, single_app)` returns an
+    `AnalysisTarget`: `SingleApp` (the old model) or `CrossApp` (the base). The
+    switch harness keeps dumping the single-app model.
+  - **Scope.** `--scope primary` drops dependency-anchored findings in the cross-app
+    runner (routine, object, `dep:` location); `--scope all` keeps them.
+  - **Coverage** counts the primary app's routines only (`project_coverage`).
+  - **Measured (release-fast, default preset).** CDO: 2,599 findings in 21 s at a
+    2.95 GB peak, against 2,172 in 5 s at 634 MiB with `--single-app`. DO: 2,253 in
+    22 s / 3.06 GB, against 1,847 in 5 s / 614 MiB.
+  - **Goldens.** No golden moved: no golden fixture with dependencies goes through
+    `alsem analyze`. A test pins the default (d13 on `ws-d13-internal-call`) and
+    `--single-app` (none).
+
+
 - **The B3 adapter no longer runs L3's receiver inference** (engine-switch S6.0). It
   asked L3's `infer_receiver_type` over the model `SymbolTable` for three outputs:
   `CallEdge::receiver_type` (into typed edges, witness hops, digest, fingerprint,

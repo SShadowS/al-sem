@@ -62,6 +62,7 @@ fn args(ws: &Path) -> AnalyzeArgs {
         group_by: None,
         deterministic: true,
         with_evidence: false,
+        single_app: false,
     }
 }
 
@@ -118,4 +119,34 @@ fn analyze_of_a_missing_workspace_is_still_could_not_verify() {
         run_analyze_with_exit(&args(&ws), "test").is_ok(),
         "a missing workspace is empty output, not an error"
     );
+}
+
+/// Engine-switch S8.3: `alsem analyze` is cross-app by default — the workspace with
+/// the dependency code it demands — so a call into a dependency's `[InternalProc]`
+/// is a d13 finding. `--single-app` analyses the workspace alone, where the
+/// dependency routine is not in the model and d13 has nothing to report.
+///
+/// Discrimination (2026-10-06): making `build_analysis_model` ignore
+/// `single_app == false` (always the single-app build) loses the default finding;
+/// restored, it passes.
+#[test]
+fn analyze_is_cross_app_by_default_and_single_app_on_request() {
+    let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d13-internal-call");
+    let detectors = |a: &AnalyzeArgs| {
+        let (out, _, _) = run_analyze_with_exit(a, "test").expect("analyze runs");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json output");
+        v["payload"]["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .map(|f| f["detector"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let default = args(&ws);
+    assert_eq!(detectors(&default), vec!["d13-cross-app-internal-call"]);
+    let single = AnalyzeArgs {
+        single_app: true,
+        ..args(&ws)
+    };
+    assert!(detectors(&single).is_empty());
 }

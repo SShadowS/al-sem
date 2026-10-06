@@ -2966,10 +2966,13 @@ pub struct R3a5FullSummaryProjection {
 /// R3a-5 projection (and the R3b Salsa wrap) consume, before the core/cone +
 /// projection. Extracted so the R3b Salsa layer can build its fine-grained inputs
 /// from EXACTLY the same base the from-scratch path uses (no divergent assembly).
-pub(crate) struct R3a5CrossAppBase {
+pub struct R3a5CrossAppBase {
     /// The workspace app's guid, lowercase (engine-switch S7.4): the role of an
     /// object-anchored finding.
     pub primary_app_guid: String,
+    /// The program build's dependency coverage and ledger (`alsem analyze`'s
+    /// preflight, engine-switch S8.3).
+    pub coverage: crate::program::resolve::full::FreshCoverage,
     /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
     /// combined graph's (workspace callers only). The detectors get it as their
     /// `resolved`, and the context reads its root classifications and ordering
@@ -3167,6 +3170,7 @@ pub(crate) fn build_cross_app_base(
     resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
     Some(R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
+        coverage: x.coverage.clone(),
         resolved,
         dep_routine_ids,
         graph,
