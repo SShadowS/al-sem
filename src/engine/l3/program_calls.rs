@@ -138,8 +138,9 @@ use crate::program::resolve::edge::{
     DispatchShape, Edge, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason,
     callee_fp,
 };
-use crate::program::resolve::full::{ClassifiedEdge, ProgramContext, ProgramReport};
+use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramContext, ProgramReport};
 use crate::snapshot::TrustTier;
+use al_syntax::ir::ObjectKind;
 
 /// Exact site key: `(unit, start line, start col, end line, end col)`.
 type SiteKey = (String, u32, u32, u32, u32);
@@ -214,8 +215,13 @@ pub struct SiteCensus {
     /// Edges L3's own trigger logic gave those ops.
     pub adapter_l3_trigger_edges: usize,
     /// Interface or trigger routes not into an L3 workspace routine
-    /// (dependency, ABI boundary, unresolved): dropped.
+    /// (dependency, ABI boundary, unresolved): dropped. Since engine-switch
+    /// S3.2 interface routes into dependencies are kept instead (see
+    /// `adapter_interface_dependency_impls`); this counts trigger routes only.
     pub adapter_routes_dropped: usize,
+    /// Dependency implementer objects an interface site reaches (S3.2): one
+    /// to-less `ExternalTarget` edge each.
+    pub adapter_interface_dependency_impls: usize,
     /// Trigger routes dropped by the site rules the program fan-out does not
     /// apply: `RunTrigger = false`, or another field's `OnValidate`.
     pub adapter_trigger_routes_filtered: usize,
@@ -743,6 +749,7 @@ fn adapter(
         by_decl,
         objects,
         symbols: &symbols,
+        interface_sites: &report.interface_sites,
     };
 
     let mut edges: Vec<CallEdge> = Vec::new();
@@ -869,6 +876,8 @@ struct Converter<'a> {
     by_decl: HashMap<(&'a str, u32, u32), &'a L3Routine>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
     symbols: &'a SymbolTable<'a>,
+    /// `ProgramReport::interface_sites` (S3.2).
+    interface_sites: &'a HashMap<ObligationId, String>,
 }
 
 impl<'a> Converter<'a> {
@@ -965,7 +974,7 @@ impl<'a> Converter<'a> {
         };
         match edge.shape {
             DispatchShape::Polymorphic => {
-                let edges = self.interface(r, cs, edge, &mut state, c)?;
+                let edges = self.interface(r, cs, ce, &mut state, c)?;
                 return Some((edges, state.bindings));
             }
             DispatchShape::AmbiguousOverload => {
@@ -1246,57 +1255,117 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// An interface (Polymorphic) edge → one `Interface`+`Maybe` edge per
-    /// workspace implementer, sorted by `to`, `dispatch_meta` on the first;
-    /// or one to-less `Unknown(InterfaceNoImpl)` edge. Bindings: ambiguous.
+    /// The model's object id for a program object (`encode_object_id`'s
+    /// `"{app guid}/{type}/{number}"`; a numberless object has number 0, as the
+    /// model writes it).
+    fn model_object_id(&self, id: &ObjectNodeId) -> String {
+        let guid = &self.graph.apps.resolve(id.app).guid;
+        let ty = crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Unknown");
+        let number = match id.key {
+            ObjKey::Id(n) => n,
+            ObjKey::Name(_) => 0,
+        };
+        crate::engine::ids::encode_object_id(guid, ty, number)
+    }
+
+    /// An interface (Polymorphic) edge, converted from the PROGRAM engine alone
+    /// (engine-switch S3.2; it used to read L3's receiver inference and symbol
+    /// table):
+    /// - one `Interface`+`Maybe` edge per workspace implementer, sorted by `to`;
+    /// - one to-less `Interface`+`ExternalTarget` edge per DEPENDENCY implementer
+    ///   object (its body is not in the model), sorted, with its
+    ///   `external_type_ref` — these routes used to be dropped;
+    /// - with no implementer reached, one to-less `Unknown(InterfaceNoImpl)` edge.
+    ///
+    /// `dispatch_meta` (on the first edge) names the interface the program
+    /// resolver dispatched over (`ProgramReport::interface_sites`), counts every
+    /// codeunit implementing it in the whole program, lists the ones no route
+    /// reached as `"not-found"`, and lists the implementing enums. Bindings:
+    /// ambiguous.
     fn interface(
         &self,
         r: &L3Routine,
         cs: &PCallSite,
-        edge: &Edge,
+        ce: &ClassifiedEdge,
         state: &mut BindingState,
         c: &mut SiteCensus,
     ) -> Option<Vec<CallEdge>> {
         mark_bindings_ambiguous(state);
         let mut callees: Vec<&L3Routine> = Vec::new();
-        for route in &edge.routes {
+        let mut dependency: Vec<ObjectNodeId> = Vec::new();
+        for route in &ce.edge.routes {
             match &route.target {
-                // A workspace implementer with no L3 routine: the whole site
-                // falls back to L3, as for an exact or ambiguous edge.
+                // A workspace implementer with no model routine: the whole site
+                // is an honest unknown (S3.1).
                 RouteTarget::Routine(id) if id.object.app == self.primary => {
                     callees.push(self.l3_routine(id)?);
                 }
-                _ => c.adapter_routes_dropped += 1,
+                RouteTarget::Routine(id) => dependency.push(id.object.clone()),
+                RouteTarget::AbiSymbol { key } => {
+                    dependency.push(ObjectNodeId {
+                        app: key.app,
+                        kind: object_kind_from_abi_type(&key.object_type),
+                        key: if key.object_number != 0 {
+                            ObjKey::Id(key.object_number)
+                        } else {
+                            ObjKey::Name(key.object_name_lc.clone())
+                        },
+                    });
+                }
+                // An implementer the resolver could not resolve: it is listed in
+                // `unresolved_impls` below (no route reached its object).
+                RouteTarget::Unresolved | RouteTarget::Builtin(_) => {}
             }
         }
         callees.sort_by(|a, b| a.id.cmp(&b.id));
         callees.dedup_by(|a, b| a.id == b.id);
-        // The metadata L3 builds from its symbol table (code map B7: the
-        // program edge does not carry the interface name). An implementer
-        // with no workspace route is listed as unresolved ("not-found": the
-        // program edge does not say why).
-        let interface_name = match self.receiver(r, cs) {
-            Some(InferredReceiver {
-                ty: ReceiverType::Interface { name },
-                ..
-            }) => name,
-            Some(rt) => rt.declared_type,
-            None => String::new(),
+        dependency.sort();
+        dependency.dedup();
+        c.adapter_interface_dependency_impls += dependency.len();
+
+        let name_lc = self
+            .interface_sites
+            .get(&ce.obligation_id)
+            .cloned()
+            .unwrap_or_default();
+        let interface_name = self
+            .graph
+            .objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .min_by_key(|o| o.id.app != self.primary)
+            .map_or_else(|| name_lc.clone(), |o| o.name.clone());
+        let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
+            let mut v: Vec<&ObjectNode> = self
+                .graph
+                .objects
+                .iter()
+                .filter(|o| {
+                    kinds.contains(&o.id.kind)
+                        && o.implements.iter().any(|i| i.fold_identifier() == name_lc)
+                })
+                .collect();
+            v.sort_by(|a, b| a.id.cmp(&b.id));
+            v
         };
-        let impls = self.symbols.objects_implementing(&interface_name);
+        let impls = implements(&[ObjectKind::Codeunit]);
+        let reached = |o: &ObjectNode| {
+            callees
+                .iter()
+                .any(|t| t.object_id == self.model_object_id(&o.id))
+                || dependency.contains(&o.id)
+        };
         let meta = DispatchMeta {
-            interface_name: interface_name.clone(),
+            interface_name,
             total_impls: impls.len(),
             unresolved_impls: impls
                 .iter()
-                .filter(|o| !callees.iter().any(|t| t.object_id == o.id))
-                .map(|o| (o.id.clone(), "not-found".to_string()))
+                .filter(|o| !reached(o))
+                .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
                 .collect(),
-            enum_implementers: self
-                .symbols
-                .enum_implementers(&interface_name)
+            enum_implementers: implements(&[ObjectKind::Enum, ObjectKind::EnumExtension])
                 .iter()
-                .map(|o| o.id.clone())
+                .map(|o| self.model_object_id(&o.id))
                 .collect(),
         };
         let base = || {
@@ -1304,7 +1373,7 @@ impl<'a> Converter<'a> {
             e.dispatch_kind = DispatchKind::Interface;
             e
         };
-        if callees.is_empty() {
+        if callees.is_empty() && dependency.is_empty() {
             let mut e = base();
             e.resolution = Resolution::Unknown(L3Reason::InterfaceNoImpl);
             e.dispatch_meta = Some(meta);
@@ -1319,6 +1388,12 @@ impl<'a> Converter<'a> {
                 e
             })
             .collect();
+        out.extend(dependency.iter().map(|o| {
+            let mut e = base();
+            e.resolution = Resolution::ExternalTarget;
+            e.external_type_ref = self.type_ref(&object_key(o));
+            e
+        }));
         out[0].dispatch_meta = Some(meta);
         Some(out)
     }
@@ -2063,9 +2138,11 @@ mod adapter_tests {
     /// `OnInsert` trigger symbol.
     const DEP_SYMBOLS: &str = r#"{"Tables":[{"Id":18,"Name":"Customer","Fields":[{"Id":1,"Name":"No.","TypeDefinition":{"Name":"Code"}}],"Methods":[{"Name":"DepProc","Parameters":[]},{"Name":"OnInsert","Parameters":[]}]}],"Interfaces":[{"Name":"IDep","Methods":[{"Name":"Go","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]}],"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Post","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]},{"Id":81,"Name":"DepImpl","ImplementedInterfaces":["IDep"],"Methods":[{"Name":"Go","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]}]}"#;
 
-    /// Row "Polymorphic (interface)": one `Interface`+`Maybe` edge to the
-    /// workspace implementer, `dispatch_meta` on it; the dependency
-    /// implementer's route is dropped and counted. Bindings: ambiguous.
+    /// Row "Polymorphic (interface)", engine-switch S3.2: one `Interface`+`Maybe`
+    /// edge to the workspace implementer, `dispatch_meta` on it, and one to-less
+    /// `Interface`+`ExternalTarget` edge naming the dependency implementer
+    /// `DepImpl` (its route used to be dropped). `total_impls` counts both.
+    /// Bindings: ambiguous.
     #[test]
     fn interface_with_workspace_and_dependency_implementers() {
         let ws_impl = "codeunit 50103 \"WsImpl\" implements IDep\n{\n    procedure Go(var C: Record Customer)\n    begin\n    end;\n}\n";
@@ -2084,13 +2161,29 @@ mod adapter_tests {
         );
         want.dispatch_meta = Some(DispatchMeta {
             interface_name: "IDep".to_string(),
-            total_impls: 1,
+            total_impls: 2,
             unresolved_impls: Vec::new(),
             enum_implementers: Vec::new(),
         });
-        assert_eq!(a.edges(&cs.id), vec![want]);
+        let mut dep = edge(
+            a.routine("Caller"),
+            cs,
+            None,
+            DispatchKind::Interface,
+            Resolution::ExternalTarget,
+        );
+        dep.external_type_ref = Some(ExternalTypeRef {
+            kind: "Codeunit".to_string(),
+            name: "DepImpl".to_string(),
+        });
+        assert_eq!(a.edges(&cs.id), vec![want, dep]);
         assert_eq!(a.bindings(&cs.id), vec![b(0, false, "ambiguous")]);
-        assert_eq!(a.census.adapter_routes_dropped, 1, "{:#?}", a.census);
+        assert_eq!(a.census.adapter_routes_dropped, 0, "{:#?}", a.census);
+        assert_eq!(
+            a.census.adapter_interface_dependency_impls, 1,
+            "{:#?}",
+            a.census
+        );
     }
 
     /// Minor 5, precondition by assignment: the workspace implementer's L3
@@ -2981,19 +3074,36 @@ mod adapter_tests {
             // The whole edge, minus the diagnostic-only fields
             // (`candidates` only feeds the projection; `unknown_method_name`
             // and `receiver_shape` only feed `aldump` breakdowns).
+            // Engine-switch S3.2: `dispatch_meta` is now the program engine's own
+            // WHOLE-program view (L3's counts workspace implementers only), so it
+            // is not compared; the dependency-implementer edges S3.2 adds (to-less
+            // `Interface`+`ExternalTarget`) have no L3 counterpart and are dropped
+            // from the adapter side before comparing (`comparable` below).
             let key = |e: &CallEdge| {
                 let mut e = e.clone();
                 e.candidates = None;
                 e.unknown_method_name = None;
                 e.receiver_shape = None;
+                e.dispatch_meta = None;
                 e
+            };
+            let comparable = |e: &CallEdge| {
+                !(e.dispatch_kind == DispatchKind::Interface
+                    && e.to.is_none()
+                    && e.resolution == Resolution::ExternalTarget)
             };
             let same_bindings = |id: &str, is_call: bool| {
                 !is_call || calls.upgraded_bindings.get(id) == old.upgraded_bindings.get(id)
             };
             let mut here: std::collections::BTreeMap<&str, usize> = Default::default();
             for (id, is_call) in &ids {
-                let mut n = new_g.get(id).cloned().unwrap_or_default();
+                let mut n: Vec<CallEdge> = new_g
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| comparable(e))
+                    .collect();
                 let mut o = old_g.get(id).cloned().unwrap_or_default();
                 let (nt, ot) = (tos(&n), tos(&o));
                 let bucket = match (nt.is_empty(), ot.is_empty()) {
@@ -3090,6 +3200,81 @@ mod adapter_tests {
 #[cfg(test)]
 mod no_fallback_tests {
     use super::*;
+
+    /// S3.2, the SOURCE-bearing dependency arm (`RouteTarget::Routine` into
+    /// another app; the symbol-only arm is pinned by
+    /// `interface_with_workspace_and_dependency_implementers`). Hand-stated: the
+    /// dependency `.app` ships source for interface `IDep` and its only
+    /// implementer `DepImpl`; the workspace calls `X.Go` on an `IDep`. The site is
+    /// one to-less `Interface`+`ExternalTarget` edge naming `DepImpl` — it used
+    /// to be `InterfaceNoImpl` (the route was dropped).
+    #[test]
+    fn interface_into_a_source_bearing_dependency_keeps_its_implementer() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let root = std::env::temp_dir().join(format!("s32-src-dep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join(".alpackages")).unwrap();
+        let dep = "dddddddd-0003-0000-0000-0000000003b2";
+        std::fs::write(
+            root.join("app.json"),
+            format!(
+                r#"{{"id":"11111111-0000-0000-0000-0000000003b2","name":"Host","publisher":"P","version":"1.0.0.0","dependencies":[{{"id":"{dep}","name":"Dep","publisher":"Microsoft","version":"1.0.0.0"}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/W.Codeunit.al"),
+            "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IDep;\n    begin\n        X.Go();\n    end;\n}\n",
+        )
+        .unwrap();
+        let manifest = test_apps::manifest_xml(dep, "Dep");
+        let symbols = br#"{"Interfaces":[{"Name":"IDep","Methods":[{"Name":"Go","Parameters":[]}]}],"Codeunits":[{"Id":60001,"Name":"DepImpl","ImplementedInterfaces":["IDep"],"Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+        std::fs::write(
+            root.join(".alpackages/dep.app"),
+            test_apps::build_app(&[
+                ("NavxManifest.xml", manifest.as_bytes()),
+                ("SymbolReference.json", symbols),
+                (
+                    "src/IDep.Interface.al",
+                    b"interface IDep\n{\n    procedure Go();\n}\n",
+                ),
+                (
+                    "src/DepImpl.Codeunit.al",
+                    b"codeunit 60001 DepImpl implements IDep\n{\n    procedure Go()\n    begin\n    end;\n}\n",
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let (ctx, report, l3) = build_models(&root).unwrap();
+        let (calls, census) = resolved_calls_from_program(&report, &ctx, &l3.workspace, true);
+        std::fs::remove_dir_all(&root).ok();
+        let caller = l3
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Caller")
+            .unwrap();
+        let cs = &caller.call_sites[0];
+        let got: Vec<_> = calls
+            .edges
+            .iter()
+            .filter(|e| e.callsite_id == cs.id)
+            .collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].dispatch_kind, DispatchKind::Interface);
+        assert_eq!(got[0].to, None);
+        assert_eq!(got[0].resolution, Resolution::ExternalTarget);
+        assert_eq!(
+            got[0].external_type_ref,
+            Some(ExternalTypeRef {
+                kind: "Codeunit".to_string(),
+                name: "DepImpl".to_string()
+            })
+        );
+        assert_eq!(census.adapter_interface_dependency_impls, 1);
+    }
 
     /// S3.1: a call site the program engine gives no edge for is an honest
     /// `Unknown(NoProgramSite)` — never the legacy resolver's answer. Hand-stated:

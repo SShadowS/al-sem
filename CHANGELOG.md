@@ -112,6 +112,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Interface dispatch comes from the program engine and keeps dependency implementers**
+  (engine-switch S3.2). Before, the B3 adapter read the interface's name from L3's
+  receiver inference and its implementers from L3's symbol table, and dropped every
+  route into a dependency implementer. Now:
+  - the program resolver records which interface each interface-receiver call site
+    dispatched over (`ProgramReport::interface_sites`);
+  - `dispatch_meta` is built from the program graph: the interface's declared name,
+    every implementing codeunit in the whole program, the ones no route reached
+    (`"not-found"`), and the implementing enums;
+  - each dependency implementer, source-bearing or symbol-only, becomes a to-less
+    `Interface`+`ExternalTarget` edge naming its object (counted in
+    `adapter_interface_dependency_impls`).
+
+  Measured with the switch harness on all 218 corpora: **no finding moved**. Call edges
+  moved on 4 corpora and coverage on 2, all triaged (`.agent/golden-triage.md`):
+  - CDO/DO `CTS-CDN IPrePostValidator` (2 sites) was `InterfaceNoImpl` with 0
+    implementers. It now has 2 dependency implementers; the interface lives in the
+    CTS-CDN dependency, so "no implementer" was false.
+  - Three more sites (`ISenderProfileRetriever`, `CDO eSeal Service`) now carry the
+    dependency implementer that was silently dropped.
+  - A compound-receiver site (`GetIFoo().Bar`) gets its interface name, which L3 could
+    not infer.
+  - A protected dependency implementer is counted and listed as unresolved.
+  - Coverage's unresolved call-site multiset grows by one entry per new dependency edge
+    (CDO +3, DO +6).
+
+  Golden moved: the B3 triage table `docs/b3-triage/r0-corpus.md` (two fixture sites).
+  Tests: `interface_with_workspace_and_dependency_implementers` (symbol-only
+  implementer) and `interface_into_a_source_bearing_dependency_keeps_its_implementer`
+  (embedded-source implementer). Discrimination: dropping the ABI arm fails the first,
+  and dropping the source arm fails the second. The corpus parity test now leaves out
+  the program's whole-program `dispatch_meta` and the new dependency edges, which L3
+  cannot see.
+
 - **No more per-call fallback to the legacy resolver** (engine-switch S3.1). When the
   program engine gives no usable edge for a model call site, the B3 adapter used to ask
   L3's resolver (`resolve_one_call_site`). That covers no edge at the span, a
