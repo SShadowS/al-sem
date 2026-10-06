@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cross-app detector model from the program engine** (engine-switch S7.2).
+  `assemble_and_resolve_cross_app_from_program` builds the workspace rows as the
+  single-app model does, then appends every dependency in the snapshot: each
+  symbol-only dependency's ABI rows (bodyless), then each source-bearing dependency's
+  files projected from the program's own parse (no second parse), in `.app` path order
+  and file path order. The ABI-row converters moved from `engine::deps::cross_app_l3`
+  to `program::model::abi_rows`; `abi_ingest::load_symbol_reference` reads a
+  symbol-only `.app`'s symbols with the same parser the graph build uses. Measured
+  against the legacy merged model (`build_cross_app_l3_r4`): every cross-app fixture,
+  and CDO, give the same rows in the same order, whole content equal. The only
+  difference is the program engine's percent-decoded zip entry name in
+  `dep:<guid>:<path>` source-unit ids (the legacy kept `%2520`). DO has 571 more
+  objects: they come from apps in an ancestor `.alpackages`, which the program engine
+  loads and the legacy `<ws>/.alpackages` scan never read. Not yet used by any
+  consumer (S7.4).
+
 - **Owning-app body resolution** (engine-switch S7.1).
   `ProgramContext::resolve_dependency_bodies` resolves every call site in every
   source-bearing dependency body from that dependency's own view: its closure, its

@@ -397,6 +397,18 @@ pub struct AbiIngestResult {
     pub error: Option<String>,
 }
 
+/// The parsed `SymbolReference.json` of one SymbolOnly dep unit, read from its
+/// `.app` (engine-switch S7.2: the cross-app model's symbol-only rows). `None`
+/// when the unit has no `.app` path. A read failure gives the empty ABI, as in
+/// [`ingest_abi`], whose `error` the program's ledger already reports.
+// ponytail: reads the `.app` a second time (the graph build's `AbiCache` is not
+// kept); keep the build's cache in the dep tier if this shows up in a profile.
+pub fn load_symbol_reference(unit: &AppUnit) -> Option<Arc<SymbolReferenceAbi>> {
+    let id = &unit.id;
+    let path = unit.app_path.as_ref()?;
+    Some(AbiCache::new().get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path))
+}
+
 /// Ingest one SymbolOnly dep unit into `ObjectNode` + `RoutineNode` lists.
 ///
 /// Returns empty vecs when the ABI is not available (no `app_path` and not

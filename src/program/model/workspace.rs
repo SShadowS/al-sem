@@ -1583,6 +1583,83 @@ pub fn assemble_and_resolve_workspace_from_program(
     finish_resolved(ws, workspace, skip_roots_config)
 }
 
+/// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
+/// [`assemble_and_resolve_workspace_from_program`] builds them, then every dependency
+/// in the snapshot appended: first each symbol-only dependency's ABI rows (bodyless,
+/// [`crate::program::model::abi_rows`]), then each source-bearing dependency's files
+/// projected whole from the program's own parse, as source unit
+/// `dep:<appGuid>:<path>`. Dependencies are taken in `.app` path order, files in path
+/// order. The order is the legacy merged model's, and it is load-bearing: the symbol
+/// table is last-wins and the extension-field merge first-wins.
+///
+/// Needs a context that keeps dependency bodies (`FULL`).
+pub fn assemble_and_resolve_cross_app_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<L3Resolved> {
+    let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
+    append_dependency_rows(&mut ws, model_instance_id, ctx);
+    finish_resolved(ws, workspace, skip_roots_config)
+}
+
+fn append_dependency_rows(
+    ws: &mut L3Workspace,
+    model_instance_id: &str,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) {
+    let bodies = ctx
+        .dep_bodies()
+        .expect("the cross-app model needs DependencyBodies::Keep");
+    let snap = &ctx.snap;
+    let mut deps: Vec<&crate::snapshot::AppUnit> = snap
+        .apps
+        .iter()
+        .filter(|u| u.id != snap.workspace_app)
+        .collect();
+    deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
+
+    let mut objects = Vec::new();
+    let mut tables = Vec::new();
+    let mut routines = Vec::new();
+    for unit in deps.iter().filter(|u| u.source.is_none()) {
+        if let Some(abi) = crate::program::abi_ingest::load_symbol_reference(unit) {
+            let p = crate::engine::deps::projection::project_abi_to_index(
+                &abi,
+                &unit.id.guid,
+                model_instance_id,
+            );
+            objects.extend(p.objects);
+            tables.extend(p.tables);
+            routines.extend(p.routines);
+        }
+    }
+    crate::program::model::abi_rows::append_dep_entities(ws, &objects, &tables, &routines);
+
+    for unit in deps.iter().filter(|u| u.source.is_some()) {
+        let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
+            continue;
+        };
+        let guid = &unit.id.guid;
+        let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
+        files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+        for pf in files {
+            let cols = Utf16Cols::new(&pf.text);
+            project_ir(
+                &pf.file,
+                &whole_file_population(&pf.file),
+                &pf.text,
+                guid,
+                model_instance_id,
+                &format!("dep:{guid}:{}", pf.virtual_path),
+                &cols,
+                ws,
+            );
+        }
+    }
+}
+
 /// Which files the program-backed assembly projects.
 pub enum ProgramFiles<'c> {
     /// Every app-scoped file, each from the program's parse, in discovery order.
