@@ -945,7 +945,8 @@ fn range_extent_cmp(
 /// Aggregate the analyzer diagnostics for a resolved workspace, in al-sem
 /// `analyzeWorkspace` (`src/index.ts:287-297`) concat order:
 ///   1. workspace.diagnostics  (provider/discover + index/parse)
-///   2. depArtifacts.diagnostics (gate gap — empty, source-only)
+///   2. dependency diagnostics (not produced here: `run_analyze` has the program
+///      build's ledger, these callers do not — docs/OUTSTANDING.md)
 ///   3. summarizeDiagnostics    (L4 JACOBI cap-hit — empty unless an SCC fails to converge)
 ///   4. loadedRootsConfig.diagnostics (gate gap — covered by overlay below)
 ///   5. overlayDiagnostics      (roots.config kinds-mismatch — `infra_diagnostics`)
@@ -954,11 +955,10 @@ fn range_extent_cmp(
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
 /// channel (`projectDiagnostics`). It follows the `run_diagnostics` build in
 /// `run_analyze`, but the output is the same only for the same `resolved`.
-/// Its callers (events, policy, digest, fingerprint) pass an `L3Resolved`
-/// without `precomputed_calls`, so the L4 cap-hit (3) and detector (6)
-/// diagnostics come from L3's own calls, while `run_analyze`'s come from the
-/// program engine's (B3 Phase A). They can differ on the same workspace until
-/// those subcommands move to `attach_program_calls` (docs/OUTSTANDING.md).
+/// Since engine-switch S6 its callers (events, policy, digest, fingerprint, prove)
+/// pass the same program-backed model `run_analyze` uses
+/// (`program_calls::assemble_and_resolve_workspace_program`), so the cap-hit (3)
+/// and detector (6) diagnostics agree with `run_analyze`'s.
 pub fn compute_analyzer_diagnostics(
     ws_path: &Path,
     resolved: &crate::engine::l3::l3_workspace::L3Resolved,

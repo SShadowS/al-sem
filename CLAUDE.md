@@ -176,20 +176,21 @@ or consumed by `src/engine/gate` (the `analyze` CLI).
 **`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
 resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
 §7): `src/engine/l3/program_calls.rs` (`attach_program_calls`) converts the resolved
-edges into L3's call shape and sets `L3Resolved.precomputed_calls`. L3 still provides the
-body facts and the event graph, and the program context and the L3 workspace are both in
-memory while the adapter runs (dropped before the detector context). The r4/r4f detector
+edges into L3's call shape and sets `L3Resolved.precomputed_calls`, and since
+engine-switch S4 also the event graph (`L3Resolved.precomputed_events`, from the program
+engine's subscription inventory, `program::model::events`). Consumers read them through
+`call_resolver::calls_for` / `event_graph::events_for`. The model (body facts, objects,
+routines) is assembled from the program engine's parse (S2a/S2b). The r4/r4f detector
 goldens use the same path (`assemble_and_resolve_workspace_with_program_calls`).
-**Every other L3 consumer still uses L3's own resolver** (no `precomputed_calls`), so its
-answer can differ from `analyze`'s on the same routine: `alsem prove`, `policy check` /
-`policy explain`, `events fanout` / `events chains`, `digest`, `fingerprint`, `diff` /
-snapshot, `query` (which calls `resolve_calls` directly), the shared
-`run::compute_analyzer_diagnostics` behind events/policy/digest/fingerprint, the
-cross-app paths (`project_r3a5_cross_app`, `project_r4_findings_cross_app`,
-`project_coverage_cross_app`), the gap and temp_state tests, and the `aldump` L3 modes
-(`--l3-*`, `--r3a*`, `--r4-findings`, `--r4f-*`; note `aldump --r4-findings` is NOT the
-path the r4 goldens pin). Moving each onto `attach_program_calls`, with its own golden
-triage, is a follow-up in `docs/OUTSTANDING.md`. L3's resolver stays until then.
+**Since engine-switch S6 every single-app consumer builds the same program-backed model**
+(`program_calls::assemble_and_resolve_workspace_program`): `alsem prove`, `digest`,
+`fingerprint`, `diff`/snapshot, `events fanout`/`chains`, `policy check`, `query`, the
+HTML report, `compute_analyzer_diagnostics`, and `aldump`'s `--r3a1/2/3`,
+`--r4-findings`, `--r4f-*` modes. Still on L3's own resolver: the cross-app paths
+(`build_cross_app_base_from_cross`, `project_r3a5_cross_app`,
+`project_r4_findings_cross_app`, `project_coverage_cross_app`, `aldump --r3a4/--r3a5`;
+engine-switch S7), and `aldump --l3-*` plus the gap/temp_state tests, which measure L3
+itself and go with it (S9). Spec: `docs/superpowers/specs/2026-10-06-engine-switch-design.md`.
 
 **Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
 - `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`
