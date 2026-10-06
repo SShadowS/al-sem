@@ -241,6 +241,20 @@ zero unexplained differences, zero regressions, written golden triage.
   sees them. Its new findings are triaged against real CDO source before merge. d45's
   external-publisher behaviour needs a scope decision (its publisher must be modelled
   with a summary and it gates on `primary_routines`) — decided here, implemented in S8.
+  *As built (2026-10-06, plan `docs/superpowers/plans/2026-10-06-engine-switch-s4.md`):*
+  S4.1 `SubscriberIndex::subscriptions()` keeps every parsed subscription with its
+  outcome (unresolved publisher objects were dropped). S4.2a moved the event model to
+  `program::model::events`. S4.2 `program_event_graph` builds the analyze-path event
+  graph from it (`L3Resolved::precomputed_events`, read via `events_for` by the four
+  `calls_for` builders); a dependency or platform publisher is a symbol with
+  `publisher_routine_id: None` and a `PublisherRef`; platform field/action events are one
+  event per element; `ambiguous` is a new unproven resolution. S4.3a/b: both engines
+  dropped subscriptions that name the event as an identifier (35 of CDO's 96) or the
+  publisher by number (4); both now parse and bind. CDO: 95 of 95 bound (was 2 of 56
+  seen); findings unchanged — d44's five-plus co-subscribed CDO events write only via
+  dependency calls (S7/S8), temporary records, or different tables. Element filter and
+  conditions are on the program `Subscription`, not yet on the detector `EventEdge` (no
+  consumer). The d45 decision is listed under Decisions (owner) as open.
 - **S5 — Coverage, roots, ledger** (G9, G10, G14), including real dependency-role
   attribution in production scope filtering (today `gate/run.rs:343` passes
   `|_obj_id| false`).
@@ -298,6 +312,11 @@ zero unexplained differences, zero regressions, written golden triage.
    (`src/program/body/`). Recommended; reviewer concurs.
 2. Retire L3-only golden families in S9, replacing those that guard a needed property.
 3. One branch per step, merged as each passes.
+4. OPEN (S4 -> S8): d45 with a dependency publisher. Proposed: a dependency publisher
+   is a d45 root when at least one primary routine is in its subscriber chain; its own
+   writes come from its summary once S7/S8 provide dependency summaries, and until then
+   the finding states the publisher's coverage as `unknown`. Alternative: d45 stays
+   primary-publisher-only. Owner to decide before S8.
 
 ## Risks
 

@@ -51,6 +51,25 @@ sizings marked pre-arc).
     d40/d41/d42/d53/d55/d61 and the by-var-argument helpers. Analysing every
     implementer is more complete; measure the finding delta before choosing.
 
+- [ ] **Event inventory follow-ups** (recorded 2026-10-06, engine-switch S4).
+  - **d45 with a dependency publisher** — owner decision, spec "Decisions (owner)" 4;
+    implemented in S8.
+  - **d38 on dependency events.** d38 (subscriber to an obsolete event) reads the
+    publisher from `routine_by_id`, so a subscription to an obsolete Base App event is
+    `noPublisherRoutine` (93 on CDO). Flagging it needs the dependency publisher's
+    `Obsolete` attribute on `EventSymbol` (or the registry). Measure the population
+    first.
+  - **`isolated` for dependency publishers** is `None` on their `EventSymbol` (not read
+    from ABI/dependency attributes). Only the ordering engine reads isolation, and only
+    for workspace publishers today; needed once dependency events enter it (S8).
+  - **L3's event builder still drops identifier and numbered subscriptions** (S4.3a/b
+    fixed only the program parser). Every consumer still on `build_event_graph`
+    (`events`, `policy`, `digest`, `prove`, `format_html`, …) keeps that gap until it
+    moves in S6.
+  - **Element and conditions on the detector `EventEdge`.** The program `Subscription`
+    has them; the detector edge does not (no consumer). Add when a detector needs
+    manual-binding or skip-on-license conditions.
+
 - [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
   - **Move the other L3 consumers onto the program engine's calls.** Only `alsem

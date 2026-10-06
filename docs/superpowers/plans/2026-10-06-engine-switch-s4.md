@@ -74,4 +74,20 @@ CHANGELOG, spec "as built" note, OUTSTANDING.
 ## Known limits
 
 - A `[EventSubscriber]` whose arguments do not parse is dropped by both engines before
-  the inventory (`node_extract`); not counted. Follow-up if a population appears.
+  the inventory (`node_extract`). S4.2's census found that population (39 of CDO's 95
+  subscriber routines), so S4.3 fixed it rather than leaving it as a limit.
+
+## As built
+
+| Commit | Step | Effect |
+|--------|------|--------|
+| `abb670d7` | S4.1 | `SubscriberIndex::subscriptions()`; unresolved publisher objects recorded |
+| `68208b58` | S4.2a | event model moved to `program::model::events` (pure move) |
+| `75b0865f` | S4.2 | analyze event graph from the inventory; `PublisherRef`; element-scoped platform events; CDO 56/56 seen subscriptions bound (was 2) |
+| `71d89206` | S4.3a | identifier event names/elements parse (35 of 96 CDO subscriptions) |
+| `70f5dce7` | S4.3b | numbered publishers parse and resolve (4); `PACK_SCHEMA` 3 |
+
+Harness labels: `s4-2`, `s4-3a`, `s4-3` (final). CDO findings unchanged at every step;
+`ws-d29` gains one d44-rw (correct). Program stats on CDO: real-unknown 0 throughout;
+whole-program `resolvedSource` 11,470 -> 11,699 (S4.3a/b only; S4.1/S4.2 byte-identical).
+The d45 decision is open (spec "Decisions (owner)" 4).
