@@ -61,7 +61,7 @@ fn usage() -> ExitCode {
          --l3-call-graph-stats-cross-app | --l3-unknown-breakdown | --l3-unknown-breakdown-cross-app | \
          --l3-event-graph | --l3-coverage | --r2.5a-merged-index | --l3-cross-app | \
          --r3a1-combined-graph | --r3a2-summary-core | --r3a3-cone-coverage | \
-         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | \
+         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
@@ -167,6 +167,7 @@ fn main() -> ExitCode {
     let mut r3a5_cross_app_summary = false;
     let mut r4_findings = false;
     let mut r4_findings_cross_app = false;
+    let mut dependency_bodies_stats = false;
     let mut r4f_root_classifications = false;
     let mut r4f_return_summaries = false;
     let mut r4f_snapshot = false;
@@ -278,6 +279,10 @@ fn main() -> ExitCode {
             r4_findings_cross_app = true;
             continue;
         }
+        if arg == "--dependency-bodies-stats" {
+            dependency_bodies_stats = true;
+            continue;
+        }
         if arg == "--r4f-root-classifications" {
             r4f_root_classifications = true;
             continue;
@@ -340,6 +345,7 @@ fn main() -> ExitCode {
         r3a5_cross_app_summary,
         r4_findings,
         r4_findings_cross_app,
+        dependency_bodies_stats,
         r4f_root_classifications,
         r4f_return_summaries,
         r4f_snapshot,
@@ -561,6 +567,57 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+
+    if dependency_bodies_stats {
+        // Engine-switch S7.1: the dependency bodies' call sites, resolved from each
+        // dependency's own view. Kept out of `--program-call-graph-stats`.
+        use al_sem::program::resolve::edge::{Histogram, unknown_reason_breakdown};
+        let Some(ctx) = al_sem::program::resolve::full::build_context(&workspace) else {
+            eprintln!(
+                "aldump: error: snapshot build failed at {}",
+                workspace.display()
+            );
+            return ExitCode::FAILURE;
+        };
+        let res = ctx.resolve_dependency_bodies();
+        let graph = ctx.graph();
+        let mut per_app: std::collections::BTreeMap<
+            String,
+            Vec<al_sem::program::resolve::edge::Edge>,
+        > = std::collections::BTreeMap::new();
+        for ce in &res.edges {
+            per_app
+                .entry(graph.apps.resolve(ce.edge.from.object.app).name.clone())
+                .or_default()
+                .push(ce.edge.clone());
+        }
+        let hist = |edges: &[al_sem::program::resolve::edge::Edge]| {
+            let h = Histogram::of_edges(edges);
+            let reasons: std::collections::BTreeMap<String, usize> =
+                unknown_reason_breakdown(edges.iter())
+                    .into_iter()
+                    .map(|(r, n)| (r.as_str().to_string(), n))
+                    .collect();
+            serde_json::json!({
+                "total": h.total,
+                "resolvedSource": h.resolved_source,
+                "resolvedCatalog": h.resolved_catalog,
+                "resolvedAbiExternal": h.resolved_abi_external,
+                "conditionalResolved": h.conditional_resolved,
+                "honestDynamic": h.honest_dynamic,
+                "honestEmpty": h.honest_empty,
+                "unknown": h.unknown,
+                "ambiguousResolved": h.ambiguous_resolved,
+                "unknownByReason": reasons,
+            })
+        };
+        let all: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
+        let apps: serde_json::Map<String, serde_json::Value> =
+            per_app.iter().map(|(n, e)| (n.clone(), hist(e))).collect();
+        let out = serde_json::json!({ "all": hist(&all), "perApp": apps });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return ExitCode::SUCCESS;
     }
 
     if r4_findings_cross_app {

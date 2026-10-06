@@ -84,6 +84,35 @@ pub enum DependencySource {
     Symbols,
 }
 
+/// The workspace app's `internalsVisibleTo` friends from its app.json (an entry's
+/// GUID is `id`, or `appId` in the older spelling). A dependency that is a friend of
+/// the workspace sees the workspace's `internal` members (engine-switch S7.1: before
+/// it, only dependency manifests were read, so such a call was `InternalNotVisible`).
+fn workspace_friend_apps(app_json: &serde_json::Value) -> Vec<crate::app_package::FriendApp> {
+    let text = |v: &serde_json::Value, k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    app_json
+        .get("internalsVisibleTo")
+        .and_then(|v| v.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|e| crate::app_package::FriendApp {
+                    app_id: Some(text(e, "id"))
+                        .filter(|g| !g.is_empty())
+                        .unwrap_or_else(|| text(e, "appId")),
+                    name: text(e, "name"),
+                    publisher: text(e, "publisher"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Builds an `AppSetSnapshot` from a workspace root + optional local checkouts.
 #[derive(Debug)]
 pub struct SnapshotBuilder {
@@ -168,6 +197,8 @@ impl SnapshotBuilder {
             ws_compilation.platform.as_deref(),
         );
 
+        let ws_friends = workspace_friend_apps(&app_json);
+
         let ws_source_provider = WorkspaceProvider { root: ws.clone() };
         let ws_source = ws_source_provider
             .try_provide(&workspace_app)
@@ -192,7 +223,7 @@ impl SnapshotBuilder {
             source: ws_source,
             compilation: ws_compilation,
             declared_deps: ws_declared_deps,
-            internals_visible_to: Vec::new(),
+            internals_visible_to: ws_friends,
             abi: None,
             app_path: None,
             app_stamp: None,

@@ -417,7 +417,9 @@ fn resolve_call_site_obligation(
     obj_node_opt: Option<&ObjectNode>,
     routine: &al_syntax::ir::RoutineDecl,
     obj: &al_syntax::ir::ObjectDecl,
-    primary_app_ref: AppRef,
+    // The app that owns the calling body (engine-switch S7.1): the primary app,
+    // or a dependency for owning-app body resolution.
+    caller_app: AppRef,
     graph: &ProgramGraph,
     index: &ResolveIndex,
     surface: &DeclSurface,
@@ -588,7 +590,7 @@ fn resolve_call_site_obligation(
             };
             if let Some(okind) = okind_opt {
                 let (shape, completeness, routes) = resolve_object_run(
-                    primary_app_ref,
+                    caller_app,
                     okind,
                     target_ref.as_deref(),
                     *target_is_name,
@@ -724,7 +726,7 @@ fn resolve_call_site_obligation(
 /// other files' accumulators in scope.
 pub(crate) fn resolve_file_obligations(
     pf: &ParsedFile,
-    primary_app_ref: AppRef,
+    caller_app: AppRef,
     graph: &ProgramGraph,
     index: &ResolveIndex,
     surface: &DeclSurface,
@@ -741,7 +743,7 @@ pub(crate) fn resolve_file_obligations(
             None => ObjKey::Name(obj.name.fold_identifier()),
         };
         let obj_node_id = ObjectNodeId {
-            app: primary_app_ref,
+            app: caller_app,
             kind: obj.kind,
             key: obj_key,
         };
@@ -787,7 +789,7 @@ pub(crate) fn resolve_file_obligations(
                     obj_node_opt,
                     routine,
                     obj,
-                    primary_app_ref,
+                    caller_app,
                     graph,
                     index,
                     surface,
@@ -930,17 +932,15 @@ fn receiver_fact(
     }
 }
 
-/// The object map `resolve_file_obligations` reads. Its only lookups use ids
-/// built from the primary app, so it holds workspace objects only: dependency
-/// objects would be dead weight, retained per root by the idle updater.
-pub fn workspace_object_map(
-    graph: &ProgramGraph,
-    primary: AppRef,
-) -> HashMap<ObjectNodeId, &ObjectNode> {
+/// The object map `resolve_file_obligations` reads for files owned by `app`. Its
+/// only lookups use ids built from the caller's app, so it holds that app's
+/// objects only: any other app's would be dead weight, retained per root by the
+/// idle updater.
+pub fn app_object_map(graph: &ProgramGraph, app: AppRef) -> HashMap<ObjectNodeId, &ObjectNode> {
     graph
         .objects
         .iter()
-        .filter(|o| o.id.app == primary)
+        .filter(|o| o.id.app == app)
         .map(|o| (o.id.clone(), o))
         .collect()
 }
@@ -967,7 +967,7 @@ fn resolve_full_program_from_parts(
 ) {
     let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
-    let obj_node_map = workspace_object_map(graph, primary_app_ref);
+    let obj_node_map = app_object_map(graph, primary_app_ref);
 
     let index = ResolveIndex::build(graph);
 
@@ -1342,6 +1342,66 @@ impl ProgramContext {
         paths.sort();
         paths
     }
+
+    /// Owning-app body resolution (engine-switch S7.1): every call site in every
+    /// source-bearing dependency body, resolved from the dependency's own view —
+    /// its declared closure, its visibility, its friends — exactly as a workspace
+    /// file is resolved from the workspace's. Separate from [`ProgramReport`]: the
+    /// north-star histogram stays the workspace's call sites plus event flow.
+    ///
+    /// Units in `snap.apps` order, files sorted by virtual path, each file's
+    /// edges in document order.
+    ///
+    /// # Panics
+    /// When the profile does not keep dependency bodies (`FULL`).
+    #[must_use]
+    pub fn resolve_dependency_bodies(&self) -> DependencyBodyResolution {
+        let bodies = self
+            .dep_bodies()
+            .expect("resolving dependency bodies needs DependencyBodies::Keep");
+        let index = ResolveIndex::build(&self.graph);
+        let surface = self.decl_surface();
+        let mut files: Vec<(AppRef, &ParsedFile)> = Vec::new();
+        for unit in bodies {
+            let Some(app) = self.graph.apps.find(&unit.app) else {
+                continue;
+            };
+            if app == self.primary_app_ref {
+                continue;
+            }
+            let start = files.len();
+            files.extend(unit.files.iter().map(|pf| (app, pf)));
+            files[start..].sort_by(|a, b| a.1.virtual_path.cmp(&b.1.virtual_path));
+        }
+        let mut maps: HashMap<AppRef, HashMap<ObjectNodeId, &ObjectNode>> = HashMap::new();
+        for (app, _) in &files {
+            maps.entry(*app)
+                .or_insert_with(|| app_object_map(&self.graph, *app));
+        }
+        let results: Vec<FileResolution> = crate::big_stack::big_stack_pool().install(|| {
+            files
+                .par_iter()
+                .map(|(app, pf)| {
+                    resolve_file_obligations(pf, *app, &self.graph, &index, &surface, &maps[app])
+                })
+                .collect()
+        });
+        let mut out = DependencyBodyResolution::default();
+        for r in results {
+            out.edges.extend(r.edges);
+            out.site_facts.extend(r.site_facts);
+        }
+        out
+    }
+}
+
+/// What [`ProgramContext::resolve_dependency_bodies`] returns.
+#[derive(Default)]
+pub struct DependencyBodyResolution {
+    /// One edge per dependency call site; `edge.from.object.app` is the owning app.
+    pub edges: Vec<ClassifiedEdge>,
+    /// The receiver/interface facts of those sites (see [`SiteFacts`]).
+    pub site_facts: HashMap<ObligationId, SiteFacts>,
 }
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
@@ -2327,7 +2387,7 @@ mod tests {
         // `resolve_full_program_from_parts` builds internally (it is a
         // private inner helper with no other seam to observe from) — this
         // mirrors its own setup exactly.
-        let obj_node_map = workspace_object_map(graph, primary_app_ref);
+        let obj_node_map = app_object_map(graph, primary_app_ref);
         let index = ResolveIndex::build(graph);
         let surface = ctx.decl_surface();
 
@@ -2396,7 +2456,7 @@ mod tests {
         }
     }
 
-    /// `workspace_object_map` holds exactly the primary app's objects, and
+    /// `app_object_map` of the primary app holds exactly the primary app's objects, and
     /// resolving a file with it gives the same edges as the whole-graph map
     /// (the only lookups use primary-app ids).
     #[test]
@@ -2413,7 +2473,7 @@ mod tests {
         } = &ctx;
         let primary = *primary_app_ref;
 
-        let ws_map = workspace_object_map(graph, primary);
+        let ws_map = app_object_map(graph, primary);
         let full_map: HashMap<ObjectNodeId, &ObjectNode> =
             graph.objects.iter().map(|o| (o.id.clone(), o)).collect();
         let ws_count = graph.objects.iter().filter(|o| o.id.app == primary).count();

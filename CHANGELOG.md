@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Owning-app body resolution** (engine-switch S7.1).
+  `ProgramContext::resolve_dependency_bodies` resolves every call site in every
+  source-bearing dependency body from that dependency's own view: its closure, its
+  visibility, its friends, own-app shadowing. Needs the `FULL` profile. The result is
+  separate from `ProgramReport`, so the north-star numbers do not move (switch harness
+  s6-0 vs s7-1: 0 of 218 corpora differ). `resolve_file_obligations` takes the caller's
+  app instead of assuming the primary app; `workspace_object_map` is now
+  `app_object_map`. `aldump --dependency-bodies-stats <workspace>` prints the taxonomy
+  per app. CDO: 430,735 dependency call sites, 6,307 unknown (1.46%; Base Application
+  4,557, mostly `untrackedReceiver` and `catalogMiss`), in ~5 s. DO: 460,980, 6,676
+  unknown.
+
 - **`aldump --r4-findings-cross-app <workspace>`** (engine-switch S7.0): every registered
   detector in cross-app mode (`project_r4_findings_cross_app`), the before/after surface
   for replacing the L3 cross-app pipeline. Baseline on the old path: CDO 2529 findings
@@ -756,6 +768,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **The workspace's own `internalsVisibleTo` is read** (engine-switch S7.1). The
+  snapshot gave the workspace app an empty friend list (only dependency manifests were
+  read), so a dependency that the workspace names as a friend — a test app — could not
+  see the workspace's `internal` members: DO's test app had 517 `InternalNotVisible`
+  call sites, now 0. Also, a friend entry's GUID now matches case-insensitively (it
+  was `==`; a stale name then lost the name+publisher fallback too). Workspace call
+  sites are unaffected: only another app's call into the workspace reads it.
 
 - **A routine known only from symbols now says its effects are unknown** (#22). A
   dependency routine with no body got an effect summary with empty `dbEffects` and empty

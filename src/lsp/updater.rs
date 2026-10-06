@@ -133,7 +133,7 @@ use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::emit_event_flow_edges;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, workspace_object_map};
+use crate::program::resolve::full::{ClassifiedEdge, ObligationId, app_object_map};
 use crate::program::resolve::index::ResolveIndex;
 use crate::snapshot::{DependencySource, ParsedFile, ParsedUnit, Provenance, TrustTier};
 
@@ -320,7 +320,7 @@ impl Updater {
                 // updater doesn't retain any).
                 let surface = DeclSurface::build(&cur.graph, std::slice::from_ref(&self.workspace))
                     .with_frozen(Arc::clone(&cur.dep_meta));
-                let obj_node_map = workspace_object_map(&cur.graph, primary_app_ref_of(cur));
+                let obj_node_map = app_object_map(&cur.graph, primary_app_ref_of(cur));
                 let (snapshot, _delta) = apply_rung1_core(
                     cur,
                     saves,
@@ -528,7 +528,7 @@ impl Updater {
             .apps
             .find(&cur.snap.workspace_app)
             .expect("assemble_program_graph must intern the workspace app");
-        let obj_node_map = workspace_object_map(&new_graph, primary_app_ref);
+        let obj_node_map = app_object_map(&new_graph, primary_app_ref);
 
         let mut edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
@@ -1135,7 +1135,7 @@ impl<'g> Rung1Context<'g> {
             index: ResolveIndex::build(&cur.graph),
             surface: DeclSurface::build(&cur.graph, std::slice::from_ref(workspace))
                 .with_frozen(Arc::clone(&cur.dep_meta)),
-            obj_node_map: workspace_object_map(&cur.graph, primary_app_ref_of(cur)),
+            obj_node_map: app_object_map(&cur.graph, primary_app_ref_of(cur)),
         }
     }
 }
