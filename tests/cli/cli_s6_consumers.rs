@@ -69,3 +69,21 @@ fn prove_follows_the_program_engines_calls() {
         .unwrap_or_default();
     assert_eq!(answer, "yes", "{}", r.json_text);
 }
+
+/// S6.2 `alsem digest`: the changed routine's effects include the write.
+#[test]
+fn digest_follows_the_program_engines_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    page_run_workspace(dir.path());
+    let r = al_sem::engine::l5::digest_cli::run_digest_pipeline(
+        dir.path(),
+        None,
+        Some(vec!["Run6".to_string()]),
+        None,
+        "s6",
+        true,
+        None,
+    )
+    .expect("digest runs");
+    assert!(r.json_text.contains("S6 Log"), "{}", r.json_text);
+}

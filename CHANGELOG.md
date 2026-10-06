@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem digest` reads the program engine** (engine-switch S6.2), through
+  `assemble_and_resolve_workspace_program` like `prove`. Golden move,
+  `tests/cli-b-goldens/digest/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`: its
+  `Page.RunModal(Page::"D49 Sender")` names a page that does not exist (the name is the
+  codeunit's). L3 called it a builtin and reported coverage `complete`; the program
+  engine reports an unresolved object run, so coverage is `partial`
+  (`object-run-unresolved`) and the call site is listed as unresolved. Effects are
+  unchanged. `digest_follows_the_program_engines_calls` (the `RunModal`-only write);
+  discrimination: the L3 builder fails it.
+
 - **`alsem prove` reads the program engine** (engine-switch S6.1). It built the
   disk-only L3 model and resolved calls and events with L3. It now uses
   `program_calls::assemble_and_resolve_workspace_program`, the program-backed model

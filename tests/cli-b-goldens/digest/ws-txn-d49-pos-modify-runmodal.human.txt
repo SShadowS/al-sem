@@ -1,5 +1,6 @@
 --- ModifyThenRunModal ---
-  coverage: complete
+  coverage: partial
+  reasons: object-run-unresolved
   [DB_MODIFY] direct
     evidence: ws:src/Sender.Codeunit.al:13 "Rec.Modify"
     detail: resourceId=11111111-0000-0000-0000-0000000d4902/table/50100, resourceDisplay=D49 Rec
@@ -7,3 +8,4 @@
   [UI_WINDOW_OPEN] direct
     evidence: ws:src/Sender.Codeunit.al:14 "Page.RunModal"
     via: 1 path(s)
+  unresolved: 1 callsite(s)
