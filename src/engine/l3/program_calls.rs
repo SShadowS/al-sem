@@ -118,7 +118,7 @@ use std::collections::{HashMap, HashSet};
 use al_syntax::IdentifierFoldExt;
 use serde::Serialize;
 
-use crate::engine::l2::features::{PAnchor, PCallSite, PCallee};
+use crate::engine::l2::features::{PCallSite, PCallee};
 use crate::engine::l3::call_resolver::{
     BindingState, CallEdge, DispatchMeta, ExternalTypeRef, ResolvedCalls,
     UnknownReason as L3Reason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
@@ -135,12 +135,10 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, Route, RouteTarget,
-    UnknownReason as PReason, callee_fp,
+    DispatchShape, Edge, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason,
+    callee_fp,
 };
-use crate::program::resolve::full::{
-    ClassifiedEdge, ObligationId, ProgramContext, ProgramReport, is_primary_scope,
-};
+use crate::program::resolve::full::{ClassifiedEdge, ProgramContext, ProgramReport};
 use crate::snapshot::TrustTier;
 
 /// Exact site key: `(unit, start line, start col, end line, end col)`.
@@ -271,29 +269,7 @@ pub struct SiteCensus {
     pub unmatched: Vec<UnmatchedSite>,
 }
 
-fn l3_key(a: &PAnchor) -> SiteKey {
-    let unit = a
-        .source_unit_id
-        .strip_prefix("ws:")
-        .unwrap_or(&a.source_unit_id);
-    (
-        unit.to_string(),
-        a.start_line,
-        a.start_column,
-        a.end_line,
-        a.end_column,
-    )
-}
-
-fn program_key(s: &CanonicalSpan) -> SiteKey {
-    (
-        s.unit.clone(),
-        s.start.line,
-        s.start.col,
-        s.end.line,
-        s.end.col,
-    )
-}
+use crate::program::model::site_links::model_key as l3_key;
 
 /// The source text a span covers (byte columns), when the unit is known.
 fn span_text<'a>(texts: &HashMap<&str, &'a str>, k: &SiteKey) -> Option<&'a str> {
@@ -353,20 +329,14 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -
         .collect();
     let commit_fp = callee_fp("Commit");
 
+    // The site links keep EVERY edge per span (S2b.6); this adapter still takes
+    // the first in report order, as it always did — S3 converts all of them.
+    let links = crate::program::model::site_links::SiteLinks::build(report);
     let mut program: HashMap<SiteKey, &'a ClassifiedEdge> = HashMap::new();
-    for ce in &report.edges {
-        if !matches!(ce.obligation_id, ObligationId::CallSite { .. })
-            || !is_primary_scope(ce, report.primary_app_ref)
-        {
-            continue;
-        }
-        c.program_sites += 1;
-        match program.entry(program_key(&ce.edge.site.span)) {
-            std::collections::hash_map::Entry::Occupied(_) => c.duplicate_program_span += 1,
-            std::collections::hash_map::Entry::Vacant(v) => {
-                v.insert(ce);
-            }
-        }
+    for (k, edges) in links.sites_of(report.primary_app_ref) {
+        c.program_sites += edges.len();
+        c.duplicate_program_span += edges.len() - 1;
+        program.insert(k.clone(), edges[0]);
     }
     let is_operation = |ce: &ClassifiedEdge| {
         ce.edge.kind == EdgeKind::ImplicitTrigger

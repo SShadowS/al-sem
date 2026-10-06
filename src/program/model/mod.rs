@@ -11,6 +11,7 @@ pub mod calls;
 pub mod census;
 pub mod extension_fields;
 pub mod record_types;
+pub mod site_links;
 pub mod symbol_table;
 pub mod taxonomy;
 pub mod workspace;

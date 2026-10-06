@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Site links between body facts and program edges** (engine-switch S2b.6).
+  `program::model::site_links::SiteLinks` indexes every program call-site edge by
+  `(caller app, span)`. Spans use zero-based rows and byte columns on both sides, so
+  there is no column conversion. The links keep EVERY edge per span, in report order;
+  the B3 adapter's inline join kept only the first. The adapter now builds its span map
+  from the links and still takes the first edge (S3 converts all of them), and it uses
+  the shared `model_key` instead of its own copy. Keys carry the caller's app because
+  two apps can both contain `src/Main.al`.
+
+  `links_keep_every_edge_and_qualify_by_app` hand-states a duplicated edge and a
+  same-span edge in another app. Discrimination: keeping only the first edge fails it.
+  Harness: `s2b5` and `s2b6` byte-identical on all 218 corpora. CDO has no duplicate
+  spans today (`duplicate_program_span: 0`), so this is structure for S3, not a fix
+  that moves anything now.
+
 - **Dependency target registry with body states** (engine-switch S2b.5).
   `program::registry::DependencyRegistry` (via `ProgramContext::registry()`) describes
   every dependency routine: its parameters (name, type, `var`, `temporary`) and the
