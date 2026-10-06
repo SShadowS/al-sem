@@ -46,6 +46,7 @@ mod cli_c_policy_differential;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_query_differential;
+mod cli_s6_consumers;
 mod cli_stderr_logger;
 mod cli_workspace_source;
 mod d1_downgraded_to_info_oracle;

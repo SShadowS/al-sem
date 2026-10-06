@@ -648,7 +648,7 @@ fn anchor_from_origin(
 // Per-file assembly.
 // ---------------------------------------------------------------------------
 
-const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
+pub const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
 
 /// Build the L3 workspace contribution for one source file, driven entirely by the
 /// owned AL syntax IR (`al_syntax::parse`) — no tree-sitter CST walk.

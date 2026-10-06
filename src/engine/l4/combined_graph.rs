@@ -23,10 +23,8 @@ use std::collections::{HashMap, HashSet};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::PCallee;
-use crate::engine::l3::call_resolver::{
-    CallEdge, DeclaredDependency, ResolvedCalls, resolve_calls,
-};
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph};
+use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
+use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
@@ -1041,10 +1039,10 @@ impl L3Resolved {
     pub fn project_r3a1_combined_graph(&self) -> R3a1Projection {
         let ws = &self.workspace;
         let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-        let no_deps: Vec<DeclaredDependency> = Vec::new();
-        let no_fetched: Vec<String> = Vec::new();
-        let resolved = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
-        let event_graph = build_event_graph(&ws.routines, &symbols);
+        // Engine-switch S6.8: the model's own calls and events (L3's when nothing
+        // is attached, as for this projection's golden callers).
+        let resolved = crate::engine::l3::call_resolver::calls_for(self, &symbols);
+        let event_graph = crate::engine::l3::event_graph::events_for(self, &symbols);
 
         let graph = build_combined_graph(ws, &resolved, &event_graph);
 

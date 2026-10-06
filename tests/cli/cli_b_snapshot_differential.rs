@@ -35,7 +35,8 @@ use std::path::{Path, PathBuf};
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::gate::run::compute_analyzer_diagnostics;
-use al_sem::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_workspace};
+use al_sem::engine::l3::l3_workspace::L3Resolved;
+use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, compose_full_snapshot, serialize_cbor,
@@ -196,7 +197,8 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, L3Resol
     // must be assembled with the SAME id the gate path computes.
     let model_instance_id = compute_gate_model_instance_id(&fixture_dir)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
-    let resolved = assemble_and_resolve_workspace(&fixture_dir, &model_instance_id, false)
+    // Engine-switch S6.4: the model `alsem diff`'s workspace mode builds.
+    let resolved = assemble_and_resolve_workspace_program(&fixture_dir, &model_instance_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
         workspace_dir: &fixture_dir,

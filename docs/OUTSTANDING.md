@@ -51,13 +51,19 @@ sizings marked pre-arc).
     d40/d41/d42/d53/d55/d61 and the by-var-argument helpers. Analysing every
     implementer is more complete; measure the finding delta before choosing.
 
-- [ ] **Adapter receiver typing from the program engine** (recorded 2026-10-06,
-  engine-switch S5; proposed as the first step of S6). The B3 adapter still runs L3's
-  `infer_receiver_type` over the model `SymbolTable` for `CallEdge::receiver_type`
-  (typed edges -> witness hops, digest, fingerprint), the dependency-member decline when
-  a route has no `receiver_tier`, `external_type_ref` naming, and census counters (plus
-  `implicit_trigger_edge_for_op` for an agreement counter). Needs the program resolver
-  to report each member site's receiver declaration. Must be gone before S9.
+- [ ] **Dependency diagnostics for the other subcommands** (recorded 2026-10-06,
+  engine-switch S6). `alsem analyze` reports the dependency ledger's problems in
+  diagnostics slot (2) (S5.2b); `compute_analyzer_diagnostics` (events, policy,
+  digest, fingerprint, prove) does not, because
+  `assemble_and_resolve_workspace_program` drops the `FreshCoverage`. Keep it (e.g. on
+  the model next to `precomputed_events`) and emit the same warnings.
+
+- [ ] **B3 harness L3 comparisons** (recorded 2026-10-06, engine-switch S6.0). The
+  adapter's receiver typing now comes from the program resolver (S6.0, done). What
+  still reads L3 in the adapter is census-only: `implicit_trigger_edge_for_op` (the
+  `adapter_trigger_edges_*` counters, one of which is in `SiteCensus::losses()`), plus
+  `b3_diff`'s old-vs-new comparison itself. They are the switch's measuring apparatus
+  and are deleted with L3 in S9.
 
 - [ ] **Event inventory follow-ups** (recorded 2026-10-06, engine-switch S4).
   - **d45 with a dependency publisher** — owner decision, spec "Decisions (owner)" 4;
@@ -80,19 +86,14 @@ sizings marked pre-arc).
 
 - [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
-  - **Move the other L3 consumers onto the program engine's calls.** Only `alsem
-    analyze` (and the r4/r4f goldens) reads them (`attach_program_calls`). Still on L3's
-    own resolver, so they can disagree with `analyze` about the same routine: `alsem
-    prove` (`l5/prove.rs`), `policy check`/`explain` (`gate/policy/pipeline.rs`),
-    `events fanout`/`chains` (`gate/events.rs`), `digest` (`l5/digest_cli.rs`),
-    `fingerprint` (`l5/fingerprint_cli.rs`), `diff`/snapshot (`gate/diff/cli.rs`),
-    `query` (`l4/effect_query_cli.rs`, which calls `resolve_calls` directly and would
-    ignore `precomputed_calls`), `run::compute_analyzer_diagnostics`, the cross-app
-    projections (`capability_cone.rs` `build_cross_app_base_from_cross`,
-    `project_coverage_cross_app`; these resolve against declared dependencies, so they
-    need a design, not just the call), the gap/temp_state tests, and the `aldump` L3
-    modes. One subcommand per change, each with its own golden triage (cli-b/cli-c/
-    query goldens will move where CDO-like call changes reach their fixtures).
+  - **Move the other L3 consumers onto the program engine's calls.** DONE for the
+    single-app consumers in engine-switch S6 (2026-10-06): prove, digest, fingerprint,
+    diff/snapshot, events, policy check, query, the HTML report, the r3a1/r3a2
+    projections, `compute_analyzer_diagnostics` (through its callers) and `aldump`'s
+    `--r3a*`/`--r4-findings`/`--r4f-*` modes. Remaining: the cross-app projections
+    (`capability_cone.rs` `build_cross_app_base_from_cross`, `recover_dep_retained`,
+    `project_coverage_cross_app`, `aldump --r3a4/--r3a5`) in S7; the gap/temp_state
+    tests and `aldump --l3-*` modes go with L3 in S9.
   - **`ProgramGraph::abi_ingest_errors` has no production reader** (FW2). ABI ingest
     failures are collected and then never surfaced: not by the preflight, not by analyze,
     not by `aldump`. Decide who reports them (likely the preflight's degraded state)

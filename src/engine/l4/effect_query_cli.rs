@@ -41,11 +41,10 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
-use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-use crate::engine::l3::event_graph::build_event_graph;
+use crate::engine::l3::call_resolver::calls_for;
+use crate::engine::l3::event_graph::events_for;
 use crate::engine::l3::l3_workspace::{
-    L3RecordOperation, L3Resolved, L3Routine, assemble_and_resolve_workspace,
-    table_by_id_preferring_real,
+    L3RecordOperation, L3Resolved, L3Routine, table_by_id_preferring_real,
 };
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
@@ -127,8 +126,13 @@ impl QuerySubstrate {
     /// swapped to the BUNDLE entry point so the compact rows survive (the
     /// materializing `_core` shim would expand and then discard them).
     pub fn build(workspace: &Path, model_instance_id: &str) -> Result<Self, String> {
-        let resolved = assemble_and_resolve_workspace(workspace, model_instance_id, false)
-            .ok_or_else(|| "query: workspace did not resolve".to_string())?;
+        // Engine-switch S6.7: the program-backed model (program calls and events).
+        let resolved = crate::engine::l3::program_calls::assemble_and_resolve_workspace_program(
+            workspace,
+            model_instance_id,
+            false,
+        )
+        .ok_or_else(|| "query: workspace did not resolve".to_string())?;
         Ok(Self::from_resolved(resolved))
     }
 
@@ -139,10 +143,10 @@ impl QuerySubstrate {
         let (graph, scc, bundle) = {
             let ws = &resolved.workspace;
             let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-            let no_deps: Vec<DeclaredDependency> = Vec::new();
-            let no_fetched: Vec<String> = Vec::new();
-            let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
-            let event_graph = build_event_graph(&ws.routines, &symbols);
+            // The resolved model's own calls and event graph (the program
+            // engine's when attached; L3's source-only ones otherwise).
+            let calls = calls_for(&resolved, &symbols);
+            let event_graph = events_for(&resolved, &symbols);
             let graph = build_combined_graph(ws, &calls, &event_graph);
 
             let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();

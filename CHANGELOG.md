@@ -152,6 +152,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The B3 adapter no longer runs L3's receiver inference** (engine-switch S6.0). It
+  asked L3's `infer_receiver_type` over the model `SymbolTable` for three outputs:
+  `CallEdge::receiver_type` (into typed edges, witness hops, digest, fingerprint,
+  snapshot), the dependency-member decline when a route has no `receiver_tier`, and
+  `external_type_ref` naming. The program resolver now reports each member site's
+  receiver (`ProgramReport::site_facts`, which replaces `interface_sites`:
+  `SiteFacts { interface, receiver }`; `ReceiverFact { type_text, ty }`). `type_text` is
+  the declaration's canonical type when the receiver is a declared name
+  (`receiver::receiver_declared_type`, Step 2's own lookup), else the resolved object
+  rendered with its own name. The adapter's L3 symbol table remains only for the
+  census's L3 trigger comparison, which goes with the B3 harness in S9.
+
+  Measured (harness `s5-4` -> `s6-0`): only `calls.edges` changes, in `receiver_type`;
+  findings and program stats unchanged. CDO 365 edges / DO 353: L3 called an implicit
+  page/table `Rec` `Record rec` (the variable's own name); it is now the real table
+  (`Record "Service Header"`, …); a `TableNo` receiver `Record 6175277` now names the
+  table; page parts are quoted (`Page "CDO Local Print Service Part"`). Fixtures:
+  ws-compound-call-result, ws-compound-receiver, ws-cross-object-chain, ws-page-rec,
+  ws-report-dataitem the same way. The B3 triage table (`docs/b3-triage/r0-corpus.md`)
+  moves with the `recv` text and census categories (call-result receivers are typed
+  objects now); one ws-cross-object-chain site, a member declined on a dependency
+  codeunit reached through a call result, converts to `ExternalTarget` like a
+  declared-variable receiver of that codeunit already did. Known limit: an object absent
+  from the graph and reached through a call result has no declared spelling, so its
+  external type name is folded (fixtures only; no reader but the triage doc). The
+  adapter-vs-L3 parity test no longer compares `receiver_type`;
+  `receiver_type_comes_from_the_program_resolver` pins it (discrimination: preferring the
+  rendered text over a declaration, and not rendering at all, each fail it).
+
+- **`aldump`'s detector-output modes read the program engine** (engine-switch S6.9):
+  `--r3a1-combined-graph`, `--r3a2-summary-core`, `--r3a3-cone-coverage`,
+  `--r4-findings` and the six `--r4f-*` modes project the program-backed model
+  (`program_model`, default model-instance id). The `--l3-*` modes keep L3's own model:
+  they measure L3 and go with it in S9. `--r3a4`/`--r3a5` (cross-app) move in S7.
+  `MODEL_INSTANCE_ID_DEFAULT` is now `pub`. Goldens unchanged.
+  `aldump_projection_modes_follow_the_program_engines_calls` runs the binary's
+  `--r3a3-cone-coverage`: `Run6`'s inherited facts hold the insert reached through
+  `MyPage.RunModal()`; discrimination: with L3's model they are empty.
+
+- **The HTML report and the r3a1/r3a2 projections read the model's own calls and
+  events** (engine-switch S6.8). `format_html` rebuilt the event graph with L3's
+  `build_event_graph`; it now draws the analyze model's (`events_for`), the graph the
+  findings came from. `summary::project_r3a2` and `project_r3a1_combined_graph` use
+  `calls_for`/`events_for` instead of calling `resolve_calls`/`build_event_graph`
+  (identical for their golden callers, which attach nothing). Golden move:
+  `tests/cli-a-goldens/html/ws-d35.default.html` gains the event-graph section for its
+  three `Codeunit, 50` subscribers (L3 could not parse them, so the graph was empty and
+  the section omitted). `html_report_draws_the_program_engines_event_graph`;
+  discrimination: `build_event_graph` in `format_html` fails it.
+
+- **`alsem query` reads the program engine** (engine-switch S6.7).
+  `QuerySubstrate::build` uses the program-backed model, and `from_resolved` builds its
+  combined graph from the model's own calls and events (`calls_for`/`events_for`)
+  instead of calling L3's `resolve_calls`/`build_event_graph` directly; a model with
+  nothing attached (the differential's) resolves exactly as before. Goldens unchanged.
+  `query_follows_the_program_engines_calls` (`query effects --routine Run6` lists the
+  insert reached through `MyPage.RunModal()`); discrimination: the L3 builder, and
+  separately `resolve_calls` inside `from_resolved`, each fail it.
+
+- **`alsem policy check` reads the program engine** (engine-switch S6.6; `policy
+  explain` builds no model). Goldens unchanged.
+  `policy_check_follows_the_program_engines_calls`: an event subscriber commits only
+  inside the page it opens with `MyPage.RunModal()`, so the default policy's
+  `no-commit-in-event-subscribers` emits 1 finding; discrimination: the L3 builder
+  emits 0.
+
+- **`alsem events fanout` and `events chains` read the program engine** (engine-switch
+  S6.5). Goldens unchanged. `events_follow_the_program_engines_event_graph` states a
+  workspace event whose only subscriber names it as an identifier (L3 drops it, the
+  program engine binds it, S4.3a): fan-out counts 1 subscriber and the chain reaches
+  it. Discrimination: the L3 builder fails the fan-out half, and on chains alone fails
+  the chains half.
+
+- **`alsem diff`'s workspace mode (the snapshot) reads the program engine**
+  (engine-switch S6.4); the snapshot golden test builds the same model. Golden moves,
+  `tests/cli-b-goldens/snapshot/` (cbor, cbor.gz, raw/envelope JSON):
+  - `ws-d35`: three `eventDeclarations` for its `Codeunit, 50` subscribers, bound to
+    `unknown:codeunit:0:50` (L3 could not parse a numbered publisher; S4.3b).
+  - `ws-txn-d49-pos-modify-runmodal`: the unresolved `Page.RunModal` of S6.2/S6.3 is a
+    `page-run` / `unfetched-dependency` call with an `object-run-unresolved` typed edge,
+    and coverage is `partial`.
+  `diff_workspace_mode_follows_the_program_engines_calls` diffs two workspaces whose
+  page trigger gains the write; discrimination: with the L3 builder `Run6` shows no
+  change.
+
+- **`alsem fingerprint` reads the program engine** (engine-switch S6.3). Golden move,
+  `tests/cli-b-goldens/fingerprint/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`:
+  the same unresolved `Page.RunModal` as S6.2, so the coverage fields go `complete` ->
+  `partial` (`object-run-unresolved`), and the human renderer adds the lines it prints
+  only for a partial cone. No fact, permission or witness changes; CBOR goldens
+  unchanged. `fingerprint_follows_the_program_engines_calls`; discrimination: the L3
+  builder fails it.
+
+- **`alsem digest` reads the program engine** (engine-switch S6.2), through
+  `assemble_and_resolve_workspace_program` like `prove`. Golden move,
+  `tests/cli-b-goldens/digest/ws-txn-d49-pos-modify-runmodal.{json,human.txt}`: its
+  `Page.RunModal(Page::"D49 Sender")` names a page that does not exist (the name is the
+  codeunit's). L3 called it a builtin and reported coverage `complete`; the program
+  engine reports an unresolved object run, so coverage is `partial`
+  (`object-run-unresolved`) and the call site is listed as unresolved. Effects are
+  unchanged. `digest_follows_the_program_engines_calls` (the `RunModal`-only write);
+  discrimination: the L3 builder fails it.
+
+- **`alsem prove` reads the program engine** (engine-switch S6.1). It built the
+  disk-only L3 model and resolved calls and events with L3. It now uses
+  `program_calls::assemble_and_resolve_workspace_program`, the program-backed model
+  `alsem analyze` uses (program calls and event graph attached), which every S6
+  consumer moves onto. Goldens unchanged (`tests/cli-b-goldens/prove`: the corpus has no
+  site where the engines disagree). `prove_follows_the_program_engines_calls`
+  (tests/cli/cli_s6_consumers.rs) states a workspace whose only path to a table write is
+  `MyPage.RunModal()` (L3: member not found; program: the page's `OnOpenPage`);
+  discrimination: the L3 builder answers it wrongly.
+
 - **The model's object facts come from the resolver's derivation** (engine-switch S5.4,
   spec G3/G4; deferred from S2b.4). Object facts were derived twice from the same IR:
   `node_extract` for the resolver's `ObjectNode` and the model assembly for `L3Object`.

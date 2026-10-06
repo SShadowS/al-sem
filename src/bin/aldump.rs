@@ -41,6 +41,20 @@ const R2_5A_MODEL_INSTANCE_ID: &str = "r2.5a";
 /// are modelInstanceId-independent — R0; pinned to match the al-sem capture).
 const R2_5B_MODEL_INSTANCE_ID: &str = "r2.5b";
 
+/// The model the detector-output modes (`--r3a1/2/3`, `--r4-findings`, `--r4f-*`)
+/// project (engine-switch S6.9): program-backed, as `alsem analyze` builds it,
+/// under the default model-instance id. The `--l3-*` modes keep L3's own model:
+/// they measure L3 and retire with it (S9).
+fn program_model(
+    workspace: &std::path::Path,
+) -> Option<al_sem::engine::l3::l3_workspace::L3Resolved> {
+    al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_program(
+        workspace,
+        al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "usage: aldump [--l2 | --l3-record-types | --l3-call-graph | --l3-call-graph-stats | \
@@ -452,7 +466,7 @@ fn main() -> ExitCode {
         //
         // Task T0.1: a fail-closed/empty layout is a genuine tool failure, not a
         // legitimate empty answer — exits non-zero with no stdout output.
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-2 summary-core projection",
                 workspace.display()
@@ -483,7 +497,7 @@ fn main() -> ExitCode {
         //
         // Task T0.1: a fail-closed/empty layout is a genuine tool failure — exits
         // non-zero with no stdout output.
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-3 cone+coverage projection",
                 workspace.display()
@@ -518,7 +532,7 @@ fn main() -> ExitCode {
             .unwrap_or_default();
         let detectors = al_sem::engine::l5::detectors::registered_detectors();
         let detector_names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4 findings projection",
                 workspace.display()
@@ -555,7 +569,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F return-summary projection",
                 workspace.display()
@@ -591,7 +605,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F snapshot projection",
                 workspace.display()
@@ -617,7 +631,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F digest-effects projection",
                 workspace.display()
@@ -643,7 +657,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F scoped-guarantees projection",
                 workspace.display()
@@ -669,7 +683,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F ordering-facts projection",
                 workspace.display()
@@ -696,7 +710,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4-F root-classification projection",
                 workspace.display()
@@ -731,7 +745,7 @@ fn main() -> ExitCode {
         //
         // Task T0.1: a fail-closed/empty layout is a genuine tool failure — exits
         // non-zero with no stdout output.
-        let Some(resolved) = assemble_and_resolve_workspace_default(&workspace) else {
+        let Some(resolved) = program_model(&workspace) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-1 projection",
                 workspace.display()

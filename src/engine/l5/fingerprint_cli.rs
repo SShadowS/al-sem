@@ -29,7 +29,7 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::l3_workspace::assemble_and_resolve_workspace;
+use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::l5::fingerprint_query::{
@@ -348,8 +348,10 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // Assemble workspace.
     let model_id = compute_gate_model_instance_id(opts.workspace)
         .ok_or_else(|| "fingerprint: could not compute modelInstanceId".to_string())?;
-    let resolved = assemble_and_resolve_workspace(opts.workspace, &model_id, opts.no_roots_config)
-        .ok_or_else(|| "fingerprint: workspace did not resolve".to_string())?;
+    // Engine-switch S6.3: the program-backed model (program calls and events).
+    let resolved =
+        assemble_and_resolve_workspace_program(opts.workspace, &model_id, opts.no_roots_config)
+            .ok_or_else(|| "fingerprint: workspace did not resolve".to_string())?;
 
     // Honest `rootsConfigIgnored`: true only when a `roots.config.json` actually
     // existed (and would have loaded+validated) AND --no-roots-config skipped it.

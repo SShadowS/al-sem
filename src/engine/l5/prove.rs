@@ -24,7 +24,8 @@
 use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_workspace};
+use crate::engine::l3::l3_workspace::L3Resolved;
+use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
@@ -884,7 +885,8 @@ pub fn run_prove_pipeline(
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "prove: could not compute modelInstanceId".to_string())?;
-    let resolved = assemble_and_resolve_workspace(workspace, &model_id, false)
+    // Engine-switch S6.1: the program-backed model (program calls and events).
+    let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
         .ok_or_else(|| "prove: workspace did not resolve".to_string())?;
 
     // Compose snapshot

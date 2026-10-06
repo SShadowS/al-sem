@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_workspace};
+use crate::engine::l3::l3_workspace::L3Resolved;
+use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
@@ -1218,7 +1219,8 @@ pub fn run_digest_pipeline(
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    let resolved = assemble_and_resolve_workspace(workspace, &model_id, false)
+    // Engine-switch S6.2: the program-backed model (program calls and events).
+    let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
         .ok_or_else(|| "digest: workspace did not resolve".to_string())?;
 
     // Compose snapshot ONCE. The workspace fingerprint is computed directly via the

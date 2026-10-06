@@ -28,7 +28,7 @@ use crate::engine::gate::policy::policy_loader::{
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::l3_workspace::assemble_and_resolve_workspace;
+use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
@@ -191,7 +191,8 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
-    let resolved = match assemble_and_resolve_workspace(opts.workspace, &model_id, false) {
+    // Engine-switch S6.6: the program-backed model (program calls and events).
+    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
         Some(r) => r,
         None => {
             return PolicyCheckOutcome {

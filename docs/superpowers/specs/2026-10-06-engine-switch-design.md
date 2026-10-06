@@ -271,6 +271,22 @@ zero unexplained differences, zero regressions, written golden triage.
   paths included: prove, digest, fingerprint, diff/snapshot, events, policy, query,
   `compute_analyzer_diagnostics`, `format_html`, the L4 projection's event rebuild,
   aldump modes.
+  *As built (2026-10-06, branch `engine-switch/s6-consumers`):* one shared builder,
+  `program_calls::assemble_and_resolve_workspace_program`, gives every single-app
+  consumer the model `analyze` uses (program calls and events attached). S6.1-S6.7 moved
+  prove, digest, fingerprint, diff/snapshot, events fanout/chains, policy check and
+  query onto it; S6.8 made `format_html` and the r3a1/r3a2 projections read
+  `calls_for`/`events_for` instead of rebuilding L3's event graph; S6.9 moved aldump's
+  `--r3a1/2/3`, `--r4-findings` and `--r4f-*` modes. S6.0 (the step S5 proposed) made the
+  B3 adapter take receiver types from the program resolver (`SiteFacts`/`ReceiverFact`
+  replace `interface_sites`); the L3 `SymbolTable` stays only for the census
+  implicit-trigger comparison. Each move has a revert-to-L3 discrimination test in
+  `tests/cli/cli_s6_consumers.rs`. Goldens moved only where the program engine knows more
+  (an unresolved `Page.RunModal` now resolves; the HTML report gains its event graph);
+  CDO program stats and findings unchanged. Left on L3's resolver: the cross-app paths
+  and `dep_artifact_l4`/`capability_cone` dependency rebuilds (S7), and the `--l3-*`
+  modes, `l3_mint`, `call_graph_projection` and the gap/temp_state tests, which measure
+  L3 itself (S9).
 - **S7 — Cross-app replacement, INCLUDING the existing dependency products** (G11a,
   G15b-existing). Today's cross-app base already builds dependency artifacts and
   retained facts by re-parsing dependency bodies (`capability_cone.rs:2984-3073,

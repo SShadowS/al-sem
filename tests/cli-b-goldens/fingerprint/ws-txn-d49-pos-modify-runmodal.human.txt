@@ -1,11 +1,14 @@
 Rendering 1 root classification.
 
 ::ModifyThenRunModal  [public-procedure]
-  coverage:   complete
+  coverage:   partial — object-run-unresolved
+  writes:     none known reachable
   reads:      TableData "11111111-0000-0000-0000-0000000d4902/table/50100"
+  publish:    none known reachable
   dispatch:   1 unresolved-dynamic
   ui:         "<unknown>"
-  permissions:
+  no known http/storage/file/background/telemetry capabilities — cone partial
+  permissions (inferred, may be incomplete):
     TableData "11111111-0000-0000-0000-0000000d4902/table/50100" MR
 
   witnesses:
