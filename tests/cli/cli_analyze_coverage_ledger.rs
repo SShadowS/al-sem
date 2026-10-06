@@ -224,3 +224,79 @@ fn analyze_degrades_on_an_unbound_event_subscription() {
         "{warning}"
     );
 }
+
+/// S5.3: `--scope primary` drops a finding whose object belongs to another app.
+/// The analyze model holds the primary app only until S7/S8, so the precondition
+/// is stated by assignment: one object of a real model is moved to another app.
+/// LIMIT: this pins `dependency_object_predicate` and `scope_filter`, not the one
+/// line in `run_analyze_with_exit` that passes the one to the other.
+#[test]
+fn scope_primary_drops_a_finding_on_another_apps_object() {
+    use al_sem::engine::gate::filter::scope_filter;
+    use al_sem::engine::gate::projection::{FindingLocation, FindingSummary, ProjectionIndex};
+    use al_sem::engine::gate::run::dependency_object_predicate;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &app_json("aaaa5555-0000-0000-0000-000000000054", "ScopeWs"),
+    );
+    write(
+        &ws.join("src/Two.al"),
+        "codeunit 50004 \"Own Cu\"\n{\n    procedure A()\n    begin\n    end;\n}\n\
+         codeunit 50005 \"Dep Cu\"\n{\n    procedure B()\n    begin\n    end;\n}\n",
+    );
+    let mut resolved = build_analysis_model(ws).model.expect("model");
+    let dep = resolved
+        .workspace
+        .objects
+        .iter_mut()
+        .find(|o| o.name == "Dep Cu")
+        .expect("Dep Cu");
+    dep.app_guid = "dddd5555-0000-0000-0000-000000000054".to_string();
+    let dep_id = dep.id.clone();
+    let own_id = resolved
+        .workspace
+        .objects
+        .iter()
+        .find(|o| o.name == "Own Cu")
+        .expect("Own Cu")
+        .id
+        .clone();
+
+    let idx = ProjectionIndex::build(&resolved.workspace.objects, &resolved.workspace.routines);
+    let finding = |id: &str, object: &str| FindingSummary {
+        id: id.to_string(),
+        fingerprint: "fp".to_string(),
+        detector: "d".to_string(),
+        title: "t".to_string(),
+        root_cause: "rc".to_string(),
+        severity: "low".to_string(),
+        confidence_level: "confirmed".to_string(),
+        confidence_capped_by: None,
+        primary_location: FindingLocation {
+            file: "ws:src/Two.al".to_string(),
+            line: 1,
+            column: 1,
+            object_id: Some(object.to_string()),
+            object_name: None,
+            routine_id: None,
+            routine_name: None,
+        },
+        terminal_location: None,
+        affected_objects: vec![],
+        affected_tables: vec![],
+        fix_hint: None,
+        path_count: 0,
+    };
+    let kept: Vec<String> = scope_filter(
+        vec![finding("own", &own_id), finding("dep", &dep_id)],
+        Scope::Primary,
+        dependency_object_predicate(&resolved, &idx),
+    )
+    .into_iter()
+    .map(|f| f.id)
+    .collect();
+    assert_eq!(kept, vec!["own".to_string()]);
+}

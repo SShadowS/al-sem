@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--scope primary` asks which app a finding's object belongs to** (engine-switch
+  S5.3). The scope filter got `|_| false`, so no finding could ever be treated as
+  dependency-anchored. `gate::run::dependency_object_predicate` answers from the model
+  object's `app_guid` against the primary app's id. Dormant: the analyze model holds the
+  primary app only until S7/S8 add dependency routines, so no output changes today.
+  `scope_primary_drops_a_finding_on_another_apps_object` moves one object of a real
+  model to another app by assignment; discrimination: the old constant-false predicate
+  fails it. Stated limit: the test pins the predicate and the filter, not the call
+  site that joins them.
+
 - **The preflight no longer says "verified" over an unbound event subscription or an
   unreadable dependency** (engine-switch S5.2b, spec G9/G14). Two holes the unknown-edge
   count cannot see:

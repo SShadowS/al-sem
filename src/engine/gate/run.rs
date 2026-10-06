@@ -255,6 +255,23 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
     }
 }
 
+/// `--scope primary`'s dependency test (engine-switch S5.3): a finding's object is a
+/// dependency object when the model object's app is not the primary app. It used to
+/// be `|_| false`. The analyze model holds the primary app only until S7/S8 add
+/// dependency routines, so today this keeps every finding, as before; it is the
+/// rule those steps rely on. With no primary app identity (no `app.json` id) nothing
+/// is treated as a dependency.
+pub fn dependency_object_predicate<'a>(
+    resolved: &'a L3Resolved,
+    idx: &'a ProjectionIndex<'a>,
+) -> impl Fn(&str) -> bool + 'a {
+    let primary = resolved.primary_app.as_ref().map(|a| a.app_guid.as_str());
+    move |obj_id: &str| match (primary, idx.objects_by_id.get(obj_id)) {
+        (Some(p), Some(o)) => !o.app_guid.eq_ignore_ascii_case(p),
+        _ => false,
+    }
+}
+
 /// One `dependencies`-stage warning per problem in the program build's dependency
 /// ledger (engine-switch S5.2b, spec G14), in ledger (guid) order, then one per
 /// package whose manifest could not be read. Missing and older dependencies do not
@@ -474,8 +491,9 @@ pub fn run_analyze_with_exit(
     // --- scope: primary drops dependency-anchored findings. Source-only ⇒ keep all. ---
     {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let is_dependency = dependency_object_predicate(&resolved, &idx);
         let kept_ids: std::collections::HashSet<String> =
-            scope_filter(summaries, args.scope, |_obj_id| false)
+            scope_filter(summaries, args.scope, is_dependency)
                 .into_iter()
                 .map(|s| s.id)
                 .collect();
