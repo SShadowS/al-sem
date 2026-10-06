@@ -3356,6 +3356,7 @@ mod tests {
             obj_index,
             friends: friends_map,
             abi_ingest_errors: Default::default(),
+            workspace_rows: Default::default(),
         }
     }
 

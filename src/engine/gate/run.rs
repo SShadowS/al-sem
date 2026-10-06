@@ -171,6 +171,9 @@ pub struct AnalysisModel {
     /// The program engine's `FreshCoverage`, or its build error.
     pub fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
     pub model: Result<L3Resolved, ModelFailure>,
+    /// The program graph's workspace physical rows (engine-switch S2b.3), kept
+    /// past the program context's drop; `None` when the model was not built.
+    pub physical: Option<crate::program::physical::PhysicalIndex>,
 }
 
 /// THE production model builder for `alsem analyze` — and the one the engine-switch
@@ -205,6 +208,7 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::NoModelInstanceId),
+            physical: None,
         };
     };
     let Some((ctx, report)) = program else {
@@ -223,7 +227,11 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
         } else {
             Err(ModelFailure::AssemblyFailed)
         };
-        return AnalysisModel { fresh, model };
+        return AnalysisModel {
+            fresh,
+            model,
+            physical: None,
+        };
     };
     // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
@@ -234,12 +242,16 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
+            physical: None,
         };
     };
+    // Taken before the adapter consumes (and drops) the program context.
+    let physical = Some(ctx.graph().workspace_rows.clone());
     crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
     AnalysisModel {
         fresh,
         model: Ok(resolved),
+        physical,
     }
 }
 
@@ -308,7 +320,7 @@ pub fn run_analyze_with_exit(
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
     let ws_path = Path::new(&args.workspace);
-    let AnalysisModel { fresh, model } = build_analysis_model(ws_path);
+    let AnalysisModel { fresh, model, .. } = build_analysis_model(ws_path);
     let resolved = match model {
         Ok(r) => r,
         // Fail-closed layout / unreadable workspace → empty output; preflight says

@@ -65,6 +65,10 @@ pub struct ProgramGraph {
     /// case) and in every in-memory test fixture that doesn't explicitly
     /// wire it.
     pub abi_ingest_errors: Vec<AbiIngestError>,
+    /// The WORKSPACE's declarations as they occur in source, before the sort and
+    /// dedup above (engine-switch S2b.3): one row per occurrence, with the node it
+    /// became. Empty for dependency-only and in-memory test graphs.
+    pub workspace_rows: crate::program::physical::PhysicalIndex,
 }
 
 /// One dependency-ABI ingest failure (H-3) — see

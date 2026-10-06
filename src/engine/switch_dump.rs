@@ -60,6 +60,12 @@ pub fn dump_lines(ws: &Path) -> Dump {
         return d;
     };
     let ws_model = &resolved.workspace;
+    if let Some(rows) = &built.physical {
+        d.insert(
+            "census.physical".into(),
+            crate::program::model::census::physical_census(ws_model, rows).lines(),
+        );
+    }
     d.insert("model.objects".into(), rows(&ws_model.objects));
     d.insert("model.tables".into(), rows(&ws_model.tables));
     d.insert("model.routines".into(), rows(&ws_model.routines));

@@ -8,6 +8,7 @@
 //! under their old names meanwhile.
 
 pub mod calls;
+pub mod census;
 pub mod extension_fields;
 pub mod record_types;
 pub mod symbol_table;

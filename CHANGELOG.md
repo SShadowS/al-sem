@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The program graph keeps every workspace declaration as it occurs** (engine-switch
+  S2b.3). `ProgramGraph::workspace_rows` (`program::physical`) holds one row per object
+  and routine declaration, recorded before the graph's sort and dedup. Each row has its
+  file, its position in the file's object and routine lists, its span, and the node it
+  became; several rows may share one node.
+
+  `program::model::census::physical_census` joins the detector model to these rows on
+  `(file, span)`. It is part of the switch harness dump (`census.physical`), and
+  `build_analysis_model` now hands the rows out before the program context is dropped.
+  On all 218 corpora:
+  - every model object and routine maps to exactly one row;
+  - the only extra rows are the 77 interface and control-add-in signature routines that
+    the model skips by rule (33 on CDO, 30 on DO, 14 in fixtures);
+  - nothing is unexplained.
+
+  This is the precondition for S2b.4, which builds the model from these rows. Apart
+  from the new census file, the dumps are byte-identical to S2b.2.
+
+  Tests:
+  - `analyze_model_maps_one_to_one_onto_physical_rows` runs the production model on a
+    fixture with interfaces.
+  - `census_reports_missing_ambiguous_and_unexplained` hand-states each failure.
+  - `each_row_names_the_node_of_its_own_declaration` recomputes every row's node from
+    its own declaration.
+
+  The last one exists because the first discrimination attempt passed: reversing the
+  row-to-node assignment went unnoticed by the census, which joins on spans. With the
+  new test, that break fails. Dropping `Interface` from the skip rule fails both census
+  tests.
+
 - **Engine-switch difference harness** (S0 of
   `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, the plan to move every
   consumer onto the program engine and delete L3). `aldump --switch-dump <ws> <dir>`

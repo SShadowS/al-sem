@@ -421,6 +421,7 @@ mod tests {
             obj_index,
             friends: Default::default(),
             abi_ingest_errors: Default::default(),
+            workspace_rows: Default::default(),
         };
 
         let pubr = rid(dep, 80, "OnAfterPost", 1);
