@@ -127,6 +127,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Coverage counts only the files the analysis read** (engine-switch S5.1, spec
+  G5/G9). `coverage_source_units_for_workspace` walked into a child directory with its
+  own `app.json` (another app), while the model analyses the root app only
+  (`NestedApps::Skip`, S2a). So `sourceUnitsTotal`/`sourceUnitsParsed` counted the
+  nested app's files as parsed although none of their routines was analysed. The unit
+  walk now uses the same app-scoped discovery. Dormant on CDO, DO and all 218 harness
+  corpora (byte-identical `s4-3` -> `s5-1`): none nests an app under a root app.
+  `coverage_counts_only_the_files_the_model_analysed` (tests/cli) states a root and a
+  nested app on disk; discrimination: the nested walk fails it with `(2, 2)`.
+
 - **Event subscribers that name the publisher by number now bind** (engine-switch
   S4.3b, spec G7). `[EventSubscriber(ObjectType::Codeunit, 80, 'OnAfterX', …)]` is valid
   AL; both engines dropped it. `ParsedSubscriberArgs::publisher_id` carries the number
