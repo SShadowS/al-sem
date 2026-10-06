@@ -509,6 +509,7 @@ mod tests {
             primary_app: None,
             infra_diagnostics: Vec::new(),
             precomputed_calls: None,
+            precomputed_events: None,
         }
     }
 

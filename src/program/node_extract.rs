@@ -737,6 +737,8 @@ pub(crate) mod test_fixtures {
             event_subscribers: vec![ParsedSubscriberArgs {
                 publisher_object_type: "codeunit".to_string(),
                 publisher_name: "sales-post".to_string(),
+                // Maximal: set although a real attribute carries a name OR a number.
+                publisher_id: Some(80),
                 event_name: "onbeforepostsalesdoc".to_string(),
                 element: Some("no.".to_string()),
                 skip_on_missing_license: true,

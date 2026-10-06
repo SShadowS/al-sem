@@ -2134,6 +2134,7 @@ pub fn route_applicability(
                                 sub_rid,
                                 &pub_type_lc,
                                 &pub_name_lc,
+                                pub_obj.declared_id,
                                 &edge.from.name_lc,
                                 edge.from.params_count,
                                 pub_include_sender,

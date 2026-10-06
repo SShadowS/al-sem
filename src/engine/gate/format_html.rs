@@ -972,6 +972,7 @@ mod tests {
             parameters: vec![],
             isolated: None,
             provenance: vec![],
+            publisher_ref: None,
         }
     }
 
@@ -1212,6 +1213,7 @@ mod tests {
             primary_app: None,
             infra_diagnostics: vec![],
             precomputed_calls: None,
+            precomputed_events: None,
         };
         let coverage = AnalysisCoverage {
             source_units_total: 1,
@@ -1267,6 +1269,7 @@ mod tests {
             primary_app: None,
             infra_diagnostics: vec![],
             precomputed_calls: None,
+            precomputed_events: None,
         };
         let coverage = AnalysisCoverage {
             source_units_total: 0,

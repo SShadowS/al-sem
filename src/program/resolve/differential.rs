@@ -551,6 +551,8 @@ pub fn project_fresh_event_rows_on(
 ///    compatibility is NOT validated (arity-only check; documented residual).
 /// 2. At least one `[EventSubscriber]` attribute in the subscriber's raw IR freshly
 ///    parses to match `(publisher_object_type_lc, publisher_name_lc, event_name_lc)`.
+///    An attribute that names the publisher by number (S4.3b) matches on
+///    `publisher_number` instead of the name.
 ///
 /// Returns `true` (fail-open) when:
 /// - The subscriber's app is not found in `apps`, OR
@@ -572,6 +574,7 @@ pub fn verify_event_subscriber_route(
     sub_rid: &RoutineNodeId,
     publisher_object_type_lc: &str,
     publisher_name_lc: &str,
+    publisher_number: Option<i64>,
     event_name_lc: &str,
     publisher_params_count: usize,
     publisher_include_sender: Option<bool>,
@@ -627,8 +630,14 @@ pub fn verify_event_subscriber_route(
                     .filter(|a| a.name.eq_ignore_ascii_case("eventsubscriber"))
                     .filter_map(|a| parse_event_subscriber_ir(a, &pf.file.ir))
                     .any(|args| {
+                        // The attribute names the publisher by name or, since
+                        // S4.3b, by number.
+                        let names_publisher = match args.publisher_id {
+                            Some(n) => publisher_number == Some(n),
+                            None => args.publisher_name == publisher_name_lc,
+                        };
                         args.publisher_object_type == publisher_object_type_lc
-                            && args.publisher_name == publisher_name_lc
+                            && names_publisher
                             && args.event_name == event_name_lc
                     });
                 return has_match;

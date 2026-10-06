@@ -6,6 +6,7 @@ mod regen;
 
 mod b3_triage_r0;
 mod r4_differential;
+mod r4_event_inventory;
 mod r4f_digest_effects;
 mod r4f_issue33_unmasked_physical_write;
 mod r4f_ordering_facts;

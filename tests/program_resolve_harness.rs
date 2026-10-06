@@ -359,6 +359,7 @@ fn event_teeth_correct_subscriber_passes() {
             &sub_rid,
             "codeunit",
             "evtpub",
+            None,
             "onafterx",
             0,
             Some(false),
@@ -386,6 +387,7 @@ fn event_teeth_wrong_publisher_fails() {
             &sub_rid,
             "codeunit",
             "evtpub_other", // WRONG publisher name
+            None,
             "onafterx",
             0,
             Some(false),
@@ -414,6 +416,7 @@ fn event_teeth_excess_params_fails() {
             &sub_rid,
             "codeunit",
             "evtpub",
+            None,
             "onafterx",
             0, // publisher has 0 params; subscriber has 2
             Some(false),
@@ -1053,6 +1056,7 @@ fn event_teeth_non_circularity_reads_raw_ir() {
             &sub_rid,
             "codeunit",
             "evtpub",
+            None,
             "onafterx",
             0,
             Some(false),
@@ -1080,6 +1084,7 @@ fn event_teeth_non_circularity_reads_raw_ir() {
             &sub_rid,
             "codeunit",
             "evtpub",
+            None,
             "onafterx",
             0,
             Some(false),
@@ -7468,7 +7473,7 @@ fn compound_obj_dup_and_overload_subscription_resolves_not_ambiguous() {
          inflation; got {:?}",
         idx.ambiguous_subscriptions()
             .iter()
-            .map(|a| (a.event_name_lc.clone(), a.candidate_count))
+            .map(|a| a.event_name_lc.clone())
             .collect::<Vec<_>>()
     );
 
@@ -8949,13 +8954,17 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "resolver.rs",
             "None => graph.resolve_object(from_object.id.app, *kind, name_lc),",
         ),
+        // `resolve_subscription_publisher` (engine-switch S4.3b): the one
+        // `[EventSubscriber]` publisher lookup (subscriber wiring, platform
+        // publisher injection, IncludeSender preflight), by name or by number.
+        // Both branches are semantic callers and fail closed on a collision.
         (
             "index.rs",
-            "let Some(pub_obj) = graph.resolve_object(sub_app, kind, &args.publisher_name)",
+            "Some(n) => graph.resolve_object_by_number(from, kind, n),",
         ),
         (
             "index.rs",
-            "let Some(pub_obj) = graph.resolve_object(sub_app, kind, &args.publisher_name) else {",
+            "None => graph.resolve_object(from, kind, &args.publisher_name),",
         ),
         (
             "receiver.rs",

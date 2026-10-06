@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::engine::l2::features::PCallSite;
 use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding, calls_for};
-use crate::engine::l3::event_graph::build_event_graph;
+use crate::engine::l3::event_graph::events_for;
 use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
 use crate::engine::l3::symbol_table::SymbolTable;
@@ -870,8 +870,9 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
     );
 
     // --- L3→L4 substrate (source-only: no deps) ----------------------------
-    // `symbols` feeds BOTH spans below (resolve_calls here, build_event_graph in
-    // the next stage), so it is built at this outer scope instead of inside either
+    // `symbols` feeds BOTH spans below (`calls_for` here, `events_for` in the next
+    // stage; each reads the program engine's result when `resolved` carries one,
+    // engine-switch S3/S4), so it is built at this outer scope instead of inside either
     // span's own block — the two spans are closed explicitly (`drop`) at their
     // semantic stage ends rather than by a block boundary (same pattern as
     // `gate/run.rs`'s `gate.project_filter_scope_baseline_suppress`).
@@ -882,7 +883,7 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
     drop(_symbols_span);
 
     let _graph_span = pt::span("context", "context.event_combined_graph");
-    let event_graph = build_event_graph(&ws.routines, &symbols);
+    let event_graph = events_for(resolved, &symbols).into_owned();
     let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_graph_span);
 
@@ -1864,6 +1865,7 @@ mod tests {
             primary_app: None,
             infra_diagnostics: Vec::new(),
             precomputed_calls: None,
+            precomputed_events: None,
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
@@ -1908,6 +1910,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 external_targets: Vec::new(),
             })),
+            precomputed_events: None,
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(

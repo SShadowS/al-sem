@@ -726,6 +726,7 @@ pub(crate) fn empty_output_result(
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
                 precomputed_calls: None,
+                precomputed_events: None,
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],
