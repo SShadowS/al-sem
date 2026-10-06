@@ -38,7 +38,7 @@ use crate::engine::l4::summary::{
     RecordRoleSummary, Uncertainty, dedupe_uncertainties, uncertainty_key,
 };
 use crate::engine::l4::summary_runner::{
-    FieldIndex, compute_summaries_v2_bundle, summaries_census,
+    FieldIndex, compute_summaries_v2_bundle_with_leaves, summaries_census,
 };
 use crate::engine::l5::confidence::UncertaintyLite;
 use crate::engine::l5::entry_points::AccessModifier;
@@ -847,8 +847,37 @@ impl DetectorContext<'_> {
 /// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
 /// byte-identical to the pre-Task-3 build.
 pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorContext<'_> {
+    build_detector_context_with(resolved, demanded, None)
+}
+
+/// What a CROSS-APP context adds to the model (engine-switch S8.1): the dependency
+/// routines (never primary roots or entry points), their fixed solver leaves, the
+/// dependency-internal edges the cone follows (`direct-call` typed edges from the
+/// R3a-4 artifacts), and d17's declared dependencies and resolved versions. The
+/// model is the cross-app base's (`R3a5CrossAppBase::resolved`), its calls cut to
+/// workspace callers.
+pub(crate) struct CrossAppInputs<'b> {
+    pub dep_routine_ids: &'b BTreeSet<String>,
+    pub leaf_summaries: &'b HashMap<String, crate::engine::l4::summary::RoutineSummary>,
+    pub injected_typed_edges: &'b [crate::engine::l4::combined_graph::TypedEdge],
+    pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
+    pub app_versions: &'b HashMap<String, String>,
+}
+
+/// [`build_detector_context`], single-app (`cross: None`) or cross-app. One builder
+/// for both since engine-switch S8.1; the cross-app one (which built every
+/// substrate whatever the detectors asked for) is gone.
+pub(crate) fn build_detector_context_with<'a>(
+    resolved: &'a L3Resolved,
+    demanded: u32,
+    cross: Option<CrossAppInputs<'_>>,
+) -> DetectorContext<'a> {
     use crate::engine::l5::registry::substrate;
     let ws = &resolved.workspace;
+    let no_deps: BTreeSet<String> = BTreeSet::new();
+    let no_leaves: HashMap<String, crate::engine::l4::summary::RoutineSummary> = HashMap::new();
+    let dep_routine_ids = cross.as_ref().map_or(&no_deps, |c| c.dep_routine_ids);
+    let leaf_summaries = cross.as_ref().map_or(&no_leaves, |c| c.leaf_summaries);
     // TRANSACTION_SPANS folds over the summaries map, so demand summaries whenever
     // either bit is set (see `compute_transaction_spans`).
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
@@ -884,7 +913,12 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
 
     let _graph_span = pt::span("context", "context.event_combined_graph");
     let event_graph = events_for(resolved, &symbols).into_owned();
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+    let mut graph = build_combined_graph(ws, &calls, &event_graph);
+    if let Some(c) = &cross {
+        graph
+            .typed_edges
+            .extend(c.injected_typed_edges.iter().cloned());
+    }
     drop(_graph_span);
 
     // Per-routine direct facts + direct coverage, then the inherited cone over
@@ -1112,10 +1146,8 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
 
     let reverse_call_graph = build_reverse_call_graph(&graph);
 
-    // Source-only: no dep routines.
-    let dep_routine_ids: BTreeSet<String> = BTreeSet::new();
     let entry_points: BTreeSet<String> =
-        crate::engine::l5::entry_points::find_entry_points(&ws.routines, &dep_routine_ids)
+        crate::engine::l5::entry_points::find_entry_points(&ws.routines, dep_routine_ids)
             .into_iter()
             .collect();
 
@@ -1141,7 +1173,7 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
     let internal_reachable_externally = false;
     let reachable_roots: BTreeSet<String> = crate::engine::l5::entry_points::find_reachable_roots(
         &ws.routines,
-        &dep_routine_ids,
+        dep_routine_ids,
         &access_modifiers,
         internal_reachable_externally,
     )
@@ -1170,7 +1202,7 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         if demanded & substrate::TRANSACTION_SPANS != 0 {
             compute_transaction_spans(
                 &ws.routines,
-                &dep_routine_ids,
+                dep_routine_ids,
                 &reverse_call_graph,
                 &summaries,
                 &cone_derived,
@@ -1183,7 +1215,7 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
     // Event-flow indexes — built eagerly from the L3 event graph + routine set +
     // dep set (source-only ⇒ empty dep set ⇒ every routine primary). Consumes
     // `event_graph` by reference before it is moved into the struct.
-    let event_flow_indexes = build_event_flow_indexes(&event_graph, &ws.routines, &dep_routine_ids);
+    let event_flow_indexes = build_event_flow_indexes(&event_graph, &ws.routines, dep_routine_ids);
 
     // Cross-extension subscriber lookup, shared by d43/d44/d45 — previously each
     // rebuilt this identically from `ctx.event_graph` + `ws.objects` per run.
@@ -1326,12 +1358,13 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         // cap-hit backstop (empty on the corpus — roles converge); the db_effects path
         // is closed-form and never caps.
         let (db_effect_bundle, mut core_summaries, summarize_diagnostics) =
-            compute_summaries_v2_bundle(
+            compute_summaries_v2_bundle_with_leaves(
                 &ws.routines,
                 &graph,
                 &scc,
                 &calls.upgraded_bindings,
                 &field_index,
+                leaf_summaries,
             );
         drop(_summaries_span);
         // ⟨substrate census⟩ `ALSEM_SUMMARIES_CENSUS=1` — the phase split inside the
@@ -1350,8 +1383,12 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         // THAT regression: deterministic, machine-independent, no timing involved.
         // See `core_summaries_stay_lean_while_the_bundle_carries_the_db_effect_rows`
         // (this module's test module) for the corpus that exercises it for real.
+        // A cross-app fixed leaf is handed in WITH its own direct rows (S8.1); only
+        // the summaries the solver computes must be lean.
         debug_assert!(
-            core_summaries.values().all(|s| s.db_effects.is_empty()),
+            core_summaries
+                .iter()
+                .all(|(id, s)| s.db_effects.is_empty() || leaf_summaries.contains_key(id)),
             "build_detector_context's core_summaries must carry EMPTY db_effects — a \
              non-empty row means this call site regressed to a materializing summary \
              entry point, reintroducing the ~24 GB / ~74 s per-routine Vec<DbEffect> \
@@ -1517,10 +1554,24 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         upgraded_bindings_by_callsite,
         reachable_roots,
         internal_reachable_externally,
-        // Source-only: no deps → every routine primary, no declared deps, no versions.
-        dep_routine_ids: BTreeSet::new(),
-        declared_dependencies: Vec::new(),
-        app_versions: HashMap::new(),
+        dep_routine_ids: dep_routine_ids.clone(),
+        declared_dependencies: cross
+            .as_ref()
+            .map(|c| {
+                c.declared_dependencies
+                    .iter()
+                    .map(|d| DeclaredDep {
+                        app_guid: d.app_guid.clone(),
+                        name: d.name.clone(),
+                        min_version: d.min_version.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        app_versions: cross
+            .as_ref()
+            .map(|c| c.app_versions.clone())
+            .unwrap_or_default(),
         root_classifications_by_routine,
         ordering_facts: std::sync::OnceLock::new(),
         ordering_source: Some(resolved),
@@ -1528,287 +1579,6 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
         summarize_diagnostics,
         db_effect_bundle,
         reverse_effect_index,
-        fingerprint_index,
-        cross_extension_subscribers,
-    }
-}
-
-/// Build the shared context for a CROSS-APP run from a pre-assembled
-/// `R3a5CrossAppBase` (the merged workspace+dep model + cross-app combined graph +
-/// `dep_routine_ids`). Mirrors `build_detector_context` but reads every substrate
-/// from `base` instead of recomputing source-only, and threads `dep_routine_ids`
-/// into the entry-point / reachable-root / transaction-span / event-flow builders so
-/// dep routines are NOT treated as primary roots. d13/d16/d17 read
-/// `dep_routine_ids` (the roleOf gate), `declared_dependencies` + `app_versions`
-/// (d17), and the eager indexes; the path-walker substrate (uncertainties /
-/// summaries) is built identically for any future cross-app detector.
-///
-/// Since engine-switch S7.6 the call-site index, the root classifications and the
-/// ordering facts come from the base's cross-app model (`base.resolved`); they were
-/// empty, which left the call-site, root and ordering detectors blind cross-app.
-pub(crate) fn build_detector_context_cross_app(
-    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
-) -> DetectorContext<'_> {
-    use crate::engine::l4::summary_runner::compute_summaries_v2_bundle_with_leaves;
-
-    let ws_routines = base.ws_routines();
-    let dep_routine_ids = &base.dep_routine_ids;
-    let graph = base.graph.clone();
-
-    // Cone over the merged graph (direct facts/coverage already assembled in `base`).
-    // ⟨C1 Task 3⟩ `DerivedOnly`, unconditionally. Unlike the source-only builder
-    // there is no mode choice to make here: this context is reachable ONLY from
-    // `registry::run_detectors_cross_app` (its single caller), i.e. from the
-    // detector path, and no detector reads raw inherited facts. The one consumer
-    // that does — `gate::policy` — builds its context through the SOURCE-ONLY
-    // `build_detector_context` (`gate/policy/pipeline.rs`), never this one. Adding
-    // a `demanded` parameter here would therefore only add a branch that no caller
-    // can ever take.
-    let outcome = compose_cone_over_graph(
-        &base.graph,
-        &base.nodes,
-        &base.direct_full,
-        &base.direct_coverage,
-        base.ws_routines(),
-        ConeOutput::DerivedOnly,
-    );
-    let cones = outcome.cones;
-    let cone_derived = outcome.derived;
-    let empty_facts: Vec<CapabilityFact> = Vec::new();
-    let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
-    for r in ws_routines {
-        // ⟨C1 Task 3, carry #2⟩ The `inherited` FIELD POPULATION is gone; the
-        // `cones.get()` is NOT. Switching this to `cones.remove()` would import
-        // the G-18 routine-id-collision degeneracy that the source-only builder
-        // accepts and this builder does not — a real output change, not a
-        // refactor. `coverage` still comes off the same borrowed entry.
-        let cone = cones.get(&r.id);
-        let coverage = cone.map(|c| c.coverage.clone());
-        summaries.insert(
-            r.id.clone(),
-            FullRoutineSummary::new(
-                r.id.clone(),
-                base.direct_full.get(&r.id).unwrap_or(&empty_facts).clone(),
-                None,
-                coverage,
-            ),
-        );
-    }
-
-    // --- Eager indexes (over the merged routine/object/table sets) ---------
-    let routine_by_id: HashMap<&str, &L3Routine> =
-        ws_routines.iter().map(|r| (r.id.as_str(), r)).collect();
-    let objects_by_id: HashMap<&str, &L3Object> =
-        base.objects().iter().map(|o| (o.id.as_str(), o)).collect();
-    // G-5: REAL table wins an id collision with a tableextension stub.
-    let table_by_id: HashMap<&str, &L3Table> =
-        crate::engine::l3::l3_workspace::table_by_id_preferring_real(base.tables());
-
-    let reverse_call_graph = build_reverse_call_graph(&graph);
-
-    let entry_points: BTreeSet<String> =
-        crate::engine::l5::entry_points::find_entry_points(ws_routines, dep_routine_ids)
-            .into_iter()
-            .collect();
-
-    let mut access_modifiers: HashMap<String, AccessModifier> = HashMap::new();
-    for r in ws_routines {
-        let access = match r.access_modifier.as_deref() {
-            Some("local") => AccessModifier::Local,
-            Some("internal") => AccessModifier::Internal,
-            _ => AccessModifier::Public,
-        };
-        access_modifiers.insert(r.id.clone(), access);
-    }
-    let internal_reachable_externally = false;
-    let reachable_roots: BTreeSet<String> = crate::engine::l5::entry_points::find_reachable_roots(
-        ws_routines,
-        dep_routine_ids,
-        &access_modifiers,
-        internal_reachable_externally,
-    )
-    .into_iter()
-    .collect();
-
-    // G-19 — closed-world proven-temp params (see the source-only builder).
-    // Dep routines carry `access_modifier: None` (the ABI does not expose it),
-    // so they can never be proven; primary `local` procedures still can.
-    let closed_world_temp_params =
-        crate::engine::l5::closed_world_temp::prove_closed_world_temp_params(
-            ws_routines,
-            &graph,
-            &reverse_call_graph,
-            &entry_points,
-        );
-
-    let transaction_spans = compute_transaction_spans(
-        ws_routines,
-        dep_routine_ids,
-        &reverse_call_graph,
-        &summaries,
-        &cone_derived,
-    );
-
-    let event_flow_indexes =
-        build_event_flow_indexes(&base.event_graph, ws_routines, dep_routine_ids);
-
-    // Cross-extension subscriber lookup, from the SAME inputs as `event_flow_indexes`
-    // above — `base.event_graph` + `base.objects` (the merged cross-app event graph
-    // + object set), consistent with how `fingerprint_index` below anchors to `base`.
-    let cross_extension_subscribers =
-        crate::engine::l5::event_flow::build_cross_extension_subscribers(
-            &base.event_graph,
-            base.objects(),
-        );
-
-    // Resolved-call-edge-by-callsite index (engine-switch S7.6; it was EMPTY here,
-    // so d40/d41/d42/d53/d55/d61 were blind cross-app): the model's calls, the
-    // workspace callers' (the base cut them to the combined graph's).
-    let resolved_call_edge_by_callsite = first_resolved_edge_per_callsite(
-        base.resolved
-            .precomputed_calls
-            .as_ref()
-            .map(|c| c.edges.clone())
-            .unwrap_or_default(),
-    );
-
-    let mut uncertainty_edges_by_from: HashMap<
-        String,
-        Vec<crate::engine::l4::combined_graph::Uncertainty>,
-    > = HashMap::new();
-    for ue in &graph.uncertainty_edges {
-        uncertainty_edges_by_from
-            .entry(ue.from.clone())
-            .or_default()
-            .push(ue.uncertainty.clone());
-    }
-
-    // Core summaries (v2 db-effect solver WITH dep leaves) for the path-walker
-    // uncertainty union + parameter roles — same as project_r3a5_cross_app's core.
-    // ⟨Task B1⟩ the LEAN bundle entry point: `core_summaries` carries EMPTY
-    // `db_effects` (never re-materialized) with `.uncertainties` / `.parameter_roles`
-    // populated — the only fields read below — while the compact rows stay queryable
-    // via `db_effect_bundle` (held on the ctx). `summarize_diagnostics` carries the
-    // roles fixpoint's cap-hit backstop (empty on the corpus).
-    let (db_effect_bundle, mut core_summaries, summarize_diagnostics) =
-        compute_summaries_v2_bundle_with_leaves(
-            ws_routines,
-            &graph,
-            &base.combined_scc,
-            &base.upgraded_bindings,
-            &base.field_index,
-            &base.leaf_summaries,
-        );
-
-    // One drained pass for both harvests, hash-consing the per-node uncertainty sets
-    // — the exact shape `build_detector_context` uses; see its own comment for why
-    // `processed` is required (colliding internal routine ids) and why draining is
-    // equivalent to the old borrow-and-clone form. Membership here stays
-    // `ws_routines`-driven for BOTH maps, matching what the two loops this replaces
-    // produced: the cross-app `parameter_roles_by_routine` never covered
-    // `core_summaries` keys outside `ws_routines`, so there is no trailing drain.
-    let mut parameter_roles_by_routine: HashMap<String, Vec<RecordRoleSummary>> = HashMap::new();
-    let mut uncertainties_by_node: HashMap<String, UncertaintySetId> = HashMap::new();
-    let mut uncertainties = UncertaintyIndex::default();
-    let mut processed: HashSet<&str> = HashSet::new();
-    for r in ws_routines {
-        if !processed.insert(r.id.as_str()) {
-            continue;
-        }
-        let (from_summary, roles) = match core_summaries.remove(&r.id) {
-            Some(s) => (s.uncertainties, s.parameter_roles),
-            None => (Vec::new(), Vec::new()),
-        };
-        if !roles.is_empty() {
-            parameter_roles_by_routine.insert(r.id.clone(), roles);
-        }
-        let from_edges: Vec<Uncertainty> = uncertainty_edges_by_from
-            .get(&r.id)
-            .map(|edges| edges.iter().map(Uncertainty::from).collect())
-            .unwrap_or_default();
-        if from_summary.is_empty() && from_edges.is_empty() {
-            continue;
-        }
-        let combined: Vec<Uncertainty> = from_summary.into_iter().chain(from_edges).collect();
-        uncertainties_by_node.insert(
-            r.id.clone(),
-            uncertainties.intern_set(dedupe_uncertainties(combined)),
-        );
-    }
-
-    let mut call_site_by_id: HashMap<&str, &PCallSite> = HashMap::new();
-    for r in ws_routines {
-        for cs in &r.call_sites {
-            call_site_by_id.insert(cs.id.as_str(), cs);
-        }
-    }
-
-    let upgraded_bindings_by_callsite: HashMap<String, Vec<UpgradedBinding>> =
-        base.upgraded_bindings.clone();
-
-    // Build the fingerprint index from `base.ws_routines`/`base.objects` — NOT from
-    // the throwaway `merged_workspace_view` (registry.rs's `run_detectors_cross_app`
-    // clones the merged sets into a local `L3Resolved` it builds AFTER calling this
-    // function, so that clone doesn't exist yet at this point and can't be borrowed
-    // from here anyway). `base: &'a R3a5CrossAppBase` is already the ctx's own
-    // borrow source for every other eager index above, so anchoring the fingerprint
-    // index to it too keeps the lifetime honest — the same 'a the whole ctx uses.
-    let fingerprint_index =
-        crate::engine::l5::fingerprint::FingerprintIndex::build(base.ws_routines(), base.objects());
-
-    let app_versions: HashMap<String, String> = base.resolved_app_versions.clone();
-    let declared_dependencies: Vec<DeclaredDep> = base
-        .declared_dependencies
-        .iter()
-        .map(|d| DeclaredDep {
-            app_guid: d.app_guid.clone(),
-            name: d.name.clone(),
-            min_version: d.min_version.clone(),
-        })
-        .collect();
-
-    // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
-    uncertainties.emit_census(&uncertainties_by_node);
-
-    DetectorContext {
-        graph,
-        event_graph: base.event_graph.clone(),
-        routine_by_id,
-        objects_by_id,
-        table_by_id,
-        reverse_call_graph,
-        entry_points,
-        transaction_spans,
-        resolved_call_edge_by_callsite,
-        uncertainty_edges_by_from,
-        uncertainties_by_node,
-        uncertainties,
-        call_site_by_id,
-        summaries,
-        cone_derived,
-        event_flow_indexes,
-        parameter_roles_by_routine,
-        upgraded_bindings_by_callsite,
-        reachable_roots,
-        internal_reachable_externally,
-        dep_routine_ids: dep_routine_ids.clone(),
-        declared_dependencies,
-        app_versions,
-        root_classifications_by_routine: base
-            .resolved
-            .root_classifications
-            .iter()
-            .map(|rc| (rc.routine_id.clone(), rc.clone()))
-            .collect(),
-        ordering_facts: std::sync::OnceLock::new(),
-        ordering_source: Some(&base.resolved),
-        closed_world_temp_params,
-        summarize_diagnostics,
-        db_effect_bundle: Some(db_effect_bundle),
-        // ⟨Task 6⟩ The cross-app context takes no `demanded` mask, so there is
-        // no way to ask it for the transpose — and no cross-app consumer wants
-        // one (d13/d16/d17 read no db effects). `None` keeps this path free.
-        reverse_effect_index: None,
         fingerprint_index,
         cross_extension_subscribers,
     }

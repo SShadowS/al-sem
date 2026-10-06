@@ -965,3 +965,66 @@ fn the_cross_app_model_holds_the_demanded_dependency_routines() {
         "objects stay whole"
     );
 }
+
+/// Two workspace subscribers of a workspace event each call dependency `A.Run`,
+/// which calls `B.Write`, which writes `Dep Log`: the write is two dependency hops
+/// away, behind a dependency-internal edge.
+fn transitive_dep_write_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let sub = |n: u32| {
+        format!(
+            "codeunit {n} \"Ws Sub {n}\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Ws Hub\", 'OnGo', '', false, false)]\n    local procedure Handle()\n    var\n        A: Codeunit \"Dep A\";\n    begin\n        A.Run2();\n    end;\n}}\n"
+        )
+    };
+    write(&dir.join("src/Sub1.al"), &sub(50281));
+    write(&dir.join("src/Sub2.al"), &sub(50282));
+    write(
+        &dir.join("src/Hub.al"),
+        "codeunit 50280 \"Ws Hub\"\n{\n    procedure Go()\n    begin\n        OnGo();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnGo()\n    begin\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            (
+                "src/A.al",
+                "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n    begin\n        B.Write();\n    end;\n}\n",
+            ),
+            (
+                "src/B.al",
+                "codeunit 50182 \"Dep B\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+}
+
+/// S8.1: the one detector-context builder folds the dependency-internal edges (the
+/// R3a-4 intra-app edges) into the cone in cross-app mode, so a write two
+/// dependency hops away reaches the workspace subscribers and d44 pairs them.
+///
+/// Discrimination (2026-10-06): not extending `graph.typed_edges` with
+/// `injected_typed_edges` in `build_detector_context_with` loses the finding
+/// (`left: 0`); restored, it passes.
+#[test]
+fn a_dependency_internal_edge_reaches_the_cone() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace(dir.path());
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+}

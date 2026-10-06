@@ -14,9 +14,7 @@
 //! is plain `str::cmp` (byte order), used inline.
 
 use crate::engine::l3::l3_workspace::L3Resolved;
-use crate::engine::l5::detector_context::{
-    DetectorContext, build_detector_context, build_detector_context_cross_app,
-};
+use crate::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use crate::engine::l5::finding::{D1CohortIndex, Finding};
 use crate::engine::perf_trace as pt;
 use rayon::prelude::*;
@@ -444,9 +442,22 @@ pub(crate) fn run_detectors_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
     detectors: &[Detector],
 ) -> RunOutput {
+    // One builder for both modes (engine-switch S8.1), demand-gated like
+    // `run_detectors`.
+    let demanded = detectors.iter().fold(0u32, |acc, d| acc | d.requires);
     let ctx = {
         let _s = pt::span("crossapp", "crossapp.context_build");
-        build_detector_context_cross_app(base)
+        crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            demanded,
+            Some(crate::engine::l5::detector_context::CrossAppInputs {
+                dep_routine_ids: &base.dep_routine_ids,
+                leaf_summaries: &base.leaf_summaries,
+                injected_typed_edges: &base.injected_typed_edges,
+                declared_dependencies: &base.declared_dependencies,
+                app_versions: &base.resolved_app_versions,
+            }),
+        )
     };
     let summarize_diagnostics: Vec<Diagnostic> = ctx
         .summarize_diagnostics

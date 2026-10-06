@@ -2973,8 +2973,8 @@ pub(crate) struct R3a5CrossAppBase {
     /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
     /// combined graph's (workspace callers only). The detectors get it as their
     /// `resolved`, and the context reads its root classifications and ordering
-    /// facts from it. [`Self::ws_routines`], [`Self::objects`] and [`Self::tables`]
-    /// are views onto it.
+    /// facts from it. [`Self::ws_routines`] and [`Self::objects`] are views onto
+    /// it.
     pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
     pub dep_routine_ids: BTreeSet<String>,
     /// The combined graph WITH the injected dep intra-app typed edges folded in
@@ -2987,6 +2987,9 @@ pub(crate) struct R3a5CrossAppBase {
     pub event_graph: EventGraph,
     /// Fixed-leaf (dep) RETAINED summaries.
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
+    /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
+    /// `direct-call` typed edges); also folded into [`Self::graph`].
+    pub injected_typed_edges: Vec<TypedEdge>,
     /// Per-routine direct capability facts (full, ordered).
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     /// Per-routine direct coverage `(status, reasons)`.
@@ -3009,10 +3012,6 @@ impl R3a5CrossAppBase {
 
     pub fn objects(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Object> {
         &self.resolved.workspace.objects
-    }
-
-    pub fn tables(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Table> {
-        &self.resolved.workspace.tables
     }
 }
 
@@ -3107,8 +3106,9 @@ pub(crate) fn build_cross_app_base(
     let mut consumer =
         crate::engine::deps::dep_artifact_l4::ConsumerModel::with_routine_ids(nodes.clone());
     crate::engine::deps::dep_artifact_l4::inject_intra_app_call_edges(&mut consumer, &artifacts);
+    let mut injected_typed_edges: Vec<TypedEdge> = Vec::new();
     for e in &consumer.injected_typed_edges {
-        graph.typed_edges.push(TypedEdge {
+        injected_typed_edges.push(TypedEdge {
             kind: e.kind.clone(),
             from: e.from.clone(),
             to: Some(e.to.clone()),
@@ -3123,6 +3123,9 @@ pub(crate) fn build_cross_app_base(
             object_type: None,
         });
     }
+    graph
+        .typed_edges
+        .extend(injected_typed_edges.iter().cloned());
 
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &event_graph.events {
@@ -3172,6 +3175,7 @@ pub(crate) fn build_cross_app_base(
         upgraded_bindings,
         event_graph: event_graph.clone(),
         leaf_summaries,
+        injected_typed_edges,
         direct_full,
         direct_coverage,
         nodes,

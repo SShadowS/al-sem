@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One detector-context builder for both modes** (engine-switch S8.1).
+  `build_detector_context_with(resolved, demanded, cross)` takes an optional
+  `CrossAppInputs`: the dependency routine ids (never primary roots or entry
+  points), the fixed solver leaves, the dependency-internal edges the cone follows,
+  and d17's declared dependencies and versions. `build_detector_context_cross_app`
+  (230 lines that built every substrate whatever the detectors asked for) is deleted.
+  `run_detectors_cross_app` now demand-gates like `run_detectors`.
+  - CDO/DO cross-app findings are byte-identical to S8.2's, and every golden is
+    unchanged.
+  - A debug assertion that the solver's summaries carry no materialized db effects
+    now exempts fixed leaves, which arrive with their own direct rows by design.
+
 - **The cross-app model holds only the dependency code the workspace needs**
   (engine-switch S8.2, the spec's demand policy). `program::resolve::demand::
   cross_app_demand` walks the program edges of every body:
