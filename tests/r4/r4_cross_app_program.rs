@@ -36,7 +36,7 @@ fn shared_name_workspace(dir: &Path) {
     );
     write(
         &dir.join("src/Main.al"),
-        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n    begin\n        W.Work();\n    end;\n}\n",
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n        E: Codeunit \"Dep Events\";\n    begin\n        W.Work();\n        E.OnFoo();\n    end;\n}\n",
     );
     let symbols = format!(
         r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Work","Parameters":[]}}]}},{{"Id":50101,"Name":"Shared Name","Methods":[{{"Name":"Foo","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
@@ -298,7 +298,7 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
     for ws in cross_app_fixtures() {
         let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx)
+        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx, None)
             .expect("program model");
         // Not degenerate: dependency rows are present, ABI and parsed alike on the
         // fixture that has both kinds.
@@ -347,7 +347,9 @@ fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> 
 /// S7.3: in the cross-app model every body's calls come from the program engine —
 /// the workspace's call into the dependency now lands on the dependency's model
 /// routine, and the dependency's own calls resolve from its own view — and the
-/// event graph binds a subscriber that lives in the dependency.
+/// event graph binds a subscriber that lives in the dependency. (Since S8.2 the
+/// workspace raises the dependency event: a subscriber of an event no demanded
+/// routine raises is not in the model.)
 ///
 /// Discrimination (2026-10-06): limiting `Converter::model_apps` to the primary app
 /// turns the three calls into the dependency into to-less `ExternalTarget` edges
@@ -384,6 +386,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
             "50100.Work -> 50100.Helper Resolved",
             "50100.Work -> 50101.Foo Resolved",
             "50201.Go -> 50100.Work Resolved",
+            "50201.Go -> 50102.OnFoo Resolved",
         ]
     );
 
@@ -891,4 +894,74 @@ fn d61_does_not_flag_a_write_that_runs_when_handled() {
         d61_workspace(dir.path(), guard);
         assert_eq!(d61_count(dir.path()), expected, "{guard}");
     }
+}
+
+/// S8.2 demand: which dependency routines the cross-app model holds.
+fn demand_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Main.al"),
+        "codeunit 50270 \"Ws Main\"\n{\n    procedure Go()\n    var\n        A: Codeunit \"Dep A\";\n    begin\n        A.Reached();\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnThing', '', false, false)]\n    local procedure OnThing()\n    begin\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            (
+                "src/A.al",
+                "codeunit 50170 \"Dep A\"\n{\n    procedure Reached()\n    begin\n        Transitive();\n    end;\n\n    procedure Transitive()\n    begin\n    end;\n\n    procedure Unreached()\n    begin\n    end;\n}\n",
+            ),
+            (
+                "src/Pub.al",
+                "codeunit 50171 \"Dep Pub\"\n{\n    procedure Raise()\n    begin\n        Prepare();\n        OnThing();\n    end;\n\n    procedure Prepare()\n    begin\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnThing()\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+}
+
+/// S8.2: forward from the workspace (`Reached` and what it calls, `Transitive`),
+/// reverse from a dependency event the workspace subscribes to (the publisher
+/// `OnThing`, its raiser `Raise`, and what the raiser calls, `Prepare`). A
+/// dependency routine nothing reaches (`Unreached`) is not in the model; its object
+/// is.
+///
+/// Discrimination (2026-10-06): dropping the reverse rule in `cross_app_demand`
+/// loses `OnThing`, `Raise` and `Prepare`; seeding no forward walk from the
+/// workspace loses `Reached` and `Transitive`. Each fails the test; restored, it
+/// passes.
+#[test]
+fn the_cross_app_model_holds_the_demanded_dependency_routines() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = tempfile::tempdir().unwrap();
+    demand_workspace(dir.path());
+    let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let ws = &x.resolved.workspace;
+    let mut dep: Vec<&str> = ws
+        .routines
+        .iter()
+        .filter(|r| r.app_guid == DEP_GUID)
+        .map(|r| r.name.as_str())
+        .collect();
+    dep.sort_unstable();
+    assert_eq!(
+        dep,
+        vec!["OnThing", "Prepare", "Raise", "Reached", "Transitive"]
+    );
+    assert!(
+        ws.objects.iter().any(|o| o.name == "Dep A"),
+        "objects stay whole"
+    );
 }

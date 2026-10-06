@@ -761,6 +761,22 @@ pub fn assemble_and_resolve_cross_app_program(
         )
         .ok()?
     };
+    let dependency = {
+        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+        ctx.resolve_dependency_bodies()
+    };
+    report.edges.extend(dependency.edges);
+    report.site_facts.extend(dependency.site_facts);
+    // S8.2: only what the workspace can reach, and the code around the dependency
+    // events it subscribes to (`program::resolve::demand`).
+    let demand = {
+        let _s = pt::span("crossapp", "crossapp.demand");
+        crate::program::resolve::demand::cross_app_demand(
+            report.primary_app_ref,
+            ctx.graph(),
+            &report.edges,
+        )
+    };
     let (mut resolved, abi_rows) = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
@@ -768,6 +784,7 @@ pub fn assemble_and_resolve_cross_app_program(
             model_instance_id,
             skip_roots_config,
             &ctx,
+            Some(&demand),
         )?
     };
     let snap = ctx.snapshot();
@@ -808,12 +825,6 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    let dependency = {
-        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-        ctx.resolve_dependency_bodies()
-    };
-    report.edges.extend(dependency.edges);
-    report.site_facts.extend(dependency.site_facts);
     {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
         attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));

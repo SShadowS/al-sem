@@ -48,11 +48,11 @@ sizings marked pre-arc).
   real writes behind them are missed (the d44/d45 triage found five writes dropped
   "by luck" this way). Feeding every program edge to the cone grew CDO's r3a5
   projection from 329 MB to 9.8 GB. S8 decides the demand policy.
-- [ ] **`aldump --r3a5-cross-app-summary` on CDO exceeds 2 GB** (S7.4). It projects
-  every model routine; the cross-app model now holds every parsed dependency
-  routine (local procedures and triggers too), where the legacy symbol-only base held
-  only the public ABI surface (329 MB). Fixtures are unaffected (golden byte-equal).
-  Decide whether the projection should cover workspace routines only.
+- [ ] **`aldump --r3a5-cross-app-summary` on CDO is 1.39 GB** (S7.4; >2 GB before
+  S8.2's demand). It projects every model routine, demanded dependency routines
+  included; the legacy symbol-only base held only the public ABI surface (329 MB).
+  Fixtures are unaffected (golden byte-equal). Decide whether the projection should
+  cover workspace routines only.
 
 ## Open — buildable backlog (no blocker, pick up any time)
 

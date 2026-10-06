@@ -1595,14 +1595,18 @@ pub fn assemble_and_resolve_workspace_from_program(
 ///
 /// Needs a context that keeps dependency bodies (`FULL`). Also returns
 /// [`AbiRowIds`], the join from a symbol-only routine's program id to its row.
+///
+/// `demand` (engine-switch S8.2, `program::resolve::demand`): when given, a
+/// source-bearing dependency file keeps every object but only the routines in it.
 pub fn assemble_and_resolve_cross_app_from_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
+    demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
 ) -> Option<(L3Resolved, AbiRowIds)> {
     let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
-    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx);
+    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand);
     Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
 }
 
@@ -1637,6 +1641,7 @@ fn append_dependency_rows(
     ws: &mut L3Workspace,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
+    demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
 ) -> AbiRowIds {
     let bodies = ctx
         .dep_bodies()
@@ -1688,13 +1693,18 @@ fn append_dependency_rows(
             continue;
         };
         let guid = &unit.id.guid;
+        let app = ctx.graph().apps.find(&unit.id);
         let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
         files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
         for pf in files {
             let cols = Utf16Cols::new(&pf.text);
+            let population = match (demand, app) {
+                (Some(d), Some(app)) => demanded_population(&pf.file, app, d),
+                _ => whole_file_population(&pf.file),
+            };
             project_ir(
                 &pf.file,
-                &whole_file_population(&pf.file),
+                &population,
                 &pf.text,
                 guid,
                 model_instance_id,
@@ -1705,6 +1715,46 @@ fn append_dependency_rows(
         }
     }
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+}
+
+/// Every object of a dependency file, with only its demanded routines (S8.2). The
+/// routine ids are built as the resolver builds a caller's
+/// (`resolve_file_obligations`): the owning app, the object's number or folded name.
+fn demanded_population(
+    ir_file: &al_syntax::ir::AlFile,
+    app: crate::program::node::AppRef,
+    demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
+) -> FilePopulation {
+    use crate::program::node::{ObjKey, ObjectNodeId};
+    use al_syntax::IdentifierFoldExt;
+    ir_file
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(oi, o)| {
+            let object = ObjectNodeId {
+                app,
+                kind: o.kind,
+                key: match o.id {
+                    Some(n) => ObjKey::Id(n),
+                    None => ObjKey::Name(o.name.fold_identifier()),
+                },
+            };
+            let routines = o
+                .routines
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    demand.contains(&crate::program::sig_fp::source_routine_node_id(
+                        object.clone(),
+                        r,
+                    ))
+                })
+                .map(|(ri, _)| ri)
+                .collect();
+            (oi, routines)
+        })
+        .collect()
 }
 
 /// Which files the program-backed assembly projects.

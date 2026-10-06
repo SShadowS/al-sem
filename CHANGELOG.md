@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cross-app model holds only the dependency code the workspace needs**
+  (engine-switch S8.2, the spec's demand policy). `program::resolve::demand::
+  cross_app_demand` walks the program edges of every body:
+  - forward from every primary routine: calls, runs, triggers, and the subscribers
+    of a raised event;
+  - reverse from each dependency event a primary routine subscribes to: the
+    publisher and its raisers, which then continue forward.
+
+  A dependency file keeps every object but only the demanded routines. Measured:
+  - CDO 104 s / 7.2 GB -> 42 s / 3.0 GB, DO 153 s -> 63 s / 3.1 GB.
+  - Findings equal the full run on both. Only d1's loop-catalog numbering differs,
+    because loops of routines no longer in the model drop out of the catalog;
+    dereferenced, every finding is identical.
+  - CDO's r3a5 summary went >2 GB -> 1.39 GB.
+
+  One S7.3 test fixture now raises its dependency event from the workspace: the
+  subscriber of an event no demanded routine raises is, rightly, not in the model.
+
 - **Cross-app run profiled; two output-identical speedups** (engine-switch S8.0).
   Spans cover every cross-app phase (`crossapp.*`). CDO `--r4-findings-cross-app`
   went 180 s -> 104 s, findings byte-identical on CDO and DO.
