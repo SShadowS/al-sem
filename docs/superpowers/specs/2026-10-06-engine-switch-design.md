@@ -222,7 +222,14 @@ zero unexplained differences, zero regressions, written golden triage.
     (`ir_object_metadata`). Two derivations can disagree. Unifying them (one
     derivation, both representations fed from it, with an agreement census first)
     is folded into S5, where the symbol table moves onto `ProgramGraph`.
-  - **S2b.5 — Dependency registry and readiness (G15a).** Separate from the detector
+  - **S2b.5 — Dependency registry and readiness (G15a).** *As built
+    (2026-10-06):* parameter names + `temporary` retained (ABI and source; pack
+    schema 2), `BodyState` + `program::registry::DependencyRegistry`. Two G15a
+    items moved to their first consumer: ABI SUBSCRIBER attributes to S8 (only
+    dependency-to-dependency subscriptions need them; S4's workspace subscribers to
+    dependency publishers need publisher metadata, which the graph already keeps),
+    and ABI object metadata (source table, page controls) to S5 (the symbol-table
+    move reads it; S3/S4 do not). Separate from the detector
     population; no output change.
   - **S2b.6 — Site links (G13).** Program `SiteId` ↔ body `/csN`/`/opN`, every edge
     kept, roles kept; consumed by S3.

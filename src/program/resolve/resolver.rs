@@ -4667,8 +4667,10 @@ pageextension 52911 "ExtA" extends BasePage
                 &dep_obj_id,
                 111,
                 AbiParams::Complete(vec![AbiParamRetained {
+                    name: "N".into(),
                     type_text: "Integer".into(),
                     is_var: false,
+                    is_temporary: false,
                     subtype_id: None,
                     subtype_raw_name: None,
                     subtype_tag: SubtypeTag::NoSubtype,
@@ -4805,8 +4807,10 @@ codeunit 50611 "MixedCU"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
+                name: "N".into(),
                 type_text: "Integer".into(),
                 is_var: false,
+                is_temporary: false,
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,

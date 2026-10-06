@@ -17,6 +17,7 @@ pub mod node_set;
 pub mod pack;
 pub mod physical;
 pub mod profile;
+pub mod registry;
 pub mod resolve;
 pub mod sig_fp;
 pub mod topology;

@@ -104,8 +104,10 @@ fn retain_abi_params(routine: &AbiRoutine) -> AbiParams {
             .parameters
             .iter()
             .map(|p| AbiParamRetained {
+                name: p.name.clone(),
                 type_text: p.type_text.clone(),
                 is_var: p.is_var,
+                is_temporary: p.is_temporary,
                 subtype_id: p.subtype_id,
                 subtype_raw_name: p.subtype_raw_name.clone(),
                 subtype_tag: p.subtype_tag,

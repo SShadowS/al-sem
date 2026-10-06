@@ -62,7 +62,9 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// all — but a shape change within a header-compatible layout is still caught
 /// by the body parse or the hash, not by this check. Every path is a miss, so
 /// this is not a soundness hole; it is only not the whole story.
-pub const PACK_SCHEMA: u32 = 1;
+/// 2: parameter names + `temporary` in `AbiParamRetained` / `ParamMeta`
+/// (engine-switch S2b.5).
+pub const PACK_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -465,10 +467,12 @@ mod tests {
             parse_incomplete: true,
             params: vec![
                 ParamMeta {
-                    ty: Some("Record \"Sales Header\"".into()),
+                    name: "SalesHeader".into(),
+                    ty: Some("Record \"Sales Header\" temporary".into()),
                     by_ref: true,
                 },
                 ParamMeta {
+                    name: String::new(),
                     ty: None,
                     by_ref: false,
                 },

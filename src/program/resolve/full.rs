@@ -1138,6 +1138,16 @@ impl ProgramContext {
             .with_frozen(Arc::clone(&self.dep_layer.dep_nodes.dep_meta))
     }
 
+    /// The dependency target registry (engine-switch S2b.5): every dependency
+    /// routine's declaration and body state. No dependency body is analysed yet.
+    #[must_use]
+    pub fn registry(&self) -> crate::program::registry::DependencyRegistry<'_> {
+        crate::program::registry::DependencyRegistry::new(
+            &self.graph,
+            &self.dep_layer.dep_nodes.dep_meta,
+        )
+    }
+
     /// `"<app name>::<virtual path>"` of every `Recovered` source file,
     /// sorted: the dependency tier's list plus the workspace's own. See
     /// [`crate::snapshot::parse::recovered_file_paths`] for the invariant.

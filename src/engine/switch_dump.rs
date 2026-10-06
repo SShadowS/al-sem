@@ -48,6 +48,18 @@ pub fn dump_lines(ws: &Path) -> Dump {
         "diagnostics.workspace".into(),
         rows(compute_workspace_diagnostics(ws)),
     );
+    // The dependency registry's body states (S2b.5). Nothing in production reads
+    // the registry yet, so it comes from its own program build.
+    if let Ok((ctx, _, _)) = crate::program::resolve::full::build_program_with_coverage(ws) {
+        d.insert(
+            "registry.census".into(),
+            ctx.registry()
+                .census()
+                .into_iter()
+                .map(|(state, n)| format!("{state:?}\t{n}"))
+                .collect(),
+        );
+    }
     let built = build_analysis_model(ws);
     d.insert(
         "status".into(),

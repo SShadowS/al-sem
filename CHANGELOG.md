@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency target registry with body states** (engine-switch S2b.5).
+  `program::registry::DependencyRegistry` (via `ProgramContext::registry()`) describes
+  every dependency routine: its parameters (name, type, `var`, `temporary`) and the
+  state of its body. There are four states:
+  - `AnalyzedClean`;
+  - `Recovered` (the parse needed error recovery);
+  - `Bodyless` (symbol-only);
+  - `NotAnalyzed` (the body exists but the model has not analysed it).
+
+  Only `AnalyzedClean` may read an empty fact set as "no effects"
+  (`BodyState::proves_absence`). The registry is separate from the detector model's
+  routines, so describing a dependency does not make the detectors analyse it. Today
+  no dependency body is analysed: CDO has 121,613 dependency routines and DO 127,201,
+  all `NotAnalyzed`.
+
+  To support it, ingestion now keeps parameter names and the `temporary` marker. Before,
+  `AbiParamRetained` dropped both, and the source-side `ParamMeta` had no name. Both are
+  persisted in dependency packs, so `PACK_SCHEMA` is now 2 and old packs are rebuilt.
+
+  Tests:
+  - `body_states_on_the_cross_app_fixture`;
+  - `symbol_only_target_keeps_parameter_names_and_temporary`, which uses a hand-built
+    `.app` with `Post(var Rec: Record Customer temporary; Qty: Integer)`;
+  - `source_param_meta_keeps_name_and_temporary`.
+
+  Discrimination: dropping the name at ingestion fails the second test; treating an
+  un-analysed body as clean fails the first. Harness: nothing moved except the new
+  `registry.census` dump file.
+
 - **The program graph keeps every workspace declaration as it occurs** (engine-switch
   S2b.3). `ProgramGraph::workspace_rows` (`program::physical`) holds one row per object
   and routine declaration, recorded before the graph's sort and dedup. Each row has its

@@ -178,8 +178,14 @@ pub struct ObjectNode {
 /// "BARE-OUTER-NAME FALLBACK" doc).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AbiParamRetained {
+    /// The parameter name as the symbol reference declares it (engine-switch
+    /// S2b.5, G15a: argument bindings and event parameters need it). Not part
+    /// of any fingerprint or dispatch decision.
+    pub name: String,
     pub type_text: String,
     pub is_var: bool,
+    /// Declared `temporary` (G15a). Not part of any fingerprint.
+    pub is_temporary: bool,
     pub subtype_id: Option<i64>,
     pub subtype_raw_name: Option<String>,
     pub subtype_tag: SubtypeTag,
@@ -747,8 +753,10 @@ pub(crate) mod test_fixtures {
             abi_overload_collapsed: false,
             source_overload_aliased: true,
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
+                name: "Customer".to_string(),
                 type_text: "Record".to_string(),
                 is_var: true,
+                is_temporary: true,
                 subtype_id: Some(18),
                 subtype_raw_name: Some("Customer".to_string()),
                 subtype_tag: SubtypeTag::Full,

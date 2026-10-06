@@ -24,8 +24,21 @@ use crate::snapshot::ParsedUnit;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParamMeta {
+    /// The declared parameter name (engine-switch S2b.5, G15a).
+    pub name: String,
     pub ty: Option<String>,
     pub by_ref: bool,
+}
+
+impl ParamMeta {
+    /// Declared `temporary`: the lowerer keeps the parameter's whole type node as
+    /// `ty`, keyword included (`Record Customer temporary`). `None` without a type.
+    pub fn is_temporary(&self) -> Option<bool> {
+        self.ty.as_deref().map(|t| {
+            t.split_whitespace()
+                .any(|w| w.eq_ignore_ascii_case("temporary"))
+        })
+    }
 }
 
 /// Serde is here because `RoutineMeta` is PERSISTED in a dependency pack
@@ -64,6 +77,7 @@ impl RoutineMeta {
                 .params
                 .iter()
                 .map(|p| ParamMeta {
+                    name: p.name.clone(),
                     ty: p.ty.clone(),
                     by_ref: p.by_ref,
                 })
