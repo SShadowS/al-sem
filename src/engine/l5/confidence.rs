@@ -107,6 +107,8 @@ fn alias_capped_by(kind: &str) -> Option<&'static str> {
         "ambiguous-overload" => Some("unresolved-call"),
         "member-not-found" => Some("unresolved-call"),
         "external-target" => Some("opaque-callee"),
+        // #22: a symbol-only routine's own body is unseen, like an opaque callee's.
+        "opaque-body" => Some("opaque-callee"),
         "interface-open-world" => Some("dynamic-dispatch"),
         _ => None,
     }
@@ -222,6 +224,15 @@ mod tests {
             ])
         );
         assert_eq!(c.evidence.len(), 3);
+    }
+
+    /// #22: a symbol-only routine's `opaque-body` caps like an opaque callee,
+    /// rather than reaching a finding only as uncapped evidence.
+    #[test]
+    fn opaque_body_caps_as_opaque_callee() {
+        let c = to_confidence(&[UncertaintyLite::new("opaque-body", "r")], "likely");
+        assert_eq!(c.level, "possible");
+        assert_eq!(c.capped_by, Some(vec!["opaque-callee".to_string()]));
     }
 
     /// `UncertaintyLite::of` must take the id under the SAME

@@ -466,7 +466,7 @@ fn map_visibility(am: Option<&str>) -> String {
 /// `[{name, argsHash}]` where argsHash = sha256(canonicalJson(args)). Each attribute
 /// fingerprint is sorted-key `{name, argsHash}` in the output, but the array order
 /// follows declaration order (al-sem maps over `attributesParsed`).
-fn fingerprint_attributes(attrs: &[crate::engine::l3::al_attributes::AttributeInfo]) -> CborValue {
+fn fingerprint_attributes(attrs: &[crate::program::attributes::AttributeInfo]) -> CborValue {
     let arr = attrs
         .iter()
         .map(|a| {
@@ -486,12 +486,12 @@ fn fingerprint_attributes(attrs: &[crate::engine::l3::al_attributes::AttributeIn
 /// `undefined` (None) keys dropped. Mirrors contracts.ts `canonicalJson`. Each
 /// `AttributeArg` has keys {kind, text, value?, qualifier?, member?}; sorted that
 /// is {kind, member, qualifier, text, value} with absent optionals dropped.
-fn canonical_attr_args_json(args: &[crate::engine::l3::al_attributes::AttributeArg]) -> String {
+fn canonical_attr_args_json(args: &[crate::program::attributes::AttributeArg]) -> String {
     let parts: Vec<String> = args.iter().map(canonical_one_attr_arg).collect();
     format!("[{}]", parts.join(","))
 }
 
-fn canonical_one_attr_arg(a: &crate::engine::l3::al_attributes::AttributeArg) -> String {
+fn canonical_one_attr_arg(a: &crate::program::attributes::AttributeArg) -> String {
     // Build sorted (key, json-value) pairs, dropping None optionals.
     let mut pairs: Vec<(&str, String)> = Vec::new();
     pairs.push(("kind", json_string(&a.kind)));

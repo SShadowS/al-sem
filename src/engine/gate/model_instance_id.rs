@@ -26,7 +26,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::engine::l2::l2_workspace::{discover_al_files, read_root_app_guid};
+use crate::source_text::{NestedApps, discover_al_files, read_root_app_guid};
 
 /// `sha256OfStrings(parts)` — length-prefixed sha256 hex (al-sem `hash.ts`). NOTE:
 /// al-sem prefixes with `String(part.length)` — the JS string LENGTH, i.e. the UTF-16
@@ -80,7 +80,7 @@ pub fn compute_gate_model_instance_id(workspace: &Path) -> Option<String> {
     let dep_graph_hash = sha256_of_strings(&[format!("{app_guid}@{app_version}")]);
 
     // unitIds — `ws:<relPosix>` for every discovered .al file, sorted.
-    let discovered = discover_al_files(workspace).ok()?;
+    let discovered = discover_al_files(workspace, NestedApps::Walk).ok()?;
     let mut unit_ids: Vec<String> = discovered
         .iter()
         .map(|f| format!("ws:{}", f.rel_posix))

@@ -15,7 +15,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l3::al_attributes::has_attribute;
 use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -25,6 +24,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
+use crate::program::attributes::has_attribute;
 
 const DETECTOR: &str = "d50-checked-run-implicit-commit";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
@@ -442,7 +442,6 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use super::*;
-    use crate::engine::l3::al_attributes::{AttributeArg, AttributeInfo};
     use crate::engine::l3::event_graph::EventGraph;
     use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Workspace};
     use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
@@ -452,6 +451,7 @@ mod tests {
     use crate::engine::l5::full_summary::FullRoutineSummary;
     use crate::engine::l5::test_support::{cone_store_of, fact, routine, summary, ts_known};
     use crate::engine::root_classification::RootClassification;
+    use crate::program::attributes::{AttributeArg, AttributeInfo};
 
     // -----------------------------------------------------------------------
     // Attribute / object constructors

@@ -13,7 +13,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::al_attributes::{AttributeInfo, find_attribute, string_arg};
 use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -23,6 +22,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::attributes::{AttributeInfo, find_attribute, string_arg};
 
 const DETECTOR: &str = "d29-subscriber-modify-on-event-record";
 

@@ -24,8 +24,8 @@
 
 use std::path::Path;
 
-use crate::engine::l2::l2_workspace::{count_app_json_paths, discover_al_files, read_al_source};
 use crate::engine::l5::registry::Diagnostic;
+use crate::source_text::{NestedApps, count_app_json_paths, discover_al_files, read_al_source};
 
 /// Compute al-sem's `workspace.diagnostics` for a disk workspace: PROVIDER
 /// diagnostics (remapped to `stage: "discover"`) concatenated with INDEX
@@ -90,7 +90,7 @@ pub fn compute_workspace_diagnostics(workspace: &Path) -> Vec<Diagnostic> {
     // `discover_al_files` already strips BOM and reads UTF-8-lossy; a read error
     // surfaces as a provider `warning` (remapped to "discover"). Units are in
     // rel-posix-sorted order — the same total order the index walks.
-    let Ok(discovered) = discover_al_files(workspace) else {
+    let Ok(discovered) = discover_al_files(workspace, NestedApps::Walk) else {
         return out;
     };
     let mut units: Vec<(String, String)> = Vec::new();

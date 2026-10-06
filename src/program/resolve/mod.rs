@@ -15,6 +15,7 @@ pub mod extract;
 pub mod extract_min;
 pub mod framework_returns;
 pub mod full;
+pub mod global_builtins;
 pub mod index;
 pub mod member_catalog;
 pub mod receiver;

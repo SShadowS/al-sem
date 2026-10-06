@@ -287,8 +287,10 @@ pub fn assemble_program_graph(
     // Workspace nodes only; the dependency part is shared, not copied.
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
+    let mut workspace_rows = crate::program::physical::PhysicalIndex::default();
 
     for pf in &ws_unit.files {
+        let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
             ws_app_ref,
             &pf.file,
@@ -296,6 +298,8 @@ pub fn assemble_program_graph(
             &mut objects,
             &mut routines,
         );
+        // Before the sort + dedup below: one row per occurrence (S2b.3).
+        workspace_rows.record_file(&pf.virtual_path, &pf.file, &objects[o0..], &routines[r0..]);
     }
 
     objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -315,6 +319,7 @@ pub fn assemble_program_graph(
         obj_index,
         friends: dep.friends.clone(),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
+        workspace_rows,
     };
 
     // ── Inject synthetic platform-event publishers ───────────────────────────

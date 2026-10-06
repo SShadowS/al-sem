@@ -1,4 +1,6 @@
-//! L3 structured-attribute model + accessors — Rust port of al-sem's
+//! Structured-attribute model + accessors (moved from `engine::l3::al_attributes` in
+//! engine-switch S1: the program engine's ABI ingestion reads it, so it lives here,
+//! not in the legacy engine). Rust port of al-sem's
 //! `src/model/attributes.ts` (`AttributeInfo` / `AttributeArg` +
 //! `findAttribute` / `qualifiedArg` / `stringArg` / `boolArg`).
 //!

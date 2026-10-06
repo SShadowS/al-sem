@@ -1,5 +1,11 @@
 //! 1B.3b Task 3: the LAST sanctioned L3-oracle access point in the library.
 //!
+//! Engine-switch S1 moved this module from `program::l3_mint` into the legacy
+//! engine, together with the two `mint_l3_*` wrappers that used to sit in
+//! `semantic_golden.rs`: nothing under `src/program` may import the legacy engine
+//! (guard: `program_has_no_legacy_engine_imports`). It is migration-only tooling
+//! and is deleted with L3 (spec S9), once its regeneration callers are replaced.
+//!
 //! Before this task, `src/program/resolve` (the fresh resolver's GATE
 //! module — `differential.rs` + `semantic_golden.rs`) depended on
 //! `engine::l3`/`engine::l2` two ways: FOUR live dual-run "fresh vs L3"
@@ -18,10 +24,8 @@
 //! - The dev-mint tool (`src/bin/mint-goldens.rs`, OUTSIDE `src/program/resolve`)
 //!   — the only way to (re)mint the three committed goldens under
 //!   `tests/goldens/semantic-edges/` from a real, CDO-licensed workspace.
-//! - `semantic_golden::mint_l3_validated_golden` / `mint_l3_trigger_golden`
-//!   wrap [`project_l3`] / [`project_l3_implicit_trigger_in_scope`] respectively
-//!   (those two wrapper functions stay in `semantic_golden.rs` — only the
-//!   L3-touching projections they delegate to live here).
+//! - [`mint_l3_validated_golden`] / [`mint_l3_trigger_golden`] wrap
+//!   [`project_l3`] / [`project_l3_implicit_trigger_in_scope`] respectively.
 //! - `tests/program_resolve_harness.rs`'s `REGEN_TEMP_GOLDENS=1` opt-in
 //!   fixture-regen path (`fixture_semantic_golden_matches_l3`), which mints a
 //!   small in-repo fixture golden directly via `mint_l3_validated_golden`.
@@ -38,6 +42,30 @@ use crate::program::resolve::differential::{
     CanonicalEdge, CanonicalEventRow, CanonicalKey, CanonicalSiteKey, CanonicalTarget,
     make_canonical_key, object_kind_str_to_tag,
 };
+use crate::program::resolve::semantic_golden::{SemanticGolden, build_golden_from_canonical};
+
+/// **SANCTIONED L3 ORACLE USE (1B.3b: the dev-mint tool is the only caller
+/// post-freeze; the in-repo fixture's `REGEN_TEMP_GOLDENS` path also still
+/// calls this directly — see `tests/program_resolve_harness.rs` Test 14)**:
+/// mint the Member/Interface semantic golden from the L3 oracle.
+///
+/// Calls [`project_l3`] over `workspace_root`, collects per-site target sets into
+/// a [`SemanticGolden`] keyed by column-ignoring site key.
+///
+/// Empty target sets (L3 Unknown/Unresolved) are retained — they record sites
+/// that L3 extracted but could not resolve, so the golden covers them.
+#[must_use]
+pub fn mint_l3_validated_golden(workspace_root: &Path) -> SemanticGolden {
+    build_golden_from_canonical(&project_l3(workspace_root))
+}
+
+/// **SANCTIONED L3 ORACLE USE (1B.3b dev-mint tool only)**: mint the
+/// ImplicitTrigger semantic golden from L3's native `PRecordOperation`-keyed
+/// edges ([`project_l3_implicit_trigger_in_scope`]). Backs `cdo-trigger-anon.json`.
+#[must_use]
+pub fn mint_l3_trigger_golden(workspace_root: &Path) -> SemanticGolden {
+    build_golden_from_canonical(&project_l3_implicit_trigger_in_scope(workspace_root))
+}
 use crate::program::resolve::edge::{CanonicalSpan, EdgeKind, SourcePos, callee_fp};
 
 // ---------------------------------------------------------------------------

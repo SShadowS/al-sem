@@ -24,8 +24,9 @@ use super::symbol_table::SymbolTable;
 use al_syntax::IdentifierFoldExt;
 
 use crate::engine::ids::{encode_object_id, to_stable_object_id, to_stable_routine_id_from_parts};
-use crate::engine::l2::node_util::{Utf16Cols, strip_quotes};
 use crate::engine::perf_trace as pt;
+use crate::program::body::node_util::{Utf16Cols, strip_quotes};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ pub struct L3Object {
     /// The object DECLARATION's own source anchor (native assembly only; dep
     /// objects `None`). Lets object-level detectors (d64) anchor findings on the
     /// object header instead of borrowing a routine anchor. Additive.
-    pub source_anchor: Option<crate::engine::l2::features::PAnchor>,
+    pub source_anchor: Option<crate::program::body::features::PAnchor>,
 }
 
 /// A page layout control relevant to member resolution: a `part`/`systempart`
@@ -216,7 +217,7 @@ pub struct L3RecordVariable {
     /// benefit for in-memory temp records). Additive L2→L3 forward — the L3
     /// record-type projection is field-allowlisted, so this never reaches an
     /// R0–R3 golden. Forwarded verbatim from `PRecordVariable.temp_state`.
-    pub temp_state: crate::engine::l2::features::PTempState,
+    pub temp_state: crate::program::body::features::PTempState,
     /// Variable scope: `"local"` | `"parameter"` | `"global"`. `None` when not
     /// yet populated. Additive — forwarded from `PRecordVariable.scope`;
     /// the L3 record-type projection is field-allowlisted, so this never reaches
@@ -246,7 +247,7 @@ pub struct L3RecordOperation {
     pub table_id: Option<String>,
     /// Temp-state of this operation (from L2 body walk). Required by the
     /// R3a-2 summary engine to derive DbEffect.tempState for base summaries.
-    pub temp_state: Option<crate::engine::l2::features::PTempState>,
+    pub temp_state: Option<crate::program::body::features::PTempState>,
     /// Field arguments for ops like Validate (from L2 body walk). Required
     /// by the R3a-2 summary engine for RecordRoleSummary.writesFields.
     pub field_arguments: Option<Vec<String>>,
@@ -254,7 +255,7 @@ pub struct L3RecordOperation {
     /// CFG walker to interleave record ops with field accesses by source
     /// position inside a block (mirrors al-sem `op.sourceAnchor.range`). L2 data
     /// that the L3 record-type projection drops, forwarded here for L4 only.
-    pub source_anchor: crate::engine::l2::features::PAnchor,
+    pub source_anchor: crate::program::body::features::PAnchor,
     /// The enclosing-loop id stack (from L2 body walk). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `op.loopStack.includes(loop.id)`). Additive — the L3 projections are
@@ -263,7 +264,7 @@ pub struct L3RecordOperation {
     /// Structured field-argument classification (from L2 body walk). L2 data that
     /// the L3 record-type projection drops, forwarded here for L5 detectors (d4
     /// reads `op.fieldArgumentInfos[0]` for the literal-key test). Additive.
-    pub field_argument_infos: Option<Vec<crate::engine::l2::features::PExpressionInfo>>,
+    pub field_argument_infos: Option<Vec<crate::program::body::features::PExpressionInfo>>,
     /// G-1: `true` when this op sits inside the `until` condition of its nearest
     /// enclosing `repeat` loop — the loop's OWN terminator expression (from L2 body
     /// walk, an exact structural proof). Forwarded for d1 to suppress the terminator
@@ -321,7 +322,7 @@ pub struct L3Variable {
 ///   over the same sequence and needs the globals last.
 /// * **the sequence is name-unique on the lowercased name.** A param/local shadows a
 ///   same-named global (recorded in `shadowed` below), and duplicate globals within an
-///   object are deduped first-wins by [`crate::engine::l2::ir_walk::ir_object_globals`].
+///   object are deduped first-wins by [`crate::program::body::ir_walk::ir_object_globals`].
 ///
 /// Nothing mutates a routine's variables after assembly (unlike `record_variables`,
 /// which `record_types.rs` upgrades per routine — see the L-6 hazard note in the
@@ -430,7 +431,7 @@ pub struct L3Routine {
     pub kind: String,
     /// Structured attributes (the grammar-derived AttributeInfo shape) — the event
     /// graph reads `[IntegrationEvent]`/`[BusinessEvent]`/`[EventSubscriber]` args.
-    pub attributes_parsed: Vec<super::al_attributes::AttributeInfo>,
+    pub attributes_parsed: Vec<crate::program::attributes::AttributeInfo>,
     /// Owning object's app guid — the EventEdge `subscriberAppId`.
     pub app_guid: String,
     /// Owning object's number — for the publisher's `publisherObjectId`.
@@ -449,7 +450,7 @@ pub struct L3Routine {
     pub record_operations: Vec<L3RecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
-    pub field_accesses: Vec<crate::engine::l2::features::PFieldAccess>,
+    pub field_accesses: Vec<crate::program::body::features::PFieldAccess>,
     /// The routine's lexical scope (params → locals → non-shadowed object globals).
     /// Iterate with `.iter()`; see [`RoutineVariables`] for why the globals are shared
     /// rather than replicated per routine.
@@ -468,22 +469,22 @@ pub struct L3Routine {
     /// `inferCallExprReturnType` for overload arg-type disambiguation.
     pub return_type: Option<String>,
     /// The routine's call sites (L2 body-walk output), the resolver input.
-    pub call_sites: Vec<crate::engine::l2::features::PCallSite>,
+    pub call_sites: Vec<crate::program::body::features::PCallSite>,
     /// The routine's operation sites (L2 body-walk output). Required by the R3a-3
     /// L4 capability extraction (commit family reads `kind === "commit"`, error
     /// family reads `kind === "error-call"`), and the unreachable-exclusion pass
     /// (sites with `controlContext === "unreachable"` are dropped before family
     /// dispatch — mirrors al-sem `extractCapabilities`).
-    pub operation_sites: Vec<crate::engine::l2::features::POperationSite>,
+    pub operation_sites: Vec<crate::program::body::features::POperationSite>,
     /// The CFN statement-tree skeleton (L2 body-walk output). Required by the
     /// R3a-2 branch-aware CFG walker (`walkCFG` port) to join role state-sets at
     /// if/case/loop. `None` for opaque / TryFunction / bodyless routines (the
     /// walker then falls back to the straight-line pass, mirroring al-sem).
-    pub statement_tree: Option<crate::engine::l2::features::PCFNNode>,
+    pub statement_tree: Option<crate::program::body::features::PCFNNode>,
     /// The routine's loops (L2 body-walk output). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `routine.features.loops`). Additive — never reaches an R0–R3 golden.
-    pub loops: Vec<crate::engine::l2::features::PLoop>,
+    pub loops: Vec<crate::program::body::features::PLoop>,
     /// The routine's OWN declaration anchor (the procedure / trigger_declaration
     /// node range, with `syntax_kind` = "procedure" / "trigger_declaration").
     /// al-sem `routine-indexer.ts:419` builds this as the routine's `sourceAnchor`.
@@ -491,14 +492,14 @@ pub struct L3Routine {
     /// d19 (primaryLocation + evidence) and d29 (first evidence step). Additive —
     /// the L3 record-type projection is field-allowlisted so this never reaches an
     /// R0–R3 golden.
-    pub source_anchor: crate::engine::l2::features::PAnchor,
+    pub source_anchor: crate::program::body::features::PAnchor,
     /// Lowercased / sorted / deduped identifier references in the routine body
     /// (L2 features `identifierReferences`). Read by d19 to test parameter use.
     /// Additive — forwarded verbatim from L2.
     pub identifier_references: Vec<String>,
     /// Unreachable-after-exit statements recorded during the L2 body DFS
     /// (`features.unreachableStatements`). Read by d20. Additive — forwarded verbatim.
-    pub unreachable_statements: Vec<crate::engine::l2::features::PUnreachableStatement>,
+    pub unreachable_statements: Vec<crate::program::body::features::PUnreachableStatement>,
     /// Whether the routine body contains any branching (`features.hasBranching`).
     /// Read by d43's `classify_subscriber` / `publisher_branch_facts`. Additive —
     /// forwarded verbatim from L2; dep (bodyless) routines default `false`.
@@ -506,11 +507,11 @@ pub struct L3Routine {
     /// Variable assignments (`features.varAssignments`) — `lhsName` + optional
     /// `rhsLiteralValue`. Read by d43 to detect `IsHandled := true` setters.
     /// Additive — forwarded verbatim from L2.
-    pub var_assignments: Vec<crate::engine::l2::features::PVarAssignment>,
+    pub var_assignments: Vec<crate::program::body::features::PVarAssignment>,
     /// Condition references (`features.conditionReferences`) — identifiers used in
     /// guard positions, with their reference anchors. Read by `enumerate_dispatch_sites`
     /// (d43) to find post-call IsHandled guards. Additive — forwarded verbatim from L2.
-    pub condition_references: Vec<crate::engine::l2::features::PConditionReference>,
+    pub condition_references: Vec<crate::program::body::features::PConditionReference>,
     /// Field/control/action/dataitem member name for a member-trigger routine — the
     /// unescaped logical identifier (inner `""` collapsed to `"`) of the enclosing
     /// member wrapper (field_declaration / page_field / action_declaration /
@@ -530,7 +531,7 @@ pub struct L3Routine {
     /// finding-side position discriminator (E3) matches a finding's primaryLocation
     /// against. `None` for non-member routines. Additive — never reaches an R0–R3
     /// golden. (RE-2)
-    pub enclosing_member_range: Option<crate::engine::l2::features::PAnchor>,
+    pub enclosing_member_range: Option<crate::program::body::features::PAnchor>,
     /// G-2 Part 2 (runtime-implied tempness): the lowercased receiver name of a
     /// routine ENTRY guard `if not <X>.IsTemporary[()] then Error(...)` — the
     /// routine's FIRST executable statement, with `<X>` a record var/param
@@ -607,7 +608,7 @@ fn index_table_ir(
         .find(|p| p.name == "tabletype")
         .map(|p| p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
-        || crate::engine::l2::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
+        || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     L3Table {
         id: table_id,
         app_guid: app_guid.to_string(),
@@ -626,8 +627,8 @@ fn anchor_from_origin(
     origin: &al_syntax::ir::Origin,
     source_unit_id: &str,
     cols: &Utf16Cols,
-) -> crate::engine::l2::features::PAnchor {
-    crate::engine::l2::features::PAnchor {
+) -> crate::program::body::features::PAnchor {
+    crate::program::body::features::PAnchor {
         source_unit_id: source_unit_id.to_string(),
         start_line: origin.start.row,
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
@@ -673,8 +674,85 @@ fn project_file(
     let ir_file = al_syntax::parse(source);
     let t_parsed = hot.then(std::time::Instant::now);
 
-    for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+    project_ir(
+        &ir_file,
+        &whole_file_population(&ir_file),
+        source,
+        app_guid,
+        model_instance_id,
+        source_unit_id,
+        cols,
+        workspace,
+    );
+
+    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
+        let mut lc = pt::LocalCounters::new();
+        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
+        lc.add("projection_us", t1.elapsed().as_micros() as u64);
+        lc.flush("l3.parse_project");
+    }
+}
+
+/// The declarations of one file to project, by position: each object's index in
+/// `AlFile::objects` with the indices of its routines, document order.
+pub type FilePopulation = Vec<(usize, Vec<usize>)>;
+
+/// Every declaration in `ir_file` — the population of the disk-backed paths.
+pub fn whole_file_population(ir_file: &al_syntax::ir::AlFile) -> FilePopulation {
+    ir_file
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(oi, o)| (oi, (0..o.routines.len()).collect()))
+        .collect()
+}
+
+/// The population of each file according to the program graph's physical rows
+/// (engine-switch S2b.4): the model projects what the program engine extracted, so
+/// one walk decides what exists. Keyed by virtual path.
+pub fn rows_population(
+    rows: &crate::program::physical::PhysicalIndex,
+) -> HashMap<&str, FilePopulation> {
+    let mut by_file: HashMap<&str, FilePopulation> = HashMap::new();
+    for o in &rows.objects {
+        by_file
+            .entry(o.file.as_str())
+            .or_default()
+            .push((o.object_ix as usize, Vec::new()));
+    }
+    for r in &rows.routines {
+        let pop = by_file
+            .get_mut(r.file.as_str())
+            .expect("a routine row's object has an object row");
+        let entry = pop
+            .iter_mut()
+            .find(|(oi, _)| *oi == r.object_ix as usize)
+            .expect("a routine row's object has an object row");
+        entry.1.push(r.routine_ix as usize);
+    }
+    by_file
+}
+
+/// Project one ALREADY-PARSED file into `workspace` — [`project_file`] without the
+/// parse. Engine-switch S2a: the analyze path hands in the program engine's parse
+/// of the same text (`al_syntax::parse` over the same `read_al_source` bytes), so
+/// each workspace file is parsed once. S2b.4: `population` names the declarations
+/// to project; the analyze path takes it from the program graph's physical rows.
+#[allow(clippy::too_many_arguments)]
+fn project_ir(
+    ir_file: &al_syntax::ir::AlFile,
+    population: &FilePopulation,
+    source: &str,
+    app_guid: &str,
+    model_instance_id: &str,
+    source_unit_id: &str,
+    cols: &Utf16Cols,
+    workspace: &mut L3Workspace,
+) {
+    for (oi, routine_ixs) in population {
+        let oi = *oi;
+        let o = &ir_file.objects[oi];
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         // Object metadata driven entirely by the owned IR (the loop iterates IR objects
@@ -827,7 +905,7 @@ fn project_file(
             // against a real table sharing that number (see `is_extension_stub`).
             workspace.tables.push(index_table_ir(
                 o,
-                &ir_file,
+                ir_file,
                 &object_id,
                 app_guid,
                 object_number,
@@ -839,7 +917,7 @@ fn project_file(
         // Object-global RECORD vars (scope=global) — promoted (below) into each
         // routine's `record_variables`, honoring AL shadowing (a routine's own var wins).
         let object_global_record_vars =
-            crate::engine::l2::ir_walk::ir_object_global_record_vars(o, &object_id);
+            crate::program::body::ir_walk::ir_object_global_record_vars(o, &object_id);
 
         // Interface / ControlAddIn: al-sem's L3Workspace never modeled these objects'
         // signature-only members as routines — this frozen legacy pipeline (L2/L3/L4,
@@ -872,7 +950,7 @@ fn project_file(
         // same source, same first-wins dedup, same lowercasing — minus the anchor,
         // which `L3Variable` does not carry. See [`RoutineVariables`].
         let object_globals: Arc<[L3Variable]> = Arc::from(
-            crate::engine::l2::ir_walk::ir_object_globals(&ir_file, oi, cols, source_unit_id)
+            crate::program::body::ir_walk::ir_object_globals(ir_file, oi, cols, source_unit_id)
                 .into_iter()
                 .map(|g| L3Variable {
                     name: g.name,
@@ -885,7 +963,7 @@ fn project_file(
                 .collect::<Vec<_>>(),
         );
 
-        for ir_routine in &o.routines {
+        for ir_routine in routine_ixs.iter().map(|&ri| &o.routines[ri]) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
                 continue;
@@ -898,12 +976,12 @@ fn project_file(
             // `L3Routine.enclosing_member` field (further down): the two MUST be the
             // same string, and `ir_enclosing_member` is the single place that
             // unescapes it.
-            let enclosing_member = crate::engine::l2::ir_walk::ir_enclosing_member(ir_routine);
+            let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
 
             let (routine_id, mut features) = {
-                let kind_for_id = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine);
-                let params_for_id = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
-                let rid = crate::engine::l2::scope::compute_routine_id(
+                let kind_for_id = crate::program::body::ir_walk::ir_routine_kind(ir_routine);
+                let params_for_id = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
+                let rid = crate::program::body::scope::compute_routine_id(
                     app_guid,
                     object_type,
                     object_number,
@@ -914,8 +992,8 @@ fn project_file(
                     ir_routine.return_type.as_deref(),
                     model_instance_id,
                 );
-                let feats = crate::engine::l2::ir_walk::project_routine_features_ir(
-                    &ir_file,
+                let feats = crate::program::body::ir_walk::project_routine_features_ir(
+                    ir_file,
                     oi,
                     ir_routine,
                     &rid,
@@ -933,15 +1011,15 @@ fn project_file(
             // "unreachable" emit no facts — mirrors al-sem `extractCapabilities`).
             // R3a-2's projection never reads control_context, so this is additive.
             {
-                let cc_params = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
+                let cc_params = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
                 let attrs_json =
-                    crate::engine::l2::ir_walk::ir_attributes(ir_routine, &ir_file, source).1;
+                    crate::program::body::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
                 let attr_names_lc: Vec<String> = attrs_json
                     .iter()
                     .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
                     .map(|n| n.to_lowercase())
                     .collect();
-                crate::engine::l2::control_context::apply_control_contexts(
+                crate::program::body::control_context::apply_control_contexts(
                     &mut features,
                     &attr_names_lc,
                     &cc_params,
@@ -1007,7 +1085,7 @@ fn project_file(
             // Computed AFTER global promotion so a guarded object-global
             // receiver also qualifies.
             let entry_temp_guard_receiver =
-                crate::engine::l2::ir_walk::ir_entry_temp_guard_receiver(&ir_file, ir_routine)
+                crate::program::body::ir_walk::ir_entry_temp_guard_receiver(ir_file, ir_routine)
                     .filter(|receiver| {
                         receiver == "rec"
                             || receiver == "xrec"
@@ -1080,7 +1158,7 @@ fn project_file(
             // the matched IR routine (legacy extractors as a fallback). Reuses the SAME
             // ParameterSymbol shape the routine-id/signature-hash path uses so
             // arity/var-ness/type-text cannot drift.
-            let param_syms = crate::engine::l2::ir_walk::ir_parameter_symbols(ir_routine);
+            let param_syms = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
             let parameters: Vec<L3Parameter> = param_syms
                 .iter()
                 .map(|p| L3Parameter {
@@ -1238,10 +1316,10 @@ fn project_file(
             // SAME L2 attribute indexing that produces the L2 projection's
             // `attributesParsed`, so the AttributeInfo arg shape (kind/value/qualifier/
             // member) cannot drift from R1.
-            let kind = crate::engine::l2::ir_walk::ir_routine_kind(ir_routine).to_string();
+            let kind = crate::program::body::ir_walk::ir_routine_kind(ir_routine).to_string();
             let attributes_parsed_json =
-                crate::engine::l2::ir_walk::ir_attributes(ir_routine, &ir_file, source).1;
-            let attributes_parsed: Vec<super::al_attributes::AttributeInfo> =
+                crate::program::body::ir_walk::ir_attributes(ir_routine, ir_file, source).1;
+            let attributes_parsed: Vec<crate::program::attributes::AttributeInfo> =
                 attributes_parsed_json
                     .into_iter()
                     .filter_map(|v| serde_json::from_value(v).ok())
@@ -1301,13 +1379,6 @@ fn project_file(
                 entry_temp_guard_receiver,
             });
         }
-    }
-
-    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
-        let mut lc = pt::LocalCounters::new();
-        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
-        lc.add("projection_us", t1.elapsed().as_micros() as u64);
-        lc.flush("l3.parse_project");
     }
 }
 
@@ -1487,8 +1558,152 @@ pub fn assemble_and_resolve_workspace(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<L3Resolved> {
+    let ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
+    finish_resolved(ws, workspace, skip_roots_config)
+}
+
+/// [`assemble_and_resolve_workspace`] over the program engine's parse (engine-switch
+/// S2a): the same file set, text, order and passes, but each file is projected from
+/// `ctx`'s already-parsed tree instead of being parsed a second time.
+///
+/// The file set is L3's own: app-scoped discovery (nested apps skipped), while the
+/// program engine's workspace unit includes nested apps (`provider.rs`), so the
+/// program files are FILTERED to the app-scoped set. If any app-scoped file is
+/// missing from the program's parse (the two walks disagreeing, e.g. a file created
+/// between them), the model is built from disk exactly as before.
+pub fn assemble_and_resolve_workspace_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<L3Resolved> {
+    let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
+    finish_resolved(ws, workspace, skip_roots_config)
+}
+
+/// Which files the program-backed assembly projects.
+pub enum ProgramFiles<'c> {
+    /// Every app-scoped file, each from the program's parse, in discovery order.
+    Selected {
+        app_guid: String,
+        files: Vec<(&'c str, &'c crate::snapshot::parse::ParsedFile)>,
+    },
+    /// An app-scoped file the program did not parse (named): build from disk.
+    Missing(String),
+}
+
+/// Select L3's app-scoped file set from `ctx`'s parse. `None` on the disk path's
+/// fail-closed conditions (no root `app.json` id, unreadable workspace).
+pub fn select_program_files<'c>(
+    workspace: &std::path::Path,
+    ctx: &'c crate::program::resolve::full::ProgramContext,
+) -> Option<ProgramFiles<'c>> {
+    use crate::program::body::l2_workspace::{discover_al_files_app_scoped, read_root_app_guid};
+    use crate::snapshot::parse::ParsedFile;
+
+    let app_guid = read_root_app_guid(workspace)?;
+    let discovered = discover_al_files_app_scoped(workspace).ok()?;
+    let by_path: std::collections::HashMap<&str, &ParsedFile> = ctx
+        .parsed()
+        .iter()
+        .flat_map(|u| u.files.iter())
+        .map(|f| (f.virtual_path.as_str(), f))
+        .collect();
+    let mut files = Vec::with_capacity(discovered.len());
+    for f in &discovered {
+        match by_path.get(f.rel_posix.as_str()) {
+            // `virtual_path == rel_posix` (the lookup key): both come from
+            // `source_text::discover_al_files`.
+            Some(pf) => files.push((pf.virtual_path.as_str(), *pf)),
+            None => return Some(ProgramFiles::Missing(f.rel_posix.clone())),
+        }
+    }
+    Some(ProgramFiles::Selected { app_guid, files })
+}
+
+fn assemble_l3_workspace_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<L3Workspace> {
+    let selected = {
+        let _s = pt::span("l3", "l3.select_program_parse");
+        select_program_files(workspace, ctx)?
+    };
+    let (app_guid, files) = match selected {
+        ProgramFiles::Selected { app_guid, files } => (app_guid, files),
+        ProgramFiles::Missing(path) => {
+            log::warn!("program parse lacks {path}; building the L3 model from disk");
+            return assemble_l3_workspace_from_disk(workspace, model_instance_id);
+        }
+    };
+    if files.is_empty() {
+        return None;
+    }
+
+    let _s = pt::span("l3", "l3.project_parallel");
+    // S2b.4: what exists is what the program engine extracted.
+    let population = rows_population(&ctx.graph().workspace_rows);
+    let no_decls = FilePopulation::new();
+    // Same deterministic order and fold as `assemble_workspace`.
+    let mut sorted = files;
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    use rayon::prelude::*;
+    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
+        sorted
+            .par_iter()
+            .map(|(fname, pf)| {
+                let source_unit_id = format!("ws:{fname}");
+                let cols = Utf16Cols::new(&pf.text);
+                let mut ws = L3Workspace {
+                    objects: Vec::new(),
+                    tables: Vec::new(),
+                    routines: Vec::new(),
+                };
+                // Every parsed workspace file has its rows recorded; only a file
+                // with no declarations has none.
+                let pop = population.get(fname).unwrap_or_else(|| {
+                    assert!(
+                        pf.file.objects.is_empty(),
+                        "{fname} declares objects but has no physical rows"
+                    );
+                    &no_decls
+                });
+                project_ir(
+                    &pf.file,
+                    pop,
+                    &pf.text,
+                    &app_guid,
+                    model_instance_id,
+                    &source_unit_id,
+                    &cols,
+                    &mut ws,
+                );
+                ws
+            })
+            .collect()
+    });
+    let mut workspace = L3Workspace {
+        objects: Vec::new(),
+        tables: Vec::new(),
+        routines: Vec::new(),
+    };
+    for mut frag in fragments {
+        workspace.objects.append(&mut frag.objects);
+        workspace.tables.append(&mut frag.tables);
+        workspace.routines.append(&mut frag.routines);
+    }
+    Some(workspace)
+}
+
+/// The finishing half shared by the disk-backed and program-backed entries:
+/// resolve, classify roots, read the primary app, and refuse an empty model.
+fn finish_resolved(
+    mut ws: L3Workspace,
+    workspace: &std::path::Path,
+    skip_roots_config: bool,
+) -> Option<L3Resolved> {
     let resolved = {
-        let mut ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`.
         // `workspace` is the root where the config lives (mirrors al-sem's
@@ -1531,7 +1746,7 @@ pub fn assemble_l3_workspace_from_disk(
     workspace: &std::path::Path,
     model_instance_id: &str,
 ) -> Option<L3Workspace> {
-    use crate::engine::l2::l2_workspace::{
+    use crate::program::body::l2_workspace::{
         discover_al_files_app_scoped, read_al_source, read_root_app_guid,
     };
 
@@ -1702,7 +1917,7 @@ pub struct L3Resolved {
     /// - deliberately NOT switched: the cross-app resolve in `capability_cone.rs`
     ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
     ///   declared dependencies.
-    pub precomputed_calls: Option<std::sync::Arc<crate::engine::l3::call_resolver::ResolvedCalls>>,
+    pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2509,7 +2724,7 @@ page 50814 "CP4 Wizard"
         );
 
         // --- L2 path -------------------------------------------------------
-        let l2 = crate::engine::l2::l2_workspace::project_named_routine(
+        let l2 = crate::program::body::l2_workspace::project_named_routine(
             src,
             "OnValidate",
             APP_GUID,
@@ -2569,14 +2784,14 @@ page 50814 "CP4 Wizard"
         // from the RAW (still-escaped) member text and assert it differs: without
         // this, both paths agreeing on a wrongly-escaped string would pass the
         // assertion above and the test would prove nothing about the normalization.
-        let params = crate::engine::l2::ir_walk::ir_parameter_symbols(
+        let params = crate::program::body::ir_walk::ir_parameter_symbols(
             al_syntax::parse(src).objects[1]
                 .routines
                 .iter()
                 .find(|r| r.name.eq_ignore_ascii_case("OnValidate"))
                 .expect("IR must carry the OnValidate trigger"),
         );
-        let raw_escaped_id = crate::engine::l2::scope::compute_routine_id(
+        let raw_escaped_id = crate::program::body::scope::compute_routine_id(
             APP_GUID,
             "Page",
             50814,
@@ -2592,5 +2807,53 @@ page 50814 "CP4 Wizard"
             "the escaped and unescaped member texts must hash differently — otherwise \
              this test could not tell a missing unescape from a present one"
         );
+    }
+}
+
+#[cfg(test)]
+mod population_tests {
+    use super::*;
+
+    /// S2b.4: the analyze model projects what the program graph's physical rows
+    /// name. Hand-stated precondition: one routine's row is removed from a real
+    /// program context. The model must lose exactly that routine — a model that
+    /// walked the syntax tree on its own would still have it.
+    #[test]
+    fn model_population_follows_the_physical_rows() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let (mut ctx, _report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+        let full = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+
+        // Drop the first codeunit routine row (interfaces are skipped anyway).
+        let k = ctx
+            .graph
+            .workspace_rows
+            .routines
+            .iter()
+            .position(|r| r.node.object.kind == al_syntax::ir::ObjectKind::Codeunit)
+            .unwrap();
+        let dropped = ctx.graph.workspace_rows.routines.remove(k);
+        let fewer = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+
+        assert_eq!(
+            fewer.workspace.routines.len() + 1,
+            full.workspace.routines.len()
+        );
+        let at = |r: &L3Routine| {
+            (
+                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.start_line,
+                r.source_anchor.start_column,
+            )
+        };
+        let gone = (
+            format!("ws:{}", dropped.file),
+            dropped.start.row,
+            dropped.start.col,
+        );
+        assert!(full.workspace.routines.iter().any(|r| at(r) == gone));
+        assert!(!fewer.workspace.routines.iter().any(|r| at(r) == gone));
     }
 }

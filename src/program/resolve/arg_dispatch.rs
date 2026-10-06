@@ -3612,8 +3612,10 @@ codeunit 50700 "Caller"
         subtype_tag: SubtypeTag,
     ) -> AbiParamRetained {
         AbiParamRetained {
+            name: String::new(),
             type_text: type_text.to_string(),
             is_var,
+            is_temporary: false,
             subtype_id,
             subtype_raw_name: subtype_raw_name.map(str::to_string),
             subtype_tag,

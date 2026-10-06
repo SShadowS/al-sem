@@ -38,7 +38,10 @@ use crate::engine::gate::preflight::evaluate_preflight;
 use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::gate::version::driver_version;
-use crate::engine::l3::l3_workspace::assemble_and_resolve_workspace;
+use crate::engine::l3::coverage::AnalysisCoverage;
+use crate::engine::l3::l3_workspace::{
+    L3Resolved, assemble_and_resolve_workspace_from_program, assemble_l3_workspace_from_disk,
+};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
 
@@ -151,6 +154,125 @@ fn read_workspace_apps(ws: &Path) -> Vec<App> {
     }]
 }
 
+/// Why [`build_analysis_model`] produced no model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelFailure {
+    /// The workspace layout yields no gate model instance id (fail-closed).
+    NoModelInstanceId,
+    /// The workspace model did not assemble (fail-closed / unreadable).
+    AssemblyFailed,
+    /// The program engine build failed while the model assembled: an error, since
+    /// detectors must never quietly fall back to L3's own calls.
+    ProgramBuildFailed(String),
+}
+
+/// The model `alsem analyze`'s detectors read, plus the program build's coverage.
+pub struct AnalysisModel {
+    /// The program engine's `FreshCoverage`, or its build error.
+    pub fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
+    pub model: Result<L3Resolved, ModelFailure>,
+    /// The program graph's workspace physical rows (engine-switch S2b.3), kept
+    /// past the program context's drop; `None` when the model was not built.
+    pub physical: Option<crate::program::physical::PhysicalIndex>,
+}
+
+/// THE production model builder for `alsem analyze` — and the one the engine-switch
+/// harness (`engine::switch_dump`) dumps, so the harness can never measure a copy.
+/// Each engine-switch step changes what this builds; nothing else should.
+///
+/// The program engine's build (B3 Phase A, spec §3/§7) gives the preflight's
+/// `FreshCoverage` AND the call resolution the detectors read (attached after the
+/// model exists). The program context and the model are resident together only
+/// while the adapter runs; the context is dropped before this returns.
+///
+/// The model is assembled with the al-sem GATE modelInstanceId (content-derived,
+/// UNPINNED) so the internal RoutineIds embedded in each finding's rootCauseKey —
+/// and therefore the SARIF fingerprint hashed over them — byte-match the goldens.
+pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
+    let (fresh, program) = {
+        let _s = pt::span("preflight", "preflight.fresh_program");
+        match crate::program::resolve::full::build_program_with_coverage(ws_path) {
+            Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
+            Err(e) => (Err(e), None),
+        }
+    };
+    // Its own span: this is a SECOND full `discover_al_files` disk walk of the
+    // workspace (plus a sort + SHA-256 over one `ws:<rel>` string per file), and
+    // it sat inside `analyze.total`'s unattributed self time until it was
+    // measured — see `run_analyze_with_exit`'s `gate.teardown` note.
+    let model_instance_id = {
+        let _s = pt::span("gate", "gate.model_instance_id");
+        compute_gate_model_instance_id(ws_path)
+    };
+    let Some(model_instance_id) = model_instance_id else {
+        return AnalysisModel {
+            fresh,
+            model: Err(ModelFailure::NoModelInstanceId),
+            physical: None,
+        };
+    };
+    let Some((ctx, report)) = program else {
+        // Classified exactly as before engine-switch S2a: a model that would not
+        // assemble from disk is the empty-output case, otherwise the failed program
+        // build is an error. (Assembly no longer runs on the success path's disk
+        // parse; only this failure path still reads the workspace through L3.)
+        let assembles = {
+            let _s = pt::span("l3", "l3.assemble_resolve");
+            assemble_l3_workspace_from_disk(ws_path, &model_instance_id)
+                .is_some_and(|w| !(w.objects.is_empty() && w.routines.is_empty()))
+        };
+        let model = if assembles {
+            let why = fresh.as_ref().err().cloned().unwrap_or_default();
+            Err(ModelFailure::ProgramBuildFailed(why))
+        } else {
+            Err(ModelFailure::AssemblyFailed)
+        };
+        return AnalysisModel {
+            fresh,
+            model,
+            physical: None,
+        };
+    };
+    // Engine-switch S2a: the model is projected from the program engine's parse.
+    let resolved = {
+        let _s = pt::span("l3", "l3.assemble_resolve");
+        assemble_and_resolve_workspace_from_program(ws_path, &model_instance_id, false, &ctx)
+    };
+    let Some(mut resolved) = resolved else {
+        return AnalysisModel {
+            fresh,
+            model: Err(ModelFailure::AssemblyFailed),
+            physical: None,
+        };
+    };
+    // Taken before the adapter consumes (and drops) the program context.
+    let physical = Some(ctx.graph().workspace_rows.clone());
+    crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
+    AnalysisModel {
+        fresh,
+        model: Ok(resolved),
+        physical,
+    }
+}
+
+/// The analysis coverage `alsem analyze` reports for `resolved`.
+///
+/// One dependency universe (spec §3): the formatter-visible opaqueApps follows the
+/// FRESH snapshot. The L3 gate path resolves source-only with empty deps
+/// (src/engine/l3/coverage.rs:239) — its opaque list is structurally empty, and
+/// leaving it would let stderr say "N symbol-only apps" while JSON says [].
+pub fn analysis_coverage(
+    resolved: &L3Resolved,
+    ws_path: &Path,
+    fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
+) -> AnalysisCoverage {
+    let mut c = resolved.project_coverage_disk(ws_path);
+    if let Ok(fc) = fresh {
+        c.opaque_apps = fc.opaque_apps.clone();
+    }
+    c
+}
+
 /// Run the gate `analyze` pipeline and return the formatted output string WITHOUT the
 /// trailing newline (the CLI / caller appends `"\n"`, matching al-sem's
 /// `process.stdout.write(`${format(...)}\n`)`).
@@ -198,52 +320,20 @@ pub fn run_analyze_with_exit(
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
     let ws_path = Path::new(&args.workspace);
-    // The program engine's build (B3 Phase A, spec §3/§7). It gives the
-    // preflight's `FreshCoverage` AND the call resolution the detectors read
-    // (the adapter, below, after the L3 workspace exists). The context and
-    // report are kept until then. While the adapter runs, the program context + report and the L3 workspace are
-    // resident together; both are dropped before the detector context is built.
-    //
-    // A failed build leaves `fresh` as `Err` (the could-not-verify path for an
-    // unreadable workspace). If the L3 workspace still assembles, the run is an
-    // error: detectors must never quietly fall back to L3's own calls.
-    let (fresh, mut program) = {
-        let _s = pt::span("preflight", "preflight.fresh_program");
-        match crate::program::resolve::full::build_program_with_coverage(ws_path) {
-            Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
-            Err(e) => (Err(e), None),
+    let AnalysisModel { fresh, model, .. } = build_analysis_model(ws_path);
+    let resolved = match model {
+        Ok(r) => r,
+        // Fail-closed layout / unreadable workspace → empty output; preflight says
+        // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
+        Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
+            return empty_output_result(args, &version, &fresh);
+        }
+        Err(ModelFailure::ProgramBuildFailed(why)) => {
+            return Err(format!(
+                "analysis failure — program engine build failed: {why}"
+            ));
         }
     };
-    // Its own span: this is a SECOND full `discover_al_files` disk walk of the
-    // workspace (plus a sort + SHA-256 over one `ws:<rel>` string per file), and
-    // it sat inside `analyze.total`'s unattributed self time until it was
-    // measured — see this function's `gate.teardown` note.
-    let model_instance_id = {
-        let _s = pt::span("gate", "gate.model_instance_id");
-        match compute_gate_model_instance_id(ws_path) {
-            Some(id) => id,
-            // Fail-closed layout → empty output; preflight now says could-not-verify
-            // (never a fabricated clean — spec §3), gated on `fresh` above.
-            None => return empty_output_result(args, &version, &fresh),
-        }
-    };
-    let mut resolved = {
-        let _s = pt::span("l3", "l3.assemble_resolve");
-        match assemble_and_resolve_workspace(ws_path, &model_instance_id, false) {
-            Some(r) => r,
-            // Fail-closed / unreadable workspace → empty output, same could-not-verify rule.
-            None => return empty_output_result(args, &version, &fresh),
-        }
-    };
-    // Run the adapter (no per-site notes), then drop the program model BEFORE
-    // the detector context is built.
-    let Some((ctx, report)) = program.take() else {
-        let why = fresh.as_ref().err().cloned().unwrap_or_default();
-        return Err(format!(
-            "analysis failure — program engine build failed: {why}"
-        ));
-    };
-    crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
 
     // L4 + L5: run the selected detectors. Findings come pre-sorted by
     // (detector, primaryLocationKey, rootCauseKey) with dep-anchored findings already
@@ -406,15 +496,7 @@ pub fn run_analyze_with_exit(
     // to the Json formatter. The preflight evaluation + exit-code gate follow below.
     let coverage = {
         let _s = pt::span("gate", "gate.coverage");
-        let mut c = resolved.project_coverage_disk(ws_path);
-        // One dependency universe (spec §3): the formatter-visible opaqueApps follows
-        // the FRESH snapshot. The L3 gate path resolves source-only with empty deps
-        // (src/engine/l3/coverage.rs:239) — its opaque list is structurally empty, and
-        // leaving it would let stderr say "N symbol-only apps" while JSON says [].
-        if let Ok(fc) = &fresh {
-            c.opaque_apps = fc.opaque_apps.clone();
-        }
-        c
+        analysis_coverage(&resolved, ws_path, &fresh)
     };
 
     // --- format ---

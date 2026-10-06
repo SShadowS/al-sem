@@ -41,7 +41,7 @@ use crate::engine::ids::{
     ParamSpec, encode_object_id, normalized_signature_hash, to_stable_object_id,
     to_stable_routine_id_from_parts,
 };
-use crate::engine::l2::scope;
+use crate::program::body::scope;
 use std::path::Path;
 
 /// The intentional stable corpus/model-instance label (matches the golden's id
@@ -72,53 +72,13 @@ pub(crate) fn discover_al_files_app_scoped(workspace: &Path) -> std::io::Result<
 /// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
 pub(crate) use crate::source_text::read_al_source;
 
-/// Read the workspace ROOT's `app.json` `id` field VERBATIM when it is a
-/// non-empty string. Mirrors `providers/workspace.ts` (GAP 2).
-pub(crate) fn read_root_app_guid(workspace: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(workspace.join("app.json")).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-    let id = value.get("id")?.as_str()?;
-    if id.is_empty() {
-        None
-    } else {
-        Some(id.to_string())
-    }
-}
+/// The shared root-`app.json` reader (moved to `source_text` in engine-switch S1).
+pub(crate) use crate::source_text::read_root_app_guid;
 
 /// Count `app.json` files anywhere under `workspace`, excluding the shared
 /// skip folders (`crate::source_text::SKIP_DIRS`, any case).
 pub(crate) fn count_app_json(workspace: &Path) -> usize {
-    count_app_json_paths(workspace).len()
-}
-
-/// Collect the absolute paths of every `app.json` anywhere under `workspace`,
-/// excluding the shared skip folders (`crate::source_text::SKIP_DIRS`, any
-/// case). Used by the gate's `workspace_diagnostics` to reproduce the
-/// provider's multi-app fail-closed message (which sorts these paths).
-pub(crate) fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
-    let mut stack = vec![workspace.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(ftype) = entry.file_type() else {
-                continue;
-            };
-            if ftype.is_dir() {
-                if crate::source_text::is_skipped_dir_name(&entry.file_name()) {
-                    continue;
-                }
-                stack.push(entry.path());
-            } else if ftype.is_file()
-                && entry.file_name().to_string_lossy().to_lowercase() == "app.json"
-            {
-                paths.push(entry.path());
-            }
-        }
-    }
-    paths
+    crate::source_text::count_app_json_paths(workspace).len()
 }
 
 /// Build one fully-populated [`PRoutine`] from an IR routine (features →
@@ -138,7 +98,7 @@ fn build_proutine(
     source: &str,
     source_unit_id: &str,
 ) -> Option<PRoutine> {
-    use crate::engine::l2::ir_walk;
+    use crate::program::body::ir_walk;
 
     let rname = ir_routine.name.clone();
     if rname.is_empty() {
@@ -203,7 +163,7 @@ fn build_proutine(
         .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
         .map(|n| n.to_lowercase())
         .collect();
-    crate::engine::l2::control_context::apply_control_contexts(
+    crate::program::body::control_context::apply_control_contexts(
         &mut features,
         &attr_names_lc,
         &parameters,
@@ -213,7 +173,7 @@ fn build_proutine(
     // Populates `order` on each op/callsite (absent when the walk produced none) —
     // including the error-call source-range post-pass over the op/callsite records —
     // and the routine's `scopeFrames`.
-    crate::engine::l2::operation_order::apply_operation_order(&mut features, &attr_names_lc);
+    crate::program::body::operation_order::apply_operation_order(&mut features, &attr_names_lc);
 
     let mut routine = PRoutine {
         stable_routine_id,
@@ -226,7 +186,7 @@ fn build_proutine(
         parse_incomplete,
         features,
         capability_facts_direct: Vec::new(),
-        capability_status: crate::engine::l2::capability::CoverageStatus::Complete,
+        capability_status: crate::program::body::capability::CoverageStatus::Complete,
         capability_reasons: Vec::new(),
         capability_diagnostics: Vec::new(),
     };
@@ -250,7 +210,7 @@ pub fn ir_features_for_named_routine(
     model_instance_id: &str,
     source_unit_id: &str,
 ) -> Option<(PFeatures, Vec<scope::ParameterSymbol>, Vec<String>)> {
-    use crate::engine::l2::ir_walk;
+    use crate::program::body::ir_walk;
     let ir_file = al_syntax::parse(source);
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = ir_walk::ir_object_type(&o.kind) else {
@@ -314,7 +274,7 @@ fn project_file(
     let ir_file = al_syntax::parse(source);
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         let object_number = o.id.unwrap_or(0);
@@ -324,7 +284,7 @@ fn project_file(
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (object_subtype, page_type, source_table_name, inherent_commit_behavior) =
-            crate::engine::l2::ir_walk::ir_object_metadata(o, object_type);
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type);
 
         objects.push(PObject {
             stable_object_id: stable_object_id.clone(),
@@ -375,7 +335,7 @@ fn project_file(
 ///     `CoverageReason` declaration order).
 ///   - `capabilityDiagnostics`: sort by `(sourceRef, message)`.
 fn apply_capabilities(routine: &mut PRoutine) {
-    let result = crate::engine::l2::capability::extract_capabilities(routine);
+    let result = crate::program::body::capability::extract_capabilities(routine);
 
     let mut reasons = result.reasons;
     // Match al-sem's `.sort()` (lexicographic on the serialized kebab string),
@@ -493,7 +453,7 @@ pub fn project_named_routine(
     let ir_file = al_syntax::parse(source);
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
-        let Some(object_type) = crate::engine::l2::ir_walk::ir_object_type(&o.kind) else {
+        let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
         let object_number = o.id.unwrap_or(0);
@@ -501,7 +461,7 @@ pub fn project_named_routine(
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (_, _, source_table_name, _) =
-            crate::engine::l2::ir_walk::ir_object_metadata(o, object_type);
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type);
 
         for ir_routine in &o.routines {
             if ir_routine.name != routine_name {

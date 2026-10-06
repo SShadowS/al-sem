@@ -13,7 +13,7 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::l3_workspace::{L3Field, L3Table, L3Workspace};
+use super::workspace::{L3Field, L3Table, L3Workspace};
 use crate::engine::ids::{encode_field_id, encode_table_id};
 use std::collections::HashSet;
 

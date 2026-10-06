@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::al_attributes::{ObsoleteState, parse_routine_attributes};
 use crate::engine::l3::event_graph::EventSymbol;
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
@@ -22,6 +21,7 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::attributes::{ObsoleteState, parse_routine_attributes};
 
 use super::anchor_of;
 

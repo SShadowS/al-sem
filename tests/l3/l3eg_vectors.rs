@@ -23,10 +23,10 @@
 //!   - modelInstanceId  = "r0"
 //!   - files            = [[name, source], ...]  →  sourceUnitId = "ws:<name>"
 
-use al_sem::engine::l3::al_attributes::{
+use al_sem::engine::l3::l3_workspace::assemble_and_resolve;
+use al_sem::program::attributes::{
     AttributeInfo, bool_arg, find_attribute, qualified_arg, string_arg,
 };
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve;
 use serde_json::Value;
 
 const APP_GUID: &str = "c2c00000-0000-0000-0000-0000000002cc";

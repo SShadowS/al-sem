@@ -9,7 +9,7 @@ use crate::engine::deps::symbol_reference::{
     AbiEventKind as SrAbiEventKind, AbiRoutine, AbiTable, SymbolReferenceAbi,
     parse_symbol_reference,
 };
-use crate::engine::l3::al_attributes::{AttributeInfo, bool_arg, find_attribute};
+use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{
     AbiParamRetained, AbiParams, Access, FieldNode, ObjectNode, RoutineNode,
@@ -104,8 +104,10 @@ fn retain_abi_params(routine: &AbiRoutine) -> AbiParams {
             .parameters
             .iter()
             .map(|p| AbiParamRetained {
+                name: p.name.clone(),
                 type_text: p.type_text.clone(),
                 is_var: p.is_var,
+                is_temporary: p.is_temporary,
                 subtype_id: p.subtype_id,
                 subtype_raw_name: p.subtype_raw_name.clone(),
                 subtype_tag: p.subtype_tag,

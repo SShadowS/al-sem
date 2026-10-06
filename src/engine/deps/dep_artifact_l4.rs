@@ -49,13 +49,13 @@ use std::io::Cursor;
 use crate::engine::deps::app_manifest::parse_app_manifest_xml;
 use crate::engine::deps::app_package_zip::{app_zip_bytes, extract_navx_manifest_xml};
 use crate::engine::l2::operation_order::apply_operation_order;
-use crate::engine::l3::al_attributes::{AttributeInfo, find_attribute, has_attribute};
 use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
 use crate::engine::l3::event_graph::{EventSymbol, build_event_graph};
 use crate::engine::l3::l3_workspace::{L3Routine, L3Workspace, assemble_workspace_units, resolve};
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::engine::l4::capability_cone::direct_facts_for_routine;
+use crate::program::attributes::{AttributeInfo, find_attribute, has_attribute};
 
 /// Schema version for the dep order index. Mirrors al-sem
 /// `DEP_ORDER_INDEX_SCHEMA_VERSION` (`src/deps/dep-order-types.ts`).

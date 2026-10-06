@@ -11,7 +11,15 @@
 //! R2a scope: record-types ONLY. The call graph (R2b), event graph (R2c), and
 //! coverage / gaps (R2d) are LATER gates and intentionally OUT.
 
-pub mod al_attributes;
+// The detector model moved to `program::model` in engine-switch S2b.2. These
+// aliases keep the old `engine::l3::…` paths compiling; they and every such path
+// are removed in S9.
+pub use crate::program::model::extension_fields;
+pub use crate::program::model::record_types;
+pub use crate::program::model::symbol_table;
+pub use crate::program::model::taxonomy;
+pub use crate::program::model::workspace as l3_workspace;
+
 pub mod al_builtins;
 pub mod al_type;
 pub mod b3_diff;
@@ -19,18 +27,13 @@ pub mod call_graph_projection;
 pub mod call_resolver;
 pub mod coverage;
 pub mod event_graph;
-pub mod extension_fields;
-pub mod global_builtins;
 pub mod implicit_edges;
-pub mod l3_workspace;
+pub mod l3_mint;
 pub mod member_builtins;
 pub mod program_calls;
 pub mod receiver;
 pub mod receiver_type;
-pub mod record_types;
 pub mod resolution_class;
 pub mod static_arg;
-pub mod symbol_table;
-pub mod taxonomy;
 pub mod type_ref;
 pub mod type_rel;

@@ -2,7 +2,7 @@
 //! `resolution` TS-port hangover). `enum.as_str()` reproduces the EXACT golden
 //! strings at the projection boundary so this refactor is byte-stable.
 
-use super::call_resolver::UnknownReason;
+use super::calls::UnknownReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchKind {
@@ -70,7 +70,7 @@ impl Resolution {
 
 #[cfg(test)]
 mod tests {
-    use super::super::call_resolver::UnknownReason;
+    use super::super::calls::UnknownReason;
     use super::*;
 
     #[test]

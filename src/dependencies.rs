@@ -212,6 +212,33 @@ pub fn parse_app_json(path: &Path) -> Result<Vec<AppDependency>> {
     Ok(app_json.dependencies)
 }
 
+/// Well-known Microsoft Application-tier app identities. BC apps never list these in
+/// `dependencies[]` — they are implicit, declared via the `application` field in
+/// app.json. Mirrors al-sem `MS_APPLICATION_TIER` in `workspace-dependencies.ts`
+/// (same GUIDs, names, publisher, ORDER).
+///
+/// The single source of truth for the tier data (moved here from
+/// `engine::deps::cross_app_l3` in engine-switch S1, so the loader no longer
+/// imports the legacy engine): [`append_implicit_ms_tier_deps`] and the legacy
+/// cross-app builder both read it.
+pub(crate) const MS_APPLICATION_TIER: &[(&str, &str)] = &[
+    ("c1335042-3002-4257-bf8a-75c898ccb1b8", "Application"),
+    ("437dbf0e-84ff-417a-965d-ed2bb9650972", "Base Application"),
+    (
+        "f3552374-a1f2-4356-848e-196002525837",
+        "Business Foundation",
+    ),
+];
+
+/// Well-known Microsoft Platform-tier app identities. BC apps never list these in
+/// `dependencies[]` — they are implicit, declared via the `platform` field in
+/// app.json. Mirrors al-sem `MS_PLATFORM_TIER` in `workspace-dependencies.ts`
+/// (same GUIDs, names, publisher, ORDER). See [`MS_APPLICATION_TIER`].
+pub(crate) const MS_PLATFORM_TIER: &[(&str, &str)] = &[
+    ("63ca2fa4-4f03-4f2b-a480-172fef340d3f", "System Application"),
+    ("8874ed3a-0643-4247-9ced-7a7002f7135d", "System"),
+];
+
 /// Append IMPLICIT Microsoft Application-/Platform-tier dependency rows to an
 /// app's `declared_deps` (beyond-1B.3b Task 5.5 — THE dominant lever for the
 /// real-`unknown` burndown).
@@ -227,9 +254,9 @@ pub fn parse_app_json(path: &Path) -> Result<Vec<AppDependency>> {
 /// Mirrors `engine::deps::cross_app_l3::read_workspace_declared_dependencies`
 /// (the existing, already-correct implicit-dep template used by the isolated
 /// `engine::l4` subsystem) and, transitively, al-sem `parseWorkspaceDependencies`:
-/// a non-empty `application` appends [`crate::engine::deps::cross_app_l3::MS_APPLICATION_TIER`]
+/// a non-empty `application` appends [`MS_APPLICATION_TIER`]
 /// (using the `application` string as each row's `version`); a non-empty
-/// `platform` appends [`crate::engine::deps::cross_app_l3::MS_PLATFORM_TIER`]
+/// `platform` appends [`MS_PLATFORM_TIER`]
 /// likewise. An empty/absent field injects NOTHING — fixtures with a minimal
 /// app.json (no `application`/`platform`) stay unaffected (low ripple).
 ///
@@ -245,8 +272,6 @@ pub fn append_implicit_ms_tier_deps(
     application: Option<&str>,
     platform: Option<&str>,
 ) {
-    use crate::engine::deps::cross_app_l3::{MS_APPLICATION_TIER, MS_PLATFORM_TIER};
-
     if let Some(app_ver) = application.filter(|s| !s.is_empty()) {
         for (guid, name) in MS_APPLICATION_TIER {
             if *guid == own_guid {

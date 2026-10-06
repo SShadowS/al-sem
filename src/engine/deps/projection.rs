@@ -28,7 +28,7 @@ use crate::engine::ids::{
     encode_table_id, sha256_hex, sha256_of_strings, to_stable_field_id, to_stable_object_id,
     to_stable_table_id,
 };
-use crate::engine::l3::al_attributes::AttributeInfo;
+use crate::program::attributes::AttributeInfo;
 use std::collections::BTreeMap;
 
 /// A projected dependency parameter.

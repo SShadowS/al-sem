@@ -7,7 +7,212 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Site links between body facts and program edges** (engine-switch S2b.6).
+  `program::model::site_links::SiteLinks` indexes every program call-site edge by
+  `(caller app, span)`. Spans use zero-based rows and byte columns on both sides, so
+  there is no column conversion. The links keep EVERY edge per span, in report order;
+  the B3 adapter's inline join kept only the first. The adapter now builds its span map
+  from the links and still takes the first edge (S3 converts all of them), and it uses
+  the shared `model_key` instead of its own copy. Keys carry the caller's app because
+  two apps can both contain `src/Main.al`.
+
+  `links_keep_every_edge_and_qualify_by_app` hand-states a duplicated edge and a
+  same-span edge in another app. Discrimination: keeping only the first edge fails it.
+  Harness: `s2b5` and `s2b6` byte-identical on all 218 corpora. CDO has no duplicate
+  spans today (`duplicate_program_span: 0`), so this is structure for S3, not a fix
+  that moves anything now.
+
+- **Dependency target registry with body states** (engine-switch S2b.5).
+  `program::registry::DependencyRegistry` (via `ProgramContext::registry()`) describes
+  every dependency routine: its parameters (name, type, `var`, `temporary`) and the
+  state of its body. There are four states:
+  - `AnalyzedClean`;
+  - `Recovered` (the parse needed error recovery);
+  - `Bodyless` (symbol-only);
+  - `NotAnalyzed` (the body exists but the model has not analysed it).
+
+  Only `AnalyzedClean` may read an empty fact set as "no effects"
+  (`BodyState::proves_absence`). The registry is separate from the detector model's
+  routines, so describing a dependency does not make the detectors analyse it. Today
+  no dependency body is analysed: CDO has 121,613 dependency routines and DO 127,201,
+  all `NotAnalyzed`.
+
+  To support it, ingestion now keeps parameter names and the `temporary` marker. Before,
+  `AbiParamRetained` dropped both, and the source-side `ParamMeta` had no name. Both are
+  persisted in dependency packs, so `PACK_SCHEMA` is now 2 and old packs are rebuilt.
+
+  Tests:
+  - `body_states_on_the_cross_app_fixture`;
+  - `symbol_only_target_keeps_parameter_names_and_temporary`, which uses a hand-built
+    `.app` with `Post(var Rec: Record Customer temporary; Qty: Integer)`;
+  - `source_param_meta_keeps_name_and_temporary`.
+
+  Discrimination: dropping the name at ingestion fails the second test; treating an
+  un-analysed body as clean fails the first. Harness: nothing moved except the new
+  `registry.census` dump file.
+
+- **The program graph keeps every workspace declaration as it occurs** (engine-switch
+  S2b.3). `ProgramGraph::workspace_rows` (`program::physical`) holds one row per object
+  and routine declaration, recorded before the graph's sort and dedup. Each row has its
+  file, its position in the file's object and routine lists, its span, and the node it
+  became; several rows may share one node.
+
+  `program::model::census::physical_census` joins the detector model to these rows on
+  `(file, span)`. It is part of the switch harness dump (`census.physical`), and
+  `build_analysis_model` now hands the rows out before the program context is dropped.
+  On all 218 corpora:
+  - every model object and routine maps to exactly one row;
+  - the only extra rows are the 77 interface and control-add-in signature routines that
+    the model skips by rule (33 on CDO, 30 on DO, 14 in fixtures);
+  - nothing is unexplained.
+
+  This is the precondition for S2b.4, which builds the model from these rows. Apart
+  from the new census file, the dumps are byte-identical to S2b.2.
+
+  Tests:
+  - `analyze_model_maps_one_to_one_onto_physical_rows` runs the production model on a
+    fixture with interfaces.
+  - `census_reports_missing_ambiguous_and_unexplained` hand-states each failure.
+  - `each_row_names_the_node_of_its_own_declaration` recomputes every row's node from
+    its own declaration.
+
+  The last one exists because the first discrimination attempt passed: reversing the
+  row-to-node assignment went unnoticed by the census, which joins on spans. With the
+  new test, that break fails. Dropping `Interface` from the skip rule fails both census
+  tests.
+
+- **Engine-switch difference harness** (S0 of
+  `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, the plan to move every
+  consumer onto the program engine and delete L3). `aldump --switch-dump <ws> <dir>`
+  writes what `alsem analyze` builds and finds as plain-text rows, one file each:
+  - model objects, tables, routines, root classifications, primary app and infra
+    diagnostics;
+  - call edges and upgraded bindings;
+  - the detector event graph;
+  - findings of every registered detector (opt-in ones too), detector stats,
+    diagnostics and coverage.
+
+  `aldump --switch-compare <A> <B>` diffs two dumps as ordered rows: lost duplicates
+  and reordering both count. `scripts/switch-baseline dump|compare <label>` does this
+  for CDO, DO and all 216 `r0-corpus` fixtures. Dumps live outside the repo, so a
+  baseline taken while L3 existed stays comparable after it is deleted. The frozen
+  pre-switch baseline is `s0-legacy`: 218 corpora in 29 s, 196 MB; on CDO 8 s, with
+  5,479 routines and 2,405 findings. Two dumps of CDO, of DO and of every fixture are
+  identical.
+
+  To make sure the harness measures production rather than a copy, `analyze`'s model
+  construction moved into `gate::run::build_analysis_model` and its coverage into
+  `gate::run::analysis_coverage`. `run_analyze_with_exit` and the harness both call
+  them, and `analyze_builds_through_the_dumped_functions` fails if the analyze path
+  builds a model or coverage any other way. The extraction moved no golden.
+  Discrimination: inlining the coverage call back into the analyze path fails the guard;
+  adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
+
 ### Changed
+
+- **The analyze model's population comes from the program graph** (engine-switch S2b.4).
+  `project_ir` now takes the declarations to project as input (`FilePopulation`: each
+  object's index with its routine indices, document order) instead of walking
+  `AlFile::objects` itself. The analyze path builds that list from the program graph's
+  physical rows (`rows_population`), so one walk decides what exists. The disk paths
+  that other consumers still use until S6 pass every declaration
+  (`whole_file_population`). The model's own skip rules (unknown object kinds,
+  interface/control-add-in signatures, nameless routines) still apply, and the S2b.3
+  census remains the cross-check. A file that declares objects but has no rows is a
+  hard error, not an empty projection.
+
+  `model_population_follows_the_physical_rows` removes one routine's row from a real
+  program context, and the model must lose exactly that routine. Discrimination:
+  projecting the whole file instead of the rows fails it. The harness shows `s2b3` and
+  `s2b4` byte-identical on all 218 corpora, census included.
+
+- **The detector model is part of the program engine** (engine-switch S2b.2). The
+  model types and assembly passes moved from `engine::l3` to `program::model`:
+  - `l3_workspace` → `workspace`;
+  - `record_types`, `extension_fields`, `symbol_table` and `taxonomy`, unchanged;
+  - the call-resolution shape (`CallEdge`, `ResolvedCalls`, `UpgradedBinding`,
+    `UnknownReason`, `DispatchMeta`, `ExternalTypeRef`, `Diagnostic`,
+    `DeclaredDependency`), cut out of `engine::l3::call_resolver` into
+    `program::model::calls`.
+
+  The legacy resolver stays in `engine::l3` and re-exports the shape. `engine::l3`
+  keeps aliases for the moved modules, removed in S9. The model types keep their `L3*`
+  names until then. No code changed beyond paths. The S1 guard now also covers
+  `program/model`. The harness shows `s2b1` and `s2b2` byte-identical on all 218
+  corpora.
+
+- **The body pipeline is part of the program engine** (engine-switch S2b.1).
+  `src/engine/l2`, the walker that turns a routine's syntax tree into body facts
+  (record operations, call sites, loops, statement tree, capabilities), moved to
+  `src/program/body`, file for file, with no code change. The 92 files that name
+  `engine::l2` keep compiling through a re-export alias in `engine/mod.rs`. The alias
+  and those paths are removed when L3 is deleted (spec S9). The moved files refer to
+  themselves as `program::body`, so the S1 guard (`program_has_no_legacy_engine_imports`)
+  still holds. The harness shows `s2a` and `s2b1` byte-identical on all 218 corpora.
+
+- **`alsem analyze` parses each workspace file once** (engine-switch S2a). Until now
+  the program engine parsed every file, and then L3 assembly parsed it again. The L3
+  model is now projected from the program engine's parse:
+  - `l3_workspace::project_file` was split so `project_ir` takes an already-parsed
+    file;
+  - the new `assemble_and_resolve_workspace_from_program` is what
+    `build_analysis_model` calls.
+
+  The file set stays L3's own. L3 discovers files app-scoped (nested apps skipped),
+  while the program engine's workspace unit includes nested apps, so
+  `select_program_files` filters the program's files to the app-scoped set. If a file
+  is missing from the program's parse, the model is built from disk as before, with a
+  warning. When the program build fails, the failure is still classified by the old
+  disk assembly, so the empty-output and error outcomes do not move.
+
+  Guards:
+  - `analyze_model_selects_app_scoped_files_from_the_program_parse` builds a root app
+    with a nested app inside. It fails if selection takes the nested file, drops the
+    root one, or falls back to disk.
+  - `analysis_model_uses_the_program_parse` fails if `build_analysis_model` goes back
+    to the disk entry.
+
+  Discrimination: switching selection to the non-scoped walk fails the first guard;
+  calling the disk entry fails the second. Harness: `s1` and `s2a` are byte-identical
+  on all 218 corpora, and the `alsem analyze` JSON on CDO is byte-identical.
+
+  Measured on CDO with `release-fast`, warm, 3–4 runs per side using `ALSEM_TRACE`
+  spans:
+  - `l3.assemble_resolve` fell from 99–129 ms to 46–53 ms. The second parse (about
+    68 ms) is gone; selecting the files plus projecting them takes about 32 ms.
+  - Peak working set fell from 603–606 MB to 594–599 MB.
+  - End-to-end wall clock did not measurably improve: 3.18–3.44 s before, 3.38–3.51 s
+    after. Unchanged stages (`preflight.fresh_program`) drifted by about 200 ms
+    between the two batches, which is more than the saving. This step's value is
+    structural: the model now rests on the program engine's parse, as S2b requires.
+
+- **The program engine no longer imports the legacy engine** (engine-switch S1). Shared
+  code moved out of L2/L3 into neutral homes:
+  - the attribute model `engine::l3::al_attributes` → `program::attributes`;
+  - the generated builtin catalog `engine::l3::global_builtins` →
+    `program::resolve::global_builtins` (the `gen-al-builtins` generator now writes
+    there);
+  - the Microsoft implicit-dependency tier data → `src/dependencies.rs`;
+  - the gate's discovery helpers (`read_root_app_guid`, `count_app_json_paths`) →
+    `source_text`, each caller keeping its nested-app policy;
+  - the L3-oracle golden minting (`l3_mint` and the two `mint_l3_*` wrappers)
+    moved the other way, into `engine::l3`, since it is migration-only tooling
+    that is deleted with L3.
+
+  The old guard `resolve_module_has_no_stray_engine_l3_l2_imports` covered only
+  `src/program/resolve` and allowed one exception. It is replaced by
+  `program_has_no_legacy_engine_imports`, which covers all of `src/program`
+  (recursively) plus `src/dependencies.rs`, has no exceptions, and also bans
+  `cross_app_l3`. Discrimination: a legacy import added to `resolve/builtins.rs`, and
+  one added to `src/dependencies.rs`, each fail it. Behaviour-preserving: the
+  engine-switch harness shows S1 byte-identical to the frozen `s0-legacy` baseline on
+  all 218 corpora.
+
+  Found and left alone: `engine/snapshot.rs` has its own discovery helpers that skip
+  different folders from `source_text`. Unifying them is a policy change, now recorded
+  in the switch spec's population contract.
 
 - **The temp-record suppression rule lives once** (#34). "Only an exact known/true
   suppresses" was written out at 13 sites over three carriers (inline in seven
@@ -59,6 +264,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **A routine known only from symbols now says its effects are unknown** (#22). A
+  dependency routine with no body got an effect summary with empty `dbEffects` and empty
+  `uncertainties`: the same as a routine proven not to write, apart from an ambiguous
+  `hasUnresolvedCalls`. It now carries an `opaque-body` self-uncertainty naming the
+  routine, as `parse-incomplete` already did for a body that cannot be parsed. The marker
+  passes up to every caller and caps finding confidence as `opaque-callee`. Coverage
+  already said `unknown` / `opaque-dependency`; this closes the gap in the effect
+  summary. Only cross-app models contain bodyless routines, so source-only `alsem
+  analyze` cannot move. The one golden that moved is the r3a5 cross-app summary: the
+  symbol-only routine and its caller each gained the marker. New oracle O7 (r3a5) checks
+  the symbol-only routine, its caller, and the source-bearing dependency beside it, which
+  shows its real `Insert` and no marker. Discrimination: renaming the marker fails O7;
+  removing the confidence alias fails `opaque_body_caps_as_opaque_callee`.
 
 - **`agentflow run` writes one log per invocation and names a contended build** (#43,
   #60). Logs were `logs/<name>.log`, so a re-run under the same name truncated the file a

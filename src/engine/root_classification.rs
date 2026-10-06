@@ -756,8 +756,8 @@ pub fn project_r4f_root_classifications(
 mod tests {
     use super::*;
     use crate::engine::l2::features::PAnchor;
-    use crate::engine::l3::al_attributes::AttributeInfo;
     use crate::engine::l3::l3_workspace::RoutineVariables;
+    use crate::program::attributes::AttributeInfo;
 
     /// The eleven kinds the AST pass derives. A8 asserts the union of `classify_roots`
     /// over the witness workspace EQUALS this; A9 asserts `ROOT_KIND_VALUES` minus

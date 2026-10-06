@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::engine::l3::al_attributes::{find_attribute, has_attribute, qualified_arg};
 use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
+use crate::program::attributes::{find_attribute, has_attribute, qualified_arg};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -282,9 +282,7 @@ fn walk_subtree_list(nodes: &[crate::engine::l2::features::PCFNNode]) -> Subtree
 /// Parse `[CommitBehavior]` from `attributes_parsed`. Returns "normal" | "ignore"
 /// | "error". Mirrors al-sem's `parseCommitBehavior` with the dual-shape fallback
 /// (native qualified_enum_value → `member`; dep ABI bare-Value → `value`/`text`).
-pub fn parse_commit_behavior(
-    attrs: &[crate::engine::l3::al_attributes::AttributeInfo],
-) -> &'static str {
+pub fn parse_commit_behavior(attrs: &[crate::program::attributes::AttributeInfo]) -> &'static str {
     let Some(attr) = find_attribute(attrs, "CommitBehavior") else {
         return "normal";
     };
@@ -313,7 +311,7 @@ pub fn parse_commit_behavior(
 /// Parse `[ErrorBehavior]` and return true when the routine has
 /// `ErrorBehavior::Collect`. Mirrors `parseHasErrorBehaviorCollect`.
 pub fn parse_has_error_behavior_collect(
-    attrs: &[crate::engine::l3::al_attributes::AttributeInfo],
+    attrs: &[crate::program::attributes::AttributeInfo],
 ) -> bool {
     let Some(attr) = find_attribute(attrs, "ErrorBehavior") else {
         return false;
@@ -536,8 +534,8 @@ pub fn project_r4f_return_summaries(
 mod tests {
     use super::*;
     use crate::engine::l2::features::PCFNNode;
-    use crate::engine::l3::al_attributes::{AttributeArg, AttributeInfo};
     use crate::engine::l3::l3_workspace::RoutineVariables;
+    use crate::program::attributes::{AttributeArg, AttributeInfo};
 
     // Helper: build a minimal AttributeInfo for a given name + one qualified arg.
     fn attr_qualified(name: &str, qualifier: &str, member: &str) -> AttributeInfo {

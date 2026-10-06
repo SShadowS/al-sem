@@ -322,3 +322,50 @@ fn o6_intra_dep_injected_edge_is_load_bearing() {
         do_it.capability_facts_direct
     );
 }
+
+/// O7 (#22) — a routine known only from symbols is distinguishable from one proven
+/// not to write. Both have empty `dbEffects`; only the symbol-only one carries the
+/// `opaque-body` self-uncertainty, and it reaches the primary that calls it. The
+/// source-bearing dep beside it shows the real write and no such marker.
+#[test]
+fn o7_symbol_only_dep_routine_reads_as_effects_unknown() {
+    let p = projection();
+    let opaque_self = |s: &PRoutineFullSummary| {
+        s.uncertainties
+            .iter()
+            .any(|u| u.kind == "opaque-body" && u.routine_id.as_deref() == Some(DEP_DOSOMETHING))
+    };
+
+    let symbol_only = by_id(&p, DEP_DOSOMETHING);
+    assert!(
+        symbol_only.db_effects.is_empty(),
+        "no body, so no effects seen"
+    );
+    assert!(
+        opaque_self(symbol_only),
+        "the symbol-only routine must say its effects are unknown, got {:?}",
+        symbol_only.uncertainties
+    );
+
+    let caller = by_id(&p, PRIMARY_USESYMBOL);
+    assert!(
+        opaque_self(caller),
+        "the primary calling it inherits the marker, got {:?}",
+        caller.uncertainties
+    );
+
+    let source_bearing = by_id(&p, DEP_DOWRITE);
+    assert!(
+        source_bearing.db_effects.iter().any(|e| e.op == "Insert"),
+        "the source-bearing dep shows its real write, got {:?}",
+        source_bearing.db_effects
+    );
+    assert!(
+        source_bearing
+            .uncertainties
+            .iter()
+            .all(|u| u.kind != "opaque-body"),
+        "a source-bearing routine is not effects-unknown, got {:?}",
+        source_bearing.uncertainties
+    );
+}
