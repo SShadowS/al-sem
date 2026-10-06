@@ -21,7 +21,7 @@ fn write(path: &Path, text: &str) {
 }
 
 /// Workspace and dependency both declare a codeunit named "Shared Name" with a
-/// procedure `Foo`. The dependency's `Run` calls its own internal `Helper` and
+/// procedure `Foo`. The dependency's `Work` calls its own internal `Helper` and
 /// `Shared Name`.Foo through a variable.
 fn shared_name_workspace(dir: &Path) {
     write(
@@ -36,10 +36,10 @@ fn shared_name_workspace(dir: &Path) {
     );
     write(
         &dir.join("src/Main.al"),
-        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n    begin\n        W.Run();\n    end;\n}\n",
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n    begin\n        W.Work();\n    end;\n}\n",
     );
     let symbols = format!(
-        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Run","Parameters":[]}}]}},{{"Id":50101,"Name":"Shared Name","Methods":[{{"Name":"Foo","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Work","Parameters":[]}}]}},{{"Id":50101,"Name":"Shared Name","Methods":[{{"Name":"Foo","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
     );
     write_source_app(
         &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
@@ -50,11 +50,30 @@ fn shared_name_workspace(dir: &Path) {
         &[
             (
                 "src/Worker.al",
-                "codeunit 50100 \"Dep Worker\"\n{\n    procedure Run()\n    var\n        S: Codeunit \"Shared Name\";\n    begin\n        Helper();\n        S.Foo();\n    end;\n\n    internal procedure Helper()\n    begin\n    end;\n}\n",
+                "codeunit 50100 \"Dep Worker\"\n{\n    procedure Work()\n    var\n        S: Codeunit \"Shared Name\";\n    begin\n        Helper();\n        S.Foo();\n    end;\n\n    internal procedure Helper()\n    begin\n    end;\n}\n",
             ),
             (
                 "src/Shared.al",
                 "codeunit 50101 \"Shared Name\"\n{\n    procedure Foo()\n    begin\n    end;\n}\n",
+            ),
+            (
+                "src/Events.al",
+                "codeunit 50102 \"Dep Events\"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnFoo()
+    begin
+    end;
+}
+
+codeunit 50103 \"Dep Listener\"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Events\", 'OnFoo', '', false, false)]
+    local procedure HandleFoo()
+    begin
+    end;
+}
+",
             ),
         ],
         "",
@@ -69,7 +88,7 @@ fn targets_of_dep_run(dir: &Path) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     for ce in &resolution.edges {
         let from = &ce.edge.from;
-        if graph.apps.resolve(from.object.app).guid != DEP_GUID || from.name_lc != "run" {
+        if graph.apps.resolve(from.object.app).guid != DEP_GUID || from.name_lc != "work" {
             continue;
         }
         for r in &ce.edge.routes {
@@ -98,7 +117,7 @@ fn targets_of_dep_run(dir: &Path) -> Vec<(String, i64)> {
 /// Discrimination (2026-10-06): passing the primary app as the caller app in
 /// `resolve_dependency_bodies` makes every dependency caller id carry the
 /// workspace's app (and miss the object map), so no edge from the dependency's
-/// `Run` is found and the test fails (`left: []`); restored, it passes.
+/// `Work` is found and the test fails (`left: []`); restored, it passes.
 #[test]
 fn a_dependency_body_resolves_from_its_own_app() {
     let dir = tempfile::tempdir().unwrap();
@@ -153,7 +172,7 @@ fn friend_workspace(dir: &Path, friend: bool) {
             "src/Caller.al",
             "codeunit 50300 \"Test Caller\"
 {
-    procedure Run()
+    procedure Work()
     var
         S: Codeunit \"Ws Secret\";
     begin
@@ -279,7 +298,7 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
     for ws in cross_app_fixtures() {
         let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let new = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx)
+        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx)
             .expect("program model");
         // Not degenerate: dependency rows are present, ABI and parsed alike on the
         // fixture that has both kinds.
@@ -312,4 +331,107 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
             assert_eq!(o, n, "{}: {kind} order differs", ws.display());
         }
     }
+}
+
+/// `"<object number>.<routine name>"` of a model routine id.
+fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> String {
+    let r = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.id == id)
+        .unwrap_or_else(|| panic!("no model routine {id}"));
+    format!("{}.{}", r.object_id.rsplit('/').next().unwrap(), r.name)
+}
+
+/// S7.3: in the cross-app model every body's calls come from the program engine —
+/// the workspace's call into the dependency now lands on the dependency's model
+/// routine, and the dependency's own calls resolve from its own view — and the
+/// event graph binds a subscriber that lives in the dependency.
+///
+/// Discrimination (2026-10-06): limiting `Converter::model_apps` to the primary app
+/// turns the three calls into the dependency into to-less `ExternalTarget` edges
+/// (and the dependency's own call sites get no program edge); limiting the event
+/// graph's `in_model` to the primary app leaves `HandleFoo` unmapped. Each fails
+/// the test; restored, it passes.
+#[test]
+fn the_cross_app_model_resolves_dependency_bodies_and_events() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = tempfile::tempdir().unwrap();
+    shared_name_workspace(dir.path());
+    let (m, _) = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let mut resolved: Vec<String> = calls
+        .edges
+        .iter()
+        .filter_map(|e| {
+            let to = e.to.as_ref()?;
+            Some(format!(
+                "{} -> {} {:?}",
+                routine_label(&m, &e.from),
+                routine_label(&m, to),
+                e.resolution
+            ))
+        })
+        .collect();
+    resolved.sort();
+    assert_eq!(
+        resolved,
+        vec![
+            "50100.Work -> 50100.Helper Resolved",
+            "50100.Work -> 50101.Foo Resolved",
+            "50201.Go -> 50100.Work Resolved",
+        ]
+    );
+
+    let events = m.precomputed_events.clone().expect("events attached");
+    let handle = events
+        .graph
+        .edges
+        .iter()
+        .find(|e| routine_label(&m, &e.subscriber_routine_id) == "50103.HandleFoo")
+        .expect("the dependency subscriber is in the event graph");
+    assert_eq!(handle.resolution, "resolved");
+    let event = events
+        .graph
+        .events
+        .iter()
+        .find(|ev| ev.id == handle.event_id)
+        .unwrap();
+    assert_eq!(
+        routine_label(&m, event.publisher_routine_id.as_ref().unwrap()),
+        "50102.OnFoo"
+    );
+}
+
+/// S7.3: a call into a SYMBOL-ONLY dependency lands on that routine's model row
+/// (the bodyless ABI row), joined through the program id `AbiRowIds` maps, not
+/// left as a to-less dependency target. On `r3a5-fixtures/ws`, whose
+/// `55555555-…` dependency ships no source.
+///
+/// Discrimination (2026-10-06): passing `None` for the ABI rows in
+/// `assemble_and_resolve_cross_app_program` leaves those calls to-less and the
+/// test fails; restored, it passes.
+#[test]
+fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
+    let (m, _) = assemble_and_resolve_cross_app_program(&ws, MI, false).expect("model");
+    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let bodyless: Vec<&str> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.app_guid.starts_with("55555555") && !r.body_available)
+        .map(|r| r.id.as_str())
+        .collect();
+    assert!(!bodyless.is_empty(), "fixture has symbol-only rows");
+    let landed = calls
+        .edges
+        .iter()
+        .filter(|e| e.to.as_deref().is_some_and(|t| bodyless.contains(&t)))
+        .count();
+    assert!(landed > 0, "no call landed on a symbol-only model row");
 }

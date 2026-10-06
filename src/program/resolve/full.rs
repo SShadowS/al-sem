@@ -1739,9 +1739,20 @@ pub fn fresh_program_from_snapshot(
 ) -> Result<(ProgramContext, ProgramReport), String> {
     // Reads no dependency body; it DOES read edge details, which a later step
     // will declare in the profile (spec §4).
-    let profile = BuildProfile {
-        dependency_bodies: DependencyBodies::Summary,
-    };
+    fresh_program_from_snapshot_with(
+        snap,
+        BuildProfile {
+            dependency_bodies: DependencyBodies::Summary,
+        },
+    )
+}
+
+/// [`fresh_program_from_snapshot`] under a stated profile: `FULL` for a reader of
+/// dependency bodies (the cross-app model, engine-switch S7.3).
+pub fn fresh_program_from_snapshot_with(
+    snap: AppSetSnapshot,
+    profile: BuildProfile,
+) -> Result<(ProgramContext, ProgramReport), String> {
     let ctx = build_context_from_snapshot(snap, profile)?;
     let report = {
         let _s = pt::span("preflight", "preflight.resolve_full");
@@ -1760,6 +1771,20 @@ pub fn fresh_program_from_snapshot(
 pub fn build_program_with_coverage(
     workspace_root: &Path,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
+    build_program_with_coverage_profiled(
+        workspace_root,
+        BuildProfile {
+            dependency_bodies: DependencyBodies::Summary,
+        },
+    )
+}
+
+/// [`build_program_with_coverage`] under a stated profile (engine-switch S7.3: the
+/// cross-app model reads dependency bodies, so it builds `FULL`).
+pub fn build_program_with_coverage_profiled(
+    workspace_root: &Path,
+    profile: BuildProfile,
+) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     let (snap, load) = {
         let _s = pt::span("preflight", "preflight.snapshot_build");
         (SnapshotBuilder {
@@ -1769,7 +1794,7 @@ pub fn build_program_with_coverage(
         .build_with_diagnostics()
         .map_err(|e| format!("snapshot build failed: {e:#}"))?
     };
-    let (ctx, report) = fresh_program_from_snapshot(snap)?;
+    let (ctx, report) = fresh_program_from_snapshot_with(snap, profile)?;
     let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
     Ok((ctx, report, fc))
 }

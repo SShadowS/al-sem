@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-app calls and events from the program engine** (engine-switch S7.3).
+  `program_calls::assemble_and_resolve_cross_app_program` builds the S7.2 model from
+  one `FULL` program build (`build_program_with_coverage_profiled`) and attaches the
+  program engine's calls for every body in it: the workspace's, and each dependency's
+  resolved from its own app (S7.1). The adapter now works over the model's apps rather
+  than the primary app alone: site keys and declaration lookups use the model's unit
+  spelling (`dep:<guid>:<path>` for a dependency file), a route to any routine the
+  model holds becomes an edge to it, and a route to a symbol-only routine joins its
+  bodyless row through `AbiRowIds` (program id -> row id, built from the same parsed
+  ABI; an id two ABI entries share is left out, so that call stays a dependency
+  target). A dependency table's trigger is a model routine there and gets its edge.
+  The event graph maps a dependency subscriber to its program node through the
+  dependency tier's declarations and binds dependency publishers as model events.
+  `abi_ingest::abi_object_node_id`/`abi_routine_node_id` are now the one place an ABI
+  routine's graph id is built. The single-app path is unchanged (switch harness s7-1
+  vs s7-3: 0 of 218 corpora differ). Not yet used by any consumer (S7.4).
+
 - **The cross-app detector model from the program engine** (engine-switch S7.2).
   `assemble_and_resolve_cross_app_from_program` builds the workspace rows as the
   single-app model does, then appends every dependency in the snapshot: each

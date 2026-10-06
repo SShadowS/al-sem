@@ -1592,23 +1592,30 @@ pub fn assemble_and_resolve_workspace_from_program(
 /// order. The order is the legacy merged model's, and it is load-bearing: the symbol
 /// table is last-wins and the extension-field merge first-wins.
 ///
-/// Needs a context that keeps dependency bodies (`FULL`).
+/// Needs a context that keeps dependency bodies (`FULL`). Also returns
+/// [`AbiRowIds`], the join from a symbol-only routine's program id to its row.
 pub fn assemble_and_resolve_cross_app_from_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
-) -> Option<L3Resolved> {
+) -> Option<(L3Resolved, AbiRowIds)> {
     let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
-    append_dependency_rows(&mut ws, model_instance_id, ctx);
-    finish_resolved(ws, workspace, skip_roots_config)
+    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx);
+    Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
 }
+
+/// Program routine id -> model routine id, for the symbol-only dependency rows of a
+/// cross-app model (engine-switch S7.3). Built from the same parsed ABI as the
+/// rows; an id two ABI entries share (a collapsed overload) is left out, so a call
+/// to it stays a dependency target.
+pub type AbiRowIds = HashMap<crate::program::node::RoutineNodeId, String>;
 
 fn append_dependency_rows(
     ws: &mut L3Workspace,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
-) {
+) -> AbiRowIds {
     let bodies = ctx
         .dep_bodies()
         .expect("the cross-app model needs DependencyBodies::Keep");
@@ -1623,13 +1630,30 @@ fn append_dependency_rows(
     let mut objects = Vec::new();
     let mut tables = Vec::new();
     let mut routines = Vec::new();
+    let mut ids: HashMap<crate::program::node::RoutineNodeId, Option<String>> = HashMap::new();
     for unit in deps.iter().filter(|u| u.source.is_none()) {
+        let Some(app) = ctx.graph().apps.find(&unit.id) else {
+            continue;
+        };
         if let Some(abi) = crate::program::abi_ingest::load_symbol_reference(unit) {
             let p = crate::engine::deps::projection::project_abi_to_index(
                 &abi,
                 &unit.id.guid,
                 model_instance_id,
             );
+            // `project_abi_to_index` projects one routine per ABI routine, objects
+            // and routines in order.
+            let node_ids = abi.objects.iter().flat_map(|o| {
+                let obj = crate::program::abi_ingest::abi_object_node_id(app, o);
+                o.routines
+                    .iter()
+                    .map(move |r| crate::program::abi_ingest::abi_routine_node_id(&obj, r))
+            });
+            for (node_id, row) in node_ids.zip(&p.routines) {
+                ids.entry(node_id)
+                    .and_modify(|v| *v = None)
+                    .or_insert_with(|| Some(row.id.clone()));
+            }
             objects.extend(p.objects);
             tables.extend(p.tables);
             routines.extend(p.routines);
@@ -1658,6 +1682,7 @@ fn append_dependency_rows(
             );
         }
     }
+    ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
 }
 
 /// Which files the program-backed assembly projects.
