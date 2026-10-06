@@ -444,7 +444,10 @@ pub(crate) fn run_detectors_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
     detectors: &[Detector],
 ) -> RunOutput {
-    let ctx = build_detector_context_cross_app(base);
+    let ctx = {
+        let _s = pt::span("crossapp", "crossapp.context_build");
+        build_detector_context_cross_app(base)
+    };
     let summarize_diagnostics: Vec<Diagnostic> = ctx
         .summarize_diagnostics
         .iter()
@@ -497,7 +500,14 @@ pub(crate) fn run_detectors_cross_app(
                     .is_some_and(|a| !a.source_unit_id.starts_with("dep:"))
         })
         .collect();
-    let scoped = role_scope_and_sort(findings, &role_by_routine);
+    let scoped = {
+        let _s = pt::span("crossapp", "crossapp.role_scope");
+        role_scope_and_sort(findings, &role_by_routine)
+    };
+    {
+        let _s = pt::span("crossapp", "crossapp.ctx_drop");
+        drop(ctx);
+    }
 
     RunOutput {
         findings: scoped,

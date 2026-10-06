@@ -3079,6 +3079,7 @@ pub(crate) fn build_cross_app_base(
         external_targets: all_calls.external_targets.clone(),
     };
     let event_graph: EventGraph = x.resolved.precomputed_events.as_ref()?.graph.clone();
+    let _s_graph = crate::engine::perf_trace::span("crossapp", "crossapp.base_graph");
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
@@ -3099,6 +3100,8 @@ pub(crate) fn build_cross_app_base(
         }
     }
 
+    drop(_s_graph);
+    let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_artifacts_facts");
     // The dependency's own edges, cone-only (see the doc above).
     let artifacts = crate::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x);
     let mut consumer =

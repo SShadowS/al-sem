@@ -752,19 +752,24 @@ pub fn assemble_and_resolve_cross_app_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
-    let (ctx, mut report, coverage) =
+    use crate::engine::perf_trace as pt;
+    let (ctx, mut report, coverage) = {
+        let _s = pt::span("crossapp", "crossapp.program_build_full");
         crate::program::resolve::full::build_program_with_coverage_profiled(
             workspace,
             crate::program::profile::BuildProfile::FULL,
         )
-        .ok()?;
-    let (mut resolved, abi_rows) =
+        .ok()?
+    };
+    let (mut resolved, abi_rows) = {
+        let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
             workspace,
             model_instance_id,
             skip_roots_config,
             &ctx,
-        )?;
+        )?
+    };
     let snap = ctx.snapshot();
     let declared_dependencies = snap
         .apps
@@ -803,10 +808,16 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    let dependency = ctx.resolve_dependency_bodies();
+    let dependency = {
+        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+        ctx.resolve_dependency_bodies()
+    };
     report.edges.extend(dependency.edges);
     report.site_facts.extend(dependency.site_facts);
-    attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
+    {
+        let _s = pt::span("crossapp", "crossapp.attach_program_calls");
+        attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
+    }
     Some(CrossAppProgram {
         resolved,
         declared_dependencies,

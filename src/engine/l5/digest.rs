@@ -3159,10 +3159,22 @@ fn digest_one_root<'i>(
 /// `isReportableRoutine` = primary && body_available && !parse_incomplete. In the
 /// source-only corpus every workspace routine is "primary" (no dependency role).
 fn reportable_roots(resolved: &L3Resolved) -> Vec<String> {
+    let primary = resolved
+        .primary_app
+        .as_ref()
+        .map(|a| a.app_guid.to_ascii_lowercase());
     let mut roots: Vec<String> = Vec::new();
     for r in &resolved.workspace.routines {
-        // isReportableRoutine = body_available && !parse_incomplete (primary is implicit
-        // in the source-only corpus). De Morgan of `!(body_available && !parse_incomplete)`.
+        // isReportableRoutine = primary && body_available && !parse_incomplete. The
+        // primary-app test was implicit while the model held the workspace only; a
+        // cross-app model (engine-switch S8.0) holds every dependency routine, whose
+        // roots no finding can keep (CDO: 46 s of ordering facts for them).
+        if primary
+            .as_deref()
+            .is_some_and(|p| !r.app_guid.eq_ignore_ascii_case(p))
+        {
+            continue;
+        }
         if !r.body_available || r.parse_incomplete {
             continue;
         }

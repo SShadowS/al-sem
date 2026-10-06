@@ -647,22 +647,30 @@ fn map_table_id(internal: &str) -> String {
 /// append the replacement and advance PAST the matched key without re-scanning the
 /// substituted text. This mirrors al-sem's single-regex-alternation pass so a
 /// shorter key can never corrupt an already-substituted stable value.
+///
+/// Per position it looks up one substring per DISTINCT key length (longest first),
+/// not every key: two keys of equal length cannot both match at one position, so
+/// this is the same longest-first rule. The per-key scan was (characters × keys)
+/// per string, and a cross-app model holds over 100k routines (55 s on CDO,
+/// engine-switch S8.0).
 fn make_stable_finding_id_fn(map: &HashMap<String, String>) -> impl Fn(&str) -> String + '_ {
-    // Sort entries by key length descending; ties broken by key asc (total order).
-    let mut entries: Vec<(&String, &String)> = map.iter().collect();
-    entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0)));
+    let mut lengths: Vec<usize> = map.keys().map(String::len).collect();
+    lengths.sort_unstable_by(|a, b| b.cmp(a));
+    lengths.dedup();
     move |s: &str| {
         let bytes = s.as_bytes();
         let len = bytes.len();
         let mut out = String::with_capacity(len);
         let mut pos = 0usize;
         'outer: while pos < len {
-            // Try keys longest-first; take the first (longest) that matches.
-            for (k, v) in &entries {
-                let kb = k.as_bytes();
-                if bytes.len() >= pos + kb.len() && &bytes[pos..pos + kb.len()] == kb {
+            // Try key lengths longest-first; take the first that names a key.
+            for &kl in &lengths {
+                let Some(candidate) = s.get(pos..pos + kl) else {
+                    continue;
+                };
+                if let Some(v) = map.get(candidate) {
                     out.push_str(v.as_str());
-                    pos += kb.len();
+                    pos += kl;
                     continue 'outer;
                 }
             }
@@ -1016,9 +1024,12 @@ pub fn project_r4_findings_cross_app(
     fixture_name: &str,
     detector_names: &[String],
 ) -> R4FindingsProjection {
-    let Some(base) =
+    let _total = crate::engine::perf_trace::span("crossapp", "crossapp.total");
+    let base = {
+        let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
         crate::engine::l4::capability_cone::build_cross_app_base(workspace, model_instance_id)
-    else {
+    };
+    let Some(base) = base else {
         return R4FindingsProjection {
             fixture_name: fixture_name.to_string(),
             detectors: detector_names.to_vec(),
@@ -1033,8 +1044,12 @@ pub fn project_r4_findings_cross_app(
         findings,
         d1_cohort_index,
         ..
-    } = run_detectors_cross_app(&base, detectors);
+    } = {
+        let _s = crate::engine::perf_trace::span("crossapp", "crossapp.run_detectors");
+        run_detectors_cross_app(&base, detectors)
+    };
 
+    let _s_project = crate::engine::perf_trace::span("crossapp", "crossapp.project");
     let detector_name_set: std::collections::HashSet<&str> =
         detector_names.iter().map(|s| s.as_str()).collect();
 
@@ -1056,6 +1071,13 @@ pub fn project_r4_findings_cross_app(
     let has_d1 = stable.iter().any(|f| f.cohort_contexts.is_some());
     let (loop_catalog, loop_set_registry) =
         project_cohort_index(d1_cohort_index.as_ref(), has_d1, &map);
+    drop(_s_project);
+    {
+        let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_drop");
+        drop(stable_finding_id);
+        drop(map);
+        drop(base);
+    }
 
     R4FindingsProjection {
         fixture_name: fixture_name.to_string(),

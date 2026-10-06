@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-app run profiled; two output-identical speedups** (engine-switch S8.0).
+  Spans cover every cross-app phase (`crossapp.*`). CDO `--r4-findings-cross-app`
+  went 180 s -> 104 s, findings byte-identical on CDO and DO.
+  - The stable-id rewrite (`make_stable_finding_id_fn`) tried every routine id at
+    every character of every finding string. A cross-app model holds over 100k
+    routines, so that took 55 s; it now looks up one substring per distinct id
+    length (0.1 s). The longest-first rule is unchanged.
+  - Ordering facts and digests take only primary-app roots: a dependency routine's
+    root yields no finding the scope filter keeps. `reportable_roots` had the
+    primary test implicit, because the model used to hold the workspace only.
+
+  Remaining CDO cost (S8.2's target):
+  - ordering facts 44 s, over a snapshot of every routine;
+  - artifacts and direct facts 14 s;
+  - context 9 s;
+  - dropping the base 9 s;
+  - model assembly 9 s.
+
+  Peak is 7.2 GB. Single-app `analyze` is 632 MiB / 6 s.
+
 - **The cross-app detector context is complete** (engine-switch S7.6). It got no
   call-site index, root classifications or ordering facts, so d40/d41/d42/d47/d49/
   d50/d51/d53/d55/d61 were blind in cross-app mode. The base now keeps the cross-app
