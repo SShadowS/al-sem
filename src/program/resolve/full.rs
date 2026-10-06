@@ -109,6 +109,8 @@ pub(crate) struct FileResolution {
     pub edges: Vec<ClassifiedEdge>,
     pub flagged: Vec<FlaggedBuiltinDispatchSite>,
     pub indeterminate: Vec<IndeterminateBuiltinDispatchSite>,
+    /// See [`ProgramReport::interface_sites`].
+    pub interface_sites: Vec<(ObligationId, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +219,10 @@ pub struct ProgramReport {
     /// doc. ADDITIVE diagnostic: never consulted by `histogram`/
     /// `classify_obligation`, does not change any route/edge.
     pub builtin_dispatch_audit: BuiltinDispatchAudit,
+    /// Engine-switch S3.2: the interface (folded name) each interface-receiver
+    /// call site dispatched over, keyed by its obligation. The edge itself does
+    /// not carry it; detector consumers need it for the dispatch metadata.
+    pub interface_sites: HashMap<ObligationId, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +393,12 @@ fn resolve_call_site_obligation(
     // `resolve_member_with_args` so `resolve_in_object`'s fail-closed pick
     // has real argument evidence to work with.
     call_args: &[al_syntax::ir::ExprId],
+    // Engine-switch S3.2: set to the interface's folded name when this is a
+    // member call on an `Interface`-typed receiver (the only arm that knows it).
+    interface_out: &mut Option<String>,
+    // Engine-switch S3.4: the file's source text, so a record operation's
+    // `Validate` field argument can be read (`TriggerSiteRule`).
+    text: &str,
 ) -> (
     EdgeKind,
     DispatchShape,
@@ -468,6 +480,9 @@ fn resolve_call_site_obligation(
                     receiver.map(|id| (file, id)),
                     Some((surface, with_state)),
                 );
+                if let ReceiverType::Interface { name_lc } = &recv {
+                    *interface_out = Some(name_lc.clone());
+                }
                 let (s, r) = resolve_member_with_args(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info,
                 );
@@ -576,7 +591,20 @@ fn resolve_call_site_obligation(
             };
 
             let (shape, completeness, routes) = if let Some(table_node) = table_node_opt {
-                resolve_implicit_trigger(&op_lc, table_node, graph, index, surface)
+                let (shape, completeness, mut routes) =
+                    resolve_implicit_trigger(&op_lc, table_node, graph, index, surface);
+                // S3.4: emit only the triggers this site can fire (a literal
+                // `RunTrigger = false` fires none; `Validate` fires its field's
+                // `OnValidate` only). Non-routine routes (an honest unknown for a
+                // collapse-marked trigger) are kept.
+                let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
+                    &op_lc, call_args, file, text,
+                );
+                routes.retain(|r| match &r.target {
+                    RouteTarget::Routine(id) => rule.admits(id),
+                    _ => true,
+                });
+                (shape, completeness, routes)
             } else {
                 // No table resolved: honest-empty Multicast (open-world, no
                 // known triggers, but we cannot say there are none).
@@ -655,6 +683,7 @@ pub(crate) fn resolve_file_obligations(
     let mut edges: Vec<ClassifiedEdge> = Vec::new();
     let mut flagged: Vec<FlaggedBuiltinDispatchSite> = Vec::new();
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
+    let mut interface_sites: Vec<(ObligationId, String)> = Vec::new();
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
@@ -700,6 +729,7 @@ pub(crate) fn resolve_file_obligations(
                     callee_fp: fp,
                 };
 
+                let mut interface: Option<String> = None;
                 let (kind, shape, completeness, routes, finding) = resolve_call_site_obligation(
                     &site.shape,
                     site.arity,
@@ -714,7 +744,12 @@ pub(crate) fn resolve_file_obligations(
                     site.with_state,
                     &pf.file,
                     &site.args,
+                    &mut interface,
+                    &pf.text,
                 );
+                if let Some(name_lc) = interface {
+                    interface_sites.push((obl_id.clone(), name_lc));
+                }
 
                 match finding {
                     Some(BuiltinDispatchFinding::Flagged { object, method }) => {
@@ -758,6 +793,7 @@ pub(crate) fn resolve_file_obligations(
         edges,
         flagged,
         indeterminate,
+        interface_sites,
     }
 }
 
@@ -790,7 +826,13 @@ fn resolve_full_program_from_parts(
     surface: &DeclSurface,
     primary_app_ref: AppRef,
     ws_file_set: &HashSet<String>,
-) -> (Vec<ClassifiedEdge>, Coverage, BuiltinDispatchAudit) {
+) -> (
+    Vec<ClassifiedEdge>,
+    Coverage,
+    BuiltinDispatchAudit,
+    HashMap<ObligationId, String>,
+) {
+    let mut interface_sites: HashMap<ObligationId, String> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
     let obj_node_map = workspace_object_map(graph, primary_app_ref);
 
@@ -856,6 +898,7 @@ fn resolve_full_program_from_parts(
         classified_edges.extend(file_res.edges);
         flagged.extend(file_res.flagged);
         indeterminate.extend(file_res.indeterminate);
+        interface_sites.extend(file_res.interface_sites);
     }
 
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
@@ -908,7 +951,12 @@ fn resolve_full_program_from_parts(
         indeterminate,
     };
 
-    (classified_edges, coverage, builtin_dispatch_audit)
+    (
+        classified_edges,
+        coverage,
+        builtin_dispatch_audit,
+        interface_sites,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -959,13 +1007,14 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit) = resolve_full_program_from_parts(
-        graph,
-        parsed,
-        &ctx.decl_surface(),
-        primary_app_ref,
-        ws_file_set,
-    );
+    let (edges, coverage, builtin_dispatch_audit, interface_sites) =
+        resolve_full_program_from_parts(
+            graph,
+            parsed,
+            &ctx.decl_surface(),
+            primary_app_ref,
+            ws_file_set,
+        );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -1013,6 +1062,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
         event_flow_dual_publisher_alias_skips,
         recovered_files,
         builtin_dispatch_audit,
+        interface_sites,
     }
 }
 
@@ -1028,13 +1078,14 @@ pub fn resolve_full_program_for_export(
     workspace_root: &Path,
 ) -> Option<(ProgramGraph, Vec<ClassifiedEdge>, AppRef)> {
     let ctx = build_context(workspace_root)?;
-    let (edges, _coverage, _builtin_dispatch_audit) = resolve_full_program_from_parts(
-        &ctx.graph,
-        &ctx.parsed,
-        &ctx.decl_surface(),
-        ctx.primary_app_ref,
-        &ctx.ws_file_set,
-    );
+    let (edges, _coverage, _builtin_dispatch_audit, _interface_sites) =
+        resolve_full_program_from_parts(
+            &ctx.graph,
+            &ctx.parsed,
+            &ctx.decl_surface(),
+            ctx.primary_app_ref,
+            &ctx.ws_file_set,
+        );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
 
@@ -1813,7 +1864,7 @@ mod tests {
             let t5 = std::time::Instant::now();
             // The surface is built inside the timed window, so the total
             // still includes the DeclSurface build, as the label says.
-            let (edges, coverage, _audit) = resolve_full_program_from_parts(
+            let (edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
                 &graph,
                 &parsed,
                 &DeclSurface::build(&graph, &parsed),
@@ -1937,7 +1988,7 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit) = resolve_full_program_from_parts(
+        let (full_edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
             graph,
             parsed,
             &ctx.decl_surface(),

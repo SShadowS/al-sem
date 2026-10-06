@@ -739,5 +739,6 @@ pub fn resolve_calls(
         edges,
         upgraded_bindings,
         diagnostics,
+        external_targets: Vec::new(),
     }
 }

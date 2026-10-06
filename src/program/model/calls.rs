@@ -70,6 +70,11 @@ pub enum UnknownReason {
     /// is RUNTIME-determined. Emitted with `dispatch_kind == Dynamic` so it classifies
     /// `dynamic` (NOT real-`unknown`): genuinely indeterminate, not a failure.
     DynamicReceiver,
+    /// The program engine produced no usable edge for this call site (no edge at
+    /// its span, a shape/callee/caller mismatch, or a workspace callee the model
+    /// has no routine for). Engine-switch S3: these used to fall back to the legacy
+    /// resolver; now they are an honest unknown.
+    NoProgramSite,
 }
 
 impl UnknownReason {
@@ -87,6 +92,7 @@ impl UnknownReason {
             UnknownReason::InterfaceNoImpl => "interface-no-impl",
             UnknownReason::DynamicObjectRunTarget => "dynamic-objectrun-target",
             UnknownReason::DynamicReceiver => "dynamic-receiver",
+            UnknownReason::NoProgramSite => "no-program-site",
         }
     }
 }
@@ -160,6 +166,27 @@ pub struct DeclaredDependency {
     pub app_guid: String,
 }
 
+/// Which dependency routine a site reaches, and the state of its body
+/// (engine-switch S3.3). For a call site the edge itself stays to-less (the model
+/// holds workspace routines only); this keeps the target's identity for S7/S8 and
+/// says whether an empty fact set for it could ever mean "no effects" (it cannot,
+/// unless `AnalyzedClean`). Since S3.6 it also holds every dependency candidate of
+/// an ambiguous overload, and every dependency table trigger a record operation
+/// reaches; those operations have no edge (`callsite_id` is then the operation's
+/// id).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalTargetRef {
+    pub callsite_id: String,
+    /// `"{app guid}/{type}/{number}::{routine name, folded}/{arity}"`; a field
+    /// trigger's name is `"{field, folded}::{trigger}"`.
+    pub target: String,
+    /// `None` when the program graph has no routine node with that identity. In
+    /// practice that is the resolver's placeholder entry-trigger key of a run into
+    /// a dependency object that declares no entry trigger (on CDO/DO: only
+    /// `OnOpenPage` of Base/System Application pages): no routine exists there.
+    pub body: Option<crate::program::registry::BodyState>,
+}
+
 /// The full call-resolution result: every edge + the per-callsite upgraded
 /// bindings (keyed by internal callsite id) + diagnostics.
 #[derive(Clone)]
@@ -168,4 +195,7 @@ pub struct ResolvedCalls {
     /// internal callsite id → upgraded argument bindings (in argument order).
     pub upgraded_bindings: HashMap<String, Vec<UpgradedBinding>>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The dependency routines this resolution's to-less dependency edges reach
+    /// (S3.3), in edge order. Empty from the legacy resolver.
+    pub external_targets: Vec<ExternalTargetRef>,
 }

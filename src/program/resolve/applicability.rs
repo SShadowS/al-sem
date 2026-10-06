@@ -136,6 +136,78 @@ pub fn interface_route_applicable(
 }
 
 // ---------------------------------------------------------------------------
+// Site rule: which implicit-trigger routes a record-operation site can fire
+// ---------------------------------------------------------------------------
+
+/// The site rules of one record operation's implicit-trigger dispatch, read from
+/// its arguments (engine-switch S3.4: the resolver applies them, so the fan-out
+/// it emits is what can fire; the B3 adapter used to filter after the fact).
+///
+/// Read EXACTLY as the body pipeline reads the same arguments, so the program
+/// edge and the detector model's record operation agree:
+/// - `run_trigger`: a boolean LITERAL in the run-trigger slot of `Modify` /
+///   `Delete` (argument 0). Anything else, including no argument and `Insert`
+///   (whose slot the body pipeline does not read — a recorded follow-up), is
+///   `None`: may fire.
+/// - `validate_field`: `Validate`'s first argument's source text, quotes
+///   stripped, doubled quotes collapsed, folded (`implicit_edges`'
+///   `normalize_field_name`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerSiteRule {
+    pub is_validate: bool,
+    pub run_trigger: Option<bool>,
+    pub validate_field: Option<String>,
+}
+
+impl TriggerSiteRule {
+    /// Read the rule for the operation `op_lc` (folded) from its arguments.
+    #[must_use]
+    pub fn of(
+        op_lc: &str,
+        args: &[al_syntax::ir::ExprId],
+        file: &al_syntax::ir::AlFile,
+        text: &str,
+    ) -> Self {
+        use al_syntax::ir::{ExprKind, Literal};
+        let run_trigger = match op_lc {
+            "modify" | "delete" => args.first().and_then(|&a| match &file.ir.expr(a).kind {
+                ExprKind::Literal(Literal::Bool(b)) => Some(*b),
+                _ => None,
+            }),
+            _ => None,
+        };
+        let is_validate = op_lc == "validate";
+        let validate_field = if is_validate {
+            args.first()
+                .and_then(|&a| text.get(file.ir.expr(a).origin.byte.clone()))
+                .map(|raw| {
+                    crate::program::body::node_util::strip_quotes(raw)
+                        .replace("\"\"", "\"")
+                        .fold_identifier()
+                })
+        } else {
+            None
+        };
+        TriggerSiteRule {
+            is_validate,
+            run_trigger,
+            validate_field,
+        }
+    }
+
+    /// Can this site fire the trigger routine `target`? A literal
+    /// `RunTrigger = false` fires nothing; a `Validate` fires only its own
+    /// field's `OnValidate`.
+    #[must_use]
+    pub fn admits(&self, target: &RoutineNodeId) -> bool {
+        self.run_trigger != Some(false)
+            && (!self.is_validate
+                || (self.validate_field.is_some()
+                    && target.enclosing_member_lc == self.validate_field))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Predicate: implicit_trigger_route_applicable
 // ---------------------------------------------------------------------------
 
@@ -806,5 +878,64 @@ mod tests {
             !instance_builtin_route_applicable(ObjectKind::Codeunit, "runmodal"),
             "(Codeunit, runmodal) must be false — Codeunit has no PAGE_INSTANCE catalog"
         );
+    }
+}
+
+#[cfg(test)]
+mod trigger_site_rule_tests {
+    use crate::program::resolve::edge::{EdgeKind, RouteTarget};
+
+    /// S3.4, pinned at the resolver's USE (a full program build, not the rule
+    /// function alone): a table with `OnModify` and two fields with `OnValidate`.
+    /// `Modify(false)` fires nothing, `Modify()` fires `OnModify`, and
+    /// `Validate(A)` fires only field A's `OnValidate` — before S3.4 the program
+    /// edges carried every trigger of the name.
+    #[test]
+    fn implicit_trigger_edges_carry_only_what_the_site_can_fire() {
+        let root = std::env::temp_dir().join(format!("s34-trig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("app.json"),
+            r#"{"id":"11111111-0000-0000-0000-0000000003b4","name":"H","publisher":"P","version":"1.0.0.0","dependencies":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/T.Table.al"),
+            "table 50100 T\n{\n    fields\n    {\n        field(1; A; Code[20]) { trigger OnValidate() begin end; }\n        field(2; B; Code[20]) { trigger OnValidate() begin end; }\n    }\n    trigger OnModify()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/C.Codeunit.al"),
+            "codeunit 50101 C\n{\n    procedure NoTrig()\n    var\n        R: Record T;\n    begin\n        R.Modify(false);\n    end;\n\n    procedure Default()\n    var\n        R: Record T;\n    begin\n        R.Modify();\n    end;\n\n    procedure Val()\n    var\n        R: Record T;\n    begin\n        R.Validate(A);\n    end;\n}\n",
+        )
+        .unwrap();
+        let (_ctx, report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&root).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        let routes_of = |caller: &str| -> Vec<String> {
+            let e = report
+                .edges
+                .iter()
+                .find(|ce| {
+                    ce.edge.kind == EdgeKind::ImplicitTrigger && ce.edge.from.name_lc == caller
+                })
+                .unwrap_or_else(|| panic!("no trigger edge from {caller}"));
+            e.edge
+                .routes
+                .iter()
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(id) => format!(
+                        "{}:{}",
+                        id.enclosing_member_lc.clone().unwrap_or_default(),
+                        id.name_lc
+                    ),
+                    other => format!("{other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(routes_of("notrig"), Vec::<String>::new());
+        assert_eq!(routes_of("default"), vec![":onmodify".to_string()]);
+        assert_eq!(routes_of("val"), vec!["a:onvalidate".to_string()]);
     }
 }

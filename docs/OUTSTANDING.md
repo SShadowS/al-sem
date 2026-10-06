@@ -26,6 +26,31 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
+  S3.4, which moved the existing rule into the program resolver UNCHANGED —
+  `applicability::TriggerSiteRule`). Two open questions, both changing findings:
+  - `Insert(false)` is not read: the body pipeline (`ir_walk`'s `run_trigger`) and
+    `TriggerSiteRule` read the run-trigger literal for `Modify`/`Delete` only, so
+    `Insert(false)` still "may fire" `OnInsert`. AL's `Insert` has the same parameter.
+  - No argument means "may fire" on both engines (`Maybe`). AL's documented default for
+    `Insert`/`Modify`/`Delete` is `RunTrigger = false`, i.e. `Rec.Modify()` would NOT run
+    `OnModify`. If true, every argument-less write currently inherits its table
+    trigger's effects. MEASURE in BC (`bc-measure`) before changing it; then fix both
+    the body pipeline and `TriggerSiteRule` together and triage the finding delta.
+
+- [ ] **Detector policy for dependency routes and multi-implementer sites** (recorded
+  2026-10-06, engine-switch S3.6). Two detector decisions, both changing findings, kept
+  out of the switch so its steps move resolution only:
+  - A record operation on a dependency table whose trigger exists (44 routes on CDO, 46
+    on DO) gets no edge and no uncertainty, as under L3. Its target and body state are
+    kept in `ResolvedCalls::external_targets` under the operation's id. Should it make
+    the routine uncertain ("external-target"), as a call into a dependency does? Decide
+    with S8 (dependency bodies), when such a trigger can be analysed instead.
+  - `resolved_call_edge_by_callsite` (`detector_context::first_resolved_edge_per_callsite`)
+    keeps one implementer of a multi-implementer interface site, the smallest id, for
+    d40/d41/d42/d53/d55/d61 and the by-var-argument helpers. Analysing every
+    implementer is more complete; measure the finding delta before choosing.
+
 - [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
   - **Move the other L3 consumers onto the program engine's calls.** Only `alsem

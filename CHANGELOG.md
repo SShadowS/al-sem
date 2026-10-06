@@ -112,6 +112,177 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The B3 adapter loses no route, and a gate proves it** (engine-switch S3.6, the end
+  of S3). Three conversions changed:
+  - A trigger route into a dependency table used to be dropped. It now keeps its target
+    and body state in `ResolvedCalls::external_targets`, under the record operation's
+    id, still without an edge (as under L3): whether it should make the routine
+    uncertain is a detector decision, recorded in `docs/OUTSTANDING.md` for S8.
+  - An ambiguous overload's dependency candidates used to be dropped. They are now kept
+    the same way, under the call site's id.
+  - A call or run edge with several routes outside an interface or overload set kept
+    its first route only. It now converts as an ambiguous candidate set. The resolver
+    makes no such edge today (`Multicast` is for triggers and events only).
+
+  A field trigger's target is now named with its field
+  (`…/Table/18::name::onvalidate/0`). Two same-arity overloads still print the same
+  target text, so an ambiguous set over them shows one line per candidate.
+
+  The gate: `SiteCensus::losses()` lists every counter that means a site or route did
+  not reach the converted calls whole (join misses, L3 fallbacks, dropped, cut or
+  filtered routes). `adapter_loses_no_site_or_route_on_the_fixtures` (every single-app
+  r0 fixture) and `adapter_loses_no_site_or_route_on_cdo` (`CDO_WS`) assert it is
+  empty. CDO census: `adapter_routes_dropped` 49 → 0, now
+  `adapter_trigger_dependency_routes` 44 and `adapter_ambiguous_dependency_candidates` 5.
+
+  Downstream selection audit. The detector context keeps one targeted edge per call
+  site (`first_resolved_edge_per_callsite`, now a named function with the policy in its
+  doc): only an interface site with several workspace implementers has more than one,
+  and the detectors that read it analyse the implementer with the smallest id, as
+  before. d1 takes the first matching seed edge; several edges per site exist only for
+  interface dispatch, which d1 skips. Both are named as deliberate policy; analysing
+  every implementer is recorded in `docs/OUTSTANDING.md`.
+
+  Harness `s3-5` → `s3-6`: only `calls.external_targets` moved, on 3 of 218 corpora
+  (CDO +49, DO +46 trigger routes, `ws-cross-object-chain` +4 candidates). No edge,
+  model row or finding moved. Goldens: none moved.
+
+  Tests: `implicit_trigger_to_dependency_has_no_edge` (the target is recorded, bodyless),
+  `ambiguous_overload_in_a_dependency_keeps_its_candidates`,
+  `multi_route_call_keeps_every_route` (a second route added by assignment),
+  `the_first_targeted_edge_represents_a_call_site`. Discrimination: dropping the
+  trigger or candidate routes again, keeping the first route, and letting the last edge
+  win each fail a test; dropping trigger routes fails the CDO gate (44 losses), and
+  inverting S3.5's procedure-name check fails the fixture gate.
+
+- **Bare record operations are record operations in the program engine too**
+  (engine-switch S3.5). A bare `Modify()` in a table, or `Insert()` inside
+  `with Cust do`, has an implicit receiver. The body pipeline (L2) always made these
+  record operations; the program extractor made them plain calls, which resolved to the
+  builtin catalog and never reached the record's triggers. The B3 adapter covered the
+  gap with L3's own per-operation trigger logic. The extractor now follows L2's rule
+  (`ImplicitRecv` in `program::resolve::extract`): the object's implicit `Rec`
+  (`ir_walk::object_has_implicit_rec`, the same test L2 uses), replaced inside a `with`
+  by its receiver when that is a record variable and by nothing when it is not. A bare
+  name that is also one of the object's own routines stays a call. The adapter's
+  per-operation L3 fallback is removed; an operation with no program edge now gets no
+  edge (`adapter_l3_trigger_ops`, 0 on CDO).
+
+  Program engine (north star, CDO): the 571 bare operations move out of
+  `resolvedCatalog` (primary 6,727 → 6,156). 490 become `honestEmpty` (operations with
+  no trigger, or a trigger that cannot fire) and 81 `resolvedSource` (their triggers):
+  primary 4,522 → 5,012 and 9,506 → 9,587; whole program 27,703 → 28,193 and 11,389 →
+  11,470. Totals and real-unknown (0) are unchanged. Adapter census on CDO:
+  `op_shape_mismatch` 571 → 0, program trigger operations 608 → 801, L3 trigger
+  operations 193 → 0. The program gives the same trigger targets L3 did
+  (`adapter_trigger_edges_beyond_l3` stays 3, `_l3_only` stays 0); 3 more routes reach
+  dependency triggers and are dropped (`adapter_routes_dropped` 46 → 49, S3.6).
+  Detector model: the harness shows `s3-4` and `s3-5` byte-identical on all 218 corpora.
+
+  Tests: `bare_record_ops_follow_the_implicit_receiver` (table `Rec`, a record `with`,
+  a non-record `with`, a name colliding with a procedure, a codeunit with and without
+  `TableNo`); `unmatched_record_op_gets_no_l3_trigger_edge` moves an operation off its
+  span by assignment. Discrimination: dropping the procedure-name check, letting a
+  non-record `with` keep the outer `Rec`, and restoring the L3 fallback each fail a test.
+
+- **The program resolver applies the implicit-trigger site rules** (engine-switch
+  S3.4). A record operation's trigger fan-out used to list every trigger of the
+  operation's name on the table and its extensions, and the B3 adapter filtered out
+  what the site could not fire. The resolver now applies the rules itself
+  (`applicability::TriggerSiteRule`, read from the site's arguments exactly as the body
+  pipeline reads them):
+  - a literal `RunTrigger = false` on `Modify`/`Delete` fires nothing;
+  - a `Validate` fires only its own field's `OnValidate`.
+
+  The adapter's check is now only an agreement counter (`adapter_trigger_routes_filtered`).
+  It is 0 on CDO and DO, so the two derivations agree on every site.
+
+  Program engine (north star, CDO): 71 edges move from `resolvedSource` to
+  `honestEmpty` in both scopes (primary 9,577 → 9,506 / 4,451 → 4,522; whole program
+  11,460 → 11,389 / 27,632 → 27,703). These are trigger sites where nothing can fire.
+  Real-unknown stays 0. Detector model: the harness shows `s3-3` and `s3-4`
+  byte-identical on all 218 corpora (the filter moved, nothing else did). Goldens: none
+  moved.
+
+  `implicit_trigger_edges_carry_only_what_the_site_can_fire` runs a full program build
+  (`Modify(false)` → none, `Modify()` → `OnModify`, `Validate(A)` → A's `OnValidate`).
+  Discrimination: removing the resolver's filter fails it.
+
+  The two `RunTrigger` questions this surfaced (`Insert(false)` is not read; a missing
+  argument "may fire" while AL documents `false` as the default) are in
+  `docs/OUTSTANDING.md`. They change findings and need a BC measurement first.
+
+- **Calls into dependencies keep their target's identity and body state**
+  (engine-switch S3.3). A call into a dependency routine is still a to-less edge, since
+  the model holds workspace routines only. `ResolvedCalls::external_targets` now
+  records, for each such edge, which dependency routine it reaches
+  (`"{app}/{type}/{number}::{routine}/{arity}"`) and that routine's `BodyState` from
+  the dependency registry. That is the identity S7/S8 need, and an explicit statement
+  that no detector may read its empty facts as "no effects". This covers both exact
+  dependency callees and interface implementers in dependencies. The registry now
+  indexes routines by id, so a lookup no longer scans the whole graph (121k routines on
+  CDO).
+
+  CDO: 778 targets, 771 `NotAnalyzed`, and 7 with no graph node. All 7 are a run into a
+  Base/System Application page that declares no `OnOpenPage` (the resolver's
+  placeholder entry-trigger key): there is no routine to describe. DO: 678, 672, and 6,
+  the same shape. Harness: nothing moved except the new `calls.external_targets` dump
+  file.
+
+  Tests assert the targets in `dependency_callee_is_external_target` (two symbol-only
+  callees, `Bodyless`; a member decline names nothing) and in both interface tests
+  (`Bodyless` / `NotAnalyzed`). Discrimination: dropping the exact arm's recording fails
+  the first.
+
+- **Interface dispatch comes from the program engine and keeps dependency implementers**
+  (engine-switch S3.2). Before, the B3 adapter read the interface's name from L3's
+  receiver inference and its implementers from L3's symbol table, and dropped every
+  route into a dependency implementer. Now:
+  - the program resolver records which interface each interface-receiver call site
+    dispatched over (`ProgramReport::interface_sites`);
+  - `dispatch_meta` is built from the program graph: the interface's declared name,
+    every implementing codeunit in the whole program, the ones no route reached
+    (`"not-found"`), and the implementing enums;
+  - each dependency implementer, source-bearing or symbol-only, becomes a to-less
+    `Interface`+`ExternalTarget` edge naming its object (counted in
+    `adapter_interface_dependency_impls`).
+
+  Measured with the switch harness on all 218 corpora: **no finding moved**. Call edges
+  moved on 4 corpora and coverage on 2, all triaged (`.agent/golden-triage.md`):
+  - CDO/DO `CTS-CDN IPrePostValidator` (2 sites) was `InterfaceNoImpl` with 0
+    implementers. It now has 2 dependency implementers; the interface lives in the
+    CTS-CDN dependency, so "no implementer" was false.
+  - Three more sites (`ISenderProfileRetriever`, `CDO eSeal Service`) now carry the
+    dependency implementer that was silently dropped.
+  - A compound-receiver site (`GetIFoo().Bar`) gets its interface name, which L3 could
+    not infer.
+  - A protected dependency implementer is counted and listed as unresolved.
+  - Coverage's unresolved call-site multiset grows by one entry per new dependency edge
+    (CDO +3, DO +6).
+
+  Golden moved: the B3 triage table `docs/b3-triage/r0-corpus.md` (two fixture sites).
+  Tests: `interface_with_workspace_and_dependency_implementers` (symbol-only
+  implementer) and `interface_into_a_source_bearing_dependency_keeps_its_implementer`
+  (embedded-source implementer). Discrimination: dropping the ABI arm fails the first,
+  and dropping the source arm fails the second. The corpus parity test now leaves out
+  the program's whole-program `dispatch_meta` and the new dependency edges, which L3
+  cannot see.
+
+- **No more per-call fallback to the legacy resolver** (engine-switch S3.1). When the
+  program engine gives no usable edge for a model call site, the B3 adapter used to ask
+  L3's resolver (`resolve_one_call_site`). That covers no edge at the span, a
+  shape/callee/caller mismatch, or a workspace callee with no model routine. The site
+  now gets one to-less `Unknown(NoProgramSite)` edge (new `UnknownReason`), and its
+  bindings stay in their initial state.
+
+  The fallback fired zero times on all 218 corpora (CDO, DO, every fixture), so no
+  output moved. The harness shows `s2b6` and `s3-1` byte-identical. The two adapter
+  tests that pinned the old ruling now pin the new one:
+  `unmatched_site_is_unknown_not_l3` and `interface_implementer_outside_l3_is_unknown`.
+  The new `a_site_without_a_program_edge_is_unknown_not_legacy_resolved` moves a real
+  fixture call site off its span. Discrimination: restoring the fallback fails it.
+  The per-operation trigger fallback is still live (CDO 193 ops) and is removed in S3.5.
+
 - **The analyze model's population comes from the program graph** (engine-switch S2b.4).
   `project_ir` now takes the declarations to project as input (`FilePopulation`: each
   object's index with its routine indices, document order) instead of walking

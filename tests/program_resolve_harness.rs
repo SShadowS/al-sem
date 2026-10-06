@@ -12004,3 +12004,55 @@ fn routines_in_object_equals_the_old_per_routine_map_on_cdo() {
     );
     assert!(shapes.multi_row > 0, "CDO precondition: overloads exist");
 }
+
+// ---------------------------------------------------------------------------
+// Engine-switch S3.6: site and route accounting gate
+// ---------------------------------------------------------------------------
+
+/// The B3 adapter loses nothing the program engine resolved, on every
+/// single-app r0 fixture (`SiteCensus::losses`: every site joins, nothing
+/// falls back to L3, no route is cut or dropped). Two-app fixtures (no root
+/// `app.json`) are not single workspaces and are skipped.
+#[test]
+fn adapter_loses_no_site_or_route_on_the_fixtures() {
+    use al_sem::engine::l3::program_calls::adapter_census_for_workspace;
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    let mut dirs: Vec<_> = std::fs::read_dir("tests/r0-corpus")
+        .expect("read tests/r0-corpus")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let census = adapter_census_for_workspace(&dir)
+            .unwrap_or_else(|e| panic!("census of {}: {e}", dir.display()));
+        checked += 1;
+        let losses = census.losses();
+        if !losses.is_empty() {
+            failures.push(format!("{}: {losses:?}", dir.display()));
+        }
+    }
+    assert!(
+        checked > 100,
+        "fixture precondition: {checked} workspaces checked"
+    );
+    assert!(
+        failures.is_empty(),
+        "adapter losses:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The same gate on the pinned CDO workspace. Skips without `CDO_WS`; fails
+/// under `ENFORCE_CDO_WS=1` (see `tests/common/cdo.rs`).
+#[test]
+fn adapter_loses_no_site_or_route_on_cdo() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let census = al_sem::engine::l3::program_calls::adapter_census_for_workspace(&ws)
+        .expect("census of CDO_WS");
+    assert!(census.program_sites > 0, "CDO precondition: program sites");
+    assert_eq!(census.losses(), vec![], "CDO adapter losses");
+}

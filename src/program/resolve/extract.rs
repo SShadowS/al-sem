@@ -5,14 +5,15 @@
 //! Produces one [`RawSiteV2`] per call site, sorted by `(caller_routine,
 //! span.start)`.
 //!
-//! # Approximations
-//! The implicit-Rec bare record-op case (e.g. `Validate(Field)` inside a table
-//! trigger where the implicit `Rec` receiver is not explicitly named) is NOT
-//! currently classified as `RecordOp` — it emerges as `Bare`. Error() handling
-//! and any other classification residual vs L2 are MEASURED by the Phase-1 Task-4
-//! site-parity gate (do not assert whether L2 makes a PCallSite for these cases —
-//! the gate measures them empirically). The Task-4 gate will quantify the residual
-//! from these approximations.
+//! # Implicit receivers
+//! A bare record-op call (`Validate(Field)` in a table trigger, `Modify()`
+//! inside `with Cust do`) is a `RecordOp` on the innermost implicit receiver,
+//! by L2's rule (`program::body::ir_walk`'s `ImplicitFrame`): the object's
+//! implicit `Rec` (`object_has_implicit_rec`), replaced inside a `with` by its
+//! receiver when that is a record variable, and by nothing when it is not. A
+//! bare name that is also one of the object's own routines is a call (S3.5).
+//! Error() handling and any other classification residual vs L2 are MEASURED
+//! by the Phase-1 Task-4 site-parity gate.
 
 use std::collections::HashSet;
 
@@ -329,14 +330,17 @@ pub(crate) fn static_database_reference_target(
 ///    Codeunit has no RunModal member) → `ObjectRun`.
 /// 3. Any other `Member` → `Member`.
 /// 4. Bare `Identifier("commit")` / `QuotedIdentifier("commit")` → `Commit`.
-/// 5. Any other bare `Identifier` / `QuotedIdentifier` → `Bare`.
-/// 6. Everything else → `Unknown`.
+/// 5. A bare record op on a record implicit receiver, not named like one of
+///    the object's routines → `RecordOp` (see the module doc).
+/// 6. Any other bare `Identifier` / `QuotedIdentifier` → `Bare`.
+/// 7. Everything else → `Unknown`.
 fn classify_call(
     file: &AlFile,
     src: &str,
     function: ExprId,
     args: &[ExprId],
     rvars: &HashSet<String>,
+    ctx: WithCtx,
 ) -> CalleeShape {
     let fe = file.ir.expr(function);
     match &fe.kind {
@@ -406,19 +410,30 @@ fn classify_call(
             }
         }
 
-        ExprKind::Identifier(name) => {
+        // QuotedIdentifier stores the already-unquoted name (lowerer strips quotes).
+        ExprKind::Identifier(name) | ExprKind::QuotedIdentifier(name) => {
             if name.eq_fold_identifier("commit") {
-                CalleeShape::Commit
-            } else {
-                CalleeShape::Bare { name: name.clone() }
+                return CalleeShape::Commit;
             }
-        }
-        ExprKind::QuotedIdentifier(name) => {
-            // QuotedIdentifier stores the already-unquoted name (lowerer strips quotes).
-            if name.eq_fold_identifier("commit") {
-                CalleeShape::Commit
-            } else {
-                CalleeShape::Bare { name: name.clone() }
+            let op = name.fold_identifier();
+            let receiver_text = match ctx.implicit {
+                ImplicitRecv::NotRecord => None,
+                ImplicitRecv::Rec => Some("Rec".to_string()),
+                ImplicitRecv::With(r) => {
+                    Some(src[file.ir.expr(r).origin.byte.clone()].trim().to_string())
+                }
+            };
+            match receiver_text {
+                Some(receiver_text)
+                    if crate::record_ops::record_op_type(&op).is_some()
+                        && !file.objects[ctx.object_idx]
+                            .routines
+                            .iter()
+                            .any(|r| r.name.eq_fold_identifier(&op)) =>
+                {
+                    CalleeShape::RecordOp { receiver_text, op }
+                }
+                _ => CalleeShape::Bare { name: name.clone() },
             }
         }
 
@@ -443,14 +458,56 @@ struct WithCtx {
     /// identifier is itself UNTERMINATED (uncertain -> conservative
     /// over-approximation, never a false negative).
     scan_hit: bool,
+    /// The innermost implicit receiver at the current walk position.
+    implicit: ImplicitRecv,
+    /// Index of the routine's object in `file.objects`.
+    object_idx: usize,
+}
+
+/// The innermost implicit receiver of a bare call (L2's `ImplicitFrame`).
+#[derive(Debug, Clone, Copy)]
+enum ImplicitRecv {
+    /// None, or one that is not a record (a `with` on a non-record).
+    NotRecord,
+    /// The object's implicit `Rec`.
+    Rec,
+    /// The receiver of the innermost `with`, a record variable.
+    With(ExprId),
 }
 
 impl WithCtx {
-    /// Depth incremented on entry to a `StmtKind::With` body.
-    fn entered_with(self) -> WithCtx {
+    /// The context at the start of `file.objects[object_idx]`'s `routine`.
+    fn for_routine(src: &str, file: &AlFile, object_idx: usize, routine: &RoutineDecl) -> WithCtx {
+        let rec = crate::program::body::ir_walk::object_has_implicit_rec(&file.objects[object_idx]);
+        WithCtx {
+            depth: 0,
+            scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),
+            implicit: if rec {
+                ImplicitRecv::Rec
+            } else {
+                ImplicitRecv::NotRecord
+            },
+            object_idx,
+        }
+    }
+
+    /// Depth incremented on entry to a `StmtKind::With` body, whose implicit
+    /// receiver is `receiver` when that is a record variable.
+    fn entered_with(self, file: &AlFile, receiver: ExprId, rvars: &HashSet<String>) -> WithCtx {
+        let is_record = match &file.ir.expr(receiver).kind {
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
+                rvars.contains(&x.fold_identifier())
+            }
+            _ => false,
+        };
         WithCtx {
             depth: self.depth + 1,
-            scan_hit: self.scan_hit,
+            implicit: if is_record {
+                ImplicitRecv::With(receiver)
+            } else {
+                ImplicitRecv::NotRecord
+            },
+            ..self
         }
     }
 
@@ -613,7 +670,7 @@ fn collect_calls_v2(
             let arg_ids = args.to_vec();
 
             // Classify and emit this call site.
-            let shape = classify_call(file, src, fn_id, &arg_ids, rvars);
+            let shape = classify_call(file, src, fn_id, &arg_ids, rvars, ctx);
             // callee_text = raw source bytes of the function expression (not the
             // arg list).  Mirrors extract_min.rs and L3's ir_walk classify_callee
             // so callee_fp agrees between the two sides of the harness.
@@ -790,7 +847,7 @@ fn walk_stmt_v2(
                 unit,
                 caller,
                 rvars,
-                ctx.entered_with(),
+                ctx.entered_with(file, *receiver, rvars),
                 out,
             );
         }
@@ -836,16 +893,13 @@ pub fn extract_sites(
     object_globals: &HashSet<String>,
 ) -> Vec<RawSiteV2> {
     let mut out = Vec::new();
-    for obj in &file.objects {
+    for (obj_idx, obj) in file.objects.iter().enumerate() {
         for routine in &obj.routines {
             if let Some(body) = routine.body {
                 let caller = routine.name.fold_identifier();
                 let mut rvars = routine_rvars(routine);
                 rvars.extend(object_globals.iter().cloned());
-                let ctx = WithCtx {
-                    depth: 0,
-                    scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),
-                };
+                let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
                 walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
             }
         }
@@ -887,10 +941,7 @@ pub fn extract_sites_for_object(
             let caller = routine.name.fold_identifier();
             let mut rvars = routine_rvars(routine);
             rvars.extend(object_globals.iter().cloned());
-            let ctx = WithCtx {
-                depth: 0,
-                scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),
-            };
+            let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
             walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
         }
     }
@@ -936,10 +987,7 @@ pub fn extract_sites_for_routine(
     let caller = routine.name.fold_identifier();
     let mut rvars = routine_rvars(routine);
     rvars.extend(object_globals.iter().cloned());
-    let ctx = WithCtx {
-        depth: 0,
-        scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),
-    };
+    let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
     let mut out = Vec::new();
     walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
     out.sort_by_key(|a| a.span.start);
@@ -949,6 +997,76 @@ pub fn extract_sites_for_routine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S3.5: a bare record op is a `RecordOp` on the innermost implicit
+    /// receiver (L2's rule), and a `Bare` call when that receiver is not a
+    /// record or the name is one of the object's own routines.
+    #[test]
+    fn bare_record_ops_follow_the_implicit_receiver() {
+        let src = r#"
+table 50100 "T"
+{
+    procedure A()
+    var
+        Cust: Record Customer;
+        Cu: Codeunit "X";
+    begin
+        Modify();
+        with Cust do
+            Insert();
+        with Cu do
+            Delete();
+        Validate(Code);
+    end;
+
+    procedure Validate(F: Integer)
+    begin
+    end;
+}
+
+codeunit 50101 "C"
+{
+    procedure B()
+    begin
+        Modify();
+    end;
+}
+
+codeunit 50102 "D"
+{
+    TableNo = Customer;
+
+    trigger OnRun()
+    begin
+        Modify();
+    end;
+}
+"#;
+        let file = al_syntax::parse(src);
+        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        let shapes: Vec<(&str, &CalleeShape)> = sites
+            .iter()
+            .map(|s| (s.caller_routine.as_str(), &s.shape))
+            .collect();
+        let op = |r: &str, o: &str| CalleeShape::RecordOp {
+            receiver_text: r.to_string(),
+            op: o.to_string(),
+        };
+        let bare = |n: &str| CalleeShape::Bare {
+            name: n.to_string(),
+        };
+        assert_eq!(
+            shapes,
+            vec![
+                ("a", &op("Rec", "modify")),
+                ("a", &op("Cust", "insert")),
+                ("a", &bare("Delete")),
+                ("a", &bare("Validate")),
+                ("b", &bare("Modify")),
+                ("onrun", &op("Rec", "modify")),
+            ]
+        );
+    }
 
     #[test]
     fn classifies_call_shapes() {
