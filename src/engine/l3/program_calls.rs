@@ -750,6 +750,8 @@ fn adapter(
         objects,
         symbols: &symbols,
         interface_sites: &report.interface_sites,
+        registry: ctx.registry(),
+        targets: std::cell::RefCell::new(Vec::new()),
     };
 
     let mut edges: Vec<CallEdge> = Vec::new();
@@ -849,6 +851,7 @@ fn adapter(
             edges,
             upgraded_bindings,
             diagnostics,
+            external_targets: conv.targets.into_inner(),
         },
         c,
         notes,
@@ -878,6 +881,11 @@ struct Converter<'a> {
     symbols: &'a SymbolTable<'a>,
     /// `ProgramReport::interface_sites` (S3.2).
     interface_sites: &'a HashMap<ObligationId, String>,
+    /// The dependency target registry (S3.3): body state per dependency routine.
+    registry: crate::program::registry::DependencyRegistry<'a>,
+    /// The dependency targets reached so far, in edge order (S3.3). Pushed only
+    /// once an edge is final, so a site that then fails leaves none behind.
+    targets: std::cell::RefCell<Vec<crate::program::model::calls::ExternalTargetRef>>,
 }
 
 impl<'a> Converter<'a> {
@@ -1069,6 +1077,7 @@ impl<'a> Converter<'a> {
                         RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. } => {
                             e.resolution = external;
                             e.external_type_ref = self.dependency_ref(route).flatten();
+                            self.record_target(cs, route);
                             if self.upgrade_dependency_bindings {
                                 self.upgrade_dependency(&mut state, route, &cs.id, c);
                             }
@@ -1255,6 +1264,53 @@ impl<'a> Converter<'a> {
         }
     }
 
+    /// The program routine a dependency route names: its own id for a source
+    /// routine, rebuilt from the ABI key (as `abi_ingest` builds an ABI routine's
+    /// id) for a symbol-only one. `None` for any other route.
+    fn route_routine_id(route: &Route) -> Option<RoutineNodeId> {
+        match &route.target {
+            RouteTarget::Routine(id) => Some(id.clone()),
+            RouteTarget::AbiSymbol { key } => Some(RoutineNodeId {
+                object: ObjectNodeId {
+                    app: key.app,
+                    kind: object_kind_from_abi_type(&key.object_type),
+                    key: if key.object_number != 0 {
+                        ObjKey::Id(key.object_number)
+                    } else {
+                        ObjKey::Name(key.object_name_lc.clone())
+                    },
+                },
+                name_lc: key.routine_name_lc.clone(),
+                enclosing_member_lc: None,
+                params_count: key.params_count,
+                sig_fp: key.param_type_fp,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Record that `cs`'s edge reaches the dependency routine `route` names
+    /// (S3.3), with that routine's body state from the registry.
+    fn record_target(&self, cs: &PCallSite, route: &Route) {
+        let Some(id) = Self::route_routine_id(route) else {
+            return;
+        };
+        let target = format!(
+            "{}::{}/{}",
+            self.model_object_id(&id.object),
+            id.name_lc,
+            id.params_count
+        );
+        let body = self.registry.target(&id).map(|t| t.body);
+        self.targets
+            .borrow_mut()
+            .push(crate::program::model::calls::ExternalTargetRef {
+                callsite_id: cs.id.clone(),
+                target,
+                body,
+            });
+    }
+
     /// The model's object id for a program object (`encode_object_id`'s
     /// `"{app guid}/{type}/{number}"`; a numberless object has number 0, as the
     /// model writes it).
@@ -1321,6 +1377,13 @@ impl<'a> Converter<'a> {
         callees.dedup_by(|a, b| a.id == b.id);
         dependency.sort();
         dependency.dedup();
+        // The site converts (no `?` below): record each dependency route's
+        // routine (S3.3).
+        for route in &ce.edge.routes {
+            if !matches!(&route.target, RouteTarget::Routine(id) if id.object.app == self.primary) {
+                self.record_target(cs, route);
+            }
+        }
         c.adapter_interface_dependency_impls += dependency.len();
 
         let name_lc = self
@@ -2184,6 +2247,23 @@ mod adapter_tests {
             "{:#?}",
             a.census
         );
+        // S3.3: the symbol-only implementer's routine is named, bodyless.
+        let targets: Vec<_> = a
+            .calls
+            .external_targets
+            .iter()
+            .filter(|t| t.callsite_id == cs.id)
+            .collect();
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert!(
+            targets[0].target.ends_with("/Codeunit/81::go/1"),
+            "{}",
+            targets[0].target
+        );
+        assert_eq!(
+            targets[0].body,
+            Some(crate::program::registry::BodyState::Bodyless)
+        );
     }
 
     /// Minor 5, precondition by assignment: the workspace implementer's L3
@@ -2433,6 +2513,31 @@ mod adapter_tests {
             name: "Sales-Post".to_string(),
         });
         assert_eq!(a.edges(&missing.id), vec![want]);
+        // S3.3: the two exact dependency callees are named (bodyless, symbol-only);
+        // the member decline (`SP.Missing`) has no routine to name.
+        let named: Vec<(&str, &str, Option<crate::program::registry::BodyState>)> = a
+            .calls
+            .external_targets
+            .iter()
+            .map(|t| {
+                let site = if t.callsite_id == post.id {
+                    "post"
+                } else if t.callsite_id == proc_.id {
+                    "proc"
+                } else {
+                    "other"
+                };
+                (site, t.target.rsplit("::").next().unwrap(), t.body)
+            })
+            .collect();
+        let bodyless = Some(crate::program::registry::BodyState::Bodyless);
+        assert_eq!(
+            named,
+            vec![
+                ("post", "post/1", bodyless),
+                ("proc", "depproc/0", bodyless)
+            ]
+        );
         let c = &a.census;
         assert_eq!(c.adapter_program_sites, 3, "{c:#?}");
         assert_eq!(
@@ -3274,6 +3379,21 @@ mod no_fallback_tests {
             })
         );
         assert_eq!(census.adapter_interface_dependency_impls, 1);
+        // S3.3: the dependency routine is named, and its body is NOT analysed
+        // (so no detector may read its empty facts as "no effects").
+        assert_eq!(
+            calls.external_targets.len(),
+            1,
+            "{:?}",
+            calls.external_targets
+        );
+        let t = &calls.external_targets[0];
+        assert_eq!(t.callsite_id, cs.id);
+        assert!(t.target.ends_with("/Codeunit/60001::go/0"), "{}", t.target);
+        assert_eq!(
+            t.body,
+            Some(crate::program::registry::BodyState::NotAnalyzed)
+        );
     }
 
     /// S3.1: a call site the program engine gives no edge for is an honest

@@ -79,15 +79,22 @@ pub struct DependencyRegistry<'g> {
     dep_meta: &'g DepMetaMap,
     /// Dependency routines whose bodies the model analysed. Empty until S7/S8.
     analyzed: HashSet<RoutineNodeId>,
+    /// Every graph routine by id (first wins on a shared id, graph order).
+    by_id: std::collections::HashMap<&'g RoutineNodeId, &'g RoutineNode>,
 }
 
 impl<'g> DependencyRegistry<'g> {
     #[must_use]
     pub fn new(graph: &'g ProgramGraph, dep_meta: &'g DepMetaMap) -> Self {
+        let mut by_id = std::collections::HashMap::new();
+        for n in graph.routines.iter() {
+            by_id.entry(&n.id).or_insert(n);
+        }
         DependencyRegistry {
             graph,
             dep_meta,
             analyzed: HashSet::new(),
+            by_id,
         }
     }
 
@@ -152,7 +159,7 @@ impl<'g> DependencyRegistry<'g> {
     /// dependency routine of this graph.
     #[must_use]
     pub fn target(&self, id: &RoutineNodeId) -> Option<DepTarget<'g>> {
-        let node = self.graph.routines.iter().find(|n| &n.id == id)?;
+        let node = *self.by_id.get(id)?;
         self.describe(node)
     }
 

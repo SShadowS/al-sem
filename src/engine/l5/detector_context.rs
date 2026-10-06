@@ -1876,6 +1876,7 @@ mod tests {
                 edges: vec![edge],
                 upgraded_bindings: HashMap::new(),
                 diagnostics: Vec::new(),
+                external_targets: Vec::new(),
             })),
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);

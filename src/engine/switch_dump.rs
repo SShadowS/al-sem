@@ -107,6 +107,10 @@ pub fn dump_lines(ws: &Path) -> Dump {
                 .collect(),
         );
         d.insert("calls.diagnostics".into(), rows(&calls.diagnostics));
+        d.insert(
+            "calls.external_targets".into(),
+            rows(&calls.external_targets),
+        );
     }
     {
         // demanded = 0: the event graph is built unconditionally; no substrate.

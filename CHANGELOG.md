@@ -112,6 +112,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Calls into dependencies keep their target's identity and body state**
+  (engine-switch S3.3). A call into a dependency routine is still a to-less edge, since
+  the model holds workspace routines only. `ResolvedCalls::external_targets` now
+  records, for each such edge, which dependency routine it reaches
+  (`"{app}/{type}/{number}::{routine}/{arity}"`) and that routine's `BodyState` from
+  the dependency registry. That is the identity S7/S8 need, and an explicit statement
+  that no detector may read its empty facts as "no effects". This covers both exact
+  dependency callees and interface implementers in dependencies. The registry now
+  indexes routines by id, so a lookup no longer scans the whole graph (121k routines on
+  CDO).
+
+  CDO: 778 targets, 771 `NotAnalyzed`, and 7 with no graph node. All 7 are a run into a
+  Base/System Application page that declares no `OnOpenPage` (the resolver's
+  placeholder entry-trigger key): there is no routine to describe. DO: 678, 672, and 6,
+  the same shape. Harness: nothing moved except the new `calls.external_targets` dump
+  file.
+
+  Tests assert the targets in `dependency_callee_is_external_target` (two symbol-only
+  callees, `Bodyless`; a member decline names nothing) and in both interface tests
+  (`Bodyless` / `NotAnalyzed`). Discrimination: dropping the exact arm's recording fails
+  the first.
+
 - **Interface dispatch comes from the program engine and keeps dependency implementers**
   (engine-switch S3.2). Before, the B3 adapter read the interface's name from L3's
   receiver inference and its implementers from L3's symbol table, and dropped every
