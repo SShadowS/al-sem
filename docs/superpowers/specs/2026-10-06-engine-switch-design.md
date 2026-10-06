@@ -215,6 +215,13 @@ zero unexplained differences, zero regressions, written golden triage.
     from the physical rows (plus G3/G4 metadata on program nodes), body facts from
     the body pipeline. The IR-object walk in `project_ir` stops being the source of
     the population. Byte-identical, or triaged.
+    *As built (2026-10-06):* the population now comes from the rows, but object
+    FACTS are still derived twice from the same IR — `node_extract` for the
+    resolver's `ObjectNode` (e.g. `singular_property_value`, which degrades a `#if`
+    conflict to `None`) and the model projection for `L3Object`
+    (`ir_object_metadata`). Two derivations can disagree. Unifying them (one
+    derivation, both representations fed from it, with an agreement census first)
+    is folded into S5, where the symbol table moves onto `ProgramGraph`.
   - **S2b.5 — Dependency registry and readiness (G15a).** Separate from the detector
     population; no output change.
   - **S2b.6 — Site links (G13).** Program `SiteId` ↔ body `/csN`/`/opN`, every edge
