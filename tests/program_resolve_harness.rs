@@ -7468,7 +7468,7 @@ fn compound_obj_dup_and_overload_subscription_resolves_not_ambiguous() {
          inflation; got {:?}",
         idx.ambiguous_subscriptions()
             .iter()
-            .map(|a| (a.event_name_lc.clone(), a.candidate_count))
+            .map(|a| a.event_name_lc.clone())
             .collect::<Vec<_>>()
     );
 

@@ -80,7 +80,7 @@ pub enum ObjectRefResolution {
 }
 
 // ---------------------------------------------------------------------------
-// SubscriberEntry / AmbiguousSub — public types produced by the event index
+// SubscriberEntry / Subscription — public types produced by the event index
 // ---------------------------------------------------------------------------
 
 /// A resolved event-subscriber for one publisher routine.
@@ -93,36 +93,65 @@ pub struct SubscriberEntry {
     pub element: Option<String>,
 }
 
-/// A subscription that could not be resolved to exactly one publisher overload.
-pub struct AmbiguousSub {
-    /// The subscriber routine carrying the unresolvable `[EventSubscriber]`.
+/// One parsed `[EventSubscriber]` attribute and what it bound to (engine-switch
+/// S4, spec G7). [`SubscriberIndex`] keeps every one of them, bound or not: an
+/// unbound subscription still drives event fan-out coverage, so it must never
+/// vanish.
+pub struct Subscription {
+    /// The subscriber routine carrying the attribute.
     pub subscriber: RoutineNodeId,
-    /// The publisher object that was found.
-    pub publisher_object: ObjectNodeId,
+    /// The attribute's position among the routine's parsed `[EventSubscriber]`
+    /// attributes (a routine may subscribe to several events).
+    pub ordinal: usize,
+    /// Publisher object type as written, lowercased (e.g. `"codeunit"`).
+    pub publisher_object_type: String,
+    /// Publisher object name as written, unquoted and lowercased.
+    pub publisher_name: String,
     /// Lowercased event name from the attribute.
     pub event_name_lc: String,
-    /// Number of candidate overloads that matched the arity filter.
-    pub candidate_count: usize,
+    /// Element filter from the attribute, if present.
+    pub element: Option<String>,
+    /// Dispatch conditions (manual binding, skip-on-missing-license/permission).
+    pub conditions: Vec<Condition>,
+    pub outcome: SubscriptionOutcome,
 }
 
-/// A subscription whose publisher OBJECT was resolved but no publisher-kind
-/// routine candidate existed for the given event name + arity bound (Tier-1
-/// remediation, H-1 fix). Additive observability replacing a prior silent
-/// `0 => continue` — the subscription edge (the charter's data-is-control-flow
-/// wiring) used to vanish with no record at all whenever its target publisher
-/// routine was absent from the graph (e.g. because ingestion had wrongly
-/// dropped it — see `abi_ingest::ingest_abi`'s doc). A nonzero count here is
-/// not necessarily a bug: it can also mean the attribute genuinely names an
-/// event that doesn't exist (a real AL compile error) or an arity the
-/// publisher never declares — but it must never again be simply invisible.
-pub struct OrphanSub {
-    /// The subscriber routine carrying the unresolvable `[EventSubscriber]`.
-    pub subscriber: RoutineNodeId,
-    /// The publisher object that WAS found (name/kind resolved).
-    pub publisher_object: ObjectNodeId,
-    /// Lowercased event name from the attribute — the routine name that had
-    /// zero publisher-kind, arity-eligible candidates on `publisher_object`.
-    pub event_name_lc: String,
+/// What a [`Subscription`] bound to.
+pub enum SubscriptionOutcome {
+    /// Exactly one publisher routine (after the exact-arity / Sender-arity
+    /// preference).
+    Bound(RoutineNodeId),
+    /// The publisher object was found but no single overload could be chosen.
+    Ambiguous {
+        publisher_object: ObjectNodeId,
+        /// Number of candidate overloads that matched the arity filter.
+        candidate_count: usize,
+    },
+    /// The publisher OBJECT was resolved but no publisher-kind routine
+    /// candidate existed for the event name + arity bound (Tier-1 remediation,
+    /// H-1 fix: this used to be a silent `0 => continue`). Not necessarily a
+    /// bug: the attribute can name an event that does not exist (a real AL
+    /// compile error) or an arity the publisher never declares — but it must
+    /// never be invisible.
+    Orphaned { publisher_object: ObjectNodeId },
+    /// No object of that type and name is visible from the subscriber's app, or
+    /// the object type is not one AL events are published on. Until S4 these
+    /// were dropped without a record.
+    ObjectUnresolved,
+}
+
+impl Subscription {
+    /// The publisher object, when one was resolved.
+    pub fn publisher_object(&self) -> Option<&ObjectNodeId> {
+        match &self.outcome {
+            SubscriptionOutcome::Bound(id) => Some(&id.object),
+            SubscriptionOutcome::Ambiguous {
+                publisher_object, ..
+            }
+            | SubscriptionOutcome::Orphaned { publisher_object } => Some(publisher_object),
+            SubscriptionOutcome::ObjectUnresolved => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,8 +207,8 @@ pub struct ResolveIndex {
 }
 
 /// Event subscriptions resolved over a [`ProgramGraph`]: which subscribers
-/// each publisher routine has, plus the subscriptions that could not be
-/// bound (ambiguous or orphaned).
+/// each publisher routine has, plus every subscription with its outcome
+/// (bound or not).
 ///
 /// Kept apart from [`ResolveIndex`] on purpose. Only
 /// `resolver::emit_event_flow_edges` reads it, and it builds one for the
@@ -189,11 +218,9 @@ pub struct ResolveIndex {
 pub struct SubscriberIndex {
     /// Publisher `RoutineNodeId` → ordered list of resolved subscribers.
     subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>>,
-    /// Subscriptions that could not be resolved to a single overload.
-    ambiguous_subscriptions: Vec<AmbiguousSub>,
-    /// Subscriptions whose publisher object resolved but had zero eligible
-    /// routine candidates (H-1 fix — see [`OrphanSub`]'s doc).
-    orphaned_subscriptions: Vec<OrphanSub>,
+    /// Every parsed subscription, in `graph.routines` order then attribute
+    /// order (engine-switch S4, G7).
+    subscriptions: Vec<Subscription>,
 }
 
 impl SubscriberIndex {
@@ -219,8 +246,7 @@ impl SubscriberIndex {
 
         // ── Event subscriber index ────────────────────────────────────────────
         let mut subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>> = HashMap::new();
-        let mut ambiguous_subscriptions: Vec<AmbiguousSub> = Vec::new();
-        let mut orphaned_subscriptions: Vec<OrphanSub> = Vec::new();
+        let mut subscriptions: Vec<Subscription> = Vec::new();
 
         for sub_routine in &graph.routines {
             if sub_routine.event_subscribers.is_empty() {
@@ -229,15 +255,31 @@ impl SubscriberIndex {
             let sub_app = sub_routine.id.object.app;
             let sub_params = sub_routine.id.params_count;
 
-            for args in &sub_routine.event_subscribers {
-                // (a) Map publisher_object_type → ObjectKind; unknown type → drop.
+            for (ordinal, args) in sub_routine.event_subscribers.iter().enumerate() {
+                let entry = build_entry(sub_routine, args);
+                let mut record = |outcome: SubscriptionOutcome| {
+                    subscriptions.push(Subscription {
+                        subscriber: sub_routine.id.clone(),
+                        ordinal,
+                        publisher_object_type: args.publisher_object_type.clone(),
+                        publisher_name: args.publisher_name.clone(),
+                        event_name_lc: args.event_name.fold_identifier(),
+                        element: entry.element.clone(),
+                        conditions: entry.conditions.clone(),
+                        outcome,
+                    });
+                };
+                // (a) Map publisher_object_type → ObjectKind; an unknown type is
+                // recorded, not dropped.
                 let Some(kind) = kind_from_object_type_str(&args.publisher_object_type) else {
+                    record(SubscriptionOutcome::ObjectUnresolved);
                     continue;
                 };
 
-                // (b) Resolve publisher object; unresolvable → drop.
+                // (b) Resolve the publisher object; unresolvable is recorded too.
                 let Some(pub_obj) = graph.resolve_object(sub_app, kind, &args.publisher_name)
                 else {
+                    record(SubscriptionOutcome::ObjectUnresolved);
                     continue;
                 };
                 let pub_obj_id = pub_obj.id.clone();
@@ -280,26 +322,18 @@ impl SubscriberIndex {
                     .collect();
 
                 // (d) Dispatch on candidate count.
-                match candidates.len() {
+                let chosen: Option<RoutineNodeId> = match candidates.len() {
                     0 => {
                         // H-1 fix: this used to be a bare `continue` — the
-                        // subscription vanished with no record at all. Now an
-                        // additive orphan diagnostic names it (see
-                        // `OrphanSub`'s doc); resolution behavior (no edge
-                        // emitted) is unchanged.
-                        orphaned_subscriptions.push(OrphanSub {
-                            subscriber: sub_routine.id.clone(),
+                        // subscription vanished with no record at all (see
+                        // `SubscriptionOutcome::Orphaned`'s doc); resolution
+                        // behavior (no edge emitted) is unchanged.
+                        record(SubscriptionOutcome::Orphaned {
                             publisher_object: pub_obj_id,
-                            event_name_lc,
                         });
                         continue;
                     }
-                    1 => {
-                        subscribers_map
-                            .entry(candidates[0].clone())
-                            .or_default()
-                            .push(build_entry(sub_routine, args));
-                    }
+                    1 => Some(candidates[0].clone()),
                     _ => {
                         // MORE THAN ONE: prefer exactly one EXACT-arity match; else fall
                         // back to exactly one Sender-arity (`+1`) match. Only genuine
@@ -308,7 +342,7 @@ impl SubscriberIndex {
                             .iter()
                             .filter(|rid| rid.params_count == sub_params)
                             .collect();
-                        let chosen: Option<&RoutineNodeId> = if exact.len() == 1 {
+                        let picked: Option<&RoutineNodeId> = if exact.len() == 1 {
                             Some(exact[0])
                         } else if exact.is_empty() {
                             let sender: Vec<&RoutineNodeId> = candidates
@@ -319,20 +353,18 @@ impl SubscriberIndex {
                         } else {
                             None
                         };
-                        if let Some(rid) = chosen {
-                            subscribers_map
-                                .entry(rid.clone())
-                                .or_default()
-                                .push(build_entry(sub_routine, args));
-                        } else {
-                            ambiguous_subscriptions.push(AmbiguousSub {
-                                subscriber: sub_routine.id.clone(),
-                                publisher_object: pub_obj_id,
-                                event_name_lc,
-                                candidate_count: candidates.len(),
-                            });
-                        }
+                        picked.cloned()
                     }
+                };
+                match chosen {
+                    Some(rid) => {
+                        record(SubscriptionOutcome::Bound(rid.clone()));
+                        subscribers_map.entry(rid).or_default().push(entry);
+                    }
+                    None => record(SubscriptionOutcome::Ambiguous {
+                        publisher_object: pub_obj_id,
+                        candidate_count: candidates.len(),
+                    }),
                 }
             }
         }
@@ -344,8 +376,7 @@ impl SubscriberIndex {
 
         SubscriberIndex {
             subscribers_map,
-            ambiguous_subscriptions,
-            orphaned_subscriptions,
+            subscriptions,
         }
     }
 
@@ -360,16 +391,28 @@ impl SubscriberIndex {
             .unwrap_or(&[])
     }
 
+    /// Every parsed subscription with its outcome, in `graph.routines` order
+    /// then attribute order (engine-switch S4, G7).
+    pub fn subscriptions(&self) -> &[Subscription] {
+        &self.subscriptions
+    }
+
     /// Subscriptions that matched a publisher object but could not be resolved
     /// to a single overload (multiple candidates, no unique strict arity match).
-    pub fn ambiguous_subscriptions(&self) -> &[AmbiguousSub] {
-        &self.ambiguous_subscriptions
+    pub fn ambiguous_subscriptions(&self) -> Vec<&Subscription> {
+        self.subscriptions
+            .iter()
+            .filter(|s| matches!(s.outcome, SubscriptionOutcome::Ambiguous { .. }))
+            .collect()
     }
 
     /// Subscriptions whose publisher object resolved but had zero eligible
-    /// routine candidates (H-1 fix; see [`OrphanSub`]'s doc).
-    pub fn orphaned_subscriptions(&self) -> &[OrphanSub] {
-        &self.orphaned_subscriptions
+    /// routine candidates (see [`SubscriptionOutcome::Orphaned`]).
+    pub fn orphaned_subscriptions(&self) -> Vec<&Subscription> {
+        self.subscriptions
+            .iter()
+            .filter(|s| matches!(s.outcome, SubscriptionOutcome::Orphaned { .. }))
+            .collect()
     }
 }
 
@@ -2502,7 +2545,13 @@ mod tests {
         assert!(idx.subscribers_of(&pub_onafterx_1param_id).is_empty());
         assert!(idx.subscribers_of(&pub_onafterx_2param_id).is_empty());
         assert_eq!(idx.ambiguous_subscriptions().len(), 1);
-        assert_eq!(idx.ambiguous_subscriptions()[0].candidate_count, 2);
+        assert!(matches!(
+            idx.ambiguous_subscriptions()[0].outcome,
+            SubscriptionOutcome::Ambiguous {
+                candidate_count: 2,
+                ..
+            }
+        ));
     }
 
     // (e0) IncludeSender: publisher explicit arity 0, subscriber arity 1 (captures
@@ -2616,8 +2665,72 @@ mod tests {
             idx.orphaned_subscriptions()[0].subscriber.name_lc,
             "handler"
         );
-        assert_eq!(idx.orphaned_subscriptions()[0].publisher_object, pub_id);
+        assert_eq!(
+            idx.orphaned_subscriptions()[0].publisher_object(),
+            Some(&pub_id)
+        );
         assert_eq!(idx.orphaned_subscriptions()[0].event_name_lc, "onafterx");
+    }
+
+    // Engine-switch S4 (G7): a subscription whose publisher object cannot be
+    // found, or whose object type is not one events are published on, is kept
+    // in the inventory with its attribute order. It used to be dropped.
+    #[test]
+    fn subscriptions_keep_unresolved_publisher_objects_in_attribute_order() {
+        let app = AppRef(0);
+        let sub_id = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(2),
+        };
+        let mut bad_type = sub_args("pub", "onafterx");
+        // Not a kind `kind_from_object_type_str` maps (`xmlport` would be, and
+        // would then fail at the object lookup instead).
+        bad_type.publisher_object_type = "controladdin".to_string();
+        let (graph, _, _) = build_event_fixture(
+            vec![make_publisher(
+                ObjectNodeId {
+                    app,
+                    kind: ObjectKind::Codeunit,
+                    key: ObjKey::Id(1),
+                },
+                "OnAfterX",
+                0,
+                PublisherKind::Integration,
+                Some(false),
+            )],
+            vec![make_subscriber(
+                sub_id,
+                "Handler",
+                0,
+                vec![
+                    sub_args("pub", "onafterx"),
+                    sub_args("no such codeunit", "onafterx"),
+                    bad_type,
+                ],
+                false,
+            )],
+        );
+        let idx = SubscriberIndex::build(&graph);
+        let rows: Vec<(usize, &str, bool)> = idx
+            .subscriptions()
+            .iter()
+            .map(|s| {
+                (
+                    s.ordinal,
+                    s.publisher_name.as_str(),
+                    matches!(s.outcome, SubscriptionOutcome::ObjectUnresolved),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (0, "pub", false),
+                (1, "no such codeunit", true),
+                (2, "pub", true),
+            ]
+        );
     }
 
     // -------------------------------------------------------------------
@@ -2913,19 +3026,25 @@ mod tests {
             }
         }
         for a in idx.ambiguous_subscriptions() {
+            let SubscriptionOutcome::Ambiguous {
+                candidate_count, ..
+            } = a.outcome
+            else {
+                unreachable!()
+            };
             out.push_str(&format!(
                 "ambiguous {} -> {}/{} x{}\n",
                 a.subscriber.name_lc,
-                a.publisher_object == pub_id,
+                a.publisher_object() == Some(&pub_id),
                 a.event_name_lc,
-                a.candidate_count
+                candidate_count
             ));
         }
         for o in idx.orphaned_subscriptions() {
             out.push_str(&format!(
                 "orphan {} -> {}/{}\n",
                 o.subscriber.name_lc,
-                o.publisher_object == pub_id,
+                o.publisher_object() == Some(&pub_id),
                 o.event_name_lc
             ));
         }

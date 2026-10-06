@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every event subscription is kept, bound or not** (engine-switch S4.1, spec G7).
+  `SubscriberIndex::subscriptions()` lists each parsed `[EventSubscriber]` attribute, in
+  routine order then attribute order, with its outcome: `Bound` (the publisher routine),
+  `Ambiguous`, `Orphaned` (publisher object found, no eligible publisher routine) or
+  `ObjectUnresolved`. The last one is new: a subscription whose publisher object could
+  not be found, or whose object type is not one events are published on, used to be
+  dropped without a record. `ambiguous_subscriptions()` and `orphaned_subscriptions()`
+  are now views over the same list. Event-flow edges do not change.
+
+  `subscriptions_keep_unresolved_publisher_objects_in_attribute_order` hand-states a
+  routine with three subscriptions (bound, unknown codeunit, unknown object type).
+  Discrimination: removing either `ObjectUnresolved` record (unknown type, object not
+  found) fails it. A first draft used `xmlport` as the unknown type; that break stayed
+  green because `xmlport` IS a mapped kind, so the row was recorded by the other arm.
+
 - **Site links between body facts and program edges** (engine-switch S2b.6).
   `program::model::site_links::SiteLinks` indexes every program call-site edge by
   `(caller app, span)`. Spans use zero-based rows and byte columns on both sides, so
