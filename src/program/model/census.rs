@@ -203,6 +203,99 @@ impl PhysicalCensus {
     }
 }
 
+/// Engine-switch S5.4 (spec G3/G4): the object facts derived twice from the same
+/// IR — by `node_extract` for the resolver's `ObjectNode` and by the model
+/// assembly for `L3Object` — compared object by object. Joined through the
+/// physical object rows. One row per disagreement
+/// (`{field}\t{model id}\tmodel={…}\tprogram={…}`), then a `compared\t{n}` row.
+pub fn object_fact_census(
+    model: &L3Workspace,
+    graph: &crate::program::graph::ProgramGraph,
+) -> Vec<String> {
+    use crate::program::node_extract::ObjectRef;
+    use al_syntax::IdentifierFoldExt;
+
+    let mut row_node: HashMap<Key, &crate::program::node::ObjectNodeId> = HashMap::new();
+    for r in &graph.workspace_rows.objects {
+        row_node
+            .entry((r.file.clone(), r.start, r.end))
+            .or_insert(&r.node);
+    }
+    let fold_ref = |r: &ObjectRef| match r {
+        ObjectRef::Name { normalized_lc, .. } => normalized_lc.clone(),
+        ObjectRef::Id(n) => n.to_string(),
+    };
+    let mut out = Vec::new();
+    let mut compared = 0usize;
+    for o in &model.objects {
+        let Some(node_id) = o
+            .source_anchor
+            .as_ref()
+            .and_then(|a| row_node.get(&anchor_key(a)))
+        else {
+            continue;
+        };
+        let Ok(i) = graph.objects.binary_search_by(|n| n.id.cmp(node_id)) else {
+            continue;
+        };
+        let n = &graph.objects[i];
+        compared += 1;
+        let mut differ = |field: &str, m: String, p: String| {
+            if m != p {
+                out.push(format!("{field}\t{}\tmodel={m}\tprogram={p}", o.id));
+            }
+        };
+        differ("name", o.name.clone(), n.name.clone());
+        differ(
+            "number",
+            o.object_number.to_string(),
+            n.declared_id.unwrap_or(0).to_string(),
+        );
+        differ(
+            "extends",
+            format!(
+                "{:?}",
+                o.extends_target_name.as_ref().map(|s| s.fold_identifier())
+            ),
+            format!(
+                "{:?}",
+                n.extends_target.as_ref().map(|s| s.fold_identifier())
+            ),
+        );
+        if matches!(o.object_type.as_str(), "Page" | "PageExtension") {
+            differ(
+                "source_table",
+                format!(
+                    "{:?}",
+                    o.source_table_name.as_ref().map(|s| s.fold_identifier())
+                ),
+                format!("{:?}", n.source_table.as_ref().map(fold_ref)),
+            );
+        }
+        if let Some(model_impl) = &o.implements_interfaces {
+            differ(
+                "implements",
+                format!(
+                    "{:?}",
+                    model_impl
+                        .iter()
+                        .map(|s| s.fold_identifier())
+                        .collect::<Vec<_>>()
+                ),
+                format!(
+                    "{:?}",
+                    n.implements
+                        .iter()
+                        .map(|s| s.fold_identifier())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+    }
+    out.push(format!("compared\t{compared}"));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

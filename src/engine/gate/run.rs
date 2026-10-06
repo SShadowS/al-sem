@@ -174,6 +174,9 @@ pub struct AnalysisModel {
     /// The program graph's workspace physical rows (engine-switch S2b.3), kept
     /// past the program context's drop; `None` when the model was not built.
     pub physical: Option<crate::program::physical::PhysicalIndex>,
+    /// `census::object_fact_census` over the model and the program graph
+    /// (engine-switch S5.4); `None` when the model was not built.
+    pub object_facts: Option<Vec<String>>,
 }
 
 /// THE production model builder for `alsem analyze` — and the one the engine-switch
@@ -209,6 +212,7 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model: Err(ModelFailure::NoModelInstanceId),
             physical: None,
+            object_facts: None,
         };
     };
     let Some((ctx, report)) = program else {
@@ -231,6 +235,7 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model,
             physical: None,
+            object_facts: None,
         };
     };
     // Engine-switch S2a: the model is projected from the program engine's parse.
@@ -243,15 +248,21 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
             physical: None,
+            object_facts: None,
         };
     };
     // Taken before the adapter consumes (and drops) the program context.
     let physical = Some(ctx.graph().workspace_rows.clone());
+    let object_facts = Some(crate::program::model::census::object_fact_census(
+        &resolved.workspace,
+        ctx.graph(),
+    ));
     crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
     AnalysisModel {
         fresh,
         model: Ok(resolved),
         physical,
+        object_facts,
     }
 }
 

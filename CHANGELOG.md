@@ -152,6 +152,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The model's object facts come from the resolver's derivation** (engine-switch S5.4,
+  spec G3/G4; deferred from S2b.4). Object facts were derived twice from the same IR:
+  `node_extract` for the resolver's `ObjectNode` and the model assembly for `L3Object`.
+  A census (`program::model::census::object_fact_census`, now in the switch dump as
+  `census.object_facts`) compared name, number, `extends`, Page `SourceTable` and
+  interfaces on every corpus first. It found one disagreement class: the model kept
+  `extends` only for table and page extensions, so report and enum extensions had none
+  (CDO 3, DO 3, `ws-report-dataitem` 1) although L3's resolver expects it
+  (`extension_base_type` maps both). Now the model takes `extends` for every extension
+  kind and `SourceTable` through `node_extract::singular_object_ref_text`: a value
+  that differs between `#if` branches is `None`, as in the resolver, instead of the
+  first branch's (no corpus has one). After: the census reports no disagreement
+  anywhere; findings, calls, events and every golden unchanged; the 7 extension
+  objects' model rows gain their `extends` target.
+  `model_object_facts_match_the_program_derivation` (tests/cli) states a conflicting
+  `#if SourceTable` and a report extension; discrimination: first-branch `SourceTable`
+  and the old table/page-only `extends` each fail it.
+
 - **`--scope primary` asks which app a finding's object belongs to** (engine-switch
   S5.3). The scope filter got `|_| false`, so no finding could ever be treated as
   dependency-anchored. `gate::run::dependency_object_predicate` answers from the model

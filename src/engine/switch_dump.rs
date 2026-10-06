@@ -64,6 +64,9 @@ pub fn dump_lines(ws: &Path) -> Dump {
     if let Ok(fc) = &built.fresh {
         d.insert("ledger".into(), rows(&fc.ledger));
     }
+    if let Some(facts) = &built.object_facts {
+        d.insert("census.object_facts".into(), facts.clone());
+    }
     d.insert(
         "status".into(),
         vec![

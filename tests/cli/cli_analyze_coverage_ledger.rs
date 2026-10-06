@@ -300,3 +300,51 @@ fn scope_primary_drops_a_finding_on_another_apps_object() {
     .collect();
     assert_eq!(kept, vec!["own".to_string()]);
 }
+
+/// S5.4: the model's object facts come from the resolver's derivation. A
+/// `SourceTable` that differs between `#if` branches is unknown (the model used
+/// to take the first branch), and a report extension keeps its `extends` target
+/// (the model used to drop it). The census over every corpus then reports no
+/// disagreement.
+#[test]
+fn model_object_facts_match_the_program_derivation() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &app_json("aaaa5555-0000-0000-0000-000000000055", "FactsWs"),
+    );
+    write(
+        &ws.join("src/Objects.al"),
+        r#"table 50006 "Facts A" { fields { field(1; "No."; Integer) { } } }
+table 50007 "Facts B" { fields { field(1; "No."; Integer) { } } }
+page 50008 "Facts Page"
+{
+#if CLEAN
+    SourceTable = "Facts A";
+#else
+    SourceTable = "Facts B";
+#endif
+}
+report 50009 "Facts Report" { }
+reportextension 50010 "Facts Report Ext" extends "Facts Report" { }
+"#,
+    );
+    let built = build_analysis_model(ws);
+    let objects = &built.model.as_ref().expect("model").workspace.objects;
+    let by_name = |n: &str| objects.iter().find(|o| o.name == n).expect(n);
+    assert_eq!(
+        by_name("Facts Page").source_table_name,
+        None,
+        "conflicting #if SourceTable values: no confident table"
+    );
+    assert_eq!(
+        by_name("Facts Report Ext").extends_target_name.as_deref(),
+        Some("Facts Report")
+    );
+    assert_eq!(
+        built.object_facts.expect("census"),
+        vec!["compared\t5".to_string()],
+        "no fact differs between the model and the resolver"
+    );
+}
