@@ -26,6 +26,7 @@ use al_syntax::IdentifierFoldExt;
 use crate::engine::ids::{encode_object_id, to_stable_object_id, to_stable_routine_id_from_parts};
 use crate::engine::perf_trace as pt;
 use crate::program::body::node_util::{Utf16Cols, strip_quotes};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -675,6 +676,7 @@ fn project_file(
 
     project_ir(
         &ir_file,
+        &whole_file_population(&ir_file),
         source,
         app_guid,
         model_instance_id,
@@ -691,12 +693,55 @@ fn project_file(
     }
 }
 
+/// The declarations of one file to project, by position: each object's index in
+/// `AlFile::objects` with the indices of its routines, document order.
+pub type FilePopulation = Vec<(usize, Vec<usize>)>;
+
+/// Every declaration in `ir_file` — the population of the disk-backed paths.
+pub fn whole_file_population(ir_file: &al_syntax::ir::AlFile) -> FilePopulation {
+    ir_file
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(oi, o)| (oi, (0..o.routines.len()).collect()))
+        .collect()
+}
+
+/// The population of each file according to the program graph's physical rows
+/// (engine-switch S2b.4): the model projects what the program engine extracted, so
+/// one walk decides what exists. Keyed by virtual path.
+pub fn rows_population(
+    rows: &crate::program::physical::PhysicalIndex,
+) -> HashMap<&str, FilePopulation> {
+    let mut by_file: HashMap<&str, FilePopulation> = HashMap::new();
+    for o in &rows.objects {
+        by_file
+            .entry(o.file.as_str())
+            .or_default()
+            .push((o.object_ix as usize, Vec::new()));
+    }
+    for r in &rows.routines {
+        let pop = by_file
+            .get_mut(r.file.as_str())
+            .expect("a routine row's object has an object row");
+        let entry = pop
+            .iter_mut()
+            .find(|(oi, _)| *oi == r.object_ix as usize)
+            .expect("a routine row's object has an object row");
+        entry.1.push(r.routine_ix as usize);
+    }
+    by_file
+}
+
 /// Project one ALREADY-PARSED file into `workspace` — [`project_file`] without the
 /// parse. Engine-switch S2a: the analyze path hands in the program engine's parse
 /// of the same text (`al_syntax::parse` over the same `read_al_source` bytes), so
-/// each workspace file is parsed once.
+/// each workspace file is parsed once. S2b.4: `population` names the declarations
+/// to project; the analyze path takes it from the program graph's physical rows.
+#[allow(clippy::too_many_arguments)]
 fn project_ir(
     ir_file: &al_syntax::ir::AlFile,
+    population: &FilePopulation,
     source: &str,
     app_guid: &str,
     model_instance_id: &str,
@@ -704,7 +749,9 @@ fn project_ir(
     cols: &Utf16Cols,
     workspace: &mut L3Workspace,
 ) {
-    for (oi, o) in ir_file.objects.iter().enumerate() {
+    for (oi, routine_ixs) in population {
+        let oi = *oi;
+        let o = &ir_file.objects[oi];
         let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
@@ -916,7 +963,7 @@ fn project_ir(
                 .collect::<Vec<_>>(),
         );
 
-        for ir_routine in &o.routines {
+        for ir_routine in routine_ixs.iter().map(|&ri| &o.routines[ri]) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
                 continue;
@@ -1595,6 +1642,9 @@ fn assemble_l3_workspace_from_program(
     }
 
     let _s = pt::span("l3", "l3.project_parallel");
+    // S2b.4: what exists is what the program engine extracted.
+    let population = rows_population(&ctx.graph().workspace_rows);
+    let no_decls = FilePopulation::new();
     // Same deterministic order and fold as `assemble_workspace`.
     let mut sorted = files;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -1610,8 +1660,18 @@ fn assemble_l3_workspace_from_program(
                     tables: Vec::new(),
                     routines: Vec::new(),
                 };
+                // Every parsed workspace file has its rows recorded; only a file
+                // with no declarations has none.
+                let pop = population.get(fname).unwrap_or_else(|| {
+                    assert!(
+                        pf.file.objects.is_empty(),
+                        "{fname} declares objects but has no physical rows"
+                    );
+                    &no_decls
+                });
                 project_ir(
                     &pf.file,
+                    pop,
                     &pf.text,
                     &app_guid,
                     model_instance_id,
@@ -2747,5 +2807,53 @@ page 50814 "CP4 Wizard"
             "the escaped and unescaped member texts must hash differently — otherwise \
              this test could not tell a missing unescape from a present one"
         );
+    }
+}
+
+#[cfg(test)]
+mod population_tests {
+    use super::*;
+
+    /// S2b.4: the analyze model projects what the program graph's physical rows
+    /// name. Hand-stated precondition: one routine's row is removed from a real
+    /// program context. The model must lose exactly that routine — a model that
+    /// walked the syntax tree on its own would still have it.
+    #[test]
+    fn model_population_follows_the_physical_rows() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let (mut ctx, _report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+        let full = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+
+        // Drop the first codeunit routine row (interfaces are skipped anyway).
+        let k = ctx
+            .graph
+            .workspace_rows
+            .routines
+            .iter()
+            .position(|r| r.node.object.kind == al_syntax::ir::ObjectKind::Codeunit)
+            .unwrap();
+        let dropped = ctx.graph.workspace_rows.routines.remove(k);
+        let fewer = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+
+        assert_eq!(
+            fewer.workspace.routines.len() + 1,
+            full.workspace.routines.len()
+        );
+        let at = |r: &L3Routine| {
+            (
+                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.start_line,
+                r.source_anchor.start_column,
+            )
+        };
+        let gone = (
+            format!("ws:{}", dropped.file),
+            dropped.start.row,
+            dropped.start.col,
+        );
+        assert!(full.workspace.routines.iter().any(|r| at(r) == gone));
+        assert!(!fewer.workspace.routines.iter().any(|r| at(r) == gone));
     }
 }

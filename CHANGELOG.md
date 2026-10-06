@@ -68,6 +68,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The analyze model's population comes from the program graph** (engine-switch S2b.4).
+  `project_ir` now takes the declarations to project as input (`FilePopulation`: each
+  object's index with its routine indices, document order) instead of walking
+  `AlFile::objects` itself. The analyze path builds that list from the program graph's
+  physical rows (`rows_population`), so one walk decides what exists. The disk paths
+  that other consumers still use until S6 pass every declaration
+  (`whole_file_population`). The model's own skip rules (unknown object kinds,
+  interface/control-add-in signatures, nameless routines) still apply, and the S2b.3
+  census remains the cross-check. A file that declares objects but has no rows is a
+  hard error, not an empty projection.
+
+  `model_population_follows_the_physical_rows` removes one routine's row from a real
+  program context, and the model must lose exactly that routine. Discrimination:
+  projecting the whole file instead of the rows fails it. The harness shows `s2b3` and
+  `s2b4` byte-identical on all 218 corpora, census included.
+
 - **The detector model is part of the program engine** (engine-switch S2b.2). The
   model types and assembly passes moved from `engine::l3` to `program::model`:
   - `l3_workspace` → `workspace`;
