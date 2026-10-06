@@ -152,6 +152,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem policy check` reads the program engine** (engine-switch S6.6; `policy
+  explain` builds no model). Goldens unchanged.
+  `policy_check_follows_the_program_engines_calls`: an event subscriber commits only
+  inside the page it opens with `MyPage.RunModal()`, so the default policy's
+  `no-commit-in-event-subscribers` emits 1 finding; discrimination: the L3 builder
+  emits 0.
+
 - **`alsem events fanout` and `events chains` read the program engine** (engine-switch
   S6.5). Goldens unchanged. `events_follow_the_program_engines_event_graph` states a
   workspace event whose only subscriber names it as an identifier (L3 drops it, the

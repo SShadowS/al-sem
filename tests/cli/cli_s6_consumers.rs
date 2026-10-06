@@ -234,3 +234,65 @@ fn events_follow_the_program_engines_event_graph() {
         chains.text
     );
 }
+
+/// S6.6 `alsem policy check` (default policy): an event subscriber commits, but
+/// only inside the page it opens with `MyPage.RunModal()`.
+#[test]
+fn policy_check_follows_the_program_engines_calls() {
+    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        r#"{"id":"aaaa6666-0000-0000-0000-000000000026","name":"S6Pol","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50620,"to":50629}]}"#,
+    );
+    write(
+        &ws.join("src/Pol.al"),
+        r#"codeunit 50620 "S6 Pol Pub"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnEvent()
+    begin
+    end;
+}
+
+page 50621 "S6 Pol Page"
+{
+    trigger OnOpenPage()
+    begin
+        Commit();
+    end;
+}
+
+codeunit 50622 "S6 Pol Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"S6 Pol Pub", 'OnEvent', '', false, false)]
+    local procedure HandleEvent()
+    var
+        MyPage: Page "S6 Pol Page";
+    begin
+        MyPage.RunModal();
+    end;
+}
+"#,
+    );
+    let out = run_policy_check(&PolicyCheckOptions {
+        workspace: ws,
+        policy_path: None,
+        no_policy: false,
+        format: "json",
+        out: None,
+        deterministic: true,
+        strict: false,
+        driver_version: "s6",
+    });
+    let text = out.text.expect("policy output");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let emitted = v["ruleSummaries"]
+        .as_array()
+        .expect("ruleSummaries")
+        .iter()
+        .find(|r| r["ruleId"] == "no-commit-in-event-subscribers")
+        .map(|r| r["findingsEmitted"].as_i64().unwrap_or(-1));
+    assert_eq!(emitted, Some(1), "{text}");
+}
