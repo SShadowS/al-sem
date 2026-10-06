@@ -15,8 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use super::effect_lattice::{EffectPresence, TempStateKind, effect_key_of};
 use super::summary_runner::compute_summaries_v2_with_leaves_core;
-use crate::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-use crate::engine::l3::event_graph::build_event_graph;
 use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::combined_graph::build_combined_graph;
@@ -836,10 +834,10 @@ pub fn project_r3a2(resolved: &L3Resolved) -> R3a2Projection {
 fn run_and_project(resolved: &L3Resolved) -> Vec<PRoutineSummaryCore> {
     let ws = &resolved.workspace;
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
-    let event_graph = build_event_graph(&ws.routines, &symbols);
+    // Engine-switch S6.8: the model's own calls and events (L3's when nothing is
+    // attached, as for this projection's golden callers).
+    let calls = crate::engine::l3::call_resolver::calls_for(resolved, &symbols);
+    let event_graph = crate::engine::l3::event_graph::events_for(resolved, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
     // Tarjan SCC over the combined graph.

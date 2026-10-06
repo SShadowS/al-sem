@@ -33,7 +33,7 @@ use indexmap::IndexMap;
 use crate::engine::gate::app_attribution::App;
 use crate::engine::gate::projection::FindingSummary;
 use crate::engine::l3::coverage::AnalysisCoverage;
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph};
+use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
 use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l5::finding::Finding;
@@ -917,8 +917,10 @@ pub fn format_html(inputs: &HtmlFormatInputs<'_>) -> String {
     };
 
     // Event graph
+    // Engine-switch S6.8: the model's own event graph (the program engine's on the
+    // analyze path).
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let graph = build_event_graph(&ws.routines, &symbols);
+    let graph = crate::engine::l3::event_graph::events_for(inputs.resolved, &symbols);
     let event_graph_html = render_event_graph(&graph, &m);
 
     let finding_count = findings.len();

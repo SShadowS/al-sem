@@ -317,3 +317,36 @@ fn query_follows_the_program_engines_calls() {
         r.json_text
     );
 }
+
+/// S6.8 `alsem analyze --format html`: the report's event graph is the model's,
+/// so the identifier-form subscriber is drawn.
+#[test]
+fn html_report_draws_the_program_engines_event_graph() {
+    use al_sem::engine::gate::filter::Scope;
+    use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
+    let dir = tempfile::tempdir().unwrap();
+    identifier_subscriber_workspace(dir.path());
+    let args = AnalyzeArgs {
+        workspace: dir.path().to_string_lossy().to_string(),
+        min_severity: None,
+        detector: None,
+        preset: None,
+        scope: Scope::Primary,
+        limit: None,
+        format: OutputFormat::Html,
+        sarif_version_override: None,
+        fail_on: None,
+        require_dependencies: false,
+        baseline: None,
+        update_baseline: false,
+        disable_inline_suppression: true,
+        group_by: None,
+        deterministic: true,
+        with_evidence: false,
+    };
+    let (html, _, _) = run_analyze_with_exit(&args, "s6").expect("analyze runs");
+    assert!(
+        html.contains("HandleX</title>"),
+        "the subscriber node is drawn"
+    );
+}

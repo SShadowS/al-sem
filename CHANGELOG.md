@@ -152,6 +152,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The HTML report and the r3a1/r3a2 projections read the model's own calls and
+  events** (engine-switch S6.8). `format_html` rebuilt the event graph with L3's
+  `build_event_graph`; it now draws the analyze model's (`events_for`), the graph the
+  findings came from. `summary::project_r3a2` and `project_r3a1_combined_graph` use
+  `calls_for`/`events_for` instead of calling `resolve_calls`/`build_event_graph`
+  (identical for their golden callers, which attach nothing). Golden move:
+  `tests/cli-a-goldens/html/ws-d35.default.html` gains the event-graph section for its
+  three `Codeunit, 50` subscribers (L3 could not parse them, so the graph was empty and
+  the section omitted). `html_report_draws_the_program_engines_event_graph`;
+  discrimination: `build_event_graph` in `format_html` fails it.
+
 - **`alsem query` reads the program engine** (engine-switch S6.7).
   `QuerySubstrate::build` uses the program-backed model, and `from_resolved` builds its
   combined graph from the model's own calls and events (`calls_for`/`events_for`)
