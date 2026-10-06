@@ -9,6 +9,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cross-app detector context is complete** (engine-switch S7.6). It got no
+  call-site index, root classifications or ordering facts, so d40/d41/d42/d47/d49/
+  d50/d51/d53/d55/d61 were blind in cross-app mode. The base now keeps the cross-app
+  model itself (`R3a5CrossAppBase::resolved`, its calls cut to the combined graph's).
+  The context reads all three from it, and the detectors receive it as their
+  `resolved`: before, they got a throwaway copy without calls, so a detector calling
+  `calls_for` there fell back to L3's resolver.
+
+  Contract test: on all 195 r0 fixtures without dependencies, cross-app mode reports
+  exactly what single-app mode reports (18 differed with the empty index).
+
+  On CDO/DO the unblinded detectors match single-app except 39 d33 findings (true
+  positives: Base Application writes with no filter, which single-app cannot see)
+  and 2+2 correct d40/d42 drops (the dependency body shows the load). The run also
+  found 7 false positives from engine and detector bugs (see Fixed).
+
+- **The cross-app base and the dependency artifacts read the program engine**
+  (engine-switch S7.4 + S7.5, one commit: the base consumes the artifacts).
+  `capability_cone::build_cross_app_base` replaces the two L3 bases
+  (`build_r3a5_cross_app_base`, symbol-only; `build_r4_cross_app_base`,
+  source-parsing). It builds one cross-app model
+  (`assemble_and_resolve_cross_app_program`). `dep_artifact_l4::dep_artifacts_from_model`
+  builds the R3a-4 products (intra-app edges, cited evidence, order index, return
+  summaries) from that model's rows, calls and events. `build_dep_artifact_l4` and
+  `recover_dep_retained` are deleted, as is the R3a-4 id stabilizer's re-parse. Each
+  used to open every `.app` and parse its embedded source into an isolated L3 model:
+  three parses per `.app` per base build, four for `--r3a4-dep-hooks`.
+  Contracts kept:
+  - A source-bearing dependency routine is a fixed solver leaf holding its own direct
+    effects.
+  - A symbol-only routine reads as effects-unknown.
+  - The combined graph takes workspace callers' calls only. A dependency's own edges
+    reach the cone only as the artifact's admitted edges (direct, resolved method,
+    interface). The program engine resolves far more inside a dependency; feeding
+    all of it to the cone grew CDO's r3a5 projection from 329 MB to 9.8 GB, a growth
+    that is S8's to decide.
+
+  d17 reads the workspace's declared dependencies (implicit Microsoft tier included)
+  and resolved versions from the snapshot. `read_workspace_declared_dependencies` and
+  its tests are deleted. Golden results:
+  - r3a4, r3a5 and the four cross-app r4 goldens are byte-identical.
+  - The r3a4 oracles and vectors now build the artifact from the
+    `r3a4-fixtures/ws` model; the standalone `.app` copy is removed.
+
+  `ws-d13-member-call`'s dependency now names its workspace in
+  `<InternalsVisibleTo>`. Without it the call into an `internal` procedure cannot
+  compile: the program resolver refuses it, where L3 ignored visibility.
+
+  The cross-app world is the workspace plus the dependencies it requires (its
+  declared closure, `ProgramContext::is_required_dependency`). An app that depends ON
+  the workspace is loaded by the snapshot but left out: DO's test app, in an ancestor
+  `.alpackages`, made two d45 false positives and hid four dead-event d12 findings.
+
+  CDO cross-app findings (`--r4-findings-cross-app`, old path s7-0 -> new) went 2529 ->
+  2671, with peak memory 7,200 -> 5,978 MiB. DO went 2334 -> 2345.
+  - Most moves equal the single-app engine switch already triaged in S3-S6: d1, d14,
+    d34, d46, d48, d54, d8 and d9 now match the single-app counts.
+  - The cross-app-specific moves were triaged against source. Findings now lost: 4
+    d45 on CDO and 1 on DO, all correct drops (unreachable writes).
+  - New true positives:
+    - d16 +10: a 3-text-argument `LogMessage` lands on its `[Obsolete]` overload.
+    - d44 +22: Guided Experience writes, which dependency bodies reveal for
+      OnRegisterAssistedSetup/ManualSetup, and two Job Queue Entry writers on
+      OnCompanyOpenCompleted.
+  - New false positives, all with correct bindings; these are detector limits that
+    dependency bodies now reach (OUTSTANDING):
+    - d43 +26: one subscriber that replaces Base App `Send` for one channel;
+      confidence now "likely", see Fixed.
+    - d35 +2: a Commit on an inactive-app activation branch behind a UI hook.
+    - d44 +2: table 1518, reached through a handler that writes only for another
+      notification id.
+  - Fixed by this step, see Fixed: 14 lost d44 findings and 3 d64 false positives.
+
+- **Cross-app calls and events from the program engine** (engine-switch S7.3).
+  `program_calls::assemble_and_resolve_cross_app_program` builds the S7.2 model from
+  one `FULL` program build (`build_program_with_coverage_profiled`) and attaches the
+  program engine's calls for every body in it: the workspace's, and each dependency's
+  resolved from its own app (S7.1). The adapter now works over the model's apps rather
+  than the primary app alone: site keys and declaration lookups use the model's unit
+  spelling (`dep:<guid>:<path>` for a dependency file), a route to any routine the
+  model holds becomes an edge to it, and a route to a symbol-only routine joins its
+  bodyless row through `AbiRowIds` (program id -> row id, built from the same parsed
+  ABI; an id two ABI entries share is left out, so that call stays a dependency
+  target). A dependency table's trigger is a model routine there and gets its edge.
+  The event graph maps a dependency subscriber to its program node through the
+  dependency tier's declarations and binds dependency publishers as model events.
+  `abi_ingest::abi_object_node_id`/`abi_routine_node_id` are now the one place an ABI
+  routine's graph id is built. The single-app path is unchanged (switch harness s7-1
+  vs s7-3: 0 of 218 corpora differ). Not yet used by any consumer (S7.4).
+
+- **The cross-app detector model from the program engine** (engine-switch S7.2).
+  `assemble_and_resolve_cross_app_from_program` builds the workspace rows as the
+  single-app model does, then appends every dependency in the snapshot: each
+  symbol-only dependency's ABI rows (bodyless), then each source-bearing dependency's
+  files projected from the program's own parse (no second parse), in `.app` path order
+  and file path order. The ABI-row converters moved from `engine::deps::cross_app_l3`
+  to `program::model::abi_rows`; `abi_ingest::load_symbol_reference` reads a
+  symbol-only `.app`'s symbols with the same parser the graph build uses. Measured
+  against the legacy merged model (`build_cross_app_l3_r4`): every cross-app fixture,
+  and CDO, give the same rows in the same order, whole content equal. The only
+  difference is the program engine's percent-decoded zip entry name in
+  `dep:<guid>:<path>` source-unit ids (the legacy kept `%2520`). DO has 571 more
+  objects: they come from apps in an ancestor `.alpackages`, which the program engine
+  loads and the legacy `<ws>/.alpackages` scan never read. Not yet used by any
+  consumer (S7.4).
+
+- **Owning-app body resolution** (engine-switch S7.1).
+  `ProgramContext::resolve_dependency_bodies` resolves every call site in every
+  source-bearing dependency body from that dependency's own view: its closure, its
+  visibility, its friends, own-app shadowing. Needs the `FULL` profile. The result is
+  separate from `ProgramReport`, so the north-star numbers do not move (switch harness
+  s6-0 vs s7-1: 0 of 218 corpora differ). `resolve_file_obligations` takes the caller's
+  app instead of assuming the primary app; `workspace_object_map` is now
+  `app_object_map`. `aldump --dependency-bodies-stats <workspace>` prints the taxonomy
+  per app. CDO: 430,735 dependency call sites, 6,307 unknown (1.46%; Base Application
+  4,557, mostly `untrackedReceiver` and `catalogMiss`), in ~5 s. DO: 460,980, 6,676
+  unknown.
+
+- **`aldump --r4-findings-cross-app <workspace>`** (engine-switch S7.0): every registered
+  detector in cross-app mode (`project_r4_findings_cross_app`), the before/after surface
+  for replacing the L3 cross-app pipeline. Baseline on the old path: CDO 2529 findings
+  (79 d13, 60 d16, 3 d17 — `alsem analyze` reports none of these three, its single-app
+  model holds no dependency routines), DO 2334 (68 d13, 47 d16, 7 d17). ~2 minutes each.
+
 - **Dependency ledger** (engine-switch S5.2a, spec G14). `FreshCoverage::ledger` lists
   every dependency in the primary app's reachable declared closure: who declared it, the
   declared minimum version, whether it is a Microsoft Application/Platform-tier app,
@@ -750,6 +874,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **`Temp Blob` is matched by its exact name** (engine-switch S7.6). The IO
+  classifier took any type containing "temp blob", so `Codeunit "Temp Blob
+  Impl."` counted too. Once dependency bodies were analysed, the System
+  Application's own `Temp Blob.CreateOutStream` got a FILE effect and d47 reported
+  CDO's stream twice. There was one copy of the predicate in
+  `program::body::capability::io` and one in `capability_cone`; it is now one
+  definition.
+- **d61 no longer flags a write that runs because the flag is set.** `if IsHandled
+  then Rec.Modify()` (the subscriber produced a result, e.g. Base App's
+  `OnSelectReportLayout`) was reported as a bypass, behind a hard-coded
+  `if not IsHandled` text: 5 false positives on CDO/DO. A simple guard whose
+  TRUE branch holds the write is now skipped. A compound guard (`if A and not
+  IsHandled`) has no recorded structure and stays a candidate.
+- **A cross-app finding located in dependency source is out of scope.** A finding
+  whose enclosing routine is the workspace's but whose primary location is a `dep:`
+  unit survived the role filter (d47 located an IO fact inside `Temp Blob`).
+
+- **d44 anchors a finding on a workspace subscriber** (engine-switch S7.4). It took
+  the first subscriber in id order. In cross-app mode an event's subscribers include
+  dependency routines, so the finding sat in a dependency and the scope filter
+  dropped it: 14 real findings on CDO and DO (OnRegisterManualSetup), now kept.
+- **A dependency object's finding is out of scope in cross-app mode** (engine-switch
+  S7.4). `run_detectors_cross_app` roled findings by their routine only. An
+  object-anchored finding (d64 names its page) carries the object id there, so it
+  defaulted to "primary". Now that the cross-app model holds dependency objects,
+  three Microsoft test-library API pages were reported on DO. Objects are now roled
+  by their app.
+- **d43 no longer calls a setter after an early `exit` certain.**
+  `classify_subscriber` labelled every top-level `IsHandled := true` "always sets"
+  (`MustSetTrue`, confidence "confirmed"), even when an `exit` before it can leave
+  first. It is now `MaySetTrue` ("likely"). Found triaging CDO's eDocs Sending
+  Profile subscriber (26 cross-app findings).
+
+- **The workspace's own `internalsVisibleTo` is read** (engine-switch S7.1). The
+  snapshot gave the workspace app an empty friend list (only dependency manifests were
+  read), so a dependency that the workspace names as a friend — a test app — could not
+  see the workspace's `internal` members: DO's test app had 517 `InternalNotVisible`
+  call sites, now 0. Also, a friend entry's GUID now matches case-insensitively (it
+  was `==`; a stale name then lost the name+publisher fallback too). Workspace call
+  sites are unaffected: only another app's call into the workspace reads it.
 
 - **A routine known only from symbols now says its effects are unknown** (#22). A
   dependency routine with no body got an effect summary with empty `dbEffects` and empty

@@ -7,6 +7,7 @@ mod regen;
 mod symbol_app;
 
 mod b3_triage_r0;
+mod r4_cross_app_program;
 mod r4_differential;
 mod r4_event_inventory;
 mod r4f_digest_effects;

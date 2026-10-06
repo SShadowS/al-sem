@@ -24,19 +24,29 @@
 //! differential vs the goldens is Task 3.
 
 use al_sem::engine::deps::dep_artifact_l4::{
-    ConsumerModel, DEP_ORDER_INDEX_SCHEMA_VERSION, DepOrderIndexStamp, build_dep_artifact_l4,
-    collect_cited_dep_evidence, collect_dep_order_index, inject_intra_app_call_edges,
-    is_dep_order_index_stamp_fresh,
+    ConsumerModel, DEP_ORDER_INDEX_SCHEMA_VERSION, DepOrderIndexStamp, collect_cited_dep_evidence,
+    collect_dep_order_index, inject_intra_app_call_edges, is_dep_order_index_stamp_fresh,
 };
 use serde_json::Value;
 use std::path::PathBuf;
 
 const MODEL_INSTANCE_ID: &str = "r0";
 
-fn fixture_app_bytes() -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/r3a4-fixtures/cccccccc-0001-0000-0000-000000000001.app");
-    std::fs::read(&p).expect("chain-dep .app fixture present")
+/// The chain dependency's artifact, built as the cross-app path builds it
+/// (engine-switch S7.5): from the cross-app model of the workspace that depends on
+/// it, `tests/r3a4-fixtures/ws`.
+fn chain_dep_artifact() -> al_sem::engine::deps::dep_artifact_l4::DependencyArtifactL4 {
+    let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r3a4-fixtures/ws");
+    let x = al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+        &ws,
+        MODEL_INSTANCE_ID,
+        false,
+    )
+    .expect("cross-app model");
+    al_sem::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x)
+        .into_iter()
+        .find(|a| a.header.app_guid.starts_with("cccccccc-0001"))
+        .expect("chain-dep artifact")
 }
 
 fn load_vectors() -> Value {
@@ -53,9 +63,7 @@ fn build_consumed() -> (
     al_sem::engine::deps::dep_artifact_l4::DependencyArtifactL4,
     ConsumerModel,
 ) {
-    let bytes = fixture_app_bytes();
-    let artifact =
-        build_dep_artifact_l4(&bytes, MODEL_INSTANCE_ID).expect("chain-dep artifact builds");
+    let artifact = chain_dep_artifact();
 
     // The merged model's routine membership = the dep's own routines (so the
     // injection both-ends guard admits every intraAppCallEdge — mirrors the
@@ -292,8 +300,7 @@ fn injection_both_ends_in_model() {
 /// injection both-ends guard). A model with NO matching routine ids injects zero.
 #[test]
 fn injection_absent_ends_skipped() {
-    let bytes = fixture_app_bytes();
-    let artifact = build_dep_artifact_l4(&bytes, MODEL_INSTANCE_ID).expect("artifact builds");
+    let artifact = chain_dep_artifact();
     let mut empty_model = ConsumerModel::with_routine_ids(vec!["unrelated/routine".to_string()]);
     inject_intra_app_call_edges(&mut empty_model, std::slice::from_ref(&artifact));
     assert!(

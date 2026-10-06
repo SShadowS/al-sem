@@ -268,6 +268,33 @@ pub fn program_event_graph(
             .entry((row.file.clone(), row.start, row.end))
             .or_insert(&row.node);
     }
+    // A cross-app model (engine-switch S7.3) also holds dependency routines; their
+    // declarations come from the dependency tier (no physical rows), spelled with
+    // the model's `dep:<guid>:<path>` unit.
+    let model_guids: HashSet<String> = ws
+        .routines
+        .iter()
+        .map(|r| r.app_guid.to_ascii_lowercase())
+        .collect();
+    let in_model = |app: crate::program::node::AppRef| {
+        model_guids.contains(&graph.apps.resolve(app).guid.to_ascii_lowercase())
+    };
+    let surface = ctx.decl_surface();
+    for r in &graph.routines {
+        if r.id.object.app == primary || !in_model(r.id.object.app) {
+            continue;
+        }
+        if let Some((meta, path)) = surface.get_with_path(&r.id) {
+            let guid = &graph.apps.resolve(r.id.object.app).guid;
+            node_by_span
+                .entry((
+                    format!("dep:{guid}:{path}"),
+                    crate::program::physical::Pos::of(meta.origin.start),
+                    crate::program::physical::Pos::of(meta.origin.end),
+                ))
+                .or_insert(&r.id);
+        }
+    }
     let mut routine_by_id = HashMap::new();
     for r in &graph.routines {
         routine_by_id.entry(&r.id).or_insert(r);
@@ -346,7 +373,7 @@ pub fn program_event_graph(
                     if let Some(e) = &element {
                         id = format!("{id}/{e}");
                     }
-                    if pid.object.app == primary && !platform {
+                    if (pid.object.app == primary || in_model(pid.object.app)) && !platform {
                         if real.contains(&id) {
                             c.bound_model += 1;
                             (id, "resolved")

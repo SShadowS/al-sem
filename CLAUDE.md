@@ -186,11 +186,19 @@ goldens use the same path (`assemble_and_resolve_workspace_with_program_calls`).
 (`program_calls::assemble_and_resolve_workspace_program`): `alsem prove`, `digest`,
 `fingerprint`, `diff`/snapshot, `events fanout`/`chains`, `policy check`, `query`, the
 HTML report, `compute_analyzer_diagnostics`, and `aldump`'s `--r3a1/2/3`,
-`--r4-findings`, `--r4f-*` modes. Still on L3's own resolver: the cross-app paths
-(`build_cross_app_base_from_cross`, `project_r3a5_cross_app`,
-`project_r4_findings_cross_app`, `project_coverage_cross_app`, `aldump --r3a4/--r3a5`;
-engine-switch S7), and `aldump --l3-*` plus the gap/temp_state tests, which measure L3
-itself and go with it (S9). Spec: `docs/superpowers/specs/2026-10-06-engine-switch-design.md`.
+`--r4-findings`, `--r4f-*` modes. **Since S7 the cross-app path is the program engine
+too**: `program_calls::assemble_and_resolve_cross_app_program` builds ONE model of the
+workspace plus the dependencies it requires (`FULL` profile; each dependency body
+resolved from its own app, `ProgramContext::resolve_dependency_bodies`), and
+`capability_cone::build_cross_app_base`, the R3a-4 artifacts
+(`dep_artifacts_from_model`), `project_r3a5_cross_app`, `project_r4_findings_cross_app`
+and `aldump --r3a4/--r3a5/--r4-findings-cross-app` all read it. With no dependency,
+cross-app mode reports exactly what single-app mode does (a contract test). A
+dependency's own edges reach the cone only as admitted intra-app edges; growing that
+is S8. Still on L3's own resolver: `project_coverage_cross_app`, the legacy merged model
+`cross_app_l3` behind the `--l3-*` cross-app modes, `aldump --l3-*` and the
+gap/temp_state tests, which measure L3 itself and go with it (S9). Spec:
+`docs/superpowers/specs/2026-10-06-engine-switch-design.md`.
 
 **Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
 - `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`

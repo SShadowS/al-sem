@@ -1007,7 +1007,7 @@ fn project_cohort_index(
 /// roles), then project + RE-SORT in stable space. The stable id map is built from the
 /// MERGED `base.ws_routines` (so dep callee ids in d16 ids project correctly).
 ///
-/// Engine-never-throws: a fail-closed / dep-less workspace (`build_r3a5_cross_app_base`
+/// Engine-never-throws: a fail-closed / dep-less workspace (`build_cross_app_base`
 /// → None) yields an empty projection.
 pub fn project_r4_findings_cross_app(
     workspace: &std::path::Path,
@@ -1017,7 +1017,7 @@ pub fn project_r4_findings_cross_app(
     detector_names: &[String],
 ) -> R4FindingsProjection {
     let Some(base) =
-        crate::engine::l4::capability_cone::build_r4_cross_app_base(workspace, model_instance_id)
+        crate::engine::l4::capability_cone::build_cross_app_base(workspace, model_instance_id)
     else {
         return R4FindingsProjection {
             fixture_name: fixture_name.to_string(),
@@ -1038,7 +1038,7 @@ pub fn project_r4_findings_cross_app(
     let detector_name_set: std::collections::HashSet<&str> =
         detector_names.iter().map(|s| s.as_str()).collect();
 
-    let map = crate::engine::l4::summary::build_routine_stable_map(&base.ws_routines);
+    let map = crate::engine::l4::summary::build_routine_stable_map(base.ws_routines());
     let stable_finding_id = make_stable_finding_id_fn(&map);
 
     let mut stable: Vec<StableFinding> = findings

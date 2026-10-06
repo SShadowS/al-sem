@@ -36,8 +36,8 @@ use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
-use crate::engine::l3::call_resolver::{DeclaredDependency, calls_for, resolve_calls};
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, build_event_graph, events_for};
+use crate::engine::l3::call_resolver::calls_for;
+use crate::engine::l3::event_graph::{EventGraph, EventSymbol, events_for};
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
 use crate::engine::l3::symbol_table::SymbolTable;
 
@@ -237,11 +237,7 @@ fn parse_data_scope(text: &str) -> String {
     }
 }
 
-/// True when a declared type names a TempBlob (al-sem `isTempBlobType`).
-fn is_temp_blob_type(t: &str) -> bool {
-    let lc = t.to_lowercase();
-    lc.contains("temp blob") || lc == "tempblob"
-}
+use crate::program::body::capability::io::is_temp_blob_type;
 
 /// True when a declared type names a Page or Report (al-sem
 /// `ui-window-open.ts` `isPageOrReportType`).
@@ -2966,122 +2962,20 @@ pub struct R3a5FullSummaryProjection {
     pub total_cross_app_inherited_facts: usize,
 }
 
-/// Per-dep-routine RETAINED L4 facts, recovered from a dep `.app`'s embedded
-/// source (the R3a-4 producer path). The dep routine arrives in the merged model
-/// EMPTY-featured; these are folded back so the cone + dbEffect compose can
-/// propagate them, exactly as al-sem retains `summary.dbEffects(via:"direct")` +
-/// `summary.capabilityFactsDirect` on the dep artifact's routines.
-struct DepRetained {
-    /// internal dep routine id → its retained summary (direct dbEffects only).
-    summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
-    /// internal dep routine id → its retained direct capability facts.
-    direct_facts: HashMap<String, Vec<CapabilityFact>>,
-    /// internal dep routine id → (direct_status, reasons) for the coverage cone.
-    direct_coverage: HashMap<String, (String, Vec<String>)>,
-}
-
-/// Recover the per-dep-routine retained L4 facts from a dep `.app`'s embedded
-/// source. Re-runs the dep's isolated assemble+resolve (the R3a-4 producer path)
-/// so the dep routine carries its REAL features, then derives:
-///   - the RETAINED summary (`base_intraprocedural_summary` → direct dbEffects),
-///   - the RETAINED direct capability facts (`direct_facts_for_routine`),
-///   - the RETAINED direct coverage (status + reasons).
-///
-/// The internal routine ids are content+modelInstanceId-derived, so they MATCH
-/// the merged cross-app model's dep routine ids (verified for the corpus).
-fn recover_dep_retained(app_bytes: &[u8], model_instance_id: &str) -> DepRetained {
-    use crate::engine::deps::app_manifest::parse_app_manifest_xml;
-    use crate::engine::deps::app_package_zip::extract_navx_manifest_xml;
-    use crate::engine::deps::dep_artifact_l4::iterate_embedded_source;
-    use crate::engine::l3::l3_workspace::assemble_workspace_units;
-    use crate::engine::l4::summary_runner::base_intraprocedural_summary;
-
-    let mut retained = DepRetained {
-        summaries: HashMap::new(),
-        direct_facts: HashMap::new(),
-        direct_coverage: HashMap::new(),
-    };
-
-    let Some(manifest_xml) = extract_navx_manifest_xml(app_bytes) else {
-        return retained;
-    };
-    let manifest = parse_app_manifest_xml(&manifest_xml);
-    if manifest.error.is_some() || manifest.identity.app_guid.is_empty() {
-        return retained;
-    }
-    let app_guid = manifest.identity.app_guid.clone();
-    let embedded = iterate_embedded_source(app_bytes);
-    if embedded.is_empty() {
-        // Symbol-only / no embedded source → no retained facts. The merged model's
-        // bodyless dep routine yields its own opaque coverage via the cone path.
-        return retained;
-    }
-    let units: Vec<(String, String)> = embedded
-        .iter()
-        .map(|f| {
-            (
-                format!("dep:{app_guid}:{}", f.relative_path),
-                f.content.clone(),
-            )
-        })
-        .collect();
-    let mut ws: L3Workspace = assemble_workspace_units(&units, &app_guid, model_instance_id);
-    crate::engine::l3::l3_workspace::resolve(&mut ws);
-
-    // Publisher events (for the publisher-fact injection in direct_facts_for_routine).
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
-    let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
-    for evt in &event_graph.events {
-        if let Some(pr) = &evt.publisher_routine_id {
-            publisher_events_by_routine
-                .entry(pr.clone())
-                .or_default()
-                .push(evt);
-        }
-    }
-
-    // Field index for the base summary's parameterRoles (harmless for the corpus).
-    let mut field_index: crate::engine::l4::summary_runner::FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
-    let routines_by_id: HashMap<String, &L3Routine> =
-        ws.routines.iter().map(|r| (r.id.clone(), r)).collect();
-
-    let empty_pub: Vec<&EventSymbol> = Vec::new();
-    for r in &ws.routines {
-        if r.app_guid != app_guid {
-            continue;
-        }
-        // RETAINED summary: the dep's OWN intraprocedural facts. al-sem keeps only
-        // `via:"direct"` dbEffects (`dependency-pipeline.ts:632`); base_intraprocedural
-        // emits exactly those (every base dbEffect is via:"direct").
-        let base = base_intraprocedural_summary(r, &routines_by_id, &field_index);
-        retained.summaries.insert(r.id.clone(), base);
-
-        // RETAINED direct capability facts + direct coverage (status + reasons).
-        let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        retained.direct_facts.insert(r.id.clone(), facts);
-        retained
-            .direct_coverage
-            .insert(r.id.clone(), (status, reasons));
-    }
-
-    retained
-}
-
 /// The FULLY-ASSEMBLED cross-app L4 BASE — every from-scratch intermediate the
 /// R3a-5 projection (and the R3b Salsa wrap) consume, before the core/cone +
 /// projection. Extracted so the R3b Salsa layer can build its fine-grained inputs
 /// from EXACTLY the same base the from-scratch path uses (no divergent assembly).
 pub(crate) struct R3a5CrossAppBase {
-    pub ws_routines: Vec<L3Routine>,
+    /// The workspace app's guid, lowercase (engine-switch S7.4): the role of an
+    /// object-anchored finding.
+    pub primary_app_guid: String,
+    /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
+    /// combined graph's (workspace callers only). The detectors get it as their
+    /// `resolved`, and the context reads its root classifications and ordering
+    /// facts from it. [`Self::ws_routines`], [`Self::objects`] and [`Self::tables`]
+    /// are views onto it.
+    pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
     pub dep_routine_ids: BTreeSet<String>,
     /// The combined graph WITH the injected dep intra-app typed edges folded in
     /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
@@ -3091,8 +2985,6 @@ pub(crate) struct R3a5CrossAppBase {
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
     pub upgraded_bindings: HashMap<String, Vec<crate::engine::l3::call_resolver::UpgradedBinding>>,
     pub event_graph: EventGraph,
-    pub objects: Vec<crate::engine::l3::l3_workspace::L3Object>,
-    pub tables: Vec<crate::engine::l3::l3_workspace::L3Table>,
     /// Fixed-leaf (dep) RETAINED summaries.
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Per-routine direct capability facts (full, ordered).
@@ -3103,116 +2995,91 @@ pub(crate) struct R3a5CrossAppBase {
     /// The DECLARED workspace dependencies `{appGuid, name, minVersion}` (app.json
     /// `dependencies[]`). The d17 MinVersion side. ADDITIVE — only the cross-app L5
     /// detector context reads it; NOT serialized into the r3a5 gate.
-    pub declared_dependencies: Vec<crate::engine::deps::cross_app_l3::DeclaredDependencyDecl>,
+    pub declared_dependencies: Vec<crate::program::model::workspace::DeclaredDependencyDecl>,
     /// Resolved dep `.app` versions keyed by appGuid (`model.apps[].version`). The d17
     /// resolved-version side. ADDITIVE — same gate-additivity note as above.
     pub resolved_app_versions: HashMap<String, String>,
 }
 
-/// Assemble the cross-app L4 BASE (steps 1–3 + 5 of the from-scratch pipeline):
-/// the merged model, the dep artifacts + recovered retained facts, the combined
-/// graph (WITH injected dep intra-app typed edges), the combined-graph SCC, the
-/// field index, and the per-routine direct facts/coverage. The core JACOBI, the
-/// cone, and the projection all run OVER this base (by both the from-scratch path
-/// and the R3b Salsa wrap). Returns `None` for a fail-closed / dep-less workspace.
-pub(crate) fn build_r3a5_cross_app_base(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-) -> Option<R3a5CrossAppBase> {
-    use crate::engine::deps::cross_app_l3::build_cross_app_l3_from_workspace;
-    // --- 1. Merged cross-app L3 (SYMBOL-ONLY dep projection — the R3a5 gate). ---
-    let cross = build_cross_app_l3_from_workspace(workspace, model_instance_id)?;
-    build_cross_app_base_from_cross(cross, workspace, model_instance_id)
-}
-
-/// R4 cross-app base: identical assembly to [`build_r3a5_cross_app_base`] EXCEPT the
-/// merged L3 is built via [`build_cross_app_l3_r4`] which PARSES embedded `.al` source
-/// of app-source deps (so a dep's `OnRun` / `[InternalProc]` / `[Obsolete]` routines
-/// materialize). ADDITIVE: the R3a5 gate keeps the symbol-only `cross`, so its golden
-/// is unmoved; only the d13/d16/d17 cross-app L5 findings consume this richer base.
-pub(crate) fn build_r4_cross_app_base(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-) -> Option<R3a5CrossAppBase> {
-    use crate::engine::deps::cross_app_l3::build_cross_app_l3_r4;
-    let cross = build_cross_app_l3_r4(workspace, model_instance_id)?;
-    build_cross_app_base_from_cross(cross, workspace, model_instance_id)
-}
-
-/// The shared cross-app base assembly (steps 1b–5) over an already-built `CrossAppL3`.
-/// Both the symbol-only R3a5 path and the source-parsing R4 path funnel through here,
-/// so the JACOBI/cone/graph assembly is byte-identical given the same merged model.
-fn build_cross_app_base_from_cross(
-    mut cross: crate::engine::deps::cross_app_l3::CrossAppL3,
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-) -> Option<R3a5CrossAppBase> {
-    use crate::engine::deps::dep_artifact_l4::{
-        ConsumerModel, build_dep_artifact_l4, inject_intra_app_call_edges,
-    };
-    use crate::engine::deps::merged_index::collect_app_paths;
-    use crate::engine::l4::summary_runner::FieldIndex;
-
-    // d17 plumbing (ADDITIVE): declared deps `{appGuid, name, minVersion}` from the
-    // workspace app.json + the resolved dep `.app` versions captured during the merge.
-    let declared_dependencies =
-        crate::engine::deps::cross_app_l3::read_workspace_declared_dependencies(workspace);
-    let resolved_app_versions: HashMap<String, String> =
-        cross.dep_app_versions.iter().cloned().collect();
-
-    // --- 2. Dep artifacts (injected intra-app edges) + recovered retained facts. ---
-    let alpackages = workspace.join(".alpackages");
-    let app_paths = collect_app_paths(&alpackages);
-    let mut artifacts = Vec::new();
-    let mut dep_retained = DepRetained {
-        summaries: HashMap::new(),
-        direct_facts: HashMap::new(),
-        direct_coverage: HashMap::new(),
-    };
-    for p in &app_paths {
-        let Ok(bytes) = std::fs::read(p) else {
-            continue;
-        };
-        if let Some(a) = build_dep_artifact_l4(&bytes, model_instance_id) {
-            artifacts.push(a);
-        }
-        let r = recover_dep_retained(&bytes, model_instance_id);
-        dep_retained.summaries.extend(r.summaries);
-        dep_retained.direct_facts.extend(r.direct_facts);
-        dep_retained.direct_coverage.extend(r.direct_coverage);
+impl R3a5CrossAppBase {
+    /// Every model routine: the workspace's, then each dependency's.
+    pub fn ws_routines(&self) -> &Vec<L3Routine> {
+        &self.resolved.workspace.routines
     }
 
-    // Restore source-bearing dep routines' bodyAvailable (parity, see project_r3a5).
-    for r in &mut cross.resolved.workspace.routines {
-        if dep_retained.summaries.contains_key(&r.id) {
-            r.body_available = true;
-        }
+    pub fn objects(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Object> {
+        &self.resolved.workspace.objects
     }
-    let ws: &L3Workspace = &cross.resolved.workspace;
-    let fetched_lc: BTreeSet<String> = cross
-        .fetched_app_guids
-        .iter()
-        .map(|g| g.to_lowercase())
-        .collect();
+
+    pub fn tables(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Table> {
+        &self.resolved.workspace.tables
+    }
+}
+
+/// The cross-app L4 BASE (engine-switch S7.4): every intermediate the R3a-5
+/// projection and the cross-app detectors read, from ONE program-backed model
+/// (`assemble_and_resolve_cross_app_program`): the workspace and every dependency,
+/// each body's calls and the event graph from the program engine. Returns `None`
+/// for a fail-closed workspace.
+///
+/// Before S7.4 there were two bases, both L3: a symbol-only one (r3a5) whose
+/// source-bearing dependency routines were empty rows with `body_available`
+/// flipped on, and a source-parsing one (r4); each also re-parsed every `.app`
+/// twice more (`build_dep_artifact_l4`, `recover_dep_retained`) for facts the model
+/// now carries itself. Kept contracts:
+/// - a source-bearing dependency routine is a FIXED solver leaf holding its own
+///   direct dbEffects (`base_intraprocedural_summary`), so a workspace caller does
+///   not inherit what the dependency routine's own callees write;
+/// - a symbol-only dependency routine is no leaf: its summary is the `opaque-body`
+///   self-uncertainty;
+/// - every routine's direct capability facts and coverage come from
+///   `direct_facts_for_routine` (a bodyless routine: `opaque-dependency`).
+///
+/// - the combined graph (solver, SCC, detector traversals) takes the calls of
+///   WORKSPACE callers only; a dependency's own edges reach the CONE alone, as the
+///   R3a-4 artifact's admitted intra-app edges (direct, resolved method, interface
+///   `Maybe`), injected as `direct-call` typed edges. The program engine resolves
+///   far more inside a dependency (triggers, events, runs); feeding all of it to
+///   the cone took CDO's r3a5 projection from 329 MB to 9.8 GB, a growth of the
+///   analysed world that is S8's to decide.
+pub(crate) fn build_cross_app_base(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+) -> Option<R3a5CrossAppBase> {
+    use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
+    let mut x = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+        workspace,
+        model_instance_id,
+        false,
+    )?;
+    let ws: &L3Workspace = &x.resolved.workspace;
+    let primary = x
+        .resolved
+        .primary_app
+        .as_ref()?
+        .app_guid
+        .to_ascii_lowercase();
     let dep_routine_ids: BTreeSet<String> = ws
         .routines
         .iter()
-        .filter(|r| fetched_lc.contains(&r.app_guid.to_lowercase()))
+        .filter(|r| r.app_guid.to_ascii_lowercase() != primary)
         .map(|r| r.id.clone())
         .collect();
 
-    // --- 3. Call resolution + combined graph over the MERGED model. ---
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let declared: Vec<DeclaredDependency> = cross
-        .declared_dep_app_guids
-        .iter()
-        .map(|g| DeclaredDependency {
-            app_guid: g.clone(),
-        })
-        .collect();
-    let calls = resolve_calls(ws, &symbols, &declared, &cross.fetched_app_guids);
-    let event_graph: EventGraph = build_event_graph(&ws.routines, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+    let all_calls = x.resolved.precomputed_calls.as_ref()?;
+    let calls = crate::program::model::calls::ResolvedCalls {
+        edges: all_calls
+            .edges
+            .iter()
+            .filter(|e| !dep_routine_ids.contains(&e.from))
+            .cloned()
+            .collect(),
+        upgraded_bindings: all_calls.upgraded_bindings.clone(),
+        diagnostics: all_calls.diagnostics.clone(),
+        external_targets: all_calls.external_targets.clone(),
+    };
+    let event_graph: EventGraph = x.resolved.precomputed_events.as_ref()?.graph.clone();
+    let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -3232,13 +3099,13 @@ fn build_cross_app_base_from_cross(
         }
     }
 
-    // --- 5a. Fold the injected dep intra-app typed edges into the combined graph
-    //         (the cone substrate). ---
-    let mut consumer = ConsumerModel::with_routine_ids(nodes.clone());
-    inject_intra_app_call_edges(&mut consumer, &artifacts);
-    let mut graph_with_injected = graph;
+    // The dependency's own edges, cone-only (see the doc above).
+    let artifacts = crate::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x);
+    let mut consumer =
+        crate::engine::deps::dep_artifact_l4::ConsumerModel::with_routine_ids(nodes.clone());
+    crate::engine::deps::dep_artifact_l4::inject_intra_app_call_edges(&mut consumer, &artifacts);
     for e in &consumer.injected_typed_edges {
-        graph_with_injected.typed_edges.push(TypedEdge {
+        graph.typed_edges.push(TypedEdge {
             kind: e.kind.clone(),
             from: e.from.clone(),
             to: Some(e.to.clone()),
@@ -3254,7 +3121,6 @@ fn build_cross_app_base_from_cross(
         });
     }
 
-    // Publisher events (for the workspace direct facts).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &event_graph.events {
         if let Some(pr) = &evt.publisher_routine_id {
@@ -3264,44 +3130,45 @@ fn build_cross_app_base_from_cross(
                 .push(evt);
         }
     }
-
-    // --- 5b. Per-routine direct facts (full) + direct coverage. ---
+    let routines_by_id: HashMap<String, &L3Routine> =
+        ws.routines.iter().map(|r| (r.id.clone(), r)).collect();
+    let mut leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
+        HashMap::new();
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
     let mut direct_coverage: HashMap<String, (String, Vec<String>)> = HashMap::new();
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     for r in &ws.routines {
-        let is_dep = dep_routine_ids.contains(&r.id);
-        let (facts, status, reasons) = if is_dep {
-            let facts = dep_retained
-                .direct_facts
-                .get(&r.id)
-                .cloned()
-                .unwrap_or_default();
-            let (status, reasons) = dep_retained
-                .direct_coverage
-                .get(&r.id)
-                .cloned()
-                .unwrap_or_else(|| ("unknown".to_string(), vec!["opaque-dependency".to_string()]));
-            (facts, status, reasons)
-        } else {
-            let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-            direct_facts_for_routine(r, pubs)
-        };
+        if dep_routine_ids.contains(&r.id) && r.body_available {
+            leaf_summaries.insert(
+                r.id.clone(),
+                base_intraprocedural_summary(r, &routines_by_id, &field_index),
+            );
+        }
+        let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
+        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
         direct_coverage.insert(r.id.clone(), (status, reasons));
         direct_full.insert(r.id.clone(), facts);
     }
 
+    let upgraded_bindings = calls.upgraded_bindings.clone();
+    let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
+    let resolved_app_versions = x
+        .dependency_apps
+        .iter()
+        .map(|a| (a.guid.clone(), a.version.clone()))
+        .collect();
+    let mut resolved = x.resolved;
+    resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
     Some(R3a5CrossAppBase {
-        ws_routines: ws.routines.clone(),
+        primary_app_guid: primary.clone(),
+        resolved,
         dep_routine_ids,
-        objects: ws.objects.clone(),
-        tables: ws.tables.clone(),
-        graph: graph_with_injected,
+        graph,
         combined_scc,
         field_index,
-        upgraded_bindings: calls.upgraded_bindings.clone(),
-        event_graph,
-        leaf_summaries: dep_retained.summaries,
+        upgraded_bindings,
+        event_graph: event_graph.clone(),
+        leaf_summaries,
         direct_full,
         direct_coverage,
         nodes,
@@ -3330,10 +3197,10 @@ pub fn project_r3a5_cross_app(
         total_cross_app_inherited_facts: 0,
     };
 
-    let Some(base) = build_r3a5_cross_app_base(workspace, model_instance_id) else {
+    let Some(base) = build_cross_app_base(workspace, model_instance_id) else {
         return empty;
     };
-    let ws_routines = &base.ws_routines;
+    let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
     let graph = &base.graph;
     let event_graph = &base.event_graph;
@@ -3359,7 +3226,7 @@ pub fn project_r3a5_cross_app(
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
-        &base.ws_routines,
+        base.ws_routines(),
         ConeOutput::RawOnly,
     )
     .cones;

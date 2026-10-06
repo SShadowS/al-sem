@@ -236,9 +236,20 @@ fn is_file_callsite_method(m: &str) -> bool {
     matches!(m, "create" | "writealltext" | "copy")
 }
 
-fn is_temp_blob_type(t: &str) -> bool {
-    let lc = t.to_lowercase();
-    lc.contains("temp blob") || lc == "tempblob"
+/// True when a declared type names the System Application `Temp Blob` codeunit (or
+/// the old `TempBlob` table): the object name EXACTLY, after its kind keyword and
+/// quotes. A substring match took `Codeunit "Temp Blob Impl."` too, so `Temp
+/// Blob`'s own body got a FILE effect (engine-switch S7.6 triage: CDO d47
+/// duplicates once dependency bodies were analysed).
+pub(crate) fn is_temp_blob_type(t: &str) -> bool {
+    let lc = t.trim().to_lowercase();
+    let name = lc
+        .strip_prefix("codeunit")
+        .or_else(|| lc.strip_prefix("record"))
+        .unwrap_or(&lc)
+        .trim()
+        .trim_matches('"');
+    name == "temp blob" || name == "tempblob"
 }
 
 pub fn extract_file_blob(
@@ -277,4 +288,20 @@ pub fn extract_file_blob(
     }
 
     (facts, vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_temp_blob_type;
+
+    /// The `Temp Blob` codeunit (and the old table) by name, never a type that only
+    /// starts with it. Discrimination (2026-10-06): the old `contains("temp blob")`
+    /// accepts `Temp Blob Impl.` and fails the last assertion.
+    #[test]
+    fn temp_blob_is_matched_by_its_exact_name() {
+        assert!(is_temp_blob_type("Codeunit \"Temp Blob\""));
+        assert!(is_temp_blob_type("Record TempBlob"));
+        assert!(is_temp_blob_type("TempBlob"));
+        assert!(!is_temp_blob_type("Codeunit \"Temp Blob Impl.\""));
+    }
 }

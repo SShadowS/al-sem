@@ -397,6 +397,53 @@ pub struct AbiIngestResult {
     pub error: Option<String>,
 }
 
+/// The parsed `SymbolReference.json` of one SymbolOnly dep unit, read from its
+/// `.app` (engine-switch S7.2: the cross-app model's symbol-only rows). `None`
+/// when the unit has no `.app` path. A read failure gives the empty ABI, as in
+/// [`ingest_abi`], whose `error` the program's ledger already reports.
+// ponytail: reads the `.app` a second time (the graph build's `AbiCache` is not
+// kept); keep the build's cache in the dep tier if this shows up in a profile.
+pub fn load_symbol_reference(unit: &AppUnit) -> Option<Arc<SymbolReferenceAbi>> {
+    let id = &unit.id;
+    let path = unit.app_path.as_ref()?;
+    Some(AbiCache::new().get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path))
+}
+
+/// The graph id of an ABI object of app `app`: by number, or by folded name when it
+/// has none.
+pub(crate) fn abi_object_node_id(
+    app: AppRef,
+    abi_obj: &crate::engine::deps::symbol_reference::AbiObject,
+) -> ObjectNodeId {
+    ObjectNodeId {
+        app,
+        kind: object_kind_from_abi_type(&abi_obj.object_type),
+        key: if abi_obj.object_number != 0 {
+            ObjKey::Id(abi_obj.object_number)
+        } else {
+            ObjKey::Name(abi_obj.name.fold_identifier())
+        },
+    }
+}
+
+/// The graph id of an ABI routine of object `obj_id`. Arity is tri-state (Task 1):
+/// a genuinely-parsed `Parameters` array (even empty) gives its real `len()`; an
+/// absent/unparseable one gives `UNKNOWN_ARITY`, a sentinel that can never
+/// arity-match a real call site — see the constant's doc for the full contract.
+pub(crate) fn abi_routine_node_id(obj_id: &ObjectNodeId, routine: &AbiRoutine) -> RoutineNodeId {
+    RoutineNodeId {
+        object: obj_id.clone(),
+        name_lc: routine.name.fold_identifier(),
+        enclosing_member_lc: None,
+        params_count: if routine.parameters_known {
+            routine.parameters.len()
+        } else {
+            UNKNOWN_ARITY
+        },
+        sig_fp: param_type_fp(&routine.parameters),
+    }
+}
+
 /// Ingest one SymbolOnly dep unit into `ObjectNode` + `RoutineNode` lists.
 ///
 /// Returns empty vecs when the ABI is not available (no `app_path` and not
@@ -424,13 +471,8 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
     let mut routines: Vec<RoutineNode> = Vec::new();
 
     for abi_obj in &abi.objects {
-        let kind = object_kind_from_abi_type(&abi_obj.object_type);
-        let key = if abi_obj.object_number != 0 {
-            ObjKey::Id(abi_obj.object_number)
-        } else {
-            ObjKey::Name(abi_obj.name.fold_identifier())
-        };
-        let obj_id = ObjectNodeId { app, kind, key };
+        let obj_id = abi_object_node_id(app, abi_obj);
+        let kind = obj_id.kind;
 
         // Table fields (Task 3) — Table/TableExtension only. The physical
         // layout (`fields`/`keys`) lives in a SEPARATE parallel `AbiTable`
@@ -493,27 +535,9 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // (`resolver::object_access_visible_from` /
             // `internal_visible_across`) enforces call-time visibility —
             // ingestion no longer makes that decision by deletion.
-            let name_lc = routine.name.fold_identifier();
-            // Tri-state arity (Task 1): a genuinely-parsed `Parameters` array
-            // (even empty) carries its real `len()`; an absent/unparseable one
-            // maps to `UNKNOWN_ARITY`, a sentinel that can never arity-match a
-            // real call site — see the constant's doc for the full contract.
-            let params_count = if routine.parameters_known {
-                routine.parameters.len()
-            } else {
-                UNKNOWN_ARITY
-            };
-            let sig_fp = param_type_fp(&routine.parameters);
+            let rid = abi_routine_node_id(&obj_id, routine);
             let (routine_kind, event_kind, publisher_kind) = abi_routine_kind_from_str(routine);
             let include_sender = abi_publisher_include_sender(&routine.attributes_parsed);
-
-            let rid = RoutineNodeId {
-                object: obj_id.clone(),
-                name_lc: name_lc.clone(),
-                enclosing_member_lc: None,
-                params_count,
-                sig_fp,
-            };
 
             routines.push(RoutineNode {
                 id: rid,

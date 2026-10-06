@@ -1583,6 +1583,130 @@ pub fn assemble_and_resolve_workspace_from_program(
     finish_resolved(ws, workspace, skip_roots_config)
 }
 
+/// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
+/// [`assemble_and_resolve_workspace_from_program`] builds them, then every dependency
+/// the workspace requires (its declared closure, S7.4: not an app that depends on
+/// the workspace) appended: first each symbol-only dependency's ABI rows (bodyless,
+/// [`crate::program::model::abi_rows`]), then each source-bearing dependency's files
+/// projected whole from the program's own parse, as source unit
+/// `dep:<appGuid>:<path>`. Dependencies are taken in `.app` path order, files in path
+/// order. The order is the legacy merged model's, and it is load-bearing: the symbol
+/// table is last-wins and the extension-field merge first-wins.
+///
+/// Needs a context that keeps dependency bodies (`FULL`). Also returns
+/// [`AbiRowIds`], the join from a symbol-only routine's program id to its row.
+pub fn assemble_and_resolve_cross_app_from_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> Option<(L3Resolved, AbiRowIds)> {
+    let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
+    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx);
+    Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
+}
+
+/// One dependency app in a cross-app model's snapshot (engine-switch S7.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyApp {
+    /// The app guid as its manifest spells it (the model rows' `app_guid`).
+    pub guid: String,
+    pub name: String,
+    pub version: String,
+    /// Whether the snapshot holds its source (embedded or local).
+    pub has_source: bool,
+}
+
+/// One dependency the workspace declares `{appGuid, name, minVersion}`, explicit or
+/// the implicit Microsoft Application/Platform tier: the d17-relevant subset of a
+/// manifest dependency. A missing `version` reads as `"0.0.0.0"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredDependencyDecl {
+    pub app_guid: String,
+    pub name: String,
+    pub min_version: String,
+}
+
+/// Program routine id -> model routine id, for the symbol-only dependency rows of a
+/// cross-app model (engine-switch S7.3). Built from the same parsed ABI as the
+/// rows; an id two ABI entries share (a collapsed overload) is left out, so a call
+/// to it stays a dependency target.
+pub type AbiRowIds = HashMap<crate::program::node::RoutineNodeId, String>;
+
+fn append_dependency_rows(
+    ws: &mut L3Workspace,
+    model_instance_id: &str,
+    ctx: &crate::program::resolve::full::ProgramContext,
+) -> AbiRowIds {
+    let bodies = ctx
+        .dep_bodies()
+        .expect("the cross-app model needs DependencyBodies::Keep");
+    let snap = &ctx.snap;
+    let mut deps: Vec<&crate::snapshot::AppUnit> = snap
+        .apps
+        .iter()
+        .filter(|u| ctx.is_required_dependency(&u.id))
+        .collect();
+    deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
+
+    let mut objects = Vec::new();
+    let mut tables = Vec::new();
+    let mut routines = Vec::new();
+    let mut ids: HashMap<crate::program::node::RoutineNodeId, Option<String>> = HashMap::new();
+    for unit in deps.iter().filter(|u| u.source.is_none()) {
+        let Some(app) = ctx.graph().apps.find(&unit.id) else {
+            continue;
+        };
+        if let Some(abi) = crate::program::abi_ingest::load_symbol_reference(unit) {
+            let p = crate::engine::deps::projection::project_abi_to_index(
+                &abi,
+                &unit.id.guid,
+                model_instance_id,
+            );
+            // `project_abi_to_index` projects one routine per ABI routine, objects
+            // and routines in order.
+            let node_ids = abi.objects.iter().flat_map(|o| {
+                let obj = crate::program::abi_ingest::abi_object_node_id(app, o);
+                o.routines
+                    .iter()
+                    .map(move |r| crate::program::abi_ingest::abi_routine_node_id(&obj, r))
+            });
+            for (node_id, row) in node_ids.zip(&p.routines) {
+                ids.entry(node_id)
+                    .and_modify(|v| *v = None)
+                    .or_insert_with(|| Some(row.id.clone()));
+            }
+            objects.extend(p.objects);
+            tables.extend(p.tables);
+            routines.extend(p.routines);
+        }
+    }
+    crate::program::model::abi_rows::append_dep_entities(ws, &objects, &tables, &routines);
+
+    for unit in deps.iter().filter(|u| u.source.is_some()) {
+        let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
+            continue;
+        };
+        let guid = &unit.id.guid;
+        let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
+        files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+        for pf in files {
+            let cols = Utf16Cols::new(&pf.text);
+            project_ir(
+                &pf.file,
+                &whole_file_population(&pf.file),
+                &pf.text,
+                guid,
+                model_instance_id,
+                &format!("dep:{guid}:{}", pf.virtual_path),
+                &cols,
+                ws,
+            );
+        }
+    }
+    ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+}
+
 /// Which files the program-backed assembly projects.
 pub enum ProgramFiles<'c> {
     /// Every app-scoped file, each from the program's parse, in discovery order.
@@ -1917,9 +2041,11 @@ pub struct L3Resolved {
     ///   (`build_r3a3_source_only_base`) and coverage (`project_coverage`);
     /// - switched but NOT on the analyze path: `project_r3a3` and
     ///   `compute_r3a3_real_matrix`;
-    /// - deliberately NOT switched: the cross-app resolve in `capability_cone.rs`
-    ///   (`build_cross_app_base_from_cross`) and `project_coverage_cross_app`, which resolve against real
-    ///   declared dependencies.
+    /// - the cross-app base (`capability_cone::build_cross_app_base`, engine-switch
+    ///   S7.4) reads the cross-app model's, set by
+    ///   `program_calls::assemble_and_resolve_cross_app_program`;
+    /// - still L3's own resolver: `project_coverage_cross_app` and the `--l3-*`
+    ///   cross-app modes, which measure L3 (S9).
     pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
     /// The detector event graph built from the program engine's subscription
     /// inventory (engine-switch S4.2). Set together with `precomputed_calls`, by

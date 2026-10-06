@@ -335,7 +335,7 @@ impl SiteCensus {
 use crate::program::model::site_links::model_key as l3_key;
 
 /// The source text a span covers (byte columns), when the unit is known.
-fn span_text<'a>(texts: &HashMap<&str, &'a str>, k: &SiteKey) -> Option<&'a str> {
+fn span_text<'a>(texts: &HashMap<String, &'a str>, k: &SiteKey) -> Option<&'a str> {
     let text = texts.get(k.0.as_str())?;
     let offset = |line: u32, col: u32| -> Option<usize> {
         let mut start = 0usize;
@@ -357,6 +357,36 @@ fn op_name(call_text: &str) -> String {
 
 fn can_fire_trigger(op: &str) -> bool {
     matches!(op, "insert" | "modify" | "delete" | "validate" | "rename")
+}
+
+/// The model's source-unit spelling of program file `path` in `app` (engine-switch
+/// S7.3): a primary-app file is its virtual path (the `ws:` prefix dropped, as the
+/// span keys drop it); a dependency file is `dep:<guid>:<path>`, as the cross-app
+/// model spells it.
+fn model_unit(graph: &ProgramGraph, primary: AppRef, app: AppRef, path: &str) -> String {
+    if app == primary {
+        path.to_string()
+    } else {
+        format!("dep:{}:{path}", graph.apps.resolve(app).guid)
+    }
+}
+
+/// The apps whose routines the model holds: the primary app, and in a cross-app
+/// model (S7.2) every dependency.
+fn model_apps(graph: &ProgramGraph, primary: AppRef, ws: &L3Workspace) -> HashSet<AppRef> {
+    let guids: HashSet<String> = ws
+        .routines
+        .iter()
+        .map(|r| r.app_guid.to_ascii_lowercase())
+        .collect();
+    let mut apps: HashSet<AppRef> = graph
+        .objects
+        .iter()
+        .map(|o| o.id.app)
+        .filter(|a| guids.contains(&graph.apps.resolve(*a).guid.to_ascii_lowercase()))
+        .collect();
+    apps.insert(primary);
+    apps
 }
 
 /// Pair every L3 call site with the program edge at the same exact span and
@@ -384,22 +414,39 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -
     let mut matched_calls: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
     let mut matched_ops: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
     let surface = ctx.decl_surface();
-    let texts: HashMap<&str, &str> = ctx
+    let graph = ctx.graph();
+    let primary = report.primary_app_ref;
+    let apps = model_apps(graph, primary, ws);
+    // Keyed by model unit (S7.3): dependency files too, when the model holds them.
+    let mut texts: HashMap<String, &str> = ctx
         .parsed()
         .iter()
         .flat_map(|u| &u.files)
-        .map(|f| (f.virtual_path.as_str(), &*f.text))
+        .map(|f| (f.virtual_path.clone(), &*f.text))
         .collect();
+    for unit in ctx.dep_bodies().unwrap_or_default() {
+        let Some(app) = graph.apps.find(&unit.app) else {
+            continue;
+        };
+        if apps.contains(&app) {
+            for f in &unit.files {
+                texts.insert(model_unit(graph, primary, app, &f.virtual_path), &*f.text);
+            }
+        }
+    }
     let commit_fp = callee_fp("Commit");
 
     // The site links keep EVERY edge per span (S2b.6); this adapter still takes
     // the first in report order, as it always did — S3 converts all of them.
     let links = crate::program::model::site_links::SiteLinks::build(report);
     let mut program: HashMap<SiteKey, &'a ClassifiedEdge> = HashMap::new();
-    for (k, edges) in links.sites_of(report.primary_app_ref) {
-        c.program_sites += edges.len();
-        c.duplicate_program_span += edges.len() - 1;
-        program.insert(k.clone(), edges[0]);
+    for &app in &apps {
+        for (k, edges) in links.sites_of(app) {
+            c.program_sites += edges.len();
+            c.duplicate_program_span += edges.len() - 1;
+            let unit = model_unit(graph, primary, app, &k.0);
+            program.insert((unit, k.1, k.2, k.3, k.4), edges[0]);
+        }
     }
     let is_operation = |ce: &ClassifiedEdge| {
         ce.edge.kind == EdgeKind::ImplicitTrigger
@@ -480,8 +527,12 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -
             } else if surface
                 .get_with_path(&ce.edge.from)
                 .is_none_or(|(meta, path)| {
-                    (path, meta.origin.start.row, meta.origin.start.column)
-                        != (decl_unit, decl.start_line, decl.start_column)
+                    let unit = model_unit(graph, primary, ce.edge.from.object.app, path);
+                    (
+                        unit.as_str(),
+                        meta.origin.start.row,
+                        meta.origin.start.column,
+                    ) != (decl_unit, decl.start_line, decl.start_column)
                 })
             {
                 caller += 1;
@@ -585,7 +636,7 @@ pub fn resolved_calls_from_program(
     ws: &L3Workspace,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
-    let (calls, census, _) = adapter(report, ctx, ws, upgrade_dependency_bindings, false);
+    let (calls, census, _) = adapter(report, ctx, ws, upgrade_dependency_bindings, false, None);
     (calls, census)
 }
 
@@ -601,10 +652,21 @@ pub fn attach_program_calls(
     ctx: ProgramContext,
     report: ProgramReport,
 ) {
+    attach_program_calls_with(resolved, ctx, report, None);
+}
+
+/// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
+/// joins a symbol-only dependency routine to its model row.
+fn attach_program_calls_with(
+    resolved: &mut crate::engine::l3::l3_workspace::L3Resolved,
+    ctx: ProgramContext,
+    report: ProgramReport,
+    abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
+) {
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
-        resolved_calls_from_program(&report, &ctx, &resolved.workspace, true).0
+        adapter(&report, &ctx, &resolved.workspace, true, false, abi_rows).0
     };
     // Engine-switch S4.2: the detector event graph, from the same program build.
     let events = {
@@ -662,6 +724,95 @@ pub fn assemble_and_resolve_workspace_program(
         )?;
     attach_program_calls(&mut resolved, ctx, report);
     Some(resolved)
+}
+
+/// The CROSS-APP detector model and what the cross-app base reads besides it.
+pub struct CrossAppProgram {
+    /// The model, with calls and events attached for every body in it.
+    pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
+    /// The workspace's declared dependencies: app.json's, plus the implicit
+    /// Microsoft tier the snapshot adds (d17's MinVersion side).
+    pub declared_dependencies: Vec<crate::program::model::workspace::DeclaredDependencyDecl>,
+    /// Every dependency app in the snapshot, `.app` path order (d17's resolved
+    /// versions; the R3a-4 artifacts).
+    pub dependency_apps: Vec<crate::program::model::workspace::DependencyApp>,
+    /// The build's dependency coverage and ledger.
+    pub coverage: crate::program::resolve::full::FreshCoverage,
+}
+
+/// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
+/// dependency in the snapshot (`assemble_and_resolve_cross_app_from_program`), from
+/// one `FULL` program build, with the program engine's calls attached for EVERY
+/// body in it — the workspace's, and each dependency's resolved from its own app
+/// (`ProgramContext::resolve_dependency_bodies`) — and its event graph over all of
+/// them. `None` when the program build or the model assembly fails.
+#[must_use]
+pub fn assemble_and_resolve_cross_app_program(
+    workspace: &std::path::Path,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Option<CrossAppProgram> {
+    let (ctx, mut report, coverage) =
+        crate::program::resolve::full::build_program_with_coverage_profiled(
+            workspace,
+            crate::program::profile::BuildProfile::FULL,
+        )
+        .ok()?;
+    let (mut resolved, abi_rows) =
+        crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
+            workspace,
+            model_instance_id,
+            skip_roots_config,
+            &ctx,
+        )?;
+    let snap = ctx.snapshot();
+    let declared_dependencies = snap
+        .apps
+        .iter()
+        .find(|u| u.id == snap.workspace_app)
+        .map(|u| {
+            u.declared_deps
+                .iter()
+                .filter(|d| !d.app_id.is_empty())
+                .map(
+                    |d| crate::program::model::workspace::DeclaredDependencyDecl {
+                        app_guid: d.app_id.clone(),
+                        name: d.name.clone(),
+                        min_version: if d.version.is_empty() {
+                            "0.0.0.0".to_string()
+                        } else {
+                            d.version.clone()
+                        },
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut deps: Vec<&crate::snapshot::AppUnit> = snap
+        .apps
+        .iter()
+        .filter(|u| ctx.is_required_dependency(&u.id))
+        .collect();
+    deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
+    let dependency_apps = deps
+        .into_iter()
+        .map(|u| crate::program::model::workspace::DependencyApp {
+            guid: u.id.guid.clone(),
+            name: u.id.name.clone(),
+            version: u.id.version.clone(),
+            has_source: u.source.is_some(),
+        })
+        .collect();
+    let dependency = ctx.resolve_dependency_bodies();
+    report.edges.extend(dependency.edges);
+    report.site_facts.extend(dependency.site_facts);
+    attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
+    Some(CrossAppProgram {
+        resolved,
+        declared_dependencies,
+        dependency_apps,
+        coverage,
+    })
 }
 
 /// The edge for a call site the program engine gave no usable edge for: one
@@ -773,7 +924,7 @@ pub fn resolved_calls_with_notes(
     ws: &L3Workspace,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus, SiteNotes) {
-    adapter(report, ctx, ws, upgrade_dependency_bindings, true)
+    adapter(report, ctx, ws, upgrade_dependency_bindings, true, None)
 }
 
 /// The adapter. `want_notes` is false on the production path
@@ -785,6 +936,7 @@ fn adapter(
     ws: &L3Workspace,
     upgrade_dependency_bindings: bool,
     want_notes: bool,
+    abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> (ResolvedCalls, SiteCensus, SiteNotes) {
     let mut notes = SiteNotes::new();
     let j = join(report, ctx, ws);
@@ -841,8 +993,12 @@ fn adapter(
         .filter(|o| o.id.app == report.primary_app_ref)
         .map(|o| (o.id.kind, o.name.fold_identifier()))
         .collect();
+    let empty_abi_rows = crate::program::model::workspace::AbiRowIds::new();
     let conv = Converter {
         primary: report.primary_app_ref,
+        model_apps: model_apps(graph, report.primary_app_ref, ws),
+        abi_rows: abi_rows.unwrap_or(&empty_abi_rows),
+        routine_by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
         upgrade_dependency_bindings,
         graph,
         surface: &surface,
@@ -956,6 +1112,16 @@ fn adapter(
     )
 }
 
+/// Where a route's target lives relative to the model (engine-switch S7.3).
+enum Target<'a> {
+    /// A routine the model holds: an edge to it.
+    Model(&'a L3Routine),
+    /// A primary-app routine the model lacks: the site fails (S3.1).
+    MissingFromModel,
+    /// Anything else: a dependency target, a builtin, an unresolved route.
+    Outside,
+}
+
 /// Object lookup key shared by a graph `ObjectNodeId` and an
 /// `AbiRoutineKey` (which spells the kind as lowercase `Debug` text).
 type ObjectKey = (AppRef, String, ObjKey);
@@ -970,6 +1136,12 @@ fn object_key(id: &ObjectNodeId) -> ObjectKey {
 
 struct Converter<'a> {
     primary: AppRef,
+    /// The apps whose routines the model holds (S7.3): the primary app, or every
+    /// app in a cross-app model.
+    model_apps: HashSet<AppRef>,
+    /// The cross-app model's symbol-only rows by program id (S7.3); empty otherwise.
+    abi_rows: &'a crate::program::model::workspace::AbiRowIds,
+    routine_by_id: HashMap<&'a str, &'a L3Routine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
     surface: &'a DeclSurface,
@@ -993,15 +1165,41 @@ struct Converter<'a> {
 }
 
 impl<'a> Converter<'a> {
-    /// The L3 routine for a program workspace routine, by declaration anchor.
+    /// The model routine for a program source routine, by declaration anchor: a
+    /// primary-app routine, or a dependency routine of a cross-app model (S7.3).
     fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a L3Routine> {
-        if id.object.app != self.primary {
+        if !self.model_apps.contains(&id.object.app) {
             return None;
         }
         let (meta, path) = self.surface.get_with_path(id)?;
+        let unit = model_unit(self.graph, self.primary, id.object.app, path);
         self.by_decl
-            .get(&(path, meta.origin.start.row, meta.origin.start.column))
+            .get(&(
+                unit.as_str(),
+                meta.origin.start.row,
+                meta.origin.start.column,
+            ))
             .copied()
+    }
+
+    /// Where a route's target lives relative to the model (S7.3).
+    fn target(&self, route: &Route) -> Target<'a> {
+        match &route.target {
+            RouteTarget::Routine(id) => match self.l3_routine(id) {
+                Some(r) => Target::Model(r),
+                // A primary routine must be in the model: the site is an honest
+                // unknown (S3.1).
+                None if id.object.app == self.primary => Target::MissingFromModel,
+                None => Target::Outside,
+            },
+            // A run into a workspace object with no entry trigger.
+            RouteTarget::AbiSymbol { key } if key.app == self.primary => Target::Outside,
+            RouteTarget::AbiSymbol { .. } => Self::route_routine_id(route)
+                .and_then(|id| self.abi_rows.get(&id))
+                .and_then(|row| self.routine_by_id.get(row.as_str()).copied())
+                .map_or(Target::Outside, Target::Model),
+            RouteTarget::Builtin(_) | RouteTarget::Unresolved => Target::Outside,
+        }
     }
 
     fn type_ref(&self, key: &ObjectKey) -> Option<ExternalTypeRef> {
@@ -1107,11 +1305,10 @@ impl<'a> Converter<'a> {
                 let mut dep_ref = None;
                 let mut dep_routes = Vec::new();
                 for route in &edge.routes {
-                    match &route.target {
-                        RouteTarget::Routine(id) if id.object.app == self.primary => {
-                            ids.push(self.l3_routine(id)?.id.clone());
-                        }
-                        _ => {
+                    match self.target(route) {
+                        Target::Model(m) => ids.push(m.id.clone()),
+                        Target::MissingFromModel => return None,
+                        Target::Outside => {
                             dep_ref = dep_ref.or_else(|| self.dependency_ref(route));
                             dep_routes.push(route);
                         }
@@ -1152,9 +1349,10 @@ impl<'a> Converter<'a> {
                         c.adapter_empty_route_sites += 1;
                         e.resolution = Resolution::Unknown(L3Reason::CalleeUnknown);
                     }
-                    Some(route) => match &route.target {
-                        RouteTarget::Routine(id) if id.object.app == self.primary => {
-                            let callee = self.l3_routine(id)?;
+                    Some(route) => match (self.target(route), &route.target) {
+                        (Target::MissingFromModel, _) => return None,
+                        (Target::Model(callee), _) => {
+                            let id = Self::route_routine_id(route)?;
                             let _ = upgrade_bindings(&mut state, callee, &cs.id);
                             e.to = Some(callee.id.clone());
                             e.resolution = Resolution::Resolved;
@@ -1175,7 +1373,9 @@ impl<'a> Converter<'a> {
                         // A run into a workspace object with no entry trigger
                         // (`Page.Run(Page::X)` or `PageVar.Run()`): the run
                         // shape, with no external type — the object is ours.
-                        RouteTarget::AbiSymbol { key } if key.app == self.primary => {
+                        (Target::Outside, RouteTarget::AbiSymbol { key })
+                            if key.app == self.primary =>
+                        {
                             // Our own app is source, so the only ABI-symbol route
                             // into it is a run's missing entry trigger (the
                             // resolver's `opaque_boundary_route`). The edge kind is
@@ -1198,7 +1398,10 @@ impl<'a> Converter<'a> {
                             );
                             e.resolution = Resolution::Opaque;
                         }
-                        RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. } => {
+                        (
+                            Target::Outside,
+                            RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. },
+                        ) => {
                             e.resolution = external;
                             e.external_type_ref = self.dependency_ref(route).flatten();
                             self.record_target(&cs.id, route);
@@ -1206,11 +1409,11 @@ impl<'a> Converter<'a> {
                                 self.upgrade_dependency(&mut state, route, &cs.id, c);
                             }
                         }
-                        RouteTarget::Builtin(_) => {
+                        (Target::Outside, RouteTarget::Builtin(_)) => {
                             e.dispatch_kind = DispatchKind::Builtin;
                             e.resolution = Resolution::Builtin;
                         }
-                        RouteTarget::Unresolved => {
+                        (Target::Outside, RouteTarget::Unresolved) => {
                             let reason = match route.evidence {
                                 Evidence::Unknown(reason) => reason,
                                 _ => PReason::IndexIntegrationGap,
@@ -1466,14 +1669,13 @@ impl<'a> Converter<'a> {
         let mut callees: Vec<&L3Routine> = Vec::new();
         let mut dependency: Vec<ObjectNodeId> = Vec::new();
         for route in &ce.edge.routes {
-            match &route.target {
+            match (self.target(route), &route.target) {
+                (Target::Model(m), _) => callees.push(m),
                 // A workspace implementer with no model routine: the whole site
                 // is an honest unknown (S3.1).
-                RouteTarget::Routine(id) if id.object.app == self.primary => {
-                    callees.push(self.l3_routine(id)?);
-                }
-                RouteTarget::Routine(id) => dependency.push(id.object.clone()),
-                RouteTarget::AbiSymbol { key } => {
+                (Target::MissingFromModel, _) => return None,
+                (Target::Outside, RouteTarget::Routine(id)) => dependency.push(id.object.clone()),
+                (Target::Outside, RouteTarget::AbiSymbol { key }) => {
                     dependency.push(ObjectNodeId {
                         app: key.app,
                         kind: object_kind_from_abi_type(&key.object_type),
@@ -1486,7 +1688,7 @@ impl<'a> Converter<'a> {
                 }
                 // An implementer the resolver could not resolve: it is listed in
                 // `unresolved_impls` below (no route reached its object).
-                RouteTarget::Unresolved | RouteTarget::Builtin(_) => {}
+                (Target::Outside, RouteTarget::Unresolved | RouteTarget::Builtin(_)) => {}
             }
         }
         callees.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1496,7 +1698,7 @@ impl<'a> Converter<'a> {
         // The site converts (no `?` below): record each dependency route's
         // routine (S3.3).
         for route in &ce.edge.routes {
-            if !matches!(&route.target, RouteTarget::Routine(id) if id.object.app == self.primary) {
+            if !matches!(self.target(route), Target::Model(_)) {
                 self.record_target(&cs.id, route);
             }
         }
@@ -1599,14 +1801,16 @@ impl<'a> Converter<'a> {
         };
         let mut tos: Vec<String> = Vec::new();
         for route in &ce.edge.routes {
-            // S3.6: a trigger in a dependency table keeps its identity and body
-            // state, but gets no edge: the model holds workspace routines only,
-            // and L3 never had an edge for it either. Whether such a trigger
-            // should make the routine uncertain is a detector decision (S8).
-            let in_dependency = match &route.target {
-                RouteTarget::Routine(id) => id.object.app != self.primary,
-                RouteTarget::AbiSymbol { .. } => true,
-                _ => false,
+            // S3.6: a trigger outside the model (a dependency table's, in a
+            // single-app model) keeps its identity and body state, but gets no
+            // edge, and L3 never had an edge for it either. Whether such a
+            // trigger should make the routine uncertain is a detector decision
+            // (S8). In a cross-app model (S7.3) a dependency's trigger is a model
+            // routine and gets its edge.
+            let in_dependency = match (self.target(route), &route.target) {
+                (Target::Model(_) | Target::MissingFromModel, _) => false,
+                (Target::Outside, RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }) => true,
+                (Target::Outside, _) => false,
             };
             if in_dependency && self.record_target(&op.id, route) {
                 c.adapter_trigger_dependency_routes += 1;

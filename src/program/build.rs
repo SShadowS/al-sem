@@ -465,7 +465,9 @@ fn wire_friend_authorizations(
                     snap.apps
                         .iter()
                         .zip(app_refs.iter())
-                        .find(|(u, _)| !u.id.guid.is_empty() && u.id.guid == friend.app_id)
+                        .find(|(u, _)| {
+                            !u.id.guid.is_empty() && u.id.guid.eq_ignore_ascii_case(&friend.app_id)
+                        })
                         .map(|(_, r)| *r)
                 })
                 .flatten();

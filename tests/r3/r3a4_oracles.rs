@@ -15,22 +15,33 @@
 //!      and SORTED (by operationId / routineId).
 
 use al_sem::engine::deps::dep_artifact_l4::{
-    ConsumerModel, DependencyArtifactL4, build_dep_artifact_l4, collect_cited_dep_evidence,
-    collect_dep_order_index, inject_intra_app_call_edges, is_dep_order_index_stamp_fresh,
+    ConsumerModel, DependencyArtifactL4, collect_cited_dep_evidence, collect_dep_order_index,
+    inject_intra_app_call_edges, is_dep_order_index_stamp_fresh,
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 const MODEL_INSTANCE_ID: &str = "r0";
 
-fn fixture_app_bytes() -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/r3a4-fixtures/cccccccc-0001-0000-0000-000000000001.app");
-    std::fs::read(&p).expect("chain-dep .app fixture present")
+/// The chain dependency's artifact, built as the cross-app path builds it
+/// (engine-switch S7.5): from the cross-app model of the workspace that depends on
+/// it, `tests/r3a4-fixtures/ws`.
+fn chain_dep_artifact() -> al_sem::engine::deps::dep_artifact_l4::DependencyArtifactL4 {
+    let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r3a4-fixtures/ws");
+    let x = al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+        &ws,
+        MODEL_INSTANCE_ID,
+        false,
+    )
+    .expect("cross-app model");
+    al_sem::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x)
+        .into_iter()
+        .find(|a| a.header.app_guid.starts_with("cccccccc-0001"))
+        .expect("chain-dep artifact")
 }
 
 fn build_artifact() -> DependencyArtifactL4 {
-    build_dep_artifact_l4(&fixture_app_bytes(), MODEL_INSTANCE_ID).expect("chain-dep artifact")
+    chain_dep_artifact()
 }
 
 /// Drive the consumer hooks over a merged model = the dep's own routines.

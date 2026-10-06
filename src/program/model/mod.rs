@@ -7,6 +7,7 @@
 //! their `L3*` names until the rename in S9; `engine::l3` re-exports these modules
 //! under their old names meanwhile.
 
+pub mod abi_rows;
 pub mod calls;
 pub mod census;
 pub mod events;
