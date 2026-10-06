@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`aldump`'s detector-output modes read the program engine** (engine-switch S6.9):
+  `--r3a1-combined-graph`, `--r3a2-summary-core`, `--r3a3-cone-coverage`,
+  `--r4-findings` and the six `--r4f-*` modes project the program-backed model
+  (`program_model`, default model-instance id). The `--l3-*` modes keep L3's own model:
+  they measure L3 and go with it in S9. `--r3a4`/`--r3a5` (cross-app) move in S7.
+  `MODEL_INSTANCE_ID_DEFAULT` is now `pub`. Goldens unchanged.
+  `aldump_projection_modes_follow_the_program_engines_calls` runs the binary's
+  `--r3a3-cone-coverage`: `Run6`'s inherited facts hold the insert reached through
+  `MyPage.RunModal()`; discrimination: with L3's model they are empty.
+
 - **The HTML report and the r3a1/r3a2 projections read the model's own calls and
   events** (engine-switch S6.8). `format_html` rebuilt the event graph with L3's
   `build_event_graph`; it now draws the analyze model's (`events_for`), the graph the

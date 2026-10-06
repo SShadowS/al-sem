@@ -350,3 +350,46 @@ fn html_report_draws_the_program_engines_event_graph() {
         "the subscriber node is drawn"
     );
 }
+
+/// S6.9 `aldump --r3a3-cone-coverage`: Run6's cone holds the insert reached
+/// through `MyPage.RunModal()`.
+#[test]
+fn aldump_projection_modes_follow_the_program_engines_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    page_run_workspace(dir.path());
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_aldump"))
+        .arg("--r3a3-cone-coverage")
+        .arg(dir.path())
+        .output()
+        .expect("aldump runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    // Run6 is the only routine of codeunit 50602; its INHERITED facts (not the
+    // page trigger's direct ones) must hold the insert.
+    let run6 = v["summaries"]
+        .as_array()
+        .expect("summaries")
+        .iter()
+        .find(|s| {
+            s["routineId"]
+                .as_str()
+                .is_some_and(|id| id.contains(":Codeunit:50602#"))
+        })
+        .expect("Run6 summary");
+    let inherited: Vec<&str> = run6["capabilityFactsInherited"]
+        .as_array()
+        .expect("inherited facts")
+        .iter()
+        .filter_map(|f| f["resourceId"].as_str())
+        .collect();
+    assert_eq!(
+        inherited,
+        vec!["aaaa6666-0000-0000-0000-000000000006:Table:50600"],
+        "{run6:#}"
+    );
+}
