@@ -300,6 +300,22 @@ zero unexplained differences, zero regressions, written golden triage.
   required population. The cross-app detector context gains the ordering input and
   resolved-site indexing it lacks (`detector_context.rs:1542-1555, 1718-1729`). Not a
   hybrid: no legacy artifact producer survives this step.
+  *As built (2026-10-06, plan `docs/superpowers/plans/2026-10-06-engine-switch-s7.md`):*
+  S7.1 owning-app body resolution (`ProgramContext::resolve_dependency_bodies`, kept out
+  of `ProgramReport`); it surfaced that the workspace's own `internalsVisibleTo` was
+  never read. S7.2 one cross-app model from the program parse (rows equal the legacy
+  merged model on every fixture and CDO). S7.3 the adapter and event graph over every
+  model app; symbol-only routines join their ABI rows by program id. S7.4+S7.5 one
+  cross-app base and the R3a-4 artifacts from that model; `build_dep_artifact_l4`,
+  `recover_dep_retained` and the stabilizer's re-parse deleted; CDO peak 7.2 -> 6.0 GB.
+  Decisions taken: the world is the workspace plus its REQUIRED dependencies (an app
+  that depends on the workspace is out); a dependency's own edges reach the cone only
+  as admitted intra-app edges (all program edges grew CDO's r3a5 output 329 MB ->
+  9.8 GB: S8's to decide). S7.6 the cross-app detector context gets its call-site
+  index, roots and ordering facts; with no dependency, cross-app == single-app on 195
+  fixtures. Triage of every cross-app-specific move on CDO/DO against source fixed
+  d44 (anchoring), d43 (early exit), d61 (guard polarity), the `Temp Blob`
+  classifier and two scope holes; the residual detector limits are in OUTSTANDING.
 - **S8 — Phase C expansion** (G11b, G15b-new). The analysed world and propagation grow
   beyond the prior cross-app contracts, under `FULL`. Demand policy per detector, with
   seeds and traversal directions stated: forward from workspace routines for effects;
