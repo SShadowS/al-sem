@@ -1213,3 +1213,50 @@ fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
         assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
     }
 }
+
+/// S8 engine gap 2 (triage D, d44 Group C): a dependency writes only under
+/// `if UpdateCache then`, and the dependency caller the workspace reaches passes
+/// a literal `false`. The write cannot run on that path, so the two workspace
+/// subscribers do not overlap. Each case is a `Dep A.Run2` body over the same
+/// `Dep B`:
+/// - `literal-false`: `B.GetState(false)` -> `if UpdateCache then Refresh()`;
+/// - `forwarded`: `B.Outer(false)` forwards its parameter to `GetState`;
+/// - `early-exit`: `if not UpdateCache then exit;` before the write;
+/// - `literal-true`, `assigned` and `cleared` (the callee overwrites the
+///   parameter) and `variable` (a local, not a literal): the controls, so d44
+///   reports.
+///
+/// Discrimination (2026-10-07), each break fails the named case (`left: 1`) and
+/// passes restored: a contradicting literal not dropping the fact
+/// (`literal-false`); a forwarded parameter dropping its requirement
+/// (`forwarded`); no early-exit guard (`early-exit`); the member's guarded call
+/// edge adding no requirement in `fact_cone_for_scc` (`literal-false`); `Clear`
+/// not counted as writing its argument in `guard_frames` (`cleared`).
+#[test]
+fn a_dependency_write_behind_a_false_literal_is_not_reached() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let run2 = |call: &str| {
+        format!(
+            "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Flag: Boolean;\n    begin\n        Flag := false;\n        {call};\n    end;\n}}\n"
+        )
+    };
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure GetState(UpdateCache: Boolean)\n    begin\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Outer(Update: Boolean)\n    begin\n        GetState(Update);\n    end;\n\n    procedure Guarded(UpdateCache: Boolean)\n    var\n        Log: Record \"Dep Log\";\n    begin\n        if not UpdateCache then\n            exit;\n        Log.Insert();\n    end;\n\n    procedure Assigned(UpdateCache: Boolean)\n    begin\n        UpdateCache := true;\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Cleared(UpdateCache: Boolean)\n    begin\n        Clear(UpdateCache);\n        if not UpdateCache then\n            Refresh();\n    end;\n\n    local procedure Refresh()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n";
+    let cases = [
+        ("literal-false", "B.GetState(false)", 0),
+        ("forwarded", "B.Outer(false)", 0),
+        ("early-exit", "B.Guarded(false)", 0),
+        ("literal-true", "B.GetState(true)", 1),
+        ("assigned", "B.Assigned(false)", 1),
+        ("cleared", "B.Cleared(true)", 1),
+        ("variable", "B.GetState(Flag)", 1),
+    ];
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    for (name, call, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        transitive_dep_write_workspace_with(dir.path(), &run2(call), b);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
+    }
+}

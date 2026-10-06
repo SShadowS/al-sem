@@ -56,6 +56,22 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **Constant-argument guards: what S8 gap 2 does not cover** (recorded 2026-10-07,
+  `src/engine/l4/param_guard.rs`). Each item keeps a fact that a literal argument
+  makes impossible; none adds a false prune.
+  - **Conjuncts.** Only a whole condition is a guard (`P`, `not P`, `P = false`).
+    `if IsPrimarySetup and (...) then Commit()` is not, so the Guided Experience
+    `Commit` at `GuidedExperienceImpl.Codeunit.al:115` still reaches CDO's setup
+    registration subscribers (d35, triage D Group 2). The THEN branch of an `and`
+    chain needs every simple conjunct; the ELSE branch needs nothing.
+  - **Data state.** The other Guided Experience `Commit` (`:121`) runs only when a
+    "Primary Guided Experience Item" exists for the extension, which only the
+    `IsPrimarySetup = true` overloads create. CDO and DO never call them. A guard
+    cannot express this; d35 Group 2 stays a false positive until it can.
+  - **Recursive SCCs and table triggers.** Guards are kept only in a non-recursive
+    singleton's cone, and the implicit-trigger path carries none.
+  - **`case P of`** and guards on non-boolean parameters (`if Mode = Mode::X`).
+
 - [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
   S3.4, which moved the existing rule into the program resolver UNCHANGED —
   `applicability::TriggerSiteRule`). Two open questions, both changing findings:

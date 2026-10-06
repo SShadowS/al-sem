@@ -978,6 +978,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A write behind a boolean parameter is pruned when the caller passes the
+  opposite literal** (engine-switch S8, triage D gap 2). Continia Core writes its
+  activation cache only under `if UpdateCache then`. Every route from a CDO/DO
+  subscriber passes a literal `false`, but one other Core caller passes `true`,
+  so no per-routine rule can prune the write. The answer depends on the call
+  path, so it is carried like a `var` record parameter's temp state
+  (`src/engine/l4/param_guard.rs`). A capability-cone entry records the
+  parameter values its site requires: `if P`, `if not P`, `if P = false`, and
+  the early exit `if <guard> then exit;`. Each call edge substitutes the caller's
+  argument. A contradicting literal drops the fact, an agreeing literal drops
+  the requirement, and a forwarded parameter re-anchors it. A call made under a
+  guard adds its requirements to everything behind it.
+  - A parameter counts only when it is a by-value `Boolean`, never assigned, and
+    never passed to a `var` parameter, `Evaluate` or `Clear`.
+  - Only a non-recursive singleton's cone keeps guards; anywhere else they are
+    dropped, and the fact is unconditional as before. The cone key carries the
+    guard, so a guarded copy never hides an unguarded one.
+  - CDO cross-app: d44 24 -> 12, d45 227 -> 143. DO: d44 24 -> 12, d45 218 -> 134.
+    The removed findings are the Core activation, access-token and consent
+    tables (written only with `UpdateCache`/`SkipCache` = `true`), and the
+    document-sending writes behind `DocEMailSend(true, ...)`: with
+    `UseQueue = true` the mail is only queued. 20 (CDO) / 32 (DO) d45 findings
+    are new; they were hidden by the 16-per-publisher cap before. Wall time and
+    peak memory did not change (CDO 15-16 s, 2.9 GB).
+  - d35 does not move. Its triaged false positives need a guard on one conjunct
+    (`IsPrimarySetup and (...)`) and data-state reasoning (`OUTSTANDING.md`).
+  - Pinned by `a_dependency_write_behind_a_false_literal_is_not_reached` (seven
+    cases, with a discrimination proof). One r3a3 fact moved (`ws-d32`'s
+    `DriverC` calls `SingleCallSite(false)`). The BFS oracle pins that one prune
+    by its exact count.
+
 - **A table method's `Rec` is as temporary as the record it is called on**
   (engine-switch S8, triage D gap 1). A Table/TableExtension procedure's
   implicit `Rec` was seeded `Known(false)`, so `Buf.ClearBuffer()` on a

@@ -22,17 +22,17 @@
 	"fixtureCount": 160,
 	"matrix": {
 		"routineCount": 595,
-		"routinesWithInheritedFacts": 145,
+		"routinesWithInheritedFacts": 144,
 		"factsWithMoreThan1HopWitness": 246,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 22,
 		"provenanceDistribution": {
 			"direct": 615,
-			"inherited": 252
+			"inherited": 251
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 773,
+			"static": 772,
 			"unresolved": 93
 		},
 		"opDistribution": {
@@ -49,12 +49,12 @@
 			"subscribe": 122,
 			"ui-confirm": 1,
 			"ui-error": 16,
-			"ui-message": 37,
+			"ui-message": 36,
 			"ui-window-open": 1,
 			"write-blob": 2
 		},
 		"viaDistribution": {
-			"call": 198,
+			"call": 197,
 			"event-dispatch": 54,
 			"self": 615
 		},
@@ -1197,22 +1197,22 @@
 			"goldenFile": "ws-d32.r3a3.golden.json",
 			"matrix": {
 				"routineCount": 8,
-				"routinesWithInheritedFacts": 4,
+				"routinesWithInheritedFacts": 3,
 				"factsWithMoreThan1HopWitness": 4,
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
 					"direct": 5,
-					"inherited": 4
+					"inherited": 3
 				},
 				"confidenceDistribution": {
-					"static": 9
+					"static": 8
 				},
 				"opDistribution": {
-					"ui-message": 9
+					"ui-message": 8
 				},
 				"viaDistribution": {
-					"call": 4,
+					"call": 3,
 					"self": 5
 				},
 				"directStatusDistribution": {

@@ -74,16 +74,7 @@
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d320:Codeunit:51500#80d8480120b346ac4413e7864bc9519b1a6cd4596b8c3ced9e213d6f2f18d1ec",
 			"capabilityFactsDirect": [],
-			"capabilityFactsInherited": [
-				{
-					"op": "ui-message",
-					"resourceKind": "ui",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "call",
-					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d320:Codeunit:51500#80d8480120b346ac4413e7864bc9519b1a6cd4596b8c3ced9e213d6f2f18d1ec/cs0"
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-00000000d320:Codeunit:51500#80d8480120b346ac4413e7864bc9519b1a6cd4596b8c3ced9e213d6f2f18d1ec",
 				"directStatus": "complete",

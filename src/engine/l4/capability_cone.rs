@@ -1418,6 +1418,63 @@ struct ConeFactEntry {
     /// re-anchor, so a rep's own `parameterIndex` can be stale; this field is
     /// the frame-correct one.
     pd: Option<u32>,
+    /// `Some`: the fact happens only when this cone's routine receives the
+    /// required boolean argument values ([`super::param_guard`]); the cone key
+    /// carries them as a suffix, so a guarded and an unguarded copy of one fact
+    /// never collapse. Like `pd`, only a non-recursive singleton's cone keeps
+    /// it; everywhere else it is dropped (the fact becomes unconditional).
+    guard: Option<Arc<EntryGuard>>,
+}
+
+/// A guarded cone entry's requirements and its key without the guard suffix.
+#[derive(Debug)]
+struct EntryGuard {
+    reqs: Vec<super::param_guard::Req>,
+    base_key: Arc<str>,
+}
+
+/// The cone key of a fact with base key `base` under `reqs` (`base` itself
+/// when there is no requirement).
+fn guarded_key(base: &Arc<str>, reqs: &[super::param_guard::Req]) -> Arc<str> {
+    if reqs.is_empty() {
+        return Arc::clone(base);
+    }
+    let mut k = String::with_capacity(base.len() + 4 * reqs.len());
+    k.push_str(base);
+    k.push_str("|g");
+    for (i, v) in reqs {
+        k.push_str(&format!("{i}{}", if *v { 't' } else { 'f' }));
+    }
+    Arc::from(k)
+}
+
+/// `(key, guard)` for a fact with base key `base` under `reqs`.
+fn with_reqs(
+    base: Arc<str>,
+    reqs: Vec<super::param_guard::Req>,
+) -> (Arc<str>, Option<Arc<EntryGuard>>) {
+    if reqs.is_empty() {
+        return (base, None);
+    }
+    let key = guarded_key(&base, &reqs);
+    (
+        key,
+        Some(Arc::new(EntryGuard {
+            reqs,
+            base_key: base,
+        })),
+    )
+}
+
+/// The key a cone entry has without its guard suffix.
+fn base_key_of<'k>(key: &'k Arc<str>, entry: &'k ConeFactEntry) -> &'k Arc<str> {
+    entry.guard.as_ref().map_or(key, |g| &g.base_key)
+}
+
+/// Whether an entry is bound to its cone routine's frame (its temp state or its
+/// guard is resolved per call edge).
+fn frame_bound(entry: &ConeFactEntry) -> bool {
+    entry.pd.is_some() || entry.guard.is_some()
 }
 
 /// The `parameter-dependent` index of a table fact, if it has one.
@@ -1453,55 +1510,68 @@ fn fact_pd_index(f: &CapabilityFact) -> Option<u32> {
 /// (`summary_runner.rs`: `direct | method | implicit-trigger`): the typed graph
 /// carries no `implicit-trigger` edges (`combined_graph.rs` skips them), so a PD
 /// fact never crosses one here and stays physical. Keep the two in step.
-fn substitute_pd_entry(
+///
+/// The same edge carries the entry's GUARD into the caller's frame
+/// ([`super::param_guard::across_edge`], over the same two edge kinds), then
+/// adds `edge_reqs`, the requirements under which the caller makes this call.
+/// `None`: an argument contradicts a requirement, so the fact cannot happen
+/// through this edge.
+fn substitute_entry(
     key: &Arc<str>,
     entry: &ConeFactEntry,
     edge: &TypedOutEdge,
     caller: Option<&L3Routine>,
-) -> (Arc<str>, ConeFactEntry) {
+    caller_frame: Option<&super::param_guard::FrameGuards>,
+    edge_reqs: &[super::param_guard::Req],
+) -> Option<(Arc<str>, ConeFactEntry)> {
     use super::summary::TempState;
-    let unchanged = |pd: Option<u32>| {
-        (
-            Arc::clone(key),
-            ConeFactEntry {
-                rep: Arc::clone(&entry.rep),
-                rep_key: Arc::clone(&entry.rep_key),
-                dist: entry.dist,
-                pd,
-            },
-        )
+    let binds = matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call");
+    let site = match (edge.callsite.as_deref(), caller) {
+        (Some(cs), Some(caller)) if binds => Some((cs, caller)),
+        _ => None,
     };
-    let (Some(i), Some(cs), Some(caller)) = (entry.pd, edge.callsite.as_deref(), caller) else {
-        return unchanged(None);
-    };
-    if !matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call") {
-        return unchanged(None);
-    }
-    match super::summary_runner::pd_temp_state_at_callsite(caller, cs, i) {
-        TempState::Known(true) => {
-            let mut rep = (*entry.rep).clone();
-            if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut rep.extra {
-                *temp_state = Some(crate::engine::l2::features::PTempState {
-                    kind: "known".to_string(),
-                    value: Some(true),
-                    parameter_index: None,
-                });
+    let mut base = Arc::clone(base_key_of(key, entry));
+    let mut rep = Arc::clone(&entry.rep);
+    let mut rep_key_s = Arc::clone(&entry.rep_key);
+    let mut pd = None;
+    if let (Some(i), Some((cs, caller))) = (entry.pd, site) {
+        match super::summary_runner::pd_temp_state_at_callsite(caller, cs, i) {
+            TempState::Known(true) => {
+                let mut r = (*entry.rep).clone();
+                if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut r.extra {
+                    *temp_state = Some(crate::engine::l2::features::PTempState {
+                        kind: "known".to_string(),
+                        value: Some(true),
+                        parameter_index: None,
+                    });
+                }
+                base = Arc::from(inherited_fact_key(&r));
+                rep_key_s = Arc::from(rep_key(&r));
+                rep = Arc::new(r);
             }
-            let new_key: Arc<str> = Arc::from(inherited_fact_key(&rep));
-            let rep_key: Arc<str> = Arc::from(rep_key(&rep));
-            (
-                new_key,
-                ConeFactEntry {
-                    rep: Arc::new(rep),
-                    rep_key,
-                    dist: entry.dist,
-                    pd: None,
-                },
-            )
+            TempState::ParameterDependent(j) => pd = Some(j),
+            _ => {}
         }
-        TempState::ParameterDependent(j) => unchanged(Some(j)),
-        _ => unchanged(None),
     }
+    let mut reqs: Vec<super::param_guard::Req> = Vec::new();
+    if let Some(g) = &entry.guard
+        && let Some((cs, caller)) = site
+        && let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs)
+    {
+        reqs = super::param_guard::across_edge(&g.reqs, cs, caller_frame)?;
+    }
+    let reqs = super::param_guard::conjoin(&reqs, edge_reqs)?;
+    let (key, guard) = with_reqs(base, reqs);
+    Some((
+        key,
+        ConeFactEntry {
+            rep,
+            rep_key: rep_key_s,
+            dist: entry.dist,
+            pd,
+            guard,
+        },
+    ))
 }
 
 /// A fact cone: dedup key → entry (min dist, tie-broken by canonical rep).
@@ -1626,12 +1696,14 @@ struct CoverageCone {
 /// wants the raw Vec. Under [`ConeOutput::DerivedOnly`] neither the `retag`
 /// clone nor `sort_inherited`'s allocation happens; the fold over the SAME
 /// `best.values()` key-winners still runs.
+#[allow(clippy::too_many_arguments)]
 fn inherited_facts_for_singleton<'g>(
     subject: &str,
     g: &'g TypedEdgeGraph,
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
     caller: Option<&L3Routine>,
+    caller_frame: Option<&super::param_guard::FrameGuards>,
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
@@ -1649,10 +1721,12 @@ fn inherited_facts_for_singleton<'g>(
     let my_scc = scc_id_by_routine.get(subject).copied();
     let out_edges: &'g [TypedOutEdge] =
         g.outgoing.get(subject).map(|v| v.as_slice()).unwrap_or(&[]);
-    // Parameter-dependent entries are carried across their edge into this
-    // routine's frame FIRST, per edge (`substitute_pd_entry`); the scan below
-    // skips them in the cone and reads these instead. Rare: only callee
-    // writes through a keyword-less `var` record param are PD.
+    // Frame-bound entries (parameter-dependent or guarded) are carried across
+    // their edge into this routine's frame FIRST, per edge
+    // (`substitute_entry`); the scan below skips them in the cone and reads
+    // these instead. A guarded entry an argument contradicts is dropped here.
+    // Rare: only writes through a keyword-less `var` record param are PD, and
+    // only sites under a boolean-parameter guard are guarded.
     let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
         .iter()
         .map(|edge| {
@@ -1661,8 +1735,8 @@ fn inherited_facts_for_singleton<'g>(
             };
             ycone
                 .iter()
-                .filter(|(_, e)| e.pd.is_some())
-                .map(|(k, e)| substitute_pd_entry(k, e, edge, caller))
+                .filter(|(_, e)| frame_bound(e))
+                .filter_map(|(k, e)| substitute_entry(k, e, edge, caller, caller_frame, &[]))
                 .collect()
         })
         .collect();
@@ -1697,10 +1771,13 @@ fn inherited_facts_for_singleton<'g>(
         c_cone_edges += 1;
         let entries = ycone
             .iter()
-            .filter(|(_, e)| e.pd.is_none())
+            .filter(|(_, e)| !frame_bound(e))
             .chain(edge_subst.iter().map(|(k, e)| (k, e)));
         for (key, entry) in entries {
             c_entries += 1;
+            // A guard does not matter at the subject: its own parameters are
+            // unknown here, so a guarded fact is a possible one. One fact, one key.
+            let key = base_key_of(key, entry);
             let cand_dist = entry.dist + 1;
             // min dist wins; equal dist → smaller edgeSortKey wins (the
             // first-hop tie-breaker). Mirrors inheritedFactsForSingleton.
@@ -1887,6 +1964,9 @@ fn inherited_facts_by_bfs<'g>(
             let ycone = their_scc.and_then(|yj| cones.get(&yj));
             if let Some(ycone) = ycone {
                 for (key, entry) in ycone {
+                    // No frame here (recursive subject): a guard is dropped,
+                    // and the fact keeps its one base key.
+                    let key = base_key_of(key, entry);
                     // `key` is the cone's `Arc<str>`; `seen` stays `BTreeSet<String>`
                     // because the sibling branch above feeds it `direct`'s own
                     // `String` keys. This walk runs 503 times per 8020 run, so the
@@ -1938,8 +2018,17 @@ fn fact_cone_for_scc(
     pd: Option<PdAnchor<'_>>,
 ) -> ConeFacts {
     let mut cone: ConeFacts = BTreeMap::new();
+    let frame = pd.as_ref().and_then(|a| a.frame);
     for m in members {
         if let Some(byk) = direct.get(m) {
+            // The raw facts' keys, when this frame has guarded sites: a key's
+            // guards are those of the raw facts deduped under it.
+            let raw_keys: Option<Vec<String>> = match (&pd, frame) {
+                (Some(a), Some(fg)) if !fg.by_site.is_empty() => {
+                    Some(a.direct_raw.iter().map(inherited_fact_key).collect())
+                }
+                _ => None,
+            };
             for (key, f) in byk {
                 // A direct PD fact stays substitutable only in a non-recursive
                 // singleton's cone (one frame), and only when EVERY raw fact
@@ -1955,43 +2044,94 @@ fn fact_cone_for_scc(
                         .then_some(i),
                     _ => None,
                 };
+                // One entry per distinct requirement list among the raw facts
+                // under this key; any unguarded raw fact makes the key
+                // unconditional (it dominates every guarded copy).
+                let mut req_sets: Vec<Vec<super::param_guard::Req>> = Vec::new();
+                if let (Some(a), Some(fg), Some(raw_keys)) = (&pd, frame, &raw_keys) {
+                    for (g, _) in a.direct_raw.iter().zip(raw_keys).filter(|(_, k)| *k == key) {
+                        match site_reqs(fg, g) {
+                            Some(r) => {
+                                if !req_sets.contains(r) {
+                                    req_sets.push(r.clone());
+                                }
+                            }
+                            None => {
+                                req_sets.clear();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if req_sets.is_empty() {
+                    req_sets.push(Vec::new());
+                }
                 // The ONE place a cone key is minted: `direct`'s keys are
                 // `String`s owned by the per-routine dedup map, so a dist-0 entry
                 // allocates its `Arc<str>` here. That is once per direct fact
                 // (121,387 per 8020 run), not once per merge — every merge below
                 // and in every predecessor cone then shares this allocation.
-                merge_cone(
-                    &mut cone,
-                    &Arc::from(key.as_str()),
-                    ConeFactEntry {
-                        rep: Arc::new(f.clone()),
-                        rep_key: Arc::from(rep_key(f)),
-                        dist: 0,
-                        pd: entry_pd,
-                    },
-                );
+                let base: Arc<str> = Arc::from(key.as_str());
+                let rep = Arc::new(f.clone());
+                let rep_key_s: Arc<str> = Arc::from(rep_key(f));
+                for reqs in req_sets {
+                    let (k, guard) = with_reqs(Arc::clone(&base), reqs);
+                    merge_cone(
+                        &mut cone,
+                        &k,
+                        ConeFactEntry {
+                            rep: Arc::clone(&rep),
+                            rep_key: Arc::clone(&rep_key_s),
+                            dist: 0,
+                            pd: entry_pd,
+                            guard,
+                        },
+                    );
+                }
             }
         }
     }
-    // A PD successor entry crosses into this cone per EDGE, through
-    // `substitute_pd_entry`; the per-SCC merge below then skips it.
+    // A frame-bound successor entry crosses into this cone per EDGE, through
+    // `substitute_entry`; the per-SCC merge below then skips it. So does EVERY
+    // entry behind an edge the member makes under a guard (it gains the
+    // edge's requirements).
+    let mut guarded_only: BTreeSet<usize> = BTreeSet::new();
     if let Some(a) = &pd {
+        let mut unguarded_to: BTreeSet<usize> = BTreeSet::new();
         for edge in a.out_edges {
-            let Some(yc) = a
-                .scc_id_by_routine
-                .get(&edge.to)
-                .and_then(|yj| fact_cones.get(yj))
-            else {
+            let Some(&yj) = a.scc_id_by_routine.get(&edge.to) else {
                 continue;
             };
-            for (key, entry) in yc.iter().filter(|(_, e)| e.pd.is_some()) {
-                let (k, mut e) = substitute_pd_entry(key, entry, edge, a.caller);
-                e.dist += 1;
-                merge_cone(&mut cone, &k, e);
+            let Some(yc) = fact_cones.get(&yj) else {
+                continue;
+            };
+            let edge_reqs: &[super::param_guard::Req] = match (frame, edge.callsite.as_deref()) {
+                (Some(fg), Some(cs)) => fg.by_site.get(cs).map_or(&[], Vec::as_slice),
+                _ => &[],
+            };
+            if edge_reqs.is_empty() {
+                unguarded_to.insert(yj);
+            } else {
+                guarded_only.insert(yj);
+            }
+            for (key, entry) in yc
+                .iter()
+                .filter(|(_, e)| !edge_reqs.is_empty() || frame_bound(e))
+            {
+                if let Some((k, mut e)) =
+                    substitute_entry(key, entry, edge, a.caller, frame, edge_reqs)
+                {
+                    e.dist += 1;
+                    merge_cone(&mut cone, &k, e);
+                }
             }
         }
+        guarded_only.retain(|y| !unguarded_to.contains(y));
     }
     for y in succ_ids {
+        if guarded_only.contains(y) {
+            continue; // every edge to it is guarded: carried per edge above
+        }
         // ⟨C1 Task 4 hardening⟩ `y` is a successor of the SCC being built, and
         // `compose_inherited_cones` processes SCCs in an order where every
         // successor has already run (Tarjan emits callees before callers) —
@@ -2006,25 +2146,84 @@ fn fact_cone_for_scc(
         );
         if let Some(yc) = fact_cones.get(y) {
             for (key, entry) in yc {
-                if pd.is_some() && entry.pd.is_some() {
+                if pd.is_some() && frame_bound(entry) {
                     continue; // carried per edge above
                 }
                 merge_cone(
                     &mut cone,
-                    key,
+                    base_key_of(key, entry),
                     ConeFactEntry {
                         rep: Arc::clone(&entry.rep),
                         rep_key: Arc::clone(&entry.rep_key),
                         dist: entry.dist + 1,
                         // Without an anchor (recursive / multi-member SCC) a
-                        // successor's PD frame means nothing here.
+                        // successor's PD frame and guard mean nothing here.
                         pd: None,
+                        guard: None,
                     },
                 );
             }
         }
     }
     cone
+}
+
+/// The requirements under which raw direct fact `f`'s site runs, by its
+/// witness operation or call site. `None`: unguarded.
+fn site_reqs<'f>(
+    fg: &'f super::param_guard::FrameGuards,
+    f: &CapabilityFact,
+) -> Option<&'f Vec<super::param_guard::Req>> {
+    [&f.witness_operation_id, &f.witness_callsite_id]
+        .into_iter()
+        .flatten()
+        .find_map(|id| fg.by_site.get(id))
+}
+
+/// Every routine's guard frame ([`super::param_guard`]), for the routines that
+/// have a usable guard parameter. A parameter passed to a call stays usable
+/// when the call's resolved callee takes it by value, or when the call has no
+/// edge at all (a platform method) other than `Evaluate` and `Clear`, which
+/// write their argument.
+fn guard_frames(
+    g: &TypedEdgeGraph,
+    routines: &[L3Routine],
+    routines_by_id: &HashMap<&str, &L3Routine>,
+) -> HashMap<String, super::param_guard::FrameGuards> {
+    let mut out = HashMap::new();
+    for r in routines {
+        let edges: &[TypedOutEdge] = g.outgoing.get(&r.id).map_or(&[], Vec::as_slice);
+        let passes_by_value = |cs_id: &str, arg: u32| -> bool {
+            let mut targets = edges
+                .iter()
+                .filter(|e| e.callsite.as_deref() == Some(cs_id))
+                .peekable();
+            if targets.peek().is_none() {
+                let callee_lc = r
+                    .call_sites
+                    .iter()
+                    .find(|c| c.id == cs_id)
+                    .map(|c| match &c.callee {
+                        PCallee::Bare { name } => name.to_ascii_lowercase(),
+                        PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default();
+                // The platform methods that write a Boolean argument.
+                return !matches!(callee_lc.as_str(), "evaluate" | "clear");
+            }
+            targets.all(|e| {
+                routines_by_id
+                    .get(e.to.as_str())
+                    .and_then(|callee| callee.parameters.iter().find(|p| p.index == arg))
+                    .is_some_and(|p| !p.is_var)
+            })
+        };
+        if let Some(f) = super::param_guard::frame_guards(r, passes_by_value) {
+            out.insert(r.id.clone(), f);
+        }
+    }
+    out
 }
 
 /// What [`fact_cone_for_scc`] needs to keep parameter-dependent facts
@@ -2038,6 +2237,8 @@ struct PdAnchor<'a> {
     scc_id_by_routine: &'a HashMap<String, usize>,
     /// The member's L3 routine (its call sites carry the argument bindings).
     caller: Option<&'a L3Routine>,
+    /// The member's guard frame, when it has a usable guard parameter.
+    frame: Option<&'a super::param_guard::FrameGuards>,
 }
 
 /// Build one SCC's coverage cone (includes self). Mirrors `coverageConeForScc`.
@@ -2118,6 +2319,7 @@ fn compose_inherited_cones(
     cov: &RoutineDirectCoverage,
     routine_ids: &BTreeSet<String>,
     routines_by_id: &HashMap<&str, &L3Routine>,
+    frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
 ) -> (HashMap<String, InheritedConeResult>, ConeDerivedStore) {
     let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
@@ -2171,6 +2373,7 @@ fn compose_inherited_cones(
                     out_edges: g.outgoing.get(m).map(|v| v.as_slice()).unwrap_or(&[]),
                     scc_id_by_routine: &scc.scc_id_by_routine,
                     caller: routines_by_id.get(m.as_str()).copied(),
+                    frame: frames.get(m),
                 }),
                 _ => None,
             };
@@ -2240,6 +2443,7 @@ fn compose_inherited_cones(
                     &scc.scc_id_by_routine,
                     &fact_cones,
                     routines_by_id.get(m.as_str()).copied(),
+                    frames.get(m),
                     mode,
                     &mut derived,
                 )
@@ -2503,6 +2707,7 @@ pub fn compose_cone_over_graph(
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
     let routines_by_id: HashMap<&str, &L3Routine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    let frames = guard_frames(&g, routines, &routines_by_id);
     let (cones, derived) = compose_inherited_cones(
         &g,
         &scc,
@@ -2511,6 +2716,7 @@ pub fn compose_cone_over_graph(
         &cov,
         &routine_ids,
         &routines_by_id,
+        &frames,
         mode,
     );
     crate::engine::l5::detector_context::cones_census::add_since(
@@ -3514,6 +3720,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     // 7) and discards the derived store. Folding one was build-then-drop.
     let routines_by_id: HashMap<&str, &L3Routine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    let frames = guard_frames(&g, &ws.routines, &routines_by_id);
     let (cones, _derived) = compose_inherited_cones(
         &g,
         &scc,
@@ -3522,6 +3729,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
         &cov,
         &routine_ids,
         &routines_by_id,
+        &frames,
         ConeOutput::RawOnly,
     );
 
