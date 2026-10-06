@@ -160,3 +160,77 @@ fn diff_workspace_mode_follows_the_program_engines_calls() {
     let run6_changes = json.matches("Run6").count();
     assert!(run6_changes > 0, "Run6 gains the S6 Log write: {v:#}");
 }
+
+/// A workspace event whose only subscriber names it as an identifier (`OnX`, not
+/// `'OnX'`): L3 drops that subscription, the program engine binds it.
+fn identifier_subscriber_workspace(ws: &Path) {
+    write(
+        &ws.join("app.json"),
+        r#"{"id":"aaaa6666-0000-0000-0000-000000000016","name":"S6Ev","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50610,"to":50619}]}"#,
+    );
+    write(
+        &ws.join("src/Ev.al"),
+        r#"codeunit 50610 "S6 Pub"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnX()
+    begin
+    end;
+}
+
+codeunit 50611 "S6 Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"S6 Pub", OnX, '', false, false)]
+    local procedure HandleX()
+    begin
+    end;
+}
+"#,
+    );
+}
+
+/// S6.5 `alsem events fanout` and `events chains` see the subscriber.
+#[test]
+fn events_follow_the_program_engines_event_graph() {
+    use al_sem::engine::gate::events::{
+        EventsChainsOptions, EventsFanoutOptions, run_events_chains, run_events_fanout,
+    };
+    use al_sem::engine::l5::event_flow::Scope;
+    let dir = tempfile::tempdir().unwrap();
+    identifier_subscriber_workspace(dir.path());
+    let fanout = run_events_fanout(&EventsFanoutOptions {
+        workspace: dir.path(),
+        format: "json",
+        scope: Scope::All,
+        coverage_policy: "warn",
+        driver_version: "s6",
+        deterministic: true,
+        strict: false,
+    });
+    let v: serde_json::Value = serde_json::from_str(&fanout.text).expect("json");
+    let counts: Vec<i64> = v
+        .pointer("/entries")
+        .and_then(|e| e.as_array())
+        .expect("entries")
+        .iter()
+        .map(|e| e["directSubscriberCount"].as_i64().unwrap_or(-1))
+        .collect();
+    assert_eq!(counts, vec![1], "{}", fanout.text);
+
+    let chains = run_events_chains(&EventsChainsOptions {
+        workspace: dir.path(),
+        format: "json",
+        scope: Scope::All,
+        coverage_policy: "warn",
+        max_depth: None,
+        max_nodes: None,
+        driver_version: "s6",
+        deterministic: true,
+        strict: false,
+    });
+    assert!(
+        chains.text.contains("\"kind\": \"subscriber\""),
+        "OnX's chain reaches HandleX: {}",
+        chains.text
+    );
+}

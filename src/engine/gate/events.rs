@@ -26,7 +26,7 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::l3_workspace::assemble_and_resolve_workspace;
+use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
@@ -362,7 +362,8 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
         }
     };
 
-    let resolved = match assemble_and_resolve_workspace(opts.workspace, &model_id, false) {
+    // Engine-switch S6.5: the program-backed model (program calls and events).
+    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
         Some(r) => r,
         None => {
             return EventsRunResult {
@@ -510,7 +511,8 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
         }
     };
 
-    let resolved = match assemble_and_resolve_workspace(opts.workspace, &model_id, false) {
+    // Engine-switch S6.5: the program-backed model (program calls and events).
+    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
         Some(r) => r,
         None => {
             return EventsRunResult {

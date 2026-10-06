@@ -152,6 +152,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`alsem events fanout` and `events chains` read the program engine** (engine-switch
+  S6.5). Goldens unchanged. `events_follow_the_program_engines_event_graph` states a
+  workspace event whose only subscriber names it as an identifier (L3 drops it, the
+  program engine binds it, S4.3a): fan-out counts 1 subscriber and the chain reaches
+  it. Discrimination: the L3 builder fails the fan-out half, and on chains alone fails
+  the chains half.
+
 - **`alsem diff`'s workspace mode (the snapshot) reads the program engine**
   (engine-switch S6.4); the snapshot golden test builds the same model. Golden moves,
   `tests/cli-b-goldens/snapshot/` (cbor, cbor.gz, raw/envelope JSON):
