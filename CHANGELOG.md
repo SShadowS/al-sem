@@ -127,6 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The event model moved into the program engine** (engine-switch S4.2a, pure move).
+  `EventGraph`, `EventSymbol`, `EventEdge`, `Evidence`, `build_event_symbol` and
+  `encode_event_id` now live in `program::model::events`; `engine::l3::event_graph`
+  re-exports them, so no caller changes. The program engine may not import `engine::l3`
+  (the S1 guard), and S4.2 builds the detector event graph there. No output change.
+
 - **The B3 adapter loses no route, and a gate proves it** (engine-switch S3.6, the end
   of S3). Three conversions changed:
   - A trigger route into a dependency table used to be dropped. It now keeps its target

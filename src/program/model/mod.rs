@@ -9,6 +9,7 @@
 
 pub mod calls;
 pub mod census;
+pub mod events;
 pub mod extension_fields;
 pub mod record_types;
 pub mod site_links;
