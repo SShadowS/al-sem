@@ -166,15 +166,19 @@ pub struct DeclaredDependency {
     pub app_guid: String,
 }
 
-/// Which dependency routine a call-site edge reaches, and the state of its body
-/// (engine-switch S3.3). The edge itself stays to-less (the model holds workspace
-/// routines only); this keeps the target's identity for S7/S8 and says whether an
-/// empty fact set for it could ever mean "no effects" (it cannot, unless
-/// `AnalyzedClean`).
+/// Which dependency routine a site reaches, and the state of its body
+/// (engine-switch S3.3). For a call site the edge itself stays to-less (the model
+/// holds workspace routines only); this keeps the target's identity for S7/S8 and
+/// says whether an empty fact set for it could ever mean "no effects" (it cannot,
+/// unless `AnalyzedClean`). Since S3.6 it also holds every dependency candidate of
+/// an ambiguous overload, and every dependency table trigger a record operation
+/// reaches; those operations have no edge (`callsite_id` is then the operation's
+/// id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalTargetRef {
     pub callsite_id: String,
-    /// `"{app guid}/{type}/{number}::{routine name, folded}/{arity}"`.
+    /// `"{app guid}/{type}/{number}::{routine name, folded}/{arity}"`; a field
+    /// trigger's name is `"{field, folded}::{trigger}"`.
     pub target: String,
     /// `None` when the program graph has no routine node with that identity. In
     /// practice that is the resolver's placeholder entry-trigger key of a run into

@@ -112,6 +112,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The B3 adapter loses no route, and a gate proves it** (engine-switch S3.6, the end
+  of S3). Three conversions changed:
+  - A trigger route into a dependency table used to be dropped. It now keeps its target
+    and body state in `ResolvedCalls::external_targets`, under the record operation's
+    id, still without an edge (as under L3): whether it should make the routine
+    uncertain is a detector decision, recorded in `docs/OUTSTANDING.md` for S8.
+  - An ambiguous overload's dependency candidates used to be dropped. They are now kept
+    the same way, under the call site's id.
+  - A call or run edge with several routes outside an interface or overload set kept
+    its first route only. It now converts as an ambiguous candidate set. The resolver
+    makes no such edge today (`Multicast` is for triggers and events only).
+
+  A field trigger's target is now named with its field
+  (`…/Table/18::name::onvalidate/0`). Two same-arity overloads still print the same
+  target text, so an ambiguous set over them shows one line per candidate.
+
+  The gate: `SiteCensus::losses()` lists every counter that means a site or route did
+  not reach the converted calls whole (join misses, L3 fallbacks, dropped, cut or
+  filtered routes). `adapter_loses_no_site_or_route_on_the_fixtures` (every single-app
+  r0 fixture) and `adapter_loses_no_site_or_route_on_cdo` (`CDO_WS`) assert it is
+  empty. CDO census: `adapter_routes_dropped` 49 → 0, now
+  `adapter_trigger_dependency_routes` 44 and `adapter_ambiguous_dependency_candidates` 5.
+
+  Downstream selection audit. The detector context keeps one targeted edge per call
+  site (`first_resolved_edge_per_callsite`, now a named function with the policy in its
+  doc): only an interface site with several workspace implementers has more than one,
+  and the detectors that read it analyse the implementer with the smallest id, as
+  before. d1 takes the first matching seed edge; several edges per site exist only for
+  interface dispatch, which d1 skips. Both are named as deliberate policy; analysing
+  every implementer is recorded in `docs/OUTSTANDING.md`.
+
+  Harness `s3-5` → `s3-6`: only `calls.external_targets` moved, on 3 of 218 corpora
+  (CDO +49, DO +46 trigger routes, `ws-cross-object-chain` +4 candidates). No edge,
+  model row or finding moved. Goldens: none moved.
+
+  Tests: `implicit_trigger_to_dependency_has_no_edge` (the target is recorded, bodyless),
+  `ambiguous_overload_in_a_dependency_keeps_its_candidates`,
+  `multi_route_call_keeps_every_route` (a second route added by assignment),
+  `the_first_targeted_edge_represents_a_call_site`. Discrimination: dropping the
+  trigger or candidate routes again, keeping the first route, and letting the last edge
+  win each fail a test; dropping trigger routes fails the CDO gate (44 losses), and
+  inverting S3.5's procedure-name check fails the fixture gate.
+
 - **Bare record operations are record operations in the program engine too**
   (engine-switch S3.5). A bare `Modify()` in a table, or `Insert()` inside
   `with Cust do`, has an implicit receiver. The body pipeline (L2) always made these

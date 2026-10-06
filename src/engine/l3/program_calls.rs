@@ -210,11 +210,19 @@ pub struct SiteCensus {
     /// engine-switch S3.5 they kept L3's own trigger logic (controller ruling
     /// 1); the name is kept for the census's continuity.
     pub adapter_l3_trigger_ops: usize,
-    /// Interface or trigger routes not into an L3 workspace routine
-    /// (dependency, ABI boundary, unresolved): dropped. Since engine-switch
-    /// S3.2 interface routes into dependencies are kept instead (see
-    /// `adapter_interface_dependency_impls`); this counts trigger routes only.
+    /// Routes the adapter loses: a trigger or ambiguous-overload route that
+    /// names no routine (unresolved), or a workspace routine with no L3
+    /// routine. Dependency routes are kept since engine-switch S3.2
+    /// (interface), S3.6 (trigger, ambiguous overload); see the counters below.
     pub adapter_routes_dropped: usize,
+    /// Trigger routes into a dependency table (S3.6): recorded in
+    /// `ResolvedCalls::external_targets` under the operation's id, no edge.
+    pub adapter_trigger_dependency_routes: usize,
+    /// Ambiguous-overload candidates in a dependency (S3.6): recorded in
+    /// `ResolvedCalls::external_targets` under the call site's id. The edge
+    /// keeps the workspace candidates only, or becomes an external call when
+    /// every candidate is in a dependency.
+    pub adapter_ambiguous_dependency_candidates: usize,
     /// Dependency implementer objects an interface site reaches (S3.2): one
     /// to-less `ExternalTarget` edge each.
     pub adapter_interface_dependency_impls: usize,
@@ -224,7 +232,8 @@ pub struct SiteCensus {
     /// agreement check (expected 0) and nothing is filtered here.
     pub adapter_trigger_routes_filtered: usize,
     /// Call/run edges with more than one route outside an interface or
-    /// ambiguous shape (only the first route is used).
+    /// ambiguous shape. Since engine-switch S3.6 they convert as an ambiguous
+    /// candidate set (every route); they used to keep the first route only.
     pub adapter_multi_route_sites: usize,
     /// Call/run edges with no route at all.
     pub adapter_empty_route_sites: usize,
@@ -273,6 +282,55 @@ pub struct SiteCensus {
     /// Every site counted under a reason other than `matched`,
     /// `operation_site` and `implicit_trigger_matched`, sorted.
     pub unmatched: Vec<UnmatchedSite>,
+}
+
+impl SiteCensus {
+    /// The non-zero counters that mean a site or route the program engine
+    /// resolved did not reach the converted calls whole (engine-switch S3.6,
+    /// the site and route accounting gate). Empty when nothing was lost: every
+    /// site joined, nothing fell back, no route was cut or dropped.
+    /// Dependency routes kept as `external_targets` are not losses.
+    pub fn losses(&self) -> Vec<(&'static str, usize)> {
+        [
+            ("no_program_site", self.no_program_site),
+            ("program_only_site", self.program_only_site),
+            ("callee_fp_mismatch", self.callee_fp_mismatch),
+            ("caller_mismatch", self.caller_mismatch),
+            ("shape_mismatch", self.shape_mismatch),
+            ("op_shape_mismatch", self.op_shape_mismatch),
+            (
+                "implicit_trigger_unmatched",
+                self.implicit_trigger_unmatched,
+            ),
+            ("duplicate_program_span", self.duplicate_program_span),
+            ("duplicate_l3_span", self.duplicate_l3_span),
+            (
+                "l3_op_no_program_site_trigger",
+                self.l3_op_no_program_site_trigger,
+            ),
+            (
+                "l3_op_no_program_site_other",
+                self.l3_op_no_program_site_other,
+            ),
+            ("adapter_l3_fallback_sites", self.adapter_l3_fallback_sites),
+            ("adapter_callee_outside_l3", self.adapter_callee_outside_l3),
+            ("adapter_l3_trigger_ops", self.adapter_l3_trigger_ops),
+            ("adapter_routes_dropped", self.adapter_routes_dropped),
+            (
+                "adapter_trigger_routes_filtered",
+                self.adapter_trigger_routes_filtered,
+            ),
+            ("adapter_multi_route_sites", self.adapter_multi_route_sites),
+            ("adapter_empty_route_sites", self.adapter_empty_route_sites),
+            (
+                "adapter_trigger_edges_l3_only",
+                self.adapter_trigger_edges_l3_only,
+            ),
+        ]
+        .into_iter()
+        .filter(|&(_, n)| n > 0)
+        .collect()
+    }
 }
 
 use crate::program::model::site_links::model_key as l3_key;
@@ -625,6 +683,12 @@ const CATEGORY_COUNTERS: &[(&str, Counter)] = &[
     // Not `_missing` / `_collapsed` / `_no_routine`: those sites keep their
     // bindings, so they are no cause of a difference.
     ("routes-dropped", |c| c.adapter_routes_dropped),
+    ("trigger-dependency-routes", |c| {
+        c.adapter_trigger_dependency_routes
+    }),
+    ("ambiguous-dependency-candidates", |c| {
+        c.adapter_ambiguous_dependency_candidates
+    }),
     ("trigger-routes-filtered", |c| {
         c.adapter_trigger_routes_filtered
     }),
@@ -975,7 +1039,18 @@ impl<'a> Converter<'a> {
         } else {
             Resolution::ExternalTarget
         };
-        match edge.shape {
+        // S3.6: no route is cut. A call or run edge with several routes outside
+        // an interface (the resolver makes none today: `Multicast` is for
+        // triggers and events, `Exact` has one route) converts as the closed
+        // candidate set it is, never as its first route.
+        let shape = match edge.shape {
+            DispatchShape::Exact | DispatchShape::Multicast if edge.routes.len() > 1 => {
+                c.adapter_multi_route_sites += 1;
+                DispatchShape::AmbiguousOverload
+            }
+            s => s,
+        };
+        match shape {
             DispatchShape::Polymorphic => {
                 let edges = self.interface(r, cs, ce, &mut state, c)?;
                 return Some((edges, state.bindings));
@@ -983,18 +1058,28 @@ impl<'a> Converter<'a> {
             DispatchShape::AmbiguousOverload => {
                 let mut ids = Vec::new();
                 let mut dep_ref = None;
+                let mut dep_routes = Vec::new();
                 for route in &edge.routes {
                     match &route.target {
                         RouteTarget::Routine(id) if id.object.app == self.primary => {
                             ids.push(self.l3_routine(id)?.id.clone());
                         }
                         _ => {
-                            c.adapter_routes_dropped += 1;
                             dep_ref = dep_ref.or_else(|| self.dependency_ref(route));
+                            dep_routes.push(route);
                         }
                     }
                 }
                 ids.sort();
+                // The site converts (no `?` below): keep each dependency
+                // candidate's identity (S3.6).
+                for route in dep_routes {
+                    if self.record_target(&cs.id, route) {
+                        c.adapter_ambiguous_dependency_candidates += 1;
+                    } else {
+                        c.adapter_routes_dropped += 1;
+                    }
+                }
                 if ids.is_empty()
                     && let Some(type_ref) = dep_ref
                 {
@@ -1015,9 +1100,6 @@ impl<'a> Converter<'a> {
                 });
             }
             DispatchShape::Exact | DispatchShape::Multicast => {
-                if edge.routes.len() > 1 {
-                    c.adapter_multi_route_sites += 1;
-                }
                 match edge.routes.first() {
                     None => {
                         c.adapter_empty_route_sites += 1;
@@ -1072,7 +1154,7 @@ impl<'a> Converter<'a> {
                         RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. } => {
                             e.resolution = external;
                             e.external_type_ref = self.dependency_ref(route).flatten();
-                            self.record_target(cs, route);
+                            self.record_target(&cs.id, route);
                             if self.upgrade_dependency_bindings {
                                 self.upgrade_dependency(&mut state, route, &cs.id, c);
                             }
@@ -1284,26 +1366,32 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// Record that `cs`'s edge reaches the dependency routine `route` names
-    /// (S3.3), with that routine's body state from the registry.
-    fn record_target(&self, cs: &PCallSite, route: &Route) {
+    /// Record that site `site_id` (a call site, or a record operation) reaches
+    /// the dependency routine `route` names (S3.3, S3.6), with that routine's
+    /// body state from the registry. `false` when the route names no routine.
+    fn record_target(&self, site_id: &str, route: &Route) -> bool {
         let Some(id) = Self::route_routine_id(route) else {
-            return;
+            return false;
+        };
+        // A field trigger (`OnValidate`) is named by its field too.
+        let name = match &id.enclosing_member_lc {
+            Some(member) => format!("{member}::{}", id.name_lc),
+            None => id.name_lc.clone(),
         };
         let target = format!(
-            "{}::{}/{}",
+            "{}::{name}/{}",
             self.model_object_id(&id.object),
-            id.name_lc,
             id.params_count
         );
         let body = self.registry.target(&id).map(|t| t.body);
         self.targets
             .borrow_mut()
             .push(crate::program::model::calls::ExternalTargetRef {
-                callsite_id: cs.id.clone(),
+                callsite_id: site_id.to_string(),
                 target,
                 body,
             });
+        true
     }
 
     /// The model's object id for a program object (`encode_object_id`'s
@@ -1376,7 +1464,7 @@ impl<'a> Converter<'a> {
         // routine (S3.3).
         for route in &ce.edge.routes {
             if !matches!(&route.target, RouteTarget::Routine(id) if id.object.app == self.primary) {
-                self.record_target(cs, route);
+                self.record_target(&cs.id, route);
             }
         }
         c.adapter_interface_dependency_impls += dependency.len();
@@ -1478,6 +1566,19 @@ impl<'a> Converter<'a> {
         };
         let mut tos: Vec<String> = Vec::new();
         for route in &ce.edge.routes {
+            // S3.6: a trigger in a dependency table keeps its identity and body
+            // state, but gets no edge: the model holds workspace routines only,
+            // and L3 never had an edge for it either. Whether such a trigger
+            // should make the routine uncertain is a detector decision (S8).
+            let in_dependency = match &route.target {
+                RouteTarget::Routine(id) => id.object.app != self.primary,
+                RouteTarget::AbiSymbol { .. } => true,
+                _ => false,
+            };
+            if in_dependency && self.record_target(&op.id, route) {
+                c.adapter_trigger_dependency_routes += 1;
+                continue;
+            }
             let RouteTarget::Routine(id) = &route.target else {
                 c.adapter_routes_dropped += 1;
                 continue;
@@ -2383,6 +2484,40 @@ mod adapter_tests {
         );
     }
 
+    /// Row "AmbiguousOverload" into a dependency (S3.6): both overloads are
+    /// in a dependency, so the edge is an external call, and both candidates
+    /// keep their identity in `external_targets`. They used to be dropped.
+    #[test]
+    fn ambiguous_overload_in_a_dependency_keeps_its_candidates() {
+        let symbols = r#"{"Codeunits":[{"Id":90,"Name":"Over","Methods":[{"Name":"F","Parameters":[{"Name":"A","TypeDefinition":{"Name":"Integer"}}]},{"Name":"F","Parameters":[{"Name":"A","TypeDefinition":{"Name":"Decimal"}}]}]}]}"#;
+        let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        O: Codeunit Over;\n        V: Variant;\n    begin\n        O.F(V);\n    end;\n}\n";
+        let a = adapt(&[("src/w.al", cu)], Some(symbols));
+        let cs = a.site("Caller", "O.F");
+        let got = a.edges(&cs.id);
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!(got[0].to, None);
+        assert_eq!(got[0].resolution, Resolution::ExternalTarget);
+        let mut targets: Vec<&str> = a
+            .calls
+            .external_targets
+            .iter()
+            .filter(|t| t.callsite_id == cs.id)
+            .map(|t| t.target.as_str())
+            .collect();
+        targets.sort();
+        assert_eq!(targets.len(), 2, "{targets:?}");
+        assert!(
+            targets.iter().all(|t| t.ends_with("/Codeunit/90::f/1")),
+            "{targets:?}"
+        );
+        assert_eq!(
+            a.census.adapter_ambiguous_dependency_candidates, 2,
+            "{:#?}",
+            a.census
+        );
+        assert_eq!(a.census.adapter_routes_dropped, 0, "{:#?}", a.census);
+    }
+
     /// Row "AmbiguousOverload": two same-arity overloads a `Variant`
     /// argument cannot pick between → to-less `Ambiguous` with both L3 ids
     /// as candidates; the record binding becomes `"ambiguous"`.
@@ -2991,7 +3126,8 @@ mod adapter_tests {
     }
 
     /// Row "ImplicitTrigger to dependency": a record op on a dependency
-    /// table → no edge.
+    /// table → no edge, but (S3.6) the trigger it reaches keeps its identity
+    /// and body state in `external_targets`, under the operation's id.
     #[test]
     fn implicit_trigger_to_dependency_has_no_edge() {
         let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        C: Record Customer;\n    begin\n        C.Insert(true);\n    end;\n}\n";
@@ -3000,9 +3136,28 @@ mod adapter_tests {
         assert_eq!(op.op, "Insert");
         assert_eq!(a.edges(&op.id), vec![]);
         assert_eq!(a.census.adapter_program_trigger_ops, 1, "{:#?}", a.census);
-        // The program edge does route to the dependency's OnInsert; the
-        // adapter drops that route.
-        assert_eq!(a.census.adapter_routes_dropped, 1, "{:#?}", a.census);
+        assert_eq!(a.census.adapter_routes_dropped, 0, "{:#?}", a.census);
+        assert_eq!(
+            a.census.adapter_trigger_dependency_routes, 1,
+            "{:#?}",
+            a.census
+        );
+        let targets: Vec<_> = a
+            .calls
+            .external_targets
+            .iter()
+            .filter(|t| t.callsite_id == op.id)
+            .collect();
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert!(
+            targets[0].target.ends_with("::oninsert/0"),
+            "{}",
+            targets[0].target
+        );
+        assert_eq!(
+            targets[0].body,
+            Some(crate::program::registry::BodyState::Bodyless)
+        );
     }
 
     /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to
@@ -3022,6 +3177,53 @@ mod adapter_tests {
         assert_eq!(a.edges(&op.id), want);
         assert_eq!(a.census.adapter_program_trigger_ops, 1, "{:#?}", a.census);
         assert_eq!(a.census.adapter_l3_trigger_ops, 0, "{:#?}", a.census);
+    }
+
+    /// S3.6, precondition by assignment: the resolver makes no call edge with
+    /// two routes outside an interface or overload set, so one is built by
+    /// giving `Foo()`'s exact edge a second route to `Bar`. The adapter keeps
+    /// both as an ambiguous candidate set; it used to keep the first only.
+    #[test]
+    fn multi_route_call_keeps_every_route() {
+        let cu = "codeunit 50101 \"W\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Bar()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n    end;\n}\n";
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"b3b3b3b3-0000-0000-0000-000000000003","name":"B3 Adapter","publisher":"T","version":"1.0.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/w.al"), cu).unwrap();
+        let (ctx, mut report, l3) = build_models(dir.path()).unwrap();
+        let bar = ctx
+            .graph
+            .routines
+            .iter()
+            .find(|n| n.id.name_lc == "bar")
+            .unwrap()
+            .id
+            .clone();
+        let ce = report
+            .edges
+            .iter_mut()
+            .find(|ce| ce.edge.from.name_lc == "caller" && ce.edge.kind == EdgeKind::Call)
+            .unwrap();
+        assert_eq!(ce.edge.shape, DispatchShape::Exact, "precondition");
+        let mut second = ce.edge.routes[0].clone();
+        second.target = RouteTarget::Routine(bar);
+        ce.edge.routes.push(second);
+
+        let ws = &l3.workspace;
+        let (calls, census) = resolved_calls_from_program(&report, &ctx, ws, true);
+        let caller = ws.routines.iter().find(|r| r.name == "Caller").unwrap();
+        let id_of = |n: &str| ws.routines.iter().find(|r| r.name == n).unwrap().id.clone();
+        let got = at(&calls, &caller.call_sites[0].id);
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!(got[0].resolution, Resolution::Ambiguous);
+        let mut want = vec![id_of("Foo"), id_of("Bar")];
+        want.sort();
+        assert_eq!(got[0].candidates, Some(want));
+        assert_eq!(census.adapter_multi_route_sites, 1, "{census:#?}");
     }
 
     /// S3.5, precondition by assignment: the op is moved off its span, so it

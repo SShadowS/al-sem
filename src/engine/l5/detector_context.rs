@@ -1191,15 +1191,8 @@ pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorC
 
     // `calls.edges` is not read after this point (`calls.upgraded_bindings` still
     // is), so take the edges by value instead of cloning each retained one.
-    let mut resolved_call_edge_by_callsite: HashMap<String, CallEdge> = HashMap::new();
-    for ce in std::mem::take(&mut calls.edges) {
-        if ce.to.is_none() {
-            continue;
-        }
-        resolved_call_edge_by_callsite
-            .entry(ce.callsite_id.clone())
-            .or_insert(ce);
-    }
+    let resolved_call_edge_by_callsite =
+        first_resolved_edge_per_callsite(std::mem::take(&mut calls.edges));
 
     let mut uncertainty_edges_by_from: HashMap<
         String,
@@ -1814,9 +1807,46 @@ pub(crate) fn build_detector_context_cross_app(
     }
 }
 
+/// `resolved_call_edge_by_callsite`: per call site, the FIRST edge that has a
+/// target, in `calls.edges` order.
+///
+/// Deliberate detector policy (engine-switch S3.6 audit). The only call sites
+/// with several targeted edges are interface dispatches with several workspace
+/// implementers; the adapter emits those sorted by target id, as L3 did, so the
+/// detectors that read this map (d40/d41/d42/d53/d55/d61 and the shared
+/// by-var-argument helpers) analyse the implementer with the smallest id. They
+/// read the callee's parameters and parameter roles; implementers share the
+/// interface's signature, but not their bodies. Analysing every implementer is
+/// a detector change, not a resolution one: see `docs/OUTSTANDING.md`.
+fn first_resolved_edge_per_callsite(edges: Vec<CallEdge>) -> HashMap<String, CallEdge> {
+    let mut by_callsite: HashMap<String, CallEdge> = HashMap::new();
+    for ce in edges {
+        if ce.to.is_none() {
+            continue;
+        }
+        by_callsite.entry(ce.callsite_id.clone()).or_insert(ce);
+    }
+    by_callsite
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S3.6 audit, precondition by assignment: one call site with two targeted
+    /// edges (an interface site with two implementers) and a to-less one first.
+    /// The map keeps the first TARGETED edge, never the to-less one or the last.
+    #[test]
+    fn the_first_targeted_edge_represents_a_call_site() {
+        let mk = |to: Option<&str>| {
+            let mut e = CallEdge::base("caller", "cs1", "op1");
+            e.to = to.map(str::to_string);
+            e
+        };
+        let map = first_resolved_edge_per_callsite(vec![mk(None), mk(Some("a")), mk(Some("b"))]);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["cs1"].to.as_deref(), Some("a"));
+    }
 
     /// Laziness contract: `build_detector_context` must NOT compute ordering facts
     /// (the OnceLock starts empty); first `get_ordering_facts()` call computes and

@@ -214,6 +214,9 @@ pub(crate) fn build_d1_graph<'a>(
             };
             // G-18 (docs/engine-gaps.md): callsite-id match + resolved-target
             // callee-name match — see `edge_target_matches_callsite_callee`.
+            // Taking the FIRST match is deliberate (engine-switch S3.6 audit): a
+            // call site has several edges only for an interface dispatch, and
+            // `interface` edges are skipped below whichever comes first.
             let edge = ctx.graph.edges_by_from.get(&routine.id).and_then(|edges| {
                 edges.iter().find(|e| {
                     e.callsite_id.as_deref() == Some(cs.id.as_str())
