@@ -12098,6 +12098,7 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
 /// after the with-context reaches nested bare names in a chain. 393 after the
 /// chain return tables (Text, Dictionary, Json, Xml, record methods, built-ins).
+/// 222 after namespace-qualified type names.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12112,7 +12113,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 393;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 222;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

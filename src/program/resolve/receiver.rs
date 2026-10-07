@@ -531,7 +531,7 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
             // Mirrors `node_extract::parse_object_ref_value`'s identical
             // numeric-vs-quoted-name distinction for `SourceTable`/`TableNo`.
             let stripped = strip_trailing_temporary(rest);
-            let stripped = stripped.trim();
+            let stripped = strip_namespace(&stripped);
             let table_ref = if let Ok(n) = stripped.parse::<i64>() {
                 ObjectRef::Id(n)
             } else {
@@ -547,10 +547,10 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "query" => parse_object_kind_type(ObjectKind::Query, rest),
         "xmlport" => parse_object_kind_type(ObjectKind::XmlPort, rest),
         "interface" => ParsedType::Interface {
-            name: unquote_identifier(rest).fold_identifier(),
+            name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
         },
         "enum" => ParsedType::EnumType {
-            name: unquote_identifier(rest).fold_identifier(),
+            name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
         },
         // Ref types
         "recordref" => ParsedType::RecordRef,
@@ -608,6 +608,8 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "integer" | "biginteger" | "decimal" | "boolean" | "byte" => {
             ParsedType::Framework(FrameworkKind::Scalar)
         }
+        // Not namespace-stripped: platform add-in names are themselves dotted
+        // (`Microsoft.Dynamics.Nav.Client.WebPageViewer`).
         "controladdin" => ParsedType::ControlAddIn {
             name: unquote_identifier(rest).fold_identifier(),
         },
@@ -3108,8 +3110,30 @@ fn object_ref_fallback_lc(object_ref: &ObjectRef) -> String {
 /// `Codeunit 80` (numeric id) and `Codeunit "80"` (a codeunit literally named
 /// `"80"`) can never be conflated by a later re-parse of an already-unquoted
 /// string.
+/// The object name of a possibly namespace-qualified reference: the segment
+/// after the last `.` outside quotes (`System.Telemetry."Feature Telemetry"` ->
+/// `"Feature Telemetry"`; `"Sales Cr.Memo Header"` is one quoted segment and
+/// stays whole). S9.0e: dependency code declares variables this way, and the
+/// whole dotted path used to be taken as the object name. Two objects of the
+/// same name in different namespaces then resolve as ambiguous (fail closed).
+pub(crate) fn strip_namespace(s: &str) -> &str {
+    let mut in_quotes = false;
+    let mut last_dot = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '.' if !in_quotes => last_dot = Some(i),
+            _ => {}
+        }
+    }
+    match last_dot {
+        Some(i) => s[i + 1..].trim(),
+        None => s.trim(),
+    }
+}
+
 fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
-    let trimmed = name_rest.trim();
+    let trimmed = strip_namespace(name_rest);
     let object_ref = if let Ok(n) = trimmed.parse::<i64>() {
         ObjectRef::Id(n)
     } else {
@@ -4512,6 +4536,40 @@ mod tests {
             None,
         );
         assert_eq!(result, ReceiverType::Framework(FrameworkKind::Session));
+    }
+
+    /// S9.0e: a namespace-qualified type names its last segment; a dot inside
+    /// quotes is part of the name.
+    #[test]
+    fn namespace_qualified_types_name_their_last_segment() {
+        assert_eq!(
+            strip_namespace("System.Telemetry.\"Feature Telemetry\""),
+            "\"Feature Telemetry\""
+        );
+        assert_eq!(
+            strip_namespace("\"Sales Cr.Memo Header\""),
+            "\"Sales Cr.Memo Header\""
+        );
+        assert_eq!(strip_namespace("Customer"), "Customer");
+        assert_eq!(
+            classify_type_text("Codeunit System.Telemetry.\"Feature Telemetry\""),
+            ParsedType::Object {
+                kind: ObjectKind::Codeunit,
+                object_ref: ObjectRef::Name {
+                    raw: "Feature Telemetry".to_string(),
+                    normalized_lc: "feature telemetry".to_string(),
+                },
+            }
+        );
+        assert_eq!(
+            classify_type_text("Record Microsoft.Sales.Document.\"Sales Line\" temporary"),
+            ParsedType::Record {
+                table_ref: ObjectRef::Name {
+                    raw: "Sales Line".to_string(),
+                    normalized_lc: "sales line".to_string(),
+                },
+            }
+        );
     }
 
     #[test]

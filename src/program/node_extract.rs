@@ -499,7 +499,11 @@ fn singular_property_value(
         .properties
         .iter()
         .filter(|p| p.name == name)
-        .map(|p| parse_object_ref_value(&p.value));
+        // A table reference may be namespace-qualified; it names its last
+        // segment (S9.0e).
+        .map(|p| {
+            parse_object_ref_value(crate::program::resolve::receiver::strip_namespace(&p.value))
+        });
     let first = values.next()?;
     for v in values {
         if object_ref_pair_conflicts(&v, &first) {
@@ -1052,6 +1056,27 @@ page 50102 "TempCard"
             "the temporary marker must not leak into the resolved name"
         );
         assert!(objs[0].source_table_temporary);
+    }
+
+    /// S9.0e: a namespace-qualified `SourceTable` names its last segment; a dot
+    /// inside a quoted name is part of it.
+    #[test]
+    fn source_table_namespace_qualified_names_its_last_segment() {
+        let src = r#"
+page 50104 "NsCard"
+{
+    SourceTable = Microsoft.Finance."Acc. Schedule Line";
+    layout { area(Content) { } }
+}
+"#;
+        let objs = extract_objs(src);
+        assert_eq!(
+            objs[0].source_table,
+            Some(ObjectRef::Name {
+                raw: "Acc. Schedule Line".to_string(),
+                normalized_lc: "acc. schedule line".to_string(),
+            })
+        );
     }
 
     #[test]

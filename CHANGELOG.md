@@ -1071,6 +1071,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Namespace-qualified type names** (engine-switch S9.0e). CDO's dependency-body
+  unknown edges 393 -> 222 (objectNotInGraph 134 -> 0); workspace metrics unchanged.
+  Dependency code declares `Codeunit System.Telemetry."Feature Telemetry"` and
+  `Record Microsoft.Sales.Document."Sales Line"`, and the whole dotted path was taken
+  as the object name. `receiver::strip_namespace` takes the segment after the last
+  `.` outside quotes, in `classify_type_text` (object, record, interface and enum
+  types) and for `SourceTable`/`TableNo`. Not applied to control-add-in names, which
+  are themselves dotted (`Microsoft.Dynamics.Nav.Client.WebPageViewer`; stripping
+  them moved CDO's workspace `unknown` 0 -> 64 during development), nor to
+  dataitem tables, which are stored unquoted. Same-named objects in different
+  namespaces resolve as ambiguous.
+
 - **Dependency bodies: chain return tables** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 643 -> 393 (compoundReceiver 277 -> 27); dependency
   `ambiguousResolved` 870 -> 865; workspace metrics unchanged.
