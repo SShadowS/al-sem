@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# scripts/compiler-graph — engine-switch S9.0d: write the AL compiler's call graph
+# for a workspace, the reference the semantic-edges golden is minted from.
+#
+# Extracts the source of every `.app` in the workspace's `.alpackages`
+# (docs/s9-oracle/extract_apps.py + manifests.py), then runs the newest installed
+# AL extension's `altool graph extract-whole` over the workspace and those sources
+# (one compilation, so cross-app calls resolve). Output: <out-dir>/whole/graph.jsonl.
+# Prints the extension directory name on the last line: pass it to
+# `mint-goldens --compiler`.
+#
+# Usage:
+#   scripts/compiler-graph <workspace> <out-dir>
+#
+# Takes about a minute on CDO; the graph is byte-deterministic for the same inputs.
+set -euo pipefail
+
+ws="${1:-}"
+out="${2:-}"
+if [[ -z "$ws" || -z "$out" ]]; then
+    echo "usage: scripts/compiler-graph <workspace> <out-dir>" >&2
+    exit 2
+fi
+here="$(cd "$(dirname "$0")/.." && pwd)"
+
+ext_dir="$(ls -d "$USERPROFILE"/.vscode/extensions/ms-dynamics-smb.al-* 2>/dev/null | sort -V | tail -n 1)"
+if [[ -z "$ext_dir" || ! -x "$ext_dir/bin/altool.exe" ]]; then
+    echo "compiler-graph: error: no AL extension with bin/altool.exe under ~/.vscode/extensions" >&2
+    exit 2
+fi
+ext="$(basename "$ext_dir")"
+
+rm -rf "$out/deps" "$out/whole"
+corpus=(--corpus "$ws")
+# A workspace without `.alpackages` (the in-repo fixture) compiles alone.
+if [[ -d "$ws/.alpackages" ]]; then
+    mkdir -p "$out/deps"
+    python -X utf8 -I "$here/docs/s9-oracle/extract_apps.py" "$ws/.alpackages" "$out/deps" >&2
+    python -X utf8 -I "$here/docs/s9-oracle/manifests.py" "$ws/.alpackages" "$out/deps" >&2
+    corpus+=(--corpus "$out/deps")
+fi
+"$ext_dir/bin/altool.exe" graph extract-whole "${corpus[@]}" \
+    --out "$out/whole" --graph "$out/whole/graph.jsonl" >&2
+
+echo "$ext"

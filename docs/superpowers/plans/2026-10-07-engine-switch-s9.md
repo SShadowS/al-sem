@@ -91,6 +91,11 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.
+  - **S9.0d done (2026-10-08).** `scripts/compiler-graph` + `mint-goldens
+    --compiler-graph` write `cdo-compiler-anon.json` (7,045 pairs) and
+    `fixture-compiler-anon.json`. The CDO audit pins every disagreement by rule
+    (`compiler_golden::Verdict`): 6,878 agree, 369 explained, 0 unexplained. The
+    L3-minted goldens, the adjudication overlay and their audits are deleted.
 
 - **S9.1 Cut the production legacy calls.** Remove the adapter's L3 trigger
   comparison and its counters; the adapter's `SymbolTable` becomes table-only.

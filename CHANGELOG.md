@@ -365,6 +365,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The semantic-edges golden is minted from the AL compiler, not from L3**
+  (engine-switch S9.0d, owner decision R1).
+  - `scripts/compiler-graph <workspace> <out>` extracts the dependency sources
+    and runs the newest installed AL extension's `altool graph extract-whole`
+    (about a minute on CDO). `mint-goldens --compiler-graph <graph.jsonl>
+    --compiler <extension>` writes `tests/goldens/semantic-edges/cdo-compiler-anon.json`:
+    every (caller, class, callee) pair whose caller is in the workspace,
+    anonymized (`anon::PAIR_DOMAIN_V1`), stamped with the workspace's git sha,
+    dirty flag, dependency closure and the AL extension. CDO: 7,045 pairs,
+    `ms-dynamics-smb.al-18.0.2732683`. `--fixture` mints
+    `fixture-compiler-anon.json` for the in-repo fixture.
+  - `cdo_compiler_audit_explains_every_disagreement` compares the program
+    resolver with it pair by pair: 6,878 agree. Every disagreeing pair must
+    match a rule over the program's own facts (`compiler_golden::Verdict`), and
+    the count per (side, class, rule) is pinned: subscriber attributes the
+    compiler records as calls (22), `RunTrigger` false (145), object runs (147),
+    field `OnValidate` triggers (40), receiver-less record operations (8),
+    platform page events (5), calls under an `#if` arm the workspace does not
+    build (2). Zero unexplained.
+  - `fixture_agrees_with_the_compiler_graph` replaces the L3-minted fixture
+    check; `committed_goldens_metadata_is_valid` now checks the compiler goldens.
+  - A `#if` around `case` branches (`preproc_conditional_case`,
+    `preproc_split_case_extended`) now records each arm's build context and
+    prunes a decided-false arm, like other `#if` shapes. The `#if` rule above
+    needed it for two calls.
+  - Removed: the L3-minted `cdo-anon.json`, `cdo-trigger-anon.json`,
+    `cdo-event-anon.json`, `fixture.json`, the adjudication overlay
+    (`adjudicated-overrides.json`, `known-genuine-divergences.json`), their
+    audits in `semantic_golden.rs` and the tests that ran them. `l3_mint` has
+    no caller left; it goes with L3 in S9.6. The anonymization domains of
+    those goldens (`site:v1`, `target:v1`, `trigger-op:v1`, `event-pair:v1`)
+    are retired; the salt and scheme are unchanged.
+  - A pair's `line` is for reading only. It is 0 for the 30 CDO pairs that
+    come only from the compiler's `Interface` and `Event` edges, which carry
+    no line.
+
 - **d45 moves from DEFAULT to OPT-IN** (engine-switch S8, 2026-10-07; the owner
   asked for the best solution).
   - **The evidence:** the S8.4 sample was 20 true and 20 false. Of the S8.6

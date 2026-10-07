@@ -1,5 +1,0 @@
-{
-  "description": "EMPTY for the bc3ccb18 baseline. The previous 54 entries adjudicated the 2026-07 CDO tree, whose mint SHA (64643a2f) exists in no checkout; on this pinned workspace the raw (pre-overlay) audit reports ZERO genuine_wrong sites, so there is nothing to adjudicate. Emptiness here is a CHECKED claim, not an accepted one: cdo_genuine_wrong_is_precedence_adjudicated asserts this file's site-key set EQUALS the raw genuine_wrong set, so emptying it to silence a real divergence fails. The old entries remain in git history if a future baseline needs them as a reference.",
-  "schema_version": 1,
-  "entries": []
-}

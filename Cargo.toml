@@ -196,11 +196,11 @@ path = "src/bin/aldump.rs"
 name = "alsem"
 path = "src/bin/alsem.rs"
 
-# 1B.3b Task 1: DEV-ONLY tool — the LAST sanctioned L3 oracle use. Mints +
-# anonymizes the three committed CDO-derived goldens under
-# `tests/goldens/semantic-edges/` (`cdo-anon.json` / `cdo-trigger-anon.json` /
-# `cdo-event-anon.json`) plus the gitignored local de-anon map. Run with
-# `CDO_WS` set; never part of the LSP surface or any release artifact.
+# DEV-ONLY tool (engine-switch S9.0d): mints the committed, anonymized
+# semantic-edges goldens under `tests/goldens/semantic-edges/`
+# (`cdo-compiler-anon.json`, `fixture-compiler-anon.json`) from the AL
+# compiler's call graph (`scripts/compiler-graph`), plus the gitignored local
+# de-anon map. Never part of the LSP surface or any release artifact.
 [[bin]]
 name = "mint-goldens"
 path = "src/bin/mint-goldens.rs"

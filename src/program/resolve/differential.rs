@@ -10,17 +10,13 @@
 //! `run_member_resolution_harness` / `run_implicit_trigger_harness` /
 //! `run_event_flow_gate`) that validated the fresh resolver against a LIVE L3
 //! build on every CDO-gated test run. 1B.3b Task 3 retired all of that: the
-//! fresh resolver is now validated against the COMMITTED, FROZEN, ANONYMIZED
-//! goldens in `semantic_golden.rs` (`run_cdo_semantic_audit_on` /
-//! `run_cdo_trigger_audit` / `run_cdo_event_audit`) plus the ported fan-out
-//! applicability teeth (`semantic_golden::route_applicability`) — both
-//! L3-INDEPENDENT at gate time. The three L3-touching projections needed
-//! only to MINT those frozen goldens (`project_l3` /
-//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) moved to
-//! `engine::l3::l3_mint` (since engine-switch S1), the lone surviving L3-oracle access point in
-//! the library (used by the dev-mint tool, `src/bin/mint-goldens.rs`, and by
-//! the in-repo `REGEN_TEMP_GOLDENS` fixture-regen paths in
-//! `tests/program_resolve_harness.rs`).
+//! fresh resolver is now validated against the AL compiler's own call graph
+//! (`compiler_golden.rs`, engine-switch S9.0d: a committed, anonymized
+//! golden minted from `altool graph`) plus the ported fan-out applicability
+//! teeth (`semantic_golden::route_applicability`). The three L3-touching
+//! projections that minted the earlier L3 goldens (`project_l3` /
+//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) live in
+//! `engine::l3::l3_mint`, which nothing calls any more; it goes with L3 in S9.6.
 //!
 //! This module and `semantic_golden.rs` import NEITHER `engine::l3` NOR
 //! `engine::l2` — the gate path is fully L3-INDEPENDENT.
@@ -207,7 +203,7 @@ fn app_guid(apps: &AppRegistry, r: AppRef) -> String {
 }
 
 /// Project a `RoutineNodeId` to a `CanonicalKey` (fresh-side only).
-fn routine_to_key(id: &RoutineNodeId, apps: &AppRegistry) -> CanonicalKey {
+pub(crate) fn routine_to_key(id: &RoutineNodeId, apps: &AppRegistry) -> CanonicalKey {
     make_canonical_key(
         app_guid(apps, id.object.app),
         object_kind_str(id.object.kind),
@@ -482,8 +478,7 @@ pub struct CanonicalEventRow {
 /// [`project_target`]).
 ///
 /// Used by the always-run synthetic EventFlow fixture test (1B.3b Task 1
-/// Step 4) and by [`crate::program::resolve::semantic_golden::run_cdo_event_audit`]'s
-/// fresh side — neither touches `engine::l3`.
+/// Step 4); it does not touch `engine::l3`.
 #[must_use]
 pub fn project_fresh_event_rows(workspace_root: &Path) -> Vec<CanonicalEventRow> {
     use crate::program::resolve::full::build_context;

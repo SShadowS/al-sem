@@ -134,6 +134,18 @@ pub struct SiteFacts {
     /// object's source declares none). The edge itself then names no routine;
     /// the adapter needs the object to keep its run shape.
     pub run_target: Option<ObjectNodeId>,
+    /// S9.0d: the build context the call site sits in (`Ir::preproc_context`:
+    /// its `#if` branches and its routine's arm); empty for unconditional code.
+    pub build_context: Vec<(String, bool)>,
+    /// S9.0d: the trigger routines this record operation's `TriggerSiteRule`
+    /// removed because its RunTrigger is false (a `false` literal, or left
+    /// out). The compiler's call graph keeps such a trigger edge; the oracle
+    /// audit reads this to tell that limit from a missing edge.
+    pub run_trigger_excluded: Vec<RoutineNodeId>,
+    /// S9.0d: a record operation written without a receiver (`Insert(true)` on
+    /// the implicit `Rec`). The compiler's call graph has no trigger edges from
+    /// one.
+    pub unqualified_record_op: bool,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -720,10 +732,20 @@ fn resolve_call_site_obligation(
                 let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
                     &op_lc, call_args, file, text,
                 );
+                if rule.run_trigger == Some(false) {
+                    facts_out.run_trigger_excluded = routes
+                        .iter()
+                        .filter_map(|r| match &r.target {
+                            RouteTarget::Routine(id) => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
                 routes.retain(|r| match &r.target {
                     RouteTarget::Routine(id) => rule.admits(id),
                     _ => true,
                 });
+                facts_out.unqualified_record_op = !callee_text.contains('.');
                 (shape, completeness, routes)
             } else {
                 // No table resolved: honest-empty Multicast (open-world, no
@@ -878,7 +900,10 @@ pub(crate) fn resolve_file_obligations(
                     callee_fp: fp,
                 };
 
-                let mut facts = SiteFacts::default();
+                let mut facts = SiteFacts {
+                    build_context: pf.file.ir.preproc_context(site.expr).to_vec(),
+                    ..SiteFacts::default()
+                };
                 let (kind, shape, completeness, routes, finding) = resolve_call_site_obligation(
                     &site.shape,
                     site.arity,

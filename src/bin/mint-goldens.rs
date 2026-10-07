@@ -1,106 +1,89 @@
-//! 1B.3b Task 1: the DEV-ONLY committed-golden minting tool.
+//! The DEV-ONLY committed-golden minting tool.
 //!
-//! 1B.3b Task 3 update: `src/program/resolve` (the gate module —
-//! `differential.rs` + `semantic_golden.rs`) now has ZERO `engine::l3`
-//! imports. The LAST sanctioned L3 oracle access point in the library is
-//! [`al_sem::engine::l3::l3_mint`] (moved out of `src/program` in engine-switch
-//! S1), reached from here directly: [`project_l3_event_rows`] and the
-//! [`mint_l3_validated_golden`]/[`mint_l3_trigger_golden`] wrappers over
-//! `l3_mint::project_l3` / `l3_mint::project_l3_implicit_trigger_in_scope`.
-//! This binary is the ONLY
-//! caller of those (plus the in-repo `REGEN_TEMP_GOLDENS` fixture-regen test
-//! path) — the runtime audits
-//! (`run_cdo_semantic_audit_on`/`run_cdo_trigger_audit`/`run_cdo_event_audit`)
-//! LOAD the committed output instead.
+//! Engine-switch S9.0d (owner decision R1): the semantic-edges golden is minted
+//! from the AL COMPILER's call graph, not from the retired L3 engine. Input is the
+//! graph `altool graph extract-whole` writes over the workspace and its dependency
+//! sources (`scripts/compiler-graph` produces it reproducibly). Output, under
+//! `tests/goldens/semantic-edges/`:
+//!   - `cdo-compiler-anon.json` — every (caller, class, callee) pair of the
+//!     compiler graph whose caller is in the workspace app, anonymized
+//!     (`program::resolve::compiler_golden`), minified.
+//!   - the GITIGNORED local de-anonymization map (`cdo-deanon-map.json`), merged,
+//!     so a developer with CDO access can read a failing audit back to AL.
 //!
-//! Mints + ANONYMIZES (via [`anon::anon`] — see that module's docs for the
-//! domain-separation + fixed-salt-governance writeup) the three committed
-//! goldens under `tests/goldens/semantic-edges/`:
-//!   - `cdo-anon.json`         — Member/Interface ([`mint_l3_validated_golden`])
-//!   - `cdo-trigger-anon.json` — ImplicitTrigger ([`mint_l3_trigger_golden`])
-//!   - `cdo-event-anon.json`   — EventFlow (`project_l3_event_rows`)
+//! # Reproducibility
 //!
-//! All three are written MINIFIED (single-line JSON; the ~13k-site CDO golden
-//! is a large committed artifact and pretty-printing roughly doubles it for
-//! no review benefit — a diff tool handles structural JSON diffs either way).
+//! Anonymization uses the FIXED, COMMITTED salt (`anon::ANON_SALT`); the compiler
+//! graph is byte-deterministic for the same inputs (S9.0b). Minting twice from the
+//! same workspace, dependency closure and AL extension gives byte-identical output.
+//! [`ANON_KEY_ENV`] remains an OPTIONAL override for a non-reproducible
+//! anonymization; never commit a golden minted with it set.
 //!
-//! ALSO writes/merges the GITIGNORED local de-anonymization map
-//! (`cdo-deanon-map.json`, `AnonId -> human-readable plaintext`) so a
-//! developer with CDO access can reverse a failing anonymized diff back to
-//! the exact broken AL code (the committed goldens themselves never carry
-//! plaintext).
+//! # Pinning
 //!
-//! # Reproducibility (1B.3b Task 1 fix)
+//! PIN `CDO_WS` to the baseline (`U:/Git/DO-cdo-baseline/Cloud`, see CLAUDE.md).
+//! The golden stamps the workspace's git HEAD, dirty flag and dependency-closure
+//! digest (audits fail on drift under `ENFORCE_CDO_WS=1`) and the AL extension the
+//! graph came from (`--compiler`). Re-mint when the pin or the compiler moves.
 //!
-//! Anonymization uses the FIXED, COMMITTED salt (`anon::ANON_SALT`) by
-//! default — running this tool twice against the SAME `CDO_WS` state produces
-//! BYTE-IDENTICAL committed goldens, with no secret required. [`ANON_KEY_ENV`]
-//! remains as an OPTIONAL override for a non-reproducible, session-local
-//! anonymization; a golden minted with it set must NEVER be committed (this
-//! tool warns loudly when it's set).
-//!
-//! # Workspace pinning
-//!
-//! PIN `CDO_WS` to a clean (or at least a known, tagged) ref at mint time —
-//! this tool stamps the workspace's git HEAD SHA + dirty flag into each
-//! golden's [`MintMetadata`], and a later audit run warns (not fails) when
-//! the workspace it sees has drifted from that stamp. Re-run this tool
-//! (re-mint) when intentionally advancing the pin to a new workspace state.
-//!
-//! Usage: `CDO_WS=<workspace> cargo run --release --bin mint-goldens`
-//! (workspace defaults to `$CDO_WS`; an explicit positional arg overrides
-//! it). Output discipline: progress/summary goes to stderr; the tool writes
-//! files directly, nothing meaningful goes to stdout.
+//! Usage:
+//!   `cargo run --release --bin mint-goldens -- --compiler-graph <graph.jsonl>
+//!    --compiler <extension> [<workspace-root>]`
+//! (workspace defaults to `$CDO_WS`). `--restamp` rewrites only the
+//! dependency-closure stamp (a digest-scheme change on an unmoved baseline).
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use al_sem::engine::l3::l3_mint::{
-    mint_l3_trigger_golden, mint_l3_validated_golden, project_l3_event_rows,
+use al_sem::program::resolve::anon::ANON_KEY_ENV;
+use al_sem::program::resolve::compiler_golden::{
+    CompilerGolden, CompilerStamp, cdo_compiler_golden_path, fixture_compiler_golden_path,
+    load_compiler_golden, mint_compiler_golden,
 };
-use al_sem::program::resolve::anon::{self, ANON_KEY_ENV};
+use al_sem::program::resolve::compiler_oracle::CompilerGraph;
 use al_sem::program::resolve::semantic_golden::{
-    MintMetadata, anonymize_event_rows_with_deanon, anonymize_golden_with_deanon,
-    cdo_anon_golden_path, cdo_deanon_map_path, cdo_event_anon_golden_path,
-    cdo_trigger_anon_golden_path, dependency_closure_digest, load_anon_event_golden,
-    load_anon_golden, merge_deanon_map, workspace_git_info,
+    MintMetadata, cdo_deanon_map_path, dependency_closure_digest, merge_deanon_map,
+    workspace_git_info,
 };
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: CDO_WS=<workspace> cargo run --release --bin mint-goldens \
-         [-- <workspace-root>]\n\
+        "usage: mint-goldens --compiler-graph <graph.jsonl> --compiler <extension> \
+         [<workspace-root>]\n\
+         \x20      mint-goldens --restamp [<workspace-root>]\n\
          \n\
-         Mints + anonymizes the three committed CDO-derived goldens under\n\
-         tests/goldens/semantic-edges/ (cdo-anon.json, cdo-trigger-anon.json,\n\
-         cdo-event-anon.json) plus the GITIGNORED local de-anon map\n\
-         (cdo-deanon-map.json). The LAST sanctioned L3 oracle use (1B.3b Task 1).\n\
+         Mints tests/goldens/semantic-edges/cdo-compiler-anon.json from the AL\n\
+         compiler's call graph (`scripts/compiler-graph <workspace> <out-dir>`\n\
+         writes it and prints the extension name), plus the GITIGNORED local\n\
+         de-anon map. <workspace-root> defaults to $CDO_WS. Anonymization uses the\n\
+         fixed committed salt; {ANON_KEY_ENV} overrides it (never commit that).\n\
          \n\
-         <workspace-root> defaults to $CDO_WS when omitted as a positional arg.\n\
-         \n\
-         Anonymization uses the FIXED, COMMITTED salt by default — re-running\n\
-         this tool against the SAME CDO_WS state reproduces byte-identical\n\
-         committed goldens, no secret required (see anon.rs's module docs,\n\
-         \"Governance\" section). {ANON_KEY_ENV} is an OPTIONAL override for a\n\
-         non-reproducible, session-local anonymization; NEVER commit a golden\n\
-         minted with it set.\n\
-         \n\
-         PIN CDO_WS to a clean/tagged ref at mint time — the mint-time git SHA\n\
-         + dirty flag are stamped into each golden's metadata, so a later audit\n\
-         can warn on workspace drift. Re-mint when intentionally advancing the\n\
-         pin.\n\
-         \n\
-         --restamp  rewrite ONLY the dependency-closure stamp of the three\n\
-                    goldens (a digest-scheme change on an unmoved baseline);\n\
-                    refuses if any golden's git stamp differs from the workspace."
+         --fixture  mint tests/goldens/semantic-edges/fixture-compiler-anon.json\n\
+                    instead (workspace: tests/fixtures/semantic-golden), with no\n\
+                    workspace stamps.\n\
+         --restamp  rewrite ONLY the golden's dependency-closure stamp (a\n\
+                    digest-scheme change on an unmoved baseline); refuses if the\n\
+                    golden's git stamp differs from the workspace."
     );
     ExitCode::FAILURE
 }
 
+/// The value after `flag`, if present.
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let positional = args.iter().find(|a| !a.starts_with("--"));
+    let graph_path = flag_value(&args, "--compiler-graph");
+    let compiler = flag_value(&args, "--compiler");
+    let values: Vec<&str> = [graph_path, compiler].into_iter().flatten().collect();
+    let positional = args
+        .iter()
+        .find(|a| !a.starts_with("--") && !values.contains(&a.as_str()));
 
     let workspace_root: PathBuf = match positional {
         Some(p) => PathBuf::from(p),
@@ -119,35 +102,22 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-
-    // 1B.3b Task 1 fix: anonymization defaults to the FIXED, COMMITTED salt
-    // (`anon::ANON_SALT`) — no secret required, and the result is
-    // REPRODUCIBLE (re-running this tool against the same CDO_WS state
-    // byte-matches the committed goldens). `ANON_KEY_ENV` remains an OPTIONAL
-    // override for a non-reproducible anonymization; warn loudly when it's
-    // set so a developer doesn't accidentally commit a non-reproducible
-    // golden.
-    let key_overridden = std::env::var(ANON_KEY_ENV)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    if key_overridden {
+    if std::env::var(ANON_KEY_ENV).is_ok_and(|v| !v.is_empty()) {
         eprintln!(
-            "WARNING: {ANON_KEY_ENV} is set — anonymizing with the OVERRIDE key, \
-             NOT the committed fixed salt. This run's output will NOT match the \
-             currently-committed goldens and will NOT reproduce on a second run \
-             without the same override. Do NOT commit goldens minted this way."
+            "WARNING: {ANON_KEY_ENV} is set — anonymizing with the OVERRIDE key, NOT \
+             the committed fixed salt. Do NOT commit goldens minted this way."
         );
     }
 
-    // 1B.3b Task 1 fix (Fix 4): stamp the mint-time CDO_WS git SHA + dirty
-    // flag into every golden's metadata. PIN CDO_WS to a clean/tagged ref
-    // before minting; re-mint when intentionally advancing the pin.
+    // `--fixture`: the in-repo fixture golden (`tests/fixtures/semantic-golden`).
+    // Its workspace is this repository, so git and closure stamps mean nothing:
+    // none are written, and the fixture test checks no drift.
+    let fixture = args.iter().any(|a| a == "--fixture");
+
+    // Stamp the workspace: git covers tracked files only, so the gitignored
+    // `.alpackages` closure is stamped separately (#29). A probe failure aborts.
     let (workspace_git_sha, workspace_dirty) = workspace_git_info(&workspace_root);
     eprintln!("  workspace git: sha={workspace_git_sha:?} dirty={workspace_dirty:?}");
-    // git state covers only TRACKED files; `.alpackages` is gitignored, so the
-    // dependency symbols the resolver actually reads are invisible to `dirty`.
-    // Stamp them separately or the baseline is only half pinned. A probe
-    // failure aborts: it is not an empty closure (#29).
     let closure = match dependency_closure_digest(&workspace_root) {
         Ok(d) => d,
         Err(e) => {
@@ -160,118 +130,88 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "--restamp") {
         return restamp(workspace_git_sha.as_deref(), workspace_dirty, &closure);
     }
-
-    let mint_metadata = MintMetadata {
-        workspace_git_sha,
-        workspace_dirty,
-        dependency_closure_sha256: Some(closure),
+    let (Some(graph_path), Some(compiler)) = (graph_path, compiler) else {
+        eprintln!("error: --compiler-graph and --compiler are both required");
+        return usage();
     };
 
+    let Some(workspace_guid) = workspace_guid(&workspace_root) else {
+        eprintln!("error: cannot read the workspace app id from app.json");
+        return ExitCode::FAILURE;
+    };
+    let graph = match CompilerGraph::read(Path::new(graph_path)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     eprintln!(
-        "mint-goldens: workspace={} (1B.3b Task 1 — LAST sanctioned L3 use)",
-        workspace_root.display()
+        "  compiler graph {graph_path}: edges {:?}, unmapped {}",
+        graph.edge_kinds, graph.unmapped_edges
     );
-
-    let mut deanon: BTreeMap<String, String> = BTreeMap::new();
-
-    // ── (a) Member/Interface ─────────────────────────────────────────────────
-    eprintln!("  minting Member/Interface golden (mint_l3_validated_golden / project_l3)...");
-    let member_golden = mint_l3_validated_golden(&workspace_root);
-    let mut member_anon =
-        anonymize_golden_with_deanon(&member_golden, anon::SITE_DOMAIN_V1, &mut deanon);
-    member_anon.metadata = mint_metadata.clone();
-    let member_path = cdo_anon_golden_path();
-    write_minified(&member_path, &member_anon);
-    eprintln!(
-        "    {} site(s) -> {}",
-        member_anon.entries.len(),
-        member_path.display()
+    let metadata = if fixture {
+        MintMetadata::default()
+    } else {
+        MintMetadata {
+            workspace_git_sha,
+            workspace_dirty,
+            dependency_closure_sha256: Some(closure),
+        }
+    };
+    let (golden, deanon) = mint_compiler_golden(
+        &graph,
+        &workspace_guid,
+        metadata,
+        CompilerStamp {
+            extension: compiler.to_string(),
+        },
     );
-
-    // ── (b) ImplicitTrigger ───────────────────────────────────────────────────
-    eprintln!(
-        "  minting ImplicitTrigger golden (mint_l3_trigger_golden / project_l3_implicit_trigger_in_scope)..."
-    );
-    let trigger_golden = mint_l3_trigger_golden(&workspace_root);
-    let mut trigger_anon =
-        anonymize_golden_with_deanon(&trigger_golden, anon::TRIGGER_OP_DOMAIN_V1, &mut deanon);
-    trigger_anon.metadata = mint_metadata.clone();
-    let trigger_path = cdo_trigger_anon_golden_path();
-    write_minified(&trigger_path, &trigger_anon);
-    eprintln!(
-        "    {} site(s) -> {}",
-        trigger_anon.entries.len(),
-        trigger_path.display()
-    );
-
-    // ── (c) EventFlow ─────────────────────────────────────────────────────────
-    eprintln!("  minting EventFlow golden (project_l3_event_rows)...");
-    let event_rows = project_l3_event_rows(&workspace_root);
-    let mut event_anon = anonymize_event_rows_with_deanon(&event_rows, &mut deanon);
-    event_anon.metadata = mint_metadata.clone();
-    let event_path = cdo_event_anon_golden_path();
-    write_minified(&event_path, &event_anon);
-    eprintln!(
-        "    {} pair(s) -> {}",
-        event_anon.entries.len(),
-        event_path.display()
-    );
-
-    // ── de-anon map (gitignored, local-only) ─────────────────────────────────
-    let deanon_path = cdo_deanon_map_path();
-    let deanon_count = deanon.len();
-    merge_deanon_map(&deanon_path, &deanon);
-    eprintln!(
-        "  merged {deanon_count} de-anon entries -> {} (GITIGNORED, local-only)",
-        deanon_path.display()
-    );
-
-    eprintln!("mint-goldens: done.");
+    let path = if fixture {
+        fixture_compiler_golden_path()
+    } else {
+        cdo_compiler_golden_path()
+    };
+    write_minified(&path, &golden);
+    eprintln!("  {} pair(s) -> {}", golden.pairs.len(), path.display());
+    if !fixture {
+        merge_deanon_map(&cdo_deanon_map_path(), &deanon);
+        eprintln!(
+            "  merged {} de-anon entries (GITIGNORED, local-only)",
+            deanon.len()
+        );
+    }
     ExitCode::SUCCESS
 }
 
-/// `--restamp` (#29): rewrite ONLY the dependency-closure stamp of the three
-/// committed goldens, for a change of digest SCHEME on an unmoved baseline.
-/// Refuses unless every golden's git stamp equals the workspace's current one;
-/// a moved workspace needs a real re-mint, never a re-stamp.
+/// The workspace app's id from `app.json`, lower-case.
+fn workspace_guid(workspace_root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(workspace_root.join("app.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(v.get("id")?.as_str()?.to_ascii_lowercase())
+}
+
+/// `--restamp` (#29): rewrite ONLY the dependency-closure stamp, for a change of
+/// digest SCHEME on an unmoved baseline. Refuses unless the golden's git stamp
+/// equals the workspace's current one; a moved workspace needs a re-mint.
 fn restamp(sha: Option<&str>, dirty: Option<bool>, closure: &str) -> ExitCode {
-    let check = |name: &str, m: &MintMetadata| -> bool {
-        let same = m.workspace_git_sha.as_deref() == sha && m.workspace_dirty == dirty;
-        if !same {
-            eprintln!(
-                "error: {name}: stamped git {:?}/dirty={:?} != current {sha:?}/dirty={dirty:?}; \
-                 the workspace moved, so re-mint instead of re-stamping",
-                m.workspace_git_sha, m.workspace_dirty
-            );
-        }
-        same
-    };
-    let (member_path, trigger_path, event_path) = (
-        cdo_anon_golden_path(),
-        cdo_trigger_anon_golden_path(),
-        cdo_event_anon_golden_path(),
-    );
-    let (Some(mut member), Some(mut trigger), Some(mut event)) = (
-        load_anon_golden(&member_path),
-        load_anon_golden(&trigger_path),
-        load_anon_event_golden(&event_path),
-    ) else {
-        eprintln!("error: a committed golden failed to load");
+    let path = cdo_compiler_golden_path();
+    let Some(mut golden): Option<CompilerGolden> = load_compiler_golden(&path) else {
+        eprintln!("error: {} failed to load", path.display());
         return ExitCode::FAILURE;
     };
-    if !(check("cdo-anon", &member.metadata)
-        && check("cdo-trigger-anon", &trigger.metadata)
-        && check("cdo-event-anon", &event.metadata))
-    {
+    let m = &golden.metadata;
+    if m.workspace_git_sha.as_deref() != sha || m.workspace_dirty != dirty {
+        eprintln!(
+            "error: stamped git {:?}/dirty={:?} != current {sha:?}/dirty={dirty:?}; the \
+             workspace moved, so re-mint instead of re-stamping",
+            m.workspace_git_sha, m.workspace_dirty
+        );
         return ExitCode::FAILURE;
     }
-    member.metadata.dependency_closure_sha256 = Some(closure.to_string());
-    trigger.metadata.dependency_closure_sha256 = Some(closure.to_string());
-    event.metadata.dependency_closure_sha256 = Some(closure.to_string());
-    write_minified(&member_path, &member);
-    write_minified(&trigger_path, &trigger);
-    write_minified(&event_path, &event);
-    eprintln!("re-stamped 3 goldens with {closure}");
+    golden.metadata.dependency_closure_sha256 = Some(closure.to_string());
+    write_minified(&path, &golden);
+    eprintln!("re-stamped {} with {closure}", path.display());
     ExitCode::SUCCESS
 }
 
