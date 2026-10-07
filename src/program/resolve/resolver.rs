@@ -2651,87 +2651,34 @@ pub(crate) fn resolve_member_with_args(
                     .map(|o| o.tier)
                     .unwrap_or(TrustTier::Workspace);
 
-                if impl_tier == TrustTier::SymbolOnly {
-                    // SymbolOnly: delegate to `resolve_in_object`'s full
-                    // arity+visibility discipline (Task 1) — no pre-check
-                    // needed here (unlike the source-tier `else` branch below)
-                    // since `resolve_in_object` itself now returns Some(Unknown)
-                    // on arity mismatch/access exclusion/ambiguity. The
-                    // `unwrap_or` fires only when this implementer does not
-                    // declare `method_lc` at all (`resolve_in_object` returns
-                    // `None` only on a name-absent `candidates.is_empty()`).
-                    let result = resolve_in_object(
-                        impl_id,
-                        impl_tier,
-                        method_lc,
-                        arity,
-                        &from_object.id,
-                        graph,
-                        index,
-                        surface,
-                        args,
-                    );
-                    // The implementer object itself IS resolved (`impl_id`/
-                    // `impl_tier` above) — tag its tier (reason-split Task 2)
-                    // on the name-absent fallback. `impl_tier == SymbolOnly`
-                    // here by construction (this branch), so this tier can
-                    // never PROVE absence — see `MemberNotFound`'s doc. A
-                    // nested `AmbiguousOverload` result collapses to a single
-                    // route, never extends this Polymorphic edge — see
-                    // `interface_delegate_route`'s doc (Task 4 round-1
-                    // addendum, interface nesting OUT OF SCOPE).
-                    let route = interface_delegate_route(
-                        result,
-                        unresolved_route_with_tier(UnknownReason::MemberNotFound, impl_tier),
-                    );
-                    routes.push(route);
-                } else {
-                    let candidates = index.routines_in_object(graph, impl_id, method_lc);
-                    if candidates.len() == 0 {
-                        // Method name absent from this implementer — Rule 1
-                        // Unresolved. The implementer object IS resolved; tag
-                        // its tier (reason-split Task 2).
-                        routes.push(unresolved_route_with_tier(
-                            UnknownReason::MemberNotFound,
-                            impl_tier,
-                        ));
-                    } else {
-                        let matching = candidates.filter(|r| r.params_count == arity).count();
-                        match matching {
-                            1 => {
-                                // Unique arity-matched overload: guaranteed to
-                                // resolve — the `unresolved_route` fallback is
-                                // defensive (should never fire;
-                                // `resolve_in_object` itself finds
-                                // `matched.len() == 1`, so its `_` arm's
-                                // `AmbiguousOverload` shape is structurally
-                                // unreachable here too — `interface_delegate_
-                                // route` handles it uniformly anyway).
-                                let result = resolve_in_object(
-                                    impl_id,
-                                    impl_tier,
-                                    method_lc,
-                                    arity,
-                                    &from_object.id,
-                                    graph,
-                                    index,
-                                    surface,
-                                    args,
-                                );
-                                let route = interface_delegate_route(
-                                    result,
-                                    unresolved_route(UnknownReason::IndexIntegrationGap),
-                                );
-                                routes.push(route);
-                            }
-                            _ => {
-                                // 0 (arity mismatch) or >1 (ambiguous) — Rule 1+2 Unresolved.
-                                // Never emit a guessed route to a wrong-arity or wrong-overload target.
-                                routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
-                            }
-                        }
-                    }
-                }
+                // Every tier delegates to `resolve_in_object`'s full
+                // arity + visibility + argument-type discipline: it returns
+                // Some(Unknown) on arity mismatch / access exclusion, picks a
+                // same-arity overload by argument type as the compiler does
+                // (S9.0e — the source branch used to decline every >1
+                // same-arity set without trying), and `None` only when this
+                // implementer does not declare `method_lc` at all. The
+                // implementer object itself IS resolved, so the name-absent
+                // fallback carries its tier (reason-split Task 2). A nested
+                // `AmbiguousOverload` result collapses to a single route,
+                // never extends this Polymorphic edge — see
+                // `interface_delegate_route`'s doc (Task 4 round-1 addendum,
+                // interface nesting OUT OF SCOPE).
+                let result = resolve_in_object(
+                    impl_id,
+                    impl_tier,
+                    method_lc,
+                    arity,
+                    &from_object.id,
+                    graph,
+                    index,
+                    surface,
+                    args,
+                );
+                routes.push(interface_delegate_route(
+                    result,
+                    unresolved_route_with_tier(UnknownReason::MemberNotFound, impl_tier),
+                ));
             }
 
             (DispatchShape::Polymorphic, routes)
@@ -9525,6 +9472,80 @@ codeunit 51499 "IfaceCaller2"
             matches!(routes[0].target, RouteTarget::Routine(_)),
             "must be Routine route; got {:?}",
             routes[0].target
+        );
+        assert_eq!(routes[0].evidence, Evidence::Source);
+    }
+
+    /// S9.0e: a source implementer's same-arity overloads are picked by
+    /// argument type, as on any object receiver. The fan-out used to decline
+    /// every >1 same-arity set without trying (`Http.Authorize(HttpClient)` /
+    /// `Authorize(WebClient)` stayed Unknown on CDO). An Integer literal binds
+    /// `Bar(p: Integer)`, never the `Text` sibling.
+    #[test]
+    fn resolve_member_interface_implementer_overload_picked_by_argument_type() {
+        use crate::program::resolve::receiver::ReceiverType;
+
+        let src: &'static str = r#"
+codeunit 51420 "IFooTypedImpl" implements IFoo
+{
+    procedure Bar(p: Integer)
+    begin
+    end;
+
+    procedure Bar(p: Text)
+    begin
+    end;
+}
+
+codeunit 51499 "IfaceTypedCaller"
+{
+    procedure Trigger()
+    begin
+    end;
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let unit = make_unit(app_id, "IfaceTyped.al", src);
+        let units = [unit];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+
+        let impl_obj = find_obj(&graph, "IFooTypedImpl");
+        let bars: Vec<_> = index
+            .routines_in_object(&graph, &impl_obj.id, "bar")
+            .collect();
+        assert_eq!(bars.len(), 2, "precondition: two same-arity Bar overloads");
+
+        let from_obj = find_obj(&graph, "IfaceTypedCaller");
+        let receiver = ReceiverType::Interface {
+            name_lc: "ifoo".into(),
+        };
+        let args = [ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base("integer".into())),
+            exact_text: Some("integer".into()),
+            literal_kind: Some(LiteralKind::Integer),
+            var_passable: false,
+        }];
+        let (shape, routes) = resolve_member_with_args(
+            &receiver, "bar", 1, from_obj, &graph, &index, &surface, &args,
+        );
+
+        assert_eq!(shape, DispatchShape::Polymorphic);
+        assert_eq!(
+            routes.len(),
+            1,
+            "one implementer, one route; got {routes:?}"
+        );
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("the Integer overload must be picked; got {routes:?}");
+        };
+        let meta = surface.get(rid).expect("picked routine is source-declared");
+        assert_eq!(
+            meta.params[0].ty.as_deref().map(str::to_ascii_lowercase),
+            Some("integer".to_string()),
+            "the Integer overload, never the Text sibling; got {:?}",
+            meta.params
         );
         assert_eq!(routes[0].evidence, Evidence::Source);
     }

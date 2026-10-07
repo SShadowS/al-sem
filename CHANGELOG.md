@@ -1071,6 +1071,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An interface call picks an implementer's overload by argument type**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 59 -> 40. The
+  interface fan-out sent a source implementer with more than one same-arity
+  overload straight to `OverloadAmbiguous`, without the argument-type
+  dispatch every object receiver gets (`IHttpAuthProvider.Authorize(HttpClient)`
+  vs `Authorize(WebClient)`). Every implementer now goes through
+  `resolve_in_object`, whatever its tier. Test
+  `resolve_member_interface_implementer_overload_picked_by_argument_type`;
+  restoring the decline fails it.
 - **A lone visible overload survivor binds** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 136 -> 59; workspace metrics unchanged. When
   access filtering left exactly one overload, `resolve_in_object` declined with
