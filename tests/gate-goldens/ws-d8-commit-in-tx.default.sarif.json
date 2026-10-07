@@ -283,60 +283,6 @@
               ]
             }
           ]
-        },
-        {
-          "ruleId": "d45-event-transitive-table-exposure",
-          "level": "note",
-          "message": {
-            "text": "Event subscribers expose table transitively from publisher — Publisher 323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete"
-          },
-          "fingerprints": {
-            "al-sem/v1": "ba1ff2b8710a181d"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "ws:src/posting.al"
-                },
-                "region": {
-                  "startLine": 19,
-                  "startColumn": 5
-                }
-              },
-              "logicalLocations": [
-                {
-                  "name": "D8PostingChain :: OnAfterPostSalesDoc"
-                }
-              ]
-            }
-          ],
-          "codeFlows": [
-            {
-              "threadFlows": [
-                {
-                  "locations": [
-                    {
-                      "location": {
-                        "physicalLocation": {
-                          "artifactLocation": {
-                            "uri": "ws:src/subscriber.al"
-                          },
-                          "region": {
-                            "startLine": 4,
-                            "startColumn": 5
-                          }
-                        },
-                        "message": {
-                          "text": "subscriber writes 11111111-0000-0000-0000-00000000d80a/table/50100"
-                        }
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
         }
       ]
     }

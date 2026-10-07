@@ -1209,10 +1209,10 @@ where
 /// `detectorStats` array for the `all` slot; the `default` slot is a subset in this
 /// same order (as `select_detectors` filters by name while preserving registry order).
 ///
-/// DEFAULT order (41): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
+/// DEFAULT order (40): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
 ///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
-///   d39, d41, d42, d43, d44, d45, d52, d53, d54, d55, d56, d57, d58, d59, d60.
-/// OPT_IN order (13):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d61, d62, d63, d64.
+///   d39, d41, d42, d43, d44, d52, d53, d54, d55, d56, d57, d58, d59, d60.
+/// OPT_IN order (14):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d45, d61, d62, d63, d64.
 pub fn registered_detectors() -> Vec<Detector> {
     // `requires` bits (W1.0): derived from the per-detector `ctx.<field>` audit +
     // the indirect-consumption grep (helpers reading substrate fields are attributed
@@ -1385,11 +1385,6 @@ pub fn registered_detectors() -> Vec<Detector> {
             run: d44::detect_d44,
             requires: substrate::SUMMARIES,
         },
-        Detector {
-            name: "d45-event-transitive-table-exposure".to_string(),
-            run: d45::detect_d45,
-            requires: substrate::SUMMARIES,
-        },
         // d52: BCQuality wave (bulk-write-param-no-temp-guard).
         Detector {
             name: "d52-bulk-write-param-no-temp-guard".to_string(),
@@ -1514,6 +1509,17 @@ pub fn registered_detectors() -> Vec<Detector> {
             run: d8::detect_d8,
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
+        },
+        // d45: OPT-IN since engine-switch S8 (2026-10-07). 20 of 40 sampled
+        // cross-app findings were false at S8.4, and 12 of 12 verified S8.6
+        // additions. The dominant cause is a subscriber that exits unless an
+        // event argument read from a DATABASE ROW matches its own app (Guided
+        // Experience `ExtensionId`), which no sound static tracking decides. Wake:
+        // OUTSTANDING ("False-positive causes exposed by S8.6").
+        Detector {
+            name: "d45-event-transitive-table-exposure".to_string(),
+            run: d45::detect_d45,
+            requires: substrate::SUMMARIES,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
         Detector {

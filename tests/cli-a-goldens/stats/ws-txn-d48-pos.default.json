@@ -204,12 +204,6 @@
   },
   {
     "candidatesConsidered": 0,
-    "detector": "d45-event-transitive-table-exposure",
-    "findingsEmitted": 0,
-    "skipped": {}
-  },
-  {
-    "candidatesConsidered": 0,
     "detector": "d17-min-version-drift",
     "findingsEmitted": 0,
     "skipped": {}
@@ -217,6 +211,12 @@
   {
     "candidatesConsidered": 0,
     "detector": "d8-commit-in-transaction",
+    "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d45-event-transitive-table-exposure",
     "findingsEmitted": 0,
     "skipped": {}
   }

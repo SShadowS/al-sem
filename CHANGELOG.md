@@ -326,6 +326,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **d45 moves from DEFAULT to OPT-IN** (engine-switch S8, 2026-10-07; the owner
+  asked for the best solution).
+  - **The evidence:** the S8.4 sample was 20 true and 20 false. Of the S8.6
+    additions, 12 of 12 verified were false and 4 were unverified.
+  - **Why it is not fixed at the root:** the dominant cause explains 12 of the
+    16 S8.6 findings. A subscriber exits unless an event argument equals its
+    own app id, and the raiser reads that argument from a DATABASE ROW (Guided
+    Experience `"Extension ID"`). No sound static rule decides it, so field-value
+    tracking would not reach the 30% bar. The trackable cause (a field left
+    blank after `Init()`) explains 4 findings.
+  - The default set is now 40 detectors and the opt-in set 14 (d45 after d8).
+    Wake condition and causes: `OUTSTANDING.md`.
+  - **Goldens:** default stats slots drop the d45 row, and `all` slots reorder.
+    The ws-d8 gate default SARIF and PR summary lose the d45 finding.
+
 - **The cross-app cone follows every resolved call dependency code makes**
   (engine-switch S8.6). It used to follow only S7's admitted own-app edges:
   direct calls, resolved method calls and interface `Maybe` edges inside one

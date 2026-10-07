@@ -250,12 +250,6 @@
         },
         {
           "candidatesConsidered": 0,
-          "detector": "d45-event-transitive-table-exposure",
-          "findingsEmitted": 0,
-          "skipped": {}
-        },
-        {
-          "candidatesConsidered": 0,
           "detector": "d52-bulk-write-param-no-temp-guard",
           "findingsEmitted": 0,
           "skipped": {}
@@ -361,6 +355,12 @@
         {
           "candidatesConsidered": 0,
           "detector": "d8-commit-in-transaction",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d45-event-transitive-table-exposure",
           "findingsEmitted": 0,
           "skipped": {}
         },

@@ -77,6 +77,15 @@ sizings marked pre-arc).
   - **A blank-field guard on a freshly initialised record.** The Job Queue
     Category is created only if the entry has a category code, and every caller
     leaves it blank.
+    Fixable by tracking a field left blank after `Init()` across calls (through
+    `Codeunit.Run(.., Rec)` into the `OnRun` record), but only the `Init()` path:
+    `Restart()` on an existing entry also needs foreign-key reasoning. Explains
+    4 findings.
+  - **d45 is OPT-IN since 2026-10-07** because of these causes. The first one
+    (an argument read from a database row) explains 12 of its 16 S8.6 findings,
+    and no sound static rule decides it. Wake: a data-model fact source, for
+    example "rows of table T are only inserted by app A with field F =
+    ModuleInfo.Id", or a measured d45 rate under 30% on a new sample.
 
 - [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (recorded
   2026-10-07; triage `g3-d8-triage.md` of the 28 pre-fix survivors). The real ones
