@@ -73,8 +73,8 @@ sizings marked pre-arc).
     exists.
   - **Commits before a modal page** (`Commit(); Page.RunModal()`) and Commits
     inside upgrade triggers (does the platform honour them?) are unverified.
-  - **Decision pending:** whether d8 stays DEFAULT. Its verified false-positive
-    rate on the sample is still above 30%.
+  - **d8 is OPT-IN since 2026-10-07** (owner decision) for this reason. Wake: these
+    causes fixed and a re-triage under 30% false positives.
 
 - [ ] **Constant-argument guards: what S8 gap 2 does not cover** (recorded 2026-10-07,
   `src/engine/l4/param_guard.rs`). Each item keeps a fact that a literal argument

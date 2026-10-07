@@ -41,14 +41,6 @@
   },
   {
     "candidatesConsidered": 2,
-    "detector": "d8-commit-in-transaction",
-    "findingsEmitted": 0,
-    "skipped": {
-      "other": 2
-    }
-  },
-  {
-    "candidatesConsidered": 2,
     "detector": "d9-transaction-span-summary",
     "findingsEmitted": 0,
     "skipped": {
@@ -220,5 +212,13 @@
     "detector": "d17-min-version-drift",
     "findingsEmitted": 0,
     "skipped": {}
+  },
+  {
+    "candidatesConsidered": 2,
+    "detector": "d8-commit-in-transaction",
+    "findingsEmitted": 0,
+    "skipped": {
+      "other": 2
+    }
   }
 ]

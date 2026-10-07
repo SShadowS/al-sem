@@ -1209,10 +1209,10 @@ where
 /// `detectorStats` array for the `all` slot; the `default` slot is a subset in this
 /// same order (as `select_detectors` filters by name while preserving registry order).
 ///
-/// DEFAULT order (42): d1, d2, d3, d4, d5, d7, d8, d9, d10, d11, d12, d13, d14,
+/// DEFAULT order (41): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
 ///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
 ///   d39, d41, d42, d43, d44, d45, d52, d53, d54, d55, d56, d57, d58, d59, d60.
-/// OPT_IN order (12):  d40, d46, d47, d48, d49, d50, d51, d17, d61, d62, d63, d64.
+/// OPT_IN order (13):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d61, d62, d63, d64.
 pub fn registered_detectors() -> Vec<Detector> {
     // `requires` bits (W1.0): derived from the per-detector `ctx.<field>` audit +
     // the indirect-consumption grep (helpers reading substrate fields are attributed
@@ -1255,12 +1255,6 @@ pub fn registered_detectors() -> Vec<Detector> {
             name: "d7-recursive-event-expansion".to_string(),
             run: d7::detect_d7,
             requires: 0,
-        },
-        Detector {
-            name: "d8-commit-in-transaction".to_string(),
-            run: d8::detect_d8,
-            // summaries + transaction_spans.
-            requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
         Detector {
             name: "d9-transaction-span-summary".to_string(),
@@ -1509,6 +1503,17 @@ pub fn registered_detectors() -> Vec<Detector> {
             name: "d17-min-version-drift".to_string(),
             run: d17::detect_d17,
             requires: 0,
+        },
+        // d8: OPT-IN since engine-switch S8 (owner decision 2026-10-07). It now
+        // counts only the writes pending at the Commit (S8 gap 3: CDO 36 -> 9),
+        // but its verified false-positive rate is still above 30% and the real
+        // findings are small intended Commits. Wake: the causes in OUTSTANDING
+        // ("d8 after S8 gap 3").
+        Detector {
+            name: "d8-commit-in-transaction".to_string(),
+            run: d8::detect_d8,
+            // summaries + transaction_spans.
+            requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
         Detector {

@@ -326,6 +326,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **d8 moves from DEFAULT to OPT-IN** (engine-switch S8, owner decision
+  2026-10-07). S8 gap 3 cut d8 from 36 to 9 findings on CDO and from 32 to 9 on
+  DO. The re-triage of the survivors still finds more than 30% false positives
+  among the verifiable ones, and the real findings are small, intended Commits
+  (setup wizard Finish, migration batches, `LogUsage`). The default set is now
+  41 detectors and the opt-in set 13; d8 sits after d17 in the opt-in order. The
+  remaining causes and the wake condition are in `OUTSTANDING.md` ("d8 after S8
+  gap 3"). Goldens moved:
+  - every `default` stats slot loses its d8 row;
+  - every `all` slot lists d8 after d17;
+  - the ws-d8 gate default SARIF and PR summary lose the d8 finding.
+
 - **Cross-app detector fixes from the CDO/DO triage** (engine-switch S8.4/S8.5).
   Each fix is pinned by a test in `tests/r4/r4_cross_app_program.rs` with a
   discrimination proof.
