@@ -1071,6 +1071,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency bodies: chain return tables** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 643 -> 393 (compoundReceiver 277 -> 27); dependency
+  `ambiguousResolved` 870 -> 865; workspace metrics unchanged.
+  - `framework_return_kind` rows (MS Learn): Text methods (`Trim`, `Replace`,
+    `ToLower`, ... -> Text; `Split` -> List; `Contains`, `IndexOf`, ... -> Scalar),
+    `TextBuilder.ToText`, `SecretText.Unwrap`, `Dictionary.Keys/Values`,
+    `Dictionary/List.Count`, `JsonValue.AsText`, Json `Clone`, `JsonObject.Keys/Values`,
+    `ModuleInfo.AppVersion`, `Version` parts, `XmlElement.Attributes`,
+    `GetChildElements`, `InnerText`, `Page.GetBackgroundParameters`.
+  - `FieldRef.Record()` / `KeyRef.Record()` -> RecordRef, and `RecordId.GetRecord()`
+    -> RecordRef. Both were held back until a real site needed them; the two fixture
+    tests that pinned them as negatives are rebaselined, and so is their row in
+    `docs/b3-triage/r0-corpus.md`.
+  - `record_builtin_return_kind`: a record's (or RecordRef's) `Count`, `GetFilter(s)`,
+    `GetView`, `TableCaption`, `FieldCaption`, ..., `RecordId`, and its system fields
+    (`SystemId`, `SystemCreatedAt`, ...). A same-named table field or procedure
+    shadows them.
+  - A built-in function's result types a chain from the built-in return catalog
+    argument typing uses (`Format(X).Trim()`), now extended with `DelChr`,
+    `ConvertStr`, `PadStr`, `SelectStr`, `IncStr`, `GetUrl`, `SecretStrSubstNo`,
+    `CurrentDateTime`, `CreateDateTime`, `Today`, `WorkDate`, `DT2Date`, `Time`,
+    `DT2Time`. The nested-chain path (`Format(X).Trim().ToLower()`) uses Step 5 too.
+
 - **Dependency bodies: compound receivers, first part** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 1,273 -> 680 (compoundReceiver 909 -> 312); workspace
   metrics unchanged.

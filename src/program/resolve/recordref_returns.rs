@@ -170,12 +170,18 @@ pub fn recordref_family_return_kind(
         // ---------------------------------------------------------------
         (KeyRef, "fieldindex", true, 1) => Some(FieldRef),
 
+        // ---------------------------------------------------------------
+        // FieldRef.Record() / KeyRef.Record() — methods-auto/fieldref,
+        // /keyref: zero-arg, returns the owning `RecordRef`. S9.0e: 43 real
+        // sites in Base Application (`SourceFieldRef.Record().Number()`).
+        // ---------------------------------------------------------------
+        (FieldRef | KeyRef, "record", true, 0) => Some(RecordRef),
+
         // Deliberately NOT tabled (see module doc): RecordRef/KeyRef's
         // `FieldCount`/`KeyCount` (scalar `Integer` return — no chainable
         // handle), FieldRef's `Value` (variant-like LEAF, never
-        // chainable), FieldRef's/KeyRef's `Record()` (real, validated,
-        // but out of this task's reviewed scope and unexercised by any
-        // real corpus site).
+        // chainable). (`Record()` used to be listed here as unexercised; it is
+        // tabled above since S9.0e.)
         _ => None,
     }
 }
@@ -257,20 +263,22 @@ mod tests {
         );
     }
 
-    /// Validated-but-out-of-scope regression pin: `FieldRef.Record()` /
-    /// `KeyRef.Record()` are real MS-Learn-documented zero-arg methods
-    /// returning `RecordRef`, but round-1 I4's enumerated handle set does
-    /// not include them and no real corpus site exercises them — they must
-    /// stay declined until a future task deliberately adds and validates
-    /// them.
+    /// `FieldRef.Record()` / `KeyRef.Record()` (MS Learn: zero-arg, returns
+    /// `RecordRef`) were held back until a real site needed them; S9.0e found
+    /// 43 in Base Application (`SourceFieldRef.Record().Number()`). The arity-1
+    /// form does not exist.
     #[test]
-    fn fieldref_and_keyref_record_stay_unvalidated_decline() {
+    fn fieldref_and_keyref_record_return_recordref() {
         assert_eq!(
             recordref_family_return_kind(&RecordRefFamilyKind::FieldRef, "record", true, 0),
-            None
+            Some(RecordRefFamilyKind::RecordRef)
         );
         assert_eq!(
             recordref_family_return_kind(&RecordRefFamilyKind::KeyRef, "record", true, 0),
+            Some(RecordRefFamilyKind::RecordRef)
+        );
+        assert_eq!(
+            recordref_family_return_kind(&RecordRefFamilyKind::FieldRef, "record", true, 1),
             None
         );
     }

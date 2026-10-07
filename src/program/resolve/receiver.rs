@@ -164,7 +164,9 @@ use crate::program::node_extract::{
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::RouteTarget;
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::framework_returns::{enum_chain_return_kind, framework_return_kind};
+use crate::program::resolve::framework_returns::{
+    enum_chain_return_kind, framework_return_kind, record_builtin_return_kind,
+};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::recordref_returns::{
     RecordRefFamilyKind, recordref_family_return_kind,
@@ -1522,14 +1524,25 @@ fn infer_receiver_type_for_expr(
                     bare_ctx,
                 )
             } else {
-                // A bare-identifier call (`Func(...)`) reaching HERE (i.e. as
-                // the BASE of a deeper chain, not the top-level receiver) is
-                // the Step-5 shape recursed one level deeper than Step 5
-                // handles — deliberately out of scope (single-hop
-                // `<Framework>.<rest>`/`this.<rest>`/cross-object chains
-                // target the OUTER receiver only, not nested bare-call
-                // chains); decline rather than guess.
-                ReceiverType::Unknown
+                // A bare-identifier call (`Func(...)`) as the BASE of a deeper
+                // chain (`Format(X).Trim().ToLower()`): the Step-5 shape, typed
+                // by Step 5 itself now that the with-context reaches here
+                // (S9.0e). No with-context: decline.
+                bare_ctx
+                    .and_then(|(surface, with_state)| {
+                        infer_call_result_receiver(
+                            file,
+                            expr_id,
+                            routine,
+                            object_globals,
+                            from_object,
+                            graph,
+                            index,
+                            surface,
+                            with_state,
+                        )
+                    })
+                    .unwrap_or(ReceiverType::Unknown)
             }
         }
         // `Enum::Value` / `Enum::"Type"` (Task 4, receiver-closure-and-arg-
@@ -1772,6 +1785,11 @@ fn infer_compound_member_receiver(
     }
 
     if let ReceiverType::Framework(kind) = &base_ty {
+        // `RecordId.GetRecord()` (methods-auto/recordid) returns a `RecordRef`,
+        // which is not a `FrameworkKind`, so it is not in the table (S9.0e).
+        if *kind == FrameworkKind::RecordId && member_lc == "getrecord" && arity == 0 {
+            return ReceiverType::RecordRef;
+        }
         if let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
             framework_return_kind(kind, &member_lc, m, a)
         }) {
@@ -1792,6 +1810,14 @@ fn infer_compound_member_receiver(
             recordref_family_return_kind(&family, &member_lc, m, a)
         }) {
             return returned.to_receiver_type();
+        }
+        // A `RecordRef` also carries the record's platform methods (S9.0e).
+        if family == RecordRefFamilyKind::RecordRef
+            && let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
+                record_builtin_return_kind(&member_lc, m, a)
+            })
+        {
+            return ReceiverType::Framework(returned);
         }
         return ReceiverType::Unknown;
     }
@@ -1905,6 +1931,20 @@ fn infer_compound_member_receiver(
         )
     {
         return recv;
+    }
+
+    // A record's platform methods and system fields (S9.0e). A table field
+    // (the arm above) and a table procedure of the same name (the chain arm
+    // above, or this guard for the parens-less form) shadow them.
+    if let ReceiverType::Record { table } = &base_ty
+        && !table
+            .as_ref()
+            .is_some_and(|t| index.table_scope_has_routine(graph, from_object, t, &member_lc))
+        && let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
+            record_builtin_return_kind(&member_lc, m, a)
+        })
+    {
+        return ReceiverType::Framework(returned);
     }
 
     ReceiverType::Unknown
@@ -2320,6 +2360,20 @@ fn infer_call_result_receiver(
     let [route] = routes.as_slice() else {
         return None;
     };
+    // A platform built-in (`Format(X).Trim()`, S9.0e): its return type comes
+    // from the built-in return catalog argument typing already uses. Reached
+    // only when `resolve_bare` itself chose the built-in, so a same-named
+    // procedure has already won.
+    if let RouteTarget::Builtin(_) = route.target {
+        let keyword =
+            crate::program::resolve::arg_dispatch::builtin_return_base_keyword(&function_lc)?;
+        return Some(parsed_type_to_receiver(
+            classify_type_text(keyword),
+            from_object,
+            graph,
+            index,
+        ));
+    }
     let RouteTarget::Routine(ref rid) = route.target else {
         return None;
     };

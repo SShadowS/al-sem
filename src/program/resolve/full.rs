@@ -2854,6 +2854,62 @@ mod tests {
         );
     }
 
+    /// S9.0e chain sources: a built-in function result (`Format(..)`), record
+    /// platform methods and system fields, `RecordId.GetRecord()`,
+    /// `FieldRef.Record()`, `TextBuilder.ToText()` and Text methods
+    /// (compoundReceiver before).
+    #[test]
+    fn builtin_and_record_chain_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        R: Record T;\n        FR: FieldRef;\n        TB: TextBuilder;\n        X: Text;\n        I: Integer;\n    begin\n\
+             X := Format(I).Trim();\n\
+             X := R.Count().ToText();\n\
+             X := R.SystemCreatedAt.ToText();\n\
+             I := R.RecordId.GetRecord().Number();\n\
+             I := FR.Record().Number();\n\
+             X := TB.ToText().TrimEnd('|').ToLower();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| format!("line {}", ce.edge.site.span.start.line))
+            .collect();
+        assert_eq!(unknown, Vec::<String>::new());
+        let ids: std::collections::BTreeSet<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .filter_map(|r| match &r.target {
+                RouteTarget::Builtin(b) => Some(b.0.clone()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "Text::trim",
+            "Scalar::totext",
+            "DateTime::totext",
+            "RecordRef::number",
+            "Text::trimend",
+            "Text::tolower",
+        ] {
+            assert!(ids.contains(want), "{want} missing from {ids:?}");
+        }
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

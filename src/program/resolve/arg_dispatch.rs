@@ -1109,6 +1109,13 @@ fn call_result_arg_from_routine_node(
 /// - `UpperCase`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/text/text-uppercase-method>
 /// - `Round`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/system/system-round-method>
 /// - `StrLen`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/text/text-strlen-method>
+///
+/// S9.0e added the rest (same `methods-auto` reference, `text/` and `system/`):
+/// `DelChr`, `ConvertStr`, `PadStr`, `SelectStr`, `IncStr` and `GetUrl` return
+/// Text; `SecretStrSubstNo` returns SecretText; `CurrentDateTime` and
+/// `CreateDateTime` a DateTime; `Today`, `WorkDate` and `DT2Date` a Date;
+/// `Time` and `DT2Time` a Time. The receiver typer (`receiver.rs`, Step 5)
+/// reads this catalog too, for `Format(X).Trim()`-style chains.
 const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("strsubstno", "text"),
     ("format", "text"),
@@ -1117,11 +1124,25 @@ const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("uppercase", "text"),
     ("round", "decimal"),
     ("strlen", "integer"),
+    ("delchr", "text"),
+    ("convertstr", "text"),
+    ("padstr", "text"),
+    ("selectstr", "text"),
+    ("incstr", "text"),
+    ("geturl", "text"),
+    ("secretstrsubstno", "secrettext"),
+    ("currentdatetime", "datetime"),
+    ("createdatetime", "datetime"),
+    ("today", "date"),
+    ("workdate", "date"),
+    ("dt2date", "date"),
+    ("time", "time"),
+    ("dt2time", "time"),
 ];
 
 /// Look up `name_lc` in [`BUILTIN_RETURN_TEXT_CATALOG`] — `None` for any
 /// name not listed (fail-closed: absence is untyped, never a guess).
-fn builtin_return_base_keyword(name_lc: &str) -> Option<&'static str> {
+pub(crate) fn builtin_return_base_keyword(name_lc: &str) -> Option<&'static str> {
     BUILTIN_RETURN_TEXT_CATALOG
         .iter()
         .find(|(n, _)| *n == name_lc)

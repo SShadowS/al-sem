@@ -10105,16 +10105,21 @@ fn ws_chain_tables_recordref_field_caption_resolves_catalog() {
     assert_eq!(bid.0, "FieldRef::caption");
 }
 
-/// Fixture (n1, NEGATIVE — un-tabled Xml member): `Node.Attributes().
-/// Count()` — `Attributes` is a real XML catalog LEAF member but
-/// deliberately not chain-tabled; the outer `Count()` call's receiver stays
-/// `Unknown`.
+/// Fixture (n1) REBASELINE (S9.0e): `Node.Attributes().Count()` —
+/// `XmlElement.Attributes()` returns an `XmlAttributeCollection` (`Xml`), now
+/// chain-tabled (19 real sites in CDO's dependency bodies), so the outer
+/// `Count()` resolves to the Xml catalog. It was the "un-tabled member" negative
+/// while no site needed the row; `framework_returns`'s unit test keeps a
+/// genuinely un-tabled member negative.
 #[test]
-fn ws_chain_tables_xml_untabled_member_chain_stays_unknown() {
+fn ws_chain_tables_xml_attributes_chain_resolves_catalog() {
     let report = ws_chain_tables_report();
     let route = widest_call_route(&report, 51201, "testxmluntabledmemberchain");
-    assert_eq!(route.target, RouteTarget::Unresolved);
-    assert!(matches!(route.evidence, Evidence::Unknown(_)));
+    assert_eq!(route.evidence, Evidence::Catalog);
+    let RouteTarget::Builtin(ref bid) = route.target else {
+        panic!("expected RouteTarget::Builtin, got {:?}", route.target);
+    };
+    assert_eq!(bid.0, "Xml::count");
 }
 
 /// Fixture (n2) REBASELINE (receiver-closure plan v2.1 Task 2 — corrects a
@@ -10199,16 +10204,20 @@ fn ws_chain_tables_fieldref_value_chain_decline_stays_unknown() {
     assert!(matches!(route.evidence, Evidence::Unknown(_)));
 }
 
-/// Fixture (n7, NEGATIVE — unvalidated/omitted entry stays declined):
-/// `FRef.Record().Number()` — `FieldRef.Record()` is a real,
-/// MS-Learn-documented method (returns `RecordRef`) but deliberately out of
-/// this task's reviewed scope — must stay `Unknown`.
+/// Fixture (n7) REBASELINE (S9.0e): `FRef.Record().Number()` —
+/// `FieldRef.Record()` (MS Learn: returns `RecordRef`) was held out of the
+/// table until a real site needed it; CDO's dependency bodies have 43
+/// (`SourceFieldRef.Record().Number()`). The outer `Number()` now resolves to
+/// the RecordRef catalog.
 #[test]
-fn ws_chain_tables_fieldref_record_unvalidated_stays_unknown() {
+fn ws_chain_tables_fieldref_record_chain_resolves_catalog() {
     let report = ws_chain_tables_report();
     let route = widest_call_route(&report, 51201, "testfieldrefrecordunvalidateddecline");
-    assert_eq!(route.target, RouteTarget::Unresolved);
-    assert!(matches!(route.evidence, Evidence::Unknown(_)));
+    assert_eq!(route.evidence, Evidence::Catalog);
+    let RouteTarget::Builtin(ref bid) = route.target else {
+        panic!("expected RouteTarget::Builtin, got {:?}", route.target);
+    };
+    assert_eq!(bid.0, "RecordRef::number");
 }
 
 /// Fixture (n8, NEGATIVE — HTTPCONTENT investigation finding, see
@@ -12087,7 +12096,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// elements, protected variables, the enum-name collision rule, `CurrQuery` /
 /// `RequestOptionsPage`, split-header object kinds and codeunit-only implementers.
 /// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
-/// after the with-context reaches nested bare names in a chain.
+/// after the with-context reaches nested bare names in a chain. 393 after the
+/// chain return tables (Text, Dictionary, Json, Xml, record methods, built-ins).
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12102,7 +12112,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 643;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 393;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

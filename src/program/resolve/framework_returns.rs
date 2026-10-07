@@ -269,6 +269,94 @@ pub fn framework_return_kind(
         // representing here, not its generic parameters.
         (ErrorInfo, "customdimensions", true, 0) => Some(Dictionary),
 
+        // ---------------------------------------------------------------
+        // S9.0e (CDO dependency bodies: Base/System Application chains).
+        //
+        // Text instance methods (methods-auto/text): every overload of each
+        // name has the same return, so any arity matches. Boolean and Integer
+        // results are `Scalar` (only `ToText` chains off them).
+        // ---------------------------------------------------------------
+        (
+            Text,
+            "tolower" | "toupper" | "trim" | "trimstart" | "trimend" | "replace" | "substring"
+            | "padleft" | "padright" | "remove",
+            true,
+            _,
+        ) => Some(Text),
+        (Text, "split", true, _) => Some(List),
+        (
+            Text,
+            "contains" | "startswith" | "endswith" | "indexof" | "indexofany" | "lastindexof",
+            true,
+            _,
+        ) => Some(Scalar),
+        // `SecretText.Unwrap()` (methods-auto/secrettext) returns `Text`.
+        (SecretText, "unwrap", true, 0) => Some(Text),
+        // `Dictionary.Keys()` / `Values()` return `List` (methods-auto/dictionary);
+        // `Count()` on a Dictionary or List is an `Integer`.
+        (Dictionary, "keys" | "values", true, 0) => Some(List),
+        (Dictionary | List, "count", true, 0) => Some(Scalar),
+        // `JsonValue.AsText()` returns `Text`; `Clone()` on every Json kind returns
+        // a `JsonToken` (methods-auto/jsonvalue, /jsontoken, /jsonobject, /jsonarray).
+        (JsonValue, "astext", true, 0) => Some(Text),
+        (JsonToken | JsonObject | JsonArray | JsonValue, "clone", true, 0) => Some(JsonToken),
+        // `ModuleInfo.AppVersion()` / `DataVersion()` return `Version`; its parts
+        // are `Integer` (methods-auto/moduleinfo, /version).
+        (ModuleInfo, "appversion" | "dataversion", true, 0) => Some(Version),
+        (Version, "major" | "minor" | "build" | "revision", true, 0) => Some(Scalar),
+        // `XmlElement.Attributes()` (an `XmlAttributeCollection`) and
+        // `GetChildElements([..])` / `GetDescendantElements([..])` (an
+        // `XmlNodeList`), all collapsing to `Xml` (methods-auto/xmlelement).
+        (Xml, "attributes", true, 0) => Some(Xml),
+        // `TextBuilder.ToText([..])` returns `Text` (methods-auto/textbuilder).
+        (TextBuilder, "totext", true, _) => Some(Text),
+        // `JsonObject.Keys()` / `Values()` return `List` (methods-auto/jsonobject).
+        (JsonObject, "keys" | "values", true, 0) => Some(List),
+        // `Page.GetBackgroundParameters()` returns a `Dictionary of [Text, Text]`
+        // (methods-auto/page).
+        (PageInstance, "getbackgroundparameters", true, 0) => Some(Dictionary),
+        // `InnerText()` / `InnerXml()` return `Text` (methods-auto/xmlelement).
+        (Xml, "innertext" | "innerxml", true, 0) => Some(Text),
+        (Xml, "getchildelements" | "getdescendantelements", true, 0..=2) => Some(Xml),
+
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// record_builtin_return_kind — S9.0e
+// ---------------------------------------------------------------------------
+
+/// The return of a platform method on a `Record` or `RecordRef` value, or of a
+/// record's system field, as a chain base (`Rec.Count().ToText()`,
+/// `Rec.GetFilter(F).Split('..')`, `Rec.RecordId.GetRecord()`,
+/// `Rec.SystemCreatedAt.ToText()`). Consulted only after a same-named table
+/// field and table procedure have both been ruled out, so those shadow it.
+///
+/// Provenance: methods-auto/record and /recordref (`Count`, `CountApprox`
+/// return Integer; `GetFilter`, `GetFilters`, `GetView`, `GetPosition`,
+/// `TableCaption`, `TableName`, `FieldCaption`, `FieldName` return Text;
+/// `RecordId` returns RecordId) and the system-field reference (`SystemId`,
+/// `SystemCreatedBy`, `SystemModifiedBy` are Guid; `SystemCreatedAt`,
+/// `SystemModifiedAt` are DateTime; `SystemRowVersion` is BigInteger).
+pub fn record_builtin_return_kind(
+    member_lc: &str,
+    is_method: bool,
+    arity: usize,
+) -> Option<FrameworkKind> {
+    use FrameworkKind::*;
+    match (member_lc, is_method, arity) {
+        ("count" | "countapprox", true, 0) => Some(Scalar),
+        (
+            "getfilter" | "getfilters" | "getview" | "getposition" | "tablecaption" | "tablename"
+            | "fieldcaption" | "fieldname",
+            true,
+            _,
+        ) => Some(Text),
+        ("recordid", true, 0) => Some(RecordId),
+        ("systemid" | "systemcreatedby" | "systemmodifiedby", false, 0) => Some(Guid),
+        ("systemcreatedat" | "systemmodifiedat", false, 0) => Some(DateTime),
+        ("systemrowversion", false, 0) => Some(Scalar),
         _ => None,
     }
 }
@@ -477,14 +565,62 @@ mod tests {
         }
     }
 
-    /// An un-tabled Xml member (`Attributes` — a real catalog LEAF member,
-    /// deliberately not chain-tabled for this task) declines, proving the
-    /// table doesn't fabricate coverage beyond what's validated.
+    /// An un-tabled Xml member (`RemoveAttribute` — a real catalog LEAF member
+    /// with no chainable return) declines, proving the table doesn't fabricate
+    /// coverage beyond what's validated. (`Attributes` was the example until
+    /// S9.0e tabled it.)
     #[test]
     fn xml_untabled_member_declines() {
         assert_eq!(
-            framework_return_kind(&FrameworkKind::Xml, "attributes", true, 0),
+            framework_return_kind(&FrameworkKind::Xml, "removeattribute", true, 1),
             None
+        );
+        assert_eq!(
+            framework_return_kind(&FrameworkKind::Xml, "attributes", true, 0),
+            Some(FrameworkKind::Xml)
+        );
+    }
+
+    /// S9.0e rows: Text methods at any arity, Dictionary/Json/Version/SecretText.
+    #[test]
+    fn s9_0e_chain_rows_resolve() {
+        use FrameworkKind::*;
+        assert_eq!(framework_return_kind(&Text, "replace", true, 2), Some(Text));
+        assert_eq!(framework_return_kind(&Text, "trimend", true, 0), Some(Text));
+        assert_eq!(framework_return_kind(&Text, "split", true, 1), Some(List));
+        assert_eq!(
+            framework_return_kind(&Text, "startswith", true, 1),
+            Some(Scalar)
+        );
+        assert_eq!(framework_return_kind(&Text, "replace", false, 0), None);
+        assert_eq!(
+            framework_return_kind(&Dictionary, "keys", true, 0),
+            Some(List)
+        );
+        assert_eq!(framework_return_kind(&List, "count", true, 0), Some(Scalar));
+        assert_eq!(
+            framework_return_kind(&JsonValue, "astext", true, 0),
+            Some(Text)
+        );
+        assert_eq!(
+            framework_return_kind(&JsonObject, "clone", true, 0),
+            Some(JsonToken)
+        );
+        assert_eq!(
+            framework_return_kind(&ModuleInfo, "appversion", true, 0),
+            Some(Version)
+        );
+        assert_eq!(
+            framework_return_kind(&Version, "major", true, 0),
+            Some(Scalar)
+        );
+        assert_eq!(
+            framework_return_kind(&SecretText, "unwrap", true, 0),
+            Some(Text)
+        );
+        assert_eq!(
+            framework_return_kind(&Xml, "innertext", true, 0),
+            Some(Text)
         );
     }
 

@@ -46,11 +46,11 @@ Differing sites by category:
 | program-site: Method/Resolved -> Method/MemberNotFound | 1 |
 | program-site: Method/Resolved -> Method/Unknown(UntrackedReceiver) | 1 |
 | program-site: Method/Resolved, details | 4 |
-| program-site: Method/Unknown(CompoundReceiver) -> Builtin/Builtin | 2 |
+| program-site: Method/Unknown(CompoundReceiver) -> Builtin/Builtin | 4 |
 | program-site: Method/Unknown(CompoundReceiver) -> Interface/Maybe | 1 |
 | program-site: Method/Unknown(CompoundReceiver) -> Method/Resolved | 2 |
 | program-site: Method/Unknown(CompoundReceiver) -> Method/Unknown(FrameworkMethodNotInCatalog) | 6 |
-| program-site: Method/Unknown(CompoundReceiver), details | 30 |
+| program-site: Method/Unknown(CompoundReceiver), details | 28 |
 | program-site: Method/Unknown(FrameworkMethodNotInCatalog), details | 5 |
 | program-site: Method/Unknown(RecordTableProcedure) -> Method/Resolved | 1 |
 | program-site: Method/Unknown(RecordTableProcedure) -> Method/Unknown(CompoundReceiver) | 2 |
@@ -98,14 +98,14 @@ Differing sites by category:
 | ws-builtin-shadow/ShadowCallerA.Codeunit.al:9:9 | `R.FieldNo` | Builtin/Builtin | Method/Resolved -> Table Acme.FieldNo recv Record Acme | Call Exact [Source] | program-site: Builtin/Builtin -> Method/Resolved |
 | ws-builtin-shadow/ShadowCallerD.Codeunit.al:11:9 | `ZzNotARealBuiltinFp` | Unresolved/Unknown(BareUnresolved) method zznotarealbuiltinfp | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(CodeunitTableNoExcluded)] | program-site: Unresolved/Unknown(BareUnresolved), details |
 | ws-callsite-resolutions/src/Broken.Codeunit.al:5:9 | `CallSomething` | Unresolved/Unknown(BareUnresolved) method callsomething | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(CodeunitTableNoExcluded)] | program-site: Unresolved/Unknown(BareUnresolved), details |
-| ws-chain-tables/src/CTCaller.Codeunit.al:96:16 | `Node.Attributes().Count` | Method/Unknown(CompoundReceiver) shape member-of-member::Node.Attributes() | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Method/Unknown(CompoundReceiver), details |
+| ws-chain-tables/src/CTCaller.Codeunit.al:96:16 | `Node.Attributes().Count` | Method/Unknown(CompoundReceiver) shape member-of-member::Node.Attributes() | Builtin/Builtin | Call Exact [Catalog] | program-site: Method/Unknown(CompoundReceiver) -> Builtin/Builtin |
 | ws-chain-tables/src/CTCaller.Codeunit.al:112:21 | `Node.AsXmlElement.GetChildNodes` | Method/Unknown(CompoundReceiver) shape member-of-member::Node.AsXmlElement | Builtin/Builtin | Call Exact [Catalog] | program-site: Method/Unknown(CompoundReceiver) -> Builtin/Builtin |
 | ws-chain-tables/src/CTCaller.Codeunit.al:121:20 | `XmlElement.Create().AsXmlNode` | Builtin/Builtin | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Builtin/Builtin -> Method/Unknown(CompoundReceiver) |
 | ws-chain-tables/src/CTCaller.Codeunit.al:131:16 | `RecRef.KeyIndex(1, 2).FieldCount` | Builtin/Builtin | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Builtin/Builtin -> Method/Unknown(CompoundReceiver) |
 | ws-chain-tables/src/CTCaller.Codeunit.al:144:14 | `Rec.FieldIndex(1).Value` | Method/Unknown(CompoundReceiver) shape member-of-member::Rec.FieldIndex(1) | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Method/Unknown(CompoundReceiver), details |
 | ws-chain-tables/src/CTCaller.Codeunit.al:144:14 | `Rec.FieldIndex` | Method/Unknown(RecordTableProcedure) shape proc-not-found::Record "CT Item"::fieldindex | Method/Unknown(FrameworkMethodNotInCatalog) | Call Exact [Unknown(CatalogMiss)] | program-site: Method/Unknown(RecordTableProcedure) -> Method/Unknown(FrameworkMethodNotInCatalog) |
 | ws-chain-tables/src/CTCaller.Codeunit.al:154:9 | `SourceRecRef.Field(1).Value().SomeMethod` | Method/Unknown(CompoundReceiver) shape member-of-member::SourceRecRef.Field(1).Value() | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Method/Unknown(CompoundReceiver), details |
-| ws-chain-tables/src/CTCaller.Codeunit.al:167:16 | `FRef.Record().Number` | Method/Unknown(CompoundReceiver) shape member-of-member::FRef.Record() | Method/Unknown(CompoundReceiver) | Call Exact [Unknown(CompoundReceiver)] | program-site: Method/Unknown(CompoundReceiver), details |
+| ws-chain-tables/src/CTCaller.Codeunit.al:167:16 | `FRef.Record().Number` | Method/Unknown(CompoundReceiver) shape member-of-member::FRef.Record() | Builtin/Builtin | Call Exact [Catalog] | program-site: Method/Unknown(CompoundReceiver) -> Builtin/Builtin |
 | ws-chain-tables/src/CTCaller.Codeunit.al:191:14 | `Content.AsText` | Method/Unknown(FrameworkMethodNotInCatalog) method HttpContent::astext | Method/Unknown(FrameworkMethodNotInCatalog) | Call Exact [Unknown(CatalogMiss)] | program-site: Method/Unknown(FrameworkMethodNotInCatalog), details |
 | ws-codeunit-rec/src/AmbiguousCodeunit.Codeunit.al:15:9 | `Rec.Baz` | Method/Unknown(RecordTableProcedure) shape table-unresolved::Record Amb Table::baz | Method/Unknown(UntrackedReceiver) | Call Exact [Unknown(ReceiverOutOfClosure)] | program-site: Method/Unknown(RecordTableProcedure) -> Method/Unknown(UntrackedReceiver) |
 | ws-codeunit-rec/src/NoTableNoCodeunit.Codeunit.al:9:9 | `Rec.Foo` | Method/Unknown(UntrackedReceiver) shape implicit-rec | Method/Unknown(UntrackedReceiver) | Call Exact [Unknown(UntrackedReceiver)] | program-site: Method/Unknown(UntrackedReceiver), details |
