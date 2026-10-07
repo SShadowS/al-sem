@@ -54,12 +54,12 @@
 //!   text (length included) to match, and the arg must be
 //!   [`ArgDispatchInfo::var_passable`] (a literal/call-result is never
 //!   var-passable — a sound elimination, not a degrade).
-//! - **`Variant`/`Any` at a discriminating position degrades**
-//!   ([`pick_candidate`]): computed from the FULL candidate set BEFORE any
-//!   compatibility filtering — a Variant-bearing candidate degrades the call
-//!   even if it would otherwise have been "eliminated" by a naive
-//!   exclusion-style matcher (no compiler-fixture-proven Variant precedence
-//!   exists yet).
+//! - **`Any` at a discriminating position degrades** ([`pick_candidate`]):
+//!   computed from the FULL candidate set BEFORE any compatibility filtering
+//!   (no compiler-proven `Any` precedence exists). **`Variant` has a proven
+//!   precedence** (S9.0e, alc probe): an exactly matching non-`Variant`
+//!   overload beats a `Variant` one, and a `Variant` argument binds the
+//!   `Variant` overload — see [`pick_candidate`].
 //! - **Candidate-set-aware literal typing**: THIS increment types only the
 //!   fixture-proven literal families (Integer/Text/Bool/Decimal-with-point —
 //!   see [`literal_canonical`]) via ordinary exact-canonical-match
@@ -113,10 +113,12 @@ use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, Routi
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
+use crate::program::resolve::framework_returns::record_builtin_return_kind;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
-    CallerScopeSymbol, ParsedType, caller_scope_symbol, classify_type_text, object_by_id,
-    parsed_type_to_receiver, unquote_identifier,
+    CallerScopeSymbol, FrameworkKind, ParsedType, ReceiverType, caller_scope_symbol,
+    classify_type_text, infer_implicit_rec, object_by_id, parsed_type_to_receiver,
+    unquote_identifier,
 };
 use crate::program::resolve::resolver::{
     resolve_bare, resolve_member, routine_node_for_type_query,
@@ -201,10 +203,16 @@ pub(crate) enum GenericArgType {
 }
 
 impl CanonicalArgType {
-    /// Whether this canonical type is the `Variant`/`Any` wildcard — see the
-    /// module doc's Variant-wildcard rule.
-    fn is_variant_or_any(&self) -> bool {
-        matches!(self, CanonicalArgType::Base(s) if s == "variant" || s == "any")
+    /// Whether this canonical type is `Variant` — see [`pick_candidate`]'s
+    /// Variant precedence rule.
+    fn is_variant(&self) -> bool {
+        matches!(self, CanonicalArgType::Base(s) if s == "variant")
+    }
+
+    /// Whether this canonical type is the `Any` wildcard, which still degrades
+    /// the pick (no compiler-proven precedence).
+    fn is_any(&self) -> bool {
+        matches!(self, CanonicalArgType::Base(s) if s == "any")
     }
 }
 
@@ -298,6 +306,20 @@ fn split_generic_clause(ty_text: &str) -> (&str, Option<Result<&str, ()>>) {
         return (first_tok, Some(Err(())));
     }
     (first_tok, Some(Ok(after_of[1..after_of.len() - 1].trim())))
+}
+
+/// The generic arguments of a `List of [T]` / `Dictionary of [K, V]` type
+/// text, with its lowercased base keyword: `("dictionary", ["Text", "Text"])`.
+/// `None` for a non-generic or malformed type (S9.0e: the receiver typer reads
+/// a collection's element type through this, the same parser dispatch uses).
+pub(crate) fn generic_type_args(ty_text: &str) -> Option<(String, Vec<&str>)> {
+    let (first_tok, Some(Ok(inner))) = split_generic_clause(ty_text) else {
+        return None;
+    };
+    Some((
+        first_tok.to_ascii_lowercase(),
+        split_top_level_commas(inner)?,
+    ))
 }
 
 /// Split `inner` (the trimmed text between a generic clause's outer `[`/`]`)
@@ -725,43 +747,69 @@ fn type_one_arg(
                 // increment's scope, decline rather than guess.
                 _ => return ArgDispatchInfo::untyped(),
             };
-            let CallerScopeSymbol::Found(Some(base_ty_text)) =
-                caller_scope_symbol(base_name, routine, object_globals)
-            else {
-                // NotFound / Found(None) / MalformedDuplicate — includes the
-                // implicit-Rec-without-declared-var case (task brief):
-                // `caller_scope_symbol` never sees the implicit-Rec fallback.
-                return ArgDispatchInfo::untyped();
-            };
-            let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
-                return ArgDispatchInfo::untyped();
-            };
-            let table_id = match index.resolve_object_ref(
-                graph,
-                from.clone(),
-                ObjectKind::Table,
-                &table_ref,
-            ) {
-                ObjectRefResolution::Unique(id) => id,
-                ObjectRefResolution::Ambiguous
-                | ObjectRefResolution::OutOfClosure
-                | ObjectRefResolution::Unresolved => return ArgDispatchInfo::untyped(),
-            };
             let Some(from_object) = object_by_id(graph, from) else {
                 return ArgDispatchInfo::untyped();
+            };
+            let table_id = match caller_scope_symbol(base_name, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(base_ty_text)) => {
+                    let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    match index.resolve_object_ref(
+                        graph,
+                        from.clone(),
+                        ObjectKind::Table,
+                        &table_ref,
+                    ) {
+                        ObjectRefResolution::Unique(id) => id,
+                        ObjectRefResolution::Ambiguous
+                        | ObjectRefResolution::OutOfClosure
+                        | ObjectRefResolution::Unresolved => return ArgDispatchInfo::untyped(),
+                    }
+                }
+                // S9.0e: an undeclared `Rec`/`xRec` is the object's implicit
+                // record, typed the way the receiver typer's Step 3b types it
+                // (Table, TableExtension, Page SourceTable, report dataitem).
+                CallerScopeSymbol::NotFound
+                    if matches!(base_name.fold_identifier().as_str(), "rec" | "xrec") =>
+                {
+                    match infer_implicit_rec(routine, from_object, graph, index) {
+                        ReceiverType::Record { table: Some(id) } => id,
+                        _ => return ArgDispatchInfo::untyped(),
+                    }
+                }
+                // Found(None) / NotFound / MalformedDuplicate.
+                _ => return ArgDispatchInfo::untyped(),
             };
             let field_lc = unquote_identifier(member).fold_identifier();
             if index.table_scope_has_routine(graph, from_object, &table_id, &field_lc) {
                 return ArgDispatchInfo::untyped();
             }
-            let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc) else {
-                return ArgDispatchInfo::untyped();
+            if let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc) {
+                return ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(&field.type_text, from, graph, index),
+                    exact_text: Some(normalize_type_text(&field.type_text)),
+                    literal_kind: None,
+                    var_passable: true,
+                };
+            }
+            // S9.0e: not a field — a record built-in read without parens
+            // (`Rec.RecordId`, `Rec.SystemId`), typed by its return. Never
+            // var-passable: it is a call result, not a variable.
+            let keyword = match record_builtin_return_kind(&field_lc, true, 0)
+                .or_else(|| record_builtin_return_kind(&field_lc, false, 0))
+            {
+                Some(FrameworkKind::RecordId) => "recordid",
+                Some(FrameworkKind::Guid) => "guid",
+                Some(FrameworkKind::DateTime) => "datetime",
+                Some(FrameworkKind::Text) => "text",
+                _ => return ArgDispatchInfo::untyped(),
             };
             ArgDispatchInfo {
-                canonical: dispatch_canonical_type_text(&field.type_text, from, graph, index),
-                exact_text: Some(normalize_type_text(&field.type_text)),
+                canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+                exact_text: Some(keyword.to_string()),
                 literal_kind: None,
-                var_passable: true,
+                var_passable: false,
             }
         }
         // Call-result arg (T3, pageext-merge-and-final-residual plan): `Foo
@@ -997,16 +1045,34 @@ fn type_call_result_arg_member(
     if with_state != WithState::NoWithProven {
         return ArgDispatchInfo::untyped();
     }
-    let base_name = match &file.ir.expr(base_expr).kind {
-        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-        // Multi-hop base (itself a Member/Call/…) — out of this increment's
-        // scope, decline rather than guess.
+    let base_ty_text = match &file.ir.expr(base_expr).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+            match caller_scope_symbol(n, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(t)) => t,
+                _ => return ArgDispatchInfo::untyped(),
+            }
+        }
+        // `this.Global.Method()` (S9.0e): `this.` names an object global,
+        // never a local or parameter.
+        ExprKind::Member { object, member, .. }
+            if matches!(
+                &file.ir.expr(*object).kind,
+                ExprKind::Identifier(t) if t.eq_ignore_ascii_case("this")
+            ) =>
+        {
+            let global_lc = unquote_identifier(member).fold_identifier();
+            match object_globals
+                .iter()
+                .find(|v| v.name.fold_identifier() == global_lc)
+                .and_then(|v| v.ty.as_deref())
+            {
+                Some(t) => t,
+                None => return ArgDispatchInfo::untyped(),
+            }
+        }
+        // Any other multi-hop base (a Call, a deeper Member, …) — out of
+        // this increment's scope, decline rather than guess.
         _ => return ArgDispatchInfo::untyped(),
-    };
-    let CallerScopeSymbol::Found(Some(base_ty_text)) =
-        caller_scope_symbol(base_name, routine, object_globals)
-    else {
-        return ArgDispatchInfo::untyped();
     };
     let Some(from_object) = object_by_id(graph, from) else {
         return ArgDispatchInfo::untyped();
@@ -1109,6 +1175,13 @@ fn call_result_arg_from_routine_node(
 /// - `UpperCase`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/text/text-uppercase-method>
 /// - `Round`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/system/system-round-method>
 /// - `StrLen`: <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/text/text-strlen-method>
+///
+/// S9.0e added the rest (same `methods-auto` reference, `text/` and `system/`):
+/// `DelChr`, `ConvertStr`, `PadStr`, `SelectStr`, `IncStr` and `GetUrl` return
+/// Text; `SecretStrSubstNo` returns SecretText; `CurrentDateTime` and
+/// `CreateDateTime` a DateTime; `Today`, `WorkDate` and `DT2Date` a Date;
+/// `Time` and `DT2Time` a Time. The receiver typer (`receiver.rs`, Step 5)
+/// reads this catalog too, for `Format(X).Trim()`-style chains.
 const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("strsubstno", "text"),
     ("format", "text"),
@@ -1117,11 +1190,25 @@ const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("uppercase", "text"),
     ("round", "decimal"),
     ("strlen", "integer"),
+    ("delchr", "text"),
+    ("convertstr", "text"),
+    ("padstr", "text"),
+    ("selectstr", "text"),
+    ("incstr", "text"),
+    ("geturl", "text"),
+    ("secretstrsubstno", "secrettext"),
+    ("currentdatetime", "datetime"),
+    ("createdatetime", "datetime"),
+    ("today", "date"),
+    ("workdate", "date"),
+    ("dt2date", "date"),
+    ("time", "time"),
+    ("dt2time", "time"),
 ];
 
 /// Look up `name_lc` in [`BUILTIN_RETURN_TEXT_CATALOG`] — `None` for any
 /// name not listed (fail-closed: absence is untyped, never a guess).
-fn builtin_return_base_keyword(name_lc: &str) -> Option<&'static str> {
+pub(crate) fn builtin_return_base_keyword(name_lc: &str) -> Option<&'static str> {
     BUILTIN_RETURN_TEXT_CATALOG
         .iter()
         .find(|(n, _)| *n == name_lc)
@@ -1529,10 +1616,11 @@ pub(crate) fn pick_candidate(
         return None;
     }
     for &pos in &discriminating {
-        // Variant/Any wildcard gate.
+        // `Any` wildcard gate: no compiler-proven precedence for `Any`.
+        // `Variant` is handled after this loop (S9.0e, proven below).
         let types_at_pos: Vec<&CanonicalArgType> =
             candidates.iter().map(|c| &c[pos].canonical).collect();
-        if types_at_pos.iter().any(|t| t.is_variant_or_any()) {
+        if types_at_pos.iter().any(|t| t.is_any()) {
             return None;
         }
         // C6 literal-forbidden-family gate, stated verbatim (module doc):
@@ -1550,8 +1638,56 @@ pub(crate) fn pick_candidate(
         }
     }
 
+    // `Variant` precedence (S9.0e), proven with alc 18.0.41.45789 on
+    // `Foo(var R: RecordRef)`/`Foo(V: Variant)`, `Bar(Integer)`/`Bar(Variant)`
+    // and `Qux(Text)`/`Qux(Variant)`, each control failing with AL0122:
+    // - an argument that exactly matches a non-`Variant` overload binds it,
+    //   never the `Variant` sibling (RecordRef, Integer and Text vars, Integer
+    //   and Text literals);
+    // - a `Variant` argument binds the `Variant` overload.
+    // So a candidate with `Variant` at a discriminating position competes
+    // only for `Variant` arguments; otherwise the pick runs over the rest.
+    let has_variant =
+        |c: &Vec<ParamDispatchInfo>| discriminating.iter().any(|&p| c[p].canonical.is_variant());
+    if candidates.iter().any(&has_variant) {
+        let variant_args = discriminating
+            .iter()
+            .filter(|&&p| args[p].canonical.as_ref().is_some_and(|t| t.is_variant()))
+            .count();
+        if variant_args == discriminating.len() {
+            // Every discriminating argument is a Variant: the one candidate
+            // that takes a Variant at every such position binds.
+            let mut pool = (0..candidates.len()).filter(|&i| {
+                discriminating
+                    .iter()
+                    .all(|&p| candidates[i][p].canonical.is_variant())
+            });
+            let picked = pool.next()?;
+            return pool.next().is_none().then_some(picked);
+        }
+        if variant_args > 0 {
+            return None;
+        }
+        let pool: Vec<usize> = (0..candidates.len())
+            .filter(|&i| !has_variant(&candidates[i]))
+            .collect();
+        return pick_exact(args, candidates, &discriminating, &pool);
+    }
+    let all: Vec<usize> = (0..candidates.len()).collect();
+    pick_exact(args, candidates, &discriminating, &all)
+}
+
+/// The exact-match-and-eliminate core of [`pick_candidate`], over the
+/// candidate indices in `pool`.
+fn pick_exact(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    discriminating: &[usize],
+    pool: &[usize],
+) -> Option<usize> {
     let mut exact_idx: Option<usize> = None;
-    for (i, params) in candidates.iter().enumerate() {
+    for &i in pool {
+        let params = &candidates[i];
         if discriminating
             .iter()
             .all(|&p| position_exact_match(&args[p], &params[p]))
@@ -1565,12 +1701,13 @@ pub(crate) fn pick_candidate(
     }
     let picked = exact_idx?;
 
-    // Every OTHER candidate must be PROVEN incompatible at some position —
-    // an undecided competitor blocks the pick (doc above).
-    for (i, params) in candidates.iter().enumerate() {
+    // Every OTHER candidate in the pool must be PROVEN incompatible at some
+    // position — an undecided competitor blocks the pick (doc above).
+    for &i in pool {
         if i == picked {
             continue;
         }
+        let params = &candidates[i];
         let eliminated = discriminating
             .iter()
             .any(|&p| position_provably_incompatible(&args[p], &params[p]));
@@ -1913,11 +2050,10 @@ mod tests {
         assert_eq!(pick_candidate(&args, &candidates), None);
     }
 
-    /// Variant wildcard: a Variant param at a discriminating position
-    /// degrades the WHOLE call, even though a naive exclusion-style matcher
-    /// would have eliminated the OTHER (non-Variant) candidate and left
-    /// Variant as the sole "survivor" — that survivor-by-elimination is
-    /// UNPROVEN, not a confident pick (Round-1 addendum I5).
+    /// Variant wildcard: when no non-Variant candidate exactly matches, the
+    /// Variant candidate is not picked as the "survivor" of eliminating the
+    /// others — that survivor-by-elimination is not picked (Round-1 addendum
+    /// I5); only the proven precedences below pick.
     #[test]
     fn pick_candidate_degrades_on_variant_at_discriminating_position() {
         let args = vec![base_arg("instream")];
@@ -1926,6 +2062,43 @@ mod tests {
             vec![base_param("integer", false)],
         ];
         assert_eq!(pick_candidate(&args, &candidates), None);
+    }
+
+    /// S9.0e, alc-proven: an argument that exactly matches a non-Variant
+    /// overload binds it over the Variant sibling (CDO's
+    /// `DataArchiveProvider.SaveRecord(RecordRef)`), for a var and a literal.
+    #[test]
+    fn pick_candidate_exact_non_variant_beats_variant() {
+        let candidates = vec![
+            vec![base_param("variant", false)],
+            vec![base_param("recordref", true)],
+        ];
+        assert_eq!(
+            pick_candidate(&[base_arg("recordref")], &candidates),
+            Some(1)
+        );
+        let candidates = vec![
+            vec![base_param("integer", false)],
+            vec![base_param("variant", false)],
+        ];
+        let literal = ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base("integer".into())),
+            exact_text: Some("integer".into()),
+            literal_kind: Some(LiteralKind::Integer),
+            var_passable: false,
+        };
+        assert_eq!(pick_candidate(&[literal], &candidates), Some(0));
+    }
+
+    /// S9.0e, alc-proven: a Variant argument binds the Variant overload
+    /// (CDO's `DataArchiveProvider.SaveRecord(RecordVariant)`).
+    #[test]
+    fn pick_candidate_variant_argument_binds_variant_overload() {
+        let candidates = vec![
+            vec![base_param("recordref", true)],
+            vec![base_param("variant", false)],
+        ];
+        assert_eq!(pick_candidate(&[base_arg("variant")], &candidates), Some(1));
     }
 
     /// An untyped argument position degrades the whole call, never merely
@@ -2269,6 +2442,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: test_origin(),
         }
@@ -2813,6 +2987,7 @@ mod tests {
                 type_text: field_type_text.to_string(),
             }],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -2833,6 +3008,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -2919,6 +3095,48 @@ codeunit 50100 "C"
         );
     }
 
+    /// S9.0e: `Foo(Rec.RecordId)` — `RecordId` is no field of the table, so
+    /// the arg types as the record built-in's return (`RecordId`), never
+    /// var-passable (a call result). CDO's `RaiseActionError(.., Rec.RecordId,
+    /// ..)` overloads differ exactly there.
+    #[test]
+    fn type_one_arg_member_record_builtin_types_its_return() {
+        let src = r#"
+codeunit 50100 "C"
+{
+    procedure Run()
+    var
+        Rec: Record Customer;
+    begin
+        Foo(Rec.RecordId);
+    end;
+}
+"#;
+        let (file, args, with_state) = parse_call_args(src, "Foo");
+        let (graph, from_id) = build_member_arg_graph("blob", "Blob");
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &[]);
+        let mut routine = empty_routine();
+        routine.locals.push(var("Rec", "Record Customer"));
+
+        let info = type_one_arg(
+            &file,
+            file.ir.expr(args[0]),
+            &routine,
+            &[],
+            &from_id,
+            &graph,
+            &index,
+            &surface,
+            with_state,
+        );
+        assert_eq!(
+            info.canonical,
+            Some(CanonicalArgType::Base("recordid".to_string()))
+        );
+        assert!(!info.var_passable, "a built-in's result is no variable");
+    }
+
     /// POSITIVE: `Foo(X."Quoted Field")` — the quoted-field spelling resolves
     /// identically to the unquoted one.
     #[test]
@@ -2962,10 +3180,9 @@ codeunit 50100 "C"
         );
     }
 
-    /// NEGATIVE: an implicit `Rec` with NO declared var in scope declines —
-    /// this arm deliberately does NOT use `receiver.rs`'s Step 3b implicit-Rec
-    /// identity fallback (task brief: "implicit-Rec-without-declared-var
-    /// base" is an explicit decline).
+    /// NEGATIVE: an undeclared `Rec` in a codeunit with no `TableNo` declines
+    /// — the object has no implicit record (`receiver.rs`'s Step 3b yields no
+    /// table), so there is nothing to type it against.
     #[test]
     fn type_one_arg_member_field_implicit_rec_without_declared_var_declines() {
         let src = r#"
@@ -2997,6 +3214,49 @@ codeunit 50100 "C"
         assert_eq!(
             info.canonical, None,
             "an implicit Rec with no DECLARED var in scope must decline"
+        );
+    }
+
+    /// S9.0e POSITIVE: inside a table's own procedure an undeclared `Rec` is
+    /// the table itself (Step 3b), so `Foo(Rec.Blob)` types via the field.
+    #[test]
+    fn type_one_arg_member_field_implicit_rec_of_a_table_resolves() {
+        let src = r#"
+codeunit 50100 "C"
+{
+    procedure Run()
+    begin
+        Foo(Rec.Blob);
+    end;
+}
+"#;
+        let (file, args, with_state) = parse_call_args(src, "Foo");
+        let (graph, _caller) = build_member_arg_graph("blob", "Blob");
+        let table_id = graph
+            .objects
+            .iter()
+            .find(|o| o.id.kind == al_syntax::ir::ObjectKind::Table)
+            .expect("fixture table")
+            .id
+            .clone();
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &[]);
+        let routine = empty_routine(); // no `Rec` declared: the implicit one
+
+        let info = type_one_arg(
+            &file,
+            file.ir.expr(args[0]),
+            &routine,
+            &[],
+            &table_id,
+            &graph,
+            &index,
+            &surface,
+            with_state,
+        );
+        assert_eq!(
+            info.canonical,
+            Some(CanonicalArgType::Base("blob".to_string()))
         );
     }
 
@@ -3476,6 +3736,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -3492,6 +3753,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -3521,6 +3783,7 @@ codeunit 50100 "C"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -3650,6 +3913,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -3690,6 +3954,7 @@ codeunit 50700 "Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             })
@@ -3738,6 +4003,7 @@ codeunit 50700 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params,
         }
     }
@@ -3761,6 +4027,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };

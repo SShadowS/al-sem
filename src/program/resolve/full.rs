@@ -445,6 +445,9 @@ fn resolve_call_site_obligation(
     // `resolve_member_with_args` so `resolve_in_object`'s fail-closed pick
     // has real argument evidence to work with.
     call_args: &[al_syntax::ir::ExprId],
+    // S9.0e: the call site's build context (`Ir::preproc_context`), for the
+    // overload build narrowing in `resolve_in_object`.
+    build: &[(String, bool)],
     // Engine-switch S3.2 / S6.0: the member arm fills the interface (for an
     // `Interface`-typed receiver) and the receiver fact.
     facts_out: &mut SiteFacts,
@@ -495,8 +498,28 @@ fn resolve_call_site_obligation(
             // Complete`, so this is behavior-preserving for every other
             // shape.
             let (shape, routes) = if let Some(obj_node) = obj_node_opt {
+                // A report dataitem trigger's implicit Rec (S9.0e).
+                let report_rec_table = matches!(
+                    obj_node.id.kind,
+                    ObjectKind::Report | ObjectKind::ReportExtension
+                )
+                .then(|| {
+                    crate::program::resolve::receiver::resolve_report_implicit_rec_table(
+                        routine, obj_node, graph, index,
+                    )
+                })
+                .flatten();
                 resolve_bare_with_args(
-                    obj_node, &name_lc, arity, graph, index, surface, with_state, &args_info,
+                    obj_node,
+                    &name_lc,
+                    arity,
+                    graph,
+                    index,
+                    surface,
+                    with_state,
+                    &args_info,
+                    build,
+                    report_rec_table.as_ref(),
                 )
             } else {
                 (
@@ -545,7 +568,7 @@ fn resolve_call_site_obligation(
                     index,
                 ));
                 let (s, r) = resolve_member_with_args(
-                    &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info,
+                    &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
                 (s, r)
@@ -835,6 +858,7 @@ pub(crate) fn resolve_file_obligations(
                     site.with_state,
                     &pf.file,
                     &site.args,
+                    pf.file.ir.preproc_context(site.expr),
                     &mut facts,
                     &pf.text,
                 );
@@ -2430,6 +2454,40 @@ mod tests {
         );
     }
 
+    /// S9.0e: inside a report dataitem trigger, a bare call falls back to the
+    /// dataitem table's procedures (`if not IsInventoriableItem() then` in Base
+    /// Application's Get Demand To Reserve; reportRecExcluded before). A report
+    /// procedure has no implicit Rec, so the same call there stays unresolved.
+    #[test]
+    fn report_dataitem_trigger_bare_call_reaches_the_dataitem_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n\
+             procedure IsSpecial(): Boolean\n    begin\n    end;\n}\n\
+             report 50003 R\n{\n    dataset\n    {\n        dataitem(D; T)\n        {\n\
+             trigger OnAfterGetRecord()\n            begin\n                if IsSpecial() then;\n            end;\n        }\n    }\n\n\
+             procedure Helper()\n    begin\n        if IsSpecial() then;\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let routes = |caller: &str| -> Vec<String> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller)
+                .flat_map(|ce| ce.edge.routes.iter())
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(id) => id.name_lc.clone(),
+                    _ => format!("{:?}", r.evidence),
+                })
+                .collect()
+        };
+        assert_eq!(routes("onaftergetrecord"), vec!["isspecial"]);
+        assert_eq!(routes("helper"), vec!["Unknown(ReportRecExcluded)"]);
+    }
+
     /// S9.0e: inside a report dataitem trigger, a bare field receiver is the
     /// dataitem record's field (`"Item Ledger Entry Type".AsInteger()` in Base
     /// Application's Item Register - Value). A report procedure of the same name
@@ -2852,6 +2910,554 @@ mod tests {
             vec!["ping", "service", "DotNet::*::getbytes", "Enum::asinteger"],
             "{got:?}"
         );
+    }
+
+    /// S9.0e chain sources: a built-in function result (`Format(..)`), record
+    /// platform methods and system fields, `RecordId.GetRecord()`,
+    /// `FieldRef.Record()`, `TextBuilder.ToText()` and Text methods
+    /// (compoundReceiver before).
+    #[test]
+    fn builtin_and_record_chain_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        R: Record T;\n        FR: FieldRef;\n        EI: ErrorInfo;\n        TB: TextBuilder;\n        X: Text;\n        I: Integer;\n    begin\n\
+             X := Format(I).Trim();\n\
+             X := R.Count().ToText();\n\
+             X := R.SystemCreatedAt.ToText();\n\
+             I := R.RecordId.GetRecord().Number();\n\
+             I := FR.Record().Number();\n\
+             I := EI.RecordId.GetRecord().Number();\n\
+             X := TB.ToText().TrimEnd('|').ToLower();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| format!("line {}", ce.edge.site.span.start.line))
+            .collect();
+        assert_eq!(unknown, Vec::<String>::new());
+        let ids: std::collections::BTreeSet<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .filter_map(|r| match &r.target {
+                RouteTarget::Builtin(b) => Some(b.0.clone()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "Text::trim",
+            "Scalar::totext",
+            "DateTime::totext",
+            "RecordRef::number",
+            "Text::trimend",
+            "Text::tolower",
+        ] {
+            assert!(ids.contains(want), "{want} missing from {ids:?}");
+        }
+    }
+
+    /// S9.0e: a `List`/`Dictionary` element is typed from the collection's
+    /// declared type text — a declared var, `this.Global`, `Text.Split`, a
+    /// nested `Get`, and `Keys()`.
+    #[test]
+    fn collection_element_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    var\n        G: Dictionary of [Integer, Text];\n\n    procedure P()\n    var\n        D: Dictionary of [Text, Dictionary of [Text, Text]];\n        L: List of [Text];\n        X: Text;\n        B: Boolean;\n    begin\n\
+             X := L.Get(1).ToLower();\n\
+             X := X.Split(',').Get(2).TrimEnd(']');\n\
+             X := D.Get('a').Get('b').ToUpper();\n\
+             B := this.G.Get(1).StartsWith('x');\n\
+             X := D.Keys().Get(1).Trim();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| format!("line {}", ce.edge.site.span.start.line))
+            .collect();
+        assert_eq!(unknown, Vec::<String>::new());
+        let ids: std::collections::BTreeSet<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .filter_map(|r| match &r.target {
+                RouteTarget::Builtin(b) => Some(b.0.clone()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "Text::tolower",
+            "Text::trimend",
+            "Text::toupper",
+            "Text::startswith",
+            "Text::trim",
+        ] {
+            assert!(ids.contains(want), "{want} missing from {ids:?}");
+        }
+    }
+
+    /// S9.0e: a `this.Global.Method()` argument types by the method's return,
+    /// so it picks an overload (CDO's `RaiseActionError(.., this.ErrorActions.
+    /// GetObjectId(), ..)`).
+    #[test]
+    fn this_global_call_result_argument_picks_an_overload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50001 W\n{\n    procedure F(I: Integer)\n    begin\n    end;\n\n    procedure F(T: Text)\n    begin\n    end;\n}\n\
+             codeunit 50002 G\n{\n    procedure GetInt(): Integer\n    begin\n    end;\n}\n\
+             codeunit 50000 C\n{\n    var\n        H: Codeunit G;\n        Wk: Codeunit W;\n\n    procedure P()\n    begin\n        Wk.F(this.H.GetInt());\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let f_targets: Vec<(DispatchShape, usize)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == "f"))
+            })
+            .map(|ce| (ce.edge.shape, ce.edge.routes.len()))
+            .collect();
+        assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
+    }
+
+    /// S9.0e: an overload that exists only under a `#if` arm is a candidate
+    /// only for a call in a build where that arm compiles. `Foo` is two
+    /// object-level arms whose parameters the argument typer cannot tell apart
+    /// (Base App `OnBeforeUpdateColumnCaptions`: `array[15] of Text[80]` vs
+    /// `of Text`). A call inside `#if not CLEAN27` / `#else` binds its own arm
+    /// (`P`); so does a call in a split caller's arm (`R`, Continia
+    /// `CoreSessionManager`); a call with no build context stays ambiguous (`Q`).
+    #[test]
+    fn overload_candidates_are_narrowed_to_the_call_sites_build() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50000 C\n{\n\
+#if not CLEAN27\n    procedure Foo(var A: array[15] of Text[80])\n    begin\n        Mark80();\n    end;\n\
+#else\n    procedure Foo(var A: array[15] of Text)\n    begin\n        MarkText();\n    end;\n\
+#endif\n\n    procedure Mark80()\n    begin\n    end;\n\n    procedure MarkText()\n    begin\n    end;\n\n\
+    procedure P()\n    var\n        C80: array[15] of Text[80];\n        C: array[15] of Text;\n    begin\n\
+#if not CLEAN27\n        Foo(C80); // p80\n#else\n        Foo(C); // ptext\n#endif\n    end;\n\n\
+    procedure Q()\n    var\n        C80: array[15] of Text[80];\n    begin\n        Foo(C80); // q\n    end;\n\n\
+#if not CLEAN27\n    procedure R(var X: array[15] of Text[80])\n#else\n    procedure R(var X: array[15] of Text)\n#endif\n\
+    begin\n        Foo(X); // r\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let line_of = |tag: &str| src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+        let foo_targets = |from: &str, line: u32| -> Vec<Vec<RoutineNodeId>> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == from && ce.edge.site.span.start.line == line)
+                .map(|ce| {
+                    ce.edge
+                        .routes
+                        .iter()
+                        .filter_map(|r| match &r.target {
+                            RouteTarget::Routine(rid) if rid.name_lc == "foo" => Some(rid.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let arm_calling = |marker: &str| -> RoutineNodeId {
+            report
+                .edges
+                .iter()
+                .find(|ce| {
+                    ce.edge.routes.iter().any(
+                        |r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == marker),
+                    )
+                })
+                .expect("marker call")
+                .edge
+                .from
+                .clone()
+        };
+        let (foo80, footext) = (arm_calling("mark80"), arm_calling("marktext"));
+        assert_ne!(foo80, footext);
+        assert_eq!(
+            foo_targets("p", line_of("// p80")),
+            vec![vec![foo80.clone()]]
+        );
+        assert_eq!(
+            foo_targets("p", line_of("// ptext")),
+            vec![vec![footext.clone()]]
+        );
+        let q = foo_targets("q", line_of("// q"));
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].len(), 2, "no build context: both arms stay candidates");
+        let mut r: Vec<Vec<RoutineNodeId>> = foo_targets("r", line_of("// r"));
+        r.sort();
+        let mut expected = vec![vec![foo80], vec![footext]];
+        expected.sort();
+        assert_eq!(
+            r, expected,
+            "each arm of R binds the Foo arm of its own build"
+        );
+    }
+
+    /// S9.0e: the same declaration in two `#if` arms collapses to one routine
+    /// node, which exists in either arm's build, so it keeps only the symbols
+    /// both arms decide alike (none here). Keeping the first arm's `X` would let
+    /// the build narrowing drop it from a call in the `#else` build and bind the
+    /// other overload.
+    #[test]
+    fn a_collapsed_same_signature_arm_pair_exists_in_both_builds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50000 C\n{\n\
+#if X\n    local procedure Foo(A: Integer)\n    begin\n    end;\n\
+#else\n    procedure Foo(A: Integer)\n    begin\n    end;\n#endif\n\n\
+    procedure Foo(T: Text)\n    begin\n    end;\n\n\
+    procedure P()\n    begin\n#if not X\n        Foo(Untyped); // call\n#endif\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let line = src
+            .lines()
+            .position(|l| l.contains("// call"))
+            .expect("tag") as u32;
+        let targets: Vec<usize> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+            .map(|ce| ce.edge.routes.len())
+            .collect();
+        assert_eq!(targets, vec![2], "both overloads stay candidates");
+    }
+
+    /// S9.0e, alc-probed: an XmlPort `textattribute` with `TextType = BigText`
+    /// is a `BigText` variable of the xmlport, so `X.AddText(..)` reaches
+    /// `BigText.AddText` (Base App `ImportExportWorkflow`).
+    #[test]
+    fn xmlport_text_node_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "xmlport 50000 X\n{\n    schema\n    {\n        textelement(Root)\n        {\n            textattribute(Big)\n            {\n                TextType = BigText;\n\n                trigger OnBeforePassVariable()\n                begin\n                    Big.AddText('a');\n                end;\n            }\n        }\n    }\n\n    procedure P()\n    begin\n        Root := Root.ToUpper();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unresolved: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(r.target, RouteTarget::Unresolved))
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        assert_eq!(unresolved, Vec::<u32>::new());
+        assert!(
+            report.edges.len() >= 2,
+            "both member calls are edges: {}",
+            report.edges.len()
+        );
+    }
+
+    /// S9.0e, alc-probed: a plain query column has its source field's type, so
+    /// `QV.EntryType.AsInteger()` reaches the enum's `AsInteger` (Base App
+    /// `ReconcileCustandVendAccs`). A `Method` column's type is not modelled.
+    #[test]
+    fn query_column_receivers_type_as_their_source_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50000 E\n{\n    value(0; A) { }\n}\n\
+             table 50000 T\n{\n    fields\n    {\n        field(1; \"Entry Type\"; Enum E) { }\n        field(2; Amt; Decimal) { }\n    }\n}\n\
+             query 50000 Q\n{\n    elements\n    {\n        dataitem(D; T)\n        {\n            column(EntryType; \"Entry Type\") { }\n            column(SumAmt; Amt) { Method = Sum; }\n        }\n    }\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        QV: Query Q;\n        I: Integer;\n        S: Text;\n    begin\n        I := QV.EntryType.AsInteger();\n        S := QV.SumAmt.ToText();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let outcome = |line: u32| -> Vec<bool> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+                .map(|ce| {
+                    ce.edge
+                        .routes
+                        .iter()
+                        .any(|r| matches!(r.target, RouteTarget::Unresolved))
+                })
+                .collect()
+        };
+        let line_of = |needle: &str| {
+            std::fs::read_to_string(dir.path().join("C.al"))
+                .expect("read C.al")
+                .lines()
+                .position(|l| l.contains(needle))
+                .expect("line") as u32
+        };
+        assert_eq!(outcome(line_of("EntryType.AsInteger")), vec![false]);
+        assert_eq!(outcome(line_of("SumAmt.ToText")), vec![true]);
+    }
+
+    /// S9.0e: a procedure header split across `#if`/`#else` is one routine per
+    /// arm, so the call written for each arm's signature binds that arm's routine
+    /// (Base App `MfgCalculateBOMTree.CalcRoutingLineCosts`, 6 vs 5 parameters).
+    /// The `#else` arm's body drops the `#if not CLEAN27` block that uses the
+    /// parameter only the first arm declares (`sender` there).
+    #[test]
+    fn split_header_arms_each_bind_their_own_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    begin\n#if not CLEAN27\n        Callee(1, this);\n#else\n        Callee(1);\n#endif\n    end;\n\n\
+             procedure Hook()\n    begin\n    end;\n\n\
+             #if not CLEAN27\n    local procedure Callee(A: Integer; var sender: Codeunit C)\n#else\n    local procedure Callee(A: Integer)\n#endif\n    begin\n#if not CLEAN27\n        sender.Hook();\n#endif\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unresolved: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(r.target, RouteTarget::Unresolved))
+            })
+            .map(|ce| (ce.edge.from.name_lc.clone(), ce.edge.from.params_count))
+            .collect();
+        assert_eq!(unresolved, vec![]);
+        let hook_callers: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge.routes.iter().any(
+                    |r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == "hook"),
+                )
+            })
+            .map(|ce| ce.edge.from.params_count)
+            .collect();
+        assert_eq!(hook_callers, vec![2]);
+        let mut targets: Vec<(DispatchShape, Vec<usize>)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .map(|ce| {
+                let arities = ce
+                    .edge
+                    .routes
+                    .iter()
+                    .filter_map(|r| match &r.target {
+                        RouteTarget::Routine(rid) if rid.name_lc == "callee" => {
+                            Some(rid.params_count)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (ce.edge.shape, arities)
+            })
+            .collect();
+        targets.sort_by_key(|(_, a)| a.clone());
+        assert_eq!(
+            targets,
+            vec![
+                (DispatchShape::Exact, vec![1]),
+                (DispatchShape::Exact, vec![2])
+            ]
+        );
+    }
+
+    /// S9.0e, alc-probed: a bare `CreateTask()` has no global form (AL0118 in
+    /// a codeunit), so in a report dataitem trigger the dataitem table's own
+    /// `CreateTask` binds; and a page with no `SourceTable` binds a bare
+    /// `Caption(..)` to the page itself.
+    #[test]
+    fn grounded_bare_calls_bind_the_table_or_the_page() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50000 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n    procedure CreateTask()\n    begin\n    end;\n}\n\
+             report 50000 R\n{\n    dataset\n    {\n        dataitem(H; T)\n        {\n            trigger OnAfterGetRecord()\n            begin\n                CreateTask();\n            end;\n        }\n    }\n}\n\
+             page 50000 P\n{\n    trigger OnOpenPage()\n    begin\n        Caption('x');\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let targets: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                matches!(
+                    ce.edge.from.name_lc.as_str(),
+                    "onaftergetrecord" | "onopenpage"
+                )
+            })
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Routine(rid) => format!("routine {}", rid.name_lc),
+                RouteTarget::Builtin(b) => format!("builtin {}", b.0),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let page_caption = crate::program::resolve::member_catalog::member_builtin_id(
+            crate::program::resolve::member_catalog::MemberCatalogKind::Framework(
+                &crate::program::resolve::receiver::FrameworkKind::PageInstance,
+            ),
+            "caption",
+        )
+        .expect("caption is a PageInstance member");
+        assert!(
+            targets.contains(&"routine createtask".to_string()),
+            "{targets:?}"
+        );
+        assert!(
+            targets.contains(&format!("builtin {}", page_caption.0)),
+            "{targets:?}"
+        );
+    }
+
+    /// S9.0e: a namespace-qualified enum type name types as the enum type,
+    /// with or without `Enum::`; a name that is no enum stays Unknown.
+    #[test]
+    fn namespace_qualified_enum_type_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("E.al"),
+            "namespace Microsoft.Foo;\n\nenum 50000 \"X Type\"\n{\n    value(0; A) { }\n}\n",
+        )
+        .expect("write E.al");
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    var\n        E: Enum Microsoft.Foo.\"X Type\";\n    begin\n\
+             E := Microsoft.Foo.\"X Type\".FromInteger(0);\n\
+             E := Enum::Microsoft.Foo.\"X Type\".FromInteger(0);\n\
+             E := Microsoft.Foo.\"No Such\".FromInteger(0);\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let in_p = || report.edges.iter().filter(|ce| ce.edge.from.name_lc == "p");
+        let first = in_p()
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        let unknown: Vec<u32> = in_p()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        assert_eq!(unknown, vec![first + 2]);
+    }
+
+    /// S9.0e: an unpicked overload set types its chain when every candidate
+    /// returns the same type (`Regex.Replace(..).Split(..)`); different return
+    /// types decline.
+    #[test]
+    fn same_return_overloads_type_their_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50001 R\n{\n    procedure Same(T: Text): Text\n    begin\n    end;\n\n    procedure Same(I: Integer): Text\n    begin\n    end;\n\n    procedure Mixed(T: Text): Text\n    begin\n    end;\n\n    procedure Mixed(I: Integer): Integer\n    begin\n    end;\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        Reg: Codeunit R;\n        V: Variant;\n        X: Text;\n    begin\n\
+             X := Reg.Same(V).ToLower();\n\
+             X := Reg.Mixed(V).ToLower();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let in_p = || report.edges.iter().filter(|ce| ce.edge.from.name_lc == "p");
+        let first = in_p()
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        let unknown: Vec<u32> = in_p()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        // Only the `Mixed(..).ToLower()` line declines.
+        assert_eq!(unknown, vec![first + 1]);
+    }
+
+    /// S9.0e: an operator result types its receiver — a comparison is a
+    /// Boolean, arithmetic on numbers is a number, `Date - Date` an Integer.
+    /// A Text `+` and `Date + Integer` decline.
+    #[test]
+    fn operator_result_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    var\n        A: Integer;\n        B: Decimal;\n        D1: Date;\n        D2: Date;\n        X: Text;\n    begin\n\
+             X := (A / B).ToText();\n\
+             X := (-B).ToText();\n\
+             X := (D1 - D2).ToText();\n\
+             X := (A < B).ToText();\n\
+             X := (X + X).ToLower();\n\
+             X := (D1 + A).ToText();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<u32> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        // Lines are 0-based: the two declining sites are the last two.
+        let first = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        assert_eq!(unknown, vec![first + 4, first + 5]);
     }
 
     #[test]

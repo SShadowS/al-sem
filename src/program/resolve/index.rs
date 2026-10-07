@@ -1200,6 +1200,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         }
@@ -1229,6 +1230,7 @@ mod tests {
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }
@@ -1263,6 +1265,7 @@ mod tests {
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }
@@ -1297,6 +1300,7 @@ mod tests {
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }

@@ -1914,9 +1914,10 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
     // source-tier same-arity-different-type overloads alias one
     // `RoutineNodeId` — see
     // `resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_
-    // to_one_declines`'s doc for why the `AccessFilteredOverload` fixture
+    // to_one_resolves`'s doc for why the `AccessFilteredOverload` fixture
     // manually constructs distinct `sig_fp`s rather than reusing AL source
-    // text). The `receiver_tier` diagnostic (new, additive) stratifies the 25
+    // text; S9.0e removed that reason — the lone visible survivor now
+    // resolves, as the compiler does). The `receiver_tier` diagnostic (new, additive) stratifies the 25
     // `MemberNotFound` sites further — see `aldump --program-call-graph-
     // stats`'s new `unknownReceiverTier` key for the live breakdown; not
     // re-pinned here (diagnostic-only, no gate). `genuine_wrong` stays 0
@@ -8978,6 +8979,13 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "receiver.rs",
             "let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;",
         ),
+        // The query-column chain arm (S9.0e): a declared `Query` var's object,
+        // the same lookup `resolve_member`'s `Object` arm makes for it; a
+        // collision fails closed and the arm declines.
+        (
+            "receiver.rs",
+            "None => graph.resolve_object(from_object.id.app, ObjectKind::Query, query_lc),",
+        ),
     ];
 
     let mut found: Vec<(String, String)> = Vec::new();
@@ -9326,15 +9334,18 @@ fn ws_bare_implicit_rec_pageext_base_precedes_step3_source_table() {
     );
 }
 
-/// Test 27k (fixture k, NEGATIVE — strict-kind): Report and Codeunit+TableNo
-/// both call a bare `Foo();` matching a real, resolvable table procedure —
-/// Step 3's strict `ObjectKind` guard (`{Table, Page, TableExtension,
-/// PageExtension}` ONLY) structurally excludes both kinds, so neither
-/// resolves. The Codeunit+TableNo case is the stronger proof: its implicit
-/// Rec IS statically typed (Task 6, for EXPLICIT `Rec.Foo()` calls) yet the
-/// BARE fallback still never fires.
+/// Test 27k (fixture k): Report and Codeunit+TableNo both call a bare `Foo();`
+/// matching a real, resolvable table procedure.
+///
+/// REBASELINE (S9.0e): the Report call sits in a dataitem trigger, and the AL
+/// compiler binds a bare call there to the dataitem table's procedure (probe,
+/// alc 18.0.41.45789: compiles in `OnAfterGetRecord`; the same call in a report
+/// procedure fails with `AL0118: The name 'IsSpecial' does not exist in the
+/// current context`). So it now resolves to the table's `Foo`. The
+/// Codeunit+TableNo case still never resolves bare: its implicit Rec is typed
+/// for EXPLICIT `Rec.Foo()` calls only.
 #[test]
-fn ws_bare_implicit_rec_strict_kind_report_and_codeunit_tableno_stay_unknown() {
+fn ws_bare_implicit_rec_report_dataitem_resolves_codeunit_tableno_stays_unknown() {
     let report = ws_bare_implicit_rec_report();
 
     let report_edges = edges_for_object_routine(&report, 50991, "onaftergetrecord");
@@ -9344,11 +9355,11 @@ fn ws_bare_implicit_rec_strict_kind_report_and_codeunit_tableno_stay_unknown() {
         "IR Strict Kind Report.OnAfterGetRecord has 1 call obligation"
     );
     let report_route = &report_edges[0].edge.routes[0];
-    assert_eq!(report_route.target, RouteTarget::Unresolved);
-    assert!(
-        matches!(report_route.evidence, Evidence::Unknown(_)),
-        "Report is structurally excluded from Step 3; got {report_route:?}"
-    );
+    let RouteTarget::Routine(ref rid) = report_route.target else {
+        panic!("a dataitem trigger's bare call reaches the table; got {report_route:?}");
+    };
+    assert_eq!(rid.name_lc, "foo");
+    assert_eq!(rid.object.kind, ObjectKind::Table);
 
     let cu_edges = edges_for_object_routine(&report, 50992, "onrun");
     assert_eq!(
@@ -10105,16 +10116,21 @@ fn ws_chain_tables_recordref_field_caption_resolves_catalog() {
     assert_eq!(bid.0, "FieldRef::caption");
 }
 
-/// Fixture (n1, NEGATIVE — un-tabled Xml member): `Node.Attributes().
-/// Count()` — `Attributes` is a real XML catalog LEAF member but
-/// deliberately not chain-tabled; the outer `Count()` call's receiver stays
-/// `Unknown`.
+/// Fixture (n1) REBASELINE (S9.0e): `Node.Attributes().Count()` —
+/// `XmlElement.Attributes()` returns an `XmlAttributeCollection` (`Xml`), now
+/// chain-tabled (19 real sites in CDO's dependency bodies), so the outer
+/// `Count()` resolves to the Xml catalog. It was the "un-tabled member" negative
+/// while no site needed the row; `framework_returns`'s unit test keeps a
+/// genuinely un-tabled member negative.
 #[test]
-fn ws_chain_tables_xml_untabled_member_chain_stays_unknown() {
+fn ws_chain_tables_xml_attributes_chain_resolves_catalog() {
     let report = ws_chain_tables_report();
     let route = widest_call_route(&report, 51201, "testxmluntabledmemberchain");
-    assert_eq!(route.target, RouteTarget::Unresolved);
-    assert!(matches!(route.evidence, Evidence::Unknown(_)));
+    assert_eq!(route.evidence, Evidence::Catalog);
+    let RouteTarget::Builtin(ref bid) = route.target else {
+        panic!("expected RouteTarget::Builtin, got {:?}", route.target);
+    };
+    assert_eq!(bid.0, "Xml::count");
 }
 
 /// Fixture (n2) REBASELINE (receiver-closure plan v2.1 Task 2 — corrects a
@@ -10199,16 +10215,20 @@ fn ws_chain_tables_fieldref_value_chain_decline_stays_unknown() {
     assert!(matches!(route.evidence, Evidence::Unknown(_)));
 }
 
-/// Fixture (n7, NEGATIVE — unvalidated/omitted entry stays declined):
-/// `FRef.Record().Number()` — `FieldRef.Record()` is a real,
-/// MS-Learn-documented method (returns `RecordRef`) but deliberately out of
-/// this task's reviewed scope — must stay `Unknown`.
+/// Fixture (n7) REBASELINE (S9.0e): `FRef.Record().Number()` —
+/// `FieldRef.Record()` (MS Learn: returns `RecordRef`) was held out of the
+/// table until a real site needed it; CDO's dependency bodies have 43
+/// (`SourceFieldRef.Record().Number()`). The outer `Number()` now resolves to
+/// the RecordRef catalog.
 #[test]
-fn ws_chain_tables_fieldref_record_unvalidated_stays_unknown() {
+fn ws_chain_tables_fieldref_record_chain_resolves_catalog() {
     let report = ws_chain_tables_report();
     let route = widest_call_route(&report, 51201, "testfieldrefrecordunvalidateddecline");
-    assert_eq!(route.target, RouteTarget::Unresolved);
-    assert!(matches!(route.evidence, Evidence::Unknown(_)));
+    assert_eq!(route.evidence, Evidence::Catalog);
+    let RouteTarget::Builtin(ref bid) = route.target else {
+        panic!("expected RouteTarget::Builtin, got {:?}", route.target);
+    };
+    assert_eq!(bid.0, "RecordRef::number");
 }
 
 /// Fixture (n8, NEGATIVE — HTTPCONTENT investigation finding, see
@@ -12087,7 +12107,26 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// elements, protected variables, the enum-name collision rule, `CurrQuery` /
 /// `RequestOptionsPage`, split-header object kinds and codeunit-only implementers.
 /// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
-/// after the with-context reaches nested bare names in a chain.
+/// after the with-context reaches nested bare names in a chain. 393 after the
+/// chain return tables (Text, Dictionary, Json, Xml, record methods, built-ins).
+/// 222 after namespace-qualified type names. 136 after report dataitem triggers'
+/// bare calls reach the dataitem table. 59 after a lone visible overload
+/// survivor binds (the compiler excludes inaccessible overloads, `AL0133`). 40
+/// after an interface implementer's same-arity overloads are picked by
+/// argument type. 37 after the proven `Variant` overload precedence. 35 after
+/// `Rec.RecordId` and implicit-`Rec` member arguments are typed. 24 after a
+/// `List`/`Dictionary` element is typed from the collection's declared type.
+/// 19 after a page's bare instance-method calls bind the page (`Update()`). 14
+/// after operator results type their receiver (`(A - B).ToText()`). 12 after
+/// `ErrorInfo`'s getters and same-return overload sets type their chain. 10
+/// after namespace-qualified enum type names (`Microsoft.Foundation."X"`). 8
+/// after a `#pragma` inside an argument list stops counting as an argument. 6
+/// after `CreateTask` (no bare global form) and SourceTable-less pages. 5 after
+/// `this.X()` in an extension reaches the base object. 4 after a
+/// `this.Global.Method()` argument types by its return. 3 after a procedure
+/// header split across `#if` arms lowers to one routine per arm. 1 after a
+/// query's plain column types as its source field. 0 after an XmlPort's text
+/// nodes became `Text`/`BigText` xmlport globals.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12102,12 +12141,26 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 643;
+    // At zero the ceiling is a pin (`<=` on a `usize` 0 is `==`).
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 0;
     assert!(
-        h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+        h.unknown == CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
          hole in dependency code; find it with `aldump --dependency-bodies-stats --sites`",
         h.unknown,
         CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+    );
+    // Dependency `ambiguousResolved` (closed overload candidate sets): 863 at
+    // the start of S9.0e, 710 before the `#if` split-header fix, 716 after it
+    // (calls seeing both arms of one routine), 710 again once overload
+    // selection narrows candidates to the call's build. A rise is lost
+    // precision; list the sites with `--sites` (`ambiguousSites`).
+    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 710;
+    assert!(
+        h.ambiguous_resolved <= CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
+        "dependency-body ambiguousResolved edges {} exceed the ceiling {}; list them \
+         with `aldump --dependency-bodies-stats --sites` (`ambiguousSites`)",
+        h.ambiguous_resolved,
+        CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
     );
 }

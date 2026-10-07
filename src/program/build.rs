@@ -581,6 +581,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 // Synthesized, not ingested from any `SymbolReference.json`
                 // — no ABI parameter metadata exists to retain.
                 abi_params: AbiParams::Missing,
@@ -697,6 +698,7 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         KeepAliased,
     }
     let mut verdicts: Vec<Verdict> = Vec::with_capacity(routines.len());
+    let mut contexts = Vec::with_capacity(routines.len());
     let mut i = 0;
     while i < routines.len() {
         let mut j = i + 1;
@@ -719,6 +721,22 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         // later entry in the run that repeats an already-seen param signature.
         let mut seen_sigs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for r in &routines[i..j] {
+            // A collapsed duplicate (the same declaration in two `#if` arms)
+            // exists under its own build conditions, so the survivor exists
+            // under either: it keeps only the symbols every collapsed copy
+            // decides alike (`RoutineNode::preproc_context`).
+            contexts.push((!seen_sigs.contains(r.param_sig_key.as_str())).then(|| {
+                r.preproc_context
+                    .iter()
+                    .filter(|e| {
+                        routines[i..j]
+                            .iter()
+                            .filter(|o| o.param_sig_key == r.param_sig_key)
+                            .all(|o| o.preproc_context.contains(e))
+                    })
+                    .cloned()
+                    .collect::<Box<[_]>>()
+            }));
             verdicts.push(if !seen_sigs.insert(r.param_sig_key.as_str()) {
                 Verdict::Drop
             } else if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
@@ -732,7 +750,10 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         i = j;
     }
     let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
-    for (mut survivor, verdict) in routines.drain(..).zip(verdicts) {
+    for ((mut survivor, verdict), context) in routines.drain(..).zip(verdicts).zip(contexts) {
+        if let Some(context) = context {
+            survivor.preproc_context = context;
+        }
         match verdict {
             Verdict::Drop => continue,
             Verdict::Keep => {}
@@ -1295,6 +1316,7 @@ codeunit 50100 "Ws2 Cu"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }
@@ -1336,6 +1358,7 @@ codeunit 50100 "Ws2 Cu"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }

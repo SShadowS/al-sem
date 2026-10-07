@@ -154,7 +154,9 @@
 //! `ObjectNodeId`s instead of L3 string IDs.
 
 use al_syntax::IdentifierFoldExt;
-use al_syntax::ir::{AlFile, ExprId, ExprKind, ObjectKind, RoutineDecl, VarDecl};
+use al_syntax::ir::{
+    AlFile, BinaryOp, ExprId, ExprKind, ObjectKind, RoutineDecl, UnaryOp, VarDecl,
+};
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
@@ -164,7 +166,9 @@ use crate::program::node_extract::{
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::RouteTarget;
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::framework_returns::{enum_chain_return_kind, framework_return_kind};
+use crate::program::resolve::framework_returns::{
+    enum_chain_return_kind, framework_return_kind, record_builtin_return_kind,
+};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::recordref_returns::{
     RecordRefFamilyKind, recordref_family_return_kind,
@@ -529,7 +533,7 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
             // Mirrors `node_extract::parse_object_ref_value`'s identical
             // numeric-vs-quoted-name distinction for `SourceTable`/`TableNo`.
             let stripped = strip_trailing_temporary(rest);
-            let stripped = stripped.trim();
+            let stripped = strip_namespace(&stripped);
             let table_ref = if let Ok(n) = stripped.parse::<i64>() {
                 ObjectRef::Id(n)
             } else {
@@ -545,10 +549,10 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "query" => parse_object_kind_type(ObjectKind::Query, rest),
         "xmlport" => parse_object_kind_type(ObjectKind::XmlPort, rest),
         "interface" => ParsedType::Interface {
-            name: unquote_identifier(rest).fold_identifier(),
+            name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
         },
         "enum" => ParsedType::EnumType {
-            name: unquote_identifier(rest).fold_identifier(),
+            name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
         },
         // Ref types
         "recordref" => ParsedType::RecordRef,
@@ -606,6 +610,8 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "integer" | "biginteger" | "decimal" | "boolean" | "byte" => {
             ParsedType::Framework(FrameworkKind::Scalar)
         }
+        // Not namespace-stripped: platform add-in names are themselves dotted
+        // (`Microsoft.Dynamics.Nav.Client.WebPageViewer`).
         "controladdin" => ParsedType::ControlAddIn {
             name: unquote_identifier(rest).fold_identifier(),
         },
@@ -1522,14 +1528,25 @@ fn infer_receiver_type_for_expr(
                     bare_ctx,
                 )
             } else {
-                // A bare-identifier call (`Func(...)`) reaching HERE (i.e. as
-                // the BASE of a deeper chain, not the top-level receiver) is
-                // the Step-5 shape recursed one level deeper than Step 5
-                // handles — deliberately out of scope (single-hop
-                // `<Framework>.<rest>`/`this.<rest>`/cross-object chains
-                // target the OUTER receiver only, not nested bare-call
-                // chains); decline rather than guess.
-                ReceiverType::Unknown
+                // A bare-identifier call (`Func(...)`) as the BASE of a deeper
+                // chain (`Format(X).Trim().ToLower()`): the Step-5 shape, typed
+                // by Step 5 itself now that the with-context reaches here
+                // (S9.0e). No with-context: decline.
+                bare_ctx
+                    .and_then(|(surface, with_state)| {
+                        infer_call_result_receiver(
+                            file,
+                            expr_id,
+                            routine,
+                            object_globals,
+                            from_object,
+                            graph,
+                            index,
+                            surface,
+                            with_state,
+                        )
+                    })
+                    .unwrap_or(ReceiverType::Unknown)
             }
         }
         // `Enum::Value` / `Enum::"Type"` (Task 4, receiver-closure-and-arg-
@@ -1574,23 +1591,7 @@ fn infer_receiver_type_for_expr(
                 // (unlike a declared var's type text, which the AL compiler
                 // itself already validated), so a typo'd/renamed enum name
                 // must decline here, never be trusted blind.
-                let name_raw = unquote_identifier(value);
-                let name_lc = name_raw.fold_identifier();
-                let object_ref = ObjectRef::Name {
-                    raw: name_raw,
-                    normalized_lc: name_lc.clone(),
-                };
-                return match index.resolve_object_ref(
-                    graph,
-                    from_object.id.clone(),
-                    ObjectKind::Enum,
-                    &object_ref,
-                ) {
-                    ObjectRefResolution::Unique(_) => ReceiverType::EnumTypeStatic { name_lc },
-                    ObjectRefResolution::Ambiguous
-                    | ObjectRefResolution::OutOfClosure
-                    | ObjectRefResolution::Unresolved => ReceiverType::Unknown,
-                };
+                return enum_type_static_by_name(value, from_object, graph, index);
             }
             // Any other `X::Value` shape: verify `enum_type` ACTUALLY types
             // Enum before accepting VALUE-instance dispatch (see this arm's
@@ -1643,6 +1644,83 @@ fn infer_receiver_type_for_expr(
                     _ => ReceiverType::Unknown,
                 },
                 _ => ReceiverType::Unknown,
+            }
+        }
+        // Operator results (S9.0e): `(A - B).ToText()`. Parentheses carry no
+        // type. A comparison, logical operator or `in` is a Boolean;
+        // arithmetic on two numbers is a number; `Date - Date` is an Integer
+        // (alc probe: assigning it to a Date fails AL0122). Every other
+        // operand mix (a Text `+`, `Date + Integer`, ...) declines.
+        ExprKind::Parenthesized(inner) => infer_receiver_type_for_expr(
+            file,
+            *inner,
+            routine,
+            object_globals,
+            from_object,
+            graph,
+            index,
+            bare_ctx,
+        ),
+        ExprKind::Unary { op, operand } => match op {
+            UnaryOp::Not => ReceiverType::Framework(FrameworkKind::Scalar),
+            UnaryOp::Neg | UnaryOp::Plus => {
+                let scalar = ReceiverType::Framework(FrameworkKind::Scalar);
+                let ty = infer_receiver_type_for_expr(
+                    file,
+                    *operand,
+                    routine,
+                    object_globals,
+                    from_object,
+                    graph,
+                    index,
+                    bare_ctx,
+                );
+                if ty == scalar {
+                    scalar
+                } else {
+                    ReceiverType::Unknown
+                }
+            }
+        },
+        ExprKind::Binary { op, lhs, rhs } => {
+            let scalar = ReceiverType::Framework(FrameworkKind::Scalar);
+            match op {
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+                | BinaryOp::In => scalar,
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::IntDiv
+                | BinaryOp::Mod => {
+                    let ty = |e: ExprId| {
+                        infer_receiver_type_for_expr(
+                            file,
+                            e,
+                            routine,
+                            object_globals,
+                            from_object,
+                            graph,
+                            index,
+                            bare_ctx,
+                        )
+                    };
+                    let date = ReceiverType::Framework(FrameworkKind::Date);
+                    match (ty(*lhs), ty(*rhs)) {
+                        (l, r) if l == scalar && r == scalar => scalar,
+                        (l, r) if *op == BinaryOp::Sub && l == date && r == date => scalar,
+                        _ => ReceiverType::Unknown,
+                    }
+                }
+                BinaryOp::Other => ReceiverType::Unknown,
             }
         }
         _ => ReceiverType::Unknown,
@@ -1763,6 +1841,26 @@ fn infer_compound_member_receiver(
         bare_ctx,
     );
 
+    // A namespace-qualified enum type (S9.0e): in
+    // `Microsoft.Foundation.Enums."Supply Document Type".FromInteger(..)` the
+    // base is a dotted path of two or more plain names that types to nothing
+    // (no symbol, singleton or object owns its root), so it is a namespace and
+    // the member names the type. Only a unique Enum is accepted; anything else
+    // falls through unchanged.
+    if !is_method
+        && base_ty == ReceiverType::Unknown
+        && let Some((len, root)) = namespace_path(file, object_expr_id)
+        && len >= 2
+        && matches!(
+            caller_scope_symbol(root, routine, object_globals),
+            CallerScopeSymbol::NotFound
+        )
+        && let enum_ty @ ReceiverType::EnumTypeStatic { .. } =
+            enum_type_static_by_name(member, from_object, graph, index)
+    {
+        return enum_ty;
+    }
+
     // Any member of a .NET value is a .NET value (or a primitive the platform
     // converts): a leaf with no AL routine behind it (S9.0e).
     if let ReceiverType::DotNet { .. } = &base_ty {
@@ -1772,6 +1870,28 @@ fn infer_compound_member_receiver(
     }
 
     if let ReceiverType::Framework(kind) = &base_ty {
+        // `RecordId.GetRecord()` (methods-auto/recordid) returns a `RecordRef`,
+        // which is not a `FrameworkKind`, so it is not in the table (S9.0e).
+        if *kind == FrameworkKind::RecordId && member_lc == "getrecord" && arity == 0 {
+            return ReceiverType::RecordRef;
+        }
+        // A collection's element (S9.0e): `Framework(List)` carries no element
+        // type, so read it from the base expression's declared type text.
+        if matches!(kind, FrameworkKind::List | FrameworkKind::Dictionary)
+            && let Some(base_text) = collection_type_text_of_expr(
+                file,
+                object_expr_id,
+                routine,
+                object_globals,
+                from_object,
+                graph,
+                index,
+                bare_ctx,
+            )
+            && let Some(elem) = collection_member_type_text(&base_text, &member_lc, arity)
+        {
+            return parsed_type_to_receiver(classify_type_text(&elem), from_object, graph, index);
+        }
         if let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
             framework_return_kind(kind, &member_lc, m, a)
         }) {
@@ -1792,6 +1912,14 @@ fn infer_compound_member_receiver(
             recordref_family_return_kind(&family, &member_lc, m, a)
         }) {
             return returned.to_receiver_type();
+        }
+        // A `RecordRef` also carries the record's platform methods (S9.0e).
+        if family == RecordRefFamilyKind::RecordRef
+            && let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
+                record_builtin_return_kind(&member_lc, m, a)
+            })
+        {
+            return ReceiverType::Framework(returned);
         }
         return ReceiverType::Unknown;
     }
@@ -1881,6 +2009,40 @@ fn infer_compound_member_receiver(
         return parsed_type_to_receiver(parsed, from_object, graph, index);
     }
 
+    // A query's plain column (`Q.EntryType.AsInteger()`, S9.0e): it has its
+    // source field's type (alc 18.0.41.45789, see `QueryColumnNode`). The same
+    // shape and guards as the record-field arm above: a bare `Member` only, a
+    // same-named query procedure (a parens-less call) declines, and the column,
+    // its dataitem table and the field must each resolve uniquely. The field and
+    // its type are read from the query's own scope.
+    if !is_method
+        && let ReceiverType::Object {
+            kind: ObjectKind::Query,
+            name_lc: query_lc,
+            id,
+        } = &base_ty
+        && let Some(query) = match id {
+            Some(id) => object_by_id(graph, id),
+            None => graph.resolve_object(from_object.id.app, ObjectKind::Query, query_lc),
+        }
+        && index
+            .routines_in_object(graph, &query.id, &member_lc)
+            .next()
+            .is_none()
+        && let [column] = query
+            .query_columns
+            .iter()
+            .filter(|c| c.name_lc == member_lc)
+            .collect::<Vec<_>>()
+            .as_slice()
+        && let Some(table_id) =
+            resolve_source_table_ref(query.id.clone(), &column.source_table, graph, index)
+        && let Some(field) = index.field_in_table(graph, query, &table_id, &column.field_lc)
+    {
+        let parsed = classify_type_text(&field.type_text);
+        return parsed_type_to_receiver(parsed, query, graph, index);
+    }
+
     // Cross-object call-result chain (plan v2.1 Task 3) — see this
     // function's doc. `is_method` gates the shape (procedure-CALL form
     // only); `surface` gates on the caller having supplied one
@@ -1905,6 +2067,20 @@ fn infer_compound_member_receiver(
         )
     {
         return recv;
+    }
+
+    // A record's platform methods and system fields (S9.0e). A table field
+    // (the arm above) and a table procedure of the same name (the chain arm
+    // above, or this guard for the parens-less form) shadow them.
+    if let ReceiverType::Record { table } = &base_ty
+        && !table
+            .as_ref()
+            .is_some_and(|t| index.table_scope_has_routine(graph, from_object, t, &member_lc))
+        && let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
+            record_builtin_return_kind(&member_lc, m, a)
+        })
+    {
+        return ReceiverType::Framework(returned);
     }
 
     ReceiverType::Unknown
@@ -2027,7 +2203,7 @@ fn infer_cross_object_chain_receiver(
     index: &ResolveIndex,
     surface: &DeclSurface,
 ) -> Option<ReceiverType> {
-    let (_shape, routes) = resolve_member(
+    let (shape, routes) = resolve_member(
         base_ty,
         member_lc,
         arity,
@@ -2036,6 +2212,18 @@ fn infer_cross_object_chain_receiver(
         index,
         surface,
     );
+    // An unpicked same-arity overload set (S9.0e, `Regex.Replace(..)`): the
+    // chain is typed when every candidate returns the same type, since then
+    // it does not matter which one the compiler binds.
+    if shape == crate::program::resolve::edge::DispatchShape::AmbiguousOverload && routes.len() > 1
+    {
+        let mut types = routes.iter().map(|r| {
+            routine_node_for_type_query(r, arity, from_object, graph, index)
+                .and_then(|node| receiver_from_routine_node(node, from_object, graph, index))
+        });
+        let first = types.next()??;
+        return types.all(|t| t.as_ref() == Some(&first)).then_some(first);
+    }
     let [route] = routes.as_slice() else {
         return None;
     };
@@ -2200,6 +2388,151 @@ fn is_this_identifier(file: &AlFile, expr_id: ExprId) -> bool {
 /// type) is handled by the caller ([`infer_compound_member_receiver`]),
 /// which declines before ever reaching here — this function is reached only
 /// for the property form.
+/// The enum TYPE named `name` (quoted or not), fail-closed: a unique Enum in
+/// `from_object`'s closure, else `Unknown`.
+fn enum_type_static_by_name(
+    name: &str,
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ReceiverType {
+    let name_raw = unquote_identifier(name);
+    let name_lc = name_raw.fold_identifier();
+    let object_ref = ObjectRef::Name {
+        raw: name_raw,
+        normalized_lc: name_lc.clone(),
+    };
+    match index.resolve_object_ref(graph, from_object.id.clone(), ObjectKind::Enum, &object_ref) {
+        ObjectRefResolution::Unique(_) => ReceiverType::EnumTypeStatic { name_lc },
+        ObjectRefResolution::Ambiguous
+        | ObjectRefResolution::OutOfClosure
+        | ObjectRefResolution::Unresolved => ReceiverType::Unknown,
+    }
+}
+
+/// The number of segments when `expr_id` is a dotted path of plain unquoted
+/// names (`Microsoft.Foundation.Enums`), with its root name. The grammar parses
+/// `Enum::Microsoft.Manufacturing.Document."X"` as member hops on
+/// `Enum::Microsoft`, so that root counts as a segment too. `None` for any
+/// other shape (a call, a quoted segment, `this`).
+fn namespace_path(file: &AlFile, expr_id: ExprId) -> Option<(usize, &str)> {
+    match &file.ir.expr(expr_id).kind {
+        ExprKind::Identifier(n) if !n.eq_ignore_ascii_case("this") => Some((1, n.as_str())),
+        ExprKind::QualifiedEnum { enum_type, value }
+            if matches!(
+                &file.ir.expr(*enum_type).kind,
+                ExprKind::Identifier(k) if k.eq_ignore_ascii_case("enum")
+            ) =>
+        {
+            Some((1, value.as_str()))
+        }
+        ExprKind::Member { object, member, .. } if !member.starts_with('"') => {
+            let (len, root) = namespace_path(file, *object)?;
+            Some((len + 1, root))
+        }
+        _ => None,
+    }
+}
+
+/// The declared collection type text of `expr_id` (S9.0e), for reading a
+/// `List`/`Dictionary` element type that [`ReceiverType::Framework`] does not
+/// carry. Covers a declared var (outside any `with`), `this.Global`,
+/// `Text.Split(..)` (`List of [Text]`), and a nested `Get(..)` /
+/// `Keys()` / `Values()` on such a collection. `None` for anything else.
+#[allow(clippy::too_many_arguments)] // the same identity/lookup inputs as infer_receiver_type_for_expr, which it calls.
+fn collection_type_text_of_expr(
+    file: &AlFile,
+    expr_id: ExprId,
+    routine: &RoutineDecl,
+    object_globals: &[VarDecl],
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
+) -> Option<String> {
+    match &file.ir.expr(expr_id).kind {
+        ExprKind::Identifier(name) | ExprKind::QuotedIdentifier(name) => {
+            // A `with` can rebind a bare name; read declarations only when
+            // no `with` is proven.
+            if bare_ctx.map(|(_, w)| w) != Some(WithState::NoWithProven) {
+                return None;
+            }
+            match caller_scope_symbol(name, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(ty)) => Some(ty.to_string()),
+                _ => None,
+            }
+        }
+        ExprKind::Member { object, member, .. } if is_this_identifier(file, *object) => {
+            let member_lc = unquote_identifier(member).fold_identifier();
+            object_globals
+                .iter()
+                .find(|v| v.name.fold_identifier() == member_lc)
+                .and_then(|v| v.ty.clone())
+        }
+        ExprKind::Parenthesized(inner) => collection_type_text_of_expr(
+            file,
+            *inner,
+            routine,
+            object_globals,
+            from_object,
+            graph,
+            index,
+            bare_ctx,
+        ),
+        ExprKind::Call { function, args } => {
+            let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind else {
+                return None;
+            };
+            let member_lc = unquote_identifier(member).fold_identifier();
+            if member_lc == "split" {
+                let base = infer_receiver_type_for_expr(
+                    file,
+                    *object,
+                    routine,
+                    object_globals,
+                    from_object,
+                    graph,
+                    index,
+                    bare_ctx,
+                );
+                return (base == ReceiverType::Framework(FrameworkKind::Text))
+                    .then(|| "List of [Text]".to_string());
+            }
+            let base_text = collection_type_text_of_expr(
+                file,
+                *object,
+                routine,
+                object_globals,
+                from_object,
+                graph,
+                index,
+                bare_ctx,
+            )?;
+            collection_member_type_text(&base_text, &member_lc, args.len())
+        }
+        _ => None,
+    }
+}
+
+/// The type text a collection member returns (S9.0e): `List.Get(i)` → `T`,
+/// `Dictionary.Get(k)` → `V`, `Dictionary.Keys()` → `List of [K]`,
+/// `Dictionary.Values()` → `List of [V]`. `Dictionary.Get(k, var v)` returns a
+/// Boolean and is not listed.
+fn collection_member_type_text(
+    collection_text: &str,
+    member_lc: &str,
+    arity: usize,
+) -> Option<String> {
+    let (base, args) = crate::program::resolve::arg_dispatch::generic_type_args(collection_text)?;
+    match (base.as_str(), member_lc, arity, args.as_slice()) {
+        ("list", "get", 1, [t]) => Some((*t).to_string()),
+        ("dictionary", "get", 1, [_, v]) => Some((*v).to_string()),
+        ("dictionary", "keys", 0, [k, _]) => Some(format!("List of [{k}]")),
+        ("dictionary", "values", 0, [_, v]) => Some(format!("List of [{v}]")),
+        _ => None,
+    }
+}
+
 fn infer_this_member(
     member_lc: &str,
     object_globals: &[VarDecl],
@@ -2320,6 +2653,20 @@ fn infer_call_result_receiver(
     let [route] = routes.as_slice() else {
         return None;
     };
+    // A platform built-in (`Format(X).Trim()`, S9.0e): its return type comes
+    // from the built-in return catalog argument typing already uses. Reached
+    // only when `resolve_bare` itself chose the built-in, so a same-named
+    // procedure has already won.
+    if let RouteTarget::Builtin(_) = route.target {
+        let keyword =
+            crate::program::resolve::arg_dispatch::builtin_return_base_keyword(&function_lc)?;
+        return Some(parsed_type_to_receiver(
+            classify_type_text(keyword),
+            from_object,
+            graph,
+            index,
+        ));
+    }
     let RouteTarget::Routine(ref rid) = route.target else {
         return None;
     };
@@ -2356,7 +2703,7 @@ fn infer_call_result_receiver(
 /// object's kind. `routine` is consulted ONLY by the Report/ReportExtension
 /// arm (dataitem-receivers plan, Task 1) — every other arm is unchanged and
 /// routine-independent, exactly as before.
-fn infer_implicit_rec(
+pub(crate) fn infer_implicit_rec(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
     graph: &ProgramGraph,
@@ -2474,7 +2821,7 @@ fn infer_implicit_rec(
 /// (`al_syntax::lower::ident_text`) — the SAME convention
 /// [`node_extract::DataitemNode::name_lc`] storage uses — so a direct
 /// lowercase comparison is consistent on both sides without re-unquoting.
-fn resolve_report_implicit_rec_table(
+pub(crate) fn resolve_report_implicit_rec_table(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
     graph: &ProgramGraph,
@@ -2674,7 +3021,7 @@ pub(crate) fn resolve_tableext_base_table(
 /// (ambiguous, out-of-closure, unresolved) — never guess. Shared by
 /// [`resolve_pageext_base_source_table`] (Task 5's implicit-`Rec` base-page
 /// lookup) and [`find_page_control`] (Task 7's PageExtension control merge).
-fn resolve_pageext_base_page(
+pub(crate) fn resolve_pageext_base_page(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
@@ -3054,8 +3401,30 @@ fn object_ref_fallback_lc(object_ref: &ObjectRef) -> String {
 /// `Codeunit 80` (numeric id) and `Codeunit "80"` (a codeunit literally named
 /// `"80"`) can never be conflated by a later re-parse of an already-unquoted
 /// string.
+/// The object name of a possibly namespace-qualified reference: the segment
+/// after the last `.` outside quotes (`System.Telemetry."Feature Telemetry"` ->
+/// `"Feature Telemetry"`; `"Sales Cr.Memo Header"` is one quoted segment and
+/// stays whole). S9.0e: dependency code declares variables this way, and the
+/// whole dotted path used to be taken as the object name. Two objects of the
+/// same name in different namespaces then resolve as ambiguous (fail closed).
+pub(crate) fn strip_namespace(s: &str) -> &str {
+    let mut in_quotes = false;
+    let mut last_dot = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '.' if !in_quotes => last_dot = Some(i),
+            _ => {}
+        }
+    }
+    match last_dot {
+        Some(i) => s[i + 1..].trim(),
+        None => s.trim(),
+    }
+}
+
 fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
-    let trimmed = name_rest.trim();
+    let trimmed = strip_namespace(name_rest);
     let object_ref = if let Ok(n) = trimmed.parse::<i64>() {
         ObjectRef::Id(n)
     } else {
@@ -3401,6 +3770,7 @@ mod tests {
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             };
@@ -3492,6 +3862,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         }
@@ -3525,6 +3896,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         }
@@ -4072,6 +4444,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         }
@@ -4223,6 +4596,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         }
@@ -4458,6 +4832,40 @@ mod tests {
             None,
         );
         assert_eq!(result, ReceiverType::Framework(FrameworkKind::Session));
+    }
+
+    /// S9.0e: a namespace-qualified type names its last segment; a dot inside
+    /// quotes is part of the name.
+    #[test]
+    fn namespace_qualified_types_name_their_last_segment() {
+        assert_eq!(
+            strip_namespace("System.Telemetry.\"Feature Telemetry\""),
+            "\"Feature Telemetry\""
+        );
+        assert_eq!(
+            strip_namespace("\"Sales Cr.Memo Header\""),
+            "\"Sales Cr.Memo Header\""
+        );
+        assert_eq!(strip_namespace("Customer"), "Customer");
+        assert_eq!(
+            classify_type_text("Codeunit System.Telemetry.\"Feature Telemetry\""),
+            ParsedType::Object {
+                kind: ObjectKind::Codeunit,
+                object_ref: ObjectRef::Name {
+                    raw: "Feature Telemetry".to_string(),
+                    normalized_lc: "feature telemetry".to_string(),
+                },
+            }
+        );
+        assert_eq!(
+            classify_type_text("Record Microsoft.Sales.Document.\"Sales Line\" temporary"),
+            ParsedType::Record {
+                table_ref: ObjectRef::Name {
+                    raw: "Sales Line".to_string(),
+                    normalized_lc: "sales line".to_string(),
+                },
+            }
+        );
     }
 
     #[test]
@@ -5060,6 +5468,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         };
@@ -5258,6 +5667,7 @@ mod tests {
         let routine = RoutineDecl {
             dataitem_source_table: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             enclosing_member: Some(("SomeControl".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -5280,6 +5690,7 @@ mod tests {
         let routine = RoutineDecl {
             dataitem_source_table: None,
             in_dataset_modify_context: true,
+            preproc_context: Vec::new(),
             enclosing_member: Some(("Cust".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -5311,6 +5722,7 @@ mod tests {
         let routine = RoutineDecl {
             dataitem_source_table: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             enclosing_member: Some(("Cust".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -5873,6 +6285,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         };
@@ -5922,6 +6335,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         };
@@ -6580,6 +6994,7 @@ mod tests {
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }
@@ -6919,6 +7334,7 @@ codeunit 50100 "C"
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: o,
         }
@@ -8422,6 +8838,7 @@ codeunit 50100 "C"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }
     }

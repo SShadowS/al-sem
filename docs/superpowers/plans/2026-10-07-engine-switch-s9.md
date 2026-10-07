@@ -63,6 +63,31 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   internalNotVisible 3). Measured with `aldump --dependency-bodies-stats --sites`;
   held by the `dependency_body_unknown_ceiling_on_cdo` ratchet, lowered with every
   fix. One family per commit, each root-caused against real source.
+  - **Status 2026-10-07 (HEAD `a51126c1`): 6,315 -> 4.** Merged to master once at
+    643 (`d389d984`, local, not pushed). Every rule since carries an alc 18.0.41.45789
+    probe (control fails with AL0122/AL0118/AL0133) and a discrimination proof; see
+    CHANGELOG `### Fixed` top entries. Workspace stayed 0 unknown / 23
+    `ambiguousResolved` throughout; dependency `ambiguousResolved` 863 -> 710.
+  - **The 4 left** (`target/cdo/aldump.exe --dependency-bodies-stats --sites
+    U:/Git/DO-cdo-baseline/Cloud`):
+    1. FIXED (4 -> 3): arityMismatch `MfgCalculateBOMTree.Codeunit.al:207` (Base
+       App), a procedure header split across `#if not CLEAN27` / `#else`. Each arm is
+       now its own routine, its body lowered with the symbols its condition decides.
+       It raised dependency `ambiguousResolved` 710 -> 716 (calls seeing both arms
+       of one routine: `AccScheduleOverview.Page.al:2130/2139`, Continia Core
+       `CoreSessionManager.Codeunit.al:77/86` twice). FIXED (716 -> 710): overload
+       selection now drops candidates outside the call's build (its `#if` branches
+       and its routine's arm), and a ratchet pins dependency ambiguous <= 710.
+    2-3. FIXED (3 -> 1): compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`,
+       `QueryVar.EntryType.AsInteger()`. A plain query column (no `Method`) now types
+       as its source field.
+    4. FIXED (1 -> 0): untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`,
+       `EventConditions.AddText(..)`. XmlPort text nodes are now `Text`/`BigText`
+       xmlport globals. **S9.0e is done: 0 dependency-body unknown edges on CDO.**
+  - Answered: no S9.0e lowerer fix needs a cache-version bump. The only cache this
+    engine writes is `snapshot/cache.rs` (raw extracted `.al` text, keyed by the
+    `.app`'s blake3, before parsing). The R3a-4 dependency-cache artifacts that
+    `cache_prune.rs` versions are only read and pruned; nothing in `src/` mints one.
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.

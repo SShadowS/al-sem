@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `cdo` cargo profile for correctness loops.** Optimized, but no LTO, 16
+  codegen units and incremental builds. `scripts/cdo-gate` now uses it: after a
+  one-line edit the gate took 236 s, against ~375 s on `release-fast` (lib-test
+  rebuild 46 s against 133 s; measured 2026-10-07, all 2,201 CDO-gated tests
+  green). `aldump` on `cdo` rebuilds in ~1 min and reports the same CDO counts.
+  Timing and memory numbers still come from `release-fast` or `release`.
+
 - **Dependency-body unknowns are measured and ratcheted** (engine-switch S9.0e).
   `aldump --dependency-bodies-stats --sites` lists every unknown route in dependency
   code resolved from its own app, with its source line. The CDO test
@@ -1070,6 +1077,303 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **Overload selection sees the call's build** (engine-switch S9.0e). CDO's
+  dependency `ambiguousResolved` 716 -> 710 and `resolvedSource` +6; unknown
+  edges stay 0; workspace metrics unchanged (0 unknown, 23 ambiguous).
+  - An overload that exists only under a `#if` arm is a candidate only for a
+    call in a build where that arm compiles. Base App's
+    `OnBeforeUpdateColumnCaptions` is two arms (`array[15] of Text[80]` under
+    `#if not CLEAN27`, `of Text` under `#else`) that the argument typer cannot
+    tell apart, and each call to it sits in one branch. Continia Core's
+    `AcquireTokenFromCache` is two `SECURETEXT` arms called from the arms of
+    split `SECURETEXT` callers.
+  - The lowerer records build contexts (`al_syntax::ir::PreprocSymbols`: the
+    symbols a condition decides): on each routine
+    (`RoutineDecl::preproc_context`: its object-level `#if` branch and its
+    split-header arm, carried to `RoutineNode::preproc_context`), and on each
+    expression (`Ir::preproc_context`: its routine's context plus the body
+    branches around it, including the arms of a `#if`-split complete body).
+    One context stack drives both this and the body-branch pruning of the
+    split-header fix, which now also prunes branches an object-level `#if`
+    rules out.
+  - `resolve_in_object` drops a visible candidate whose context contradicts
+    the call's, before the argument-type pick. If none would survive, the set
+    is left as it was.
+  - The same declaration in two arms collapses to one routine node
+    (`build::dedup_routines_preserving_genuine_overloads`); the survivor now
+    keeps only the symbols every collapsed copy decides alike, as it exists in
+    either build.
+  - Symbols are case-sensitive: alc 18.0.41.45789 with `CLEAN27` defined
+    activates `#if CLEAN27` and not `#if clean27`.
+  - Limit: the split-statement shapes `lower_unmodelled_stmt` recovers
+    (`preproc_split_if_statement`, ...) mix arm and shared parts of one
+    statement; their calls carry only the enclosing context, so they are
+    narrowed less, never wrongly.
+  - Dependency pack schema 6. New ratchet: dependency `ambiguousResolved` <=
+    710 (`dependency_body_unknown_ceiling_on_cdo`).
+  - Tests `overload_candidates_are_narrowed_to_the_call_sites_build`,
+    `a_collapsed_same_signature_arm_pair_exists_in_both_builds` and
+    `build_contexts_are_recorded_on_routines_and_expressions`. Each of these
+    fails one of them: disabling the narrowing, not recording expression
+    contexts, not passing object-level branch symbols down, giving a split
+    complete body's arms no symbols, and keeping the first collapsed arm's
+    context.
+- **An XmlPort's text nodes are xmlport variables** (engine-switch S9.0e).
+  CDO's dependency-body unknown edges 1 -> 0 (from 6,315 at the start of
+  S9.0e); workspace metrics unchanged. `EventConditions.AddText(..)` stayed
+  `untrackedReceiver`: `textattribute(EventConditions)` was no variable at
+  all. alc 18.0.41.45789 makes each `textelement`/`textattribute` a variable
+  of the whole xmlport, read from its triggers and its procedures alike:
+  `Text` by default, `BigText` with `TextType = BigText` (assigning one to a
+  `Date` fails AL0122 naming `Text` / `BigText`). The lowerer now adds them
+  to the XmlPort's globals with that type. Tests
+  `xmlport_text_nodes_are_globals` and `xmlport_text_node_receivers_resolve`;
+  disabling the collection fails both.
+- **A query column types as its source field** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 3 -> 1; workspace metrics unchanged.
+  `ReconCustPostingGrSum.EntryType.AsInteger()` stayed `compoundReceiver`:
+  query columns were not modelled. alc 18.0.41.45789 types a plain
+  `column(EntryType; "Entry Type")` as the field (assigning it to a `Date`
+  fails AL0122 naming `Enum E`; a `Method = Sum` column of a Decimal reports
+  `Decimal`). The lowerer now records each plain column (no `Method`) with
+  its innermost dataitem's table (`ObjectDecl::query_columns`), the graph
+  carries it (`ObjectNode::query_columns`; dependency pack schema 5, bumped
+  in a follow-up commit), and the chain typer reads a
+  `Query` var's `.Column` as that field, with the record-field arm's guards
+  (bare member only; a same-named query procedure declines). A `Method`
+  column still declines. Test
+  `query_column_receivers_type_as_their_source_field` (plus
+  `query_plain_columns_are_lowered_with_their_dataitem_table`); making the arm
+  match another object kind fails it.
+- **A procedure header split across `#if` arms is one routine per arm**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 4 -> 3;
+  workspace metrics unchanged (0 unknown, 23 `ambiguousResolved`).
+  - Base App's `CalcRoutingLineCosts` declares 6 parameters under
+    `#if not CLEAN27` and 5 under `#else`. The lowerer read only the first
+    header, so the `#else` call (5 arguments) was an `arityMismatch`. Each arm
+    of a `preproc_split_procedure` / `_preamble` now lowers to its own
+    `RoutineDecl`: that arm's name, parameters, modifier, return, attributes
+    and (preamble) `var` section, plus the shared body. A whole procedure
+    duplicated across arms already lowered this way.
+  - Each arm's body is lowered with the preprocessor symbols its own
+    condition decides (its condition true, every earlier arm's false). A body
+    `#if` branch that this decides false is left out; everything undecided
+    still union-reads. Without this, the `#else` arm (`CLEAN27` defined) kept
+    two `sender.RunOn..()` calls from `#if not CLEAN27` blocks, and `sender`
+    is a parameter only the first arm declares (2 new `untrackedReceiver`).
+    Symbols match by exact text, so a case-folding compiler only means less
+    pruning.
+  - Known cost: dependency `ambiguousResolved` 710 -> 716. Three call sites
+    now see both arms of one routine where the arms differ only in a type the
+    argument typer cannot split (`array[15] of Text[80]` vs `of Text`;
+    `SecretText` vs `Text`). Each call sits in a build that has only one of
+    them (its own `#if` branch, or a split caller's arm), but a call's build
+    context did not reach overload selection yet. Removed by "Overload
+    selection sees the call's build" above.
+  - Tests `preproc_split_header_yields_one_routine_per_arm`,
+    `preproc_branches_outside_a_split_arm_union_read` and
+    `split_header_arms_each_bind_their_own_call`. Keeping only the first arm
+    fails the first and third; lowering pruned branches anyway fails them too.
+  - `aldump --dependency-bodies-stats --sites` also lists `ambiguousSites`
+    (file, line, candidates as `name/arity`).
+- **A `this.Global.Method()` argument types by its return** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 5 -> 4 and dependency
+  `ambiguousResolved` 723 -> 710; workspace metrics unchanged. The
+  call-result argument typer read only a bare variable base, so
+  `RaiseActionError(.., this.ErrorActions.GetObjectId(), ..)` left its
+  discriminating positions untyped. A `this.X` base now reads the object
+  global `X` (never a local or parameter, as `this.` means). Test
+  `this_global_call_result_argument_picks_an_overload`; disabling the arm
+  leaves the call an `AmbiguousOverload`.
+- **`this.X()` in an extension reaches the base object** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 6 -> 5; workspace metrics
+  unchanged. A report extension's `this.GetLocation(..)` targets the base
+  report's `protected` procedure. A bare `GetLocation(..)` already reached it
+  (Step 2), but the `this` receiver searched only the extension itself. The
+  base lookup is now one helper, `resolve_in_extension_base`, with the same
+  access rules (a base `local` stays invisible), used by both. Test
+  `this_call_in_an_extension_reaches_the_base_object`; making the `this` arm
+  skip the base fails it.
+- **`CreateTask` has no bare global form; a page with no `SourceTable` has
+  no implicit `Rec`** (engine-switch S9.0e). CDO's dependency-body unknown
+  edges 8 -> 6; workspace metrics unchanged.
+  - A bare `CreateTask()` in a report dataitem trigger was a
+    `BuiltinPrecedenceCollision`, because `GLOBAL_BUILTIN_METHODS` (the union
+    of every type's methods) lists `TaskScheduler.CreateTask`. alc
+    18.0.41.45789 rejects a bare `CreateTask()` in a codeunit with AL0118 and
+    binds it in a dataitem trigger to the dataitem table's procedure. The name
+    joins a new probe-grounded set, `NO_BARE_GLOBAL_FORM`.
+  - Step 3 labelled every page without an implicit-Rec table
+    `ReceiverOutOfClosure`, including a page that declares no `SourceTable`
+    at all. Such a page (or a page extension whose base declares none) now
+    keeps `MemberNotFound`, so its bare `Caption(..)` reaches Step 4a.
+  - Test `grounded_bare_calls_bind_the_table_or_the_page`; undoing either
+    change fails it.
+- **A `#pragma` inside an argument list is no argument** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 10 -> 8; workspace metrics
+  unchanged. The grammar keeps a `#pragma warning disable` line that sits
+  between two arguments inside `argument_list`. `lower_arguments` lowered it
+  as an argument, so Continia's `CreateDefaultPaymentMeans(..)` (6 arguments)
+  read as 8 and missed its 6-parameter target (`arityMismatch`). The lowerer
+  now skips `pragma`, `#region` and `#endregion` there, as the statement
+  lowerer already did. Test `pragma_inside_an_argument_list_is_no_argument`;
+  removing the `Pragma` arm fails it (5 arguments read).
+- **A namespace-qualified enum type name types as the enum** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 12 -> 10; workspace metrics
+  unchanged. `Microsoft.Foundation.Enums."Supply Document Type".FromInteger(..)`
+  stayed `compoundReceiver`. The grammar parses
+  `Enum::Microsoft.Manufacturing.Document."X"` as member hops on
+  `Enum::Microsoft`, so it stayed `compoundReceiver` too. When a member's base
+  is a dotted path of two or more plain names, the base types to nothing, and
+  its root is no declared symbol, the path is a namespace. A unique Enum named
+  by the member is then the enum type. Anything else falls through unchanged,
+  so a real chain such as `CurrPage.Lines.Page` is never touched. Test
+  `namespace_qualified_enum_type_receivers_resolve` (both spellings, plus a
+  non-enum that stays Unknown); disabling the rule fails it.
+- **`ErrorInfo` getters and same-return overload sets type their chain**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 14 -> 12;
+  workspace metrics unchanged.
+  - `ErrorInfo.RecordId.GetRecord()` stayed `compoundReceiver`: the chain
+    table had only `CustomDimensions`. It now also has `RecordId`, `SystemId`,
+    the text properties and the numeric ids (methods-auto/errorinfo; all in
+    `member_catalog`'s `ERRORINFO`).
+  - `Regex.Replace(..).Split(..)` declined because `Replace` is an unpicked
+    overload set. The chain typer now types it when every candidate returns
+    the same type, since then the bound overload does not matter.
+    Different return types still decline.
+  - Tests `same_return_overloads_type_their_chain` (positive and negative)
+    and new rows in `builtin_and_record_chain_receivers_resolve`. Disabling
+    the rule, or the `recordid` row, fails them.
+- **An operator result types its receiver** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 19 -> 14; workspace metrics unchanged.
+  `(TotalDaysToPay / TotalNoOfInv).ToText()` and `(WorkDate() - "Posting
+  Date").ToText()` stayed `compoundReceiver`: the expression typer had no arm
+  for parentheses or operators. Parentheses now pass their inner type
+  through. Comparisons, `and`/`or`/`xor`/`not` and `in` give a Boolean.
+  Arithmetic on two numbers gives a number. `Date - Date` gives an Integer:
+  alc 18.0.41.45789 rejects assigning it to a Date with AL0122. Every other
+  operand mix declines (a Text `+`, `Date + Integer`). Test
+  `operator_result_receivers_resolve`; disabling the arithmetic arm fails it.
+- **A bare page-instance call in a page binds the page** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 24 -> 19; workspace metrics
+  unchanged. `INSTANCE_ONLY_NEVER_BARE` claimed its 19 names (`Update`,
+  `SetSelectionFilter`, `Caption`, `Run`, ...) have no bare form anywhere in AL.
+  That claim was read from MS Learn, and alc 18.0.41.45789 disproves it for
+  pages. All 19 compile bare in a page trigger, each reporting the method's own
+  type or protection error (AL0122/AL0161) and never AL0118. Bare `Update()`
+  and `Caption()` also compile in a page extension. The same bare `Update()`
+  fails AL0118 in a table and in a codeunit. A source-table procedure of the
+  same name still wins (implicit-with AL0604). New Step 4a in
+  `resolve_bare_with_args` binds the name to `PageInstance` in a Page or
+  PageExtension, only when nothing earlier claimed it. The global-builtin
+  fallback stays suppressed. `bare_run_on_page_with_no_sourcetable_candidate_is_unknown_not_builtin`
+  pinned the false claim and is rebaselined as
+  `..._binds_the_page_instance`. Test
+  `bare_update_binds_the_page_instance_in_a_pageextension_not_a_table`;
+  narrowing Step 4a's kinds fails both.
+- **A `List`/`Dictionary` element types its chain** (engine-switch S9.0e).
+  CDO's dependency-body unknown edges 35 -> 24; workspace metrics unchanged.
+  `ReceiverType::Framework(List)` carries no element type, so
+  `X.Split(',').Get(2).TrimEnd(..)` and `Dict.Get(k).Split(..)` stayed
+  `compoundReceiver`. The receiver typer now reads the element from the
+  collection's declared type text (`collection_type_text_of_expr`): a declared
+  var outside any `with`, `this.Global`, `Text.Split` (`List of [Text]`), and a
+  nested `Get(..)`/`Keys()`/`Values()`. The generic clause is parsed by the
+  same parser argument dispatch uses (`arg_dispatch::generic_type_args`). Test
+  `collection_element_receivers_resolve`; disabling the arm fails all five
+  lines.
+- **Record built-ins and the implicit `Rec` type as overload arguments**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 37 -> 35 and
+  dependency `ambiguousResolved` 764 -> 723; workspace metrics unchanged. The
+  member-argument typer read only declared fields of a declared record var.
+  It now also types an undeclared `Rec`/`xRec` through the receiver typer's
+  implicit-record rule (`receiver::infer_implicit_rec`), and a member that is no
+  field but a record built-in (`Rec.RecordId`, `Rec.SystemId`) by its return
+  type, not var-passable. CDO's `RaiseActionError(.., Rec.RecordId, ..)`
+  overloads differ exactly there. Tests
+  `type_one_arg_member_record_builtin_types_its_return` and
+  `type_one_arg_member_field_implicit_rec_of_a_table_resolves`; removing either
+  arm fails its test.
+- **Overloads with a `Variant` parameter are picked by the compiler's
+  precedence** (engine-switch S9.0e). CDO's dependency-body unknown edges
+  40 -> 37 and dependency `ambiguousResolved` 863 -> 764; workspace metrics
+  unchanged. `pick_candidate` declined every call where one same-arity
+  overload took a `Variant`. An alc 18.0.41.45789 probe proved two rules, each
+  control failing with `AL0122`: an argument that exactly matches a
+  non-`Variant` overload binds it (RecordRef, Integer and Text vars, Integer and
+  Text literals); a `Variant` argument binds the `Variant` overload. Both are
+  implemented; with no exact non-`Variant` match the call still declines, and
+  `Any` still declines. Tests `pick_candidate_exact_non_variant_beats_variant`
+  and `pick_candidate_variant_argument_binds_variant_overload`; restoring the
+  blanket gate fails both.
+- **An interface call picks an implementer's overload by argument type**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 59 -> 40. The
+  interface fan-out sent a source implementer with more than one same-arity
+  overload straight to `OverloadAmbiguous`, without the argument-type
+  dispatch every object receiver gets (`IHttpAuthProvider.Authorize(HttpClient)`
+  vs `Authorize(WebClient)`). Every implementer now goes through
+  `resolve_in_object`, whatever its tier. Test
+  `resolve_member_interface_implementer_overload_picked_by_argument_type`;
+  restoring the decline fails it.
+- **A lone visible overload survivor binds** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 136 -> 59; workspace metrics unchanged. When
+  access filtering left exactly one overload, `resolve_in_object` declined with
+  `AccessFilteredOverload` unless the pre-filter set was also one. The AL
+  compiler (alc 18.0.41.45789) excludes an inaccessible overload from overload
+  resolution: calling a `local` `Foo(Text)` sibling of a public `Foo(Integer)`
+  from outside fails with `AL0133: cannot convert from 'Text' to 'Integer'`,
+  so the call binds the visible one. The decline arm and the
+  `UnknownReason::AccessFilteredOverload` reason are removed. Two resolver tests
+  and `tests/r0-corpus/ws-object-interface-visibility/PROOF.md` row D-neg-3
+  (now D-pos-4) were rebaselined; restoring the guard fails both tests.
+- **A bare call in a report dataitem trigger reaches the dataitem table**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 222 -> 136
+  (reportRecExcluded 87 -> 0); workspace metrics unchanged. The AL compiler
+  (alc 18.0.41.45789) binds a bare call in a dataitem trigger to the dataitem
+  table's procedure, and rejects the same call from a report procedure with
+  `AL0118: The name 'IsSpecial' does not exist in the current context`.
+  `resolve_bare_with_args` takes the routine's dataitem table
+  (`receiver::resolve_report_implicit_rec_table`), and Step 3 searches it as it
+  searches a page's SourceTable. Report routines without a dataitem record keep
+  `ReportRecExcluded`. The fixture test that pinned the old exclusion
+  (`ws_bare_implicit_rec_...`) and its row in `docs/b3-triage/r0-corpus.md` are
+  rebaselined; the Codeunit+TableNo half is unchanged.
+
+- **Namespace-qualified type names** (engine-switch S9.0e). CDO's dependency-body
+  unknown edges 393 -> 222 (objectNotInGraph 134 -> 0); workspace metrics unchanged.
+  Dependency code declares `Codeunit System.Telemetry."Feature Telemetry"` and
+  `Record Microsoft.Sales.Document."Sales Line"`, and the whole dotted path was taken
+  as the object name. `receiver::strip_namespace` takes the segment after the last
+  `.` outside quotes, in `classify_type_text` (object, record, interface and enum
+  types) and for `SourceTable`/`TableNo`. Not applied to control-add-in names, which
+  are themselves dotted (`Microsoft.Dynamics.Nav.Client.WebPageViewer`; stripping
+  them moved CDO's workspace `unknown` 0 -> 64 during development), nor to
+  dataitem tables, which are stored unquoted. Same-named objects in different
+  namespaces resolve as ambiguous.
+
+- **Dependency bodies: chain return tables** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 643 -> 393 (compoundReceiver 277 -> 27); dependency
+  `ambiguousResolved` 870 -> 865; workspace metrics unchanged.
+  - `framework_return_kind` rows (MS Learn): Text methods (`Trim`, `Replace`,
+    `ToLower`, ... -> Text; `Split` -> List; `Contains`, `IndexOf`, ... -> Scalar),
+    `TextBuilder.ToText`, `SecretText.Unwrap`, `Dictionary.Keys/Values`,
+    `Dictionary/List.Count`, `JsonValue.AsText`, Json `Clone`, `JsonObject.Keys/Values`,
+    `ModuleInfo.AppVersion`, `Version` parts, `XmlElement.Attributes`,
+    `GetChildElements`, `InnerText`, `Page.GetBackgroundParameters`.
+  - `FieldRef.Record()` / `KeyRef.Record()` -> RecordRef, and `RecordId.GetRecord()`
+    -> RecordRef. Both were held back until a real site needed them; the two fixture
+    tests that pinned them as negatives are rebaselined, and so is their row in
+    `docs/b3-triage/r0-corpus.md`.
+  - `record_builtin_return_kind`: a record's (or RecordRef's) `Count`, `GetFilter(s)`,
+    `GetView`, `TableCaption`, `FieldCaption`, ..., `RecordId`, and its system fields
+    (`SystemId`, `SystemCreatedAt`, ...). A same-named table field or procedure
+    shadows them.
+  - A built-in function's result types a chain from the built-in return catalog
+    argument typing uses (`Format(X).Trim()`), now extended with `DelChr`,
+    `ConvertStr`, `PadStr`, `SelectStr`, `IncStr`, `GetUrl`, `SecretStrSubstNo`,
+    `CurrentDateTime`, `CreateDateTime`, `Today`, `WorkDate`, `DT2Date`, `Time`,
+    `DT2Time`. The nested-chain path (`Format(X).Trim().ToLower()`) uses Step 5 too.
 
 - **Dependency bodies: compound receivers, first part** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 1,273 -> 680 (compoundReceiver 909 -> 312); workspace

@@ -698,26 +698,53 @@ fn main() -> ExitCode {
                     );
                 }
             }
+            use al_sem::program::resolve::edge::{ObligationOutcome, RouteTarget};
             let mut rows = Vec::new();
+            let mut ambiguous = Vec::new();
             for ce in &res.edges {
                 let app = graph.apps.resolve(ce.edge.from.object.app);
                 let span = &ce.edge.site.span;
+                let line_text = || {
+                    texts
+                        .get(&(app.guid.to_ascii_lowercase(), span.unit.as_str()))
+                        .and_then(|t| t.lines().nth(span.start.line as usize))
+                        .unwrap_or("")
+                        .trim()
+                };
                 // The edges `unknown` counts, each with its first unknown reason
-                // (`unknown_reason_breakdown`'s rule).
-                if al_sem::program::resolve::edge::classify_obligation(&ce.edge)
-                    != al_sem::program::resolve::edge::ObligationOutcome::Unknown
-                {
-                    continue;
+                // (`unknown_reason_breakdown`'s rule), and the `ambiguousResolved`
+                // ones with their candidates (`name/arity`).
+                match al_sem::program::resolve::edge::classify_obligation(&ce.edge) {
+                    ObligationOutcome::Unknown => {}
+                    ObligationOutcome::AmbiguousResolved => {
+                        let candidates: Vec<String> = ce
+                            .edge
+                            .routes
+                            .iter()
+                            .filter_map(|r| match &r.target {
+                                RouteTarget::Routine(rid) => {
+                                    Some(format!("{}/{}", rid.name_lc, rid.params_count))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        ambiguous.push(serde_json::json!({
+                            "app": app.name,
+                            "file": span.unit,
+                            "line": span.start.line + 1,
+                            "routine": ce.edge.from.name_lc,
+                            "candidates": candidates,
+                            "text": line_text(),
+                        }));
+                        continue;
+                    }
+                    _ => continue,
                 }
                 if let Some(reason) = ce.edge.routes.iter().find_map(|r| match &r.evidence {
                     Evidence::Unknown(reason) => Some(reason),
                     _ => None,
                 }) {
-                    let line = texts
-                        .get(&(app.guid.to_ascii_lowercase(), span.unit.as_str()))
-                        .and_then(|t| t.lines().nth(span.start.line as usize))
-                        .unwrap_or("")
-                        .trim();
+                    let line = line_text();
                     let receiver = res
                         .site_facts
                         .get(&ce.obligation_id)
@@ -735,6 +762,7 @@ fn main() -> ExitCode {
                 }
             }
             out["unknownSites"] = serde_json::Value::Array(rows);
+            out["ambiguousSites"] = serde_json::Value::Array(ambiguous);
         }
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return ExitCode::SUCCESS;

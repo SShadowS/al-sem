@@ -63,12 +63,33 @@ id_type!(ExprId);
 id_type!(StmtId);
 id_type!(BlockId);
 
+/// Preprocessor symbols a build condition decides: `(symbol, defined)`.
+///
+/// Code inside `#if X` / `#else` / `#elif` branches, and a routine that exists only
+/// under such a branch, compiles only in builds where its conditions hold. The
+/// lowerer records the symbols those conditions decide (a condition true; every
+/// earlier arm's false; `A and B` true decides both, `A or B` false decides both,
+/// anything else decides nothing). Symbols are case-sensitive: alc 18.0.41.45789
+/// with `CLEAN27` defined activates `#if CLEAN27` and not `#if clean27`.
+pub type PreprocSymbols = Vec<(String, bool)>;
+
+/// Whether two sets of decided symbols can never hold in one build: some symbol
+/// is decided defined in one and undefined in the other.
+pub fn preproc_contradicts(a: &[(String, bool)], b: &[(String, bool)]) -> bool {
+    a.iter()
+        .any(|(s, v)| b.iter().any(|(t, w)| s == t && v != w))
+}
+
 /// Push-only arena holding the `Expr`/`Stmt`/`Block` pools an `AlFile` references.
 #[derive(Default)]
 pub struct Ir {
     exprs: Vec<Expr>,
     stmts: Vec<Stmt>,
     blocks: Vec<Block>,
+    /// Expression id ranges lowered under a non-empty build context, each with
+    /// that whole context (enclosing branches and routine arm together). Ranges
+    /// nest; [`Ir::preproc_context`] picks the innermost.
+    preproc_ranges: Vec<(Range<u32>, PreprocSymbols)>,
 }
 
 impl Ir {
@@ -115,6 +136,25 @@ impl Ir {
 
     pub fn expr_count(&self) -> usize {
         self.exprs.len()
+    }
+
+    /// Record that the expressions added since `first` (an earlier
+    /// [`Ir::expr_count`]) were lowered under build context `ctx`. Nothing is
+    /// recorded for an empty context or an empty range.
+    pub fn record_preproc_context(&mut self, first: usize, ctx: &[(String, bool)]) {
+        let (start, end) = (first as u32, self.exprs.len() as u32);
+        if !ctx.is_empty() && start < end {
+            self.preproc_ranges.push((start..end, ctx.to_vec()));
+        }
+    }
+
+    /// The build context expression `id` was lowered under (empty: none).
+    pub fn preproc_context(&self, id: ExprId) -> &[(String, bool)] {
+        self.preproc_ranges
+            .iter()
+            .filter(|(r, _)| r.contains(&id.0))
+            .min_by_key(|(r, _)| r.len())
+            .map_or(&[], |(_, ctx)| ctx.as_slice())
     }
     pub fn stmt_count(&self) -> usize {
         self.stmts.len()

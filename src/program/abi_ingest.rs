@@ -512,6 +512,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // same additive gap as SourceTable/TableNo/page-controls above (dataitem
             // receivers, Task 1: source `extract_nodes` path only).
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             // ABI ingestion is a JSON deserialization, never a tree-sitter parse — the
             // `parse_incomplete` concept (error-recovered CST) does not apply here; ABI's
@@ -621,6 +622,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // `RoutineNode::source_overload_aliased`'s doc (mutually
                 // exclusive with `abi_overload_collapsed` by construction).
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 // Task 2 (roadmap-closure plan): retain the raw parameter
                 // metadata now instead of hard-discarding it — see
                 // `retain_abi_params`'s doc. `abi_overload_collapsed`'s later

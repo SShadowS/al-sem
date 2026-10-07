@@ -302,18 +302,12 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 ///      caused the exclusion but the reason-finder couldn't re-derive why —
 ///      should never happen, since the two functions apply the identical
 ///      per-`Access` rule).
-///    - **Exactly 1 visible AND `pre_filter_count == 1`** → the visible
-///      candidate WAS the only overload to begin with; access filtering
-///      changed nothing about cardinality → resolve it (subject to the
-///      collapse-marker guard below → `Unknown(AbiCollapsedOverload)`).
-///    - **Exactly 1 visible BUT `pre_filter_count > 1`** → access narrowed an
-///      originally-AMBIGUOUS same-arity set down to one. This is NOT a safe
-///      selection: the pre-filter set was ambiguous (no arg-type evidence to
-///      pick between overloads — full arg-type dispatch is deferred), so
-///      access removing the OTHER sibling(s) doesn't prove the call meant
-///      THIS one. Selecting the lone survivor would MANUFACTURE a false
-///      `Source` route from what is actually still an unproven overload
-///      choice → `Unknown(AccessFilteredOverload)`.
+///    - **Exactly 1 visible** → resolve it (subject to the collapse-marker
+///      guard below → `Unknown(AbiCollapsedOverload)`), whether it was the
+///      only overload or access narrowed a larger same-arity set to it. AL
+///      leaves an inaccessible overload out of overload resolution (S9.0e alc
+///      probe), so a compiling call binds to the survivor. (Before S9.0e the
+///      narrowed case declined as `AccessFilteredOverload`.)
 ///    - **>1 visible** → genuine unresolved ambiguity (mirrors the
 ///      interface-implementer fan-out's `>1 candidates → Unresolved` rule) →
 ///      `Unknown(OverloadAmbiguous)`. Never pick-first.
@@ -342,7 +336,7 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 /// visible, prevalidated-concrete candidate case, which is
 /// `(DispatchShape::AmbiguousOverload, vec![one route per candidate])` — see
 /// the `_` arm's doc below for the prevalidation contract.
-#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan); each is a distinct identity/lookup input, grouping would obscure call sites.
+#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
 fn resolve_in_object(
     obj_id: &ObjectNodeId,
     obj_tier: TrustTier,
@@ -360,6 +354,10 @@ fn resolve_in_object(
     // helpers below — see `resolve_bare`/`resolve_member`'s `args = &[]`
     // wrappers).
     args: &[ArgDispatchInfo],
+    // The call site's build context (`al_syntax::ir::Ir::preproc_context`),
+    // consulted only by the build narrowing below; empty where there is none
+    // (the same wrappers as `args`).
+    build: &[(String, bool)],
 ) -> Option<(DispatchShape, Vec<Route>)> {
     let candidates = index.routines_in_object(graph, obj_id, name_lc);
     if candidates.len() == 0 {
@@ -428,17 +426,43 @@ fn resolve_in_object(
         .filter(|rid| routine_candidate_is_visible(rid, from_object, graph, index))
         .collect();
 
+    // Build narrowing (S9.0e): overloads that exist only under `#if` arms are
+    // candidates only in a build where their arm compiles. A candidate whose
+    // build conditions contradict the call site's (`build`: the `#if` branches
+    // around the call and its routine's own arm) is not in the call's build, so
+    // the compiler never sees it. Base App's `OnBeforeUpdateColumnCaptions`
+    // (`#if not CLEAN27` array of Text[80], `#else` array of Text) is two such
+    // arms; each call to it sits in one branch. If no candidate survives (a
+    // call in a build none of them is in), the set is left as it was.
+    let visible: Vec<&RoutineNodeId> = if visible.len() > 1 && !build.is_empty() {
+        let in_build: Vec<&RoutineNodeId> = visible
+            .iter()
+            .copied()
+            .filter(|rid| !routine_outside_build(rid, build, graph))
+            .collect();
+        if in_build.is_empty() {
+            visible
+        } else {
+            in_build
+        }
+    } else {
+        visible
+    };
+
     match visible.len() {
         0 => {
             let reason = access_exclusion_reason(obj_id, name_lc, arity, from_object, graph, index)
                 .unwrap_or(UnknownReason::IndexIntegrationGap);
             Some((DispatchShape::Exact, vec![unresolved_route(reason)]))
         }
-        // Overload-narrowing guard: only select the lone survivor when it was
-        // ALSO the lone candidate before visibility filtering. If access
-        // narrowed an originally-ambiguous (`pre_filter_count > 1`) set down
-        // to one, that is NOT a safe selection — fall through to the `_` arm.
-        1 if pre_filter_count == 1 => {
+        // The lone visible candidate, whether or not access narrowed a larger
+        // same-arity set down to it. S9.0e: AL leaves an inaccessible overload
+        // out of overload resolution (alc 18.0.41.45789: with `P(Integer)`
+        // public and `local P(Text)`, an outside `A.P('abc')` fails with
+        // `AL0133: cannot convert from 'Text' to 'Integer'`), so a call that
+        // compiles binds to the survivor. This used to decline as
+        // `AccessFilteredOverload`.
+        1 => {
             let rid0 = visible[0];
             // PLAIN-DISPATCH MARKER GUARD (Task 2 round-2, the round-1
             // critical fold-in): before this fix, `abi_overload_collapsed`
@@ -488,15 +512,6 @@ fn resolve_in_object(
                 vec![make_routine_route(rid0, obj_tier, surface, graph)],
             ))
         }
-        // pre_filter_count == 1 was already handled by the guarded arm above;
-        // reaching `visible.len() == 1` here means `pre_filter_count > 1` —
-        // access narrowed an originally-ambiguous same-arity set down to one
-        // survivor. NOT a safe selection (see the doc above): the decided
-        // reason-split Task 2 label for this shape.
-        1 => Some((
-            DispatchShape::Exact,
-            vec![unresolved_route(UnknownReason::AccessFilteredOverload)],
-        )),
         // >1 visible: genuine unresolved ambiguity (sigfp-and-ambiguous-
         // reclassification plan, Task 4 — round-2 closer #1 PREVALIDATION):
         // every candidate must be CONCRETE — not collapse-marked (ABI or
@@ -733,6 +748,19 @@ fn object_has_member_candidate(
     candidates.any(|rid| rid.params_count == arity)
 }
 
+/// Whether candidate `rid` exists in no build the call site's build context
+/// `build` allows: every node carrying the id has build conditions
+/// (`RoutineNode::preproc_context`) that contradict `build`.
+fn routine_outside_build(
+    rid: &RoutineNodeId,
+    build: &[(String, bool)],
+    graph: &ProgramGraph,
+) -> bool {
+    let mut nodes = graph.routines.run_by(|p| p.id.cmp(rid)).peekable();
+    nodes.peek().is_some()
+        && nodes.all(|n| al_syntax::ir::preproc_contradicts(&n.preproc_context, build))
+}
+
 /// Look up the declared [`Access`] of `rid` in `graph.routines` (already
 /// sorted by `RoutineNodeId` — binary-searchable, mirroring
 /// `make_routine_route`'s existing `graph.routines.binary_search_by` lookup
@@ -961,8 +989,8 @@ enum ZeroMatchStrategy {
     /// check whether the routine NAME (any arity) is declared SOMEWHERE in
     /// scope, and if so forward to the first (deterministic, scope-order)
     /// name-bearing object so [`resolve_in_object`]'s own internal
-    /// diagnostic — `ArityMismatch`, `AccessFilteredOverload`,
-    /// `LocalNotVisible`, … — survives exactly as a single-object dispatch
+    /// diagnostic — `ArityMismatch`, `LocalNotVisible`, … — survives exactly
+    /// as a single-object dispatch
     /// would have produced it. See [`resolve_in_page_scope`]'s doc for the
     /// full "why Page/Report diverges from Table" rationale (the
     /// `ArityMismatch`-preservation requirement) and the al-compile probe
@@ -1057,6 +1085,7 @@ fn resolve_in_extendable_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
     extensions_of: for<'a> fn(&'a ResolveIndex, &str) -> &'a [ObjectNodeId],
     zero_match: ZeroMatchStrategy,
 ) -> TableScopeOutcome {
@@ -1126,6 +1155,7 @@ fn resolve_in_extendable_scope(
             index,
             surface,
             args,
+            build,
         ) {
             Some((shape, routes)) => TableScopeOutcome::Resolved(shape, routes),
             // Defensive: `object_has_visible_member_candidate` already
@@ -1178,6 +1208,7 @@ fn resolve_in_extendable_scope(
                         index,
                         surface,
                         args,
+                        build,
                     ) {
                         Some((shape, routes)) => TableScopeOutcome::Resolved(shape, routes),
                         None => TableScopeOutcome::NotVisible {
@@ -1216,6 +1247,7 @@ fn resolve_in_table_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1226,6 +1258,7 @@ fn resolve_in_table_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::table_extensions_of,
         ZeroMatchStrategy::AccessExcludedReason,
     )
@@ -1254,8 +1287,8 @@ fn resolve_in_table_scope(
 /// has an arity+visibility match ANYWHERE, but the routine NAME (any arity)
 /// is declared somewhere in scope, the first (deterministic, scope-order)
 /// name-bearing object is still forwarded to [`resolve_in_object`] so its own
-/// internal per-object diagnostic (`ArityMismatch`, `AccessFilteredOverload`,
-/// `LocalNotVisible`, …) survives exactly as the single-object dispatch
+/// internal per-object diagnostic (`ArityMismatch`, `LocalNotVisible`, …)
+/// survives exactly as the single-object dispatch
 /// produced it pre-merge — required so the merge is a pure ADDITIVE gain
 /// (extensions become reachable) and never a diagnostic regression for a
 /// base-only call whose arity happens to be wrong. See
@@ -1275,6 +1308,7 @@ fn resolve_in_page_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1285,6 +1319,7 @@ fn resolve_in_page_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::page_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
     )
@@ -1333,6 +1368,7 @@ fn resolve_in_report_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1343,6 +1379,7 @@ fn resolve_in_report_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::report_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
     )
@@ -1391,9 +1428,19 @@ pub(crate) fn implicit_rec_table_id(
     }
 }
 
-/// Names compiler-GROUNDED to have **no bare-call form anywhere in AL**
+/// Names with **no bare-call form as a GLOBAL built-in**
 /// (pageext-merge-and-final-residual plan, Task 2 — the round-1 review
-/// addenda's GLOBAL, unconditional narrowing). Every entry here is a
+/// addenda's narrowing).
+///
+/// **S9.0e correction:** the "no bare form anywhere" claim below was read
+/// from MS Learn, not compiled, and it is false inside a page. alc
+/// 18.0.41.45789 binds all 19 names bare in a Page or PageExtension, to the
+/// page's own instance method (`Update()` = `CurrPage.Update()`); in a table
+/// or codeunit the same bare `Update()` fails AL0118. They stay out of the
+/// global-builtin fallback (Step 4) and the Step 3 collision guard (a
+/// source-table procedure of the same name does win, probed), and
+/// `resolve_bare_with_args`'s Step 4a binds them to `PageInstance` in page
+/// context. Every entry here is a
 /// documented AL method that is ALWAYS reached through an explicit receiver
 /// (`CurrPage.Update()`, `MyCodeunit.Run()`, `Page.RunModal(...)`) — never a
 /// bare unqualified call — in EVERY context checked: page trigger/action/
@@ -1478,8 +1525,43 @@ static INSTANCE_ONLY_NEVER_BARE: phf::Set<&'static str> = phf_set! {
 /// short-circuits BOTH to "not a builtin reading" — never a partial fix
 /// applied to only one of the two call sites.
 fn is_proven_never_bare_call(name_lc: &str) -> bool {
-    INSTANCE_ONLY_NEVER_BARE.contains(name_lc)
+    INSTANCE_ONLY_NEVER_BARE.contains(name_lc) || NO_BARE_GLOBAL_FORM.contains(name_lc)
 }
+
+/// A Page that declares no `SourceTable`, or a PageExtension where neither it
+/// nor its (resolved) base page declares one: no implicit Rec exists (S9.0e).
+fn page_has_no_source_table(
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> bool {
+    match from_object.id.kind {
+        ObjectKind::Page => from_object.source_table.is_none(),
+        ObjectKind::PageExtension => {
+            from_object.source_table.is_none()
+                && crate::program::resolve::receiver::resolve_pageext_base_page(
+                    from_object,
+                    graph,
+                    index,
+                )
+                .and_then(|id| crate::program::resolve::receiver::object_by_id(graph, &id))
+                .is_some_and(|base| base.source_table.is_none())
+        }
+        _ => false,
+    }
+}
+
+/// Names in `GLOBAL_BUILTIN_METHODS` (the union of every type's methods) that
+/// alc proved have NO bare global form (S9.0e), each probed in a codeunit:
+/// - `createtask` (`TaskScheduler.CreateTask` only): a bare `CreateTask()`
+///   fails AL0118, and in a report dataitem trigger it binds the dataitem
+///   table's own `CreateTask` (alc 18.0.41.45789; CDO `SalesQuoteGB`).
+///
+/// Unlike [`INSTANCE_ONLY_NEVER_BARE`], none of these is a page-instance
+/// method, so Step 4a never binds them either. Add a name only with a probe.
+static NO_BARE_GLOBAL_FORM: phf::Set<&'static str> = phf_set! {
+    "createtask",
+};
 
 /// Whether `name_lc` is a global builtin OR a bare-callable page/instance
 /// intrinsic (`member_catalog`'s `PageInstance` set: `Update`/`Close`/
@@ -1570,7 +1652,84 @@ pub fn resolve_bare(
         surface,
         with_state,
         &[],
+        &[],
+        None,
     )
+}
+
+/// What an extension's base object holds for a member (see
+/// [`resolve_in_extension_base`]).
+enum ExtensionBase {
+    Resolved(DispatchShape, Vec<Route>),
+    /// A candidate exists but access excludes it, with the reason.
+    Excluded(UnknownReason),
+    /// Not an extension, base unresolved, or no candidate.
+    Miss,
+}
+
+/// An extension's (access-filtered) base-object lookup — the bare call's
+/// Step 2, also used by `this.X()` in an extension (S9.0e: a report
+/// extension's `this.GetLocation(..)` reaches the base report's `protected`
+/// procedure). `resolve_in_object` does ZERO access filtering, so it is gated
+/// behind the caller-identity-aware visibility check Task 1 established
+/// (`object_has_visible_member_candidate`): the calling object is the
+/// extension (`from_object`), the candidate object is the resolved base. Per
+/// the Task-1 rule: base `Local` is NEVER visible from an extension;
+/// cross-app `Internal` requires the same app; `Protected` is visible (the
+/// caller is by construction a direct, kind-compatible extension of the base);
+/// `Public` is always visible.
+#[allow(clippy::too_many_arguments)] // the bare call's own identity/lookup inputs.
+fn resolve_in_extension_base(
+    from_object: &ObjectNode,
+    name_lc: &str,
+    arity: usize,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+    args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
+) -> ExtensionBase {
+    // The same audited call site the bare call's Step 2 always had
+    // (`resolve_module_pick_first_base_function_callers_are_a_known_allowlist`).
+    let base_obj = if let Some(base_kind) = extension_base_kind(from_object.id.kind)
+        && let Some(extends_target) = from_object.extends_target.as_deref()
+        && let Some(base_obj) = graph.resolve_object(from_object.id.app, base_kind, extends_target)
+    {
+        base_obj
+    } else {
+        return ExtensionBase::Miss;
+    };
+    let base_id = base_obj.id.clone();
+    let base_tier = base_obj.tier;
+    if object_has_visible_member_candidate(
+        &base_id,
+        base_tier,
+        name_lc,
+        arity,
+        &from_object.id,
+        graph,
+        index,
+    ) {
+        return match resolve_in_object(
+            &base_id,
+            base_tier,
+            name_lc,
+            arity,
+            &from_object.id,
+            graph,
+            index,
+            surface,
+            args,
+            build,
+        ) {
+            Some((shape, routes)) => ExtensionBase::Resolved(shape, routes),
+            None => ExtensionBase::Miss,
+        };
+    }
+    match access_exclusion_reason(&base_id, name_lc, arity, &from_object.id, graph, index) {
+        Some(r) => ExtensionBase::Excluded(r),
+        None => ExtensionBase::Miss,
+    }
 }
 
 /// The arg-typed variant of [`resolve_bare`] — `resolve_full_program`'s real
@@ -1581,7 +1740,12 @@ pub fn resolve_bare(
 /// query) that has no argument-typing context available or relevant — an
 /// empty `args` slice is behavior-neutral (Task 2's pick never fires without
 /// arguments to type).
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan).
+///
+/// `report_rec_table` (S9.0e): in a report dataitem trigger, the dataitem's
+/// table (`receiver::resolve_report_implicit_rec_table` of the calling
+/// routine). A bare call there falls back to that table's procedures, as a
+/// page's falls back to its SourceTable. `None` elsewhere.
+#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `report_rec_table`.
 pub(crate) fn resolve_bare_with_args(
     from_object: &ObjectNode,
     name_lc: &str,
@@ -1591,6 +1755,8 @@ pub(crate) fn resolve_bare_with_args(
     surface: &DeclSurface,
     with_state: WithState,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
+    report_rec_table: Option<&ObjectNodeId>,
 ) -> (DispatchShape, Vec<Route>) {
     // 1. Own object.
     if let Some((shape, routes)) = resolve_in_object(
@@ -1603,6 +1769,7 @@ pub(crate) fn resolve_bare_with_args(
         index,
         surface,
         args,
+        build,
     ) {
         return (shape, routes);
     }
@@ -1628,69 +1795,60 @@ pub(crate) fn resolve_bare_with_args(
     // declines entirely (no `resolve_in_object` call) and falls through to
     // Step 3/4/5, exactly like the pre-existing "no candidate at all"
     // fallthrough shape.
-    if let Some(base_kind) = extension_base_kind(from_object.id.kind)
-        && let Some(extends_target) = from_object.extends_target.as_deref()
-        && let Some(base_obj) = graph.resolve_object(from_object.id.app, base_kind, extends_target)
-    {
-        let base_id = base_obj.id.clone();
-        let base_tier = base_obj.tier;
-        if object_has_visible_member_candidate(
-            &base_id,
-            base_tier,
-            name_lc,
-            arity,
-            &from_object.id,
-            graph,
-            index,
-        ) {
-            if let Some((shape, routes)) = resolve_in_object(
-                &base_id,
-                base_tier,
-                name_lc,
-                arity,
-                &from_object.id,
-                graph,
-                index,
-                surface,
-                args,
-            ) {
-                return (shape, routes);
-            }
-        } else if let Some(r) =
-            access_exclusion_reason(&base_id, name_lc, arity, &from_object.id, graph, index)
-        {
-            reason = r;
-        }
+    match resolve_in_extension_base(
+        from_object,
+        name_lc,
+        arity,
+        graph,
+        index,
+        surface,
+        args,
+        build,
+    ) {
+        ExtensionBase::Resolved(shape, routes) => return (shape, routes),
+        ExtensionBase::Excluded(r) => reason = r,
+        ExtensionBase::Miss => {}
     }
 
     // 3. Implicit-Rec (beyond-1B.3b Task 3). Every guard below is
     // independently fail-closed; any of them declining routes straight past
     // this step to Step 4/5 rather than guessing.
     //
-    // (0) STRICT ObjectKind guard: bare-implicit-Rec dispatch is structurally
-    // a Page/Table source-record mechanism in AL — ONLY these four kinds are
-    // eligible. Every other kind (Codeunit/Report/XmlPort/Query/…) skips this
-    // step entirely, no accidental leakage via `implicit_rec_table_id`'s own
-    // (defense-in-depth) kind match. Task 3: tag WHY it's skipped for the two
-    // named, high-volume excluded kinds (Codeunit/Report(Extension)) so the
-    // eventual Step 5 Unknown carries that context rather than the generic
-    // `MemberNotFound` default.
+    // (0) STRICT ObjectKind guard: bare-implicit-Rec dispatch is a Page/Table
+    // source-record mechanism, plus (S9.0e) a report dataitem trigger's
+    // dataitem record (`report_rec_table`; the AL compiler binds a bare call
+    // there to the dataitem table, and rejects it from a report procedure with
+    // AL0118). Every other kind (Codeunit/XmlPort/Query/…), and a report
+    // routine with no dataitem record, skips this step. Task 3: tag WHY it's
+    // skipped for the two named, high-volume excluded kinds
+    // (Codeunit/Report(Extension)) so the eventual Step 5 Unknown carries that
+    // context rather than the generic `MemberNotFound` default.
+    let is_report = matches!(
+        from_object.id.kind,
+        ObjectKind::Report | ObjectKind::ReportExtension
+    );
     if matches!(
         from_object.id.kind,
         ObjectKind::Table
             | ObjectKind::Page
             | ObjectKind::TableExtension
             | ObjectKind::PageExtension
-    ) {
+    ) || (is_report && report_rec_table.is_some())
+    {
         // (1) with-guard: Step 3 runs ONLY on a proven with-free call site.
         // `InsideWith`/`Unknown` (the AST places the site inside a `with`, or
         // the two with-detection signals disagree) skip Step 3 — a false
         // `Source` inside an unrepresented `with` is the fatal case this
         // guards against (see `WithState`'s doc).
         if with_state == WithState::NoWithProven {
-            // (2) Compute the implicit-Rec table id by kind; no unique
-            // in-closure table → fall through (nothing to search).
-            if let Some(table_id) = implicit_rec_table_id(from_object, graph, index) {
+            // (2) Compute the implicit-Rec table id by kind (a report's is its
+            // dataitem's, passed in); no unique in-closure table → fall through.
+            let table_id = if is_report {
+                report_rec_table.cloned()
+            } else {
+                implicit_rec_table_id(from_object, graph, index)
+            };
+            if let Some(table_id) = table_id {
                 // (3) Visibility-scoped table ∪ extensions search (Task 2):
                 // `NotVisible` falls through to Step 4/5 (tagging WHY when a
                 // candidate existed but was access-excluded); `Resolved` is a
@@ -1706,6 +1864,7 @@ pub(crate) fn resolve_bare_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 ) {
                     TableScopeOutcome::Resolved(shape, routes) => {
                         // (4) Builtin/intrinsic PROBE-THEN-DECIDE: the probe
@@ -1736,9 +1895,11 @@ pub(crate) fn resolve_bare_with_args(
                         }
                     }
                 }
-            } else {
+            } else if !page_has_no_source_table(from_object, graph, index) {
                 // No unique in-closure implicit-Rec table (ambiguous
-                // cross-app name, out-of-closure, or unresolved).
+                // cross-app name, out-of-closure, or unresolved). A page with
+                // no `SourceTable` at all has no implicit Rec to miss, so it
+                // keeps `MemberNotFound` and reaches Step 4a (S9.0e).
                 reason = UnknownReason::ReceiverOutOfClosure;
             }
         } else {
@@ -1747,11 +1908,32 @@ pub(crate) fn resolve_bare_with_args(
         }
     } else if matches!(from_object.id.kind, ObjectKind::Codeunit) {
         reason = UnknownReason::CodeunitTableNoExcluded;
-    } else if matches!(
-        from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
-    ) {
+    } else if is_report {
+        // A report routine outside a dataitem trigger (a procedure, a request
+        // page trigger): no implicit Rec.
         reason = UnknownReason::ReportRecExcluded;
+    }
+
+    // 4a. The page's own instance methods (S9.0e). Inside a Page or
+    // PageExtension, bare `Update()`, `SetSelectionFilter(R)`, `Caption(..)`
+    // and every other `PageInstance` member bind to the page itself: alc
+    // 18.0.41.45789 compiled all 19 bare in a page trigger, each reporting the
+    // method's own type or protection error (AL0122/AL0161), never AL0118; the
+    // same bare `Update()` in a table or codeunit fails AL0118. A source-table
+    // procedure of the same name still wins (Step 3, probed: implicit-with
+    // AL0604), so this runs only when nothing above claimed the name — an
+    // out-of-closure table or a `with` scope (another `reason`) still declines.
+    if reason == UnknownReason::MemberNotFound
+        && matches!(
+            from_object.id.kind,
+            ObjectKind::Page | ObjectKind::PageExtension
+        )
+        && let Some(bid) = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            name_lc,
+        )
+    {
+        return member_catalog_route(bid);
     }
 
     // 4. Global builtin. GLOBAL suppression (pageext-merge-and-final-residual
@@ -2288,6 +2470,7 @@ pub fn resolve_member(
         index,
         surface,
         &[],
+        &[],
     )
 }
 
@@ -2304,6 +2487,7 @@ pub(crate) fn resolve_member_with_args(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> (DispatchShape, Vec<Route>) {
     match receiver {
         ReceiverType::RecordRef => {
@@ -2415,6 +2599,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 ) {
                     TableScopeOutcome::Resolved(shape, routes) => return (shape, routes),
                     TableScopeOutcome::Ambiguous => {
@@ -2516,6 +2701,7 @@ pub(crate) fn resolve_member_with_args(
                         index,
                         surface,
                         args,
+                        build,
                     )
                 } else {
                     resolve_in_report_scope(
@@ -2527,6 +2713,7 @@ pub(crate) fn resolve_member_with_args(
                         index,
                         surface,
                         args,
+                        build,
                     )
                 };
                 match outcome {
@@ -2560,6 +2747,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 )
             };
 
@@ -2607,13 +2795,32 @@ pub(crate) fn resolve_member_with_args(
                 index,
                 surface,
                 args,
+                build,
             ) {
                 (shape, routes)
             } else {
-                // Method not found in own object — the receiver (from_object
-                // itself) IS resolved by construction; tag its tier
-                // (reason-split Task 2).
-                member_unknown_route_with_tier(UnknownReason::MemberNotFound, from_object.tier)
+                // Not declared by the object itself: an extension's `this`
+                // also reaches its base object (S9.0e), as a bare call does.
+                match resolve_in_extension_base(
+                    from_object,
+                    method_lc,
+                    arity,
+                    graph,
+                    index,
+                    surface,
+                    args,
+                    build,
+                ) {
+                    ExtensionBase::Resolved(shape, routes) => (shape, routes),
+                    ExtensionBase::Excluded(r) => member_unknown_route(r),
+                    // Method not found — the receiver (from_object itself) IS
+                    // resolved by construction; tag its tier (reason-split
+                    // Task 2).
+                    ExtensionBase::Miss => member_unknown_route_with_tier(
+                        UnknownReason::MemberNotFound,
+                        from_object.tier,
+                    ),
+                }
             }
         }
         ReceiverType::Interface { name_lc } => {
@@ -2646,87 +2853,35 @@ pub(crate) fn resolve_member_with_args(
                     .map(|o| o.tier)
                     .unwrap_or(TrustTier::Workspace);
 
-                if impl_tier == TrustTier::SymbolOnly {
-                    // SymbolOnly: delegate to `resolve_in_object`'s full
-                    // arity+visibility discipline (Task 1) — no pre-check
-                    // needed here (unlike the source-tier `else` branch below)
-                    // since `resolve_in_object` itself now returns Some(Unknown)
-                    // on arity mismatch/access exclusion/ambiguity. The
-                    // `unwrap_or` fires only when this implementer does not
-                    // declare `method_lc` at all (`resolve_in_object` returns
-                    // `None` only on a name-absent `candidates.is_empty()`).
-                    let result = resolve_in_object(
-                        impl_id,
-                        impl_tier,
-                        method_lc,
-                        arity,
-                        &from_object.id,
-                        graph,
-                        index,
-                        surface,
-                        args,
-                    );
-                    // The implementer object itself IS resolved (`impl_id`/
-                    // `impl_tier` above) — tag its tier (reason-split Task 2)
-                    // on the name-absent fallback. `impl_tier == SymbolOnly`
-                    // here by construction (this branch), so this tier can
-                    // never PROVE absence — see `MemberNotFound`'s doc. A
-                    // nested `AmbiguousOverload` result collapses to a single
-                    // route, never extends this Polymorphic edge — see
-                    // `interface_delegate_route`'s doc (Task 4 round-1
-                    // addendum, interface nesting OUT OF SCOPE).
-                    let route = interface_delegate_route(
-                        result,
-                        unresolved_route_with_tier(UnknownReason::MemberNotFound, impl_tier),
-                    );
-                    routes.push(route);
-                } else {
-                    let candidates = index.routines_in_object(graph, impl_id, method_lc);
-                    if candidates.len() == 0 {
-                        // Method name absent from this implementer — Rule 1
-                        // Unresolved. The implementer object IS resolved; tag
-                        // its tier (reason-split Task 2).
-                        routes.push(unresolved_route_with_tier(
-                            UnknownReason::MemberNotFound,
-                            impl_tier,
-                        ));
-                    } else {
-                        let matching = candidates.filter(|r| r.params_count == arity).count();
-                        match matching {
-                            1 => {
-                                // Unique arity-matched overload: guaranteed to
-                                // resolve — the `unresolved_route` fallback is
-                                // defensive (should never fire;
-                                // `resolve_in_object` itself finds
-                                // `matched.len() == 1`, so its `_` arm's
-                                // `AmbiguousOverload` shape is structurally
-                                // unreachable here too — `interface_delegate_
-                                // route` handles it uniformly anyway).
-                                let result = resolve_in_object(
-                                    impl_id,
-                                    impl_tier,
-                                    method_lc,
-                                    arity,
-                                    &from_object.id,
-                                    graph,
-                                    index,
-                                    surface,
-                                    args,
-                                );
-                                let route = interface_delegate_route(
-                                    result,
-                                    unresolved_route(UnknownReason::IndexIntegrationGap),
-                                );
-                                routes.push(route);
-                            }
-                            _ => {
-                                // 0 (arity mismatch) or >1 (ambiguous) — Rule 1+2 Unresolved.
-                                // Never emit a guessed route to a wrong-arity or wrong-overload target.
-                                routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
-                            }
-                        }
-                    }
-                }
+                // Every tier delegates to `resolve_in_object`'s full
+                // arity + visibility + argument-type discipline: it returns
+                // Some(Unknown) on arity mismatch / access exclusion, picks a
+                // same-arity overload by argument type as the compiler does
+                // (S9.0e — the source branch used to decline every >1
+                // same-arity set without trying), and `None` only when this
+                // implementer does not declare `method_lc` at all. The
+                // implementer object itself IS resolved, so the name-absent
+                // fallback carries its tier (reason-split Task 2). A nested
+                // `AmbiguousOverload` result collapses to a single route,
+                // never extends this Polymorphic edge — see
+                // `interface_delegate_route`'s doc (Task 4 round-1 addendum,
+                // interface nesting OUT OF SCOPE).
+                let result = resolve_in_object(
+                    impl_id,
+                    impl_tier,
+                    method_lc,
+                    arity,
+                    &from_object.id,
+                    graph,
+                    index,
+                    surface,
+                    args,
+                    build,
+                );
+                routes.push(interface_delegate_route(
+                    result,
+                    unresolved_route_with_tier(UnknownReason::MemberNotFound, impl_tier),
+                ));
             }
 
             (DispatchShape::Polymorphic, routes)
@@ -3564,15 +3719,13 @@ page 50901 "EMailJobsPage"
         assert_eq!(rid.object.kind, ObjectKind::Table);
     }
 
-    /// NEGATIVE (the critical fix): a Page's SourceTable does NOT declare
-    /// `Run()` at all — no table-scope candidate exists. Pre-fix this fell
-    /// through Step 3 (NotVisible, no collision to even detect) straight
-    /// into Step 4's UNGUARDED `global_builtin_id("run")` fallback →
-    /// `Catalog`/`Builtin` (a false edge — `run` has no bare-call form in
-    /// AL). Post-fix: Step 4 is ALSO suppressed for a proven-never-bare
-    /// name, so this correctly falls all the way to `Unknown`.
+    /// A Page's SourceTable does NOT declare `Run()`, so a bare `Run()` binds
+    /// the PAGE's own `Run` (S9.0e, Step 4a): alc 18.0.41.45789 compiles a
+    /// bare `Run()` in a page trigger. It is the page-instance method, never
+    /// the global-builtin fallback (Step 4 stays suppressed — the codeunit
+    /// test below still declines).
     #[test]
-    fn bare_run_on_page_with_no_sourcetable_candidate_is_unknown_not_builtin() {
+    fn bare_run_on_page_with_no_sourcetable_candidate_binds_the_page_instance() {
         let src_table: &'static str = r#"
 table 50910 "Baz"
 {
@@ -3613,15 +3766,141 @@ page 50911 "BazPage"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
-        assert!(
-            !matches!(routes[0].target, RouteTarget::Builtin(_)),
-            "must NEVER resolve to Builtin — `run` has no bare form in AL; got {:?}",
-            routes[0].target
+        let expected = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            "run",
+        )
+        .expect("run is a PageInstance member");
+        assert_eq!(routes[0].target, RouteTarget::Builtin(expected));
+        assert_eq!(routes[0].evidence, Evidence::Catalog);
+    }
+
+    /// S9.0e: `this.X()` in a report extension reaches the base report's
+    /// `protected` procedure, as a bare call does (CDO's
+    /// `MfgGetOutboundSourceDocs` `this.GetLocation(..)`); a base `local`
+    /// procedure stays invisible.
+    #[test]
+    fn this_call_in_an_extension_reaches_the_base_object() {
+        use crate::program::resolve::receiver::ReceiverType;
+
+        let src: &'static str = r#"
+report 50950 "BaseRep"
+{
+    protected procedure Helper()
+    begin
+    end;
+
+    local procedure Hidden()
+    begin
+    end;
+}
+
+reportextension 50951 "RepExt" extends "BaseRep"
+{
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let units = [make_unit(app_id, "Rep.al", src)];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+        let ext = find_obj(&graph, "RepExt");
+
+        let (_, routes) = resolve_member(
+            &ReceiverType::SelfObject,
+            "helper",
+            0,
+            ext,
+            &graph,
+            &index,
+            &surface,
+        );
+        assert_eq!(routes.len(), 1);
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("this.Helper() must reach the base report; got {routes:?}");
+        };
+        assert_eq!(rid.object.kind, ObjectKind::Report);
+
+        let (_, routes) = resolve_member(
+            &ReceiverType::SelfObject,
+            "hidden",
+            0,
+            ext,
+            &graph,
+            &index,
+            &surface,
         );
         assert!(
             matches!(routes[0].evidence, Evidence::Unknown(_)),
-            "expected Unknown evidence; got {:?}",
-            routes[0].evidence
+            "a base local procedure is invisible; got {routes:?}"
+        );
+    }
+
+    /// S9.0e, alc-probed: a PageExtension's bare `Update()` binds the page
+    /// instance; a Table's bare `Update()` is AL0118 and stays Unknown.
+    #[test]
+    fn bare_update_binds_the_page_instance_in_a_pageextension_not_a_table() {
+        let src: &'static str = r#"
+table 50940 "Qux"
+{
+    procedure T()
+    begin
+        Update();
+    end;
+}
+
+page 50941 "QuxPage"
+{
+    SourceTable = Qux;
+}
+
+pageextension 50942 "QuxPageExt" extends "QuxPage"
+{
+    procedure E()
+    begin
+        Update();
+    end;
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let units = [make_unit(app_id, "Qux.al", src)];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+        let update = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            "update",
+        )
+        .expect("update is a PageInstance member");
+
+        let ext = find_obj(&graph, "QuxPageExt");
+        let (_, routes) = resolve_bare(
+            ext,
+            "update",
+            0,
+            &graph,
+            &index,
+            &surface,
+            WithState::NoWithProven,
+        );
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].target, RouteTarget::Builtin(update));
+
+        let table = find_obj(&graph, "Qux");
+        let (_, routes) = resolve_bare(
+            table,
+            "update",
+            0,
+            &graph,
+            &index,
+            &surface,
+            WithState::NoWithProven,
+        );
+        assert_eq!(routes.len(), 1);
+        assert!(
+            matches!(routes[0].evidence, Evidence::Unknown(_)),
+            "a table has no page instance; got {:?}",
+            routes[0]
         );
     }
 
@@ -4275,6 +4554,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4291,6 +4571,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4320,6 +4601,7 @@ pageextension 52911 "ExtA" extends BasePage
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -4439,6 +4721,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4455,6 +4738,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4488,6 +4772,7 @@ pageextension 52911 "ExtA" extends BasePage
             return_type_id: Some(("Dep Http Content".into(), 60101)),
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -4630,6 +4915,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4646,6 +4932,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -4675,6 +4962,7 @@ pageextension 52911 "ExtA" extends BasePage
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params,
             }
         }
@@ -4740,7 +5028,15 @@ pageextension 52911 "ExtA" extends BasePage
             var_passable: false,
         }];
         let (shape, routes) = resolve_member_with_args(
-            &receiver, "get", 1, from_obj, &graph, &index, &surface, &args,
+            &receiver,
+            "get",
+            1,
+            from_obj,
+            &graph,
+            &index,
+            &surface,
+            &args,
+            &[],
         );
 
         assert_eq!(
@@ -4823,6 +5119,7 @@ codeunit 50611 "MixedCU"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "N".into(),
                 type_text: "Integer".into(),
@@ -4909,6 +5206,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
@@ -5002,6 +5300,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -5018,6 +5317,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -5046,6 +5346,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -5231,6 +5532,7 @@ codeunit 50612 "MixedCU2"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         }];
@@ -5258,6 +5560,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -5376,6 +5679,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -5392,6 +5696,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -5420,6 +5725,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         };
 
@@ -5454,6 +5760,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         };
 
@@ -6196,6 +6503,7 @@ codeunit 50300 "OverloadCU"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -9524,6 +9832,88 @@ codeunit 51499 "IfaceCaller2"
         assert_eq!(routes[0].evidence, Evidence::Source);
     }
 
+    /// S9.0e: a source implementer's same-arity overloads are picked by
+    /// argument type, as on any object receiver. The fan-out used to decline
+    /// every >1 same-arity set without trying (`Http.Authorize(HttpClient)` /
+    /// `Authorize(WebClient)` stayed Unknown on CDO). An Integer literal binds
+    /// `Bar(p: Integer)`, never the `Text` sibling.
+    #[test]
+    fn resolve_member_interface_implementer_overload_picked_by_argument_type() {
+        use crate::program::resolve::receiver::ReceiverType;
+
+        let src: &'static str = r#"
+codeunit 51420 "IFooTypedImpl" implements IFoo
+{
+    procedure Bar(p: Integer)
+    begin
+    end;
+
+    procedure Bar(p: Text)
+    begin
+    end;
+}
+
+codeunit 51499 "IfaceTypedCaller"
+{
+    procedure Trigger()
+    begin
+    end;
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let unit = make_unit(app_id, "IfaceTyped.al", src);
+        let units = [unit];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+
+        let impl_obj = find_obj(&graph, "IFooTypedImpl");
+        let bars: Vec<_> = index
+            .routines_in_object(&graph, &impl_obj.id, "bar")
+            .collect();
+        assert_eq!(bars.len(), 2, "precondition: two same-arity Bar overloads");
+
+        let from_obj = find_obj(&graph, "IfaceTypedCaller");
+        let receiver = ReceiverType::Interface {
+            name_lc: "ifoo".into(),
+        };
+        let args = [ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base("integer".into())),
+            exact_text: Some("integer".into()),
+            literal_kind: Some(LiteralKind::Integer),
+            var_passable: false,
+        }];
+        let (shape, routes) = resolve_member_with_args(
+            &receiver,
+            "bar",
+            1,
+            from_obj,
+            &graph,
+            &index,
+            &surface,
+            &args,
+            &[],
+        );
+
+        assert_eq!(shape, DispatchShape::Polymorphic);
+        assert_eq!(
+            routes.len(),
+            1,
+            "one implementer, one route; got {routes:?}"
+        );
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("the Integer overload must be picked; got {routes:?}");
+        };
+        let meta = surface.get(rid).expect("picked routine is source-declared");
+        assert_eq!(
+            meta.params[0].ty.as_deref().map(str::to_ascii_lowercase),
+            Some("integer".to_string()),
+            "the Integer overload, never the Text sibling; got {:?}",
+            meta.params
+        );
+        assert_eq!(routes[0].evidence, Evidence::Source);
+    }
+
     /// Task 4 fixture (e), round-1 addendum "T4 — interface nesting OUT OF
     /// SCOPE" (BINDING): an implementer with its OWN same-object overload
     /// ambiguity (`Bar(p: Integer)` / `Bar(p: Text)`, both `Public`) inside an
@@ -10391,6 +10781,7 @@ codeunit 50000 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         });
@@ -10419,6 +10810,7 @@ codeunit 50000 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
 
@@ -10446,6 +10838,7 @@ codeunit 50000 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
 
@@ -12518,14 +12911,14 @@ codeunit 53961 "LocNCaller"
     // collision either way: `resolve_in_object`'s `pre_filter_count` counts
     // every arity-matched candidate regardless of whether their ids are
     // identical or distinct, so the pre-filter set is genuinely ambiguous
-    // (2 same-arity candidates) purely from that count. Calling cross-app
-    // with 1 (unproven-type) argument must NEVER resolve to Source, even
-    // though exactly one physical overload (`Foo(Integer)`, `public`)
-    // happens to be visible and the other (`Foo(Text)`, `internal`) is
-    // cross-app-excluded — access alone cannot prove which overload the
-    // call meant.
+    // (2 same-arity candidates) purely from that count. Called cross-app,
+    // only `Foo(Integer)` (`public`) is visible; `Foo(Text)` (`internal`) is
+    // excluded. This used to decline ("access alone cannot prove which
+    // overload the call meant"); S9.0e's compiler probe shows AL leaves an
+    // inaccessible overload out of overload resolution, so it binds the
+    // visible one.
     #[test]
-    fn resolve_member_object_mixed_access_same_arity_overload_never_resolves_to_source() {
+    fn resolve_member_object_mixed_access_same_arity_overload_binds_the_visible_one() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let src_target: &'static str = r#"
@@ -12582,41 +12975,27 @@ codeunit 53971 "OverloadNCaller"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
+        // REBASELINE (S9.0e): cross-app, the `internal Foo(Text)` is invisible,
+        // and AL leaves an inaccessible overload out of overload resolution
+        // (alc probe: public `P(Integer)` + `local P(Text)`, an outside
+        // `A.P('abc')` fails AL0133 'cannot convert from Text to Integer'). So
+        // the call binds to the visible `Foo(Integer)`.
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("expected the visible Foo(Integer); got {:?}", routes[0]);
+        };
+        assert_eq!(rid.name_lc, "foo");
         assert!(
-            !matches!(routes[0].target, RouteTarget::Routine(_)),
-            "mixed-access same-arity overload (public Foo(Integer) + \
-             internal Foo(Text)) called cross-app with an unproven-type arg \
-             must NEVER resolve to Source — access-narrowing to the lone \
-             visible overload would manufacture a false resolution (the \
-             overload-narrowing guard); got {:?}",
-            routes[0].target
+            graph
+                .routines
+                .iter()
+                .find(|r| &r.id == rid)
+                .is_some_and(|r| r.access == Access::Public),
+            "the public overload"
         );
-        assert_eq!(routes[0].target, RouteTarget::Unresolved);
-        // NOTE (reason-split Task 2 investigation; STALE-CLAIM CORRECTED
-        // Task 5 nit sweep, 2026-07-04): this comment originally claimed
-        // the fixture's TWO same-arity SOURCE overloads (`Foo(Integer)`/
-        // `Foo(Text)`) shared an IDENTICAL `RoutineNodeId` because "source
-        // `sig_fp` is always 0" — true only PRE the
-        // sigfp-and-ambiguous-reclassification plan's Task 2 (2026-07-03).
-        // Verified directly (debug-printed `foo_candidates` on this exact
-        // fixture): post-fix the two DO get genuinely distinct `sig_fp`s
-        // (`69875687941676757` vs `7629489990184319135`), so there is no
-        // `binary_search_by` id-collision non-determinism here anymore —
-        // the observed reason today is deterministically
-        // `Unknown(AccessFilteredOverload)` (verified, not `InternalNotVisible`
-        // as this comment used to describe), matching the SAME
-        // `AccessFilteredOverload` shape the sibling
-        // `resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_declines`
-        // test below deliberately constructs — the two tests are no longer
-        // meaningfully different w.r.t. id-collision, only in HOW the
-        // distinct ids arise (real source fingerprinting here vs. manual
-        // construction there). Left as the original generic
-        // `Evidence::Unknown(_)` assertion regardless (pinning the specific
-        // reason isn't this fixture's job).
-        assert!(matches!(routes[0].evidence, Evidence::Unknown(_)));
+        assert_eq!(routes[0].evidence, Evidence::Source);
     }
 
-    /// Reason-split Task 2 fixture: an `AccessFilteredOverload` probe that
+    /// Reason-split Task 2 fixture (the former `AccessFilteredOverload` probe) that
     /// manually constructs the graph (mirrors
     /// `plain_dispatch_marker_guard_fixture`'s pattern) with two DISTINCT
     /// `sig_fp` values so the two same-arity candidates get genuinely
@@ -12629,13 +13008,12 @@ codeunit 53971 "OverloadNCaller"
     /// ids today, verified — see that test's own corrected NOTE. This
     /// fixture's manual construction is no longer a workaround for a
     /// collision the sibling test suffers; it is simply a more explicit,
-    /// hand-controlled probe of the identical `AccessFilteredOverload`
-    /// shape.) One candidate `Public` (always visible), one `Internal` (excluded
+    /// hand-controlled probe of the identical access-narrowed shape.) One candidate `Public` (always visible), one `Internal` (excluded
     /// cross-app, no friendship declared) — access narrows the ORIGINALLY
     /// `pre_filter_count == 2` set down to exactly ONE visible survivor, and
-    /// the resolver must decline rather than select it.
+    /// (S9.0e) the resolver selects it; see the assertion's note.
     #[test]
-    fn resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_declines() {
+    fn resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_resolves() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let ws_id = make_app_id("AccessFilteredWS");
@@ -12670,6 +13048,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -12686,6 +13065,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -12720,6 +13100,7 @@ codeunit 53971 "OverloadNCaller"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             }
         }
@@ -12773,19 +13154,23 @@ codeunit 53971 "OverloadNCaller"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].target, RouteTarget::Unresolved);
+        // REBASELINE (S9.0e): access narrows the pre_filter_count==2 set to the
+        // one visible survivor (Public, sig_fp 100), and the call binds to it.
+        // AL leaves an inaccessible overload out of overload resolution (alc
+        // probe: `A.P('abc')` against public `P(Integer)` + `local P(Text)`
+        // fails AL0133), so a compiling call can only mean the survivor. This
+        // used to decline as `AccessFilteredOverload`.
+        //
+        // This hand-built graph has an empty `DeclSurface`, so the selected
+        // survivor's route degrades to `IndexIntegrationGap` inside
+        // `make_routine_route`: reaching it proves the survivor was selected
+        // (the old outcome was `AccessFilteredOverload`). The real-source
+        // sibling test above proves the resulting `Source` route.
         assert_eq!(
             routes[0].evidence,
-            Evidence::Unknown(UnknownReason::AccessFilteredOverload),
-            "access narrowed an originally-ambiguous (pre_filter_count==2) \
-             same-arity set down to ONE visible survivor (Public) and \
-             declined rather than select it — reason-split Task 2's \
-             AccessFilteredOverload label; got {:?}",
-            routes[0].evidence
-        );
-        assert_eq!(
-            routes[0].receiver_tier, None,
-            "AccessFilteredOverload is not a MemberNotFound shape — no receiver_tier"
+            Evidence::Unknown(UnknownReason::IndexIntegrationGap),
+            "{:?}",
+            routes[0]
         );
     }
 
@@ -12799,9 +13184,9 @@ codeunit 53971 "OverloadNCaller"
     /// `Histogram` both agreeing this is NOT `unknown` — the pre-Task-4
     /// behavior (single `Unresolved(OverloadAmbiguous)` route, `Exact`
     /// shape) this test used to pin. This is the ONLY same-object overload
-    /// ambiguity shape henceforth; `AccessFilteredOverload` (the sibling test
-    /// above, where access narrows the visible set to exactly one) is
-    /// unaffected.
+    /// ambiguity shape henceforth; the access-narrowed shape (the sibling test
+    /// above, where access narrows the visible set to exactly one) resolves
+    /// since S9.0e.
     #[test]
     fn resolve_member_object_genuine_two_public_same_arity_overload_becomes_ambiguous_resolved() {
         use crate::program::resolve::receiver::ReceiverType;
@@ -13052,6 +13437,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -13068,6 +13454,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -13099,6 +13486,7 @@ codeunit 53975 "Overload3Caller"
                 return_type_id: None,
                 abi_overload_collapsed: true,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13124,6 +13512,7 @@ codeunit 53975 "Overload3Caller"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
         ];
@@ -13239,6 +13628,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -13255,6 +13645,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -13301,6 +13692,7 @@ codeunit 60152 "AliasTarget"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13320,6 +13712,7 @@ codeunit 60152 "AliasTarget"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
         ];

@@ -29,6 +29,12 @@ pub struct ObjectDecl {
     /// dataitem trigger's per-dataitem implicit `Rec` (see
     /// [`RoutineDecl::dataitem_source_table`]).
     pub dataitems: Vec<(String, String)>,
+    /// Query `column(Name; "Source Field")` declarations with no `Method` property, as
+    /// (column name, enclosing dataitem's source table, source field), all unquoted,
+    /// document order — Query only (empty otherwise). Such a column has its source
+    /// field's type (alc 18.0.41.45789: assigning an Enum-field column to a `Date`
+    /// fails AL0122 naming the enum); a `Method` column's type is not modelled.
+    pub query_columns: Vec<(String, String, String)>,
     /// The `extends <Target>` target name (unquoted) for an extension object
     /// (Table/Page/Report/Enum/PermissionSet extension), else `None`.
     pub extends_target: Option<String>,
@@ -208,6 +214,12 @@ pub struct RoutineDecl {
     /// non-Report/ReportExtension object (they never contain a `dataset` section).
     /// Always `false` when `enclosing_member` is not itself a `modify_modification`.
     pub in_dataset_modify_context: bool,
+    /// The build conditions this routine exists under (see
+    /// [`super::PreprocSymbols`]): the object-level `#if` branches around it and,
+    /// for a header split across `#if` arms, its own arm. Empty for a routine
+    /// every build compiles. Overload selection drops a candidate whose
+    /// conditions contradict the call site's build context.
+    pub preproc_context: super::PreprocSymbols,
     /// `None` for a forward/external declaration with no body.
     pub body: Option<BlockId>,
     pub origin: Origin,

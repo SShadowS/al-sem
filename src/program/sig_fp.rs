@@ -275,6 +275,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: member.map(|m| (m.to_string(), test_origin())),
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: test_origin(),
         };

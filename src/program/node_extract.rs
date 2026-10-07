@@ -88,6 +88,16 @@ pub struct DataitemNode {
     pub source_table: ObjectRef,
 }
 
+/// One plain query column (Query only, S9.0e): `column(Name; "Field")` with no
+/// `Method`, which has its source field's type. `source_table` is its enclosing
+/// dataitem's table; `field_lc` the lowercased, unquoted source field name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryColumnNode {
+    pub name_lc: String,
+    pub source_table: ObjectRef,
+    pub field_lc: String,
+}
+
 /// One table field surface entry (Table / TableExtension only) — Task 3
 /// (record-field chains). `name_lc` is the lowercased, UNQUOTED field name
 /// (mirrors [`RoutineNode`]'s `name_lc`/`RoutineNodeId::name_lc` convention —
@@ -143,6 +153,9 @@ pub struct ObjectNode {
     /// `receiver::resolve_dataitem_source_table` (Step 2b's dataitem-NAME
     /// receiver lookup, and the report implicit-Rec fallback).
     pub dataitems: Vec<DataitemNode>,
+    /// A Query's plain columns, document order; empty for every other kind.
+    /// Consumed by `receiver::infer_compound_member_receiver` (`Q.Column.X()`).
+    pub query_columns: Vec<QueryColumnNode>,
     /// The object's `protected var` globals as `(name lowercased, declared type
     /// text)`, document order: what an extension of it can read (S9.0e).
     pub protected_vars: Vec<(String, String)>,
@@ -365,6 +378,12 @@ pub struct RoutineNode {
     /// definition-surface CHANGE-DETECTION fingerprint reads, the other is
     /// about what goes over the wire.
     pub source_overload_aliased: bool,
+    /// The build conditions this routine exists under
+    /// (`al_syntax::ir::RoutineDecl::preproc_context`); empty for a routine
+    /// every build compiles, and for every ABI routine. Overload selection
+    /// (`resolver::resolve_in_object`) drops a candidate whose conditions
+    /// contradict the call site's build. A boxed slice: almost always empty.
+    pub preproc_context: Box<[(String, bool)]>,
     /// Retained ABI parameter metadata (Task 2, roadmap-closure plan) — see
     /// [`AbiParams`]'s doc for the full structural-guard rationale. Always
     /// [`AbiParams::Missing`] for a SOURCE (non-`TrustTier::SymbolOnly`)
@@ -499,7 +518,11 @@ fn singular_property_value(
         .properties
         .iter()
         .filter(|p| p.name == name)
-        .map(|p| parse_object_ref_value(&p.value));
+        // A table reference may be namespace-qualified; it names its last
+        // segment (S9.0e).
+        .map(|p| {
+            parse_object_ref_value(crate::program::resolve::receiver::strip_namespace(&p.value))
+        });
     let first = values.next()?;
     for v in values {
         if object_ref_pair_conflicts(&v, &first) {
@@ -664,6 +687,15 @@ pub fn extract_nodes(
             page_controls,
             fields,
             dataitems,
+            query_columns: obj
+                .query_columns
+                .iter()
+                .map(|(name, table, field)| QueryColumnNode {
+                    name_lc: name.fold_identifier(),
+                    source_table: parse_object_ref_value(table).0,
+                    field_lc: field.fold_identifier(),
+                })
+                .collect(),
             protected_vars: obj
                 .protected_globals
                 .iter()
@@ -710,6 +742,7 @@ pub fn extract_nodes(
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: r.preproc_context.clone().into_boxed_slice(),
                 // SOURCE routine: parameter metadata for arg-type dispatch
                 // lives in `DeclSurface`/`RoutineMeta`, never here — see
                 // `RoutineNode::abi_params`'s doc.
@@ -783,6 +816,7 @@ pub(crate) mod test_fixtures {
             return_type_id: Some(("Sales-Post".to_string(), 80)),
             abi_overload_collapsed: false,
             source_overload_aliased: true,
+            preproc_context: vec![("CLEAN27".to_string(), false)].into_boxed_slice(),
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "Customer".to_string(),
                 type_text: "Record".to_string(),
@@ -831,6 +865,7 @@ pub(crate) mod test_fixtures {
                 name: "Customer".to_string(),
                 source_table: ObjectRef::Id(18),
             }],
+            query_columns: Vec::new(),
             protected_vars: vec![("item".to_string(), "Record Item".to_string())],
             parse_incomplete: true,
         }
@@ -1052,6 +1087,27 @@ page 50102 "TempCard"
             "the temporary marker must not leak into the resolved name"
         );
         assert!(objs[0].source_table_temporary);
+    }
+
+    /// S9.0e: a namespace-qualified `SourceTable` names its last segment; a dot
+    /// inside a quoted name is part of it.
+    #[test]
+    fn source_table_namespace_qualified_names_its_last_segment() {
+        let src = r#"
+page 50104 "NsCard"
+{
+    SourceTable = Microsoft.Finance."Acc. Schedule Line";
+    layout { area(Content) { } }
+}
+"#;
+        let objs = extract_objs(src);
+        assert_eq!(
+            objs[0].source_table,
+            Some(ObjectRef::Name {
+                raw: "Acc. Schedule Line".to_string(),
+                normalized_lc: "acc. schedule line".to_string(),
+            })
+        );
     }
 
     #[test]

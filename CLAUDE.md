@@ -35,6 +35,9 @@ cargo build                    # Debug build
 cargo build --release          # Optimized release (full LTO, cu=1 — ~4 min for alsem; SLOW)
 cargo build --profile release-fast  # Thin LTO — USE THIS for measurement/triage loops (alsem/aldump on DO);
                                     # full --release only for the SHA-pinned north-star measure, perf_bounds, benches
+cargo build --profile cdo --bin aldump  # No LTO, incremental — for CORRECTNESS loops only (the CDO
+                                    # unknown count, scripts/cdo-gate). ~1 min rebuild after an edit vs
+                                    # ~2 min for release-fast. Never quote timings or memory from it.
 cargo test                     # Run tests
 cargo test -p al-sem --lib <filter>   # Package is al-sem (HYPHEN); al_sem fails. Renamed from
                                       # al-call-hierarchy 2026-08-07 — the BINARY keeps that name
@@ -58,7 +61,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   the pre-commit hook unset `CDO_WS`, so the CDO-gated tests skip there whatever your
   environment says. In a debug build they cost ~5 minutes per run
   (`abi_ingestion_integrity_cdo_gate` alone took 243 s). `scripts/cdo-gate` is the one
-  runner for them, built with `release-fast`. **Do not set `CDO_WS` globally** — it was
+  runner for them, built with the `cdo` profile (warm, after an edit: 236 s, against
+  ~375 s on `release-fast`; measured 2026-10-07). **Do not run `cdo-gate` per commit**:
+  while iterating, the CDO number you are moving comes straight from
+  `target/cdo/aldump.exe --program-call-graph-stats` / `--dependency-bodies-stats`
+  (~1 min build + seconds to run); `cdo-gate` is the branch gate. **Do not set `CDO_WS` globally** — it was
   set as a user environment variable until 2026-10-04 and made every `cargo test` a
   CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud`; pass it to `cdo-gate`.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
