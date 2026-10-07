@@ -73,11 +73,11 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     1. FIXED (4 -> 3): arityMismatch `MfgCalculateBOMTree.Codeunit.al:207` (Base
        App), a procedure header split across `#if not CLEAN27` / `#else`. Each arm is
        now its own routine, its body lowered with the symbols its condition decides.
-       Follow-up: dependency `ambiguousResolved` 710 -> 716, three sites
-       (`AccScheduleOverview.Page.al:2130/2139`, Continia Core
-       `CoreSessionManager.Codeunit.al:77/86` twice) where a call sees both arms of
-       one routine. Removing them needs the call's build context (its `#if` branch
-       and its caller's arm symbols) in overload selection (`resolve_in_object`).
+       It raised dependency `ambiguousResolved` 710 -> 716 (calls seeing both arms
+       of one routine: `AccScheduleOverview.Page.al:2130/2139`, Continia Core
+       `CoreSessionManager.Codeunit.al:77/86` twice). FIXED (716 -> 710): overload
+       selection now drops candidates outside the call's build (its `#if` branches
+       and its routine's arm), and a ratchet pins dependency ambiguous <= 710.
     2-3. FIXED (3 -> 1): compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`,
        `QueryVar.EntryType.AsInteger()`. A plain query column (no `Method`) now types
        as its source field.

@@ -1078,6 +1078,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Overload selection sees the call's build** (engine-switch S9.0e). CDO's
+  dependency `ambiguousResolved` 716 -> 710 and `resolvedSource` +6; unknown
+  edges stay 0; workspace metrics unchanged (0 unknown, 23 ambiguous).
+  - An overload that exists only under a `#if` arm is a candidate only for a
+    call in a build where that arm compiles. Base App's
+    `OnBeforeUpdateColumnCaptions` is two arms (`array[15] of Text[80]` under
+    `#if not CLEAN27`, `of Text` under `#else`) that the argument typer cannot
+    tell apart, and each call to it sits in one branch. Continia Core's
+    `AcquireTokenFromCache` is two `SECURETEXT` arms called from the arms of
+    split `SECURETEXT` callers.
+  - The lowerer records build contexts (`al_syntax::ir::PreprocSymbols`: the
+    symbols a condition decides): on each routine
+    (`RoutineDecl::preproc_context`: its object-level `#if` branch and its
+    split-header arm, carried to `RoutineNode::preproc_context`), and on each
+    expression (`Ir::preproc_context`: its routine's context plus the body
+    branches around it, including the arms of a `#if`-split complete body).
+    One context stack drives both this and the body-branch pruning of the
+    split-header fix, which now also prunes branches an object-level `#if`
+    rules out.
+  - `resolve_in_object` drops a visible candidate whose context contradicts
+    the call's, before the argument-type pick. If none would survive, the set
+    is left as it was.
+  - The same declaration in two arms collapses to one routine node
+    (`build::dedup_routines_preserving_genuine_overloads`); the survivor now
+    keeps only the symbols every collapsed copy decides alike, as it exists in
+    either build.
+  - Symbols are case-sensitive: alc 18.0.41.45789 with `CLEAN27` defined
+    activates `#if CLEAN27` and not `#if clean27`.
+  - Limit: the split-statement shapes `lower_unmodelled_stmt` recovers
+    (`preproc_split_if_statement`, ...) mix arm and shared parts of one
+    statement; their calls carry only the enclosing context, so they are
+    narrowed less, never wrongly.
+  - Dependency pack schema 6. New ratchet: dependency `ambiguousResolved` <=
+    710 (`dependency_body_unknown_ceiling_on_cdo`).
+  - Tests `overload_candidates_are_narrowed_to_the_call_sites_build`,
+    `a_collapsed_same_signature_arm_pair_exists_in_both_builds` and
+    `build_contexts_are_recorded_on_routines_and_expressions`. Each of these
+    fails one of them: disabling the narrowing, not recording expression
+    contexts, not passing object-level branch symbols down, giving a split
+    complete body's arms no symbols, and keeping the first collapsed arm's
+    context.
 - **An XmlPort's text nodes are xmlport variables** (engine-switch S9.0e).
   CDO's dependency-body unknown edges 1 -> 0 (from 6,315 at the start of
   S9.0e); workspace metrics unchanged. `EventConditions.AddText(..)` stayed
@@ -1128,7 +1169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     argument typer cannot split (`array[15] of Text[80]` vs `of Text`;
     `SecretText` vs `Text`). Each call sits in a build that has only one of
     them (its own `#if` branch, or a split caller's arm), but a call's build
-    context does not reach overload selection yet.
+    context did not reach overload selection yet. Removed by "Overload
+    selection sees the call's build" above.
   - Tests `preproc_split_header_yields_one_routine_per_arm`,
     `preproc_branches_outside_a_split_arm_union_read` and
     `split_header_arms_each_bind_their_own_call`. Keeping only the first arm

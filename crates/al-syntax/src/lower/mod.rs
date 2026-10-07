@@ -217,10 +217,18 @@ fn lower_object(
     // becomes `true` while descending a report/report-extension `dataset` section, and
     // is force-reset to `false` on entering `requestpage` (REQUESTPAGE ISOLATION).
     let mut routine_nodes = Vec::new();
-    collect_routines(node, None, None, false, source, &mut routine_nodes);
+    collect_routines(
+        node.named_children(),
+        None,
+        None,
+        false,
+        &[],
+        source,
+        &mut routine_nodes,
+    );
     // A `#if`-split header yields one routine per arm (see `header_arms`).
     let mut routines = Vec::new();
-    for (r, attr_items, di_table, member, in_dataset_modify_context) in routine_nodes {
+    for (r, attr_items, di_table, member, in_dataset_modify_context, ctx) in routine_nodes {
         let (arms, shared_from) = header_arms(r);
         for arm in arms {
             routines.push(lower_routine(
@@ -230,6 +238,7 @@ fn lower_object(
                 member,
                 in_dataset_modify_context,
                 (&arm, shared_from),
+                &ctx,
                 source,
                 ir,
                 issues,
@@ -734,12 +743,18 @@ fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::Obje
 /// `modify()`'s context into a requestpage trigger), inherited unchanged otherwise. Used
 /// only to compute `in_dataset_modify_context` at push time — see that tuple field's doc
 /// and [`crate::ir::RoutineDecl::in_dataset_modify_context`].
-#[allow(clippy::type_complexity)]
+///
+/// `ctx` is the symbols the object-level `#if` branches around `children` decide
+/// (see [`preproc_branches`]); each routine is pushed with it, so a routine that
+/// exists only under `#if X` carries `X` (`RoutineDecl::preproc_context`). A branch
+/// the enclosing ones decide false is not walked.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn collect_routines<'t>(
-    node: RawNode<'t>,
+    children: Vec<RawNode<'t>>,
     dataitem_table: Option<&str>,
     member: Option<RawNode<'t>>,
     dataset_ctx: bool,
+    ctx: &[(String, bool)],
     source: &str,
     out: &mut Vec<(
         RawNode<'t>,
@@ -747,10 +762,11 @@ fn collect_routines<'t>(
         Option<String>,
         Option<RawNode<'t>>,
         bool,
+        Vec<(String, bool)>,
     )>,
 ) {
     let mut pending: Vec<RawNode<'t>> = Vec::new();
-    for child in node.named_children() {
+    for child in children {
         match child.kind() {
             RawKind::AttributeItem => pending.push(child),
             RawKind::Procedure
@@ -811,6 +827,7 @@ fn collect_routines<'t>(
                     dataitem_table.map(str::to_string),
                     member,
                     in_dataset_modify_context,
+                    ctx.to_vec(),
                 ));
             }
             RawKind::ReportDataitem => {
@@ -824,11 +841,27 @@ fn collect_routines<'t>(
                 // unconditionally — defensive, in practice already `true` by construction:
                 // `report_dataitem` only appears under `dataset_section`/`report_body`).
                 let inner = dataitem_table_name(child, source);
-                collect_routines(child, inner.as_deref(), Some(child), true, source, out);
+                collect_routines(
+                    child.named_children(),
+                    inner.as_deref(),
+                    Some(child),
+                    true,
+                    ctx,
+                    source,
+                    out,
+                );
             }
             RawKind::DatasetSection => {
                 pending.clear();
-                collect_routines(child, dataitem_table, member, true, source, out);
+                collect_routines(
+                    child.named_children(),
+                    dataitem_table,
+                    member,
+                    true,
+                    ctx,
+                    source,
+                    out,
+                );
             }
             RawKind::RequestpageSection => {
                 // REQUESTPAGE ISOLATION (binding, dataitem-receivers plan round-1
@@ -838,7 +871,15 @@ fn collect_routines<'t>(
                 // decompiled nesting the real AL compiler would never accept ("parse
                 // structure, don't validate").
                 pending.clear();
-                collect_routines(child, dataitem_table, member, false, source, out);
+                collect_routines(
+                    child.named_children(),
+                    dataitem_table,
+                    member,
+                    false,
+                    ctx,
+                    source,
+                    out,
+                );
             }
             // `preproc_split_modify` (grammar 2026-10): `#if modify(A) #else modify(B)
             // #endif { … }` — the target differs per arm, the body is shared. Its
@@ -857,7 +898,36 @@ fn collect_routines<'t>(
                 // name extraction. THIS arm is the load-bearing gate: without it the
                 // generic arm below inherits the outer member and the fallback never
                 // sees the wrapper at all.
-                collect_routines(child, dataitem_table, Some(child), dataset_ctx, source, out);
+                collect_routines(
+                    child.named_children(),
+                    dataitem_table,
+                    Some(child),
+                    dataset_ctx,
+                    ctx,
+                    source,
+                    out,
+                );
+            }
+            // An object-level `#if` (`#if X procedure Foo(..) .. #else procedure
+            // Foo(..) .. #endif`): each live branch's routines exist under that
+            // branch's symbols.
+            _ if is_preproc_wrapper(child) => {
+                pending.clear();
+                for (syms, live, branch) in preproc_branches(child, source, ctx) {
+                    if live {
+                        let inner: Vec<(String, bool)> =
+                            ctx.iter().cloned().chain(syms).collect();
+                        collect_routines(
+                            branch,
+                            dataitem_table,
+                            member,
+                            dataset_ctx,
+                            &inner,
+                            source,
+                            out,
+                        );
+                    }
+                }
             }
             _ => {
                 pending.clear();
@@ -874,10 +944,11 @@ fn collect_routines<'t>(
                     member
                 };
                 collect_routines(
-                    child,
+                    child.named_children(),
                     dataitem_table,
                     child_member,
                     dataset_ctx,
+                    ctx,
                     source,
                     out,
                 );
@@ -985,21 +1056,97 @@ fn header_arms(node: RawNode) -> (Vec<std::ops::Range<usize>>, usize) {
 }
 
 thread_local! {
-    /// The preprocessor symbols a split header's arm decides, set only while that
-    /// arm's body lowers (`lower_routine`). `#else` under `#if not CLEAN27` compiles
-    /// with `CLEAN27` defined, so a body `#if not CLEAN27` block is not in that arm's
-    /// build: Base App's `#else` arm of `CalcRoutingLineCosts` has no `sender`
-    /// parameter, and its body uses `sender` only inside such blocks. Empty
-    /// everywhere else, where every `#if` union-reads (`is_preproc_wrapper`).
+    /// The build context of the routine body being lowered: the symbols its
+    /// routine's conditions decide (`RoutineDecl::preproc_context`) plus those of
+    /// every enclosing `#if` branch inside the body. A body `#if` branch the context
+    /// decides false is left out (`lower_block_child`): `#else` under
+    /// `#if not CLEAN27` compiles with `CLEAN27` defined, so Base App's `#else` arm of
+    /// `CalcRoutingLineCosts`, which has no `sender` parameter, does not contain the
+    /// body's `#if not CLEAN27` blocks that use `sender`. Every expression lowered
+    /// under a non-empty context is recorded with it (`Ir::preproc_context`), so a
+    /// call's overload selection sees its build. Empty outside routine bodies.
     /// ponytail: thread-local, not a lowering-context parameter; a lowering pass is
-    /// one file on one thread, so it never leaks across files.
-    static ARM_SYMBOLS: std::cell::RefCell<Vec<(String, bool)>> =
+    /// one file on one thread, and `with_build_context` restores it on exit.
+    static BUILD_CONTEXT: std::cell::RefCell<Vec<(String, bool)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The current build context (`BUILD_CONTEXT`).
+fn build_context() -> Vec<(String, bool)> {
+    BUILD_CONTEXT.with(|s| s.borrow().clone())
+}
+
+/// Run `f` with `extra` added to the build context, recording the expressions
+/// `f` lowers with the whole resulting context.
+fn with_build_context<R>(extra: &[(String, bool)], ir: &mut Ir, f: impl FnOnce(&mut Ir) -> R) -> R {
+    if extra.is_empty() {
+        return f(ir);
+    }
+    let (outer, full) = BUILD_CONTEXT.with(|s| {
+        let mut s = s.borrow_mut();
+        let outer = s.len();
+        s.extend_from_slice(extra);
+        (outer, s.clone())
+    });
+    let first = ir.expr_count();
+    let r = f(ir);
+    ir.record_preproc_context(first, &full);
+    BUILD_CONTEXT.with(|s| s.borrow_mut().truncate(outer));
+    r
+}
+
+/// The children of a `#if` wrapper, grouped by branch. Each group carries the
+/// symbols its branch decides (its own condition true, every earlier condition of
+/// the chain false; nothing for content outside any branch) and whether it is live
+/// under `ctx`: a branch `ctx` decides false, or one after a branch `ctx` decides
+/// true, is dead. Directive nodes belong to no group.
+#[allow(clippy::type_complexity)]
+fn preproc_branches<'t>(
+    node: RawNode<'t>,
+    source: &str,
+    ctx: &[(String, bool)],
+) -> Vec<(Vec<(String, bool)>, bool, Vec<RawNode<'t>>)> {
+    let mut out = vec![(Vec::new(), true, Vec::new())];
+    let mut earlier: Vec<RawNode> = Vec::new();
+    let mut taken = false;
+    for c in node.named_children() {
+        match c.kind() {
+            RawKind::PreprocIf | RawKind::PreprocElif => {
+                let cond = c.field(FieldName::Condition);
+                let d = cond.and_then(|e| decide_preproc(e, source, ctx));
+                let live = !taken && d != Some(false);
+                taken |= d == Some(true);
+                let mut syms = Vec::new();
+                for e in &earlier {
+                    assume_preproc(*e, false, source, &mut syms);
+                }
+                if let Some(e) = cond {
+                    assume_preproc(e, true, source, &mut syms);
+                    earlier.push(e);
+                }
+                out.push((syms, live, Vec::new()));
+            }
+            RawKind::PreprocElse => {
+                let mut syms = Vec::new();
+                for e in &earlier {
+                    assume_preproc(*e, false, source, &mut syms);
+                }
+                out.push((syms, !taken, Vec::new()));
+            }
+            RawKind::PreprocEndif => {
+                earlier.clear();
+                taken = false;
+                out.push((Vec::new(), true, Vec::new()));
+            }
+            _ => out.last_mut().expect("never empty").2.push(c),
+        }
+    }
+    out
 }
 
 /// Record the symbol values that make preprocessor condition `cond` equal `value`,
 /// where they follow (`A and B` true: both true; `A or B` false: both false).
-/// Symbols are matched by exact text: if alc folds case, this only prunes less.
+/// Symbols match by exact text, as alc's do (see `al_syntax::ir::PreprocSymbols`).
 fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(String, bool)>) {
     let kids = structural_children(cond);
     match cond.kind() {
@@ -1024,7 +1171,8 @@ fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(Strin
     }
 }
 
-/// Condition `cond` under `ARM_SYMBOLS`, three-valued: `None` when undecided.
+/// Condition `cond` under decided symbols `syms`, three-valued: `None` when
+/// undecided.
 fn decide_preproc(cond: RawNode, source: &str, syms: &[(String, bool)]) -> Option<bool> {
     let mut kids = structural_children(cond)
         .into_iter()
@@ -1086,6 +1234,7 @@ fn lower_routine<'t>(
     member: Option<RawNode<'t>>,
     in_dataset_modify_context: bool,
     (arm, shared_from): (&std::ops::Range<usize>, usize),
+    object_ctx: &[(String, bool)],
     source: &str,
     ir: &mut Ir,
     issues: &mut Vec<SyntaxIssue>,
@@ -1268,50 +1417,51 @@ fn lower_routine<'t>(
         }
     }
 
-    let syms = if split {
-        arm_symbols(node, arm, source)
-    } else {
-        Vec::new()
-    };
-    let outer_syms = ARM_SYMBOLS.with(|s| s.replace(syms));
-    let body = if let Some(cb) = node
-        .field(FieldName::Body)
-        .filter(|b| b.kind() == RawKind::CodeBlock)
-    {
-        Some(lower_code_block(cb, ir, issues, source, 0))
-    } else if node.kind() == RawKind::PreprocSplitProcedurePreamble {
-        // `preproc_split_procedure_preamble` (H-6): unlike `_routine_regular_body`'s
-        // `field('body', $.code_block)`, this shape's shared trailing `code_block` (the
-        // ONE body after `#endif`) is a BARE child with no field tag at all — VERIFIED
-        // against the pinned grammar (`tree-sitter parse`), so `.field(Body)` above always
-        // misses it for this one kind. Fall back to the last `CodeBlock`-kind child (there
-        // is exactly one, by construction).
-        node.named_children()
-            .into_iter()
-            .rev()
-            .find(|c| c.kind() == RawKind::CodeBlock)
-            .map(|cb| lower_code_block(cb, ir, issues, source, 0))
-    } else {
-        // `preproc_split_procedure_body` / `preproc_split_complete_body` (T1.4 review,
-        // sibling-gap fix): unlike `preproc_split_procedure_preamble` above, `node.kind()`
-        // is STILL plain `Procedure`/`TriggerDeclaration` for these two shapes — only the
-        // BODY position is a `#if`-guarded choice (grammar: `choice($._routine_regular_body,
-        // $.preproc_split_procedure_body, $.preproc_split_complete_body)`). Both wrapper
-        // rules are NAMED (non-inlined), so neither one's `field('body', ..)` flattens onto
-        // `node` itself — `node.field(Body)` above is unconditionally `None` for both,
-        // and the `_preamble` branch above does not apply (`node.kind()` never becomes
-        // one of these two). Recover directly from the wrapper child instead.
-        node.named_children()
-            .into_iter()
-            .find(|c| {
-                matches!(
-                    c.kind(),
-                    RawKind::PreprocSplitProcedureBody | RawKind::PreprocSplitCompleteBody
-                )
-            })
-            .map(|wrapper| lower_preproc_split_routine_body(wrapper, ir, issues, source, 0))
-    };
-    ARM_SYMBOLS.with(|s| s.replace(outer_syms));
+    // The builds this routine exists in: the object-level `#if` branches around
+    // it, plus its own arm when its header is split.
+    let mut preproc_context = object_ctx.to_vec();
+    if split {
+        preproc_context.extend(arm_symbols(node, arm, source));
+    }
+    let body = with_build_context(&preproc_context, ir, |ir| {
+        if let Some(cb) = node
+            .field(FieldName::Body)
+            .filter(|b| b.kind() == RawKind::CodeBlock)
+        {
+            Some(lower_code_block(cb, ir, issues, source, 0))
+        } else if node.kind() == RawKind::PreprocSplitProcedurePreamble {
+            // `preproc_split_procedure_preamble` (H-6): unlike `_routine_regular_body`'s
+            // `field('body', $.code_block)`, this shape's shared trailing `code_block` (the
+            // ONE body after `#endif`) is a BARE child with no field tag at all — VERIFIED
+            // against the pinned grammar (`tree-sitter parse`), so `.field(Body)` above always
+            // misses it for this one kind. Fall back to the last `CodeBlock`-kind child (there
+            // is exactly one, by construction).
+            node.named_children()
+                .into_iter()
+                .rev()
+                .find(|c| c.kind() == RawKind::CodeBlock)
+                .map(|cb| lower_code_block(cb, ir, issues, source, 0))
+        } else {
+            // `preproc_split_procedure_body` / `preproc_split_complete_body` (T1.4 review,
+            // sibling-gap fix): unlike `preproc_split_procedure_preamble` above, `node.kind()`
+            // is STILL plain `Procedure`/`TriggerDeclaration` for these two shapes — only the
+            // BODY position is a `#if`-guarded choice (grammar: `choice($._routine_regular_body,
+            // $.preproc_split_procedure_body, $.preproc_split_complete_body)`). Both wrapper
+            // rules are NAMED (non-inlined), so neither one's `field('body', ..)` flattens onto
+            // `node` itself — `node.field(Body)` above is unconditionally `None` for both,
+            // and the `_preamble` branch above does not apply (`node.kind()` never becomes
+            // one of these two). Recover directly from the wrapper child instead.
+            node.named_children()
+                .into_iter()
+                .find(|c| {
+                    matches!(
+                        c.kind(),
+                        RawKind::PreprocSplitProcedureBody | RawKind::PreprocSplitCompleteBody
+                    )
+                })
+                .map(|wrapper| lower_preproc_split_routine_body(wrapper, ir, issues, source, 0))
+        }
+    });
 
     RoutineDecl {
         kind,
@@ -1328,6 +1478,7 @@ fn lower_routine<'t>(
         dataitem_source_table,
         enclosing_member,
         in_dataset_modify_context,
+        preproc_context,
         body,
         origin: origin_of(node),
     }
@@ -1368,9 +1519,22 @@ fn lower_preproc_split_routine_body(
 ) -> BlockId {
     push_unlowered_issue(wrapper, "routine body", issues);
     let mut items = Vec::new();
-    for body in wrapper.children_by_field(FieldName::Body) {
-        for child in body.named_children() {
-            lower_block_child(child, ir, issues, source, &mut items, depth);
+    // Each arm's body under its own branch's symbols (`preproc_branches`); a
+    // shared tail after `#endif` under none.
+    let bodies: Vec<usize> = wrapper
+        .children_by_field(FieldName::Body)
+        .iter()
+        .map(|b| b.id())
+        .collect();
+    for (syms, live, branch) in preproc_branches(wrapper, source, &build_context()) {
+        if live {
+            with_build_context(&syms, ir, |ir| {
+                for body in branch.into_iter().filter(|b| bodies.contains(&b.id())) {
+                    for child in body.named_children() {
+                        lower_block_child(child, ir, issues, source, &mut items, depth);
+                    }
+                }
+            });
         }
     }
     ir.add_block(Block {
@@ -1574,25 +1738,15 @@ fn lower_block_child(
     depth: u32,
 ) {
     if is_preproc_wrapper(node) {
-        // Union-read every branch, except one the enclosing split arm's own
-        // condition decides false (`ARM_SYMBOLS`; empty outside such an arm).
-        let syms = ARM_SYMBOLS.with(|s| s.borrow().clone());
-        let (mut live, mut taken) = (true, false);
-        for c in node.named_children() {
-            match c.kind() {
-                RawKind::PreprocIf | RawKind::PreprocElif => {
-                    let d = c
-                        .field(FieldName::Condition)
-                        .and_then(|e| decide_preproc(e, source, &syms));
-                    live = !taken && d != Some(false);
-                    taken |= d == Some(true);
-                }
-                RawKind::PreprocElse => live = !taken,
-                RawKind::PreprocEndif => live = true,
-                _ => {}
-            }
+        // Union-read every branch the build context leaves live, each under
+        // its own branch's symbols (`BUILD_CONTEXT`).
+        for (syms, live, children) in preproc_branches(node, source, &build_context()) {
             if live {
-                lower_block_child(c, ir, issues, source, items, depth);
+                with_build_context(&syms, ir, |ir| {
+                    for c in children {
+                        lower_block_child(c, ir, issues, source, items, depth);
+                    }
+                });
             }
         }
         return;
@@ -4007,6 +4161,102 @@ xmlport 50000 X
             globals,
             vec![("Root", Some("Text")), ("Big", Some("BigText"))]
         );
+    }
+
+    /// The build context is recorded where it applies: on each routine (its
+    /// object-level `#if` branch and split-header arm) and on each expression
+    /// (its routine's context plus the body branches around it), including the
+    /// arms of a `#if`-split complete body. A `#else` decides the negation of
+    /// every earlier condition; `A and B` true decides both.
+    #[test]
+    fn build_contexts_are_recorded_on_routines_and_expressions() {
+        let src = r#"
+codeunit 50104 T
+{
+#if A and B
+    procedure Obj()
+    begin
+        InObj();
+    end;
+#else
+    procedure Obj()
+    begin
+        InObjElse();
+    end;
+#endif
+
+#if not CLEAN27
+    procedure Split(X: Integer)
+#else
+    procedure Split()
+#endif
+    begin
+#if FEATURE
+        InFeature();
+#endif
+        Plain();
+    end;
+
+    procedure Whole()
+#if Y
+    begin
+        InY();
+    end;
+#else
+    begin
+        InNotY();
+    end;
+#endif
+}
+"#;
+        fn call_in(af: &crate::ir::AlFile, b: crate::ir::BlockId, name: &str) -> crate::ir::ExprId {
+            af.ir
+                .block(b)
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    crate::ir::BlockItem::Stmt(sid) => match &af.ir.stmt(*sid).kind {
+                        StmtKind::Call(eid) => matches!(
+                            &af.ir.expr(match &af.ir.expr(*eid).kind {
+                                ExprKind::Call { function, .. } => *function,
+                                _ => *eid,
+                            })
+                            .kind,
+                            ExprKind::Identifier(n) if n == name
+                        )
+                        .then_some(*eid),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no direct call to {name}"))
+        }
+        let s = |v: &[(&str, bool)]| -> Vec<(String, bool)> {
+            v.iter().map(|(n, b)| (n.to_string(), *b)).collect()
+        };
+        let af = parse(src);
+        let routines = &af.objects[0].routines;
+        let ctx_of = |i: usize| routines[i].preproc_context.clone();
+        assert_eq!(routines.len(), 5);
+        assert_eq!(ctx_of(0), s(&[("A", true), ("B", true)]));
+        assert_eq!(ctx_of(1), Vec::new(), "`A and B` false decides neither");
+        assert_eq!(ctx_of(2), s(&[("CLEAN27", false)]));
+        assert_eq!(ctx_of(3), s(&[("CLEAN27", true)]));
+        assert_eq!(ctx_of(4), Vec::new());
+        let at = |r: usize, name: &str| {
+            af.ir
+                .preproc_context(call_in(&af, routines[r].body.expect("body"), name))
+                .to_vec()
+        };
+        assert_eq!(at(0, "InObj"), s(&[("A", true), ("B", true)]));
+        assert_eq!(at(1, "InObjElse"), Vec::new());
+        assert_eq!(
+            at(2, "InFeature"),
+            s(&[("CLEAN27", false), ("FEATURE", true)])
+        );
+        assert_eq!(at(3, "Plain"), s(&[("CLEAN27", true)]));
+        assert_eq!(at(4, "InY"), s(&[("Y", true)]));
+        assert_eq!(at(4, "InNotY"), s(&[("Y", false)]));
     }
 
     /// Outside a split header's arm nothing is decided: every branch union-reads.

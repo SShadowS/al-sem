@@ -622,6 +622,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // `RoutineNode::source_overload_aliased`'s doc (mutually
                 // exclusive with `abi_overload_collapsed` by construction).
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 // Task 2 (roadmap-closure plan): retain the raw parameter
                 // metadata now instead of hard-discarding it — see
                 // `retain_abi_params`'s doc. `abi_overload_collapsed`'s later

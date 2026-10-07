@@ -445,6 +445,9 @@ fn resolve_call_site_obligation(
     // `resolve_member_with_args` so `resolve_in_object`'s fail-closed pick
     // has real argument evidence to work with.
     call_args: &[al_syntax::ir::ExprId],
+    // S9.0e: the call site's build context (`Ir::preproc_context`), for the
+    // overload build narrowing in `resolve_in_object`.
+    build: &[(String, bool)],
     // Engine-switch S3.2 / S6.0: the member arm fills the interface (for an
     // `Interface`-typed receiver) and the receiver fact.
     facts_out: &mut SiteFacts,
@@ -515,6 +518,7 @@ fn resolve_call_site_obligation(
                     surface,
                     with_state,
                     &args_info,
+                    build,
                     report_rec_table.as_ref(),
                 )
             } else {
@@ -564,7 +568,7 @@ fn resolve_call_site_obligation(
                     index,
                 ));
                 let (s, r) = resolve_member_with_args(
-                    &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info,
+                    &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
                 (s, r)
@@ -854,6 +858,7 @@ pub(crate) fn resolve_file_obligations(
                     site.with_state,
                     &pf.file,
                     &site.args,
+                    pf.file.ir.preproc_context(site.expr),
                     &mut facts,
                     &pf.text,
                 );
@@ -3044,6 +3049,112 @@ mod tests {
             .map(|ce| (ce.edge.shape, ce.edge.routes.len()))
             .collect();
         assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
+    }
+
+    /// S9.0e: an overload that exists only under a `#if` arm is a candidate
+    /// only for a call in a build where that arm compiles. `Foo` is two
+    /// object-level arms whose parameters the argument typer cannot tell apart
+    /// (Base App `OnBeforeUpdateColumnCaptions`: `array[15] of Text[80]` vs
+    /// `of Text`). A call inside `#if not CLEAN27` / `#else` binds its own arm
+    /// (`P`); so does a call in a split caller's arm (`R`, Continia
+    /// `CoreSessionManager`); a call with no build context stays ambiguous (`Q`).
+    #[test]
+    fn overload_candidates_are_narrowed_to_the_call_sites_build() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50000 C\n{\n\
+#if not CLEAN27\n    procedure Foo(var A: array[15] of Text[80])\n    begin\n        Mark80();\n    end;\n\
+#else\n    procedure Foo(var A: array[15] of Text)\n    begin\n        MarkText();\n    end;\n\
+#endif\n\n    procedure Mark80()\n    begin\n    end;\n\n    procedure MarkText()\n    begin\n    end;\n\n\
+    procedure P()\n    var\n        C80: array[15] of Text[80];\n        C: array[15] of Text;\n    begin\n\
+#if not CLEAN27\n        Foo(C80); // p80\n#else\n        Foo(C); // ptext\n#endif\n    end;\n\n\
+    procedure Q()\n    var\n        C80: array[15] of Text[80];\n    begin\n        Foo(C80); // q\n    end;\n\n\
+#if not CLEAN27\n    procedure R(var X: array[15] of Text[80])\n#else\n    procedure R(var X: array[15] of Text)\n#endif\n\
+    begin\n        Foo(X); // r\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let line_of = |tag: &str| src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+        let foo_targets = |from: &str, line: u32| -> Vec<Vec<RoutineNodeId>> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == from && ce.edge.site.span.start.line == line)
+                .map(|ce| {
+                    ce.edge
+                        .routes
+                        .iter()
+                        .filter_map(|r| match &r.target {
+                            RouteTarget::Routine(rid) if rid.name_lc == "foo" => Some(rid.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let arm_calling = |marker: &str| -> RoutineNodeId {
+            report
+                .edges
+                .iter()
+                .find(|ce| {
+                    ce.edge.routes.iter().any(
+                        |r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == marker),
+                    )
+                })
+                .expect("marker call")
+                .edge
+                .from
+                .clone()
+        };
+        let (foo80, footext) = (arm_calling("mark80"), arm_calling("marktext"));
+        assert_ne!(foo80, footext);
+        assert_eq!(
+            foo_targets("p", line_of("// p80")),
+            vec![vec![foo80.clone()]]
+        );
+        assert_eq!(
+            foo_targets("p", line_of("// ptext")),
+            vec![vec![footext.clone()]]
+        );
+        let q = foo_targets("q", line_of("// q"));
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].len(), 2, "no build context: both arms stay candidates");
+        let mut r: Vec<Vec<RoutineNodeId>> = foo_targets("r", line_of("// r"));
+        r.sort();
+        let mut expected = vec![vec![foo80], vec![footext]];
+        expected.sort();
+        assert_eq!(
+            r, expected,
+            "each arm of R binds the Foo arm of its own build"
+        );
+    }
+
+    /// S9.0e: the same declaration in two `#if` arms collapses to one routine
+    /// node, which exists in either arm's build, so it keeps only the symbols
+    /// both arms decide alike (none here). Keeping the first arm's `X` would let
+    /// the build narrowing drop it from a call in the `#else` build and bind the
+    /// other overload.
+    #[test]
+    fn a_collapsed_same_signature_arm_pair_exists_in_both_builds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50000 C\n{\n\
+#if X\n    local procedure Foo(A: Integer)\n    begin\n    end;\n\
+#else\n    procedure Foo(A: Integer)\n    begin\n    end;\n#endif\n\n\
+    procedure Foo(T: Text)\n    begin\n    end;\n\n\
+    procedure P()\n    begin\n#if not X\n        Foo(Untyped); // call\n#endif\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let line = src
+            .lines()
+            .position(|l| l.contains("// call"))
+            .expect("tag") as u32;
+        let targets: Vec<usize> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+            .map(|ce| ce.edge.routes.len())
+            .collect();
+        assert_eq!(targets, vec![2], "both overloads stay candidates");
     }
 
     /// S9.0e, alc-probed: an XmlPort `textattribute` with `TextType = BigText`

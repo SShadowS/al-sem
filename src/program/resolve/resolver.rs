@@ -336,7 +336,7 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 /// visible, prevalidated-concrete candidate case, which is
 /// `(DispatchShape::AmbiguousOverload, vec![one route per candidate])` — see
 /// the `_` arm's doc below for the prevalidation contract.
-#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan); each is a distinct identity/lookup input, grouping would obscure call sites.
+#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
 fn resolve_in_object(
     obj_id: &ObjectNodeId,
     obj_tier: TrustTier,
@@ -354,6 +354,10 @@ fn resolve_in_object(
     // helpers below — see `resolve_bare`/`resolve_member`'s `args = &[]`
     // wrappers).
     args: &[ArgDispatchInfo],
+    // The call site's build context (`al_syntax::ir::Ir::preproc_context`),
+    // consulted only by the build narrowing below; empty where there is none
+    // (the same wrappers as `args`).
+    build: &[(String, bool)],
 ) -> Option<(DispatchShape, Vec<Route>)> {
     let candidates = index.routines_in_object(graph, obj_id, name_lc);
     if candidates.len() == 0 {
@@ -421,6 +425,29 @@ fn resolve_in_object(
         .copied()
         .filter(|rid| routine_candidate_is_visible(rid, from_object, graph, index))
         .collect();
+
+    // Build narrowing (S9.0e): overloads that exist only under `#if` arms are
+    // candidates only in a build where their arm compiles. A candidate whose
+    // build conditions contradict the call site's (`build`: the `#if` branches
+    // around the call and its routine's own arm) is not in the call's build, so
+    // the compiler never sees it. Base App's `OnBeforeUpdateColumnCaptions`
+    // (`#if not CLEAN27` array of Text[80], `#else` array of Text) is two such
+    // arms; each call to it sits in one branch. If no candidate survives (a
+    // call in a build none of them is in), the set is left as it was.
+    let visible: Vec<&RoutineNodeId> = if visible.len() > 1 && !build.is_empty() {
+        let in_build: Vec<&RoutineNodeId> = visible
+            .iter()
+            .copied()
+            .filter(|rid| !routine_outside_build(rid, build, graph))
+            .collect();
+        if in_build.is_empty() {
+            visible
+        } else {
+            in_build
+        }
+    } else {
+        visible
+    };
 
     match visible.len() {
         0 => {
@@ -719,6 +746,19 @@ fn object_has_member_candidate(
         return true;
     }
     candidates.any(|rid| rid.params_count == arity)
+}
+
+/// Whether candidate `rid` exists in no build the call site's build context
+/// `build` allows: every node carrying the id has build conditions
+/// (`RoutineNode::preproc_context`) that contradict `build`.
+fn routine_outside_build(
+    rid: &RoutineNodeId,
+    build: &[(String, bool)],
+    graph: &ProgramGraph,
+) -> bool {
+    let mut nodes = graph.routines.run_by(|p| p.id.cmp(rid)).peekable();
+    nodes.peek().is_some()
+        && nodes.all(|n| al_syntax::ir::preproc_contradicts(&n.preproc_context, build))
 }
 
 /// Look up the declared [`Access`] of `rid` in `graph.routines` (already
@@ -1045,6 +1085,7 @@ fn resolve_in_extendable_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
     extensions_of: for<'a> fn(&'a ResolveIndex, &str) -> &'a [ObjectNodeId],
     zero_match: ZeroMatchStrategy,
 ) -> TableScopeOutcome {
@@ -1114,6 +1155,7 @@ fn resolve_in_extendable_scope(
             index,
             surface,
             args,
+            build,
         ) {
             Some((shape, routes)) => TableScopeOutcome::Resolved(shape, routes),
             // Defensive: `object_has_visible_member_candidate` already
@@ -1166,6 +1208,7 @@ fn resolve_in_extendable_scope(
                         index,
                         surface,
                         args,
+                        build,
                     ) {
                         Some((shape, routes)) => TableScopeOutcome::Resolved(shape, routes),
                         None => TableScopeOutcome::NotVisible {
@@ -1204,6 +1247,7 @@ fn resolve_in_table_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1214,6 +1258,7 @@ fn resolve_in_table_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::table_extensions_of,
         ZeroMatchStrategy::AccessExcludedReason,
     )
@@ -1263,6 +1308,7 @@ fn resolve_in_page_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1273,6 +1319,7 @@ fn resolve_in_page_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::page_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
     )
@@ -1321,6 +1368,7 @@ fn resolve_in_report_scope(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> TableScopeOutcome {
     resolve_in_extendable_scope(
         from_object,
@@ -1331,6 +1379,7 @@ fn resolve_in_report_scope(
         index,
         surface,
         args,
+        build,
         ResolveIndex::report_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
     )
@@ -1603,6 +1652,7 @@ pub fn resolve_bare(
         surface,
         with_state,
         &[],
+        &[],
         None,
     )
 }
@@ -1637,6 +1687,7 @@ fn resolve_in_extension_base(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> ExtensionBase {
     // The same audited call site the bare call's Step 2 always had
     // (`resolve_module_pick_first_base_function_callers_are_a_known_allowlist`).
@@ -1669,6 +1720,7 @@ fn resolve_in_extension_base(
             index,
             surface,
             args,
+            build,
         ) {
             Some((shape, routes)) => ExtensionBase::Resolved(shape, routes),
             None => ExtensionBase::Miss,
@@ -1703,6 +1755,7 @@ pub(crate) fn resolve_bare_with_args(
     surface: &DeclSurface,
     with_state: WithState,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
     report_rec_table: Option<&ObjectNodeId>,
 ) -> (DispatchShape, Vec<Route>) {
     // 1. Own object.
@@ -1716,6 +1769,7 @@ pub(crate) fn resolve_bare_with_args(
         index,
         surface,
         args,
+        build,
     ) {
         return (shape, routes);
     }
@@ -1741,7 +1795,16 @@ pub(crate) fn resolve_bare_with_args(
     // declines entirely (no `resolve_in_object` call) and falls through to
     // Step 3/4/5, exactly like the pre-existing "no candidate at all"
     // fallthrough shape.
-    match resolve_in_extension_base(from_object, name_lc, arity, graph, index, surface, args) {
+    match resolve_in_extension_base(
+        from_object,
+        name_lc,
+        arity,
+        graph,
+        index,
+        surface,
+        args,
+        build,
+    ) {
         ExtensionBase::Resolved(shape, routes) => return (shape, routes),
         ExtensionBase::Excluded(r) => reason = r,
         ExtensionBase::Miss => {}
@@ -1801,6 +1864,7 @@ pub(crate) fn resolve_bare_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 ) {
                     TableScopeOutcome::Resolved(shape, routes) => {
                         // (4) Builtin/intrinsic PROBE-THEN-DECIDE: the probe
@@ -2406,6 +2470,7 @@ pub fn resolve_member(
         index,
         surface,
         &[],
+        &[],
     )
 }
 
@@ -2422,6 +2487,7 @@ pub(crate) fn resolve_member_with_args(
     index: &ResolveIndex,
     surface: &DeclSurface,
     args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
 ) -> (DispatchShape, Vec<Route>) {
     match receiver {
         ReceiverType::RecordRef => {
@@ -2533,6 +2599,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 ) {
                     TableScopeOutcome::Resolved(shape, routes) => return (shape, routes),
                     TableScopeOutcome::Ambiguous => {
@@ -2634,6 +2701,7 @@ pub(crate) fn resolve_member_with_args(
                         index,
                         surface,
                         args,
+                        build,
                     )
                 } else {
                     resolve_in_report_scope(
@@ -2645,6 +2713,7 @@ pub(crate) fn resolve_member_with_args(
                         index,
                         surface,
                         args,
+                        build,
                     )
                 };
                 match outcome {
@@ -2678,6 +2747,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 )
             };
 
@@ -2725,6 +2795,7 @@ pub(crate) fn resolve_member_with_args(
                 index,
                 surface,
                 args,
+                build,
             ) {
                 (shape, routes)
             } else {
@@ -2738,6 +2809,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 ) {
                     ExtensionBase::Resolved(shape, routes) => (shape, routes),
                     ExtensionBase::Excluded(r) => member_unknown_route(r),
@@ -2804,6 +2876,7 @@ pub(crate) fn resolve_member_with_args(
                     index,
                     surface,
                     args,
+                    build,
                 );
                 routes.push(interface_delegate_route(
                     result,
@@ -4528,6 +4601,7 @@ pageextension 52911 "ExtA" extends BasePage
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -4698,6 +4772,7 @@ pageextension 52911 "ExtA" extends BasePage
             return_type_id: Some(("Dep Http Content".into(), 60101)),
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -4887,6 +4962,7 @@ pageextension 52911 "ExtA" extends BasePage
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params,
             }
         }
@@ -4952,7 +5028,15 @@ pageextension 52911 "ExtA" extends BasePage
             var_passable: false,
         }];
         let (shape, routes) = resolve_member_with_args(
-            &receiver, "get", 1, from_obj, &graph, &index, &surface, &args,
+            &receiver,
+            "get",
+            1,
+            from_obj,
+            &graph,
+            &index,
+            &surface,
+            &args,
+            &[],
         );
 
         assert_eq!(
@@ -5035,6 +5119,7 @@ codeunit 50611 "MixedCU"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "N".into(),
                 type_text: "Integer".into(),
@@ -5121,6 +5206,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
@@ -5260,6 +5346,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -5473,6 +5560,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -5637,6 +5725,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         };
 
@@ -5671,6 +5760,7 @@ codeunit 50612 "MixedCU2"
             return_type_id: None,
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         };
 
@@ -9794,7 +9884,15 @@ codeunit 51499 "IfaceTypedCaller"
             var_passable: false,
         }];
         let (shape, routes) = resolve_member_with_args(
-            &receiver, "bar", 1, from_obj, &graph, &index, &surface, &args,
+            &receiver,
+            "bar",
+            1,
+            from_obj,
+            &graph,
+            &index,
+            &surface,
+            &args,
+            &[],
         );
 
         assert_eq!(shape, DispatchShape::Polymorphic);
@@ -10712,6 +10810,7 @@ codeunit 50000 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
 
@@ -10739,6 +10838,7 @@ codeunit 50000 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         });
 
@@ -13000,6 +13100,7 @@ codeunit 53971 "OverloadNCaller"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             }
         }
@@ -13385,6 +13486,7 @@ codeunit 53975 "Overload3Caller"
                 return_type_id: None,
                 abi_overload_collapsed: true,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13410,6 +13512,7 @@ codeunit 53975 "Overload3Caller"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
         ];
@@ -13589,6 +13692,7 @@ codeunit 60152 "AliasTarget"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13608,6 +13712,7 @@ codeunit 60152 "AliasTarget"
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
+                preproc_context: Box::default(),
                 abi_params: AbiParams::Missing,
             },
         ];

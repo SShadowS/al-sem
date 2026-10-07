@@ -214,6 +214,12 @@ pub struct RoutineDecl {
     /// non-Report/ReportExtension object (they never contain a `dataset` section).
     /// Always `false` when `enclosing_member` is not itself a `modify_modification`.
     pub in_dataset_modify_context: bool,
+    /// The build conditions this routine exists under (see
+    /// [`super::PreprocSymbols`]): the object-level `#if` branches around it and,
+    /// for a header split across `#if` arms, its own arm. Empty for a routine
+    /// every build compiles. Overload selection drops a candidate whose
+    /// conditions contradict the call site's build context.
+    pub preproc_context: super::PreprocSymbols,
     /// `None` for a forward/external declaration with no body.
     pub body: Option<BlockId>,
     pub origin: Origin,

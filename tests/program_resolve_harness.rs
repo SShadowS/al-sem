@@ -12150,4 +12150,17 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         h.unknown,
         CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
     );
+    // Dependency `ambiguousResolved` (closed overload candidate sets): 863 at
+    // the start of S9.0e, 710 before the `#if` split-header fix, 716 after it
+    // (calls seeing both arms of one routine), 710 again once overload
+    // selection narrows candidates to the call's build. A rise is lost
+    // precision; list the sites with `--sites` (`ambiguousSites`).
+    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 710;
+    assert!(
+        h.ambiguous_resolved <= CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
+        "dependency-body ambiguousResolved edges {} exceed the ceiling {}; list them \
+         with `aldump --dependency-bodies-stats --sites` (`ambiguousSites`)",
+        h.ambiguous_resolved,
+        CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
+    );
 }

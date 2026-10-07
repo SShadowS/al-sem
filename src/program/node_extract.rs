@@ -378,6 +378,12 @@ pub struct RoutineNode {
     /// definition-surface CHANGE-DETECTION fingerprint reads, the other is
     /// about what goes over the wire.
     pub source_overload_aliased: bool,
+    /// The build conditions this routine exists under
+    /// (`al_syntax::ir::RoutineDecl::preproc_context`); empty for a routine
+    /// every build compiles, and for every ABI routine. Overload selection
+    /// (`resolver::resolve_in_object`) drops a candidate whose conditions
+    /// contradict the call site's build. A boxed slice: almost always empty.
+    pub preproc_context: Box<[(String, bool)]>,
     /// Retained ABI parameter metadata (Task 2, roadmap-closure plan) — see
     /// [`AbiParams`]'s doc for the full structural-guard rationale. Always
     /// [`AbiParams::Missing`] for a SOURCE (non-`TrustTier::SymbolOnly`)
@@ -736,6 +742,7 @@ pub fn extract_nodes(
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
+                preproc_context: r.preproc_context.clone().into_boxed_slice(),
                 // SOURCE routine: parameter metadata for arg-type dispatch
                 // lives in `DeclSurface`/`RoutineMeta`, never here — see
                 // `RoutineNode::abi_params`'s doc.
@@ -809,6 +816,7 @@ pub(crate) mod test_fixtures {
             return_type_id: Some(("Sales-Post".to_string(), 80)),
             abi_overload_collapsed: false,
             source_overload_aliased: true,
+            preproc_context: vec![("CLEAN27".to_string(), false)].into_boxed_slice(),
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "Customer".to_string(),
                 type_text: "Record".to_string(),

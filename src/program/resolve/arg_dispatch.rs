@@ -2442,6 +2442,7 @@ mod tests {
             dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
+            preproc_context: Vec::new(),
             body: None,
             origin: test_origin(),
         }
@@ -3782,6 +3783,7 @@ codeunit 50100 "C"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params: AbiParams::Missing,
         }];
 
@@ -4001,6 +4003,7 @@ codeunit 50700 "Caller"
             return_type_id: None,
             abi_overload_collapsed: false,
             source_overload_aliased: false,
+            preproc_context: Box::default(),
             abi_params,
         }
     }

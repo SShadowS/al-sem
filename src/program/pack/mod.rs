@@ -67,7 +67,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 3: `ParsedSubscriberArgs::publisher_id` (engine-switch S4.3b).
 /// 4: `ObjectNode::protected_vars` (engine-switch S9.0e).
 /// 5: `ObjectNode::query_columns` (engine-switch S9.0e).
-pub const PACK_SCHEMA: u32 = 5;
+/// 6: `RoutineNode::preproc_context` (engine-switch S9.0e).
+pub const PACK_SCHEMA: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
