@@ -1071,6 +1071,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bare page-instance call in a page binds the page** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 24 -> 19; workspace metrics
+  unchanged. `INSTANCE_ONLY_NEVER_BARE` claimed its 19 names (`Update`,
+  `SetSelectionFilter`, `Caption`, `Run`, ...) have no bare form anywhere in AL.
+  That claim was read from MS Learn, and alc 18.0.41.45789 disproves it for
+  pages. All 19 compile bare in a page trigger, each reporting the method's own
+  type or protection error (AL0122/AL0161) and never AL0118. Bare `Update()`
+  and `Caption()` also compile in a page extension. The same bare `Update()`
+  fails AL0118 in a table and in a codeunit. A source-table procedure of the
+  same name still wins (implicit-with AL0604). New Step 4a in
+  `resolve_bare_with_args` binds the name to `PageInstance` in a Page or
+  PageExtension, only when nothing earlier claimed it. The global-builtin
+  fallback stays suppressed. `bare_run_on_page_with_no_sourcetable_candidate_is_unknown_not_builtin`
+  pinned the false claim and is rebaselined as
+  `..._binds_the_page_instance`. Test
+  `bare_update_binds_the_page_instance_in_a_pageextension_not_a_table`;
+  narrowing Step 4a's kinds fails both.
 - **A `List`/`Dictionary` element types its chain** (engine-switch S9.0e).
   CDO's dependency-body unknown edges 35 -> 24; workspace metrics unchanged.
   `ReceiverType::Framework(List)` carries no element type, so

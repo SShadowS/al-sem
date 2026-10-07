@@ -12109,6 +12109,7 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// argument type. 37 after the proven `Variant` overload precedence. 35 after
 /// `Rec.RecordId` and implicit-`Rec` member arguments are typed. 24 after a
 /// `List`/`Dictionary` element is typed from the collection's declared type.
+/// 19 after a page's bare instance-method calls bind the page (`Update()`).
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12123,7 +12124,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 24;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 19;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

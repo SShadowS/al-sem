@@ -1379,9 +1379,19 @@ pub(crate) fn implicit_rec_table_id(
     }
 }
 
-/// Names compiler-GROUNDED to have **no bare-call form anywhere in AL**
+/// Names with **no bare-call form as a GLOBAL built-in**
 /// (pageext-merge-and-final-residual plan, Task 2 — the round-1 review
-/// addenda's GLOBAL, unconditional narrowing). Every entry here is a
+/// addenda's narrowing).
+///
+/// **S9.0e correction:** the "no bare form anywhere" claim below was read
+/// from MS Learn, not compiled, and it is false inside a page. alc
+/// 18.0.41.45789 binds all 19 names bare in a Page or PageExtension, to the
+/// page's own instance method (`Update()` = `CurrPage.Update()`); in a table
+/// or codeunit the same bare `Update()` fails AL0118. They stay out of the
+/// global-builtin fallback (Step 4) and the Step 3 collision guard (a
+/// source-table procedure of the same name does win, probed), and
+/// `resolve_bare_with_args`'s Step 4a binds them to `PageInstance` in page
+/// context. Every entry here is a
 /// documented AL method that is ALWAYS reached through an explicit receiver
 /// (`CurrPage.Update()`, `MyCodeunit.Run()`, `Page.RunModal(...)`) — never a
 /// bare unqualified call — in EVERY context checked: page trigger/action/
@@ -1757,6 +1767,28 @@ pub(crate) fn resolve_bare_with_args(
         // A report routine outside a dataitem trigger (a procedure, a request
         // page trigger): no implicit Rec.
         reason = UnknownReason::ReportRecExcluded;
+    }
+
+    // 4a. The page's own instance methods (S9.0e). Inside a Page or
+    // PageExtension, bare `Update()`, `SetSelectionFilter(R)`, `Caption(..)`
+    // and every other `PageInstance` member bind to the page itself: alc
+    // 18.0.41.45789 compiled all 19 bare in a page trigger, each reporting the
+    // method's own type or protection error (AL0122/AL0161), never AL0118; the
+    // same bare `Update()` in a table or codeunit fails AL0118. A source-table
+    // procedure of the same name still wins (Step 3, probed: implicit-with
+    // AL0604), so this runs only when nothing above claimed the name — an
+    // out-of-closure table or a `with` scope (another `reason`) still declines.
+    if reason == UnknownReason::MemberNotFound
+        && matches!(
+            from_object.id.kind,
+            ObjectKind::Page | ObjectKind::PageExtension
+        )
+        && let Some(bid) = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            name_lc,
+        )
+    {
+        return member_catalog_route(bid);
     }
 
     // 4. Global builtin. GLOBAL suppression (pageext-merge-and-final-residual
@@ -3516,15 +3548,13 @@ page 50901 "EMailJobsPage"
         assert_eq!(rid.object.kind, ObjectKind::Table);
     }
 
-    /// NEGATIVE (the critical fix): a Page's SourceTable does NOT declare
-    /// `Run()` at all — no table-scope candidate exists. Pre-fix this fell
-    /// through Step 3 (NotVisible, no collision to even detect) straight
-    /// into Step 4's UNGUARDED `global_builtin_id("run")` fallback →
-    /// `Catalog`/`Builtin` (a false edge — `run` has no bare-call form in
-    /// AL). Post-fix: Step 4 is ALSO suppressed for a proven-never-bare
-    /// name, so this correctly falls all the way to `Unknown`.
+    /// A Page's SourceTable does NOT declare `Run()`, so a bare `Run()` binds
+    /// the PAGE's own `Run` (S9.0e, Step 4a): alc 18.0.41.45789 compiles a
+    /// bare `Run()` in a page trigger. It is the page-instance method, never
+    /// the global-builtin fallback (Step 4 stays suppressed — the codeunit
+    /// test below still declines).
     #[test]
-    fn bare_run_on_page_with_no_sourcetable_candidate_is_unknown_not_builtin() {
+    fn bare_run_on_page_with_no_sourcetable_candidate_binds_the_page_instance() {
         let src_table: &'static str = r#"
 table 50910 "Baz"
 {
@@ -3565,15 +3595,80 @@ page 50911 "BazPage"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
-        assert!(
-            !matches!(routes[0].target, RouteTarget::Builtin(_)),
-            "must NEVER resolve to Builtin — `run` has no bare form in AL; got {:?}",
-            routes[0].target
+        let expected = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            "run",
+        )
+        .expect("run is a PageInstance member");
+        assert_eq!(routes[0].target, RouteTarget::Builtin(expected));
+        assert_eq!(routes[0].evidence, Evidence::Catalog);
+    }
+
+    /// S9.0e, alc-probed: a PageExtension's bare `Update()` binds the page
+    /// instance; a Table's bare `Update()` is AL0118 and stays Unknown.
+    #[test]
+    fn bare_update_binds_the_page_instance_in_a_pageextension_not_a_table() {
+        let src: &'static str = r#"
+table 50940 "Qux"
+{
+    procedure T()
+    begin
+        Update();
+    end;
+}
+
+page 50941 "QuxPage"
+{
+    SourceTable = Qux;
+}
+
+pageextension 50942 "QuxPageExt" extends "QuxPage"
+{
+    procedure E()
+    begin
+        Update();
+    end;
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let units = [make_unit(app_id, "Qux.al", src)];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+        let update = member_builtin_id(
+            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
+            "update",
+        )
+        .expect("update is a PageInstance member");
+
+        let ext = find_obj(&graph, "QuxPageExt");
+        let (_, routes) = resolve_bare(
+            ext,
+            "update",
+            0,
+            &graph,
+            &index,
+            &surface,
+            WithState::NoWithProven,
         );
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].target, RouteTarget::Builtin(update));
+
+        let table = find_obj(&graph, "Qux");
+        let (_, routes) = resolve_bare(
+            table,
+            "update",
+            0,
+            &graph,
+            &index,
+            &surface,
+            WithState::NoWithProven,
+        );
+        assert_eq!(routes.len(), 1);
         assert!(
             matches!(routes[0].evidence, Evidence::Unknown(_)),
-            "expected Unknown evidence; got {:?}",
-            routes[0].evidence
+            "a table has no page instance; got {:?}",
+            routes[0]
         );
     }
 
