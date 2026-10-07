@@ -63,6 +63,26 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   internalNotVisible 3). Measured with `aldump --dependency-bodies-stats --sites`;
   held by the `dependency_body_unknown_ceiling_on_cdo` ratchet, lowered with every
   fix. One family per commit, each root-caused against real source.
+  - **Status 2026-10-07 (HEAD `a51126c1`): 6,315 -> 4.** Merged to master once at
+    643 (`d389d984`, local, not pushed). Every rule since carries an alc 18.0.41.45789
+    probe (control fails with AL0122/AL0118/AL0133) and a discrimination proof; see
+    CHANGELOG `### Fixed` top entries. Workspace stayed 0 unknown / 23
+    `ambiguousResolved` throughout; dependency `ambiguousResolved` 863 -> 710.
+  - **The 4 left** (`target/cdo/aldump.exe --dependency-bodies-stats --sites
+    U:/Git/DO-cdo-baseline/Cloud`):
+    1. arityMismatch `MfgCalculateBOMTree.Codeunit.al:207` (Base App): procedure
+       header split across `#if not CLEAN27` / `#else` (lines 266-270); the lowerer
+       keeps only the first header (6 params), the `#else` call passes 5. This is the
+       deferred "preproc-symbol fidelity" item, now with a real consumer. Likely fix:
+       lower one routine per header arm (union-read, as argument lists already are).
+    2-3. compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`:
+       `QueryVar.EntryType.AsInteger()` — query columns are not modelled (need column
+       name -> source field type).
+    4. untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`:
+       `EventConditions.AddText(..)` — an XmlPort `textattribute(EventConditions)` used
+       as a BigText; XmlPort text nodes are not modelled.
+  - Open question: no S9.0e lowerer fix bumped a cache version (`cache_prune.rs`).
+    Packs are not persisted in production; the R3a-4 summary cache was not checked.
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.
