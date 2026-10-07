@@ -683,6 +683,9 @@ fn attach_program_calls_with(
         drop(ctx);
     }
     resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
+    // A `local` event raised only with temporary records makes its subscribers'
+    // same-named `var` parameters temporary (engine-switch S8).
+    crate::engine::l3::event_param_temp::prove_event_param_temps(resolved);
 }
 
 /// `assemble_and_resolve_workspace_default` plus the production call

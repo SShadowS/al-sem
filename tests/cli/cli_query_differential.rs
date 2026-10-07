@@ -560,3 +560,43 @@ codeunit 50301 "Rn Runner"
         "expected a Rename effect on Rn Item, got {ops:?}"
     );
 }
+
+/// S8: the L4 db-effect solver carries a subscriber's `var` record parameter
+/// across the event-dispatch edge into the PUBLISHER's frame by name
+/// (`summary_runner::event_param_temp_state`), so the raiser's argument decides
+/// the temp state of the subscriber's write. A PUBLIC event, so no closed-world
+/// proof applies: only the edge substitution can decide. `temporary` raise ->
+/// `known(true)`; physical raise -> `known(false)`.
+///
+/// Discrimination (2026-10-07): returning `Unknown` for `event-dispatch` in
+/// `substitute_pd_temp_state` turns the temporary case into `unknown`
+/// (`left: "unknown"`); restored, both pass.
+#[test]
+fn query_effects_event_raise_decides_the_subscribers_temp_state() {
+    for (decl, want) in [
+        ("\"Q Log\" temporary", "known(true)"),
+        ("\"Q Log\"", "known(false)"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"aaaa1111-0000-0000-0000-0000000000a8","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50200,"to":50299}]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/All.al"),
+            format!(
+                "table 50200 \"Q Log\"\n{{\n    fields {{ field(1; Code; Code[20]) {{ }} }}\n    keys {{ key(PK; Code) {{ Clustered = true; }} }}\n}}\ncodeunit 50201 \"Q Pub\"\n{{\n    procedure Raise()\n    var\n        Tmp: Record {decl};\n    begin\n        OnFill(Tmp);\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnFill(var Log: Record \"Q Log\")\n    begin\n    end;\n}}\ncodeunit 50202 \"Q Sub\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Q Pub\", 'OnFill', '', false, false)]\n    local procedure Fill(var Log: Record \"Q Log\")\n    begin\n        Log.Insert();\n    end;\n}}\n"
+            ),
+        )
+        .unwrap();
+        let ws = dir.path().to_string_lossy().to_string();
+        let (out, code) = run_alsem(&["query", "effects", &ws, "--routine", "Raise"], "json");
+        assert_eq!(code, 0, "{out}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let effects = v["payload"]["effects"].as_array().unwrap();
+        assert_eq!(effects.len(), 1, "{out}");
+        assert_eq!(effects[0]["tempState"], want, "{decl}");
+    }
+}

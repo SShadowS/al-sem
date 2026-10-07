@@ -311,7 +311,12 @@ pub fn solve_pd_reachability(
                     identity.table_id.clone(),
                     identity.operation_id.clone(),
                 );
-                let outcome = substitute_pd_temp_state(e, j, caller_routine);
+                let outcome = substitute_pd_temp_state(
+                    e,
+                    j,
+                    caller_routine,
+                    routines_by_id.get(e.to.as_str()).copied(),
+                );
                 apply_pd_transition(
                     m_ix,
                     &base_id,
@@ -337,7 +342,12 @@ pub fn solve_pd_reachability(
                 let v_ix = interner
                     .get(v)
                     .expect("every effective-SCC member is interned at workspace setup");
-                let outcome = substitute_pd_temp_state(edge, idx, caller_routine);
+                let outcome = substitute_pd_temp_state(
+                    edge,
+                    idx,
+                    caller_routine,
+                    routines_by_id.get(edge.to.as_str()).copied(),
+                );
                 apply_pd_transition(
                     v_ix,
                     &base_id,
@@ -1298,7 +1308,12 @@ fn attribute_pd_substituted_via(
             }
 
             for (op, table_id, operation_id, pd_index) in callee_pd {
-                let outcome = substitute_pd_temp_state(edge, pd_index, caller_routine);
+                let outcome = substitute_pd_temp_state(
+                    edge,
+                    pd_index,
+                    caller_routine,
+                    routines_by_id.get(edge.to.as_str()).copied(),
+                );
                 let produced = EffectIdentity {
                     op,
                     table_id,

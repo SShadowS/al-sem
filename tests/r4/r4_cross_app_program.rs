@@ -1173,7 +1173,14 @@ fn d3_skips_what_setloadfields_cannot_help() {
 /// - `var-param`: the helper writes its `var` parameter;
 /// - `forwarded`: the `var` parameter is forwarded once more before the write;
 /// - `table-method`: a table procedure writes `Rec` (`Buf.ClearBuffer()`);
-/// - `physical`: the control — a non-temporary local, so d44 reports.
+/// - `physical`: the control — a non-temporary local, so d44 reports;
+/// - `event-raise`: the record goes through a PUBLIC event (no closed world) to
+///   a subscriber that writes it; the event edge carries the subscriber's
+///   parameter into the publisher's frame by name, and the raiser's temporary
+///   argument decides (`event-raise-physical` is its control).
+///
+/// Discrimination for `event-raise` (2026-10-07): no `event-dispatch` arm in
+/// `substitute_entry` fails it (`left: 1`); restored, it passes.
 ///
 /// `var-param` and `forwarded` already held; `table-method` was the gap: a table
 /// method's `Rec` was `Known(false)`. Discrimination (2026-10-06): seeding `Rec`
@@ -1189,7 +1196,7 @@ fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
             "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Buf: Record {decl};\n    begin\n        {call};\n    end;\n}}\n"
         )
     };
-    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure Write(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n\n    procedure Mid(var Log: Record \"Dep Log\")\n    begin\n        Write(Log);\n    end;\n}\n\ntable 50183 \"Dep Buf\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n\n    procedure ClearBuffer()\n    begin\n        DeleteAll();\n    end;\n}\n";
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure Write(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n\n    procedure Mid(var Log: Record \"Dep Log\")\n    begin\n        Write(Log);\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnFill(var Log: Record \"Dep Log\")\n    begin\n    end;\n}\n\ncodeunit 50184 \"Dep Sub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep B\", 'OnFill', '', false, false)]\n    local procedure Fill(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n}\n\ntable 50183 \"Dep Buf\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n\n    procedure ClearBuffer()\n    begin\n        DeleteAll();\n    end;\n}\n";
     let cases = [
         (
             "var-param",
@@ -1203,6 +1210,16 @@ fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
             0,
         ),
         ("physical", run2("\"Dep Log\"", "B.Mid(Buf)"), 1),
+        (
+            "event-raise",
+            run2("\"Dep Log\" temporary", "B.OnFill(Buf)"),
+            0,
+        ),
+        (
+            "event-raise-physical",
+            run2("\"Dep Log\"", "B.OnFill(Buf)"),
+            1,
+        ),
     ];
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
     for (name, a, expected) in cases {
@@ -1480,6 +1497,105 @@ fn the_cone_follows_every_dependency_call() {
     let n = count(dir.path());
     if n != 1 {
         wrong.push(format!("cross-dependency: {n}"));
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
+}
+
+/// One workspace whose two subscribers write the `var Buf` of the dependency
+/// event `Dep Feat.OnRequest`, raised by `Dep Feat.Collect` with `buf` (a
+/// `Dep Log` declaration, `temporary` or not); `access` is the publisher's.
+/// `sub_body` is each subscriber's body.
+fn event_temp_workspace(dir: &Path, buf: &str, access: &str, sub_body: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let sub = |n: u32| {
+        format!(
+            "codeunit {n} \"Ws Sub {n}\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Feat\", 'OnRequest', '', false, false)]\n    local procedure Handle(var Buf: Record \"Dep Log\")\n    begin\n{sub_body}\n    end;\n\n    local procedure Helper(var B: Record \"Dep Log\")\n    begin\n        B.Insert();\n    end;\n}}\n"
+        )
+    };
+    write(&dir.join("src/Sub1.al"), &sub(50281));
+    write(&dir.join("src/Sub2.al"), &sub(50282));
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            (
+                "src/Feat.al",
+                &format!(
+                    "codeunit 50183 \"Dep Feat\"\n{{\n    procedure Collect()\n    var\n        Tmp: Record {buf};\n    begin\n        OnRequest(Tmp);\n    end;\n\n    [IntegrationEvent(false, false)]\n    {access}procedure OnRequest(var Buf: Record \"Dep Log\")\n    begin\n    end;\n}}\n"
+                ),
+            ),
+        ],
+        "",
+    );
+}
+
+/// S8 (S8.6 triage cause 5): a `local` event raised only with a `temporary`
+/// record makes each subscriber's same-named `var` parameter temporary
+/// (`event_param_temp`), so two subscribers writing it do not overlap (d44):
+/// - `local-temp`: the subscribers write `Buf` directly;
+/// - `forwarded`: they pass it to a helper that writes it;
+/// - `physical-raise` and `public-publisher` (anyone may raise it): d44 reports.
+///
+/// Discrimination (2026-10-07): not calling `prove_event_param_temps` fails
+/// `local-temp` and `forwarded`; dropping the `local` access rule fails
+/// `public-publisher`; restored, all pass.
+#[test]
+fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let cases = [
+        (
+            "local-temp",
+            "\"Dep Log\" temporary",
+            "local ",
+            "        Buf.Insert();",
+            0,
+        ),
+        (
+            "forwarded",
+            "\"Dep Log\" temporary",
+            "local ",
+            "        Helper(Buf);",
+            0,
+        ),
+        (
+            "physical-raise",
+            "\"Dep Log\"",
+            "local ",
+            "        Buf.Insert();",
+            1,
+        ),
+        (
+            "public-publisher",
+            "\"Dep Log\" temporary",
+            "",
+            "        Buf.Insert();",
+            1,
+        ),
+    ];
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, buf, access, body, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        event_temp_workspace(dir.path(), buf, access, body);
+        let n =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names)
+                .finding_count;
+        if n != expected {
+            wrong.push(format!("{name}: {n} (want {expected})"));
+        }
     }
     assert!(wrong.is_empty(), "cases {wrong:?}");
 }

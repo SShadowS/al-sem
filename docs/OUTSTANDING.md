@@ -64,13 +64,16 @@ sizings marked pre-arc).
     false positives (Company Information, Email Connector Logo, My Notifications).
     Constant-argument guards cannot see it; it needs value tracking from the
     record the raiser read.
-  - **Temporariness through an event's `var` record parameter.** Every raise of
-    Continia Core's `OnRequestAppFeatureInformation` passes a temporary record,
-    but the subscribers' writes count as physical. The PD substitution does not
-    cross event-dispatch edges.
-  - **A constant enum/option argument selecting a `case` branch.**
-    `SetStatus("On Hold")` -> `SetStatusValue`, where only one branch runs.
-    `param_guard` reads Boolean parameters only.
+  - **Temporariness through an event's `var` record parameter:** the event
+    edge now substitutes by name, and a `local` event raised only with temporary
+    records is proven (2026-10-07). The triaged case still fires, and soundly
+    so. `OnRequestAppFeatureInformation` is raised with `GetAppFeatures`'s own
+    `var` parameter, and `GetAppFeatures` is `public`. Every known caller passes
+    a temporary record, but another app could pass a physical one.
+  - **A constant enum/option argument selecting a `case` branch:** not built.
+    `SetStatus("On Hold")` -> `SetStatusValue` runs only one branch, but both
+    findings it explains are also blocked by the blank-field cause below, so it
+    would remove none. Wake: a finding that only this cause explains.
   - **A blank-field guard on a freshly initialised record.** The Job Queue
     Category is created only if the entry has a category code, and every caller
     leaves it blank.

@@ -1521,10 +1521,17 @@ fn substitute_entry(
     entry: &ConeFactEntry,
     edge: &TypedOutEdge,
     caller: Option<&L3Routine>,
+    callee: Option<&L3Routine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
     edge_reqs: &[super::param_guard::Req],
 ) -> Option<(Arc<str>, ConeFactEntry)> {
     use super::summary::TempState;
+    // Publisher -> subscriber: the subscriber's parameters are the publisher's,
+    // by name (engine-switch S8; `summary_runner::event_param_temp_state`).
+    let event = match (edge.kind.as_str(), caller, callee) {
+        ("event-dispatch", Some(publisher), Some(subscriber)) => Some((publisher, subscriber)),
+        _ => None,
+    };
     let binds = matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call");
     let site = match (edge.callsite.as_deref(), caller) {
         (Some(cs), Some(caller)) if binds => Some((cs, caller)),
@@ -1534,8 +1541,17 @@ fn substitute_entry(
     let mut rep = Arc::clone(&entry.rep);
     let mut rep_key_s = Arc::clone(&entry.rep_key);
     let mut pd = None;
-    if let (Some(i), Some((cs, caller))) = (entry.pd, site) {
-        match super::summary_runner::pd_temp_state_at_callsite(caller, cs, i) {
+    let pd_state = match (entry.pd, site, event) {
+        (Some(i), _, Some((publisher, subscriber))) => Some(
+            super::summary_runner::event_param_temp_state(publisher, subscriber, i),
+        ),
+        (Some(i), Some((cs, caller)), None) => Some(
+            super::summary_runner::pd_temp_state_at_callsite(caller, cs, i),
+        ),
+        _ => None,
+    };
+    if let Some(state) = pd_state {
+        match state {
             TempState::Known(true) => {
                 let mut r = (*entry.rep).clone();
                 if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut r.extra {
@@ -1554,11 +1570,32 @@ fn substitute_entry(
         }
     }
     let mut reqs: Vec<super::param_guard::Req> = Vec::new();
-    if let Some(g) = &entry.guard
-        && let Some((cs, caller)) = site
-        && let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs)
-    {
-        reqs = super::param_guard::across_edge(&g.reqs, cs, caller_frame)?;
+    if let Some(g) = &entry.guard {
+        if let Some((publisher, subscriber)) = event {
+            // A subscriber's guard re-anchors on the same-named publisher
+            // parameter, when that one is a usable guard there.
+            for &(j, v) in &g.reqs {
+                let mapped = subscriber
+                    .parameters
+                    .iter()
+                    .find(|p| p.index == j)
+                    .and_then(|sp| {
+                        publisher
+                            .parameters
+                            .iter()
+                            .find(|pp| pp.name.eq_ignore_ascii_case(&sp.name))
+                    })
+                    .map(|pp| pp.index)
+                    .filter(|i| caller_frame.is_some_and(|f| f.usable.contains(i)));
+                if let Some(i) = mapped {
+                    reqs = super::param_guard::conjoin(&reqs, &[(i, v)])?;
+                }
+            }
+        } else if let Some((cs, caller)) = site
+            && let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs)
+        {
+            reqs = super::param_guard::across_edge(&g.reqs, cs, caller_frame)?;
+        }
     }
     let reqs = super::param_guard::conjoin(&reqs, edge_reqs)?;
     let (key, guard) = with_reqs(base, reqs);
@@ -1704,6 +1741,7 @@ fn inherited_facts_for_singleton<'g>(
     cones: &'g HashMap<usize, ConeFacts>,
     caller: Option<&L3Routine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
+    routines_by_id: &HashMap<&str, &L3Routine>,
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
@@ -1736,7 +1774,17 @@ fn inherited_facts_for_singleton<'g>(
             ycone
                 .iter()
                 .filter(|(_, e)| frame_bound(e))
-                .filter_map(|(k, e)| substitute_entry(k, e, edge, caller, caller_frame, &[]))
+                .filter_map(|(k, e)| {
+                    substitute_entry(
+                        k,
+                        e,
+                        edge,
+                        caller,
+                        routines_by_id.get(edge.to.as_str()).copied(),
+                        caller_frame,
+                        &[],
+                    )
+                })
                 .collect()
         })
         .collect();
@@ -2118,9 +2166,15 @@ fn fact_cone_for_scc(
                 .iter()
                 .filter(|(_, e)| !edge_reqs.is_empty() || frame_bound(e))
             {
-                if let Some((k, mut e)) =
-                    substitute_entry(key, entry, edge, a.caller, frame, edge_reqs)
-                {
+                if let Some((k, mut e)) = substitute_entry(
+                    key,
+                    entry,
+                    edge,
+                    a.caller,
+                    a.routines_by_id.get(edge.to.as_str()).copied(),
+                    frame,
+                    edge_reqs,
+                ) {
                     e.dist += 1;
                     merge_cone(&mut cone, &k, e);
                 }
@@ -2217,6 +2271,8 @@ struct PdAnchor<'a> {
     caller: Option<&'a L3Routine>,
     /// The member's guard frame, when it has a usable guard parameter.
     frame: Option<&'a super::param_guard::FrameGuards>,
+    /// Every routine, for an edge's callee (an event subscriber's parameters).
+    routines_by_id: &'a HashMap<&'a str, &'a L3Routine>,
 }
 
 /// Build one SCC's coverage cone (includes self). Mirrors `coverageConeForScc`.
@@ -2352,6 +2408,7 @@ fn compose_inherited_cones(
                     scc_id_by_routine: &scc.scc_id_by_routine,
                     caller: routines_by_id.get(m.as_str()).copied(),
                     frame: frames.get(m),
+                    routines_by_id,
                 }),
                 _ => None,
             };
@@ -2422,6 +2479,7 @@ fn compose_inherited_cones(
                     &fact_cones,
                     routines_by_id.get(m.as_str()).copied(),
                     frames.get(m),
+                    routines_by_id,
                     mode,
                     &mut derived,
                 )

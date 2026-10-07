@@ -1011,6 +1011,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A record passed to an event keeps its temp state through the subscriber**
+  (engine-switch S8, S8.6 triage cause 5). AL binds an event subscriber's
+  parameters to the publisher's by NAME. A subscriber's write through its `var`
+  record parameter used to lose the raiser's temp state at the event edge
+  (`Unknown`, counted as physical).
+  - **Event-edge substitution:** both the L4 solver
+    (`summary_runner::substitute_pd_temp_state`) and the capability cone
+    (`substitute_entry`) now carry the subscriber's parameter, and its
+    constant-argument guards, into the publisher's frame by name
+    (`event_param_temp_state`). The raiser's argument then decides there.
+    Publisher summaries change from `unknown` to `parameter-dependent(i)`
+    (r3a2 goldens `ws-event-chains`, `ws-event-multi-sub-overlap`,
+    `ws-event-read-after-write`).
+  - **Closed-world proof (new `engine::l3::event_param_temp`):** a `local`
+    publisher can only be raised from its own object. When every raise is
+    resolved and passes a `temporary` record, each subscriber's same-named
+    parameter becomes `Known(true)` in the model. This matters because d44/d45
+    read subscriber cones on their own.
+  - **CDO/DO:** neither moves a finding. The triaged case (Continia Core's
+    `OnRequestAppFeatureInformation`) raises with the raiser's own parameter,
+    from a `public` procedure that any app may call, so it soundly stays
+    open.
+  - **Tests:** pinned by `a_local_event_raised_with_temporary_records_has_temporary_subscribers`,
+    the `event-raise` cases of `a_dependency_write_to_a_temporary_argument_is_not_physical`,
+    and `query_effects_event_raise_decides_the_subscribers_temp_state`, each with
+    a discrimination proof.
+
 - **d8/d9 count only the writes still uncommitted at the Commit** (engine-switch
   S8, triage C gap 3; new `src/engine/l5/pending_writes.rs`). A transaction span
   unioned every member's whole forward cone. That union held the Commit routine's
