@@ -39,7 +39,9 @@ echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1"
 # run the same code paths; full LTO only bought a much slower link of every test
 # executable. Timing claims still need full `release` (`perf_bounds`, benches, the
 # SHA-pinned north-star measure — CLAUDE.md "Build Commands").
-profile=(--profile release-fast)
+# The `cdo` profile (no LTO, incremental) rebuilds the lib tests in ~46 s after an
+# edit, against ~133 s for `release-fast` (measured 2026-10-07).
+profile=(--profile cdo)
 
 status=0
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `cdo` cargo profile for correctness loops.** Optimized, but no LTO, 16
+  codegen units and incremental builds. `scripts/cdo-gate` now uses it: after a
+  one-line edit the gate took 236 s, against ~375 s on `release-fast` (lib-test
+  rebuild 46 s against 133 s; measured 2026-10-07, all 2,201 CDO-gated tests
+  green). `aldump` on `cdo` rebuilds in ~1 min and reports the same CDO counts.
+  Timing and memory numbers still come from `release-fast` or `release`.
+
 - **Dependency-body unknowns are measured and ratcheted** (engine-switch S9.0e).
   `aldump --dependency-bodies-stats --sites` lists every unknown route in dependency
   code resolved from its own app, with its source line. The CDO test

@@ -249,3 +249,14 @@ strip = true
 inherits = "release"
 lto = "thin"
 codegen-units = 4
+
+# Optimized but fast to REBUILD: for correctness runs on CDO (`scripts/cdo-gate`, the
+# `aldump` unknown-count loop), never for timing or memory numbers — use
+# `release-fast` or `release` for those. No LTO, many codegen units and incremental
+# compilation trade some runtime speed for a much shorter edit-rebuild cycle.
+[profile.cdo]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+strip = false
