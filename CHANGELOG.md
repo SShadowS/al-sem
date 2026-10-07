@@ -1078,6 +1078,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An object run reaches the entry triggers the source declares, and every
+  page/report extension's** (engine-switch S9.0d, found by the compiler-oracle
+  triage). CDO: `resolvedAbiExternal` 62 -> 0 in the workspace and 1,294 -> 0
+  in dependency bodies; still 0 unknown and 23 `ambiguousResolved`; oracle
+  program-only pairs 258 -> 202.
+  - A run of an object whose source declares no entry trigger (a workspace
+    `ConfirmationDialog` page with no triggers, run by `WarningPage.RunModal()`)
+    got an Opaque `onopenpage` boundary route: a callee that does not exist,
+    counted as resolved. It now reaches no routine (honest empty). The Opaque
+    boundary stays for a symbol-only object, whose triggers the ABI does not
+    list.
+  - A page or report run now also reaches the entry trigger of each page or
+    report extension of it (an extension's triggers run after the base
+    object's): a `Multicast` over base + extensions, `Partial` like implicit
+    triggers. A codeunit or XmlPort run stays one trigger or a closed empty
+    set; `classify_obligation` reads an empty `Multicast` as honest-empty
+    whether open or closed.
+  - The analyze adapter keeps the L3 shape detectors saw. An empty run keeps
+    the run shape (a workspace object) or the external callee naming the
+    object (a dependency object; the resolver now records it as
+    `SiteFacts::run_target`), and a run reaching several triggers becomes one
+    resolved edge per trigger, never an ambiguous candidate set. CDO
+    `alsem analyze` (both scopes) is unchanged except 3 `d9` transaction spans
+    that now count one more published event (an extension `OnOpenPage` raises
+    it). The adapter no longer records the invented dependency `onopenpage`
+    routine as a call target.
+  - Tests `object_runs_reach_the_declared_entry_triggers_only`,
+    `object_run_symbol_only_target_keeps_the_opaque_trigger_boundary`,
+    `page_run_reaches_the_base_and_extension_entry_triggers` and
+    `a_run_of_a_dependency_page_without_entry_trigger_names_the_page`; five
+    resolver tests that pinned the invented boundary or the `Exact` page
+    shape are rebaselined. Re-inventing the boundary, skipping extensions,
+    dropping the closed-empty rule, converting a multi-route run as its first
+    route, or ignoring the run target each fails one of them.
 - **Overload selection sees the call's build** (engine-switch S9.0e). CDO's
   dependency `ambiguousResolved` 716 -> 710 and `resolvedSource` +6; unknown
   edges stay 0; workspace metrics unchanged (0 unknown, 23 ambiguous).

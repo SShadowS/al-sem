@@ -244,8 +244,8 @@ pub struct SiteCensus {
     /// outside the workspace, mapped to `ExternalTarget`/`Opaque` rather
     /// than `MemberNotFound`/`Ambiguous`.
     pub adapter_external_member_decline: usize,
-    /// Member runs (`PageVar.Run()`) on a WORKSPACE object with no entry
-    /// trigger: `Opaque` with no external type, like `Page.Run(Page::X)`.
+    /// Runs (`Page.Run(Page::X)`, `PageVar.Run()`) of a WORKSPACE object with
+    /// no entry trigger: `Opaque` with no external type.
     pub adapter_workspace_run_no_entry: usize,
     /// Stage 2 (`upgrade_dependency_bindings`): call sites into a dependency
     /// routine where at least one binding actually changed (from
@@ -1301,12 +1301,52 @@ impl<'a> Converter<'a> {
         } else {
             Resolution::ExternalTarget
         };
-        // S3.6: no route is cut. A call or run edge with several routes outside
-        // an interface (the resolver makes none today: `Multicast` is for
-        // triggers and events, `Exact` has one route) converts as the closed
-        // candidate set it is, never as its first route.
+        // S9.0d: the one `Multicast` a call site gets is an object run
+        // (`resolver::dispatch_entry_trigger`): it reaches EVERY entry trigger,
+        // the base object's and each extension's, so each route is its own
+        // edge. An empty one is a run of an object whose source declares no
+        // entry trigger: L3's run shape, `Opaque`, with no callee to name.
+        if edge.shape == DispatchShape::Multicast {
+            if edge.routes.is_empty() {
+                // The L3 shape of a run that reaches no entry trigger, as it
+                // was when the resolver still invented an Opaque trigger route
+                // for one: into our own app, the run kind with no external
+                // type; into a dependency, an external callee of that object.
+                let target = self
+                    .site_facts
+                    .get(&ce.obligation_id)
+                    .and_then(|f| f.run_target.as_ref());
+                match target {
+                    Some(t) if t.app != self.primary => {
+                        e.resolution = external;
+                        e.external_type_ref = self.type_ref(&object_key(t));
+                    }
+                    _ => {
+                        c.adapter_workspace_run_no_entry += 1;
+                        e.dispatch_kind = object_run_dispatch_kind(match target.map(|t| t.kind) {
+                            Some(ObjectKind::Page) => "Page",
+                            Some(ObjectKind::Report) => "Report",
+                            _ => "Codeunit",
+                        });
+                        e.resolution = Resolution::Opaque;
+                    }
+                }
+                return Some((vec![e], state.bindings));
+            }
+            let mut edges = Vec::with_capacity(edge.routes.len());
+            for route in &edge.routes {
+                let mut one = e.clone();
+                self.route_into(&mut one, route, cs, ce, external, is_run, &mut state, c)?;
+                edges.push(one);
+            }
+            return Some((edges, state.bindings));
+        }
+        // S3.6: no route is cut. A call edge with several routes outside an
+        // interface or a run (the resolver makes none today: `Exact` has one
+        // route) converts as the closed candidate set it is, never as its
+        // first route.
         let shape = match edge.shape {
-            DispatchShape::Exact | DispatchShape::Multicast if edge.routes.len() > 1 => {
+            DispatchShape::Exact if edge.routes.len() > 1 => {
                 c.adapter_multi_route_sites += 1;
                 DispatchShape::AmbiguousOverload
             }
@@ -1360,108 +1400,15 @@ impl<'a> Converter<'a> {
                     L3Reason::DynamicReceiver
                 });
             }
-            DispatchShape::Exact | DispatchShape::Multicast => {
-                match edge.routes.first() {
-                    None => {
-                        c.adapter_empty_route_sites += 1;
-                        e.resolution = Resolution::Unknown(L3Reason::CalleeUnknown);
-                    }
-                    Some(route) => match (self.target(route), &route.target) {
-                        (Target::MissingFromModel, _) => return None,
-                        (Target::Model(callee), _) => {
-                            let id = Self::route_routine_id(route)?;
-                            let _ = upgrade_bindings(&mut state, callee, &cs.id);
-                            e.to = Some(callee.id.clone());
-                            e.resolution = Resolution::Resolved;
-                            if let PCallee::Member { method, .. } = &cs.callee {
-                                if method.fold_identifier() == "run"
-                                    && id.object.kind == al_syntax::ir::ObjectKind::Codeunit
-                                    && id.name_lc == "onrun"
-                                {
-                                    // `CuVar.Run()` lands on OnRun: L3's
-                                    // codeunit-run shape.
-                                    e.dispatch_kind = DispatchKind::CodeunitRun;
-                                } else if e.dispatch_kind == DispatchKind::Method {
-                                    e.receiver_type =
-                                        self.receiver(ce).and_then(|f| f.type_text.clone());
-                                }
-                            }
-                        }
-                        // A run into a workspace object with no entry trigger
-                        // (`Page.Run(Page::X)` or `PageVar.Run()`): the run
-                        // shape, with no external type — the object is ours.
-                        (Target::Outside, RouteTarget::AbiSymbol { key })
-                            if key.app == self.primary =>
-                        {
-                            // Our own app is source, so the only ABI-symbol route
-                            // into it is a run's missing entry trigger (the
-                            // resolver's `opaque_boundary_route`). The edge kind is
-                            // `Run` for `Page.Run(..)` but `Call` for `PageVar.Run()`,
-                            // so the trigger name is the invariant, not `is_run`.
-                            debug_assert!(
-                                matches!(
-                                    key.routine_name_lc.as_str(),
-                                    "onrun" | "onopenpage" | "onprereport"
-                                ),
-                                "workspace ABI-symbol route that is not a missing entry trigger: {key:?}"
-                            );
-                            c.adapter_workspace_run_no_entry += 1;
-                            e.dispatch_kind = object_run_dispatch_kind(
-                                match key.object_type.to_ascii_lowercase().as_str() {
-                                    "page" => "Page",
-                                    "report" => "Report",
-                                    _ => "Codeunit",
-                                },
-                            );
-                            e.resolution = Resolution::Opaque;
-                        }
-                        (
-                            Target::Outside,
-                            RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. },
-                        ) => {
-                            e.resolution = external;
-                            e.external_type_ref = self.dependency_ref(route).flatten();
-                            self.record_target(&cs.id, route);
-                            if self.upgrade_dependency_bindings {
-                                self.upgrade_dependency(&mut state, route, &cs.id, c);
-                            }
-                        }
-                        (Target::Outside, RouteTarget::Builtin(_)) => {
-                            e.dispatch_kind = DispatchKind::Builtin;
-                            e.resolution = Resolution::Builtin;
-                        }
-                        (Target::Outside, RouteTarget::Unresolved) => {
-                            let reason = match route.evidence {
-                                Evidence::Unknown(reason) => reason,
-                                _ => PReason::IndexIntegrationGap,
-                            };
-                            let member_decline =
-                                member_reason(reason) && self.receiver_outside_workspace(ce, route);
-                            if member_decline {
-                                c.adapter_external_member_decline += 1;
-                            }
-                            // A run's entry trigger is "ambiguous" only when
-                            // it is ABI-collapse-marked: a dependency object.
-                            if reason == PReason::ObjectNotInGraph
-                                || reason == PReason::AbiCollapsedOverload
-                                || (is_run && reason == PReason::OverloadAmbiguous)
-                                || member_decline
-                            {
-                                e.resolution = external;
-                                e.external_type_ref = self.named_type_ref(cs, ce);
-                            } else {
-                                e.resolution = map_unknown(reason);
-                                // L3 spells an unresolved bare call `Unresolved`.
-                                if matches!(cs.callee, PCallee::Bare { .. })
-                                    && matches!(e.resolution, Resolution::Unknown(_))
-                                {
-                                    e.dispatch_kind = DispatchKind::Unresolved;
-                                }
-                            }
-                        }
-                    },
+            DispatchShape::Exact | DispatchShape::Multicast => match edge.routes.first() {
+                None => {
+                    c.adapter_empty_route_sites += 1;
+                    e.resolution = Resolution::Unknown(L3Reason::CalleeUnknown);
                 }
-            }
+                Some(route) => {
+                    self.route_into(&mut e, route, cs, ce, external, is_run, &mut state, c)?
+                }
+            },
         }
         if e.resolution == Resolution::Ambiguous {
             mark_bindings_ambiguous(&mut state);
@@ -1478,6 +1425,85 @@ impl<'a> Converter<'a> {
             }
         }
         Some((vec![e], state.bindings))
+    }
+
+    /// One route of a call site into `e`: its callee, resolution and kind.
+    /// `None` when a workspace callee has no L3 routine (the caller falls back
+    /// to L3).
+    #[allow(clippy::too_many_arguments)]
+    fn route_into(
+        &self,
+        e: &mut CallEdge,
+        route: &crate::program::resolve::edge::Route,
+        cs: &PCallSite,
+        ce: &ClassifiedEdge,
+        external: Resolution,
+        is_run: bool,
+        state: &mut BindingState,
+        c: &mut SiteCensus,
+    ) -> Option<()> {
+        match (self.target(route), &route.target) {
+            (Target::MissingFromModel, _) => return None,
+            (Target::Model(callee), _) => {
+                let id = Self::route_routine_id(route)?;
+                let _ = upgrade_bindings(state, callee, &cs.id);
+                e.to = Some(callee.id.clone());
+                e.resolution = Resolution::Resolved;
+                if let PCallee::Member { method, .. } = &cs.callee {
+                    if method.fold_identifier() == "run"
+                        && id.object.kind == al_syntax::ir::ObjectKind::Codeunit
+                        && id.name_lc == "onrun"
+                    {
+                        // `CuVar.Run()` lands on OnRun: L3's codeunit-run shape.
+                        e.dispatch_kind = DispatchKind::CodeunitRun;
+                    } else if e.dispatch_kind == DispatchKind::Method {
+                        e.receiver_type = self.receiver(ce).and_then(|f| f.type_text.clone());
+                    }
+                }
+            }
+            (Target::Outside, RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }) => {
+                e.resolution = external;
+                e.external_type_ref = self.dependency_ref(route).flatten();
+                self.record_target(&cs.id, route);
+                if self.upgrade_dependency_bindings {
+                    self.upgrade_dependency(state, route, &cs.id, c);
+                }
+            }
+            (Target::Outside, RouteTarget::Builtin(_)) => {
+                e.dispatch_kind = DispatchKind::Builtin;
+                e.resolution = Resolution::Builtin;
+            }
+            (Target::Outside, RouteTarget::Unresolved) => {
+                let reason = match route.evidence {
+                    Evidence::Unknown(reason) => reason,
+                    _ => PReason::IndexIntegrationGap,
+                };
+                let member_decline =
+                    member_reason(reason) && self.receiver_outside_workspace(ce, route);
+                if member_decline {
+                    c.adapter_external_member_decline += 1;
+                }
+                // A run's entry trigger is "ambiguous" only when it is
+                // ABI-collapse-marked: a dependency object.
+                if reason == PReason::ObjectNotInGraph
+                    || reason == PReason::AbiCollapsedOverload
+                    || (is_run && reason == PReason::OverloadAmbiguous)
+                    || member_decline
+                {
+                    e.resolution = external;
+                    e.external_type_ref = self.named_type_ref(cs, ce);
+                } else {
+                    e.resolution = map_unknown(reason);
+                    // L3 spells an unresolved bare call `Unresolved`.
+                    if matches!(cs.callee, PCallee::Bare { .. })
+                        && matches!(e.resolution, Resolution::Unknown(_))
+                    {
+                        e.dispatch_kind = DispatchKind::Unresolved;
+                    }
+                }
+            }
+        }
+        Some(())
     }
 
     /// Stage 2: upgrade a dependency callee's bindings with its parameter
@@ -2718,6 +2744,31 @@ mod adapter_tests {
         );
         assert_eq!(a.edges(&cs.id), vec![want.clone()]);
         assert_eq!(at(&a.old, &cs.id), vec![want], "L3 agrees");
+    }
+
+    /// S9.0d: a page run reaches the page's `OnOpenPage` AND each page
+    /// extension's; each is its own resolved edge (never an ambiguous
+    /// candidate set: the run calls them all).
+    #[test]
+    fn page_run_reaches_the_base_and_extension_entry_triggers() {
+        let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    begin\n        Page.Run(Page::\"P\");\n    end;\n}\n";
+        let page = "page 50102 \"P\"\n{\n    trigger OnOpenPage()\n    begin\n    end;\n}\n";
+        let ext = "pageextension 50103 \"PExt\" extends \"P\"\n{\n    trigger OnOpenPage()\n    begin\n    end;\n}\n";
+        let a = adapt(
+            &[("src/w.al", cu), ("src/p.al", page), ("src/e.al", ext)],
+            None,
+        );
+        let cs = a.site("Caller", "Page.Run");
+        let edges = a.edges(&cs.id);
+        assert!(
+            edges.iter().all(|e| e.resolution == Resolution::Resolved),
+            "{edges:?}"
+        );
+        let mut to: Vec<_> = edges.into_iter().filter_map(|e| e.to).collect();
+        to.sort();
+        to.dedup();
+        assert_eq!(to.len(), 2, "both triggers, each its own edge: {to:?}");
+        assert_eq!(a.census.adapter_multi_route_sites, 0);
     }
 
     /// A run through a page VARIABLE on a workspace page with no entry

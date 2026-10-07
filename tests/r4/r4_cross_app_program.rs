@@ -1606,3 +1606,69 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
     }
     assert!(wrong.is_empty(), "cases {wrong:?}");
 }
+
+/// S9.0d: a run of a DEPENDENCY page whose source declares no `OnOpenPage`
+/// reaches no routine (the resolver no longer invents an Opaque trigger), and
+/// the model still sees the dependency callee it saw before: an external
+/// callee naming that page, `PageRun` for `Page.Run(..)` and a method call for
+/// `PageVar.RunModal()`. Without the run target the adapter would turn both
+/// into the workspace shape (`PageRun`, no external type).
+#[test]
+fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.path().join("src/Main.al"),
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        P: Page \"Dep Page\";\n    begin\n        Page.Run(Page::\"Dep Page\");\n        P.RunModal();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Pages":[{{"Id":50110,"Name":"Dep Page"}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/DepPage.al",
+            "page 50110 \"Dep Page\"\n{\n    PageType = ConfirmationDialog;\n}\n",
+        )],
+        "",
+    );
+    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+        .expect("model")
+        .resolved;
+    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let mut got: Vec<String> = calls
+        .edges
+        .iter()
+        .filter(|e| routine_label(&m, &e.from) == "50201.Go")
+        .map(|e| {
+            format!(
+                "{:?} {:?} to={} ext={:?}",
+                e.dispatch_kind,
+                e.resolution,
+                e.to.is_some(),
+                e.external_type_ref
+                    .as_ref()
+                    .map(|t| (t.kind.as_str(), t.name.as_str()))
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            r#"Method ExternalTarget to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+            r#"PageRun Opaque to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+        ]
+    );
+}

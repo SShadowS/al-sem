@@ -129,6 +129,11 @@ pub struct SiteFacts {
     pub interface: Option<String>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,
+    /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
+    /// runs, when its entry triggers resolved to an EMPTY set (S9.0d: the
+    /// object's source declares none). The edge itself then names no routine;
+    /// the adapter needs the object to keep its run shape.
+    pub run_target: Option<ObjectNodeId>,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -571,6 +576,22 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                // An empty `Multicast` from an object receiver is a run of an
+                // object that declares no entry trigger (`dispatch_entry_trigger`).
+                if s == DispatchShape::Multicast
+                    && r.is_empty()
+                    && let ReceiverType::Object { kind, name_lc, id } = &recv
+                {
+                    facts_out.run_target =
+                        crate::program::resolve::resolver::object_receiver_target(
+                            kind,
+                            name_lc,
+                            id.as_ref(),
+                            obj_node,
+                            graph,
+                        )
+                        .map(|o| o.id.clone());
+                }
                 (s, r)
             } else {
                 (
@@ -631,6 +652,20 @@ fn resolve_call_site_obligation(
                     index,
                     surface,
                 );
+                if shape == DispatchShape::Multicast
+                    && routes.is_empty()
+                    && let Some(t) = target_ref
+                {
+                    facts_out.run_target = crate::program::resolve::resolver::object_run_target(
+                        caller_app,
+                        okind,
+                        t,
+                        *target_is_name,
+                        graph,
+                        index,
+                    )
+                    .map(|o| o.id.clone());
+                }
                 (EdgeKind::Run, shape, completeness, routes, None)
             } else {
                 // Unrecognised object kind — honest Unknown.
@@ -3049,6 +3084,66 @@ mod tests {
             .map(|ce| (ce.edge.shape, ce.edge.routes.len()))
             .collect();
         assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
+    }
+
+    /// S9.0d (compiler-oracle triage): a run reaches the entry triggers the
+    /// SOURCE declares, the base object's and each page extension's, and none
+    /// is invented for an object that declares none (a workspace
+    /// `ConfirmationDialog` page with no triggers used to get an Opaque
+    /// `onopenpage` boundary).
+    #[test]
+    fn object_runs_reach_the_declared_entry_triggers_only() {
+        use crate::program::resolve::edge::{ObligationOutcome, classify_obligation};
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "page 50000 NoTriggers\n{\n    PageType = ConfirmationDialog;\n}\n\
+             page 50001 WithOpen\n{\n    trigger OnOpenPage()\n    begin\n    end;\n}\n\
+             pageextension 50002 WithOpenExt extends WithOpen\n{\n    trigger OnOpenPage()\n    begin\n    end;\n}\n\
+             codeunit 50003 NoOnRun\n{\n    procedure X()\n    begin\n    end;\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        WP: Page NoTriggers;\n    begin\n        \
+             Page.RunModal(Page::NoTriggers); // static\n        \
+             WP.RunModal(); // typed\n        \
+             Page.Run(Page::WithOpen); // ext\n        \
+             Codeunit.Run(Codeunit::NoOnRun); // cu\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let at = |tag: &str| -> (Vec<ObligationOutcome>, Vec<String>) {
+            let line = src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+            let edges: Vec<_> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+                .collect();
+            let targets = edges
+                .iter()
+                .flat_map(|ce| ce.edge.routes.iter())
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(rid) => format!("{:?}:{}", rid.object.key, rid.name_lc),
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            (
+                edges
+                    .iter()
+                    .map(|ce| classify_obligation(&ce.edge))
+                    .collect(),
+                targets,
+            )
+        };
+        let empty = (vec![ObligationOutcome::HonestEmpty], Vec::<String>::new());
+        assert_eq!(at("// static"), empty);
+        assert_eq!(at("// typed"), empty);
+        assert_eq!(at("// cu"), empty);
+        let (outcomes, mut targets) = at("// ext");
+        targets.sort();
+        assert_eq!(outcomes, vec![ObligationOutcome::Resolved]);
+        assert_eq!(
+            targets,
+            vec![
+                "Id(50001):onopenpage".to_string(),
+                "Id(50002):onopenpage".to_string()
+            ]
+        );
     }
 
     /// S9.0e: an overload that exists only under a `#if` arm is a candidate
