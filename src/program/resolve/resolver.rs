@@ -1570,6 +1570,7 @@ pub fn resolve_bare(
         surface,
         with_state,
         &[],
+        None,
     )
 }
 
@@ -1581,7 +1582,12 @@ pub fn resolve_bare(
 /// query) that has no argument-typing context available or relevant — an
 /// empty `args` slice is behavior-neutral (Task 2's pick never fires without
 /// arguments to type).
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan).
+///
+/// `report_rec_table` (S9.0e): in a report dataitem trigger, the dataitem's
+/// table (`receiver::resolve_report_implicit_rec_table` of the calling
+/// routine). A bare call there falls back to that table's procedures, as a
+/// page's falls back to its SourceTable. `None` elsewhere.
+#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `report_rec_table`.
 pub(crate) fn resolve_bare_with_args(
     from_object: &ObjectNode,
     name_lc: &str,
@@ -1591,6 +1597,7 @@ pub(crate) fn resolve_bare_with_args(
     surface: &DeclSurface,
     with_state: WithState,
     args: &[ArgDispatchInfo],
+    report_rec_table: Option<&ObjectNodeId>,
 ) -> (DispatchShape, Vec<Route>) {
     // 1. Own object.
     if let Some((shape, routes)) = resolve_in_object(
@@ -1667,30 +1674,41 @@ pub(crate) fn resolve_bare_with_args(
     // independently fail-closed; any of them declining routes straight past
     // this step to Step 4/5 rather than guessing.
     //
-    // (0) STRICT ObjectKind guard: bare-implicit-Rec dispatch is structurally
-    // a Page/Table source-record mechanism in AL — ONLY these four kinds are
-    // eligible. Every other kind (Codeunit/Report/XmlPort/Query/…) skips this
-    // step entirely, no accidental leakage via `implicit_rec_table_id`'s own
-    // (defense-in-depth) kind match. Task 3: tag WHY it's skipped for the two
-    // named, high-volume excluded kinds (Codeunit/Report(Extension)) so the
-    // eventual Step 5 Unknown carries that context rather than the generic
-    // `MemberNotFound` default.
+    // (0) STRICT ObjectKind guard: bare-implicit-Rec dispatch is a Page/Table
+    // source-record mechanism, plus (S9.0e) a report dataitem trigger's
+    // dataitem record (`report_rec_table`; the AL compiler binds a bare call
+    // there to the dataitem table, and rejects it from a report procedure with
+    // AL0118). Every other kind (Codeunit/XmlPort/Query/…), and a report
+    // routine with no dataitem record, skips this step. Task 3: tag WHY it's
+    // skipped for the two named, high-volume excluded kinds
+    // (Codeunit/Report(Extension)) so the eventual Step 5 Unknown carries that
+    // context rather than the generic `MemberNotFound` default.
+    let is_report = matches!(
+        from_object.id.kind,
+        ObjectKind::Report | ObjectKind::ReportExtension
+    );
     if matches!(
         from_object.id.kind,
         ObjectKind::Table
             | ObjectKind::Page
             | ObjectKind::TableExtension
             | ObjectKind::PageExtension
-    ) {
+    ) || (is_report && report_rec_table.is_some())
+    {
         // (1) with-guard: Step 3 runs ONLY on a proven with-free call site.
         // `InsideWith`/`Unknown` (the AST places the site inside a `with`, or
         // the two with-detection signals disagree) skip Step 3 — a false
         // `Source` inside an unrepresented `with` is the fatal case this
         // guards against (see `WithState`'s doc).
         if with_state == WithState::NoWithProven {
-            // (2) Compute the implicit-Rec table id by kind; no unique
-            // in-closure table → fall through (nothing to search).
-            if let Some(table_id) = implicit_rec_table_id(from_object, graph, index) {
+            // (2) Compute the implicit-Rec table id by kind (a report's is its
+            // dataitem's, passed in); no unique in-closure table → fall through.
+            let table_id = if is_report {
+                report_rec_table.cloned()
+            } else {
+                implicit_rec_table_id(from_object, graph, index)
+            };
+            if let Some(table_id) = table_id {
                 // (3) Visibility-scoped table ∪ extensions search (Task 2):
                 // `NotVisible` falls through to Step 4/5 (tagging WHY when a
                 // candidate existed but was access-excluded); `Resolved` is a
@@ -1747,10 +1765,9 @@ pub(crate) fn resolve_bare_with_args(
         }
     } else if matches!(from_object.id.kind, ObjectKind::Codeunit) {
         reason = UnknownReason::CodeunitTableNoExcluded;
-    } else if matches!(
-        from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
-    ) {
+    } else if is_report {
+        // A report routine outside a dataitem trigger (a procedure, a request
+        // page trigger): no implicit Rec.
         reason = UnknownReason::ReportRecExcluded;
     }
 

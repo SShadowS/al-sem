@@ -1071,6 +1071,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bare call in a report dataitem trigger reaches the dataitem table**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 222 -> 136
+  (reportRecExcluded 87 -> 0); workspace metrics unchanged. The AL compiler
+  (alc 18.0.41.45789) binds a bare call in a dataitem trigger to the dataitem
+  table's procedure, and rejects the same call from a report procedure with
+  `AL0118: The name 'IsSpecial' does not exist in the current context`.
+  `resolve_bare_with_args` takes the routine's dataitem table
+  (`receiver::resolve_report_implicit_rec_table`), and Step 3 searches it as it
+  searches a page's SourceTable. Report routines without a dataitem record keep
+  `ReportRecExcluded`. The fixture test that pinned the old exclusion
+  (`ws_bare_implicit_rec_...`) and its row in `docs/b3-triage/r0-corpus.md` are
+  rebaselined; the Codeunit+TableNo half is unchanged.
+
 - **Namespace-qualified type names** (engine-switch S9.0e). CDO's dependency-body
   unknown edges 393 -> 222 (objectNotInGraph 134 -> 0); workspace metrics unchanged.
   Dependency code declares `Codeunit System.Telemetry."Feature Telemetry"` and

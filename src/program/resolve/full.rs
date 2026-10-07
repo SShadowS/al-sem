@@ -495,8 +495,27 @@ fn resolve_call_site_obligation(
             // Complete`, so this is behavior-preserving for every other
             // shape.
             let (shape, routes) = if let Some(obj_node) = obj_node_opt {
+                // A report dataitem trigger's implicit Rec (S9.0e).
+                let report_rec_table = matches!(
+                    obj_node.id.kind,
+                    ObjectKind::Report | ObjectKind::ReportExtension
+                )
+                .then(|| {
+                    crate::program::resolve::receiver::resolve_report_implicit_rec_table(
+                        routine, obj_node, graph, index,
+                    )
+                })
+                .flatten();
                 resolve_bare_with_args(
-                    obj_node, &name_lc, arity, graph, index, surface, with_state, &args_info,
+                    obj_node,
+                    &name_lc,
+                    arity,
+                    graph,
+                    index,
+                    surface,
+                    with_state,
+                    &args_info,
+                    report_rec_table.as_ref(),
                 )
             } else {
                 (
@@ -2428,6 +2447,40 @@ mod tests {
                 EvidenceKind::Catalog
             )]
         );
+    }
+
+    /// S9.0e: inside a report dataitem trigger, a bare call falls back to the
+    /// dataitem table's procedures (`if not IsInventoriableItem() then` in Base
+    /// Application's Get Demand To Reserve; reportRecExcluded before). A report
+    /// procedure has no implicit Rec, so the same call there stays unresolved.
+    #[test]
+    fn report_dataitem_trigger_bare_call_reaches_the_dataitem_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n\
+             procedure IsSpecial(): Boolean\n    begin\n    end;\n}\n\
+             report 50003 R\n{\n    dataset\n    {\n        dataitem(D; T)\n        {\n\
+             trigger OnAfterGetRecord()\n            begin\n                if IsSpecial() then;\n            end;\n        }\n    }\n\n\
+             procedure Helper()\n    begin\n        if IsSpecial() then;\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let routes = |caller: &str| -> Vec<String> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller)
+                .flat_map(|ce| ce.edge.routes.iter())
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(id) => id.name_lc.clone(),
+                    _ => format!("{:?}", r.evidence),
+                })
+                .collect()
+        };
+        assert_eq!(routes("onaftergetrecord"), vec!["isspecial"]);
+        assert_eq!(routes("helper"), vec!["Unknown(ReportRecExcluded)"]);
     }
 
     /// S9.0e: inside a report dataitem trigger, a bare field receiver is the

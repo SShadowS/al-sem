@@ -59,7 +59,8 @@ Differing sites by category:
 | program-site: Method/Unknown(UntrackedReceiver) -> Method/Resolved | 2 |
 | program-site: Method/Unknown(UntrackedReceiver), details | 8 |
 | program-site: Unresolved/Unknown(BareUnresolved) -> Direct/MemberNotFound | 1 |
-| program-site: Unresolved/Unknown(BareUnresolved), details | 10 |
+| program-site: Unresolved/Unknown(BareUnresolved) -> Direct/Resolved | 1 |
+| program-site: Unresolved/Unknown(BareUnresolved), details | 9 |
 | program-trigger: ImplicitTrigger/Maybe -> no edge | 1 |
 
 ## Differences
@@ -85,7 +86,7 @@ Differing sites by category:
 | ws-bare-implicit-rec/IRPageE.Page.al:20:9 | `StrLen` | Direct/Resolved -> Table IR Builtin Collide Table.StrLen | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(BuiltinPrecedenceCollision)] | program-site: Direct/Resolved -> Unresolved/Unknown(BareUnresolved) |
 | ws-bare-implicit-rec/IRPageG.Page.al:24:13 | `GetNameW` | Direct/Resolved -> Table IR With Target Table.GetNameW | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(WithScopeGuard)] | program-site: Direct/Resolved -> Unresolved/Unknown(BareUnresolved) |
 | ws-bare-implicit-rec/IRStrictKindCU2.Codeunit.al:15:9 | `Foo` | Unresolved/Unknown(BareUnresolved) method foo | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(CodeunitTableNoExcluded)] | program-site: Unresolved/Unknown(BareUnresolved), details |
-| ws-bare-implicit-rec/IRStrictKindReport.Report.al:14:17 | `Foo` | Unresolved/Unknown(BareUnresolved) method foo | Unresolved/Unknown(BareUnresolved) | Call Exact [Unknown(ReportRecExcluded)] | program-site: Unresolved/Unknown(BareUnresolved), details |
+| ws-bare-implicit-rec/IRStrictKindReport.Report.al:14:17 | `Foo` | Unresolved/Unknown(BareUnresolved) method foo | Direct/Resolved -> Table IR Strict Kind Table.Foo | Call Exact [Source] | program-site: Unresolved/Unknown(BareUnresolved) -> Direct/Resolved |
 | ws-bare-implicit-rec-field/RBFBase.Table.al:75:9 | `"No Such Field".DoIt` | Method/Unknown(UntrackedReceiver) shape other::no such field | Method/Unknown(UntrackedReceiver) | Call Exact [Unknown(UntrackedReceiver)] | program-site: Method/Unknown(UntrackedReceiver), details |
 | ws-bare-implicit-rec-field/RBFBase.Table.al:103:9 | `"Shadowed Field".CreateInStream` | Builtin/Builtin | Method/Unknown(UntrackedReceiver) | Call Exact [Unknown(UntrackedReceiver)] | program-site: Builtin/Builtin -> Method/Unknown(UntrackedReceiver) |
 | ws-bare-implicit-rec-field/RBFCaller.Codeunit.al:12:9 | `"File Blob".CreateInStream` | Method/Unknown(UntrackedReceiver) shape other::file blob | Method/Unknown(UntrackedReceiver) | Call Exact [Unknown(UntrackedReceiver)] | program-site: Method/Unknown(UntrackedReceiver), details |

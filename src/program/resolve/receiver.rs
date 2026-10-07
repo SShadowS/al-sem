@@ -2530,7 +2530,7 @@ fn infer_implicit_rec(
 /// (`al_syntax::lower::ident_text`) — the SAME convention
 /// [`node_extract::DataitemNode::name_lc`] storage uses — so a direct
 /// lowercase comparison is consistent on both sides without re-unquoting.
-fn resolve_report_implicit_rec_table(
+pub(crate) fn resolve_report_implicit_rec_table(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
     graph: &ProgramGraph,

@@ -9326,15 +9326,18 @@ fn ws_bare_implicit_rec_pageext_base_precedes_step3_source_table() {
     );
 }
 
-/// Test 27k (fixture k, NEGATIVE — strict-kind): Report and Codeunit+TableNo
-/// both call a bare `Foo();` matching a real, resolvable table procedure —
-/// Step 3's strict `ObjectKind` guard (`{Table, Page, TableExtension,
-/// PageExtension}` ONLY) structurally excludes both kinds, so neither
-/// resolves. The Codeunit+TableNo case is the stronger proof: its implicit
-/// Rec IS statically typed (Task 6, for EXPLICIT `Rec.Foo()` calls) yet the
-/// BARE fallback still never fires.
+/// Test 27k (fixture k): Report and Codeunit+TableNo both call a bare `Foo();`
+/// matching a real, resolvable table procedure.
+///
+/// REBASELINE (S9.0e): the Report call sits in a dataitem trigger, and the AL
+/// compiler binds a bare call there to the dataitem table's procedure (probe,
+/// alc 18.0.41.45789: compiles in `OnAfterGetRecord`; the same call in a report
+/// procedure fails with `AL0118: The name 'IsSpecial' does not exist in the
+/// current context`). So it now resolves to the table's `Foo`. The
+/// Codeunit+TableNo case still never resolves bare: its implicit Rec is typed
+/// for EXPLICIT `Rec.Foo()` calls only.
 #[test]
-fn ws_bare_implicit_rec_strict_kind_report_and_codeunit_tableno_stay_unknown() {
+fn ws_bare_implicit_rec_report_dataitem_resolves_codeunit_tableno_stays_unknown() {
     let report = ws_bare_implicit_rec_report();
 
     let report_edges = edges_for_object_routine(&report, 50991, "onaftergetrecord");
@@ -9344,11 +9347,11 @@ fn ws_bare_implicit_rec_strict_kind_report_and_codeunit_tableno_stay_unknown() {
         "IR Strict Kind Report.OnAfterGetRecord has 1 call obligation"
     );
     let report_route = &report_edges[0].edge.routes[0];
-    assert_eq!(report_route.target, RouteTarget::Unresolved);
-    assert!(
-        matches!(report_route.evidence, Evidence::Unknown(_)),
-        "Report is structurally excluded from Step 3; got {report_route:?}"
-    );
+    let RouteTarget::Routine(ref rid) = report_route.target else {
+        panic!("a dataitem trigger's bare call reaches the table; got {report_route:?}");
+    };
+    assert_eq!(rid.name_lc, "foo");
+    assert_eq!(rid.object.kind, ObjectKind::Table);
 
     let cu_edges = edges_for_object_routine(&report, 50992, "onrun");
     assert_eq!(
@@ -12098,7 +12101,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
 /// after the with-context reaches nested bare names in a chain. 393 after the
 /// chain return tables (Text, Dictionary, Json, Xml, record methods, built-ins).
-/// 222 after namespace-qualified type names.
+/// 222 after namespace-qualified type names. 136 after report dataitem triggers'
+/// bare calls reach the dataitem table.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12113,7 +12117,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 222;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 136;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
