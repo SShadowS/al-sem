@@ -1065,6 +1065,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A table write fires its trigger only when it asks to** (engine-switch S9.0c,
+  found by the compiler oracle). Measured on BC 28: `Insert()`, `Modify()` and
+  `Delete()` with no argument, or with `false`, run no table trigger; `true` runs
+  it. `ModifyAll(F, V, true)` runs `OnModify` and `DeleteAll(true)` runs `OnDelete`,
+  once per row; without `true` neither does. The program resolver now reads the
+  RunTrigger argument (slot 0, or slot 2 for `ModifyAll`): a missing argument is
+  `false`, a literal is its value, anything else stays unknown and keeps the edge.
+  `ModifyAll`/`DeleteAll` now map to `OnModify`/`OnDelete`.
+  - Goldens moved (triaged): `implicit-trigger-fixture.json` (the fixture now
+    writes with `true`; only its lines moved), `r2a-record-types.declaredvars.effects`
+    (6 -> 4 effects: `TempCust.Insert()` no longer inherits `OnInsert`'s writes),
+    `docs/b3-triage/r0-corpus.md` (+1 program-only trigger row).
+  - The CDO trigger audit's `fresh_missing` ceiling went 3 -> 103. The L3-minted
+    golden is wrong at those sites: every one is an argless or `false` write
+    (insert 69, delete 16, modify 11, insert(false) 7). S9.0d re-mints it.
+
 - **A record passed to an event keeps its temp state through the subscriber**
   (engine-switch S8, S8.6 triage cause 5). AL binds an event subscriber's
   parameters to the publisher's by NAME. A subscriber's write through its `var`

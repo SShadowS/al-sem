@@ -1988,8 +1988,8 @@ pub fn resolve_object_run(
 /// | `op`        | Trigger         |
 /// |-------------|-----------------|
 /// | `"insert"`  | `"oninsert"`    |
-/// | `"modify"`  | `"onmodify"`    |
-/// | `"delete"`  | `"ondelete"`    |
+/// | `"modify"`, `"modifyall"` | `"onmodify"` |
+/// | `"delete"`, `"deleteall"` | `"ondelete"` |
 /// | `"validate"`| `"onvalidate"`  |
 /// | `"rename"`  | `"onrename"`    |
 ///
@@ -2014,8 +2014,8 @@ pub fn resolve_implicit_trigger(
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name: &str = match op.fold_identifier().as_str() {
         "insert" => "oninsert",
-        "modify" => "onmodify",
-        "delete" => "ondelete",
+        "modify" | "modifyall" => "onmodify",
+        "delete" | "deleteall" => "ondelete",
         "validate" => "onvalidate",
         "rename" => "onrename",
         _ => {

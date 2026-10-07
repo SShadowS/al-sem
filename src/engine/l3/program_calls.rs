@@ -3438,10 +3438,11 @@ mod adapter_tests {
 
     /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to
     /// the program engine too, and takes its trigger edge from it, the same
-    /// edge L3 gives.
+    /// edge L3 gives. It passes `true`: an argless write fires no trigger
+    /// (measured on BC 28), so it would have no edge to compare.
     #[test]
     fn bare_record_op_takes_the_program_trigger_edge() {
-        let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
+        let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify(true);\n    end;\n}\n";
         let a = adapt(&[("src/t.al", table)], None);
         let op = &a.routine("P").record_operations[0];
         let want = at(&a.old, &op.id);

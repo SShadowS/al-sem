@@ -143,12 +143,15 @@ pub fn interface_route_applicable(
 /// its arguments (engine-switch S3.4: the resolver applies them, so the fan-out
 /// it emits is what can fire; the B3 adapter used to filter after the fact).
 ///
-/// Read EXACTLY as the body pipeline reads the same arguments, so the program
-/// edge and the detector model's record operation agree:
-/// - `run_trigger`: a boolean LITERAL in the run-trigger slot of `Modify` /
-///   `Delete` (argument 0). Anything else, including no argument and `Insert`
-///   (whose slot the body pipeline does not read — a recorded follow-up), is
-///   `None`: may fire.
+/// - `run_trigger`: the RunTrigger argument of `Insert` / `Modify` / `Delete` /
+///   `DeleteAll` (argument 0) and `ModifyAll` (argument 2). A boolean literal is
+///   `Some(b)`; a MISSING argument is `Some(false)`: measured on BC 28 (Cronus28,
+///   2026-10-07), `Insert()`, `Modify()`, `Delete()`, `ModifyAll(F, V)` and
+///   `DeleteAll()` run no table trigger, and `ModifyAll(F, V, true)` /
+///   `DeleteAll(true)` run it once per row. Any other expression is `None`
+///   (may fire). `Rename` and `Validate` take no RunTrigger and always fire.
+///   The body pipeline's `run_trigger` field stays literal-only: d29 reads it
+///   for the platform's database events, which are a different question.
 /// - `validate_field`: `Validate`'s first argument's source text, quotes
 ///   stripped, doubled quotes collapsed, folded (`implicit_edges`'
 ///   `normalize_field_name`).
@@ -169,13 +172,18 @@ impl TriggerSiteRule {
         text: &str,
     ) -> Self {
         use al_syntax::ir::{ExprKind, Literal};
-        let run_trigger = match op_lc {
-            "modify" | "delete" => args.first().and_then(|&a| match &file.ir.expr(a).kind {
-                ExprKind::Literal(Literal::Bool(b)) => Some(*b),
-                _ => None,
-            }),
+        let slot = match op_lc {
+            "insert" | "modify" | "delete" | "deleteall" => Some(0),
+            "modifyall" => Some(2),
             _ => None,
         };
+        let run_trigger = slot.and_then(|i| match args.get(i) {
+            None => Some(false),
+            Some(&a) => match &file.ir.expr(a).kind {
+                ExprKind::Literal(Literal::Bool(b)) => Some(*b),
+                _ => None,
+            },
+        });
         let is_validate = op_lc == "validate";
         let validate_field = if is_validate {
             args.first()
@@ -195,8 +203,8 @@ impl TriggerSiteRule {
         }
     }
 
-    /// Can this site fire the trigger routine `target`? A literal
-    /// `RunTrigger = false` fires nothing; a `Validate` fires only its own
+    /// Can this site fire the trigger routine `target`? `RunTrigger = false`
+    /// (a literal, or the argument left out) fires nothing; a `Validate` fires only its own
     /// field's `OnValidate`.
     #[must_use]
     pub fn admits(&self, target: &RoutineNodeId) -> bool {
@@ -885,11 +893,18 @@ mod tests {
 mod trigger_site_rule_tests {
     use crate::program::resolve::edge::{EdgeKind, RouteTarget};
 
-    /// S3.4, pinned at the resolver's USE (a full program build, not the rule
-    /// function alone): a table with `OnModify` and two fields with `OnValidate`.
-    /// `Modify(false)` fires nothing, `Modify()` fires `OnModify`, and
-    /// `Validate(A)` fires only field A's `OnValidate` — before S3.4 the program
-    /// edges carried every trigger of the name.
+    /// S3.4 + S9.0c, pinned at the resolver's USE (a full program build, not the
+    /// rule function alone): a table with `OnInsert`/`OnModify`/`OnDelete` and two
+    /// fields with `OnValidate`. Each case is one procedure's single record op and
+    /// the triggers its edge may carry. Measured on BC 28 (Cronus28, 2026-10-07):
+    /// a write without the RunTrigger argument runs no trigger, and
+    /// `ModifyAll(.., true)` / `DeleteAll(true)` run it per row.
+    ///
+    /// Discrimination (2026-10-07): mapping a missing argument back to `None`
+    /// fails `insert`, `modify`, `delete`, `deleteall` and `modifyall` (they
+    /// fire again); dropping `modifyall`/`deleteall` from
+    /// `resolve_implicit_trigger` fails `modifyall-true` and `deleteall-true`;
+    /// restored, all pass.
     #[test]
     fn implicit_trigger_edges_carry_only_what_the_site_can_fire() {
         let root = std::env::temp_dir().join(format!("s34-trig-{}", std::process::id()));
@@ -902,28 +917,47 @@ mod trigger_site_rule_tests {
         .unwrap();
         std::fs::write(
             root.join("src/T.Table.al"),
-            "table 50100 T\n{\n    fields\n    {\n        field(1; A; Code[20]) { trigger OnValidate() begin end; }\n        field(2; B; Code[20]) { trigger OnValidate() begin end; }\n    }\n    trigger OnModify()\n    begin\n    end;\n}\n",
+            "table 50100 T\n{\n    fields\n    {\n        field(1; A; Code[20]) { trigger OnValidate() begin end; }\n        field(2; B; Code[20]) { trigger OnValidate() begin end; }\n    }\n    trigger OnInsert()\n    begin\n    end;\n    trigger OnModify()\n    begin\n    end;\n    trigger OnDelete()\n    begin\n    end;\n}\n",
         )
         .unwrap();
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("insert", "R.Insert()", &[]),
+            ("insertfalse", "R.Insert(false)", &[]),
+            ("inserttrue", "R.Insert(true)", &[":oninsert"]),
+            ("modify", "R.Modify()", &[]),
+            ("modifyfalse", "R.Modify(false)", &[]),
+            ("modifytrue", "R.Modify(true)", &[":onmodify"]),
+            ("modifyvar", "R.Modify(X)", &[":onmodify"]),
+            ("delete", "R.Delete()", &[]),
+            ("deletetrue", "R.Delete(true)", &[":ondelete"]),
+            ("modifyall", "R.ModifyAll(A, '')", &[]),
+            ("modifyalltrue", "R.ModifyAll(A, '', true)", &[":onmodify"]),
+            ("deleteall", "R.DeleteAll()", &[]),
+            ("deletealltrue", "R.DeleteAll(true)", &[":ondelete"]),
+            ("val", "R.Validate(A)", &["a:onvalidate"]),
+        ];
+        let body: String = cases
+            .iter()
+            .map(|(name, stmt, _)| {
+                format!("    procedure {name}(X: Boolean)\n    var\n        R: Record T;\n    begin\n        {stmt};\n    end;\n\n")
+            })
+            .collect();
         std::fs::write(
             root.join("src/C.Codeunit.al"),
-            "codeunit 50101 C\n{\n    procedure NoTrig()\n    var\n        R: Record T;\n    begin\n        R.Modify(false);\n    end;\n\n    procedure Default()\n    var\n        R: Record T;\n    begin\n        R.Modify();\n    end;\n\n    procedure Val()\n    var\n        R: Record T;\n    begin\n        R.Validate(A);\n    end;\n}\n",
+            format!("codeunit 50101 C\n{{\n{body}}}\n"),
         )
         .unwrap();
         let (_ctx, report, _) =
             crate::program::resolve::full::build_program_with_coverage(&root).unwrap();
         std::fs::remove_dir_all(&root).ok();
         let routes_of = |caller: &str| -> Vec<String> {
-            let e = report
+            report
                 .edges
                 .iter()
-                .find(|ce| {
+                .filter(|ce| {
                     ce.edge.kind == EdgeKind::ImplicitTrigger && ce.edge.from.name_lc == caller
                 })
-                .unwrap_or_else(|| panic!("no trigger edge from {caller}"));
-            e.edge
-                .routes
-                .iter()
+                .flat_map(|e| e.edge.routes.iter())
                 .map(|r| match &r.target {
                     RouteTarget::Routine(id) => format!(
                         "{}:{}",
@@ -934,8 +968,13 @@ mod trigger_site_rule_tests {
                 })
                 .collect()
         };
-        assert_eq!(routes_of("notrig"), Vec::<String>::new());
-        assert_eq!(routes_of("default"), vec![":onmodify".to_string()]);
-        assert_eq!(routes_of("val"), vec!["a:onvalidate".to_string()]);
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(name, _, want)| {
+                let got = routes_of(name);
+                (got != *want).then(|| format!("{name}: {got:?} (want {want:?})"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "cases {wrong:?}");
     }
 }

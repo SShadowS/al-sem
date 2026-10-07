@@ -1,8 +1,6 @@
 --- effects of Codeunit R2a Records::DeclaredVars ---
-  6 effect(s)
+  4 effect(s)
     [FindFirst] on Sales Line via direct, temp known(false) — Codeunit R2a Records::DeclaredVars at ws:src/Codeunit.al:17
     [FindSet] on Customer via direct, temp known(false) — Codeunit R2a Records::DeclaredVars at ws:src/Codeunit.al:16
     [Get] on unknown (target table unresolved — not a table) via direct, temp known(false) — Codeunit R2a Records::DeclaredVars at ws:src/Codeunit.al:19
     [Insert] on Customer via direct, temp known(true) — Codeunit R2a Records::DeclaredVars at ws:src/Codeunit.al:18
-    [Modify] on Customer via implicit-trigger, temp known(false) — Table Customer::OnInsert at ws:src/Tables.al:23
-    [Modify] on Customer via implicit-trigger, temp known(false) — Table Customer::OnInsert at ws:src/Tables.al:24

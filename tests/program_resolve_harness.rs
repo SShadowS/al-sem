@@ -4276,14 +4276,22 @@ fn cdo_trigger_audit_frozen_load() {
     // the gate-completeness deletion this fix restores, so asserting literal
     // `matches == total_paired` would fail on a KNOWN, already-accepted gap,
     // not a new one. Pin it as a CEILING instead (same pattern as Test 16):
-    // any NEW drop (4+) is a real completeness regression and FAILS.
-    const FRESH_MISSING_CEILING: usize = 3;
+    // any NEW drop is a real completeness regression and FAILS.
+    //
+    // S9.0c (2026-10-07) raised it 3 -> 103, and the golden is the one that is
+    // wrong. Measured on BC 28: `Insert()`/`Modify()`/`Delete()` with no
+    // RunTrigger argument, or with `false`, run NO table trigger. L3 minted a
+    // trigger edge for every write, so this golden claims a trigger at sites
+    // that cannot fire one. All 103 missing sites, read back through the local
+    // deanon map, are such writes: insert() 69, delete() 16, modify() 11,
+    // insert(false) 7. None passes `true`. S9.0d re-mints this golden from the
+    // compiler's graph with the measured rule, and the ceiling goes back down.
+    const FRESH_MISSING_CEILING: usize = 103;
     assert!(
         audit.fresh_missing <= FRESH_MISSING_CEILING,
         "COMPLETENESS REGRESSION: ImplicitTrigger fresh_missing={} exceeds the \
-         recorded ceiling {} (stable since the golden's 1B.3b Task 1 mint-time \
-         verification — see task-1-report.md). A NEW dropped trigger target. \
-         Investigate before raising the ceiling.",
+         recorded ceiling {} (see the S9.0c note above). A NEW dropped \
+         trigger target. Investigate before raising the ceiling.",
         audit.fresh_missing,
         FRESH_MISSING_CEILING,
     );
