@@ -1097,7 +1097,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails AL0122 naming `Enum E`; a `Method = Sum` column of a Decimal reports
   `Decimal`). The lowerer now records each plain column (no `Method`) with
   its innermost dataitem's table (`ObjectDecl::query_columns`), the graph
-  carries it (`ObjectNode::query_columns`), and the chain typer reads a
+  carries it (`ObjectNode::query_columns`; dependency pack schema 5, bumped
+  in a follow-up commit), and the chain typer reads a
   `Query` var's `.Column` as that field, with the record-field arm's guards
   (bare member only; a same-named query procedure declines). A `Method`
   column still declines. Test
