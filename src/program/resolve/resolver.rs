@@ -1476,8 +1476,43 @@ static INSTANCE_ONLY_NEVER_BARE: phf::Set<&'static str> = phf_set! {
 /// short-circuits BOTH to "not a builtin reading" — never a partial fix
 /// applied to only one of the two call sites.
 fn is_proven_never_bare_call(name_lc: &str) -> bool {
-    INSTANCE_ONLY_NEVER_BARE.contains(name_lc)
+    INSTANCE_ONLY_NEVER_BARE.contains(name_lc) || NO_BARE_GLOBAL_FORM.contains(name_lc)
 }
+
+/// A Page that declares no `SourceTable`, or a PageExtension where neither it
+/// nor its (resolved) base page declares one: no implicit Rec exists (S9.0e).
+fn page_has_no_source_table(
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> bool {
+    match from_object.id.kind {
+        ObjectKind::Page => from_object.source_table.is_none(),
+        ObjectKind::PageExtension => {
+            from_object.source_table.is_none()
+                && crate::program::resolve::receiver::resolve_pageext_base_page(
+                    from_object,
+                    graph,
+                    index,
+                )
+                .and_then(|id| crate::program::resolve::receiver::object_by_id(graph, &id))
+                .is_some_and(|base| base.source_table.is_none())
+        }
+        _ => false,
+    }
+}
+
+/// Names in `GLOBAL_BUILTIN_METHODS` (the union of every type's methods) that
+/// alc proved have NO bare global form (S9.0e), each probed in a codeunit:
+/// - `createtask` (`TaskScheduler.CreateTask` only): a bare `CreateTask()`
+///   fails AL0118, and in a report dataitem trigger it binds the dataitem
+///   table's own `CreateTask` (alc 18.0.41.45789; CDO `SalesQuoteGB`).
+///
+/// Unlike [`INSTANCE_ONLY_NEVER_BARE`], none of these is a page-instance
+/// method, so Step 4a never binds them either. Add a name only with a probe.
+static NO_BARE_GLOBAL_FORM: phf::Set<&'static str> = phf_set! {
+    "createtask",
+};
 
 /// Whether `name_lc` is a global builtin OR a bare-callable page/instance
 /// intrinsic (`member_catalog`'s `PageInstance` set: `Update`/`Close`/
@@ -1752,9 +1787,11 @@ pub(crate) fn resolve_bare_with_args(
                         }
                     }
                 }
-            } else {
+            } else if !page_has_no_source_table(from_object, graph, index) {
                 // No unique in-closure implicit-Rec table (ambiguous
-                // cross-app name, out-of-closure, or unresolved).
+                // cross-app name, out-of-closure, or unresolved). A page with
+                // no `SourceTable` at all has no implicit Rec to miss, so it
+                // keeps `MemberNotFound` and reaches Step 4a (S9.0e).
                 reason = UnknownReason::ReceiverOutOfClosure;
             }
         } else {

@@ -1071,6 +1071,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`CreateTask` has no bare global form; a page with no `SourceTable` has
+  no implicit `Rec`** (engine-switch S9.0e). CDO's dependency-body unknown
+  edges 8 -> 6; workspace metrics unchanged.
+  - A bare `CreateTask()` in a report dataitem trigger was a
+    `BuiltinPrecedenceCollision`, because `GLOBAL_BUILTIN_METHODS` (the union
+    of every type's methods) lists `TaskScheduler.CreateTask`. alc
+    18.0.41.45789 rejects a bare `CreateTask()` in a codeunit with AL0118 and
+    binds it in a dataitem trigger to the dataitem table's procedure. The name
+    joins a new probe-grounded set, `NO_BARE_GLOBAL_FORM`.
+  - Step 3 labelled every page without an implicit-Rec table
+    `ReceiverOutOfClosure`, including a page that declares no `SourceTable`
+    at all. Such a page (or a page extension whose base declares none) now
+    keeps `MemberNotFound`, so its bare `Caption(..)` reaches Step 4a.
+  - Test `grounded_bare_calls_bind_the_table_or_the_page`; undoing either
+    change fails it.
 - **A `#pragma` inside an argument list is no argument** (engine-switch
   S9.0e). CDO's dependency-body unknown edges 10 -> 8; workspace metrics
   unchanged. The grammar keeps a `#pragma warning disable` line that sits

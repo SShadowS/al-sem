@@ -3016,6 +3016,55 @@ mod tests {
         }
     }
 
+    /// S9.0e, alc-probed: a bare `CreateTask()` has no global form (AL0118 in
+    /// a codeunit), so in a report dataitem trigger the dataitem table's own
+    /// `CreateTask` binds; and a page with no `SourceTable` binds a bare
+    /// `Caption(..)` to the page itself.
+    #[test]
+    fn grounded_bare_calls_bind_the_table_or_the_page() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50000 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n    procedure CreateTask()\n    begin\n    end;\n}\n\
+             report 50000 R\n{\n    dataset\n    {\n        dataitem(H; T)\n        {\n            trigger OnAfterGetRecord()\n            begin\n                CreateTask();\n            end;\n        }\n    }\n}\n\
+             page 50000 P\n{\n    trigger OnOpenPage()\n    begin\n        Caption('x');\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let targets: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                matches!(
+                    ce.edge.from.name_lc.as_str(),
+                    "onaftergetrecord" | "onopenpage"
+                )
+            })
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Routine(rid) => format!("routine {}", rid.name_lc),
+                RouteTarget::Builtin(b) => format!("builtin {}", b.0),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let page_caption = crate::program::resolve::member_catalog::member_builtin_id(
+            crate::program::resolve::member_catalog::MemberCatalogKind::Framework(
+                &crate::program::resolve::receiver::FrameworkKind::PageInstance,
+            ),
+            "caption",
+        )
+        .expect("caption is a PageInstance member");
+        assert!(
+            targets.contains(&"routine createtask".to_string()),
+            "{targets:?}"
+        );
+        assert!(
+            targets.contains(&format!("builtin {}", page_caption.0)),
+            "{targets:?}"
+        );
+    }
+
     /// S9.0e: a namespace-qualified enum type name types as the enum type,
     /// with or without `Enum::`; a name that is no enum stays Unknown.
     #[test]

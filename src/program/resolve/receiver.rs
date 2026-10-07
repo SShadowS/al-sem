@@ -2987,7 +2987,7 @@ pub(crate) fn resolve_tableext_base_table(
 /// (ambiguous, out-of-closure, unresolved) — never guess. Shared by
 /// [`resolve_pageext_base_source_table`] (Task 5's implicit-`Rec` base-page
 /// lookup) and [`find_page_control`] (Task 7's PageExtension control merge).
-fn resolve_pageext_base_page(
+pub(crate) fn resolve_pageext_base_page(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
