@@ -1071,6 +1071,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `#pragma` inside an argument list is no argument** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 10 -> 8; workspace metrics
+  unchanged. The grammar keeps a `#pragma warning disable` line that sits
+  between two arguments inside `argument_list`. `lower_arguments` lowered it
+  as an argument, so Continia's `CreateDefaultPaymentMeans(..)` (6 arguments)
+  read as 8 and missed its 6-parameter target (`arityMismatch`). The lowerer
+  now skips `pragma`, `#region` and `#endregion` there, as the statement
+  lowerer already did. Test `pragma_inside_an_argument_list_is_no_argument`;
+  removing the `Pragma` arm fails it (5 arguments read).
 - **A namespace-qualified enum type name types as the enum** (engine-switch
   S9.0e). CDO's dependency-body unknown edges 12 -> 10; workspace metrics
   unchanged. `Microsoft.Foundation.Enums."Supply Document Type".FromInteger(..)`

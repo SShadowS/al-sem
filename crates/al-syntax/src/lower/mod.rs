@@ -2160,6 +2160,11 @@ fn lower_arguments(
     let mut args = Vec::new();
     for c in structural_children(al) {
         match c.kind() {
+            // A directive line inside the list (`#pragma warning disable` between
+            // two arguments) is no argument (S9.0e: it inflated the arity, so
+            // the call missed its 6-parameter target). The statement lowerer
+            // skips the same kinds.
+            RawKind::Pragma | RawKind::PreprocRegion | RawKind::PreprocEndregion => {}
             RawKind::PreprocConditionalExpressionTail => {}
             RawKind::PreprocConditionalArguments => {
                 issues.push(SyntaxIssue {
@@ -3736,6 +3741,36 @@ codeunit 50105 T
                 .all(|s| !matches!(s.kind, StmtKind::Unknown)),
             "#region/#endregion must never fabricate an Unknown statement"
         );
+    }
+
+    /// S9.0e: a `#pragma` line between two arguments is no argument. The grammar
+    /// keeps it inside `argument_list`; counting it inflated the arity (CDO:
+    /// `CreateDefaultPaymentMeans(..)` — 6 args read as 8, an arity mismatch).
+    #[test]
+    fn pragma_inside_an_argument_list_is_no_argument() {
+        let src = r#"
+codeunit 50106 T
+{
+    procedure P()
+    begin
+        F(A,
+#pragma warning disable AA0139
+            B,
+#pragma warning restore AA0139
+            C);
+    end;
+}
+"#;
+        let af = parse(src);
+        let arg_counts: Vec<usize> = af
+            .ir
+            .iter_exprs()
+            .filter_map(|e| match &e.kind {
+                ExprKind::Call { args, .. } => Some(args.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arg_counts, vec![3]);
     }
 
     /// T1.4 review finding 1a: `preproc_split_procedure_body` — a plain (non-preamble,
