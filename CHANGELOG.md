@@ -374,6 +374,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The r4/r4f test helper builds the production model** (engine-switch S9.3).
+  `assemble_and_resolve_workspace_with_program_calls` built L3's disk model and
+  attached the program calls to it; it now calls
+  `assemble_and_resolve_workspace_program`, the builder `alsem analyze` uses.
+  No golden moved (all nine `check-goldens` targets green), as S2b.4's census
+  predicted.
+
 - **The semantic-edges golden is minted from the AL compiler, not from L3**
   (engine-switch S9.0d, owner decision R1).
   - `scripts/compiler-graph <workspace> <out>` extracts the dependency sources

@@ -629,8 +629,8 @@ pub fn resolved_calls_from_program(
 /// build the event graph from the program engine's subscriptions (S4.2), drop
 /// the program model, and set `resolved.precomputed_calls` and
 /// `resolved.precomputed_events`. `alsem
-/// analyze` and [`assemble_and_resolve_workspace_with_program_calls`] both
-/// use it, so a test cannot drift from the production path.
+/// analyze` and [`assemble_and_resolve_workspace_program`] both use it, so a
+/// test cannot drift from the production path.
 pub fn attach_program_calls(
     resolved: &mut crate::engine::l3::l3_workspace::L3Resolved,
     ctx: ProgramContext,
@@ -672,20 +672,20 @@ fn attach_program_calls_with(
     crate::engine::l3::event_param_temp::prove_event_param_temps(resolved);
 }
 
-/// `assemble_and_resolve_workspace_default` plus the production call
-/// resolution ([`attach_program_calls`]): the L3 model the detectors see in
-/// `alsem analyze`. `None` if either build fails. For tests that pin detector
-/// output (r4/r4f goldens).
+/// [`assemble_and_resolve_workspace_program`] with the default model-instance id
+/// and `roots.config.json` read: the model the detectors see in `alsem analyze`.
+/// `None` if the build fails. For tests that pin detector output (r4/r4f
+/// goldens). Until engine-switch S9.3 it built L3's disk model and attached the
+/// program calls to it; no golden moved when it switched.
 #[must_use]
 pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
 ) -> Option<crate::engine::l3::l3_workspace::L3Resolved> {
-    let (ctx, report, _) =
-        crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
-    let mut resolved =
-        crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(workspace)?;
-    attach_program_calls(&mut resolved, ctx, report);
-    Some(resolved)
+    assemble_and_resolve_workspace_program(
+        workspace,
+        crate::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
 }
 
 /// The program-backed model every consumer moves onto in engine-switch S6: the

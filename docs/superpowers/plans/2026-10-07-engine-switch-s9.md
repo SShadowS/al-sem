@@ -114,7 +114,7 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     checks every single-app r0-corpus fixture (rows, calls, events, root
     classifications) against the disk build.
 - **S9.3 The r4/r4f helper uses the production builder.** Triage any move (expected
-  none if S2b.4's census holds).
+  none if S2b.4's census holds). **Done (2026-10-08): zero goldens moved.**
 - **S9.4 Move the keepers out of `engine/l3`** (pure moves): the adapter
   (`program_calls`), `event_param_temp`, binding helpers, `coverage` (minus
   `project_coverage_cross_app`), `calls_for`/`events_for`/`isolated_event_ids`.
