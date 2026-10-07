@@ -512,6 +512,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // same additive gap as SourceTable/TableNo/page-controls above (dataitem
             // receivers, Task 1: source `extract_nodes` path only).
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             // ABI ingestion is a JSON deserialization, never a tree-sitter parse — the
             // `parse_incomplete` concept (error-recovered CST) does not apply here; ABI's

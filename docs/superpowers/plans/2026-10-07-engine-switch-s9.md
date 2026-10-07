@@ -78,9 +78,9 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
        `CoreSessionManager.Codeunit.al:77/86` twice) where a call sees both arms of
        one routine. Removing them needs the call's build context (its `#if` branch
        and its caller's arm symbols) in overload selection (`resolve_in_object`).
-    2-3. compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`:
-       `QueryVar.EntryType.AsInteger()` — query columns are not modelled (need column
-       name -> source field type).
+    2-3. FIXED (3 -> 1): compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`,
+       `QueryVar.EntryType.AsInteger()`. A plain query column (no `Method`) now types
+       as its source field.
     4. untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`:
        `EventConditions.AddText(..)` — an XmlPort `textattribute(EventConditions)` used
        as a BigText; XmlPort text nodes are not modelled.

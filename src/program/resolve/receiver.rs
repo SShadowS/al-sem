@@ -2009,6 +2009,40 @@ fn infer_compound_member_receiver(
         return parsed_type_to_receiver(parsed, from_object, graph, index);
     }
 
+    // A query's plain column (`Q.EntryType.AsInteger()`, S9.0e): it has its
+    // source field's type (alc 18.0.41.45789, see `QueryColumnNode`). The same
+    // shape and guards as the record-field arm above: a bare `Member` only, a
+    // same-named query procedure (a parens-less call) declines, and the column,
+    // its dataitem table and the field must each resolve uniquely. The field and
+    // its type are read from the query's own scope.
+    if !is_method
+        && let ReceiverType::Object {
+            kind: ObjectKind::Query,
+            name_lc: query_lc,
+            id,
+        } = &base_ty
+        && let Some(query) = match id {
+            Some(id) => object_by_id(graph, id),
+            None => graph.resolve_object(from_object.id.app, ObjectKind::Query, query_lc),
+        }
+        && index
+            .routines_in_object(graph, &query.id, &member_lc)
+            .next()
+            .is_none()
+        && let [column] = query
+            .query_columns
+            .iter()
+            .filter(|c| c.name_lc == member_lc)
+            .collect::<Vec<_>>()
+            .as_slice()
+        && let Some(table_id) =
+            resolve_source_table_ref(query.id.clone(), &column.source_table, graph, index)
+        && let Some(field) = index.field_in_table(graph, query, &table_id, &column.field_lc)
+    {
+        let parsed = classify_type_text(&field.type_text);
+        return parsed_type_to_receiver(parsed, query, graph, index);
+    }
+
     // Cross-object call-result chain (plan v2.1 Task 3) — see this
     // function's doc. `is_method` gates the shape (procedure-CALL form
     // only); `surface` gates on the caller having supplied one
@@ -3736,6 +3770,7 @@ mod tests {
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             };
@@ -3860,6 +3895,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         }

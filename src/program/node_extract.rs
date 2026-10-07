@@ -88,6 +88,16 @@ pub struct DataitemNode {
     pub source_table: ObjectRef,
 }
 
+/// One plain query column (Query only, S9.0e): `column(Name; "Field")` with no
+/// `Method`, which has its source field's type. `source_table` is its enclosing
+/// dataitem's table; `field_lc` the lowercased, unquoted source field name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryColumnNode {
+    pub name_lc: String,
+    pub source_table: ObjectRef,
+    pub field_lc: String,
+}
+
 /// One table field surface entry (Table / TableExtension only) — Task 3
 /// (record-field chains). `name_lc` is the lowercased, UNQUOTED field name
 /// (mirrors [`RoutineNode`]'s `name_lc`/`RoutineNodeId::name_lc` convention —
@@ -143,6 +153,9 @@ pub struct ObjectNode {
     /// `receiver::resolve_dataitem_source_table` (Step 2b's dataitem-NAME
     /// receiver lookup, and the report implicit-Rec fallback).
     pub dataitems: Vec<DataitemNode>,
+    /// A Query's plain columns, document order; empty for every other kind.
+    /// Consumed by `receiver::infer_compound_member_receiver` (`Q.Column.X()`).
+    pub query_columns: Vec<QueryColumnNode>,
     /// The object's `protected var` globals as `(name lowercased, declared type
     /// text)`, document order: what an extension of it can read (S9.0e).
     pub protected_vars: Vec<(String, String)>,
@@ -668,6 +681,15 @@ pub fn extract_nodes(
             page_controls,
             fields,
             dataitems,
+            query_columns: obj
+                .query_columns
+                .iter()
+                .map(|(name, table, field)| QueryColumnNode {
+                    name_lc: name.fold_identifier(),
+                    source_table: parse_object_ref_value(table).0,
+                    field_lc: field.fold_identifier(),
+                })
+                .collect(),
             protected_vars: obj
                 .protected_globals
                 .iter()
@@ -835,6 +857,7 @@ pub(crate) mod test_fixtures {
                 name: "Customer".to_string(),
                 source_table: ObjectRef::Id(18),
             }],
+            query_columns: Vec::new(),
             protected_vars: vec![("item".to_string(), "Record Item".to_string())],
             parse_incomplete: true,
         }

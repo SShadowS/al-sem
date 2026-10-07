@@ -246,6 +246,10 @@ fn lower_object(
     ) {
         collect_dataitems(node, source, &mut dataitems);
     }
+    let mut query_columns = Vec::new();
+    if kind == ObjectKind::Query {
+        collect_query_columns(node, "", source, &mut query_columns);
+    }
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
     // non-extension objects (no such field).
@@ -304,6 +308,7 @@ fn lower_object(
         protected_globals,
         properties,
         dataitems,
+        query_columns,
         extends_target,
         implements,
         page_controls,
@@ -533,6 +538,47 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
 /// Collect every report `dataitem(Name; "Source Table")` (incl. nested) as
 /// `(name, source-table)`, both unquoted, document order. Mirrors the legacy
 /// `report_dataitem_record_vars`.
+/// A query's plain columns (see [`crate::ir::ObjectDecl::query_columns`]): each
+/// `query_column` with a `field_name` and no `Method` property, paired with the
+/// source table of its innermost enclosing `query_dataitem` (`table`).
+fn collect_query_columns(
+    node: RawNode,
+    table: &str,
+    source: &str,
+    out: &mut Vec<(String, String, String)>,
+) {
+    for child in node.named_children() {
+        match child.kind() {
+            RawKind::QueryDataitem => {
+                let inner = child
+                    .field(FieldName::TableName)
+                    .map(|n| ident_text(n, source))
+                    .unwrap_or_default();
+                collect_query_columns(child, &inner, source, out);
+            }
+            RawKind::QueryColumn => {
+                let name = child.field(FieldName::Name).map(|n| ident_text(n, source));
+                let field = child
+                    .field(FieldName::FieldName)
+                    .map(|n| ident_text(n, source));
+                let mut props = Vec::new();
+                if let Some(body) = child.field(FieldName::Body) {
+                    for p in body.named_children() {
+                        collect_properties(p, source, &mut props);
+                    }
+                }
+                if let (Some(name), Some(field)) = (name, field)
+                    && !table.is_empty()
+                    && !props.iter().any(|p| p.name == "method")
+                {
+                    out.push((name, table.to_string(), field));
+                }
+            }
+            _ => collect_query_columns(child, table, source, out),
+        }
+    }
+}
+
 fn collect_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)>) {
     for child in node.named_children() {
         // `tableelement(Name; Table)` (S9.0e): an XmlPort's record variable.
@@ -856,11 +902,6 @@ fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-// 7 pre-existing params + `in_dataset_modify_context`
-// (dataitem-receivers plan, Task 1); each is a distinct piece of context
-// `collect_routines`'s DFS threads down — grouping would obscure the call
-// site, mirrors `infer_receiver_type`'s identical precedent.
 /// The header arms of a routine node, as byte ranges, plus where its shared tail
 /// starts. A `preproc_split_procedure` / `preproc_split_procedure_preamble` repeats
 /// its header (`name`, `parameters`, `modifier`, return, attributes and, for the
@@ -994,6 +1035,10 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
 }
 
 #[allow(clippy::too_many_arguments)]
+// 7 pre-existing params + `in_dataset_modify_context`
+// (dataitem-receivers plan, Task 1) + the header arm; each is a distinct piece of
+// context `collect_routines`'s DFS threads down — grouping would obscure the call
+// site, mirrors `infer_receiver_type`'s identical precedent.
 fn lower_routine<'t>(
     node: RawNode<'t>,
     mut attr_items: Vec<RawNode<'t>>,
@@ -3847,6 +3892,44 @@ codeunit 50102 T
                 vec![true, true, false, true],
                 vec![true, false, true, true],
                 vec![true, false, true, false],
+            ]
+        );
+    }
+
+    /// A query's plain columns carry their innermost dataitem's table and their
+    /// source field; a `Method` column and a filter are no plain column.
+    #[test]
+    fn query_plain_columns_are_lowered_with_their_dataitem_table() {
+        let src = r#"
+query 50000 Q
+{
+    elements
+    {
+        dataitem(D; "Detailed Cust. Ledg. Entry")
+        {
+            column(EntryType; "Entry Type") { }
+            filter(PostingDate; "Posting Date") { }
+            column(SumAmt; "Amount (LCY)") { Method = Sum; }
+            column(Cnt) { Method = Count; }
+            dataitem(Customer; Customer)
+            {
+                column(CustNo; "No.") { }
+            }
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let cols: Vec<(&str, &str, &str)> = af.objects[0]
+            .query_columns
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        assert_eq!(
+            cols,
+            vec![
+                ("EntryType", "Detailed Cust. Ledg. Entry", "Entry Type"),
+                ("CustNo", "Customer", "No."),
             ]
         );
     }

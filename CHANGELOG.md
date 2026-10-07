@@ -1078,6 +1078,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A query column types as its source field** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 3 -> 1; workspace metrics unchanged.
+  `ReconCustPostingGrSum.EntryType.AsInteger()` stayed `compoundReceiver`:
+  query columns were not modelled. alc 18.0.41.45789 types a plain
+  `column(EntryType; "Entry Type")` as the field (assigning it to a `Date`
+  fails AL0122 naming `Enum E`; a `Method = Sum` column of a Decimal reports
+  `Decimal`). The lowerer now records each plain column (no `Method`) with
+  its innermost dataitem's table (`ObjectDecl::query_columns`), the graph
+  carries it (`ObjectNode::query_columns`), and the chain typer reads a
+  `Query` var's `.Column` as that field, with the record-field arm's guards
+  (bare member only; a same-named query procedure declines). A `Method`
+  column still declines. Test
+  `query_column_receivers_type_as_their_source_field` (plus
+  `query_plain_columns_are_lowered_with_their_dataitem_table`); making the arm
+  match another object kind fails it.
 - **A procedure header split across `#if` arms is one routine per arm**
   (engine-switch S9.0e). CDO's dependency-body unknown edges 4 -> 3;
   workspace metrics unchanged (0 unknown, 23 `ambiguousResolved`).

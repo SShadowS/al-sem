@@ -2986,6 +2986,7 @@ mod tests {
                 type_text: field_type_text.to_string(),
             }],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -3006,6 +3007,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -3733,6 +3735,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -3749,6 +3752,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
@@ -3907,6 +3911,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };
@@ -3947,6 +3952,7 @@ codeunit 50700 "Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
             })
@@ -4018,6 +4024,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
         };

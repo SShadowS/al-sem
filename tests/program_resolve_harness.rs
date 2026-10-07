@@ -8979,6 +8979,13 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "receiver.rs",
             "let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;",
         ),
+        // The query-column chain arm (S9.0e): a declared `Query` var's object,
+        // the same lookup `resolve_member`'s `Object` arm makes for it; a
+        // collision fails closed and the arm declines.
+        (
+            "receiver.rs",
+            "None => graph.resolve_object(from_object.id.app, ObjectKind::Query, query_lc),",
+        ),
     ];
 
     let mut found: Vec<(String, String)> = Vec::new();
@@ -12117,7 +12124,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// after `CreateTask` (no bare global form) and SourceTable-less pages. 5 after
 /// `this.X()` in an extension reaches the base object. 4 after a
 /// `this.Global.Method()` argument types by its return. 3 after a procedure
-/// header split across `#if` arms lowers to one routine per arm.
+/// header split across `#if` arms lowers to one routine per arm. 1 after a
+/// query's plain column types as its source field.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12132,7 +12140,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 3;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 1;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

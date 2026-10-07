@@ -3046,6 +3046,46 @@ mod tests {
         assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
     }
 
+    /// S9.0e, alc-probed: a plain query column has its source field's type, so
+    /// `QV.EntryType.AsInteger()` reaches the enum's `AsInteger` (Base App
+    /// `ReconcileCustandVendAccs`). A `Method` column's type is not modelled.
+    #[test]
+    fn query_column_receivers_type_as_their_source_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50000 E\n{\n    value(0; A) { }\n}\n\
+             table 50000 T\n{\n    fields\n    {\n        field(1; \"Entry Type\"; Enum E) { }\n        field(2; Amt; Decimal) { }\n    }\n}\n\
+             query 50000 Q\n{\n    elements\n    {\n        dataitem(D; T)\n        {\n            column(EntryType; \"Entry Type\") { }\n            column(SumAmt; Amt) { Method = Sum; }\n        }\n    }\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        QV: Query Q;\n        I: Integer;\n        S: Text;\n    begin\n        I := QV.EntryType.AsInteger();\n        S := QV.SumAmt.ToText();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let outcome = |line: u32| -> Vec<bool> {
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+                .map(|ce| {
+                    ce.edge
+                        .routes
+                        .iter()
+                        .any(|r| matches!(r.target, RouteTarget::Unresolved))
+                })
+                .collect()
+        };
+        let line_of = |needle: &str| {
+            std::fs::read_to_string(dir.path().join("C.al"))
+                .expect("read C.al")
+                .lines()
+                .position(|l| l.contains(needle))
+                .expect("line") as u32
+        };
+        assert_eq!(outcome(line_of("EntryType.AsInteger")), vec![false]);
+        assert_eq!(outcome(line_of("SumAmt.ToText")), vec![true]);
+    }
+
     /// S9.0e: a procedure header split across `#if`/`#else` is one routine per
     /// arm, so the call written for each arm's signature binds that arm's routine
     /// (Base App `MfgCalculateBOMTree.CalcRoutingLineCosts`, 6 vs 5 parameters).
