@@ -65,7 +65,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 2: parameter names + `temporary` in `AbiParamRetained` / `ParamMeta`
 /// (engine-switch S2b.5).
 /// 3: `ParsedSubscriberArgs::publisher_id` (engine-switch S4.3b).
-pub const PACK_SCHEMA: u32 = 3;
+/// 4: `ObjectNode::protected_vars` (engine-switch S9.0e).
+pub const PACK_SCHEMA: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {

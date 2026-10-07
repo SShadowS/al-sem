@@ -4276,14 +4276,22 @@ fn cdo_trigger_audit_frozen_load() {
     // the gate-completeness deletion this fix restores, so asserting literal
     // `matches == total_paired` would fail on a KNOWN, already-accepted gap,
     // not a new one. Pin it as a CEILING instead (same pattern as Test 16):
-    // any NEW drop (4+) is a real completeness regression and FAILS.
-    const FRESH_MISSING_CEILING: usize = 3;
+    // any NEW drop is a real completeness regression and FAILS.
+    //
+    // S9.0c (2026-10-07) raised it 3 -> 103, and the golden is the one that is
+    // wrong. Measured on BC 28: `Insert()`/`Modify()`/`Delete()` with no
+    // RunTrigger argument, or with `false`, run NO table trigger. L3 minted a
+    // trigger edge for every write, so this golden claims a trigger at sites
+    // that cannot fire one. All 103 missing sites, read back through the local
+    // deanon map, are such writes: insert() 69, delete() 16, modify() 11,
+    // insert(false) 7. None passes `true`. S9.0d re-mints this golden from the
+    // compiler's graph with the measured rule, and the ceiling goes back down.
+    const FRESH_MISSING_CEILING: usize = 103;
     assert!(
         audit.fresh_missing <= FRESH_MISSING_CEILING,
         "COMPLETENESS REGRESSION: ImplicitTrigger fresh_missing={} exceeds the \
-         recorded ceiling {} (stable since the golden's 1B.3b Task 1 mint-time \
-         verification — see task-1-report.md). A NEW dropped trigger target. \
-         Investigate before raising the ceiling.",
+         recorded ceiling {} (see the S9.0c note above). A NEW dropped \
+         trigger target. Investigate before raising the ceiling.",
         audit.fresh_missing,
         FRESH_MISSING_CEILING,
     );
@@ -12064,4 +12072,42 @@ fn adapter_loses_no_site_or_route_on_cdo() {
         .expect("census of CDO_WS");
     assert!(census.program_sites > 0, "CDO precondition: program sites");
     assert_eq!(census.losses(), vec![], "CDO adapter losses");
+}
+
+/// Engine-switch S9.0e: dependency bodies, resolved from their own app (what
+/// cross-app `alsem analyze` reads; `ProgramContext::resolve_dependency_bodies`),
+/// are not in `realUnknownRate`, which counts workspace and publisher edges only.
+/// This ceiling holds their `unknown` edge count; it only ever moves DOWN. Measure
+/// with `aldump --dependency-bodies-stats [--sites] <workspace>`.
+///
+/// 6315 on 2026-10-07 (pinned `bc3ccb18` baseline), of 431,248 edges. 2979 after
+/// the catalogMiss family (DotNet leaves, scalar `ToText`, report-dataitem bare
+/// fields, the split-`if` phantom call). 1790 after the XmlPort family (table
+/// elements, `currXMLport`, XmlPort runs) and `ProductName`. 1273 after array
+/// elements, protected variables, the enum-name collision rule, `CurrQuery` /
+/// `RequestOptionsPage`, split-header object kinds and codeunit-only implementers.
+/// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
+/// after the with-context reaches nested bare names in a chain.
+#[test]
+fn dependency_body_unknown_ceiling_on_cdo() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let ctx = al_sem::program::resolve::full::build_context(&ws).expect("CDO context");
+    let res = ctx.resolve_dependency_bodies();
+    let edges: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
+    let h = al_sem::program::resolve::edge::Histogram::of_edges(&edges);
+    assert!(
+        h.total > 400_000,
+        "CDO precondition: {} dependency edges",
+        h.total
+    );
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 643;
+    assert!(
+        h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+        "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
+         hole in dependency code; find it with `aldump --dependency-bodies-stats --sites`",
+        h.unknown,
+        CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+    );
 }

@@ -1079,6 +1079,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }
     }

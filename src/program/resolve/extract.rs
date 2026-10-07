@@ -154,6 +154,14 @@ pub struct RawSiteV2 {
     /// obligation` to build the [`crate::program::resolve::arg_dispatch::
     /// ArgDispatchInfo`] list a fail-closed overload-dispatch pick needs.
     pub args: Vec<ExprId>,
+    /// `true` for a bare `M` or `X.M` read as a VALUE (an argument, an operand,
+    /// a condition, an assigned or returned value). AL lets a zero-argument
+    /// call drop its `()`, so such a read MAY be a call; syntax cannot tell it
+    /// from a variable or field read. The resolver keeps the site only when it
+    /// resolves to a routine (`full.rs`, `resolve_file_obligations`).
+    pub parenless: bool,
+    /// The site's expression: the call, or for a parens-less site the read.
+    pub expr: ExprId,
 }
 
 /// Tri-state guard for whether a call site sits lexically inside a `with X do`
@@ -277,6 +285,7 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
         "codeunit" => Some("Codeunit"),
         "page" => Some("Page"),
         "report" => Some("Report"),
+        "xmlport" => Some("XmlPort"),
         _ => None,
     }
 }
@@ -385,7 +394,10 @@ fn classify_call(
             if obj.origin.kind_text == "keyword_identifier" {
                 let obj_text = &src[obj.origin.byte.clone()];
                 if let Some(okind) = object_run_kind(obj_text)
-                    && (method_lc == "run" || (method_lc == "runmodal" && okind != "Codeunit"))
+                    && (method_lc == "run"
+                    || (method_lc == "runmodal" && matches!(okind, "Page" | "Report"))
+                    // Static `XmlPort.Import/Export(XmlPort::X, ...)` run X too.
+                    || (okind == "XmlPort" && matches!(method_lc.as_str(), "import" | "export")))
                 {
                     let (target_ref, target_is_name) =
                         match static_database_reference_target(file, args) {
@@ -650,6 +662,45 @@ fn routine_has_with_token(src: &str, routine_span: std::ops::Range<usize>) -> bo
     false
 }
 
+/// [`collect_calls_v2`] for an expression read as a VALUE: a bare `M` or
+/// `X.M` there is also a candidate parens-less call ([`RawSiteV2::parenless`]).
+/// A callee or a member's receiver is not a value position: those go straight
+/// to [`collect_calls_v2`].
+#[allow(clippy::too_many_arguments)]
+fn collect_value_v2(
+    file: &AlFile,
+    src: &str,
+    eid: ExprId,
+    unit: &str,
+    caller: &str,
+    rvars: &HashSet<String>,
+    ctx: WithCtx,
+    out: &mut Vec<RawSiteV2>,
+) {
+    let e = file.ir.expr(eid);
+    if matches!(
+        e.kind,
+        ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_) | ExprKind::Member { .. }
+    ) {
+        out.push(RawSiteV2 {
+            caller_routine: caller.to_string(),
+            shape: classify_call(file, src, eid, &[], rvars, ctx),
+            arity: 0,
+            span: CanonicalSpan {
+                unit: unit.to_string(),
+                start: byte_to_pos(src, e.origin.byte.start),
+                end: byte_to_pos(src, e.origin.byte.end),
+            },
+            callee_text: src[e.origin.byte.clone()].to_string(),
+            with_state: ctx.state(),
+            args: Vec::new(),
+            parenless: true,
+            expr: eid,
+        });
+    }
+    collect_calls_v2(file, src, eid, unit, caller, rvars, ctx, out);
+}
+
 /// Recursively collect every [`RawSiteV2`] reachable from `eid`, including
 /// calls nested inside arguments or chained receivers.
 #[allow(clippy::too_many_arguments)]
@@ -688,12 +739,14 @@ fn collect_calls_v2(
                 callee_text,
                 with_state: ctx.state(),
                 args: arg_ids.clone(),
+                parenless: false,
+                expr: eid,
             });
 
             // Recurse: function expression (catches chained calls), then args.
             collect_calls_v2(file, src, fn_id, unit, caller, rvars, ctx, out);
             for a in arg_ids {
-                collect_calls_v2(file, src, a, unit, caller, rvars, ctx, out);
+                collect_value_v2(file, src, a, unit, caller, rvars, ctx, out);
             }
         }
         ExprKind::Member { object, .. } => {
@@ -702,30 +755,35 @@ fn collect_calls_v2(
         }
         ExprKind::Binary { lhs, rhs, .. } => {
             let (l, r) = (*lhs, *rhs);
-            collect_calls_v2(file, src, l, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, r, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, l, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, r, unit, caller, rvars, ctx, out);
         }
         ExprKind::Unary { operand, .. } => {
             let op = *operand;
-            collect_calls_v2(file, src, op, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, op, unit, caller, rvars, ctx, out);
         }
         ExprKind::Parenthesized(x) => {
             let x = *x;
-            collect_calls_v2(file, src, x, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, x, unit, caller, rvars, ctx, out);
         }
         ExprKind::Index { base, index } => {
             let (b, i) = (*base, *index);
             collect_calls_v2(file, src, b, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, i, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, i, unit, caller, rvars, ctx, out);
         }
         ExprKind::RangeExpr { start, end } => {
             let (s, e2) = (*start, *end);
-            collect_calls_v2(file, src, s, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, e2, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, s, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, e2, unit, caller, rvars, ctx, out);
         }
         ExprKind::QualifiedEnum { enum_type, .. } => {
             let et = *enum_type;
             collect_calls_v2(file, src, et, unit, caller, rvars, ctx, out);
+        }
+        ExprKind::Ternary { .. } | ExprKind::TypeOp { .. } | ExprKind::List(_) => {
+            for c in e.kind.children() {
+                collect_value_v2(file, src, c, unit, caller, rvars, ctx, out);
+            }
         }
         // Identifier / QuotedIdentifier / Literal / DatabaseReference / Unknown:
         // no nested calls.
@@ -773,7 +831,7 @@ fn walk_stmt_v2(
     match kind {
         StmtKind::Assignment { target, value, .. } => {
             collect_calls_v2(file, src, *target, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, *value, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *value, unit, caller, rvars, ctx, out);
         }
         StmtKind::Call(eid) => {
             collect_calls_v2(file, src, *eid, unit, caller, rvars, ctx, out);
@@ -783,7 +841,7 @@ fn walk_stmt_v2(
             then_block,
             else_block,
         } => {
-            collect_calls_v2(file, src, *cond, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *cond, unit, caller, rvars, ctx, out);
             walk_block_v2(file, src, *then_block, unit, caller, rvars, ctx, out);
             if let Some(b) = else_block {
                 walk_block_v2(file, src, *b, unit, caller, rvars, ctx, out);
@@ -794,10 +852,10 @@ fn walk_stmt_v2(
             branches,
             else_block,
         } => {
-            collect_calls_v2(file, src, *scrutinee, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *scrutinee, unit, caller, rvars, ctx, out);
             for br in branches {
                 for &p in &br.patterns {
-                    collect_calls_v2(file, src, p, unit, caller, rvars, ctx, out);
+                    collect_value_v2(file, src, p, unit, caller, rvars, ctx, out);
                 }
                 walk_block_v2(file, src, br.body, unit, caller, rvars, ctx, out);
             }
@@ -806,12 +864,12 @@ fn walk_stmt_v2(
             }
         }
         StmtKind::While { cond, body } => {
-            collect_calls_v2(file, src, *cond, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *cond, unit, caller, rvars, ctx, out);
             walk_block_v2(file, src, *body, unit, caller, rvars, ctx, out);
         }
         StmtKind::Repeat { body, until } => {
             walk_block_v2(file, src, *body, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, *until, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *until, unit, caller, rvars, ctx, out);
         }
         StmtKind::For {
             var,
@@ -821,8 +879,8 @@ fn walk_stmt_v2(
             ..
         } => {
             collect_calls_v2(file, src, *var, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, *from, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, *to, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *from, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *to, unit, caller, rvars, ctx, out);
             walk_block_v2(file, src, *body, unit, caller, rvars, ctx, out);
         }
         StmtKind::Foreach {
@@ -831,7 +889,7 @@ fn walk_stmt_v2(
             body,
         } => {
             collect_calls_v2(file, src, *var, unit, caller, rvars, ctx, out);
-            collect_calls_v2(file, src, *iterable, unit, caller, rvars, ctx, out);
+            collect_value_v2(file, src, *iterable, unit, caller, rvars, ctx, out);
             walk_block_v2(file, src, *body, unit, caller, rvars, ctx, out);
         }
         StmtKind::With { receiver, body } => {
@@ -862,7 +920,7 @@ fn walk_stmt_v2(
         }
         StmtKind::Exit(x) => {
             if let Some(e) = x {
-                collect_calls_v2(file, src, *e, unit, caller, rvars, ctx, out);
+                collect_value_v2(file, src, *e, unit, caller, rvars, ctx, out);
             }
         }
         StmtKind::Block(b) => {
@@ -1043,7 +1101,11 @@ codeunit 50102 "D"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        // Parens-less value reads are candidates, not definite sites.
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+            .into_iter()
+            .filter(|s| !s.parenless)
+            .collect();
         let shapes: Vec<(&str, &CalleeShape)> = sites
             .iter()
             .map(|s| (s.caller_routine.as_str(), &s.shape))
@@ -1089,7 +1151,11 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        // Parens-less value reads are candidates, not definite sites.
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+            .into_iter()
+            .filter(|s| !s.parenless)
+            .collect();
         let run: Vec<_> = sites.iter().filter(|s| s.caller_routine == "run").collect();
         assert_eq!(run.len(), 6, "Expected 6 call sites in Run procedure");
         assert!(run.iter().any(
@@ -1197,7 +1263,11 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        // Parens-less value reads are candidates, not definite sites.
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+            .into_iter()
+            .filter(|s| !s.parenless)
+            .collect();
         let run: Vec<_> = sites.iter().filter(|s| s.caller_routine == "run").collect();
         assert!(
             run.is_empty(),
@@ -1226,7 +1296,11 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        // Parens-less value reads are candidates, not definite sites.
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+            .into_iter()
+            .filter(|s| !s.parenless)
+            .collect();
         let run: Vec<_> = sites.iter().filter(|s| s.caller_routine == "run").collect();
         assert_eq!(
             run.len(),

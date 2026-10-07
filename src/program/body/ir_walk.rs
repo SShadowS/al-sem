@@ -228,6 +228,9 @@ fn build_scope(
 /// Working state for the spine walk.
 struct SpineCtx<'a> {
     file: &'a AlFile,
+    /// Parens-less value reads the program resolver kept as calls
+    /// (`program::resolve::full::ParenlessCalls`): walked as zero-argument calls.
+    parenless_calls: &'a HashSet<ExprId>,
     scope: &'a Scope,
     routine_id: &'a str,
     source: &'a str,
@@ -540,6 +543,11 @@ impl<'a> SpineCtx<'a> {
                 let (start, end) = (*start, *end);
                 self.collect_cond_idents(start, kind, stmt);
                 self.collect_cond_idents(end, kind, stmt);
+            }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.collect_cond_idents(c, kind, stmt);
+                }
             }
             _ => {}
         }
@@ -898,8 +906,18 @@ impl<'a> SpineCtx<'a> {
     fn walk_expr(&mut self, eid: ExprId) {
         use ExprKind::*;
         let e = self.file.ir.expr(eid);
-        if let Call { function, args } = &e.kind {
-            let (function, args) = (*function, args.clone());
+        // A parens-less value read the resolver proved a call is walked exactly as
+        // the lowered statement form `X.M;`: a call whose function is the read.
+        let call = match &e.kind {
+            Call { function, args } => Some((*function, args.clone())),
+            Identifier(_) | QuotedIdentifier(_) | Member { .. }
+                if self.parenless_calls.contains(&eid) =>
+            {
+                Some((eid, Vec::new()))
+            }
+            _ => None,
+        };
+        if let Some((function, args)) = call {
             // A parenless call (`Rec.Find;`) was normalized from a member/identifier/
             // subscript, so its origin kind is NOT `call_expression`. Legacy harvests
             // identifier-refs from a call's function subtree ONLY for real (parens)
@@ -1187,6 +1205,11 @@ impl<'a> SpineCtx<'a> {
                 self.walk_expr(start);
                 self.walk_expr(end);
             }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.walk_expr(c);
+                }
+            }
             // Value-reference identifier (lc, deduped) — legacy counts only plain
             // `identifier` nodes, NOT keyword_identifier/quoted_identifier.
             Identifier(name) => {
@@ -1221,10 +1244,12 @@ pub fn walk_spine(
     cols: &Utf16Cols,
     source_unit_id: &str,
     source_table_name: Option<&str>,
+    parenless_calls: &HashSet<ExprId>,
 ) -> IrSpine {
     let (scope, implicit_rec) = build_scope(file, object_idx, routine, source_table_name);
     let mut ctx = SpineCtx {
         file,
+        parenless_calls,
         scope: &scope,
         routine_id,
         source,
@@ -1397,6 +1422,16 @@ impl<'a> IrCfn<'a> {
     fn harvest(&self, eid: ExprId, out: &mut Vec<PCFNNode>) {
         use ExprKind::*;
         let e = self.ir().expr(eid);
+        // A parens-less call: the walk gave the read itself a call-site id.
+        if !matches!(e.kind, Call { .. })
+            && let Some(cs) = self.spine.cs_id_by_expr.get(&eid)
+        {
+            self.harvest_receiver(eid, out);
+            let mut leaf = cfn_node("call");
+            leaf.callsite_id = Some(cs.clone());
+            out.push(leaf);
+            return;
+        }
         match &e.kind {
             Call { function, args } => {
                 if let Some(op) = self.spine.op_id_by_expr.get(&eid) {
@@ -1451,6 +1486,11 @@ impl<'a> IrCfn<'a> {
             RangeExpr { start, end } => {
                 self.harvest(*start, out);
                 self.harvest(*end, out);
+            }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.harvest(c, out);
+                }
             }
             _ => {}
         }
@@ -1690,6 +1730,7 @@ pub fn routine_features_partial(
     source: &str,
     source_unit_id: &str,
     source_table_name: Option<&str>,
+    parenless_calls: &HashSet<ExprId>,
 ) -> IrPartialFeatures {
     let cols = Utf16Cols::new(source);
     let spine = walk_spine(
@@ -1701,6 +1742,7 @@ pub fn routine_features_partial(
         &cols,
         source_unit_id,
         source_table_name,
+        parenless_calls,
     );
     let statement_tree = routine.body.map(|b| {
         let cfn = IrCfn {
@@ -1854,6 +1896,31 @@ pub fn project_routine_features_ir(
     source_unit_id: &str,
     source_table_name: Option<&str>,
 ) -> super::features::PFeatures {
+    project_routine_features_ir_with(
+        file,
+        object_idx,
+        routine,
+        routine_id,
+        source,
+        source_unit_id,
+        source_table_name,
+        &HashSet::new(),
+    )
+}
+
+/// [`project_routine_features_ir`] with the parens-less value reads the program
+/// resolver kept as calls (`program::resolve::full::ParenlessCalls`).
+#[allow(clippy::too_many_arguments)]
+pub fn project_routine_features_ir_with(
+    file: &AlFile,
+    object_idx: usize,
+    routine: &RoutineDecl,
+    routine_id: &str,
+    source: &str,
+    source_unit_id: &str,
+    source_table_name: Option<&str>,
+    parenless_calls: &HashSet<ExprId>,
+) -> super::features::PFeatures {
     let p = routine_features_partial(
         file,
         object_idx,
@@ -1862,6 +1929,7 @@ pub fn project_routine_features_ir(
         source,
         source_unit_id,
         source_table_name,
+        parenless_calls,
     );
     let record_variables =
         ir_record_variables(file, object_idx, routine, routine_id, source_table_name);
@@ -2039,8 +2107,11 @@ pub fn ir_record_variables(
     // routines (a dataitem may be referenced by name as a record typed to its source
     // table). Seed each, skipping any name already declared (never shadow). Mirrors
     // `project_routine_features`'s report_dataitem_record_vars block.
-    if matches!(o.kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-        for (di_name, di_table) in &o.report_dataitems {
+    if matches!(
+        o.kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+    ) {
+        for (di_name, di_table) in &o.dataitems {
             if out.iter().any(|v| v.name.eq_ignore_ascii_case(di_name)) {
                 continue;
             }

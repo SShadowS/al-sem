@@ -61,7 +61,7 @@ fn usage() -> ExitCode {
          --l3-call-graph-stats-cross-app | --l3-unknown-breakdown | --l3-unknown-breakdown-cross-app | \
          --l3-event-graph | --l3-coverage | --r2.5a-merged-index | --l3-cross-app | \
          --r3a1-combined-graph | --r3a2-summary-core | --r3a3-cone-coverage | \
-         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats | \
+         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats [--sites] | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
@@ -133,6 +133,69 @@ fn switch_compare_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+/// `aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]`
+/// (engine-switch S9.0): compare the program resolver (FULL build) with the AL
+/// compiler's call graph from `altool graph extract-whole`, site by site. Writes
+/// the JSON report to stdout; the summary goes to stderr. Default scope: callers
+/// in the workspace app; `--all-apps` compares every app's callers.
+fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
+    use al_sem::program::profile::BuildProfile;
+    use al_sem::program::resolve::compiler_oracle::{CompilerGraph, compare, program_sites};
+    use al_sem::program::resolve::differential::project_fresh;
+    let (Some(graph_path), Some(ws)) = (args.first(), args.get(1)) else {
+        eprintln!("usage: aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]");
+        return ExitCode::FAILURE;
+    };
+    let all_apps = args.iter().any(|a| a == "--all-apps");
+    let compiler = match CompilerGraph::read(std::path::Path::new(graph_path)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (ctx, report, _) =
+        match al_sem::program::resolve::full::build_program_with_coverage_profiled(
+            std::path::Path::new(ws),
+            BuildProfile::FULL,
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("aldump: error: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let mut edges: Vec<_> = report.edges.iter().map(|ce| ce.edge.clone()).collect();
+    if all_apps {
+        // Dependency call sites are resolved separately, from their own app
+        // (`resolve_dependency_bodies`, as the cross-app model does).
+        edges.extend(
+            ctx.resolve_dependency_bodies()
+                .edges
+                .into_iter()
+                .map(|ce| ce.edge),
+        );
+    }
+    al_sem::program::resolve::compiler_oracle::reclassify_entry_runs(&mut edges, ctx.graph());
+    let program = program_sites(&project_fresh(&edges, &ctx.graph().apps));
+    let mut apps = std::collections::BTreeSet::new();
+    if !all_apps {
+        apps.insert(ctx.snapshot().workspace_app.guid.to_ascii_lowercase());
+    }
+    let r = compare(&compiler.sites, &program, &apps);
+    eprintln!(
+        "compiler edges {:?}, unmapped {}; callers {}; pairs agree {}, compiler-only {}, program-only {}",
+        compiler.edge_kinds,
+        compiler.unmapped_edges,
+        r.callers,
+        r.pairs_agree,
+        r.pairs_compiler_only,
+        r.pairs_program_only
+    );
+    println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
@@ -142,6 +205,7 @@ fn main() -> ExitCode {
     match raw.first().map(String::as_str) {
         Some("--switch-dump") => return switch_dump_cmd(&raw[1..]),
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
+        Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;
@@ -168,6 +232,7 @@ fn main() -> ExitCode {
     let mut r4_findings = false;
     let mut r4_findings_cross_app = false;
     let mut dependency_bodies_stats = false;
+    let mut sites = false;
     let mut r4f_root_classifications = false;
     let mut r4f_return_summaries = false;
     let mut r4f_snapshot = false;
@@ -281,6 +346,10 @@ fn main() -> ExitCode {
         }
         if arg == "--dependency-bodies-stats" {
             dependency_bodies_stats = true;
+            continue;
+        }
+        if arg == "--sites" {
+            sites = true;
             continue;
         }
         if arg == "--r4f-root-classifications" {
@@ -399,9 +468,9 @@ fn main() -> ExitCode {
         // ledger is a legitimate empty answer, and several differential/oracle tests
         // call it directly expecting that always-succeeds shape) — it has no signal
         // for "the workspace itself is unusable". Task T0.1: gate that ONE genuine
-        // failure mode at the CLI boundary with the SAME predicate every other L3-based
-        // mode already uses, without touching the library function's tested contract.
-        if assemble_and_resolve_workspace_default(&workspace).is_none() {
+        // failure mode at the CLI boundary with the program-backed model (S9.1),
+        // without touching the library function's tested contract.
+        if program_model(&workspace).is_none() {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-4 dep-hook projection",
                 workspace.display()
@@ -440,8 +509,8 @@ fn main() -> ExitCode {
         // stays engine-never-throws (zero deps is legitimate, and its `empty` fallback
         // is exercised directly by differential/oracle tests), so the ONE genuine
         // failure — an unbuildable primary workspace — is caught at the CLI boundary
-        // with the same predicate every other L3-based mode uses.
-        if assemble_and_resolve_workspace_default(&workspace).is_none() {
+        // with the program-backed model (S9.1).
+        if program_model(&workspace).is_none() {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-5 cross-app summary",
                 workspace.display()
@@ -615,7 +684,58 @@ fn main() -> ExitCode {
         let all: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
         let apps: serde_json::Map<String, serde_json::Value> =
             per_app.iter().map(|(n, e)| (n.clone(), hist(e))).collect();
-        let out = serde_json::json!({ "all": hist(&all), "perApp": apps });
+        let mut out = serde_json::json!({ "all": hist(&all), "perApp": apps });
+        if sites {
+            // `--sites`: every unknown route's site with its source line, for triage.
+            use al_sem::program::resolve::edge::Evidence;
+            let mut texts: std::collections::HashMap<(String, &str), &str> =
+                std::collections::HashMap::new();
+            for u in ctx.dep_bodies().unwrap_or_default() {
+                for pf in &u.files {
+                    texts.insert(
+                        (u.app.guid.to_ascii_lowercase(), &pf.virtual_path),
+                        &pf.text,
+                    );
+                }
+            }
+            let mut rows = Vec::new();
+            for ce in &res.edges {
+                let app = graph.apps.resolve(ce.edge.from.object.app);
+                let span = &ce.edge.site.span;
+                // The edges `unknown` counts, each with its first unknown reason
+                // (`unknown_reason_breakdown`'s rule).
+                if al_sem::program::resolve::edge::classify_obligation(&ce.edge)
+                    != al_sem::program::resolve::edge::ObligationOutcome::Unknown
+                {
+                    continue;
+                }
+                if let Some(reason) = ce.edge.routes.iter().find_map(|r| match &r.evidence {
+                    Evidence::Unknown(reason) => Some(reason),
+                    _ => None,
+                }) {
+                    let line = texts
+                        .get(&(app.guid.to_ascii_lowercase(), span.unit.as_str()))
+                        .and_then(|t| t.lines().nth(span.start.line as usize))
+                        .unwrap_or("")
+                        .trim();
+                    let receiver = res
+                        .site_facts
+                        .get(&ce.obligation_id)
+                        .and_then(|f| f.receiver.as_ref())
+                        .map(|r| format!("{:?} {}", r.ty, r.type_text.as_deref().unwrap_or("")));
+                    rows.push(serde_json::json!({
+                        "receiver": receiver,
+                        "app": app.name,
+                        "file": span.unit,
+                        "line": span.start.line + 1,
+                        "routine": ce.edge.from.name_lc,
+                        "reason": reason.as_str(),
+                        "text": line,
+                    }));
+                }
+            }
+            out["unknownSites"] = serde_json::Value::Array(rows);
+        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return ExitCode::SUCCESS;
     }

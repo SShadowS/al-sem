@@ -215,7 +215,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
     let o = &f.objects[0];
     // The report carries its dataitem (name, source-table) in the IR.
     assert_eq!(
-        o.report_dataitems,
+        o.dataitems,
         vec![("Cust".to_string(), "Customer".to_string())]
     );
 

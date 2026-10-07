@@ -2813,6 +2813,7 @@ mod tests {
                 type_text: field_type_text.to_string(),
             }],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         let caller = ObjectNode {
@@ -2832,6 +2833,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         let from_id = caller.id.clone();
@@ -3474,6 +3476,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -3489,6 +3492,7 @@ codeunit 50100 "C"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -3646,6 +3650,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         let objects = vec![table];
@@ -3685,6 +3690,7 @@ codeunit 50700 "Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             })
             .collect();
@@ -3755,6 +3761,7 @@ codeunit 50700 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         let objects = vec![object];

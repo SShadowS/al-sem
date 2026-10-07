@@ -74,7 +74,7 @@ pub struct PageControlNode {
 /// One report `dataitem(Name; "Source Table")` declaration — Report /
 /// ReportExtension only, document order (dataitem-receivers plan, Task 1).
 /// Mirrors [`PageControlNode`]: `name_lc` is the lowercased UNQUOTED dataitem
-/// name (`al_syntax::ir::ObjectDecl.report_dataitems` is already
+/// name (`al_syntax::ir::ObjectDecl.dataitems` is already
 /// outer-quote-stripped, `ident_text`); `source_table` is the RAW `ObjectRef`
 /// parsed exactly like `SourceTable`/`TableNo` — resolved lazily via
 /// [`crate::program::resolve::receiver::resolve_source_table_ref`] at the
@@ -143,6 +143,9 @@ pub struct ObjectNode {
     /// `receiver::resolve_dataitem_source_table` (Step 2b's dataitem-NAME
     /// receiver lookup, and the report implicit-Rec fallback).
     pub dataitems: Vec<DataitemNode>,
+    /// The object's `protected var` globals as `(name lowercased, declared type
+    /// text)`, document order: what an extension of it can read (S9.0e).
+    pub protected_vars: Vec<(String, String)>,
     /// `true` when the OWNING FILE's parse hit tree-sitter error recovery
     /// (`AlFile::parse_status == ParseStatus::Recovered` — receiver-closure
     /// plan, Task 1). File-level, not object- or routine-level: a `#if`
@@ -628,11 +631,15 @@ pub fn extract_nodes(
 
         // Report dataitems — Report/ReportExtension only, document order (Task 1,
         // dataitem-receivers plan). `d.0`/`d.1` are already outer-quote-stripped
-        // (`ident_text`, `al_syntax::lower::collect_report_dataitems`); the shared
+        // (`ident_text`, `al_syntax::lower::collect_dataitems`); the shared
         // `parse_object_ref_value` still normalizes the table half losslessly
         // (numeric vs quoted-name), mirroring `SourceTable`/`TableNo` above.
-        let dataitems = if matches!(obj.kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-            obj.report_dataitems
+        // XmlPort table elements are the same kind of named record (S9.0e).
+        let dataitems = if matches!(
+            obj.kind,
+            ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+        ) {
+            obj.dataitems
                 .iter()
                 .map(|(name, table)| DataitemNode {
                     name_lc: name.fold_identifier(),
@@ -657,6 +664,14 @@ pub fn extract_nodes(
             page_controls,
             fields,
             dataitems,
+            protected_vars: obj
+                .protected_globals
+                .iter()
+                .filter_map(|name| {
+                    let g = obj.globals.iter().find(|g| g.name == *name)?;
+                    Some((name.fold_identifier(), g.ty.clone()?))
+                })
+                .collect(),
             parse_incomplete: file.parse_status != ParseStatus::Clean,
         });
         // Computed once per object — same value for every routine in the object.
@@ -816,6 +831,7 @@ pub(crate) mod test_fixtures {
                 name: "Customer".to_string(),
                 source_table: ObjectRef::Id(18),
             }],
+            protected_vars: vec![("item".to_string(), "Record Item".to_string())],
             parse_incomplete: true,
         }
     }

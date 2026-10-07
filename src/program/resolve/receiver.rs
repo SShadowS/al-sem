@@ -232,11 +232,18 @@ pub enum FrameworkKind {
     FileUpload,
     NumberSequence,
     Version,
+    /// `Integer` / `BigInteger` / `Decimal` / `Boolean` / `Byte`: a scalar whose
+    /// only instance method is `ToText` (MS Learn, `<type>-data-type`).
+    Scalar,
     // Dialog
     Dialog,
     // Page/Report singleton types (from receiver name, not declared type)
     PageInstance,
     ReportInstance,
+    /// `currXMLport` / an `XmlPort "X"` variable (S9.0e).
+    XmlPortInstance,
+    /// A report's `RequestOptionsPage` (S9.0e).
+    RequestPage,
     // Query instance (from a variable's DECLARED type — `V: Query "Name"`),
     // never a receiver name. Unlike Page/Report there is no `CurrQuery`
     // singleton; the `Query.SaveAsXml(...)` STATIC form is a separate surface
@@ -251,6 +258,8 @@ pub enum FrameworkKind {
     System,
     CompanyProperty,
     SessionInformation,
+    /// `ProductName.Full()/Marketing()/Short()` (S9.0e).
+    ProductName,
     // Enum VALUE-instance surface (Task 4, receiver-closure-and-arg-increments
     // plan — the SPLIT catalog closer): `AsInteger()`/`Names()`/`Ordinals()`,
     // callable on an enum VALUE (a declared `Enum "X"`-typed var/field, or an
@@ -371,6 +380,11 @@ pub enum ReceiverType {
     /// A platform/framework type (`Json*` / `Http*` / `InStream` / … ) — catalog
     /// lookup in Phase B.
     Framework(FrameworkKind),
+    /// A `DotNet <Alias>` receiver: a .NET interop object. Its members are .NET
+    /// methods, outside the AL program — Phase B makes each call a catalog leaf
+    /// `DotNet::<alias>::<member>` (the AL compiler binds the member against the
+    /// alias's declared assembly; there is no AL body to reach).
+    DotNet { name_lc: String },
     /// A primitive or unrecognized non-object, non-catalog type.  Phase B turns
     /// this into an honest `Unknown` edge.
     Primitive,
@@ -463,6 +477,8 @@ pub enum ParsedType {
     KeyRef,
     /// A recognized platform/framework type.
     Framework(FrameworkKind),
+    /// `DotNet <Alias>` — lowercased alias, quotes stripped: a .NET interop type.
+    DotNet { name: String },
     /// Primitive numeric/boolean type or an unrecognized keyword → Phase B unknown.
     Primitive,
     /// `Variant` — runtime-typed, genuinely dynamic dispatch.
@@ -587,7 +603,13 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "fileupload" => ParsedType::Framework(FrameworkKind::FileUpload),
         "numbersequence" => ParsedType::Framework(FrameworkKind::NumberSequence),
         "version" => ParsedType::Framework(FrameworkKind::Version),
+        "integer" | "biginteger" | "decimal" | "boolean" | "byte" => {
+            ParsedType::Framework(FrameworkKind::Scalar)
+        }
         "controladdin" => ParsedType::ControlAddIn {
+            name: unquote_identifier(rest).fold_identifier(),
+        },
+        "dotnet" => ParsedType::DotNet {
             name: unquote_identifier(rest).fold_identifier(),
         },
         // Variant — runtime-typed, genuinely dynamic
@@ -818,6 +840,17 @@ pub fn infer_receiver_type(
     }
 
     // -----------------------------------------------------------------------
+    // Step 2c — a base object's `protected var` globals (S9.0e). A table, page
+    // or report extension reads its base object's protected variables as if
+    // they were its own globals (AL "protected variables"). Reached only on a
+    // Step 2 miss: the extension's own scope comes first.
+    // -----------------------------------------------------------------------
+
+    if let Some(ty) = base_protected_var_type(&lookup_lc, from_object, graph, index) {
+        return parsed_type_to_receiver(classify_type_text(&ty), from_object, graph, index);
+    }
+
+    // -----------------------------------------------------------------------
     // Step 2b — report DATAITEM-NAME receiver (dataitem-receivers plan, Task
     // 1). Reached ONLY on a Step 2 miss — a var/param/global of the same name
     // ALWAYS shadows a dataitem (AL scoping; mirrors L2's `report_dataitem_
@@ -833,7 +866,8 @@ pub fn infer_receiver_type(
     // `CompoundReceiver` before it could ever reach this step. A dataitem
     // name is in scope as a record var across ALL the report's routines (not
     // merely the enclosing dataitem's own trigger — see `ObjectDecl.
-    // report_dataitems`'s doc), so this lookup is routine-independent.
+    // dataitems`'s doc), so this lookup is routine-independent. An XmlPort's
+    // `tableelement(Name; Table)` is the same kind of named record (S9.0e).
     //
     // Fail-closed collisions (`resolve_dataitem_source_table`, below): a
     // same-named report PROCEDURE anywhere in the visible object(s) declines
@@ -846,7 +880,7 @@ pub fn infer_receiver_type(
 
     if matches!(
         from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) && let Some(table_id) =
         resolve_dataitem_source_table(&lookup_lc, from_object, graph, index)
     {
@@ -948,17 +982,39 @@ pub fn infer_receiver_type(
                 | ObjectKind::TableExtension
                 | ObjectKind::Page
                 | ObjectKind::PageExtension
+                | ObjectKind::Report
+                | ObjectKind::ReportExtension
         )
     {
-        let table_id = implicit_rec_table_id(from_object, graph, index);
+        // A report's implicit Rec is its dataitem's, so only inside a dataitem
+        // trigger (S9.0e): `resolve_report_implicit_rec_table` is routine-contextual.
+        let is_report = matches!(
+            from_object.id.kind,
+            ObjectKind::Report | ObjectKind::ReportExtension
+        );
+        let table_id = if is_report {
+            resolve_report_implicit_rec_table(routine, from_object, graph, index)
+        } else {
+            implicit_rec_table_id(from_object, graph, index)
+        };
         if let Some(table_id) = table_id {
             let field_lc = unquote_identifier(receiver_lc);
+            // A ReportExtension reaches its base report's procedures bare too.
+            let base_report = (from_object.id.kind == ObjectKind::ReportExtension)
+                .then(|| resolve_reportext_base_report(from_object, graph, index))
+                .flatten();
             let routine_shadowed =
                 index.table_scope_has_routine(graph, from_object, &table_id, &field_lc)
                     || index
                         .routines_in_object(graph, &from_object.id, &field_lc)
                         .next()
-                        .is_some();
+                        .is_some()
+                    || base_report.is_some_and(|b| {
+                        index
+                            .routines_in_object(graph, &b, &field_lc)
+                            .next()
+                            .is_some()
+                    });
             if !routine_shadowed
                 && let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc)
             {
@@ -1033,6 +1089,9 @@ pub fn infer_receiver_type(
     let singleton = match receiver_lc {
         "currpage" | "page" => Some(FrameworkKind::PageInstance),
         "currreport" | "report" => Some(FrameworkKind::ReportInstance),
+        "currxmlport" => Some(FrameworkKind::XmlPortInstance),
+        "currquery" => Some(FrameworkKind::QueryInstance),
+        "requestoptionspage" => Some(FrameworkKind::RequestPage),
         "session" => Some(FrameworkKind::Session),
         "navapp" => Some(FrameworkKind::NavApp),
         "database" => Some(FrameworkKind::Database),
@@ -1041,6 +1100,7 @@ pub fn infer_receiver_type(
         "system" => Some(FrameworkKind::System),
         "companyproperty" => Some(FrameworkKind::CompanyProperty),
         "sessioninformation" => Some(FrameworkKind::SessionInformation),
+        "productname" => Some(FrameworkKind::ProductName),
         _ => None,
     };
     if let Some(kind) = singleton {
@@ -1110,13 +1170,14 @@ pub fn infer_receiver_type(
     //    dependency closure (`ResolveIndex::resolve_object_ref`, the SAME
     //    fail-closed primitive `infer_receiver_type_for_expr`'s `Enum::"Type"`
     //    arm uses).
-    // 2. Zero objects of ANY OTHER kind share the identical normalized name,
-    //    ANYWHERE in the whole graph (`enum_type_name_collision_free` —
-    //    deliberately NOT closure-scoped, per the round-2 closer's literal
-    //    "over the whole object index": a same-name Table in an unrelated app
-    //    is still a real naming collision this engine has no compiler-level
-    //    disambiguation for, so it must decline rather than assume the Enum
-    //    reading).
+    // 2. (REMOVED 2026-10-07, S9.0e.) A same-named object of another kind
+    //    used to decline. The AL compiler (alc 18.0.41.45789) proves it does
+    //    not: with a table, an enum AND a codeunit all named "Dup Name",
+    //    `"Dup Name".FromInteger(1)` / `.Ordinals()` compile, and
+    //    `"Dup Name".Ping()` / `.Get('x')` fail with `AL0132: 'Enum "Dup Name"'
+    //    does not contain a definition`. A bare object name is a value only as
+    //    an enum type, so the name binds to the enum. The rule declined real
+    //    Base/System Application code (`"Tenant License State".FromInteger`).
     // 3. No same-named routine reachable via a parens-less bare call
     //    (`object_scope_has_bare_routine_shadow` — mirrors Step 3a's
     //    `table_scope_has_routine` precedent, generalized to every object
@@ -1150,7 +1211,6 @@ pub fn infer_receiver_type(
         };
         if let ObjectRefResolution::Unique(_) =
             index.resolve_object_ref(graph, from_object.id.clone(), ObjectKind::Enum, &object_ref)
-            && enum_type_name_collision_free(&name_lc, graph)
             && !object_scope_has_bare_routine_shadow(from_object, &name_lc, graph, index)
         {
             return ReceiverType::EnumTypeStatic { name_lc };
@@ -1210,7 +1270,7 @@ pub fn infer_receiver_type(
             from_object,
             graph,
             index,
-            bare_ctx.map(|(surface, _)| surface),
+            bare_ctx,
         );
         if !matches!(recv, ReceiverType::Unknown) {
             return recv;
@@ -1222,23 +1282,6 @@ pub fn infer_receiver_type(
     // -----------------------------------------------------------------------
 
     ReceiverType::Unknown
-}
-
-/// The programmatic Enum collision rule (Task 4, receiver-closure-and-arg-
-/// increments plan, round-2 closer — BINDING: `same_normalized_name &&
-/// object_kind != Enum` over the WHOLE object index, never a hardcoded kind
-/// subset). Returns `true` when NO object of any non-`Enum` kind anywhere in
-/// `graph.objects` shares `name_lc` — i.e. it is safe to interpret a bare
-/// name as the enum TYPE reference. Deliberately whole-graph, not
-/// closure-scoped: a same-name Table in an app `from_object` doesn't even
-/// depend on is still a genuine naming collision this engine cannot resolve
-/// the real AL compiler's disambiguation for, so it must decline rather than
-/// assume the Enum reading.
-fn enum_type_name_collision_free(name_lc: &str, graph: &ProgramGraph) -> bool {
-    !graph
-        .objects
-        .iter()
-        .any(|o| o.id.kind != ObjectKind::Enum && o.name.eq_fold_identifier(name_lc))
 }
 
 /// Whether a same-named ROUTINE is reachable from `from_object` via a
@@ -1277,6 +1320,50 @@ fn object_scope_has_bare_routine_shadow(
             .next()
             .is_some(),
     }
+}
+
+/// The declared type of `name_lc` among the `protected var` globals of the object
+/// `from_object` extends (Step 2c). `None` when `from_object` is not an extension,
+/// its base does not resolve uniquely in its closure, or the base declares no such
+/// protected variable.
+fn base_protected_var_type(
+    name_lc: &str,
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<String> {
+    let base_kind = from_object.id.kind.extension_base_kind()?;
+    let extends = from_object.extends_target.as_deref()?;
+    let base_ref = ObjectRef::Name {
+        raw: extends.to_string(),
+        normalized_lc: extends.fold_identifier(),
+    };
+    let ObjectRefResolution::Unique(base_id) =
+        index.resolve_object_ref(graph, from_object.id.clone(), base_kind, &base_ref)
+    else {
+        return None;
+    };
+    object_by_id(graph, &base_id)?
+        .protected_vars
+        .iter()
+        .find(|(n, _)| n == name_lc)
+        .map(|(_, ty)| ty.clone())
+}
+
+/// The element type of an `array[N, ...] of T` type text: `T`. `None` for any other
+/// type text.
+fn array_element_type(ty: &str) -> Option<&str> {
+    let t = ty.trim();
+    if !t.get(..5)?.eq_ignore_ascii_case("array") {
+        return None;
+    }
+    let close = t.find(']')?;
+    let rest = t[close + 1..].trim_start();
+    if !rest.get(..2)?.eq_ignore_ascii_case("of") {
+        return None;
+    }
+    let element = rest[2..].trim();
+    (!element.is_empty() && rest[2..].starts_with(char::is_whitespace)).then_some(element)
 }
 
 /// Step 6's AST-native entry point: type an arbitrary `Expr` node directly
@@ -1332,21 +1419,21 @@ fn object_scope_has_bare_routine_shadow(
 ///   `arity: args.len()`. A `Call` whose `function` is anything else (a bare
 ///   identifier call, i.e. the Step-5 shape already handled at the TOP level
 ///   only — not recursively here) declines.
-/// - Anything else (`Index`, `Literal`, `Binary`, …) — declines. Fail-closed by
+/// - `Index{base, ..}` — `X[i]` where `X` is a declared `array[..] of T`: a `T`
+///   (S9.0e, [`array_element_type`]).
+/// - Anything else (`Literal`, `Binary`, …) — declines. Fail-closed by
 ///   construction: every arm either delegates to more fail-closed logic or
 ///   returns `Unknown` directly.
 ///
-/// `surface` (plan v2.1 Task 3 enabling primitive): `Some` when the caller
-/// can supply the `DeclSurface` [`infer_compound_member_receiver`]'s new
-/// cross-object call-result chain arm needs to run `resolve_member` as a
-/// type-query; `None` for callers with no such context in scope — that arm
-/// is then a no-op there, exactly like [`infer_receiver_type`]'s `bare_ctx`.
-/// Threaded unchanged through every recursive call so a multi-hop chain's
-/// BASE typing (itself possibly another compound receiver) can reach the new
-/// arm too — a 3-level chain whose middle hop cannot be typed (no
-/// `surface`, or the middle hop itself declines) correctly propagates
-/// `Unknown` rather than partially guessing.
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `surface` (plan v2.1 Task 3); each is a distinct identity/lookup input, grouping would obscure the recursive call sites.
+/// `bare_ctx`: the site's `DeclSurface` and `WithState`, exactly as
+/// [`infer_receiver_type`] takes them. The surface lets
+/// [`infer_compound_member_receiver`]'s cross-object chain arm run
+/// `resolve_member` as a type query; the with-state lets a nested bare name
+/// reach Steps 3a/4b (an implicit-`Rec` field such as `"Account Type"` in
+/// `"Account Type"::Customer.AsInteger()`, S9.0e). `None` makes both no-ops.
+/// Threaded unchanged through every recursive call, so a multi-hop chain whose
+/// middle hop cannot be typed propagates `Unknown` rather than guessing.
+#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `bare_ctx`; each is a distinct identity/lookup input, grouping would obscure the recursive call sites.
 fn infer_receiver_type_for_expr(
     file: &AlFile,
     expr_id: ExprId,
@@ -1355,7 +1442,7 @@ fn infer_receiver_type_for_expr(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
-    surface: Option<&DeclSurface>,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
 ) -> ReceiverType {
     match &file.ir.expr(expr_id).kind {
         ExprKind::Identifier(name) => {
@@ -1368,7 +1455,7 @@ fn infer_receiver_type_for_expr(
                 graph,
                 index,
                 None,
-                None,
+                bare_ctx,
             )
         }
         ExprKind::QuotedIdentifier(name) => {
@@ -1386,8 +1473,25 @@ fn infer_receiver_type_for_expr(
                 graph,
                 index,
                 None,
-                None,
+                bare_ctx,
             )
+        }
+        // `X[i]` (S9.0e): an element of a declared `array[..] of T` variable is
+        // a `T`. The same scope lookup Step 2 uses (params, locals, globals).
+        ExprKind::Index { base, .. } => {
+            let base_lc = match &file.ir.expr(*base).kind {
+                ExprKind::Identifier(n) => n.fold_identifier(),
+                ExprKind::QuotedIdentifier(n) => format!("\"{}\"", n.fold_identifier()),
+                _ => return ReceiverType::Unknown,
+            };
+            match receiver_declared_type(&base_lc, routine, object_globals)
+                .and_then(array_element_type)
+            {
+                Some(element) => {
+                    parsed_type_to_receiver(classify_type_text(element), from_object, graph, index)
+                }
+                None => ReceiverType::Unknown,
+            }
         }
         ExprKind::Member { object, member, .. } => infer_compound_member_receiver(
             file,
@@ -1400,7 +1504,7 @@ fn infer_receiver_type_for_expr(
             from_object,
             graph,
             index,
-            surface,
+            bare_ctx,
         ),
         ExprKind::Call { function, args } => {
             if let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind {
@@ -1415,7 +1519,7 @@ fn infer_receiver_type_for_expr(
                     from_object,
                     graph,
                     index,
-                    surface,
+                    bare_ctx,
                 )
             } else {
                 // A bare-identifier call (`Func(...)`) reaching HERE (i.e. as
@@ -1502,13 +1606,42 @@ fn infer_receiver_type_for_expr(
                 from_object,
                 graph,
                 index,
-                surface,
+                bare_ctx,
             ) {
                 ReceiverType::EnumType { .. } | ReceiverType::EnumTypeStatic { .. } => {
                     ReceiverType::EnumType {
                         name_lc: String::new(),
                     }
                 }
+                // An option value is an Integer to the compiler (`Opt::B` is
+                // `'Integer'` in AL0132), so it takes the scalar surface.
+                ReceiverType::Framework(FrameworkKind::Scalar) => {
+                    ReceiverType::Framework(FrameworkKind::Scalar)
+                }
+                // `"Type"::Value` where `"Type"` types as nothing in scope here
+                // (S9.0e): an Enum object of that unique name makes it an enum
+                // value. A shadowing option field the expression path cannot see
+                // would leave its member unresolved, never a wrong target.
+                ReceiverType::Unknown => match &file.ir.expr(*enum_type).kind {
+                    ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                        let object_ref = ObjectRef::Name {
+                            raw: n.clone(),
+                            normalized_lc: n.fold_identifier(),
+                        };
+                        match index.resolve_object_ref(
+                            graph,
+                            from_object.id.clone(),
+                            ObjectKind::Enum,
+                            &object_ref,
+                        ) {
+                            ObjectRefResolution::Unique(_) => ReceiverType::EnumType {
+                                name_lc: n.fold_identifier(),
+                            },
+                            _ => ReceiverType::Unknown,
+                        }
+                    }
+                    _ => ReceiverType::Unknown,
+                },
                 _ => ReceiverType::Unknown,
             }
         }
@@ -1587,8 +1720,9 @@ fn infer_compound_member_receiver(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
-    surface: Option<&DeclSurface>,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
 ) -> ReceiverType {
+    let surface = bare_ctx.map(|(s, _)| s);
     // `member` (from `ExprKind::Member`/`Call{function: Member{..}}`) may
     // itself be RAW WITH QUOTES (mirrors `extract.rs::classify_call`'s own
     // `strip_quote_chars(member)` before use) — unquote before matching so a
@@ -1599,8 +1733,21 @@ fn infer_compound_member_receiver(
 
     if is_this_identifier(file, object_expr_id) {
         if is_method {
-            // `this.Method(...)` call-result chaining — deferred, decline.
-            return ReceiverType::Unknown;
+            // `this.Func()` (S9.0e): the result of the object's own procedure,
+            // typed like any `Var.Func()` chain on a `SelfObject` base.
+            return surface
+                .and_then(|bm| {
+                    infer_cross_object_chain_receiver(
+                        &ReceiverType::SelfObject,
+                        &member_lc,
+                        arity,
+                        from_object,
+                        graph,
+                        index,
+                        bm,
+                    )
+                })
+                .unwrap_or(ReceiverType::Unknown);
         }
         return infer_this_member(&member_lc, object_globals, from_object, graph, index);
     }
@@ -1613,8 +1760,16 @@ fn infer_compound_member_receiver(
         from_object,
         graph,
         index,
-        surface,
+        bare_ctx,
     );
+
+    // Any member of a .NET value is a .NET value (or a primitive the platform
+    // converts): a leaf with no AL routine behind it (S9.0e).
+    if let ReceiverType::DotNet { .. } = &base_ty {
+        return ReceiverType::DotNet {
+            name_lc: "*".to_string(),
+        };
+    }
 
     if let ReceiverType::Framework(kind) = &base_ty {
         if let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
@@ -2361,8 +2516,8 @@ fn resolve_report_implicit_rec_table(
 /// - the name resolves to more than one DISTINCT (own ∪ base) source-table
 ///   `ObjectRef` — an unprovable duplicate, decline rather than pick one.
 ///   IDENTICAL duplicates (harmless `#if`/`#else` re-parse duplication —
-///   `collect_report_dataitems` walks both branches, mirroring `globals`/
-///   `locals`; see `ObjectDecl.report_dataitems`'s doc) are deduped first, so
+///   `collect_dataitems` walks both branches, mirroring `globals`/
+///   `locals`; see `ObjectDecl.dataitems`'s doc) are deduped first, so
 ///   they never manufacture an artificial ambiguity.
 fn resolve_dataitem_source_table(
     name_lc: &str,
@@ -2372,7 +2527,7 @@ fn resolve_dataitem_source_table(
 ) -> Option<ObjectNodeId> {
     if !matches!(
         from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) {
         return None;
     }
@@ -2721,6 +2876,7 @@ pub(crate) fn parsed_type_to_receiver(
         ParsedType::FieldRef => ReceiverType::FieldRef,
         ParsedType::KeyRef => ReceiverType::KeyRef,
         ParsedType::Framework(kind) => ReceiverType::Framework(kind),
+        ParsedType::DotNet { name } => ReceiverType::DotNet { name_lc: name },
         ParsedType::Primitive => ReceiverType::Primitive,
         ParsedType::Dynamic => ReceiverType::Dynamic,
     }
@@ -3245,6 +3401,7 @@ mod tests {
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             };
 
@@ -3368,6 +3525,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }
     }
@@ -3656,9 +3814,18 @@ mod tests {
         );
     }
 
+    /// S9.0e: the numeric/boolean scalars carry `ToText`, so they are a catalog
+    /// kind; a type with no catalogued member (`Char`) stays `Primitive`.
     #[test]
-    fn classify_integer_is_primitive() {
-        assert_eq!(classify_type_text("Integer"), ParsedType::Primitive);
+    fn classify_integer_is_scalar() {
+        for t in ["Integer", "BigInteger", "Decimal", "Boolean", "Byte"] {
+            assert_eq!(
+                classify_type_text(t),
+                ParsedType::Framework(FrameworkKind::Scalar),
+                "{t}"
+            );
+        }
+        assert_eq!(classify_type_text("Char"), ParsedType::Primitive);
     }
 
     #[test]
@@ -4291,6 +4458,48 @@ mod tests {
             None,
         );
         assert_eq!(result, ReceiverType::Framework(FrameworkKind::Session));
+    }
+
+    #[test]
+    fn array_element_type_parses_the_element() {
+        assert_eq!(
+            array_element_type("array[2] of Record \"Sales Line\""),
+            Some("Record \"Sales Line\"")
+        );
+        assert_eq!(
+            array_element_type("Array[2, 3] OF Codeunit X"),
+            Some("Codeunit X")
+        );
+        assert_eq!(array_element_type("Record Arrays"), None);
+        assert_eq!(array_element_type("array[2] ofText"), None);
+    }
+
+    /// S9.0e: `ProductName`, `currXMLport`, `CurrQuery` and a report's
+    /// `RequestOptionsPage` are platform singletons.
+    #[test]
+    fn infer_singleton_productname_and_currxmlport() {
+        let (graph, app) = build_test_graph();
+        let index = ResolveIndex::build(&graph);
+        let routine = build_test_routine();
+        let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
+        let infer =
+            |r: &str| infer_receiver_type(r, &routine, &[], &from_obj, &graph, &index, None, None);
+        assert_eq!(
+            infer("productname"),
+            ReceiverType::Framework(FrameworkKind::ProductName)
+        );
+        assert_eq!(
+            infer("currxmlport"),
+            ReceiverType::Framework(FrameworkKind::XmlPortInstance)
+        );
+        assert_eq!(
+            infer("currquery"),
+            ReceiverType::Framework(FrameworkKind::QueryInstance)
+        );
+        assert_eq!(
+            infer("requestoptionspage"),
+            ReceiverType::Framework(FrameworkKind::RequestPage)
+        );
     }
 
     #[test]
@@ -7984,14 +8193,11 @@ codeunit 50100 "C"
         );
     }
 
-    /// NEGATIVE (collision rule): a same-named TABLE exists elsewhere in the
-    /// whole object index — the programmatic collision rule
-    /// (`same_normalized_name && kind != Enum`) declines even though the Enum
-    /// itself resolves uniquely too. Proves the rule is whole-index, not
-    /// closure-scoped or kind-hardcoded — the colliding Table lives in a
-    /// DIFFERENT app that `from_object`'s app does not even depend on.
+    /// POSITIVE (S9.0e): a same-named TABLE does not block the enum reading. The
+    /// AL compiler binds a bare object name used as a receiver to the enum (see
+    /// Step 4b's gate, rule 2). The table lives in a different app here.
     #[test]
-    fn bare_enum_type_name_collision_with_other_kind_declines() {
+    fn bare_enum_type_name_resolves_despite_a_same_named_table() {
         let mut apps = crate::program::node::AppRegistry::default();
         let enum_app = apps.intern(&AppId {
             guid: String::new(),
@@ -8026,6 +8232,7 @@ codeunit 50100 "C"
         let routine = build_test_routine();
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
 
+        let surface = DeclSurface::build(&graph, &[]);
         let result = infer_receiver_type(
             "\"ambiguous name\"",
             &routine,
@@ -8034,9 +8241,14 @@ codeunit 50100 "C"
             &graph,
             &index,
             None,
-            None,
+            Some((&surface, WithState::NoWithProven)),
         );
-        assert_eq!(result, ReceiverType::Unknown);
+        assert_eq!(
+            result,
+            ReceiverType::EnumTypeStatic {
+                name_lc: "ambiguous name".to_string()
+            }
+        );
     }
 
     /// NEGATIVE (routine shadow): the SAME name is ALSO a declared procedure
@@ -8099,7 +8311,8 @@ codeunit 50100 "C"
             None,
             None,
         );
-        assert_eq!(result, ReceiverType::Primitive);
+        // The local's own type, not the enum's.
+        assert_eq!(result, ReceiverType::Framework(FrameworkKind::Scalar));
     }
 
     /// NEGATIVE (Task 3, roadmap-closure plan): Step 4b's with-guard —

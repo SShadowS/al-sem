@@ -1813,6 +1813,8 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
     match kind {
         ObjectKind::Page => "onopenpage",
         ObjectKind::Report => "onprereport",
+        // Like Report's `OnPreReport`: the trigger a run reaches after the init one.
+        ObjectKind::XmlPort => "onprexmlport",
         _ => "onrun",
     }
 }
@@ -1988,8 +1990,8 @@ pub fn resolve_object_run(
 /// | `op`        | Trigger         |
 /// |-------------|-----------------|
 /// | `"insert"`  | `"oninsert"`    |
-/// | `"modify"`  | `"onmodify"`    |
-/// | `"delete"`  | `"ondelete"`    |
+/// | `"modify"`, `"modifyall"` | `"onmodify"` |
+/// | `"delete"`, `"deleteall"` | `"ondelete"` |
 /// | `"validate"`| `"onvalidate"`  |
 /// | `"rename"`  | `"onrename"`    |
 ///
@@ -2014,8 +2016,8 @@ pub fn resolve_implicit_trigger(
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name: &str = match op.fold_identifier().as_str() {
         "insert" => "oninsert",
-        "modify" => "onmodify",
-        "delete" => "ondelete",
+        "modify" | "modifyall" => "onmodify",
+        "delete" | "deleteall" => "ondelete",
         "validate" => "onvalidate",
         "rename" => "onrename",
         _ => {
@@ -2170,6 +2172,7 @@ fn object_instance_framework_kind(kind: ObjectKind) -> Option<FrameworkKind> {
         // `member_catalog::ENTRY_DISPATCH_BUILTIN_IDS`'s doc for why the
         // ENTRY-DISPATCH exclusion was never a reason to withhold the catalog.
         ObjectKind::Query => Some(FrameworkKind::QueryInstance),
+        ObjectKind::XmlPort => Some(FrameworkKind::XmlPortInstance),
         _ => None,
     }
 }
@@ -2476,6 +2479,8 @@ pub(crate) fn resolve_member_with_args(
                 ObjectKind::Page | ObjectKind::Report => {
                     method_lc == "run" || method_lc == "runmodal"
                 }
+                // An XmlPort runs its own triggers on Run, Import and Export.
+                ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
                 _ => false,
             };
             if is_entry_trigger_dispatch && arity <= 1 {
@@ -2751,6 +2756,12 @@ pub(crate) fn resolve_member_with_args(
             } else {
                 member_unknown_route(UnknownReason::CatalogMiss)
             }
+        }
+        ReceiverType::DotNet { name_lc } => {
+            // A .NET interop member: the call leaves AL. The AL compiler binds it
+            // against the alias's declared assembly, so the alias and member name
+            // identify the target; no AL routine exists to resolve it to.
+            member_catalog_route(BuiltinId(format!("DotNet::{name_lc}::{method_lc}")))
         }
         ReceiverType::Primitive => {
             // Non-catalog type — honest Unknown (not a false resolution gap).
@@ -4264,6 +4275,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4279,6 +4291,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4426,6 +4439,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4441,6 +4455,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4615,6 +4630,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4630,6 +4646,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4985,6 +5002,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -5000,6 +5018,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -5212,6 +5231,7 @@ codeunit 50612 "MixedCU2"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }];
 
@@ -5356,6 +5376,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -5371,6 +5392,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -6174,6 +6196,7 @@ codeunit 50300 "OverloadCU"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         (graph, index, surface, from_obj)
@@ -10368,6 +10391,7 @@ codeunit 50000 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         });
 
@@ -12646,6 +12670,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -12661,6 +12686,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -13026,6 +13052,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -13041,6 +13068,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -13211,6 +13239,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -13226,6 +13255,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];

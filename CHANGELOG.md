@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency-body unknowns are measured and ratcheted** (engine-switch S9.0e).
+  `aldump --dependency-bodies-stats --sites` lists every unknown route in dependency
+  code resolved from its own app, with its source line. The CDO test
+  `dependency_body_unknown_ceiling_on_cdo` holds their count (6,315 of 431,248 edges on
+  2026-10-07) and only moves down. `realUnknownRate` never counted these.
+
+- **The AL compiler's call graph as an independent oracle** (engine-switch
+  S9.0b). The AL extension ships `altool graph`
+  (Microsoft.BusinessCentral.CallGraph). `altool graph extract-whole --corpus
+  <workspace> --corpus <dependency sources> --graph g.jsonl` compiles every app
+  together and writes the compiler's own call graph. The new
+  `aldump --compiler-oracle <g.jsonl> <workspace> [--all-apps]`
+  (`program::resolve::compiler_oracle`) compares it with the program resolver's
+  edges, caller->callee pair by pair. Pairs are the granularity both share: the
+  compiler graph keeps ONE edge per pair, at its first line.
+  - **Not compared:** built-in methods, self-recursion, interface declarations
+    (implementations are compared), and object runs (the compiler graph has
+    none). Instance runs (`CU.Run()`) are recognised as runs.
+  - **CDO:** extracting the 11-app corpus takes about 2 minutes and is
+    byte-deterministic. Workspace callers: 6,968 pairs agree, 77 are
+    compiler-only, 277 program-only. Whole program: 152,004 agree.
+  - **Triage of the workspace disagreements** (240 pairs):
+    - 37 are program-resolver bugs, fixed next in S9.0c. Triggers fire for
+      argument-less writes; parens-less calls inside expressions are missed;
+      `DeleteAll(true)`/`ModifyAll` raise no triggers; ternary/`in`/`is`/`as`
+      expressions are opaque to call extraction.
+    - 113 are compiler-graph limits: subscriber attributes recorded as calls,
+      `RunTrigger` ignored, no `Validate` edges.
+    - 90 are mapping differences, now handled by the comparison.
+  - This is the reference that replaces the L3 oracle for minting the
+    semantic-edges goldens (S9.0d); the product never depends on it.
+
 - **One detector-context builder for both modes** (engine-switch S8.1).
   `build_detector_context_with(resolved, demanded, cross)` takes an optional
   `CrossAppInputs`: the dependency routine ids (never primary roots or entry
@@ -1020,11 +1052,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The production paths no longer touch L3** (engine-switch S9.1). Three
+  things changed:
+  - The `alsem analyze` adapter no longer compares its trigger edges with L3's
+    trigger resolver. That comparison only fed two census counters and made the
+    adapter build L3's full symbol table on every run.
+  - A program parse that lacks a file now fails the model closed, instead of
+    falling back to L3's disk assembly.
+  - `analyze`'s failure classification (empty output vs program-build error)
+    now asks only whether the workspace has app-scoped AL files.
+
+  `aldump --r3a4-dep-hooks/--r3a5-cross-app-summary` check the program-backed
+  model as their precondition. No golden moved.
+
 - **`run_cdo_semantic_audit`** (#47), a `&Path` wrapper with no caller. Callers use
   `run_cdo_semantic_audit_on`; the wrapper could not be driven safely in a test (it would
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **Dependency bodies: compound receivers, first part** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 1,273 -> 680 (compoundReceiver 909 -> 312); workspace
+  metrics unchanged.
+  - `this.Func().M()` types by `Func`'s return, like any `Var.Func().M()` chain (it
+    declined as "deferred").
+  - Any member of a .NET value is a .NET leaf (`Enc.UTF8.GetBytes(...)`).
+  - `"Type"::Value.AsInteger()`: when `"Type"` types as nothing in scope but names a
+    unique Enum, the literal is an enum value. An option value takes the scalar
+    surface (the compiler types it `Integer`).
+  - 4 sites moved from compoundReceiver to overloadAmbiguous: they now reach their
+    target and stop at an overload choice.
+  - The expression typer (`infer_receiver_type_for_expr`) takes the site's full
+    with-context (`bare_ctx`), not only its surface, so a nested bare name reaches the
+    implicit-`Rec` field and enum-type steps: `"Account Type"::Customer.AsInteger()` in
+    a table types `"Account Type"` as its enum field. 680 -> 643.
+
+- **Dependency bodies: the rest of untrackedReceiver** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 1,790 -> 1,273 (untrackedReceiver 483 -> 3,
+  memberNotFound 28 -> 6); workspace metrics unchanged.
+  - `X[i].M()` on a declared `array[..] of T` types the receiver as `T` (368 sites).
+  - **Protected variables.** A table, page or report extension reads its base
+    object's `protected var` globals. The lowerer records them
+    (`ObjectDecl.protected_globals`), `ObjectNode.protected_vars` carries them across
+    files (pack schema 3 -> 4), and receiver Step 2c looks them up after the
+    extension's own scope. Record ops on them are still classified as plain member
+    calls, in both the program and the body walk (consistent; trigger edges for
+    `ProtectedRec.Modify(true)` are a known gap).
+  - **The enum-name collision rule is gone.** Step 4b declined `"X".FromInteger(...)`
+    when any non-enum object shared the name. The AL compiler (alc 18.0.41.45789)
+    binds the bare name to the enum: with a table, enum and codeunit all named
+    `"Dup Name"`, `"Dup Name".FromInteger(1)` compiles and `"Dup Name".Ping()` fails
+    with `AL0132: 'Enum "Dup Name"' does not contain a definition for 'Ping'`. The old
+    test of the rule passed no with-context, so it never reached the rule; it is now a
+    positive test.
+  - `CurrQuery` (query instance) and a report's `RequestOptionsPage` (MS Learn's
+    RequestPage methods) are singletons.
+  - **Lowerer: a header split across `#if` arms keeps its object kind.**
+    `preproc_split_declaration` can split any object header but was always lowered
+    as a Codeunit (System Application's `enum 8889 "Email Connector"`). It now takes
+    its first header's keyword.
+  - **Interface implementers are codeunits.** The implementer index took every object
+    with an `implements` clause, including enums (whose values map to codeunits that
+    declare the interface themselves), and listed an object once per `#if` arm of a
+    split header. Both corrected.
+
+- **Dependency bodies: XmlPort and `ProductName`** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 2,933 -> 1,790 (untrackedReceiver 1,527 -> 483,
+  memberNotFound 123 -> 28); workspace metrics unchanged.
+  - An XmlPort `tableelement(Name; Table)` is a named record like a report dataitem: the
+    lowerer collects it (`ObjectDecl.dataitems`, renamed from `report_dataitems`), and
+    it types receivers (Step 2b) and seeds the body walk's record variables.
+  - Dataitem and table-element names are record variables for record-op
+    classification, so `Di.Modify(true)` on one gets its trigger edge. This was a gap
+    for report dataitems too.
+  - XmlPort got its instance catalog (MS Learn, 18 methods), the `currXMLport`
+    singleton, and the instance kind for an `XmlPort "X"` variable. `XmlPort.Run`,
+    `Import` and `Export` with a static id, and a variable's `Run()`/`Import()`/`Export()`,
+    dispatch to the XmlPort's `OnPreXmlPort`, as a report run reaches `OnPreReport`.
+  - `ProductName.Full()/Marketing()/Short()` is a platform singleton.
+  - `aldump --dependency-bodies-stats --sites` now lists exactly the edges `unknown`
+    counts (it listed every unknown-evidence route, including `honestDynamic` edges).
+
+- **Dependency bodies: the catalogMiss family** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 6,315 -> 2,979 (catalogMiss 3,341 -> 0); workspace
+  metrics unchanged.
+  - A `DotNet <Alias>` receiver is `ReceiverType::DotNet`, and a member call on it is a
+    catalog leaf `DotNet::<alias>::<member>`: the AL compiler binds it against the
+    alias's declared assembly, and no AL routine exists to reach (3,331 sites).
+  - `Integer`, `BigInteger`, `Decimal`, `Boolean` and `Byte` are
+    `FrameworkKind::Scalar`, whose only instance method is `ToText` (MS Learn).
+  - Inside a report dataitem trigger, a bare field receiver (`"Entry Type".AsInteger()`)
+    is the dataitem record's field. A same-named procedure of the report, or of the
+    base report for a report extension, shadows it.
+  - The lowerer kept the condition of an `if C then begin` split across `#if`
+    (`preproc_split_if_then_begin` and its 3 siblings) as a statement: a phantom
+    call site on `C`. It is now the `if`'s condition, with the remaining statements as
+    its (union-read) then-block.
+  - Moved: `docs/b3-triage/r0-corpus.md`, two negative fixtures whose reason sharpens
+    from compoundReceiver to catalogMiss (still unknown).
+
+- **Calls inside a ternary, an `in` list, or an `is`/`as` operand are calls**
+  (engine-switch S9.0c, found by the compiler oracle: 3 pairs on CDO). The lowerer made
+  `c ? a : b`, `x is T`, `x as T` and `[a, b]` an opaque `ExprKind::Unknown`: it lowered
+  the children into the arena but linked none of them, so every call inside had no
+  edge and no body call site. They are now `ExprKind::Ternary`, `ExprKind::TypeOp`
+  (`TypeOp::Is`/`As`, type text as written) and `ExprKind::List`, with a shared
+  `ExprKind::children()`. The extractors, the body walk (call sites, condition
+  references, the control-flow tree) and the complexity metric descend into them; a
+  ternary adds one to cyclomatic complexity, like `and`/`or`.
+  - CDO oracle: the 3 S3 pairs agree; no new disagreement.
+  - The frozen CDO L4 digest moved (2 of 5479 routines; see
+    `tests/l4-summary-baseline/README.md`). No other golden moved.
+
+- **A parens-less call inside an expression is a call** (engine-switch S9.0c, found
+  by the compiler oracle: 10 pairs on CDO). AL lets a zero-argument call drop its
+  `()`, also as a value: `if IsOn then`, `exit(GetSetup)`, `Foo(X.Bar)`. Syntax
+  cannot tell such a read from a variable or field read, so the extractor makes a
+  candidate site for every bare `M` or `X.M` read as a value (`RawSiteV2::parenless`),
+  and the resolver keeps it only when every route reaches a routine (source or ABI).
+  A declared variable, parameter or return name shadows a same-named procedure. A
+  parens-less built-in read (`Rec.Count`) is dropped, as the compiler's graph does.
+  - The kept reads travel as `ProgramReport::parenless_calls` (by app and file) into
+    the analyze model, whose body walk takes each one as a zero-argument call site,
+    so the adapter joins it instead of losing it (`program_only_site` was 11 on CDO).
+  - `adapter_census_for_workspace` (and the adapter tests) now measure the
+    production model (`assemble_and_resolve_workspace_from_program`), not L3's disk
+    model.
+  - CDO oracle: all 10 S1 pairs agree; no new Call disagreement. CDO histogram:
+    `unknown` 0, `ambiguousResolved` 23 (its pin), unchanged. No golden moved.
+  - The route-applicability checker's op table lacked `modifyall`/`deleteall` (the
+    resolver gained them in the previous entry): 5 false violations on CDO, now 0.
+
+- **A table write fires its trigger only when it asks to** (engine-switch S9.0c,
+  found by the compiler oracle). Measured on BC 28: `Insert()`, `Modify()` and
+  `Delete()` with no argument, or with `false`, run no table trigger; `true` runs
+  it. `ModifyAll(F, V, true)` runs `OnModify` and `DeleteAll(true)` runs `OnDelete`,
+  once per row; without `true` neither does. The program resolver now reads the
+  RunTrigger argument (slot 0, or slot 2 for `ModifyAll`): a missing argument is
+  `false`, a literal is its value, anything else stays unknown and keeps the edge.
+  `ModifyAll`/`DeleteAll` now map to `OnModify`/`OnDelete`.
+  - Goldens moved (triaged): `implicit-trigger-fixture.json` (the fixture now
+    writes with `true`; only its lines moved), `r2a-record-types.declaredvars.effects`
+    (6 -> 4 effects: `TempCust.Insert()` no longer inherits `OnInsert`'s writes),
+    `docs/b3-triage/r0-corpus.md` (+1 program-only trigger row).
+  - The CDO trigger audit's `fresh_missing` ceiling went 3 -> 103. The L3-minted
+    golden is wrong at those sites: every one is an argless or `false` write
+    (insert 69, delete 16, modify 11, insert(false) 7). S9.0d re-mints it.
 
 - **A record passed to an event keeps its temp state through the subscriber**
   (engine-switch S8, S8.6 triage cause 5). AL binds an event subscriber's

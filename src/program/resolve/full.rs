@@ -111,7 +111,14 @@ pub(crate) struct FileResolution {
     pub indeterminate: Vec<IndeterminateBuiltinDispatchSite>,
     /// See [`ProgramReport::site_facts`].
     pub site_facts: Vec<(ObligationId, SiteFacts)>,
+    /// The parens-less value reads this file's resolution kept as calls.
+    pub parenless: Vec<al_syntax::ir::ExprId>,
 }
+
+/// The parens-less value reads (`X.M` / `M` without `()`) the resolver kept as
+/// calls, by owning app and file (`ParsedFile::virtual_path`). The body walk
+/// takes these as calls too, so its call sites match the program's edges.
+pub type ParenlessCalls = HashMap<(AppRef, String), HashSet<al_syntax::ir::ExprId>>;
 
 /// What the resolver knew about one call site beyond its edge, for the B3
 /// adapter (engine-switch S3.2 interfaces, S6.0 receivers). Only member call
@@ -264,6 +271,8 @@ pub struct ProgramReport {
     /// dispatched over (engine-switch S3.2) and its receiver (S6.0). The edge
     /// itself does not carry them; the B3 adapter needs them.
     pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// See [`ParenlessCalls`]: the workspace files' parens-less calls.
+    pub parenless_calls: ParenlessCalls,
 }
 
 // ---------------------------------------------------------------------------
@@ -586,6 +595,7 @@ fn resolve_call_site_obligation(
                 "Codeunit" => Some(ObjectKind::Codeunit),
                 "Page" => Some(ObjectKind::Page),
                 "Report" => Some(ObjectKind::Report),
+                "XmlPort" => Some(ObjectKind::XmlPort),
                 _ => None,
             };
             if let Some(okind) = okind_opt {
@@ -736,6 +746,7 @@ pub(crate) fn resolve_file_obligations(
     let mut flagged: Vec<FlaggedBuiltinDispatchSite> = Vec::new();
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
+    let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
@@ -759,6 +770,17 @@ pub(crate) fn resolve_file_obligations(
                     .unwrap_or(false)
             })
             .map(|v| v.name.fold_identifier())
+            // Report dataitems and XmlPort table elements are record variables too
+            // (S9.0e), so `Item.Modify(true)` on one is a record op with its trigger
+            // edge. An object global of the same name shadows the element.
+            // ponytail: a non-record LOCAL of the same name is not excluded here;
+            // receiver inference still types it by the local.
+            .chain(
+                obj.dataitems
+                    .iter()
+                    .map(|(name, _)| name.fold_identifier())
+                    .filter(|n| !obj.globals.iter().any(|g| g.name.fold_identifier() == *n)),
+            )
             .collect();
 
         for (routine_idx, routine) in obj.routines.iter().enumerate() {
@@ -773,7 +795,24 @@ pub(crate) fn resolve_file_obligations(
                 routine_idx,
             );
 
+            // A declared variable shadows a same-named procedure, so a bare
+            // parens-less read of one is a variable read, never a call.
+            let shadows: HashSet<String> = routine
+                .params
+                .iter()
+                .map(|p| p.name.fold_identifier())
+                .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
+                .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+                .chain(obj.globals.iter().map(|v| v.name.fold_identifier()))
+                .collect();
+
             for site in &sites {
+                if site.parenless
+                    && let CalleeShape::Bare { name } = &site.shape
+                    && shadows.contains(&name.fold_identifier())
+                {
+                    continue;
+                }
                 let fp = callee_fp(&site.callee_text);
                 let obl_id = ObligationId::CallSite {
                     caller: caller.clone(),
@@ -799,6 +838,25 @@ pub(crate) fn resolve_file_obligations(
                     &mut facts,
                     &pf.text,
                 );
+                // A parens-less value read is a call only when it reaches a
+                // routine; otherwise it is a variable, field or built-in read.
+                // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
+                // as the compiler's graph does; keep it if built-in reads matter.
+                if site.parenless
+                    && (kind != EdgeKind::Call
+                        || routes.is_empty()
+                        || !routes.iter().all(|r| {
+                            matches!(
+                                r.target,
+                                RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }
+                            )
+                        }))
+                {
+                    continue;
+                }
+                if site.parenless {
+                    parenless.push(site.expr);
+                }
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
                 }
@@ -846,6 +904,7 @@ pub(crate) fn resolve_file_obligations(
         flagged,
         indeterminate,
         site_facts,
+        parenless,
     }
 }
 
@@ -964,6 +1023,7 @@ fn resolve_full_program_from_parts(
     Coverage,
     BuiltinDispatchAudit,
     HashMap<ObligationId, SiteFacts>,
+    ParenlessCalls,
 ) {
     let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
@@ -1007,16 +1067,32 @@ fn resolve_full_program_from_parts(
         })
         .collect();
 
-    let file_results: Vec<FileResolution> = crate::big_stack::big_stack_pool().install(|| {
-        files_to_resolve
-            .par_iter()
-            .map(|pf| {
-                resolve_file_obligations(pf, primary_app_ref, graph, &index, surface, &obj_node_map)
-            })
-            .collect()
-    });
+    let file_results: Vec<(String, FileResolution)> =
+        crate::big_stack::big_stack_pool().install(|| {
+            files_to_resolve
+                .par_iter()
+                .map(|pf| {
+                    let r = resolve_file_obligations(
+                        pf,
+                        primary_app_ref,
+                        graph,
+                        &index,
+                        surface,
+                        &obj_node_map,
+                    );
+                    (pf.virtual_path.clone(), r)
+                })
+                .collect()
+        });
 
-    for file_res in file_results {
+    let mut parenless_calls = ParenlessCalls::new();
+    for (path, file_res) in file_results {
+        if !file_res.parenless.is_empty() {
+            parenless_calls.insert(
+                (primary_app_ref, path),
+                file_res.parenless.into_iter().collect(),
+            );
+        }
         // T3 Task 6: `resolve_file_obligations` no longer inserts into
         // `obligation_id_set` inline (it has no access to this whole-run
         // accumulator) — insert from the returned edges' obligation ids
@@ -1089,6 +1165,7 @@ fn resolve_full_program_from_parts(
         coverage,
         builtin_dispatch_audit,
         site_facts,
+        parenless_calls,
     )
 }
 
@@ -1140,13 +1217,14 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit, site_facts) = resolve_full_program_from_parts(
-        graph,
-        parsed,
-        &ctx.decl_surface(),
-        primary_app_ref,
-        ws_file_set,
-    );
+    let (edges, coverage, builtin_dispatch_audit, site_facts, parenless_calls) =
+        resolve_full_program_from_parts(
+            graph,
+            parsed,
+            &ctx.decl_surface(),
+            primary_app_ref,
+            ws_file_set,
+        );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -1195,6 +1273,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
         recovered_files,
         builtin_dispatch_audit,
         site_facts,
+        parenless_calls,
     }
 }
 
@@ -1210,13 +1289,14 @@ pub fn resolve_full_program_for_export(
     workspace_root: &Path,
 ) -> Option<(ProgramGraph, Vec<ClassifiedEdge>, AppRef)> {
     let ctx = build_context(workspace_root)?;
-    let (edges, _coverage, _builtin_dispatch_audit, _site_facts) = resolve_full_program_from_parts(
-        &ctx.graph,
-        &ctx.parsed,
-        &ctx.decl_surface(),
-        ctx.primary_app_ref,
-        &ctx.ws_file_set,
-    );
+    let (edges, _coverage, _builtin_dispatch_audit, _site_facts, _parenless) =
+        resolve_full_program_from_parts(
+            &ctx.graph,
+            &ctx.parsed,
+            &ctx.decl_surface(),
+            ctx.primary_app_ref,
+            &ctx.ws_file_set,
+        );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
 
@@ -1409,9 +1489,15 @@ impl ProgramContext {
                 .collect()
         });
         let mut out = DependencyBodyResolution::default();
-        for r in results {
+        for ((app, pf), r) in files.iter().zip(results) {
             out.edges.extend(r.edges);
             out.site_facts.extend(r.site_facts);
+            if !r.parenless.is_empty() {
+                out.parenless_calls.insert(
+                    (*app, pf.virtual_path.clone()),
+                    r.parenless.into_iter().collect(),
+                );
+            }
         }
         out
     }
@@ -1424,6 +1510,8 @@ pub struct DependencyBodyResolution {
     pub edges: Vec<ClassifiedEdge>,
     /// The receiver/interface facts of those sites (see [`SiteFacts`]).
     pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// See [`ParenlessCalls`]: the dependency files' parens-less calls.
+    pub parenless_calls: ParenlessCalls,
 }
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
@@ -2146,6 +2234,626 @@ mod tests {
         );
     }
 
+    /// S9.0c (found by the compiler oracle): a zero-argument call may drop its
+    /// `()`, also inside an expression. A bare `M` or `X.M` read as a value is a
+    /// call when it reaches a routine; a variable, a field or a shadowing local
+    /// of the same name is not.
+    #[test]
+    fn parenless_call_in_an_expression_is_a_call_site() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 R
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+             codeunit 50002 D
+{
+    procedure Flag(): Boolean
+    begin
+        exit(true);
+    end;
+}
+             codeunit 50000 C
+{
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+
+             procedure Caller()
+    var
+        Other: Codeunit D;
+        T: Record R;
+        B: Boolean;
+    begin
+             if IsOn then;
+             if not Other.Flag then;
+             B := IsOn;
+             if T.Code = '' then;
+             if B then;
+             exit;
+    end;
+
+             procedure Shadowed()
+    var
+        IsOn: Boolean;
+    begin
+             if IsOn then;
+    end;
+}
+",
+        )
+        .expect("write C.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let calls = |caller: &str| -> Vec<(u32, String)> {
+            let mut v: Vec<(u32, String)> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller && ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| {
+                    ce.edge.routes.iter().map(move |r| match &r.target {
+                        RouteTarget::Routine(id) => {
+                            (ce.edge.site.span.start.line, id.name_lc.clone())
+                        }
+                        other => (ce.edge.site.span.start.line, format!("{other:?}")),
+                    })
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        // Lines are 0-based: `if IsOn then;` is line 27.
+        assert_eq!(
+            calls("caller"),
+            vec![
+                (27, "ison".to_string()),
+                (28, "flag".to_string()),
+                (29, "ison".to_string()),
+            ],
+            "IsOn / Other.Flag read as values are calls; the field T.Code and the variable B are not"
+        );
+        assert_eq!(
+            calls("shadowed"),
+            vec![],
+            "a local named IsOn shadows the procedure"
+        );
+    }
+
+    /// S9.0c (found by the compiler oracle): a call inside a ternary, an `in` list
+    /// or an `is`/`as` operand is a call site. The lowerer used to make those
+    /// containers an opaque `Unknown`, so the calls had no edge.
+    #[test]
+    fn calls_inside_ternary_list_and_typeop_are_call_sites() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C
+{
+             procedure F(): Boolean
+    begin
+    end;
+             procedure A(): Integer
+    begin
+    end;
+             procedure B(): Integer
+    begin
+    end;
+             procedure G(): Codeunit C
+    begin
+    end;
+             procedure Caller()
+    var
+        X: Integer;
+        O: Codeunit C;
+    begin
+             X := F() ? A() : B();
+             if X in [A(), B()] then;
+             if G() is C then;
+             O := G() as C;
+    end;
+}
+",
+        )
+        .expect("write C.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut calls: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "caller" && ce.edge.kind == EdgeKind::Call)
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| match &r.target {
+                    RouteTarget::Routine(id) => (ce.edge.site.span.start.line, id.name_lc.clone()),
+                    other => (ce.edge.site.span.start.line, format!("{other:?}")),
+                })
+            })
+            .collect();
+        calls.sort();
+        let want: Vec<(u32, String)> = [
+            (19, "a"),
+            (19, "b"),
+            (19, "f"),
+            (20, "a"),
+            (20, "b"),
+            (21, "g"),
+            (22, "g"),
+        ]
+        .into_iter()
+        .map(|(l, n)| (l, n.to_string()))
+        .collect();
+        assert_eq!(calls, want);
+    }
+
+    /// S9.0e: a member call on a `DotNet` receiver is a .NET interop leaf, a
+    /// catalog route `DotNet::<alias>::<member>`, not an unknown (`catalogMiss`,
+    /// 3,331 sites in CDO's dependency bodies).
+    #[test]
+    fn dotnet_member_call_is_a_catalog_leaf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C
+{
+    procedure P()
+    var
+        Enc: DotNet \"Encoding\";
+        B: DotNet Array;
+    begin
+        B := Enc.GetBytes('a');
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let routes: Vec<(String, EvidenceKind)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| (format!("{:?}", r.target), r.evidence.kind()))
+            .collect();
+        assert_eq!(
+            routes,
+            vec![(
+                "Builtin(BuiltinId(\"DotNet::encoding::getbytes\"))".to_string(),
+                EvidenceKind::Catalog
+            )]
+        );
+    }
+
+    /// S9.0e: inside a report dataitem trigger, a bare field receiver is the
+    /// dataitem record's field (`"Item Ledger Entry Type".AsInteger()` in Base
+    /// Application's Item Register - Value). A report procedure of the same name
+    /// shadows it (parens-optional call), so that case declines.
+    #[test]
+    fn report_dataitem_bare_field_receiver_types_by_the_dataitem_table() {
+        let src = |shadow: &str| {
+            format!(
+                "enum 50002 S
+{{
+    value(0; A) {{ }}
+}}
+                 table 50001 T
+{{
+    fields
+    {{
+        field(1; \"My Status\"; Enum S) {{ }}
+    }}
+}}
+                 report 50003 R
+{{
+    dataset
+    {{
+        dataitem(D; T)
+        {{
+                 trigger OnAfterGetRecord()
+            var
+                I: Integer;
+            begin
+                 I := \"My Status\".AsInteger();
+            end;
+        }}
+    }}
+{shadow}}}
+"
+            )
+        };
+        let routes = |text: String| -> Vec<EvidenceKind> {
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_minimal_workspace(dir.path());
+            std::fs::write(dir.path().join("C.al"), text).expect("write C.al");
+            let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "onaftergetrecord")
+                .flat_map(|ce| ce.edge.routes.iter().map(|r| r.evidence.kind()))
+                .collect()
+        };
+        assert_eq!(routes(src("")), vec![EvidenceKind::Catalog]);
+        assert_eq!(
+            routes(src("    procedure \"My Status\"(): Integer
+    begin
+    end;
+")),
+            vec![EvidenceKind::Unknown],
+            "a same-named report procedure shadows the field"
+        );
+    }
+
+    /// S9.0e: an XmlPort `tableelement(Name; Table)` name is a record variable
+    /// across the XmlPort (untrackedReceiver before), and on it, as on a report
+    /// dataitem name, `Modify(true)` is a record op that fires the table trigger.
+    #[test]
+    fn xmlport_table_element_and_report_dataitem_are_record_variables() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+             trigger OnModify()
+    begin
+    end;
+}
+             xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+             tableelement(Elem; T)
+            {
+                trigger OnAfterGetRecord()
+                begin
+             Elem.Modify(true);
+                    Elem.FieldCaption(Code);
+                end;
+            }
+        }
+    }
+}
+             report 50003 R
+{
+    dataset
+    {
+        dataitem(Di; T)
+        {
+             trigger OnPreDataItem()
+            begin
+                Di.Modify(true);
+            end;
+        }
+    }
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(String, EdgeKind, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                matches!(
+                    ce.edge.from.name_lc.as_str(),
+                    "onaftergetrecord" | "onpredataitem"
+                )
+            })
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.from.name_lc.clone(), ce.edge.kind, to)
+                })
+            })
+            .collect();
+        got.sort_by(|a, b| (&a.0, &a.2).cmp(&(&b.0, &b.2)));
+        assert!(
+            got.iter().all(|(_, _, to)| to != "Unknown"),
+            "no unknown route: {got:?}"
+        );
+        let triggers: Vec<&str> = got
+            .iter()
+            .filter(|(_, k, _)| *k == EdgeKind::ImplicitTrigger)
+            .map(|(from, _, to)| {
+                assert_eq!(to, "onmodify");
+                from.as_str()
+            })
+            .collect();
+        assert_eq!(
+            triggers,
+            vec!["onaftergetrecord", "onpredataitem"],
+            "{got:?}"
+        );
+    }
+
+    /// S9.0e: XmlPort calls (untrackedReceiver / memberNotFound before):
+    /// `currXMLport.Skip()` is an XmlPort instance builtin; `XmlPort.Run`/`Export`
+    /// with a static id and a variable's `Import()` run the XmlPort's own
+    /// `OnPreXmlPort`.
+    #[test]
+    fn xmlport_calls_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+             trigger OnBeforePassVariable()
+            begin
+                currXMLport.Skip();
+            end;
+        }
+    }
+             trigger OnPreXmlPort()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    procedure P()
+    var
+        V: XmlPort X;
+        OutS: OutStream;
+    begin
+             XmlPort.Run(XmlPort::X);
+        Xmlport.Export(Xmlport::X, OutS);
+        V.Import();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(String, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| matches!(ce.edge.from.name_lc.as_str(), "p" | "onbeforepassvariable"))
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.from.name_lc.clone(), to)
+                })
+            })
+            .collect();
+        got.sort();
+        let want: Vec<(String, String)> = [
+            ("onbeforepassvariable", "XmlPortInstance::skip"),
+            ("p", "onprexmlport"),
+            ("p", "onprexmlport"),
+            ("p", "onprexmlport"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        assert_eq!(got, want);
+    }
+
+    /// S9.0e: `X[i].M()` on a declared `array[..] of T` types the receiver as `T`
+    /// (untrackedReceiver before; 368 sites in CDO's dependency bodies).
+    #[test]
+    fn array_element_receiver_types_by_the_element_type() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50002 D
+{
+    procedure Flag()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    var
+        G: array[2, 3] of Codeunit D;
+             procedure P()
+    var
+        M: array[2] of Codeunit D;
+        T: array[2] of Text[30];
+    begin
+             M[1].Flag();
+        G[1, 2].Flag();
+        T[1].ToUpper();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Routine(id) => id.name_lc.clone(),
+                RouteTarget::Builtin(b) => b.0.clone(),
+                _ => format!("{:?}", r.evidence.kind()),
+            })
+            .collect();
+        got.sort();
+        assert_eq!(got, vec!["Text::toupper", "flag", "flag"]);
+    }
+
+    /// S9.0e: an extension reads its base object's `protected var` globals
+    /// (untrackedReceiver before; e.g. Base Application's
+    /// `AsmRequisitionLine.TableExt.al` on `Requisition Line`'s `Item`). A plain
+    /// `var` of the base stays invisible.
+    #[test]
+    fn extension_reads_the_base_objects_protected_vars() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50002 Mgt
+{
+    procedure Calc()
+    begin
+    end;
+}
+             table 50001 T
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+             var
+        Hidden: Codeunit Mgt;
+
+    protected var
+        Other: Record T;
+        M: Codeunit Mgt;
+}
+             tableextension 50003 TX extends T
+{
+    procedure P()
+    begin
+             Other.Get('x');
+        M.Calc();
+        Hidden.Calc();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.site.span.start.line, to)
+                })
+            })
+            .collect();
+        got.sort();
+        let to: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(to, vec!["Record::get", "calc", "Unknown"], "{got:?}");
+    }
+
+    /// S9.0e: a nested bare name in a receiver chain reaches the implicit-`Rec`
+    /// field step: in a table, `"Account Type"::Customer.AsInteger()` types
+    /// `"Account Type"` as the enum field (no Enum object has that name), so the
+    /// literal is an enum value (compoundReceiver before).
+    #[test]
+    fn enum_field_literal_receiver_types_through_the_implicit_rec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50001 \"Gen. Account Kind\"\n{\n    value(0; Customer) { }\n}\n\
+             table 50002 T\n{\n    fields\n    {\n        field(1; \"Account Type\"; Enum \"Gen. Account Kind\") { }\n    }\n\n\
+             procedure P(): Integer\n    begin\n        exit(\"Account Type\"::Customer.AsInteger());\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let got: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Builtin(b) => b.0.clone(),
+                _ => format!("{:?}", r.evidence.kind()),
+            })
+            .collect();
+        assert_eq!(got, vec!["Enum::asinteger"]);
+    }
+
+    /// S9.0e compound receivers: `this.Func().M()` types by `Func`'s return; any
+    /// member of a .NET value is a .NET leaf; `"Type"::Value.AsInteger()` is an
+    /// enum value when `"Type"` is a unique Enum (compoundReceiver before).
+    #[test]
+    fn compound_this_dotnet_and_enum_literal_receivers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50001 \"My Kind\"
+{
+    value(0; A) { }
+    value(1; \"Big B\") { }
+}
+             codeunit 50002 Svc
+{
+    procedure Ping()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    procedure Service(): Codeunit Svc
+    begin
+    end;
+
+             procedure P()
+    var
+        Enc: DotNet Encoding;
+        I: Integer;
+    begin
+             this.Service().Ping();
+        Enc.UTF8.GetBytes('a');
+        I := \"My Kind\"::\"Big B\".AsInteger();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.site.span.start.line, to)
+                })
+            })
+            .collect();
+        got.sort();
+        let to: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            to,
+            vec!["ping", "service", "DotNet::*::getbytes", "Enum::asinteger"],
+            "{got:?}"
+        );
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2285,7 +2993,7 @@ mod tests {
             let t5 = std::time::Instant::now();
             // The surface is built inside the timed window, so the total
             // still includes the DeclSurface build, as the label says.
-            let (edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
+            let (edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
                 &graph,
                 &parsed,
                 &DeclSurface::build(&graph, &parsed),
@@ -2409,7 +3117,7 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
+        let (full_edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
             graph,
             parsed,
             &ctx.decl_surface(),

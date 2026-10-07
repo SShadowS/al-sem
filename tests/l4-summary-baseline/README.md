@@ -191,3 +191,12 @@ root-cause any movement before committing (the old solver is at the
   receiver), `|pN` (the caller's own `var` parameter is the receiver), or `|u` (8, a
   receiver that is not a declared record variable). The event-edge substitution
   (`239a157d`) moved nothing here.
+- **2026-10-07, engine-switch S9.0c** (the lowerer models ternary, `is`/`as` and the list
+  literal instead of an opaque `Unknown`). `c771d616…` -> `9e72fb92…`. Measured by dumping
+  the canonical serialization with the three new lowering arms disabled (reproduces
+  `c771d616…` exactly) and enabled. 2 of 5479 routines moved, none added or removed:
+  `SendElectronicDocument` gains the two dispatcher-factory interface calls inside its
+  ternary (with their open-world and opaque-callee uncertainties, and its record parameter
+  now requires `"E-Document Send Code"` loaded); a second routine gains
+  `has_unresolved_calls`, because its ternary call (`eDocsFeatureEnabled`) is now visible to
+  L3's legacy resolver, which this digest still uses and which cannot resolve it.

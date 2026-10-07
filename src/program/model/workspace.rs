@@ -682,6 +682,7 @@ fn project_file(
         model_instance_id,
         source_unit_id,
         cols,
+        &std::collections::HashSet::new(),
         workspace,
     );
 
@@ -747,6 +748,7 @@ fn project_ir(
     model_instance_id: &str,
     source_unit_id: &str,
     cols: &Utf16Cols,
+    parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
     workspace: &mut L3Workspace,
 ) {
     for (oi, routine_ixs) in population {
@@ -993,7 +995,7 @@ fn project_ir(
                     ir_routine.return_type.as_deref(),
                     model_instance_id,
                 );
-                let feats = crate::program::body::ir_walk::project_routine_features_ir(
+                let feats = crate::program::body::ir_walk::project_routine_features_ir_with(
                     ir_file,
                     oi,
                     ir_routine,
@@ -1001,6 +1003,7 @@ fn project_ir(
                     source,
                     source_unit_id,
                     source_table_name.as_deref(),
+                    parenless_calls,
                 );
                 (rid, feats)
             };
@@ -1587,13 +1590,17 @@ pub fn assemble_and_resolve_workspace(
 /// program files are FILTERED to the app-scoped set. If any app-scoped file is
 /// missing from the program's parse (the two walks disagreeing, e.g. a file created
 /// between them), the model is built from disk exactly as before.
+///
+/// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
+/// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
 pub fn assemble_and_resolve_workspace_from_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<L3Resolved> {
-    let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
+    let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
     finish_resolved(ws, workspace, skip_roots_config)
 }
 
@@ -1618,9 +1625,10 @@ pub fn assemble_and_resolve_cross_app_from_program(
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<(L3Resolved, AbiRowIds)> {
-    let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx)?;
-    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand);
+    let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
+    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand, parenless);
     Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
 }
 
@@ -1656,6 +1664,7 @@ fn append_dependency_rows(
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> AbiRowIds {
     let bodies = ctx
         .dep_bodies()
@@ -1716,6 +1725,10 @@ fn append_dependency_rows(
                 (Some(d), Some(app)) => demanded_population(&pf.file, app, d),
                 _ => whole_file_population(&pf.file),
             };
+            let no_calls = std::collections::HashSet::new();
+            let calls = app
+                .and_then(|a| parenless.get(&(a, pf.virtual_path.clone())))
+                .unwrap_or(&no_calls);
             project_ir(
                 &pf.file,
                 &population,
@@ -1724,6 +1737,7 @@ fn append_dependency_rows(
                 model_instance_id,
                 &format!("dep:{guid}:{}", pf.virtual_path),
                 &cols,
+                calls,
                 ws,
             );
         }
@@ -1778,7 +1792,7 @@ pub enum ProgramFiles<'c> {
         app_guid: String,
         files: Vec<(&'c str, &'c crate::snapshot::parse::ParsedFile)>,
     },
-    /// An app-scoped file the program did not parse (named): build from disk.
+    /// An app-scoped file the program did not parse (named): no model.
     Missing(String),
 }
 
@@ -1815,6 +1829,7 @@ fn assemble_l3_workspace_from_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<L3Workspace> {
     let selected = {
         let _s = pt::span("l3", "l3.select_program_parse");
@@ -1822,9 +1837,13 @@ fn assemble_l3_workspace_from_program(
     };
     let (app_guid, files) = match selected {
         ProgramFiles::Selected { app_guid, files } => (app_guid, files),
+        // The program parse is the only parse (engine-switch S9.1): a file the
+        // disk discovery lists but the program did not parse is an inconsistency
+        // between the two discoveries, so the model fails closed rather than
+        // falling back to L3's own disk assembly.
         ProgramFiles::Missing(path) => {
-            log::warn!("program parse lacks {path}; building the L3 model from disk");
-            return assemble_l3_workspace_from_disk(workspace, model_instance_id);
+            log::warn!("program parse lacks {path}; no model");
+            return None;
         }
     };
     if files.is_empty() {
@@ -1835,6 +1854,7 @@ fn assemble_l3_workspace_from_program(
     // S2b.4: what exists is what the program engine extracted.
     let population = rows_population(&ctx.graph().workspace_rows);
     let no_decls = FilePopulation::new();
+    let no_calls = std::collections::HashSet::new();
     // Same deterministic order and fold as `assemble_workspace`.
     let mut sorted = files;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -1859,6 +1879,9 @@ fn assemble_l3_workspace_from_program(
                     );
                     &no_decls
                 });
+                let calls = parenless
+                    .get(&(ctx.primary_app_ref, pf.virtual_path.clone()))
+                    .unwrap_or(&no_calls);
                 project_ir(
                     &pf.file,
                     pop,
@@ -1867,6 +1890,7 @@ fn assemble_l3_workspace_from_program(
                     model_instance_id,
                     &source_unit_id,
                     &cols,
+                    calls,
                     &mut ws,
                 );
                 ws
@@ -3023,7 +3047,9 @@ mod population_tests {
             .join("tests/r0-corpus/ws-cross-object-chain");
         let (mut ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
-        let full = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+        let full =
+            assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx, &Default::default())
+                .unwrap();
 
         // Drop the first codeunit routine row (interfaces are skipped anyway).
         let k = ctx
@@ -3034,7 +3060,9 @@ mod population_tests {
             .position(|r| r.node.object.kind == al_syntax::ir::ObjectKind::Codeunit)
             .unwrap();
         let dropped = ctx.graph.workspace_rows.routines.remove(k);
-        let fewer = assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx).unwrap();
+        let fewer =
+            assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx, &Default::default())
+                .unwrap();
 
         assert_eq!(
             fewer.workspace.routines.len() + 1,

@@ -10,7 +10,7 @@ use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
     ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind, Stmt,
-    StmtId, StmtKind, SyntaxIssue, UnaryOp, VarDecl,
+    StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -75,7 +75,12 @@ fn collect_objects(
     out: &mut Vec<ObjectDecl>,
 ) {
     for child in node.named_children() {
-        match object_kind_of(child.kind()) {
+        let kind = if child.kind() == RawKind::PreprocSplitDeclaration {
+            Some(split_declaration_kind(child))
+        } else {
+            object_kind_of(child.kind())
+        };
+        match kind {
             Some(kind) => out.push(lower_object(child, kind, source, ir, issues)),
             None => {
                 // Descend containers that may hold objects (namespace, preproc).
@@ -133,10 +138,43 @@ fn structural_children(node: RawNode) -> Vec<RawNode> {
         .collect()
 }
 
+/// The kind of a header split across `#if` arms (`preproc_split_declaration`): its
+/// FIRST header's object keyword, the first-branch-wins policy its name and id
+/// already follow. It can split any object kind; it used to be lowered as a
+/// Codeunit whatever it was (S9.0e: an `enum` in System Application).
+fn split_declaration_kind(node: RawNode) -> ObjectKind {
+    use ObjectKind as O;
+    node.named_children()
+        .into_iter()
+        .find_map(|c| {
+            Some(match c.kind() {
+                RawKind::CodeunitKeyword => O::Codeunit,
+                RawKind::EnumKeyword => O::Enum,
+                RawKind::TableKeyword => O::Table,
+                RawKind::PageKeyword => O::Page,
+                RawKind::ReportKeyword => O::Report,
+                RawKind::QueryKeyword => O::Query,
+                RawKind::XmlportKeyword => O::XmlPort,
+                RawKind::PermissionsetKeyword => O::PermissionSet,
+                RawKind::TableextensionKeyword => O::TableExtension,
+                RawKind::PageextensionKeyword => O::PageExtension,
+                RawKind::ReportextensionKeyword => O::ReportExtension,
+                RawKind::EnumextensionKeyword => O::EnumExtension,
+                RawKind::PermissionsetextensionKeyword => O::PermissionSetExtension,
+                RawKind::InterfaceKeyword => O::Interface,
+                _ => return None,
+            })
+        })
+        .unwrap_or(O::Other)
+}
+
 fn object_kind_of(k: RawKind) -> Option<ObjectKind> {
     use ObjectKind as O;
     Some(match k {
-        RawKind::CodeunitDeclaration | RawKind::PreprocSplitDeclaration => O::Codeunit,
+        RawKind::CodeunitDeclaration => O::Codeunit,
+        // Its kind is its header's (`split_declaration_kind`); `Other` here only
+        // keeps it an object for `enclosing_member` detection.
+        RawKind::PreprocSplitDeclaration => O::Other,
         RawKind::TableDeclaration => O::Table,
         RawKind::TableextensionDeclaration => O::TableExtension,
         RawKind::PageDeclaration => O::Page,
@@ -198,11 +236,14 @@ fn lower_object(
         )
         .collect();
 
-    // Report dataitems (name, source-table) — a dataitem name is in scope as a record
-    // var across all the report's routines. Reports only (empty otherwise).
-    let mut report_dataitems = Vec::new();
-    if matches!(kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-        collect_report_dataitems(node, source, &mut report_dataitems);
+    // Report dataitems and XmlPort table elements (name, source-table) — the name is
+    // in scope as a record var across all the object's routines. Empty otherwise.
+    let mut dataitems = Vec::new();
+    if matches!(
+        kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+    ) {
+        collect_dataitems(node, source, &mut dataitems);
     }
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
@@ -244,9 +285,11 @@ fn lower_object(
     // function's doc for the union-read + program-layer-degrade contract).
     let mut globals = Vec::new();
     let mut properties = Vec::new();
+    let mut protected_globals = Vec::new();
     if let Some(body) = node.field(FieldName::Body) {
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
+            collect_protected_names(member, source, &mut protected_globals);
             collect_properties(member, source, &mut properties);
         }
     }
@@ -257,8 +300,9 @@ fn lower_object(
         name,
         routines,
         globals,
+        protected_globals,
         properties,
-        report_dataitems,
+        dataitems,
         extends_target,
         implements,
         page_controls,
@@ -488,8 +532,26 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
 /// Collect every report `dataitem(Name; "Source Table")` (incl. nested) as
 /// `(name, source-table)`, both unquoted, document order. Mirrors the legacy
 /// `report_dataitem_record_vars`.
-fn collect_report_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)>) {
+fn collect_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)>) {
     for child in node.named_children() {
+        // `tableelement(Name; Table)` (S9.0e): an XmlPort's record variable.
+        if child.kind() == RawKind::XmlportElement
+            && child
+                .field(FieldName::ElementType)
+                .is_some_and(|t| t.kind() == RawKind::TableelementKeyword)
+        {
+            let name = child
+                .field(FieldName::Name)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            let table = child
+                .field(FieldName::Source)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            if !name.is_empty() && !table.is_empty() {
+                out.push((name, table));
+            }
+        }
         if child.kind() == RawKind::ReportDataitem {
             let name = child
                 .field(FieldName::Name)
@@ -502,7 +564,7 @@ fn collect_report_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, 
         }
         // Descend (nested dataitems live under a dataitem's body); routine bodies hold
         // no dataitems so the extra recursion is harmless.
-        collect_report_dataitems(child, source, out);
+        collect_dataitems(child, source, out);
     }
 }
 
@@ -743,6 +805,30 @@ fn dataitem_table_name(node: RawNode, source: &str) -> Option<String> {
     node.field(FieldName::TableName)
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty())
+}
+
+/// The names of the globals declared in a `protected var` section, descending
+/// preproc wrappers like [`collect_globals`]. An extension of the object can read
+/// them (AL "protected variables").
+fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
+    match node.kind() {
+        RawKind::VarSection
+            if node
+                .named_children()
+                .iter()
+                .any(|c| c.kind() == RawKind::ProtectedKeyword) =>
+        {
+            let mut decls = Vec::new();
+            extract_var_section(node, source, &mut decls);
+            out.extend(decls.into_iter().map(|d| d.name));
+        }
+        _ if is_preproc_wrapper(node) => {
+            for c in node.named_children() {
+                collect_protected_names(c, source, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Collect object-level var declarations, descending preproc wrappers (both
@@ -1528,8 +1614,12 @@ fn push_unlowered_issue(node: RawNode, noun: &str, issues: &mut Vec<SyntaxIssue>
 ///   (`PreprocSplitDeclaration`'s name/id resolution). Reconstructed as a real
 ///   `StmtKind::If`, indistinguishable from an ordinary `if`.
 ///
-/// Everything else — the remaining begin/end-fragmented shapes
-/// (`preproc_split_if_then_begin` and its asymmetric/shared/begin-else siblings), any
+/// The begin/end-fragmented shapes (`preproc_split_if_then_begin` and its
+/// asymmetric/shared/begin-else siblings) expose only `condition`: reconstructed as an
+/// `If` on it whose then-block is the union of the remaining statements (S9.0e; the
+/// condition was lowered as a statement before, a phantom statement-call site).
+///
+/// Everything else — any
 /// arm's content NOT consumed by the `If` reconstruction above (extra `#elif`/`#else`
 /// arms, `preproc_guarded_statement`'s leading guard statements, a
 /// `preproc_fragmented_else_tail`), and any other genuinely-unmodelled preproc/unknown
@@ -1577,6 +1667,36 @@ fn lower_unmodelled_stmt(
             | RawKind::PreprocGuardedStatement
             | RawKind::PreprocSplitIfElseStatement
     );
+    // The begin/end-fragmented `if` shapes carry only a `condition` field; the rest
+    // is a flat statement run. The condition is the `if`'s, never a statement.
+    let cond_only_shape = matches!(
+        node.kind(),
+        RawKind::PreprocSplitIfThenBegin
+            | RawKind::PreprocSplitIfBeginAsymmetric
+            | RawKind::PreprocSplitIfThenBeginElseShared
+            | RawKind::PreprocSplitIfBeginElse
+    );
+    if cond_only_shape && let Some(c) = node.field(FieldName::Condition) {
+        let cond = lower_expr(c, ir, issues, source, depth + 1);
+        let mut items = Vec::new();
+        for ch in structural_children(node) {
+            if is_preproc_scaffold(ch.kind()) || ch.id() == c.id() {
+                continue;
+            }
+            lower_block_child(ch, ir, issues, source, &mut items, depth);
+        }
+        // Union read: every arm's statements sit in the then-block, so each call
+        // keeps its site even though the arm structure is not preserved.
+        let then_block = ir.add_block(Block {
+            items,
+            origin: origin.clone(),
+        });
+        return StmtKind::If {
+            cond,
+            then_block,
+            else_block: None,
+        };
+    }
     let cond_node = if if_shape {
         node.field(FieldName::Condition)
     } else {
@@ -1963,6 +2083,35 @@ fn lower_expr(
                 .map(|v| ident_text(v, source))
                 .unwrap_or_default(),
         },
+        RawKind::TernaryExpression => ExprKind::Ternary {
+            cond: lower_opt_field(node, FieldName::Condition, ir, issues, source, depth),
+            then_value: lower_opt_field(node, FieldName::ThenValue, ir, issues, source, depth),
+            else_value: lower_opt_field(node, FieldName::ElseValue, ir, issues, source, depth),
+        },
+        RawKind::IsExpression | RawKind::AsExpression => ExprKind::TypeOp {
+            op: if node.kind() == RawKind::IsExpression {
+                TypeOp::Is
+            } else {
+                TypeOp::As
+            },
+            value: lower_opt_field(node, FieldName::Left, ir, issues, source, depth),
+            ty: match node.field(FieldName::Right) {
+                Some(t) => t.text(source).to_string(),
+                None => {
+                    issues.push(SyntaxIssue {
+                        message: format!("missing `Right` on `{}`", node.kind_str()),
+                        origin: origin_of(node),
+                    });
+                    String::new()
+                }
+            },
+        },
+        RawKind::ListLiteral => ExprKind::List(
+            structural_children(node)
+                .into_iter()
+                .map(|c| lower_expr(c, ir, issues, source, depth + 1))
+                .collect(),
+        ),
         RawKind::DatabaseReference => ExprKind::DatabaseReference(node.text(source).to_string()),
         RawKind::Boolean => ExprKind::Literal(Literal::Bool(
             node.text(source).eq_ignore_ascii_case("true"),
@@ -1973,9 +2122,11 @@ fn lower_expr(
             ExprKind::Literal(Literal::Text(node.text(source).to_string()))
         }
         _ => {
-            // Unmodelled expression container (in/is/as expression, list_literal,
-            // ternary, …): lower its non-trivia children so nested calls/members are
-            // still captured in the arena (completeness). The node itself is Unknown.
+            // Unmodelled expression container: lower its non-trivia children so
+            // nested calls/members are still captured in the arena (completeness).
+            // The node itself is Unknown, and nothing links those children: a
+            // container with calls inside needs a real variant (S9.0c gave one to
+            // ternary, is/as and the list literal).
             for c in structural_children(node) {
                 lower_expr(c, ir, issues, source, depth + 1);
             }
@@ -2145,6 +2296,198 @@ mod tests {
             }
         }
         panic!("no Case statement lowered");
+    }
+
+    /// S9.0e: a header split across `#if` arms takes its first header's kind
+    /// (System Application's `enum 8889 "Email Connector"` was lowered as a
+    /// Codeunit).
+    #[test]
+    fn split_declaration_takes_its_headers_kind() {
+        let src = "#if not CLEAN26
+enum 8889 \"Email Connector\" implements \"A\", \"B\"
+#else
+enum 8889 \"Email Connector\" implements \"A\"
+#endif
+{
+    Extensible = true;
+    value(0; X) { }
+}
+                   #if not CLEAN27
+table 50000 \"T One\"
+#else
+table 50000 \"T Two\"
+#endif
+{
+    fields { field(1; A; Integer) { } }
+}
+";
+        let af = parse(src);
+        let kinds: Vec<_> = af
+            .objects
+            .iter()
+            .map(|o| (o.kind, o.id, o.name.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    crate::ir::ObjectKind::Enum,
+                    Some(8889),
+                    "Email Connector".to_string()
+                ),
+                (
+                    crate::ir::ObjectKind::Table,
+                    Some(50000),
+                    "T One".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// S9.0e: an XmlPort `tableelement(Name; Table)` is collected like a report
+    /// dataitem, at any nesting depth.
+    #[test]
+    fn xmlport_table_elements_are_collected() {
+        let src = "xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Elem; T)
+            {
+                tableelement(\"Inner Line\"; \"Sales Line\") { }
+            }
+            textelement(Other) { }
+        }
+    }
+}
+";
+        let af = parse(src);
+        assert_eq!(
+            af.objects[0].dataitems,
+            vec![
+                ("Elem".to_string(), "T".to_string()),
+                ("Inner Line".to_string(), "Sales Line".to_string())
+            ]
+        );
+    }
+
+    /// S9.0e: `if C then begin` split across `#if` (`preproc_split_if_then_begin`,
+    /// real code in Base Application's SalesPost) keeps `C` as the `if` condition. It
+    /// used to be lowered through the statement dispatcher, a phantom statement call.
+    #[test]
+    fn split_if_then_begin_keeps_its_condition() {
+        let src = "codeunit 50000 T
+{
+    procedure P()
+    begin
+        if not IsHandled then
+#if not CLEAN27
+            if SalesLine.Quantity <> 0 then begin
+                Foo();
+#endif
+                Bar();
+#if not CLEAN27
+            end;
+#endif
+    end;
+}
+";
+        let af = parse(src);
+        let member_is_quantity = |id: crate::ir::ExprId| matches!(&af.ir.expr(id).kind, ExprKind::Member { member, .. } if member == "Quantity");
+        let mut split_if = 0;
+        for st in af.ir.iter_stmts() {
+            match &st.kind {
+                StmtKind::Call(e) => {
+                    if let ExprKind::Call { function, .. } = &af.ir.expr(*e).kind {
+                        assert!(
+                            !member_is_quantity(*function),
+                            "phantom call on the condition"
+                        );
+                    }
+                }
+                StmtKind::If {
+                    cond, then_block, ..
+                } => {
+                    if let ExprKind::Binary { lhs, .. } = &af.ir.expr(*cond).kind
+                        && member_is_quantity(*lhs)
+                    {
+                        split_if += 1;
+                        assert_eq!(af.ir.block(*then_block).items.len(), 2, "Foo and Bar");
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(split_if, 1);
+    }
+
+    /// S9.0c: the ternary, `is`/`as` and the list literal are real expressions whose
+    /// sub-expressions are linked, not an opaque `Unknown` with unlinked children
+    /// (which lost every call inside them).
+    #[test]
+    fn ternary_typeop_and_list_link_their_operands() {
+        let src = "codeunit 50000 T
+{
+    procedure P()
+    var
+        A: Integer;
+        O: Codeunit Y;
+    begin
+        A := IsOn() ? GetA() : GetB(1);
+        if A in [GetA(), /* c */ 2] then;
+        if GetI() is \"Y\" then;
+        O := GetI() as Y;
+    end;
+}
+";
+        let af = parse(src);
+        let callee = |id: crate::ir::ExprId| match &af.ir.expr(id).kind {
+            ExprKind::Call { function, .. } => match &af.ir.expr(*function).kind {
+                ExprKind::Identifier(n) => n.clone(),
+                _ => panic!("callee is not an identifier"),
+            },
+            _ => panic!("not a call: {}", af.ir.expr(id).origin.kind_text),
+        };
+        let mut seen = Vec::new();
+        for e in af.ir.iter_exprs() {
+            match &e.kind {
+                ExprKind::Ternary {
+                    cond,
+                    then_value,
+                    else_value,
+                } => seen.push(format!(
+                    "ternary {} {} {}",
+                    callee(*cond),
+                    callee(*then_value),
+                    callee(*else_value)
+                )),
+                ExprKind::TypeOp { op, value, ty } => {
+                    seen.push(format!("{op:?} {} {ty}", callee(*value)));
+                }
+                ExprKind::List(items) => {
+                    let first = callee(items[0]);
+                    let second = matches!(
+                        &af.ir.expr(items[1]).kind,
+                        ExprKind::Literal(Literal::Int(n)) if n == "2"
+                    );
+                    seen.push(format!("list {first} {second} {}", items.len()));
+                }
+                ExprKind::Unknown => panic!("Unknown at {:?}", e.origin.kind_text),
+                _ => {}
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                "As GetI Y".to_string(),
+                "Is GetI \"Y\"".to_string(),
+                "list GetA true 2".to_string(),
+                "ternary IsOn GetA GetB".to_string(),
+            ]
+        );
     }
 
     /// Regression for the case-pattern field-pollution grammar fix: `case 1, 2:` must

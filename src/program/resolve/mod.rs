@@ -7,6 +7,7 @@ pub mod anon;
 pub mod applicability;
 pub mod arg_dispatch;
 pub mod builtins;
+pub mod compiler_oracle;
 pub mod decl_surface;
 pub mod demand;
 pub mod differential;
