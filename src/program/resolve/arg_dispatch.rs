@@ -308,6 +308,20 @@ fn split_generic_clause(ty_text: &str) -> (&str, Option<Result<&str, ()>>) {
     (first_tok, Some(Ok(after_of[1..after_of.len() - 1].trim())))
 }
 
+/// The generic arguments of a `List of [T]` / `Dictionary of [K, V]` type
+/// text, with its lowercased base keyword: `("dictionary", ["Text", "Text"])`.
+/// `None` for a non-generic or malformed type (S9.0e: the receiver typer reads
+/// a collection's element type through this, the same parser dispatch uses).
+pub(crate) fn generic_type_args(ty_text: &str) -> Option<(String, Vec<&str>)> {
+    let (first_tok, Some(Ok(inner))) = split_generic_clause(ty_text) else {
+        return None;
+    };
+    Some((
+        first_tok.to_ascii_lowercase(),
+        split_top_level_commas(inner)?,
+    ))
+}
+
 /// Split `inner` (the trimmed text between a generic clause's outer `[`/`]`)
 /// on TOP-LEVEL commas only — a comma nested inside a further `[...]` (a
 /// nested generic argument, `List of [List of [Integer]]`) does not split.

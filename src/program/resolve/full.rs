@@ -2963,6 +2963,58 @@ mod tests {
         }
     }
 
+    /// S9.0e: a `List`/`Dictionary` element is typed from the collection's
+    /// declared type text — a declared var, `this.Global`, `Text.Split`, a
+    /// nested `Get`, and `Keys()`.
+    #[test]
+    fn collection_element_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    var\n        G: Dictionary of [Integer, Text];\n\n    procedure P()\n    var\n        D: Dictionary of [Text, Dictionary of [Text, Text]];\n        L: List of [Text];\n        X: Text;\n        B: Boolean;\n    begin\n\
+             X := L.Get(1).ToLower();\n\
+             X := X.Split(',').Get(2).TrimEnd(']');\n\
+             X := D.Get('a').Get('b').ToUpper();\n\
+             B := this.G.Get(1).StartsWith('x');\n\
+             X := D.Keys().Get(1).Trim();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| format!("line {}", ce.edge.site.span.start.line))
+            .collect();
+        assert_eq!(unknown, Vec::<String>::new());
+        let ids: std::collections::BTreeSet<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .filter_map(|r| match &r.target {
+                RouteTarget::Builtin(b) => Some(b.0.clone()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "Text::tolower",
+            "Text::trimend",
+            "Text::toupper",
+            "Text::startswith",
+            "Text::trim",
+        ] {
+            assert!(ids.contains(want), "{want} missing from {ids:?}");
+        }
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

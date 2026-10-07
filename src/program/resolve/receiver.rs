@@ -1792,6 +1792,23 @@ fn infer_compound_member_receiver(
         if *kind == FrameworkKind::RecordId && member_lc == "getrecord" && arity == 0 {
             return ReceiverType::RecordRef;
         }
+        // A collection's element (S9.0e): `Framework(List)` carries no element
+        // type, so read it from the base expression's declared type text.
+        if matches!(kind, FrameworkKind::List | FrameworkKind::Dictionary)
+            && let Some(base_text) = collection_type_text_of_expr(
+                file,
+                object_expr_id,
+                routine,
+                object_globals,
+                from_object,
+                graph,
+                index,
+                bare_ctx,
+            )
+            && let Some(elem) = collection_member_type_text(&base_text, &member_lc, arity)
+        {
+            return parsed_type_to_receiver(classify_type_text(&elem), from_object, graph, index);
+        }
         if let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
             framework_return_kind(kind, &member_lc, m, a)
         }) {
@@ -2242,6 +2259,105 @@ fn is_this_identifier(file: &AlFile, expr_id: ExprId) -> bool {
 /// type) is handled by the caller ([`infer_compound_member_receiver`]),
 /// which declines before ever reaching here — this function is reached only
 /// for the property form.
+/// The declared collection type text of `expr_id` (S9.0e), for reading a
+/// `List`/`Dictionary` element type that [`ReceiverType::Framework`] does not
+/// carry. Covers a declared var (outside any `with`), `this.Global`,
+/// `Text.Split(..)` (`List of [Text]`), and a nested `Get(..)` /
+/// `Keys()` / `Values()` on such a collection. `None` for anything else.
+#[allow(clippy::too_many_arguments)] // the same identity/lookup inputs as infer_receiver_type_for_expr, which it calls.
+fn collection_type_text_of_expr(
+    file: &AlFile,
+    expr_id: ExprId,
+    routine: &RoutineDecl,
+    object_globals: &[VarDecl],
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
+) -> Option<String> {
+    match &file.ir.expr(expr_id).kind {
+        ExprKind::Identifier(name) | ExprKind::QuotedIdentifier(name) => {
+            // A `with` can rebind a bare name; read declarations only when
+            // no `with` is proven.
+            if bare_ctx.map(|(_, w)| w) != Some(WithState::NoWithProven) {
+                return None;
+            }
+            match caller_scope_symbol(name, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(ty)) => Some(ty.to_string()),
+                _ => None,
+            }
+        }
+        ExprKind::Member { object, member, .. } if is_this_identifier(file, *object) => {
+            let member_lc = unquote_identifier(member).fold_identifier();
+            object_globals
+                .iter()
+                .find(|v| v.name.fold_identifier() == member_lc)
+                .and_then(|v| v.ty.clone())
+        }
+        ExprKind::Parenthesized(inner) => collection_type_text_of_expr(
+            file,
+            *inner,
+            routine,
+            object_globals,
+            from_object,
+            graph,
+            index,
+            bare_ctx,
+        ),
+        ExprKind::Call { function, args } => {
+            let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind else {
+                return None;
+            };
+            let member_lc = unquote_identifier(member).fold_identifier();
+            if member_lc == "split" {
+                let base = infer_receiver_type_for_expr(
+                    file,
+                    *object,
+                    routine,
+                    object_globals,
+                    from_object,
+                    graph,
+                    index,
+                    bare_ctx,
+                );
+                return (base == ReceiverType::Framework(FrameworkKind::Text))
+                    .then(|| "List of [Text]".to_string());
+            }
+            let base_text = collection_type_text_of_expr(
+                file,
+                *object,
+                routine,
+                object_globals,
+                from_object,
+                graph,
+                index,
+                bare_ctx,
+            )?;
+            collection_member_type_text(&base_text, &member_lc, args.len())
+        }
+        _ => None,
+    }
+}
+
+/// The type text a collection member returns (S9.0e): `List.Get(i)` → `T`,
+/// `Dictionary.Get(k)` → `V`, `Dictionary.Keys()` → `List of [K]`,
+/// `Dictionary.Values()` → `List of [V]`. `Dictionary.Get(k, var v)` returns a
+/// Boolean and is not listed.
+fn collection_member_type_text(
+    collection_text: &str,
+    member_lc: &str,
+    arity: usize,
+) -> Option<String> {
+    let (base, args) = crate::program::resolve::arg_dispatch::generic_type_args(collection_text)?;
+    match (base.as_str(), member_lc, arity, args.as_slice()) {
+        ("list", "get", 1, [t]) => Some((*t).to_string()),
+        ("dictionary", "get", 1, [_, v]) => Some((*v).to_string()),
+        ("dictionary", "keys", 0, [k, _]) => Some(format!("List of [{k}]")),
+        ("dictionary", "values", 0, [_, v]) => Some(format!("List of [{v}]")),
+        _ => None,
+    }
+}
+
 fn infer_this_member(
     member_lc: &str,
     object_globals: &[VarDecl],

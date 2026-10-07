@@ -1071,6 +1071,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `List`/`Dictionary` element types its chain** (engine-switch S9.0e).
+  CDO's dependency-body unknown edges 35 -> 24; workspace metrics unchanged.
+  `ReceiverType::Framework(List)` carries no element type, so
+  `X.Split(',').Get(2).TrimEnd(..)` and `Dict.Get(k).Split(..)` stayed
+  `compoundReceiver`. The receiver typer now reads the element from the
+  collection's declared type text (`collection_type_text_of_expr`): a declared
+  var outside any `with`, `this.Global`, `Text.Split` (`List of [Text]`), and a
+  nested `Get(..)`/`Keys()`/`Values()`. The generic clause is parsed by the
+  same parser argument dispatch uses (`arg_dispatch::generic_type_args`). Test
+  `collection_element_receivers_resolve`; disabling the arm fails all five
+  lines.
 - **Record built-ins and the implicit `Rec` type as overload arguments**
   (engine-switch S9.0e). CDO's dependency-body unknown edges 37 -> 35 and
   dependency `ambiguousResolved` 764 -> 723; workspace metrics unchanged. The
