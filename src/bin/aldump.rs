@@ -463,9 +463,9 @@ fn main() -> ExitCode {
         // ledger is a legitimate empty answer, and several differential/oracle tests
         // call it directly expecting that always-succeeds shape) — it has no signal
         // for "the workspace itself is unusable". Task T0.1: gate that ONE genuine
-        // failure mode at the CLI boundary with the SAME predicate every other L3-based
-        // mode already uses, without touching the library function's tested contract.
-        if assemble_and_resolve_workspace_default(&workspace).is_none() {
+        // failure mode at the CLI boundary with the program-backed model (S9.1),
+        // without touching the library function's tested contract.
+        if program_model(&workspace).is_none() {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-4 dep-hook projection",
                 workspace.display()
@@ -504,8 +504,8 @@ fn main() -> ExitCode {
         // stays engine-never-throws (zero deps is legitimate, and its `empty` fallback
         // is exercised directly by differential/oracle tests), so the ONE genuine
         // failure — an unbuildable primary workspace — is caught at the CLI boundary
-        // with the same predicate every other L3-based mode uses.
-        if assemble_and_resolve_workspace_default(&workspace).is_none() {
+        // with the program-backed model (S9.1).
+        if program_model(&workspace).is_none() {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R3a-5 cross-app summary",
                 workspace.display()

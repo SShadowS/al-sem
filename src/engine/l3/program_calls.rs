@@ -95,10 +95,8 @@
 //!   workspace trigger route. The program's fan-out lists every trigger of
 //!   the name on the table and its extensions, without the site rules, so
 //!   the adapter applies them (`RunTrigger = false` fires nothing; a
-//!   `Validate` fires only its field's `OnValidate`), as L3 does. Edges L3's
-//!   own trigger logic would not give (TableExtension triggers) are counted
-//!   in `adapter_trigger_edges_beyond_l3`. `Rename` reaches no trigger on
-//!   either side today: both engines treat `R.Rename(..)` as a plain call.
+//!   `Validate` fires only its field's `OnValidate`). Since engine-switch S9.1
+//!   nothing compares them with L3's own trigger logic any more.
 //!
 //! **No fallback to L3** (engine-switch S3.1, S3.5; controller rulings 1-2
 //! as they stood before). An L3 call site the program engine gave no usable
@@ -121,9 +119,7 @@ use crate::engine::l3::call_resolver::{
     UnknownReason as L3Reason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
     object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
-use crate::engine::l3::implicit_edges::{implicit_trigger_edge_for_op, validate_field_lc};
 use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Workspace};
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::program::abi_ingest::object_kind_from_abi_type;
 use crate::program::graph::ProgramGraph;
@@ -236,14 +232,6 @@ pub struct SiteCensus {
     pub adapter_multi_route_sites: usize,
     /// Call/run edges with no route at all.
     pub adapter_empty_route_sites: usize,
-    /// Program trigger edges with a target L3's own trigger logic does not
-    /// give the op (TableExtension triggers; L3 maps a base table's
-    /// `OnRename` itself since #9).
-    pub adapter_trigger_edges_beyond_l3: usize,
-    /// The `Rename` part of `adapter_trigger_edges_beyond_l3`.
-    pub adapter_trigger_edges_beyond_l3_rename: usize,
-    /// Matched ops where L3's own trigger edge is not among the adapter's.
-    pub adapter_trigger_edges_l3_only: usize,
     /// `ExternalTarget` call edges by the L2 receiver type. A record
     /// receiver's (a dependency table procedure) is `RecordTableProcedure`
     /// ("unresolved-call") in L3, so these change the confidence cap; an
@@ -321,10 +309,6 @@ impl SiteCensus {
             ),
             ("adapter_multi_route_sites", self.adapter_multi_route_sites),
             ("adapter_empty_route_sites", self.adapter_empty_route_sites),
-            (
-                "adapter_trigger_edges_l3_only",
-                self.adapter_trigger_edges_l3_only,
-            ),
         ]
         .into_iter()
         .filter(|&(_, n)| n > 0)
@@ -918,11 +902,6 @@ const CATEGORY_COUNTERS: &[(&str, Counter)] = &[
     }),
     ("multi-route", |c| c.adapter_multi_route_sites),
     ("empty-route", |c| c.adapter_empty_route_sites),
-    ("trigger-beyond-l3", |c| c.adapter_trigger_edges_beyond_l3),
-    ("trigger-beyond-l3-rename", |c| {
-        c.adapter_trigger_edges_beyond_l3_rename
-    }),
-    ("trigger-l3-only", |c| c.adapter_trigger_edges_l3_only),
     ("l3-fallback:callee-outside-l3", |c| {
         c.adapter_callee_outside_l3
     }),
@@ -1009,7 +988,6 @@ fn adapter(
         HashMap::new()
     };
     let mut c = j.census;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
     let mut by_decl: HashMap<(&str, u32, u32), &L3Routine> = HashMap::new();
@@ -1046,7 +1024,6 @@ fn adapter(
         by_decl,
         objects,
         primary_objects,
-        symbols: &symbols,
         site_facts: &report.site_facts,
         registry: ctx.registry(),
         targets: std::cell::RefCell::new(Vec::new()),
@@ -1192,10 +1169,6 @@ struct Converter<'a> {
     /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
     /// receiver object ours?".
     primary_objects: std::collections::HashSet<(al_syntax::ir::ObjectKind, String)>,
-    /// L3's symbol table, for the census's L3 trigger comparison only
-    /// (`implicit_trigger_edge_for_op`); no converted edge reads it (S6.0). It
-    /// goes with the B3 harness in S9.
-    symbols: &'a SymbolTable<'a>,
     /// `ProgramReport::site_facts`: interfaces (S3.2) and receivers (S6.0).
     site_facts: &'a HashMap<ObligationId, crate::program::resolve::full::SiteFacts>,
     /// The dependency target registry (S3.3): body state per dependency routine.
@@ -1836,7 +1809,17 @@ impl<'a> Converter<'a> {
     ) -> Vec<CallEdge> {
         let is_validate = op.op.fold_identifier() == "validate";
         let field_lc = if is_validate {
-            validate_field_lc(op)
+            // The validated field: its first argument, quotes stripped, doubled
+            // quotes collapsed, folded (the same normalisation as
+            // `TriggerSiteRule`'s `validate_field`).
+            op.field_arguments
+                .as_ref()
+                .and_then(|fa| fa.first())
+                .map(|f| {
+                    crate::program::body::node_util::strip_quotes(f)
+                        .replace("\"\"", "\"")
+                        .fold_identifier()
+                })
         } else {
             None
         };
@@ -1876,20 +1859,6 @@ impl<'a> Converter<'a> {
         }
         tos.sort();
         tos.dedup();
-        // Compare with L3's own answer for this op, so the edges the program
-        // engine adds (TableExtension triggers) are counted.
-        let l3_to = implicit_trigger_edge_for_op(r, op, self.symbols).and_then(|e| e.to);
-        for to in &tos {
-            if Some(to) != l3_to.as_ref() {
-                c.adapter_trigger_edges_beyond_l3 += 1;
-                if op.op.fold_identifier() == "rename" {
-                    c.adapter_trigger_edges_beyond_l3_rename += 1;
-                }
-            }
-        }
-        if l3_to.as_ref().is_some_and(|t| !tos.contains(t)) {
-            c.adapter_trigger_edges_l3_only += 1;
-        }
         tos.into_iter()
             .map(|to| {
                 let mut e = CallEdge::base(&r.id, &op.id, &op.id);
@@ -2441,7 +2410,11 @@ mod adapter_tests {
             resolved_calls_from_program(&report, &ctx, &l3.workspace, upgrade_dependency_bindings);
         let ws = l3.workspace;
         let old = {
-            let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
+            let symbols = crate::engine::l3::symbol_table::SymbolTable::build(
+                &ws.objects,
+                &ws.tables,
+                &ws.routines,
+            );
             resolve_calls(&ws, &symbols, &[], &[])
         };
         Adapted {
@@ -3396,20 +3369,16 @@ mod adapter_tests {
         assert_eq!(at(&a.old, &op.id), vec![want], "L3 agrees");
         let c = &a.census;
         assert_eq!(
-            (
-                c.implicit_trigger_matched,
-                c.implicit_trigger_unmatched,
-                c.adapter_trigger_edges_beyond_l3_rename
-            ),
-            (1, 0, 0),
+            (c.implicit_trigger_matched, c.implicit_trigger_unmatched),
+            (1, 0),
             "{c:#?}"
         );
     }
 
     /// Beyond L3: an `Insert` also fires a TableExtension's `OnInsert`. Both
-    /// edges are emitted, sorted by `to`; only the extension's is counted.
+    /// edges are emitted, sorted by `to`.
     #[test]
-    fn table_extension_trigger_is_counted_beyond_l3() {
+    fn table_extension_trigger_is_emitted_beyond_l3() {
         let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n    trigger OnInsert()\n    begin\n    end;\n}\n";
         let ext = "tableextension 50110 \"TExt\" extends \"T\"\n{\n    trigger OnInsert()\n    begin\n    end;\n}\n";
         let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        R: Record \"T\";\n    begin\n        R.Insert(true);\n    end;\n}\n";
@@ -3430,17 +3399,6 @@ mod adapter_tests {
         ];
         want.sort_by(|x, y| x.to.cmp(&y.to));
         assert_eq!(a.edges(&op.id), want);
-        assert_eq!(
-            a.census.adapter_trigger_edges_beyond_l3, 1,
-            "{:#?}",
-            a.census
-        );
-        assert_eq!(
-            a.census.adapter_trigger_edges_beyond_l3_rename, 0,
-            "{:#?}",
-            a.census
-        );
-        assert_eq!(a.census.adapter_trigger_edges_l3_only, 0, "{:#?}", a.census);
     }
 
     /// Row "ImplicitTrigger to dependency": a record op on a dependency
@@ -3666,7 +3624,11 @@ mod adapter_tests {
             *total.entry("adapter: program trigger ops").or_default() +=
                 census.adapter_program_trigger_ops;
             *total.entry("adapter: L3 trigger ops").or_default() += census.adapter_l3_trigger_ops;
-            let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
+            let symbols = crate::engine::l3::symbol_table::SymbolTable::build(
+                &ws.objects,
+                &ws.tables,
+                &ws.routines,
+            );
             let old = resolve_calls(ws, &symbols, &[], &[]);
             let group = |rc: &ResolvedCalls| {
                 let mut m: HashMap<String, Vec<CallEdge>> = HashMap::new();

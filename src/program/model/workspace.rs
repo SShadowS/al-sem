@@ -1778,7 +1778,7 @@ pub enum ProgramFiles<'c> {
         app_guid: String,
         files: Vec<(&'c str, &'c crate::snapshot::parse::ParsedFile)>,
     },
-    /// An app-scoped file the program did not parse (named): build from disk.
+    /// An app-scoped file the program did not parse (named): no model.
     Missing(String),
 }
 
@@ -1822,9 +1822,13 @@ fn assemble_l3_workspace_from_program(
     };
     let (app_guid, files) = match selected {
         ProgramFiles::Selected { app_guid, files } => (app_guid, files),
+        // The program parse is the only parse (engine-switch S9.1): a file the
+        // disk discovery lists but the program did not parse is an inconsistency
+        // between the two discoveries, so the model fails closed rather than
+        // falling back to L3's own disk assembly.
         ProgramFiles::Missing(path) => {
-            log::warn!("program parse lacks {path}; building the L3 model from disk");
-            return assemble_l3_workspace_from_disk(workspace, model_instance_id);
+            log::warn!("program parse lacks {path}; no model");
+            return None;
         }
     };
     if files.is_empty() {

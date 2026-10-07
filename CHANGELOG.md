@@ -1046,6 +1046,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The production paths no longer touch L3** (engine-switch S9.1). Three
+  things changed:
+  - The `alsem analyze` adapter no longer compares its trigger edges with L3's
+    trigger resolver. That comparison only fed two census counters and made the
+    adapter build L3's full symbol table on every run.
+  - A program parse that lacks a file now fails the model closed, instead of
+    falling back to L3's disk assembly.
+  - `analyze`'s failure classification (empty output vs program-build error)
+    now asks only whether the workspace has app-scoped AL files.
+
+  `aldump --r3a4-dep-hooks/--r3a5-cross-app-summary` check the program-backed
+  model as their precondition. No golden moved.
+
 - **`run_cdo_semantic_audit`** (#47), a `&Path` wrapper with no caller. Callers use
   `run_cdo_semantic_audit_on`; the wrapper could not be driven safely in a test (it would
   merge the real fixture's sites into the local de-anonymization map).
