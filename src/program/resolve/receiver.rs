@@ -1270,7 +1270,7 @@ pub fn infer_receiver_type(
             from_object,
             graph,
             index,
-            bare_ctx.map(|(surface, _)| surface),
+            bare_ctx,
         );
         if !matches!(recv, ReceiverType::Unknown) {
             return recv;
@@ -1425,17 +1425,15 @@ fn array_element_type(ty: &str) -> Option<&str> {
 ///   construction: every arm either delegates to more fail-closed logic or
 ///   returns `Unknown` directly.
 ///
-/// `surface` (plan v2.1 Task 3 enabling primitive): `Some` when the caller
-/// can supply the `DeclSurface` [`infer_compound_member_receiver`]'s new
-/// cross-object call-result chain arm needs to run `resolve_member` as a
-/// type-query; `None` for callers with no such context in scope — that arm
-/// is then a no-op there, exactly like [`infer_receiver_type`]'s `bare_ctx`.
-/// Threaded unchanged through every recursive call so a multi-hop chain's
-/// BASE typing (itself possibly another compound receiver) can reach the new
-/// arm too — a 3-level chain whose middle hop cannot be typed (no
-/// `surface`, or the middle hop itself declines) correctly propagates
-/// `Unknown` rather than partially guessing.
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `surface` (plan v2.1 Task 3); each is a distinct identity/lookup input, grouping would obscure the recursive call sites.
+/// `bare_ctx`: the site's `DeclSurface` and `WithState`, exactly as
+/// [`infer_receiver_type`] takes them. The surface lets
+/// [`infer_compound_member_receiver`]'s cross-object chain arm run
+/// `resolve_member` as a type query; the with-state lets a nested bare name
+/// reach Steps 3a/4b (an implicit-`Rec` field such as `"Account Type"` in
+/// `"Account Type"::Customer.AsInteger()`, S9.0e). `None` makes both no-ops.
+/// Threaded unchanged through every recursive call, so a multi-hop chain whose
+/// middle hop cannot be typed propagates `Unknown` rather than guessing.
+#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `bare_ctx`; each is a distinct identity/lookup input, grouping would obscure the recursive call sites.
 fn infer_receiver_type_for_expr(
     file: &AlFile,
     expr_id: ExprId,
@@ -1444,7 +1442,7 @@ fn infer_receiver_type_for_expr(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
-    surface: Option<&DeclSurface>,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
 ) -> ReceiverType {
     match &file.ir.expr(expr_id).kind {
         ExprKind::Identifier(name) => {
@@ -1457,7 +1455,7 @@ fn infer_receiver_type_for_expr(
                 graph,
                 index,
                 None,
-                None,
+                bare_ctx,
             )
         }
         ExprKind::QuotedIdentifier(name) => {
@@ -1475,7 +1473,7 @@ fn infer_receiver_type_for_expr(
                 graph,
                 index,
                 None,
-                None,
+                bare_ctx,
             )
         }
         // `X[i]` (S9.0e): an element of a declared `array[..] of T` variable is
@@ -1506,7 +1504,7 @@ fn infer_receiver_type_for_expr(
             from_object,
             graph,
             index,
-            surface,
+            bare_ctx,
         ),
         ExprKind::Call { function, args } => {
             if let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind {
@@ -1521,7 +1519,7 @@ fn infer_receiver_type_for_expr(
                     from_object,
                     graph,
                     index,
-                    surface,
+                    bare_ctx,
                 )
             } else {
                 // A bare-identifier call (`Func(...)`) reaching HERE (i.e. as
@@ -1608,7 +1606,7 @@ fn infer_receiver_type_for_expr(
                 from_object,
                 graph,
                 index,
-                surface,
+                bare_ctx,
             ) {
                 ReceiverType::EnumType { .. } | ReceiverType::EnumTypeStatic { .. } => {
                     ReceiverType::EnumType {
@@ -1722,8 +1720,9 @@ fn infer_compound_member_receiver(
     from_object: &ObjectNode,
     graph: &ProgramGraph,
     index: &ResolveIndex,
-    surface: Option<&DeclSurface>,
+    bare_ctx: Option<(&DeclSurface, WithState)>,
 ) -> ReceiverType {
+    let surface = bare_ctx.map(|(s, _)| s);
     // `member` (from `ExprKind::Member`/`Call{function: Member{..}}`) may
     // itself be RAW WITH QUOTES (mirrors `extract.rs::classify_call`'s own
     // `strip_quote_chars(member)` before use) — unquote before matching so a
@@ -1761,7 +1760,7 @@ fn infer_compound_member_receiver(
         from_object,
         graph,
         index,
-        surface,
+        bare_ctx,
     );
 
     // Any member of a .NET value is a .NET value (or a primitive the platform

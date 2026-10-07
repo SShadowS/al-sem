@@ -2761,6 +2761,35 @@ mod tests {
         assert_eq!(to, vec!["Record::get", "calc", "Unknown"], "{got:?}");
     }
 
+    /// S9.0e: a nested bare name in a receiver chain reaches the implicit-`Rec`
+    /// field step: in a table, `"Account Type"::Customer.AsInteger()` types
+    /// `"Account Type"` as the enum field (no Enum object has that name), so the
+    /// literal is an enum value (compoundReceiver before).
+    #[test]
+    fn enum_field_literal_receiver_types_through_the_implicit_rec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50001 \"Gen. Account Kind\"\n{\n    value(0; Customer) { }\n}\n\
+             table 50002 T\n{\n    fields\n    {\n        field(1; \"Account Type\"; Enum \"Gen. Account Kind\") { }\n    }\n\n\
+             procedure P(): Integer\n    begin\n        exit(\"Account Type\"::Customer.AsInteger());\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let got: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Builtin(b) => b.0.clone(),
+                _ => format!("{:?}", r.evidence.kind()),
+            })
+            .collect();
+        assert_eq!(got, vec!["Enum::asinteger"]);
+    }
+
     /// S9.0e compound receivers: `this.Func().M()` types by `Func`'s return; any
     /// member of a .NET value is a .NET leaf; `"Type"::Value.AsInteger()` is an
     /// enum value when `"Type"` is a unique Enum (compoundReceiver before).

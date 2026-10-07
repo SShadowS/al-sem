@@ -1082,6 +1082,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     surface (the compiler types it `Integer`).
   - 4 sites moved from compoundReceiver to overloadAmbiguous: they now reach their
     target and stop at an overload choice.
+  - The expression typer (`infer_receiver_type_for_expr`) takes the site's full
+    with-context (`bare_ctx`), not only its surface, so a nested bare name reaches the
+    implicit-`Rec` field and enum-type steps: `"Account Type"::Customer.AsInteger()` in
+    a table types `"Account Type"` as its enum field. 680 -> 643.
 
 - **Dependency bodies: the rest of untrackedReceiver** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 1,790 -> 1,273 (untrackedReceiver 483 -> 3,

@@ -12086,7 +12086,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// elements, `currXMLport`, XmlPort runs) and `ProductName`. 1273 after array
 /// elements, protected variables, the enum-name collision rule, `CurrQuery` /
 /// `RequestOptionsPage`, split-header object kinds and codeunit-only implementers.
-/// 680 after `this.Func()` chains, .NET value chains and enum value literals.
+/// 680 after `this.Func()` chains, .NET value chains and enum value literals. 643
+/// after the with-context reaches nested bare names in a chain.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12101,7 +12102,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 680;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 643;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
