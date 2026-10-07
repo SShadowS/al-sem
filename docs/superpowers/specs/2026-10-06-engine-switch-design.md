@@ -323,6 +323,28 @@ zero unexplained differences, zero regressions, written golden triage.
   that raise them, plus those sites' effect dependencies (forward traversal from a
   subscriber never reaches the raiser). d43/d45 decisions implemented here. Measure
   cold/warm peak, retained memory, allocations and old/new coexistence separately.
+  **As built (2026-10-07, branch `engine-switch/s8-phase-c`):**
+  - S8.0 profiled the cross-app run. Stable-id rewrite made linear (55 s -> 0.1 s);
+    ordering roots are primary-only.
+  - S8.2 demand (`program::resolve::demand`): forward from primary routines over
+    every edge, and reverse from subscribed dependency events to their raisers. CDO
+    104 s / 7.2 GB -> 42 s / 3.0 GB with equal findings.
+  - S8.1 one detector-context builder (`CrossAppInputs`).
+  - S8.3 `alsem analyze` cross-app by default, `--single-app`. CDO 21 s / 2.95 GB.
+  - S8.4 d45 roots a dependency publisher when a primary routine subscribes.
+  - S8.5 the triage fixes: d3 (virtual tables, nothing to trim, non-fields, record
+    escape), the virtual-table gate, d13 friends, and d17 to opt-in.
+  - Three engine gaps the triages exposed, each fixed at the root:
+    - a table method's `Rec` follows its receiver's temp state;
+    - constant-argument guards in the cone (`param_guard`);
+    - d8/d9 read the writes pending at the Commit (`pending_writes`), and d8
+      moved to opt-in.
+  - S8.6 the cone follows every resolved dependency call: +1 s, no memory.
+  - Event-edge temp substitution and the `local`-event closed-world proof.
+  - d45 moved to opt-in: its dominant cause is an argument read from a database
+    row, which no sound static rule decides.
+  - CDO cross-app default findings: see CHANGELOG. Out of scope, as planned: the
+    other consumers stay single-app, and L3 deletion is S9.
 - **Deferred — demanded-trees profile.** Not part of the switch; `FULL` is the profile
   for S7/S8. If measured memory later requires it, it is a separately gated step whose
   design must first state: how complete forward AND reverse demand is discovered before
