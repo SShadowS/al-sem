@@ -81,9 +81,9 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     2-3. FIXED (3 -> 1): compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`,
        `QueryVar.EntryType.AsInteger()`. A plain query column (no `Method`) now types
        as its source field.
-    4. untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`:
-       `EventConditions.AddText(..)` — an XmlPort `textattribute(EventConditions)` used
-       as a BigText; XmlPort text nodes are not modelled.
+    4. FIXED (1 -> 0): untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`,
+       `EventConditions.AddText(..)`. XmlPort text nodes are now `Text`/`BigText`
+       xmlport globals. **S9.0e is done: 0 dependency-body unknown edges on CDO.**
   - Answered: no S9.0e lowerer fix needs a cache-version bump. The only cache this
     engine writes is `snapshot/cache.rs` (raw extracted `.al` text, keyed by the
     `.app`'s blake3, before parsing). The R3a-4 dependency-cache artifacts that

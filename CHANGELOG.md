@@ -1078,6 +1078,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An XmlPort's text nodes are xmlport variables** (engine-switch S9.0e).
+  CDO's dependency-body unknown edges 1 -> 0 (from 6,315 at the start of
+  S9.0e); workspace metrics unchanged. `EventConditions.AddText(..)` stayed
+  `untrackedReceiver`: `textattribute(EventConditions)` was no variable at
+  all. alc 18.0.41.45789 makes each `textelement`/`textattribute` a variable
+  of the whole xmlport, read from its triggers and its procedures alike:
+  `Text` by default, `BigText` with `TextType = BigText` (assigning one to a
+  `Date` fails AL0122 naming `Text` / `BigText`). The lowerer now adds them
+  to the XmlPort's globals with that type. Tests
+  `xmlport_text_nodes_are_globals` and `xmlport_text_node_receivers_resolve`;
+  disabling the collection fails both.
 - **A query column types as its source field** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 3 -> 1; workspace metrics unchanged.
   `ReconCustPostingGrSum.EntryType.AsInteger()` stayed `compoundReceiver`:

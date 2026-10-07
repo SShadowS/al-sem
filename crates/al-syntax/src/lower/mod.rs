@@ -298,6 +298,9 @@ fn lower_object(
             collect_properties(member, source, &mut properties);
         }
     }
+    if kind == ObjectKind::XmlPort {
+        collect_xmlport_text_nodes(node, source, &mut globals);
+    }
 
     ObjectDecl {
         kind,
@@ -538,6 +541,43 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
 /// Collect every report `dataitem(Name; "Source Table")` (incl. nested) as
 /// `(name, source-table)`, both unquoted, document order. Mirrors the legacy
 /// `report_dataitem_record_vars`.
+/// An XmlPort's `textelement(Name)` / `textattribute(Name)` nodes, as object
+/// globals: each is a variable in the whole xmlport's scope, `Text` by default and
+/// `BigText` with `TextType = BigText` (alc 18.0.41.45789: assigning one to a
+/// `Date` fails AL0122 naming `Text` / `BigText`; both are read from an xmlport
+/// procedure as well as from the node's own triggers).
+fn collect_xmlport_text_nodes(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
+    for child in node.named_children() {
+        let is_text_node = match child.kind() {
+            RawKind::XmlportElement => child
+                .field(FieldName::ElementType)
+                .is_some_and(|t| t.kind() == RawKind::TextelementKeyword),
+            RawKind::XmlportAttribute => child
+                .field(FieldName::AttributeType)
+                .is_some_and(|t| t.kind() == RawKind::TextattributeKeyword),
+            _ => false,
+        };
+        if is_text_node && let Some(name) = child.field(FieldName::Name) {
+            let mut props = Vec::new();
+            if let Some(body) = child.field(FieldName::Body) {
+                for p in body.named_children() {
+                    collect_properties(p, source, &mut props);
+                }
+            }
+            let big = props
+                .iter()
+                .any(|p| p.name == "texttype" && p.value.eq_ignore_ascii_case("bigtext"));
+            out.push(VarDecl {
+                name: ident_text(name, source),
+                ty: Some(if big { "BigText" } else { "Text" }.to_string()),
+                temporary: false,
+                origin: origin_of(child),
+            });
+        }
+        collect_xmlport_text_nodes(child, source, out);
+    }
+}
+
 /// A query's plain columns (see [`crate::ir::ObjectDecl::query_columns`]): each
 /// `query_column` with a `field_name` and no `Method` property, paired with the
 /// source table of its innermost enclosing `query_dataitem` (`table`).
@@ -3931,6 +3971,41 @@ query 50000 Q
                 ("EntryType", "Detailed Cust. Ledg. Entry", "Entry Type"),
                 ("CustNo", "Customer", "No."),
             ]
+        );
+    }
+
+    /// An XmlPort's text nodes are xmlport globals: `Text`, or `BigText` with
+    /// `TextType = BigText`. A `fieldelement` is no variable.
+    #[test]
+    fn xmlport_text_nodes_are_globals() {
+        let src = r#"
+xmlport 50000 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+            textattribute(Big)
+            {
+                TextType = BigText;
+            }
+            tableelement(Item; Item)
+            {
+                fieldelement(No; Item."No.") { }
+            }
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        let globals: Vec<(&str, Option<&str>)> = af.objects[0]
+            .globals
+            .iter()
+            .map(|g| (g.name.as_str(), g.ty.as_deref()))
+            .collect();
+        assert_eq!(
+            globals,
+            vec![("Root", Some("Text")), ("Big", Some("BigText"))]
         );
     }
 

@@ -12125,7 +12125,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// `this.X()` in an extension reaches the base object. 4 after a
 /// `this.Global.Method()` argument types by its return. 3 after a procedure
 /// header split across `#if` arms lowers to one routine per arm. 1 after a
-/// query's plain column types as its source field.
+/// query's plain column types as its source field. 0 after an XmlPort's text
+/// nodes became `Text`/`BigText` xmlport globals.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12140,9 +12141,10 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 1;
+    // At zero the ceiling is a pin (`<=` on a `usize` 0 is `==`).
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 0;
     assert!(
-        h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+        h.unknown == CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
          hole in dependency code; find it with `aldump --dependency-bodies-stats --sites`",
         h.unknown,

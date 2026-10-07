@@ -3046,6 +3046,38 @@ mod tests {
         assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
     }
 
+    /// S9.0e, alc-probed: an XmlPort `textattribute` with `TextType = BigText`
+    /// is a `BigText` variable of the xmlport, so `X.AddText(..)` reaches
+    /// `BigText.AddText` (Base App `ImportExportWorkflow`).
+    #[test]
+    fn xmlport_text_node_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "xmlport 50000 X\n{\n    schema\n    {\n        textelement(Root)\n        {\n            textattribute(Big)\n            {\n                TextType = BigText;\n\n                trigger OnBeforePassVariable()\n                begin\n                    Big.AddText('a');\n                end;\n            }\n        }\n    }\n\n    procedure P()\n    begin\n        Root := Root.ToUpper();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unresolved: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(r.target, RouteTarget::Unresolved))
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        assert_eq!(unresolved, Vec::<u32>::new());
+        assert!(
+            report.edges.len() >= 2,
+            "both member calls are edges: {}",
+            report.edges.len()
+        );
+    }
+
     /// S9.0e, alc-probed: a plain query column has its source field's type, so
     /// `QV.EntryType.AsInteger()` reaches the enum's `AsInteger` (Base App
     /// `ReconcileCustandVendAccs`). A `Method` column's type is not modelled.
