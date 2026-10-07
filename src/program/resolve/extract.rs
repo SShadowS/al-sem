@@ -776,6 +776,11 @@ fn collect_calls_v2(
             let et = *enum_type;
             collect_calls_v2(file, src, et, unit, caller, rvars, ctx, out);
         }
+        ExprKind::Ternary { .. } | ExprKind::TypeOp { .. } | ExprKind::List(_) => {
+            for c in e.kind.children() {
+                collect_value_v2(file, src, c, unit, caller, rvars, ctx, out);
+            }
+        }
         // Identifier / QuotedIdentifier / Literal / DatabaseReference / Unknown:
         // no nested calls.
         _ => {}

@@ -10,7 +10,7 @@ use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
     ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind, Stmt,
-    StmtId, StmtKind, SyntaxIssue, UnaryOp, VarDecl,
+    StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -1963,6 +1963,35 @@ fn lower_expr(
                 .map(|v| ident_text(v, source))
                 .unwrap_or_default(),
         },
+        RawKind::TernaryExpression => ExprKind::Ternary {
+            cond: lower_opt_field(node, FieldName::Condition, ir, issues, source, depth),
+            then_value: lower_opt_field(node, FieldName::ThenValue, ir, issues, source, depth),
+            else_value: lower_opt_field(node, FieldName::ElseValue, ir, issues, source, depth),
+        },
+        RawKind::IsExpression | RawKind::AsExpression => ExprKind::TypeOp {
+            op: if node.kind() == RawKind::IsExpression {
+                TypeOp::Is
+            } else {
+                TypeOp::As
+            },
+            value: lower_opt_field(node, FieldName::Left, ir, issues, source, depth),
+            ty: match node.field(FieldName::Right) {
+                Some(t) => t.text(source).to_string(),
+                None => {
+                    issues.push(SyntaxIssue {
+                        message: format!("missing `Right` on `{}`", node.kind_str()),
+                        origin: origin_of(node),
+                    });
+                    String::new()
+                }
+            },
+        },
+        RawKind::ListLiteral => ExprKind::List(
+            structural_children(node)
+                .into_iter()
+                .map(|c| lower_expr(c, ir, issues, source, depth + 1))
+                .collect(),
+        ),
         RawKind::DatabaseReference => ExprKind::DatabaseReference(node.text(source).to_string()),
         RawKind::Boolean => ExprKind::Literal(Literal::Bool(
             node.text(source).eq_ignore_ascii_case("true"),
@@ -1973,9 +2002,11 @@ fn lower_expr(
             ExprKind::Literal(Literal::Text(node.text(source).to_string()))
         }
         _ => {
-            // Unmodelled expression container (in/is/as expression, list_literal,
-            // ternary, …): lower its non-trivia children so nested calls/members are
-            // still captured in the arena (completeness). The node itself is Unknown.
+            // Unmodelled expression container: lower its non-trivia children so
+            // nested calls/members are still captured in the arena (completeness).
+            // The node itself is Unknown, and nothing links those children: a
+            // container with calls inside needs a real variant (S9.0c gave one to
+            // ternary, is/as and the list literal).
             for c in structural_children(node) {
                 lower_expr(c, ir, issues, source, depth + 1);
             }
@@ -2145,6 +2176,73 @@ mod tests {
             }
         }
         panic!("no Case statement lowered");
+    }
+
+    /// S9.0c: the ternary, `is`/`as` and the list literal are real expressions whose
+    /// sub-expressions are linked, not an opaque `Unknown` with unlinked children
+    /// (which lost every call inside them).
+    #[test]
+    fn ternary_typeop_and_list_link_their_operands() {
+        let src = "codeunit 50000 T
+{
+    procedure P()
+    var
+        A: Integer;
+        O: Codeunit Y;
+    begin
+        A := IsOn() ? GetA() : GetB(1);
+        if A in [GetA(), /* c */ 2] then;
+        if GetI() is \"Y\" then;
+        O := GetI() as Y;
+    end;
+}
+";
+        let af = parse(src);
+        let callee = |id: crate::ir::ExprId| match &af.ir.expr(id).kind {
+            ExprKind::Call { function, .. } => match &af.ir.expr(*function).kind {
+                ExprKind::Identifier(n) => n.clone(),
+                _ => panic!("callee is not an identifier"),
+            },
+            _ => panic!("not a call: {}", af.ir.expr(id).origin.kind_text),
+        };
+        let mut seen = Vec::new();
+        for e in af.ir.iter_exprs() {
+            match &e.kind {
+                ExprKind::Ternary {
+                    cond,
+                    then_value,
+                    else_value,
+                } => seen.push(format!(
+                    "ternary {} {} {}",
+                    callee(*cond),
+                    callee(*then_value),
+                    callee(*else_value)
+                )),
+                ExprKind::TypeOp { op, value, ty } => {
+                    seen.push(format!("{op:?} {} {ty}", callee(*value)));
+                }
+                ExprKind::List(items) => {
+                    let first = callee(items[0]);
+                    let second = matches!(
+                        &af.ir.expr(items[1]).kind,
+                        ExprKind::Literal(Literal::Int(n)) if n == "2"
+                    );
+                    seen.push(format!("list {first} {second} {}", items.len()));
+                }
+                ExprKind::Unknown => panic!("Unknown at {:?}", e.origin.kind_text),
+                _ => {}
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                "As GetI Y".to_string(),
+                "Is GetI \"Y\"".to_string(),
+                "list GetA true 2".to_string(),
+                "ternary IsOn GetA GetB".to_string(),
+            ]
+        );
     }
 
     /// Regression for the case-pattern field-pollution grammar fix: `case 1, 2:` must

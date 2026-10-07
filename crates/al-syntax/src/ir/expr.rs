@@ -54,6 +54,20 @@ pub enum ExprKind {
         start: ExprId,
         end: ExprId,
     },
+    /// `cond ? then_value : else_value`
+    Ternary {
+        cond: ExprId,
+        then_value: ExprId,
+        else_value: ExprId,
+    },
+    /// `value is Type` / `value as Type`; `ty` is the type text as written.
+    TypeOp {
+        op: TypeOp,
+        value: ExprId,
+        ty: String,
+    },
+    /// `[a, b, ...]`, the right side of `in`.
+    List(Vec<ExprId>),
     /// A syntactically present expression the lowerer does not yet model. The kind
     /// is preserved via `Origin.kind_text`; a `SyntaxIssue` is recorded.
     Unknown,
@@ -70,6 +84,44 @@ pub enum Literal {
     Time(String),
     /// Any other literal kind, raw text preserved.
     Other(String),
+}
+
+impl ExprKind {
+    /// The direct sub-expressions, in source order.
+    #[must_use]
+    pub fn children(&self) -> Vec<ExprId> {
+        match self {
+            ExprKind::Member { object, .. } => vec![*object],
+            ExprKind::Call { function, args } => std::iter::once(*function)
+                .chain(args.iter().copied())
+                .collect(),
+            ExprKind::Index { base, index } => vec![*base, *index],
+            ExprKind::Unary { operand, .. } => vec![*operand],
+            ExprKind::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
+            ExprKind::Parenthesized(x) => vec![*x],
+            ExprKind::QualifiedEnum { enum_type, .. } => vec![*enum_type],
+            ExprKind::RangeExpr { start, end } => vec![*start, *end],
+            ExprKind::Ternary {
+                cond,
+                then_value,
+                else_value,
+            } => vec![*cond, *then_value, *else_value],
+            ExprKind::TypeOp { value, .. } => vec![*value],
+            ExprKind::List(items) => items.clone(),
+            ExprKind::Identifier(_)
+            | ExprKind::QuotedIdentifier(_)
+            | ExprKind::Literal(_)
+            | ExprKind::DatabaseReference(_)
+            | ExprKind::Unknown => Vec::new(),
+        }
+    }
+}
+
+/// `is` / `as`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum TypeOp {
+    Is,
+    As,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

@@ -544,6 +544,11 @@ impl<'a> SpineCtx<'a> {
                 self.collect_cond_idents(start, kind, stmt);
                 self.collect_cond_idents(end, kind, stmt);
             }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.collect_cond_idents(c, kind, stmt);
+                }
+            }
             _ => {}
         }
     }
@@ -1200,6 +1205,11 @@ impl<'a> SpineCtx<'a> {
                 self.walk_expr(start);
                 self.walk_expr(end);
             }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.walk_expr(c);
+                }
+            }
             // Value-reference identifier (lc, deduped) — legacy counts only plain
             // `identifier` nodes, NOT keyword_identifier/quoted_identifier.
             Identifier(name) => {
@@ -1476,6 +1486,11 @@ impl<'a> IrCfn<'a> {
             RangeExpr { start, end } => {
                 self.harvest(*start, out);
                 self.harvest(*end, out);
+            }
+            Ternary { .. } | TypeOp { .. } | List(_) => {
+                for c in e.kind.children() {
+                    self.harvest(c, out);
+                }
             }
             _ => {}
         }

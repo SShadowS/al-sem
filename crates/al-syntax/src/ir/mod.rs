@@ -18,7 +18,7 @@ pub use decl::{
     AttributeIr, FieldDecl, ObjectDecl, ObjectKind, ObjectProperty, PageControl, Param,
     RoutineDecl, RoutineKind, VarDecl,
 };
-pub use expr::{BinaryOp, Expr, ExprKind, Literal, UnaryOp};
+pub use expr::{BinaryOp, Expr, ExprKind, Literal, TypeOp, UnaryOp};
 pub use stmt::{Block, BlockItem, CaseBranch, PreprocGroup, Stmt, StmtKind};
 
 use std::ops::Range;

@@ -3486,6 +3486,41 @@ mod adapter_tests {
         assert_eq!(a.census.program_only_site, 0, "{:#?}", a.census);
     }
 
+    /// S9.0c: a call inside a ternary or an `in` list is a body call site as well
+    /// as a program edge, so the adapter joins it.
+    #[test]
+    fn calls_inside_a_ternary_reach_the_model() {
+        let cu = "codeunit 50121 \"Q\"
+{
+    procedure F(): Boolean
+    begin
+    end;
+
+    procedure A(): Integer
+    begin
+    end;
+
+    procedure Caller()
+    var
+        X: Integer;
+    begin
+        X := F() ? A() : 0;
+        if X in [A()] then;
+    end;
+}
+";
+        let a = adapt(&[("src/q.al", cu)], None);
+        let mut sites: Vec<&str> = a
+            .routine("Caller")
+            .call_sites
+            .iter()
+            .map(|cs| cs.callee_text.as_str())
+            .collect();
+        sites.sort_unstable();
+        assert_eq!(sites, vec!["A", "A", "F"]);
+        assert_eq!(a.census.program_only_site, 0, "{:#?}", a.census);
+    }
+
     /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to
     /// the program engine too, and takes its trigger edge from it, the same
     /// edge L3 gives. It passes `true`: an argless write fires no trigger

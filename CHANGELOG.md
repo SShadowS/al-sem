@@ -1065,6 +1065,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Calls inside a ternary, an `in` list, or an `is`/`as` operand are calls**
+  (engine-switch S9.0c, found by the compiler oracle: 3 pairs on CDO). The lowerer made
+  `c ? a : b`, `x is T`, `x as T` and `[a, b]` an opaque `ExprKind::Unknown`: it lowered
+  the children into the arena but linked none of them, so every call inside had no
+  edge and no body call site. They are now `ExprKind::Ternary`, `ExprKind::TypeOp`
+  (`TypeOp::Is`/`As`, type text as written) and `ExprKind::List`, with a shared
+  `ExprKind::children()`. The extractors, the body walk (call sites, condition
+  references, the control-flow tree) and the complexity metric descend into them; a
+  ternary adds one to cyclomatic complexity, like `and`/`or`.
+  - CDO oracle: the 3 S3 pairs agree; no new disagreement.
+  - The frozen CDO L4 digest moved (2 of 5479 routines; see
+    `tests/l4-summary-baseline/README.md`). No other golden moved.
+
 - **A parens-less call inside an expression is a call** (engine-switch S9.0c, found
   by the compiler oracle: 10 pairs on CDO). AL lets a zero-argument call drop its
   `()`, also as a value: `if IsOn then`, `exit(GetSetup)`, `Foo(X.Bar)`. Syntax

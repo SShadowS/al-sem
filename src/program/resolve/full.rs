@@ -2313,6 +2313,72 @@ mod tests {
         );
     }
 
+    /// S9.0c (found by the compiler oracle): a call inside a ternary, an `in` list
+    /// or an `is`/`as` operand is a call site. The lowerer used to make those
+    /// containers an opaque `Unknown`, so the calls had no edge.
+    #[test]
+    fn calls_inside_ternary_list_and_typeop_are_call_sites() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C
+{
+             procedure F(): Boolean
+    begin
+    end;
+             procedure A(): Integer
+    begin
+    end;
+             procedure B(): Integer
+    begin
+    end;
+             procedure G(): Codeunit C
+    begin
+    end;
+             procedure Caller()
+    var
+        X: Integer;
+        O: Codeunit C;
+    begin
+             X := F() ? A() : B();
+             if X in [A(), B()] then;
+             if G() is C then;
+             O := G() as C;
+    end;
+}
+",
+        )
+        .expect("write C.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut calls: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "caller" && ce.edge.kind == EdgeKind::Call)
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| match &r.target {
+                    RouteTarget::Routine(id) => (ce.edge.site.span.start.line, id.name_lc.clone()),
+                    other => (ce.edge.site.span.start.line, format!("{other:?}")),
+                })
+            })
+            .collect();
+        calls.sort();
+        let want: Vec<(u32, String)> = [
+            (19, "a"),
+            (19, "b"),
+            (19, "f"),
+            (20, "a"),
+            (20, "b"),
+            (21, "g"),
+            (22, "g"),
+        ]
+        .into_iter()
+        .map(|(l, n)| (l, n.to_string()))
+        .collect();
+        assert_eq!(calls, want);
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

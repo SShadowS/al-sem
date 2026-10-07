@@ -311,11 +311,14 @@ fn complexity_stmt(ir: &ir::Ir, sid: ir::StmtId, c: &mut u32) {
 
 fn complexity_expr(ir: &ir::Ir, eid: ExprId, c: &mut u32) {
     let e = ir.expr(eid);
-    if let ExprKind::Binary {
-        op: BinaryOp::And | BinaryOp::Or,
-        ..
-    } = &e.kind
-    {
+    // `and`/`or` and the ternary each add a decision point.
+    if matches!(
+        &e.kind,
+        ExprKind::Binary {
+            op: BinaryOp::And | BinaryOp::Or,
+            ..
+        } | ExprKind::Ternary { .. }
+    ) {
         *c += 1;
     }
     for_each_subexpr(ir, eid, &mut |sub| complexity_expr(ir, sub, c));
@@ -328,34 +331,8 @@ fn complexity_expr(ir: &ir::Ir, eid: ExprId, c: &mut u32) {
 /// `calls_in_expr` imports this directly (dying module depends on the
 /// surviving one, never the reverse).
 pub(crate) fn for_each_subexpr(ir: &ir::Ir, eid: ExprId, f: &mut dyn FnMut(ExprId)) {
-    match &ir.expr(eid).kind {
-        ExprKind::Member { object, .. } => f(*object),
-        ExprKind::Call { function, args } => {
-            f(*function);
-            for a in args {
-                f(*a);
-            }
-        }
-        ExprKind::Index { base, index } => {
-            f(*base);
-            f(*index);
-        }
-        ExprKind::Unary { operand, .. } => f(*operand),
-        ExprKind::Binary { lhs, rhs, .. } => {
-            f(*lhs);
-            f(*rhs);
-        }
-        ExprKind::Parenthesized(inner) => f(*inner),
-        ExprKind::QualifiedEnum { enum_type, .. } => f(*enum_type),
-        ExprKind::RangeExpr { start, end } => {
-            f(*start);
-            f(*end);
-        }
-        ExprKind::Identifier(_)
-        | ExprKind::QuotedIdentifier(_)
-        | ExprKind::Literal(_)
-        | ExprKind::DatabaseReference(_)
-        | ExprKind::Unknown => {}
+    for c in ir.expr(eid).kind.children() {
+        f(c);
     }
 }
 
