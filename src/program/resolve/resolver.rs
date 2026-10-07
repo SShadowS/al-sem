@@ -1607,6 +1607,79 @@ pub fn resolve_bare(
     )
 }
 
+/// What an extension's base object holds for a member (see
+/// [`resolve_in_extension_base`]).
+enum ExtensionBase {
+    Resolved(DispatchShape, Vec<Route>),
+    /// A candidate exists but access excludes it, with the reason.
+    Excluded(UnknownReason),
+    /// Not an extension, base unresolved, or no candidate.
+    Miss,
+}
+
+/// An extension's (access-filtered) base-object lookup — the bare call's
+/// Step 2, also used by `this.X()` in an extension (S9.0e: a report
+/// extension's `this.GetLocation(..)` reaches the base report's `protected`
+/// procedure). `resolve_in_object` does ZERO access filtering, so it is gated
+/// behind the caller-identity-aware visibility check Task 1 established
+/// (`object_has_visible_member_candidate`): the calling object is the
+/// extension (`from_object`), the candidate object is the resolved base. Per
+/// the Task-1 rule: base `Local` is NEVER visible from an extension;
+/// cross-app `Internal` requires the same app; `Protected` is visible (the
+/// caller is by construction a direct, kind-compatible extension of the base);
+/// `Public` is always visible.
+#[allow(clippy::too_many_arguments)] // the bare call's own identity/lookup inputs.
+fn resolve_in_extension_base(
+    from_object: &ObjectNode,
+    name_lc: &str,
+    arity: usize,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+    args: &[ArgDispatchInfo],
+) -> ExtensionBase {
+    // The same audited call site the bare call's Step 2 always had
+    // (`resolve_module_pick_first_base_function_callers_are_a_known_allowlist`).
+    let base_obj = if let Some(base_kind) = extension_base_kind(from_object.id.kind)
+        && let Some(extends_target) = from_object.extends_target.as_deref()
+        && let Some(base_obj) = graph.resolve_object(from_object.id.app, base_kind, extends_target)
+    {
+        base_obj
+    } else {
+        return ExtensionBase::Miss;
+    };
+    let base_id = base_obj.id.clone();
+    let base_tier = base_obj.tier;
+    if object_has_visible_member_candidate(
+        &base_id,
+        base_tier,
+        name_lc,
+        arity,
+        &from_object.id,
+        graph,
+        index,
+    ) {
+        return match resolve_in_object(
+            &base_id,
+            base_tier,
+            name_lc,
+            arity,
+            &from_object.id,
+            graph,
+            index,
+            surface,
+            args,
+        ) {
+            Some((shape, routes)) => ExtensionBase::Resolved(shape, routes),
+            None => ExtensionBase::Miss,
+        };
+    }
+    match access_exclusion_reason(&base_id, name_lc, arity, &from_object.id, graph, index) {
+        Some(r) => ExtensionBase::Excluded(r),
+        None => ExtensionBase::Miss,
+    }
+}
+
 /// The arg-typed variant of [`resolve_bare`] — `resolve_full_program`'s real
 /// call-site resolution uses this so Task 2's fail-closed pick
 /// (`resolve_in_object`'s `_` arm) has the call's typed arguments available.
@@ -1668,39 +1741,10 @@ pub(crate) fn resolve_bare_with_args(
     // declines entirely (no `resolve_in_object` call) and falls through to
     // Step 3/4/5, exactly like the pre-existing "no candidate at all"
     // fallthrough shape.
-    if let Some(base_kind) = extension_base_kind(from_object.id.kind)
-        && let Some(extends_target) = from_object.extends_target.as_deref()
-        && let Some(base_obj) = graph.resolve_object(from_object.id.app, base_kind, extends_target)
-    {
-        let base_id = base_obj.id.clone();
-        let base_tier = base_obj.tier;
-        if object_has_visible_member_candidate(
-            &base_id,
-            base_tier,
-            name_lc,
-            arity,
-            &from_object.id,
-            graph,
-            index,
-        ) {
-            if let Some((shape, routes)) = resolve_in_object(
-                &base_id,
-                base_tier,
-                name_lc,
-                arity,
-                &from_object.id,
-                graph,
-                index,
-                surface,
-                args,
-            ) {
-                return (shape, routes);
-            }
-        } else if let Some(r) =
-            access_exclusion_reason(&base_id, name_lc, arity, &from_object.id, graph, index)
-        {
-            reason = r;
-        }
+    match resolve_in_extension_base(from_object, name_lc, arity, graph, index, surface, args) {
+        ExtensionBase::Resolved(shape, routes) => return (shape, routes),
+        ExtensionBase::Excluded(r) => reason = r,
+        ExtensionBase::Miss => {}
     }
 
     // 3. Implicit-Rec (beyond-1B.3b Task 3). Every guard below is
@@ -2684,10 +2728,27 @@ pub(crate) fn resolve_member_with_args(
             ) {
                 (shape, routes)
             } else {
-                // Method not found in own object — the receiver (from_object
-                // itself) IS resolved by construction; tag its tier
-                // (reason-split Task 2).
-                member_unknown_route_with_tier(UnknownReason::MemberNotFound, from_object.tier)
+                // Not declared by the object itself: an extension's `this`
+                // also reaches its base object (S9.0e), as a bare call does.
+                match resolve_in_extension_base(
+                    from_object,
+                    method_lc,
+                    arity,
+                    graph,
+                    index,
+                    surface,
+                    args,
+                ) {
+                    ExtensionBase::Resolved(shape, routes) => (shape, routes),
+                    ExtensionBase::Excluded(r) => member_unknown_route(r),
+                    // Method not found — the receiver (from_object itself) IS
+                    // resolved by construction; tag its tier (reason-split
+                    // Task 2).
+                    ExtensionBase::Miss => member_unknown_route_with_tier(
+                        UnknownReason::MemberNotFound,
+                        from_object.tier,
+                    ),
+                }
             }
         }
         ReceiverType::Interface { name_lc } => {
@@ -3639,6 +3700,67 @@ page 50911 "BazPage"
         .expect("run is a PageInstance member");
         assert_eq!(routes[0].target, RouteTarget::Builtin(expected));
         assert_eq!(routes[0].evidence, Evidence::Catalog);
+    }
+
+    /// S9.0e: `this.X()` in a report extension reaches the base report's
+    /// `protected` procedure, as a bare call does (CDO's
+    /// `MfgGetOutboundSourceDocs` `this.GetLocation(..)`); a base `local`
+    /// procedure stays invisible.
+    #[test]
+    fn this_call_in_an_extension_reaches_the_base_object() {
+        use crate::program::resolve::receiver::ReceiverType;
+
+        let src: &'static str = r#"
+report 50950 "BaseRep"
+{
+    protected procedure Helper()
+    begin
+    end;
+
+    local procedure Hidden()
+    begin
+    end;
+}
+
+reportextension 50951 "RepExt" extends "BaseRep"
+{
+}
+"#;
+        let app_id = make_app_id("TestApp");
+        let units = [make_unit(app_id, "Rep.al", src)];
+        let graph = build_graph(&units, None);
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+        let ext = find_obj(&graph, "RepExt");
+
+        let (_, routes) = resolve_member(
+            &ReceiverType::SelfObject,
+            "helper",
+            0,
+            ext,
+            &graph,
+            &index,
+            &surface,
+        );
+        assert_eq!(routes.len(), 1);
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("this.Helper() must reach the base report; got {routes:?}");
+        };
+        assert_eq!(rid.object.kind, ObjectKind::Report);
+
+        let (_, routes) = resolve_member(
+            &ReceiverType::SelfObject,
+            "hidden",
+            0,
+            ext,
+            &graph,
+            &index,
+            &surface,
+        );
+        assert!(
+            matches!(routes[0].evidence, Evidence::Unknown(_)),
+            "a base local procedure is invisible; got {routes:?}"
+        );
     }
 
     /// S9.0e, alc-probed: a PageExtension's bare `Update()` binds the page

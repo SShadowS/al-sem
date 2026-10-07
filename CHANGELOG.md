@@ -1071,6 +1071,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`this.X()` in an extension reaches the base object** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 6 -> 5; workspace metrics
+  unchanged. A report extension's `this.GetLocation(..)` targets the base
+  report's `protected` procedure. A bare `GetLocation(..)` already reached it
+  (Step 2), but the `this` receiver searched only the extension itself. The
+  base lookup is now one helper, `resolve_in_extension_base`, with the same
+  access rules (a base `local` stays invisible), used by both. Test
+  `this_call_in_an_extension_reaches_the_base_object`; making the `this` arm
+  skip the base fails it.
 - **`CreateTask` has no bare global form; a page with no `SourceTable` has
   no implicit `Rec`** (engine-switch S9.0e). CDO's dependency-body unknown
   edges 8 -> 6; workspace metrics unchanged.

@@ -12114,7 +12114,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// `ErrorInfo`'s getters and same-return overload sets type their chain. 10
 /// after namespace-qualified enum type names (`Microsoft.Foundation."X"`). 8
 /// after a `#pragma` inside an argument list stops counting as an argument. 6
-/// after `CreateTask` (no bare global form) and SourceTable-less pages.
+/// after `CreateTask` (no bare global form) and SourceTable-less pages. 5 after
+/// `this.X()` in an extension reaches the base object.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12129,7 +12130,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 6;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 5;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
