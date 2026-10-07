@@ -1071,6 +1071,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An operator result types its receiver** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 19 -> 14; workspace metrics unchanged.
+  `(TotalDaysToPay / TotalNoOfInv).ToText()` and `(WorkDate() - "Posting
+  Date").ToText()` stayed `compoundReceiver`: the expression typer had no arm
+  for parentheses or operators. Parentheses now pass their inner type
+  through. Comparisons, `and`/`or`/`xor`/`not` and `in` give a Boolean.
+  Arithmetic on two numbers gives a number. `Date - Date` gives an Integer:
+  alc 18.0.41.45789 rejects assigning it to a Date with AL0122. Every other
+  operand mix declines (a Text `+`, `Date + Integer`). Test
+  `operator_result_receivers_resolve`; disabling the arithmetic arm fails it.
 - **A bare page-instance call in a page binds the page** (engine-switch
   S9.0e). CDO's dependency-body unknown edges 24 -> 19; workspace metrics
   unchanged. `INSTANCE_ONLY_NEVER_BARE` claimed its 19 names (`Update`,

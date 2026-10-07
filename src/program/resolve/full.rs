@@ -3015,6 +3015,48 @@ mod tests {
         }
     }
 
+    /// S9.0e: an operator result types its receiver — a comparison is a
+    /// Boolean, arithmetic on numbers is a number, `Date - Date` an Integer.
+    /// A Text `+` and `Date + Integer` decline.
+    #[test]
+    fn operator_result_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    var\n        A: Integer;\n        B: Decimal;\n        D1: Date;\n        D2: Date;\n        X: Text;\n    begin\n\
+             X := (A / B).ToText();\n\
+             X := (-B).ToText();\n\
+             X := (D1 - D2).ToText();\n\
+             X := (A < B).ToText();\n\
+             X := (X + X).ToLower();\n\
+             X := (D1 + A).ToText();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unknown: Vec<u32> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        // Lines are 0-based: the two declining sites are the last two.
+        let first = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        assert_eq!(unknown, vec![first + 4, first + 5]);
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

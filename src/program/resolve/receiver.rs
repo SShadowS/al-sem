@@ -154,7 +154,9 @@
 //! `ObjectNodeId`s instead of L3 string IDs.
 
 use al_syntax::IdentifierFoldExt;
-use al_syntax::ir::{AlFile, ExprId, ExprKind, ObjectKind, RoutineDecl, VarDecl};
+use al_syntax::ir::{
+    AlFile, BinaryOp, ExprId, ExprKind, ObjectKind, RoutineDecl, UnaryOp, VarDecl,
+};
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
@@ -1658,6 +1660,83 @@ fn infer_receiver_type_for_expr(
                     _ => ReceiverType::Unknown,
                 },
                 _ => ReceiverType::Unknown,
+            }
+        }
+        // Operator results (S9.0e): `(A - B).ToText()`. Parentheses carry no
+        // type. A comparison, logical operator or `in` is a Boolean;
+        // arithmetic on two numbers is a number; `Date - Date` is an Integer
+        // (alc probe: assigning it to a Date fails AL0122). Every other
+        // operand mix (a Text `+`, `Date + Integer`, ...) declines.
+        ExprKind::Parenthesized(inner) => infer_receiver_type_for_expr(
+            file,
+            *inner,
+            routine,
+            object_globals,
+            from_object,
+            graph,
+            index,
+            bare_ctx,
+        ),
+        ExprKind::Unary { op, operand } => match op {
+            UnaryOp::Not => ReceiverType::Framework(FrameworkKind::Scalar),
+            UnaryOp::Neg | UnaryOp::Plus => {
+                let scalar = ReceiverType::Framework(FrameworkKind::Scalar);
+                let ty = infer_receiver_type_for_expr(
+                    file,
+                    *operand,
+                    routine,
+                    object_globals,
+                    from_object,
+                    graph,
+                    index,
+                    bare_ctx,
+                );
+                if ty == scalar {
+                    scalar
+                } else {
+                    ReceiverType::Unknown
+                }
+            }
+        },
+        ExprKind::Binary { op, lhs, rhs } => {
+            let scalar = ReceiverType::Framework(FrameworkKind::Scalar);
+            match op {
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+                | BinaryOp::In => scalar,
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::IntDiv
+                | BinaryOp::Mod => {
+                    let ty = |e: ExprId| {
+                        infer_receiver_type_for_expr(
+                            file,
+                            e,
+                            routine,
+                            object_globals,
+                            from_object,
+                            graph,
+                            index,
+                            bare_ctx,
+                        )
+                    };
+                    let date = ReceiverType::Framework(FrameworkKind::Date);
+                    match (ty(*lhs), ty(*rhs)) {
+                        (l, r) if l == scalar && r == scalar => scalar,
+                        (l, r) if *op == BinaryOp::Sub && l == date && r == date => scalar,
+                        _ => ReceiverType::Unknown,
+                    }
+                }
+                BinaryOp::Other => ReceiverType::Unknown,
             }
         }
         _ => ReceiverType::Unknown,
