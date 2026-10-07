@@ -1071,6 +1071,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `this.Global.Method()` argument types by its return** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 5 -> 4 and dependency
+  `ambiguousResolved` 723 -> 710; workspace metrics unchanged. The
+  call-result argument typer read only a bare variable base, so
+  `RaiseActionError(.., this.ErrorActions.GetObjectId(), ..)` left its
+  discriminating positions untyped. A `this.X` base now reads the object
+  global `X` (never a local or parameter, as `this.` means). Test
+  `this_global_call_result_argument_picks_an_overload`; disabling the arm
+  leaves the call an `AmbiguousOverload`.
 - **`this.X()` in an extension reaches the base object** (engine-switch
   S9.0e). CDO's dependency-body unknown edges 6 -> 5; workspace metrics
   unchanged. A report extension's `this.GetLocation(..)` targets the base

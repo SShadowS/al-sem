@@ -1045,16 +1045,34 @@ fn type_call_result_arg_member(
     if with_state != WithState::NoWithProven {
         return ArgDispatchInfo::untyped();
     }
-    let base_name = match &file.ir.expr(base_expr).kind {
-        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-        // Multi-hop base (itself a Member/Call/…) — out of this increment's
-        // scope, decline rather than guess.
+    let base_ty_text = match &file.ir.expr(base_expr).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+            match caller_scope_symbol(n, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(t)) => t,
+                _ => return ArgDispatchInfo::untyped(),
+            }
+        }
+        // `this.Global.Method()` (S9.0e): `this.` names an object global,
+        // never a local or parameter.
+        ExprKind::Member { object, member, .. }
+            if matches!(
+                &file.ir.expr(*object).kind,
+                ExprKind::Identifier(t) if t.eq_ignore_ascii_case("this")
+            ) =>
+        {
+            let global_lc = unquote_identifier(member).fold_identifier();
+            match object_globals
+                .iter()
+                .find(|v| v.name.fold_identifier() == global_lc)
+                .and_then(|v| v.ty.as_deref())
+            {
+                Some(t) => t,
+                None => return ArgDispatchInfo::untyped(),
+            }
+        }
+        // Any other multi-hop base (a Call, a deeper Member, …) — out of
+        // this increment's scope, decline rather than guess.
         _ => return ArgDispatchInfo::untyped(),
-    };
-    let CallerScopeSymbol::Found(Some(base_ty_text)) =
-        caller_scope_symbol(base_name, routine, object_globals)
-    else {
-        return ArgDispatchInfo::untyped();
     };
     let Some(from_object) = object_by_id(graph, from) else {
         return ArgDispatchInfo::untyped();

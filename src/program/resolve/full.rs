@@ -3016,6 +3016,36 @@ mod tests {
         }
     }
 
+    /// S9.0e: a `this.Global.Method()` argument types by the method's return,
+    /// so it picks an overload (CDO's `RaiseActionError(.., this.ErrorActions.
+    /// GetObjectId(), ..)`).
+    #[test]
+    fn this_global_call_result_argument_picks_an_overload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50001 W\n{\n    procedure F(I: Integer)\n    begin\n    end;\n\n    procedure F(T: Text)\n    begin\n    end;\n}\n\
+             codeunit 50002 G\n{\n    procedure GetInt(): Integer\n    begin\n    end;\n}\n\
+             codeunit 50000 C\n{\n    var\n        H: Codeunit G;\n        Wk: Codeunit W;\n\n    procedure P()\n    begin\n        Wk.F(this.H.GetInt());\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let f_targets: Vec<(DispatchShape, usize)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == "f"))
+            })
+            .map(|ce| (ce.edge.shape, ce.edge.routes.len()))
+            .collect();
+        assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
+    }
+
     /// S9.0e, alc-probed: a bare `CreateTask()` has no global form (AL0118 in
     /// a codeunit), so in a report dataitem trigger the dataitem table's own
     /// `CreateTask` binds; and a page with no `SourceTable` binds a bare
