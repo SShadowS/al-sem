@@ -2752,6 +2752,12 @@ pub(crate) fn resolve_member_with_args(
                 member_unknown_route(UnknownReason::CatalogMiss)
             }
         }
+        ReceiverType::DotNet { name_lc } => {
+            // A .NET interop member: the call leaves AL. The AL compiler binds it
+            // against the alias's declared assembly, so the alias and member name
+            // identify the target; no AL routine exists to resolve it to.
+            member_catalog_route(BuiltinId(format!("DotNet::{name_lc}::{method_lc}")))
+        }
         ReceiverType::Primitive => {
             // Non-catalog type — honest Unknown (not a false resolution gap).
             member_unknown_route(UnknownReason::CatalogMiss)

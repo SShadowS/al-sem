@@ -711,7 +711,13 @@ fn main() -> ExitCode {
                         .and_then(|t| t.lines().nth(span.start.line as usize))
                         .unwrap_or("")
                         .trim();
+                    let receiver = res
+                        .site_facts
+                        .get(&ce.obligation_id)
+                        .and_then(|f| f.receiver.as_ref())
+                        .map(|r| format!("{:?} {}", r.ty, r.type_text.as_deref().unwrap_or("")));
                     rows.push(serde_json::json!({
+                        "receiver": receiver,
                         "app": app.name,
                         "file": span.unit,
                         "line": span.start.line + 1,

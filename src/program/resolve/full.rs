@@ -2379,6 +2379,105 @@ mod tests {
         assert_eq!(calls, want);
     }
 
+    /// S9.0e: a member call on a `DotNet` receiver is a .NET interop leaf, a
+    /// catalog route `DotNet::<alias>::<member>`, not an unknown (`catalogMiss`,
+    /// 3,331 sites in CDO's dependency bodies).
+    #[test]
+    fn dotnet_member_call_is_a_catalog_leaf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C
+{
+    procedure P()
+    var
+        Enc: DotNet \"Encoding\";
+        B: DotNet Array;
+    begin
+        B := Enc.GetBytes('a');
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let routes: Vec<(String, EvidenceKind)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| (format!("{:?}", r.target), r.evidence.kind()))
+            .collect();
+        assert_eq!(
+            routes,
+            vec![(
+                "Builtin(BuiltinId(\"DotNet::encoding::getbytes\"))".to_string(),
+                EvidenceKind::Catalog
+            )]
+        );
+    }
+
+    /// S9.0e: inside a report dataitem trigger, a bare field receiver is the
+    /// dataitem record's field (`"Item Ledger Entry Type".AsInteger()` in Base
+    /// Application's Item Register - Value). A report procedure of the same name
+    /// shadows it (parens-optional call), so that case declines.
+    #[test]
+    fn report_dataitem_bare_field_receiver_types_by_the_dataitem_table() {
+        let src = |shadow: &str| {
+            format!(
+                "enum 50002 S
+{{
+    value(0; A) {{ }}
+}}
+                 table 50001 T
+{{
+    fields
+    {{
+        field(1; \"My Status\"; Enum S) {{ }}
+    }}
+}}
+                 report 50003 R
+{{
+    dataset
+    {{
+        dataitem(D; T)
+        {{
+                 trigger OnAfterGetRecord()
+            var
+                I: Integer;
+            begin
+                 I := \"My Status\".AsInteger();
+            end;
+        }}
+    }}
+{shadow}}}
+"
+            )
+        };
+        let routes = |text: String| -> Vec<EvidenceKind> {
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_minimal_workspace(dir.path());
+            std::fs::write(dir.path().join("C.al"), text).expect("write C.al");
+            let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "onaftergetrecord")
+                .flat_map(|ce| ce.edge.routes.iter().map(|r| r.evidence.kind()))
+                .collect()
+        };
+        assert_eq!(routes(src("")), vec![EvidenceKind::Catalog]);
+        assert_eq!(
+            routes(src("    procedure \"My Status\"(): Integer
+    begin
+    end;
+")),
+            vec![EvidenceKind::Unknown],
+            "a same-named report procedure shadows the field"
+        );
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

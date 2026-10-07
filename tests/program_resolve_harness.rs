@@ -12080,7 +12080,9 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// This ceiling holds their `unknown` edge count; it only ever moves DOWN. Measure
 /// with `aldump --dependency-bodies-stats [--sites] <workspace>`.
 ///
-/// 6315 on 2026-10-07 (pinned `bc3ccb18` baseline), of 431,248 edges.
+/// 6315 on 2026-10-07 (pinned `bc3ccb18` baseline), of 431,248 edges. 2979 after
+/// the catalogMiss family (DotNet leaves, scalar `ToText`, report-dataitem bare
+/// fields, the split-`if` phantom call).
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12095,7 +12097,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 6315;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 2979;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

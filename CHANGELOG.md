@@ -1071,6 +1071,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency bodies: the catalogMiss family** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 6,315 -> 2,979 (catalogMiss 3,341 -> 0); workspace
+  metrics unchanged.
+  - A `DotNet <Alias>` receiver is `ReceiverType::DotNet`, and a member call on it is a
+    catalog leaf `DotNet::<alias>::<member>`: the AL compiler binds it against the
+    alias's declared assembly, and no AL routine exists to reach (3,331 sites).
+  - `Integer`, `BigInteger`, `Decimal`, `Boolean` and `Byte` are
+    `FrameworkKind::Scalar`, whose only instance method is `ToText` (MS Learn).
+  - Inside a report dataitem trigger, a bare field receiver (`"Entry Type".AsInteger()`)
+    is the dataitem record's field. A same-named procedure of the report, or of the
+    base report for a report extension, shadows it.
+  - The lowerer kept the condition of an `if C then begin` split across `#if`
+    (`preproc_split_if_then_begin` and its 3 siblings) as a statement: a phantom
+    call site on `C`. It is now the `if`'s condition, with the remaining statements as
+    its (union-read) then-block.
+  - Moved: `docs/b3-triage/r0-corpus.md`, two negative fixtures whose reason sharpens
+    from compoundReceiver to catalogMiss (still unknown).
+
 - **Calls inside a ternary, an `in` list, or an `is`/`as` operand are calls**
   (engine-switch S9.0c, found by the compiler oracle: 3 pairs on CDO). The lowerer made
   `c ? a : b`, `x is T`, `x as T` and `[a, b]` an opaque `ExprKind::Unknown`: it lowered

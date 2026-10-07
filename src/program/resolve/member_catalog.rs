@@ -296,6 +296,13 @@ static VERSION: phf::Set<&'static str> = phf_set! {
     "build", "create", "major", "minor", "revision", "totext"
 };
 
+/// `Integer` / `BigInteger` / `Decimal` / `Boolean` / `Byte` instance methods: only
+/// `ToText` (MS Learn `integer-data-type`, `decimal-data-type`, `boolean-data-type`,
+/// `biginteger-totext-method`, `byte-totext-method`).
+static SCALAR: phf::Set<&'static str> = phf_set! {
+    "totext"
+};
+
 static DIALOG: phf::Set<&'static str> = phf_set! {
     "close", "confirm", "error", "hidesubsequentdialogs", "loginternalerror",
     "message", "open", "strmenu", "update"
@@ -499,6 +506,7 @@ fn framework_lookup(fk: &FrameworkKind, method_lc: &str) -> bool {
         FrameworkKind::FileUpload => FILEUPLOAD.contains(method_lc),
         FrameworkKind::NumberSequence => NUMBERSEQUENCE.contains(method_lc),
         FrameworkKind::Version => VERSION.contains(method_lc),
+        FrameworkKind::Scalar => SCALAR.contains(method_lc),
         FrameworkKind::Dialog => DIALOG.contains(method_lc),
         FrameworkKind::PageInstance => PAGE_INSTANCE.contains(method_lc),
         FrameworkKind::ReportInstance => REPORT_INSTANCE.contains(method_lc),

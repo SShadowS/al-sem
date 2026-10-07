@@ -1528,8 +1528,12 @@ fn push_unlowered_issue(node: RawNode, noun: &str, issues: &mut Vec<SyntaxIssue>
 ///   (`PreprocSplitDeclaration`'s name/id resolution). Reconstructed as a real
 ///   `StmtKind::If`, indistinguishable from an ordinary `if`.
 ///
-/// Everything else — the remaining begin/end-fragmented shapes
-/// (`preproc_split_if_then_begin` and its asymmetric/shared/begin-else siblings), any
+/// The begin/end-fragmented shapes (`preproc_split_if_then_begin` and its
+/// asymmetric/shared/begin-else siblings) expose only `condition`: reconstructed as an
+/// `If` on it whose then-block is the union of the remaining statements (S9.0e; the
+/// condition was lowered as a statement before, a phantom statement-call site).
+///
+/// Everything else — any
 /// arm's content NOT consumed by the `If` reconstruction above (extra `#elif`/`#else`
 /// arms, `preproc_guarded_statement`'s leading guard statements, a
 /// `preproc_fragmented_else_tail`), and any other genuinely-unmodelled preproc/unknown
@@ -1577,6 +1581,36 @@ fn lower_unmodelled_stmt(
             | RawKind::PreprocGuardedStatement
             | RawKind::PreprocSplitIfElseStatement
     );
+    // The begin/end-fragmented `if` shapes carry only a `condition` field; the rest
+    // is a flat statement run. The condition is the `if`'s, never a statement.
+    let cond_only_shape = matches!(
+        node.kind(),
+        RawKind::PreprocSplitIfThenBegin
+            | RawKind::PreprocSplitIfBeginAsymmetric
+            | RawKind::PreprocSplitIfThenBeginElseShared
+            | RawKind::PreprocSplitIfBeginElse
+    );
+    if cond_only_shape && let Some(c) = node.field(FieldName::Condition) {
+        let cond = lower_expr(c, ir, issues, source, depth + 1);
+        let mut items = Vec::new();
+        for ch in structural_children(node) {
+            if is_preproc_scaffold(ch.kind()) || ch.id() == c.id() {
+                continue;
+            }
+            lower_block_child(ch, ir, issues, source, &mut items, depth);
+        }
+        // Union read: every arm's statements sit in the then-block, so each call
+        // keeps its site even though the arm structure is not preserved.
+        let then_block = ir.add_block(Block {
+            items,
+            origin: origin.clone(),
+        });
+        return StmtKind::If {
+            cond,
+            then_block,
+            else_block: None,
+        };
+    }
     let cond_node = if if_shape {
         node.field(FieldName::Condition)
     } else {
@@ -2176,6 +2210,56 @@ mod tests {
             }
         }
         panic!("no Case statement lowered");
+    }
+
+    /// S9.0e: `if C then begin` split across `#if` (`preproc_split_if_then_begin`,
+    /// real code in Base Application's SalesPost) keeps `C` as the `if` condition. It
+    /// used to be lowered through the statement dispatcher, a phantom statement call.
+    #[test]
+    fn split_if_then_begin_keeps_its_condition() {
+        let src = "codeunit 50000 T
+{
+    procedure P()
+    begin
+        if not IsHandled then
+#if not CLEAN27
+            if SalesLine.Quantity <> 0 then begin
+                Foo();
+#endif
+                Bar();
+#if not CLEAN27
+            end;
+#endif
+    end;
+}
+";
+        let af = parse(src);
+        let member_is_quantity = |id: crate::ir::ExprId| matches!(&af.ir.expr(id).kind, ExprKind::Member { member, .. } if member == "Quantity");
+        let mut split_if = 0;
+        for st in af.ir.iter_stmts() {
+            match &st.kind {
+                StmtKind::Call(e) => {
+                    if let ExprKind::Call { function, .. } = &af.ir.expr(*e).kind {
+                        assert!(
+                            !member_is_quantity(*function),
+                            "phantom call on the condition"
+                        );
+                    }
+                }
+                StmtKind::If {
+                    cond, then_block, ..
+                } => {
+                    if let ExprKind::Binary { lhs, .. } = &af.ir.expr(*cond).kind
+                        && member_is_quantity(*lhs)
+                    {
+                        split_if += 1;
+                        assert_eq!(af.ir.block(*then_block).items.len(), 2, "Foo and Bar");
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(split_if, 1);
     }
 
     /// S9.0c: the ternary, `is`/`as` and the list literal are real expressions whose

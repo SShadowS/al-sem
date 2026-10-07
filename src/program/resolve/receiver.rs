@@ -232,6 +232,9 @@ pub enum FrameworkKind {
     FileUpload,
     NumberSequence,
     Version,
+    /// `Integer` / `BigInteger` / `Decimal` / `Boolean` / `Byte`: a scalar whose
+    /// only instance method is `ToText` (MS Learn, `<type>-data-type`).
+    Scalar,
     // Dialog
     Dialog,
     // Page/Report singleton types (from receiver name, not declared type)
@@ -371,6 +374,11 @@ pub enum ReceiverType {
     /// A platform/framework type (`Json*` / `Http*` / `InStream` / … ) — catalog
     /// lookup in Phase B.
     Framework(FrameworkKind),
+    /// A `DotNet <Alias>` receiver: a .NET interop object. Its members are .NET
+    /// methods, outside the AL program — Phase B makes each call a catalog leaf
+    /// `DotNet::<alias>::<member>` (the AL compiler binds the member against the
+    /// alias's declared assembly; there is no AL body to reach).
+    DotNet { name_lc: String },
     /// A primitive or unrecognized non-object, non-catalog type.  Phase B turns
     /// this into an honest `Unknown` edge.
     Primitive,
@@ -463,6 +471,8 @@ pub enum ParsedType {
     KeyRef,
     /// A recognized platform/framework type.
     Framework(FrameworkKind),
+    /// `DotNet <Alias>` — lowercased alias, quotes stripped: a .NET interop type.
+    DotNet { name: String },
     /// Primitive numeric/boolean type or an unrecognized keyword → Phase B unknown.
     Primitive,
     /// `Variant` — runtime-typed, genuinely dynamic dispatch.
@@ -587,7 +597,13 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "fileupload" => ParsedType::Framework(FrameworkKind::FileUpload),
         "numbersequence" => ParsedType::Framework(FrameworkKind::NumberSequence),
         "version" => ParsedType::Framework(FrameworkKind::Version),
+        "integer" | "biginteger" | "decimal" | "boolean" | "byte" => {
+            ParsedType::Framework(FrameworkKind::Scalar)
+        }
         "controladdin" => ParsedType::ControlAddIn {
+            name: unquote_identifier(rest).fold_identifier(),
+        },
+        "dotnet" => ParsedType::DotNet {
             name: unquote_identifier(rest).fold_identifier(),
         },
         // Variant — runtime-typed, genuinely dynamic
@@ -948,17 +964,39 @@ pub fn infer_receiver_type(
                 | ObjectKind::TableExtension
                 | ObjectKind::Page
                 | ObjectKind::PageExtension
+                | ObjectKind::Report
+                | ObjectKind::ReportExtension
         )
     {
-        let table_id = implicit_rec_table_id(from_object, graph, index);
+        // A report's implicit Rec is its dataitem's, so only inside a dataitem
+        // trigger (S9.0e): `resolve_report_implicit_rec_table` is routine-contextual.
+        let is_report = matches!(
+            from_object.id.kind,
+            ObjectKind::Report | ObjectKind::ReportExtension
+        );
+        let table_id = if is_report {
+            resolve_report_implicit_rec_table(routine, from_object, graph, index)
+        } else {
+            implicit_rec_table_id(from_object, graph, index)
+        };
         if let Some(table_id) = table_id {
             let field_lc = unquote_identifier(receiver_lc);
+            // A ReportExtension reaches its base report's procedures bare too.
+            let base_report = (from_object.id.kind == ObjectKind::ReportExtension)
+                .then(|| resolve_reportext_base_report(from_object, graph, index))
+                .flatten();
             let routine_shadowed =
                 index.table_scope_has_routine(graph, from_object, &table_id, &field_lc)
                     || index
                         .routines_in_object(graph, &from_object.id, &field_lc)
                         .next()
-                        .is_some();
+                        .is_some()
+                    || base_report.is_some_and(|b| {
+                        index
+                            .routines_in_object(graph, &b, &field_lc)
+                            .next()
+                            .is_some()
+                    });
             if !routine_shadowed
                 && let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc)
             {
@@ -2721,6 +2759,7 @@ pub(crate) fn parsed_type_to_receiver(
         ParsedType::FieldRef => ReceiverType::FieldRef,
         ParsedType::KeyRef => ReceiverType::KeyRef,
         ParsedType::Framework(kind) => ReceiverType::Framework(kind),
+        ParsedType::DotNet { name } => ReceiverType::DotNet { name_lc: name },
         ParsedType::Primitive => ReceiverType::Primitive,
         ParsedType::Dynamic => ReceiverType::Dynamic,
     }
@@ -3656,9 +3695,18 @@ mod tests {
         );
     }
 
+    /// S9.0e: the numeric/boolean scalars carry `ToText`, so they are a catalog
+    /// kind; a type with no catalogued member (`Char`) stays `Primitive`.
     #[test]
-    fn classify_integer_is_primitive() {
-        assert_eq!(classify_type_text("Integer"), ParsedType::Primitive);
+    fn classify_integer_is_scalar() {
+        for t in ["Integer", "BigInteger", "Decimal", "Boolean", "Byte"] {
+            assert_eq!(
+                classify_type_text(t),
+                ParsedType::Framework(FrameworkKind::Scalar),
+                "{t}"
+            );
+        }
+        assert_eq!(classify_type_text("Char"), ParsedType::Primitive);
     }
 
     #[test]
@@ -8099,7 +8147,8 @@ codeunit 50100 "C"
             None,
             None,
         );
-        assert_eq!(result, ReceiverType::Primitive);
+        // The local's own type, not the enum's.
+        assert_eq!(result, ReceiverType::Framework(FrameworkKind::Scalar));
     }
 
     /// NEGATIVE (Task 3, roadmap-closure plan): Step 4b's with-guard —
