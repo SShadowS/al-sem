@@ -12106,7 +12106,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// bare calls reach the dataitem table. 59 after a lone visible overload
 /// survivor binds (the compiler excludes inaccessible overloads, `AL0133`). 40
 /// after an interface implementer's same-arity overloads are picked by
-/// argument type. 37 after the proven `Variant` overload precedence.
+/// argument type. 37 after the proven `Variant` overload precedence. 35 after
+/// `Rec.RecordId` and implicit-`Rec` member arguments are typed.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12121,7 +12122,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 37;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 35;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

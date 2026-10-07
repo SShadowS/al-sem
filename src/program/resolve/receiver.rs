@@ -2412,7 +2412,7 @@ fn infer_call_result_receiver(
 /// object's kind. `routine` is consulted ONLY by the Report/ReportExtension
 /// arm (dataitem-receivers plan, Task 1) — every other arm is unchanged and
 /// routine-independent, exactly as before.
-fn infer_implicit_rec(
+pub(crate) fn infer_implicit_rec(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
     graph: &ProgramGraph,

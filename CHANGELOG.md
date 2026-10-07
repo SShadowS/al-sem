@@ -1071,6 +1071,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Record built-ins and the implicit `Rec` type as overload arguments**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 37 -> 35 and
+  dependency `ambiguousResolved` 764 -> 723; workspace metrics unchanged. The
+  member-argument typer read only declared fields of a declared record var.
+  It now also types an undeclared `Rec`/`xRec` through the receiver typer's
+  implicit-record rule (`receiver::infer_implicit_rec`), and a member that is no
+  field but a record built-in (`Rec.RecordId`, `Rec.SystemId`) by its return
+  type, not var-passable. CDO's `RaiseActionError(.., Rec.RecordId, ..)`
+  overloads differ exactly there. Tests
+  `type_one_arg_member_record_builtin_types_its_return` and
+  `type_one_arg_member_field_implicit_rec_of_a_table_resolves`; removing either
+  arm fails its test.
 - **Overloads with a `Variant` parameter are picked by the compiler's
   precedence** (engine-switch S9.0e). CDO's dependency-body unknown edges
   40 -> 37 and dependency `ambiguousResolved` 863 -> 764; workspace metrics

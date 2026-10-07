@@ -113,10 +113,12 @@ use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, Routi
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
+use crate::program::resolve::framework_returns::record_builtin_return_kind;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
-    CallerScopeSymbol, ParsedType, caller_scope_symbol, classify_type_text, object_by_id,
-    parsed_type_to_receiver, unquote_identifier,
+    CallerScopeSymbol, FrameworkKind, ParsedType, ReceiverType, caller_scope_symbol,
+    classify_type_text, infer_implicit_rec, object_by_id, parsed_type_to_receiver,
+    unquote_identifier,
 };
 use crate::program::resolve::resolver::{
     resolve_bare, resolve_member, routine_node_for_type_query,
@@ -731,43 +733,69 @@ fn type_one_arg(
                 // increment's scope, decline rather than guess.
                 _ => return ArgDispatchInfo::untyped(),
             };
-            let CallerScopeSymbol::Found(Some(base_ty_text)) =
-                caller_scope_symbol(base_name, routine, object_globals)
-            else {
-                // NotFound / Found(None) / MalformedDuplicate — includes the
-                // implicit-Rec-without-declared-var case (task brief):
-                // `caller_scope_symbol` never sees the implicit-Rec fallback.
-                return ArgDispatchInfo::untyped();
-            };
-            let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
-                return ArgDispatchInfo::untyped();
-            };
-            let table_id = match index.resolve_object_ref(
-                graph,
-                from.clone(),
-                ObjectKind::Table,
-                &table_ref,
-            ) {
-                ObjectRefResolution::Unique(id) => id,
-                ObjectRefResolution::Ambiguous
-                | ObjectRefResolution::OutOfClosure
-                | ObjectRefResolution::Unresolved => return ArgDispatchInfo::untyped(),
-            };
             let Some(from_object) = object_by_id(graph, from) else {
                 return ArgDispatchInfo::untyped();
+            };
+            let table_id = match caller_scope_symbol(base_name, routine, object_globals) {
+                CallerScopeSymbol::Found(Some(base_ty_text)) => {
+                    let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    match index.resolve_object_ref(
+                        graph,
+                        from.clone(),
+                        ObjectKind::Table,
+                        &table_ref,
+                    ) {
+                        ObjectRefResolution::Unique(id) => id,
+                        ObjectRefResolution::Ambiguous
+                        | ObjectRefResolution::OutOfClosure
+                        | ObjectRefResolution::Unresolved => return ArgDispatchInfo::untyped(),
+                    }
+                }
+                // S9.0e: an undeclared `Rec`/`xRec` is the object's implicit
+                // record, typed the way the receiver typer's Step 3b types it
+                // (Table, TableExtension, Page SourceTable, report dataitem).
+                CallerScopeSymbol::NotFound
+                    if matches!(base_name.fold_identifier().as_str(), "rec" | "xrec") =>
+                {
+                    match infer_implicit_rec(routine, from_object, graph, index) {
+                        ReceiverType::Record { table: Some(id) } => id,
+                        _ => return ArgDispatchInfo::untyped(),
+                    }
+                }
+                // Found(None) / NotFound / MalformedDuplicate.
+                _ => return ArgDispatchInfo::untyped(),
             };
             let field_lc = unquote_identifier(member).fold_identifier();
             if index.table_scope_has_routine(graph, from_object, &table_id, &field_lc) {
                 return ArgDispatchInfo::untyped();
             }
-            let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc) else {
-                return ArgDispatchInfo::untyped();
+            if let Some(field) = index.field_in_table(graph, from_object, &table_id, &field_lc) {
+                return ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(&field.type_text, from, graph, index),
+                    exact_text: Some(normalize_type_text(&field.type_text)),
+                    literal_kind: None,
+                    var_passable: true,
+                };
+            }
+            // S9.0e: not a field — a record built-in read without parens
+            // (`Rec.RecordId`, `Rec.SystemId`), typed by its return. Never
+            // var-passable: it is a call result, not a variable.
+            let keyword = match record_builtin_return_kind(&field_lc, true, 0)
+                .or_else(|| record_builtin_return_kind(&field_lc, false, 0))
+            {
+                Some(FrameworkKind::RecordId) => "recordid",
+                Some(FrameworkKind::Guid) => "guid",
+                Some(FrameworkKind::DateTime) => "datetime",
+                Some(FrameworkKind::Text) => "text",
+                _ => return ArgDispatchInfo::untyped(),
             };
             ArgDispatchInfo {
-                canonical: dispatch_canonical_type_text(&field.type_text, from, graph, index),
-                exact_text: Some(normalize_type_text(&field.type_text)),
+                canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+                exact_text: Some(keyword.to_string()),
                 literal_kind: None,
-                var_passable: true,
+                var_passable: false,
             }
         }
         // Call-result arg (T3, pageext-merge-and-final-residual plan): `Foo
@@ -3032,6 +3060,48 @@ codeunit 50100 "C"
         );
     }
 
+    /// S9.0e: `Foo(Rec.RecordId)` — `RecordId` is no field of the table, so
+    /// the arg types as the record built-in's return (`RecordId`), never
+    /// var-passable (a call result). CDO's `RaiseActionError(.., Rec.RecordId,
+    /// ..)` overloads differ exactly there.
+    #[test]
+    fn type_one_arg_member_record_builtin_types_its_return() {
+        let src = r#"
+codeunit 50100 "C"
+{
+    procedure Run()
+    var
+        Rec: Record Customer;
+    begin
+        Foo(Rec.RecordId);
+    end;
+}
+"#;
+        let (file, args, with_state) = parse_call_args(src, "Foo");
+        let (graph, from_id) = build_member_arg_graph("blob", "Blob");
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &[]);
+        let mut routine = empty_routine();
+        routine.locals.push(var("Rec", "Record Customer"));
+
+        let info = type_one_arg(
+            &file,
+            file.ir.expr(args[0]),
+            &routine,
+            &[],
+            &from_id,
+            &graph,
+            &index,
+            &surface,
+            with_state,
+        );
+        assert_eq!(
+            info.canonical,
+            Some(CanonicalArgType::Base("recordid".to_string()))
+        );
+        assert!(!info.var_passable, "a built-in's result is no variable");
+    }
+
     /// POSITIVE: `Foo(X."Quoted Field")` — the quoted-field spelling resolves
     /// identically to the unquoted one.
     #[test]
@@ -3075,10 +3145,9 @@ codeunit 50100 "C"
         );
     }
 
-    /// NEGATIVE: an implicit `Rec` with NO declared var in scope declines —
-    /// this arm deliberately does NOT use `receiver.rs`'s Step 3b implicit-Rec
-    /// identity fallback (task brief: "implicit-Rec-without-declared-var
-    /// base" is an explicit decline).
+    /// NEGATIVE: an undeclared `Rec` in a codeunit with no `TableNo` declines
+    /// — the object has no implicit record (`receiver.rs`'s Step 3b yields no
+    /// table), so there is nothing to type it against.
     #[test]
     fn type_one_arg_member_field_implicit_rec_without_declared_var_declines() {
         let src = r#"
@@ -3110,6 +3179,49 @@ codeunit 50100 "C"
         assert_eq!(
             info.canonical, None,
             "an implicit Rec with no DECLARED var in scope must decline"
+        );
+    }
+
+    /// S9.0e POSITIVE: inside a table's own procedure an undeclared `Rec` is
+    /// the table itself (Step 3b), so `Foo(Rec.Blob)` types via the field.
+    #[test]
+    fn type_one_arg_member_field_implicit_rec_of_a_table_resolves() {
+        let src = r#"
+codeunit 50100 "C"
+{
+    procedure Run()
+    begin
+        Foo(Rec.Blob);
+    end;
+}
+"#;
+        let (file, args, with_state) = parse_call_args(src, "Foo");
+        let (graph, _caller) = build_member_arg_graph("blob", "Blob");
+        let table_id = graph
+            .objects
+            .iter()
+            .find(|o| o.id.kind == al_syntax::ir::ObjectKind::Table)
+            .expect("fixture table")
+            .id
+            .clone();
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &[]);
+        let routine = empty_routine(); // no `Rec` declared: the implicit one
+
+        let info = type_one_arg(
+            &file,
+            file.ir.expr(args[0]),
+            &routine,
+            &[],
+            &table_id,
+            &graph,
+            &index,
+            &surface,
+            with_state,
+        );
+        assert_eq!(
+            info.canonical,
+            Some(CanonicalArgType::Base("blob".to_string()))
         );
     }
 
