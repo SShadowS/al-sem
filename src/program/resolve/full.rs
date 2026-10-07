@@ -3016,6 +3016,43 @@ mod tests {
         }
     }
 
+    /// S9.0e: a namespace-qualified enum type name types as the enum type,
+    /// with or without `Enum::`; a name that is no enum stays Unknown.
+    #[test]
+    fn namespace_qualified_enum_type_receivers_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("E.al"),
+            "namespace Microsoft.Foo;\n\nenum 50000 \"X Type\"\n{\n    value(0; A) { }\n}\n",
+        )
+        .expect("write E.al");
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    var\n        E: Enum Microsoft.Foo.\"X Type\";\n    begin\n\
+             E := Microsoft.Foo.\"X Type\".FromInteger(0);\n\
+             E := Enum::Microsoft.Foo.\"X Type\".FromInteger(0);\n\
+             E := Microsoft.Foo.\"No Such\".FromInteger(0);\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let in_p = || report.edges.iter().filter(|ce| ce.edge.from.name_lc == "p");
+        let first = in_p()
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        let unknown: Vec<u32> = in_p()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        assert_eq!(unknown, vec![first + 2]);
+    }
+
     /// S9.0e: an unpicked overload set types its chain when every candidate
     /// returns the same type (`Regex.Replace(..).Split(..)`); different return
     /// types decline.

@@ -1591,23 +1591,7 @@ fn infer_receiver_type_for_expr(
                 // (unlike a declared var's type text, which the AL compiler
                 // itself already validated), so a typo'd/renamed enum name
                 // must decline here, never be trusted blind.
-                let name_raw = unquote_identifier(value);
-                let name_lc = name_raw.fold_identifier();
-                let object_ref = ObjectRef::Name {
-                    raw: name_raw,
-                    normalized_lc: name_lc.clone(),
-                };
-                return match index.resolve_object_ref(
-                    graph,
-                    from_object.id.clone(),
-                    ObjectKind::Enum,
-                    &object_ref,
-                ) {
-                    ObjectRefResolution::Unique(_) => ReceiverType::EnumTypeStatic { name_lc },
-                    ObjectRefResolution::Ambiguous
-                    | ObjectRefResolution::OutOfClosure
-                    | ObjectRefResolution::Unresolved => ReceiverType::Unknown,
-                };
+                return enum_type_static_by_name(value, from_object, graph, index);
             }
             // Any other `X::Value` shape: verify `enum_type` ACTUALLY types
             // Enum before accepting VALUE-instance dispatch (see this arm's
@@ -1856,6 +1840,26 @@ fn infer_compound_member_receiver(
         index,
         bare_ctx,
     );
+
+    // A namespace-qualified enum type (S9.0e): in
+    // `Microsoft.Foundation.Enums."Supply Document Type".FromInteger(..)` the
+    // base is a dotted path of two or more plain names that types to nothing
+    // (no symbol, singleton or object owns its root), so it is a namespace and
+    // the member names the type. Only a unique Enum is accepted; anything else
+    // falls through unchanged.
+    if !is_method
+        && base_ty == ReceiverType::Unknown
+        && let Some((len, root)) = namespace_path(file, object_expr_id)
+        && len >= 2
+        && matches!(
+            caller_scope_symbol(root, routine, object_globals),
+            CallerScopeSymbol::NotFound
+        )
+        && let enum_ty @ ReceiverType::EnumTypeStatic { .. } =
+            enum_type_static_by_name(member, from_object, graph, index)
+    {
+        return enum_ty;
+    }
 
     // Any member of a .NET value is a .NET value (or a primitive the platform
     // converts): a leaf with no AL routine behind it (S9.0e).
@@ -2350,6 +2354,52 @@ fn is_this_identifier(file: &AlFile, expr_id: ExprId) -> bool {
 /// type) is handled by the caller ([`infer_compound_member_receiver`]),
 /// which declines before ever reaching here — this function is reached only
 /// for the property form.
+/// The enum TYPE named `name` (quoted or not), fail-closed: a unique Enum in
+/// `from_object`'s closure, else `Unknown`.
+fn enum_type_static_by_name(
+    name: &str,
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ReceiverType {
+    let name_raw = unquote_identifier(name);
+    let name_lc = name_raw.fold_identifier();
+    let object_ref = ObjectRef::Name {
+        raw: name_raw,
+        normalized_lc: name_lc.clone(),
+    };
+    match index.resolve_object_ref(graph, from_object.id.clone(), ObjectKind::Enum, &object_ref) {
+        ObjectRefResolution::Unique(_) => ReceiverType::EnumTypeStatic { name_lc },
+        ObjectRefResolution::Ambiguous
+        | ObjectRefResolution::OutOfClosure
+        | ObjectRefResolution::Unresolved => ReceiverType::Unknown,
+    }
+}
+
+/// The number of segments when `expr_id` is a dotted path of plain unquoted
+/// names (`Microsoft.Foundation.Enums`), with its root name. The grammar parses
+/// `Enum::Microsoft.Manufacturing.Document."X"` as member hops on
+/// `Enum::Microsoft`, so that root counts as a segment too. `None` for any
+/// other shape (a call, a quoted segment, `this`).
+fn namespace_path(file: &AlFile, expr_id: ExprId) -> Option<(usize, &str)> {
+    match &file.ir.expr(expr_id).kind {
+        ExprKind::Identifier(n) if !n.eq_ignore_ascii_case("this") => Some((1, n.as_str())),
+        ExprKind::QualifiedEnum { enum_type, value }
+            if matches!(
+                &file.ir.expr(*enum_type).kind,
+                ExprKind::Identifier(k) if k.eq_ignore_ascii_case("enum")
+            ) =>
+        {
+            Some((1, value.as_str()))
+        }
+        ExprKind::Member { object, member, .. } if !member.starts_with('"') => {
+            let (len, root) = namespace_path(file, *object)?;
+            Some((len + 1, root))
+        }
+        _ => None,
+    }
+}
+
 /// The declared collection type text of `expr_id` (S9.0e), for reading a
 /// `List`/`Dictionary` element type that [`ReceiverType::Framework`] does not
 /// carry. Covers a declared var (outside any `with`), `this.Global`,

@@ -1071,6 +1071,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A namespace-qualified enum type name types as the enum** (engine-switch
+  S9.0e). CDO's dependency-body unknown edges 12 -> 10; workspace metrics
+  unchanged. `Microsoft.Foundation.Enums."Supply Document Type".FromInteger(..)`
+  stayed `compoundReceiver`. The grammar parses
+  `Enum::Microsoft.Manufacturing.Document."X"` as member hops on
+  `Enum::Microsoft`, so it stayed `compoundReceiver` too. When a member's base
+  is a dotted path of two or more plain names, the base types to nothing, and
+  its root is no declared symbol, the path is a namespace. A unique Enum named
+  by the member is then the enum type. Anything else falls through unchanged,
+  so a real chain such as `CurrPage.Lines.Page` is never touched. Test
+  `namespace_qualified_enum_type_receivers_resolve` (both spellings, plus a
+  non-enum that stays Unknown); disabling the rule fails it.
 - **`ErrorInfo` getters and same-return overload sets type their chain**
   (engine-switch S9.0e). CDO's dependency-body unknown edges 14 -> 12;
   workspace metrics unchanged.
