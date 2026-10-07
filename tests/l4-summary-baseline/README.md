@@ -179,3 +179,15 @@ CDO_WS=<path> REGEN_TEMP_GOLDENS=1 cargo test -p al-call-hierarchy --test l4_sum
 Regen is a **measurement**, never a blind bless — inspect the diff and
 root-cause any movement before committing (the old solver is at the
 `l4-pre-jacobi-deletion` tag, `f295ef8`, for re-differencing).
+
+## Re-freeze log
+
+- **2026-10-07, engine-switch S8 gap 1** (`408926b3`, a table method's `Rec` follows its
+  receiver's temp state). `90d246d6…` -> `c771d616…`. Measured by dumping the canonical
+  serialization at `f221d190` (matches the old digest) and at the branch head. 334 of 5479
+  routines moved; no routine was added or removed; every moved effect was `|f`
+  (Known(false)) on an operation inside a table method. They are now
+  `|p4294967295` (the method's own `Rec`, the receiver index), `|t` (a temporary
+  receiver), `|pN` (the caller's own `var` parameter is the receiver), or `|u` (8, a
+  receiver that is not a declared record variable). The event-edge substitution
+  (`239a157d`) moved nothing here.

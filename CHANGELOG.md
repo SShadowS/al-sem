@@ -1132,7 +1132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PCallSite::source_temp_state_for`: the L4 solver, the capability cone,
   d1's temp and liveness passes and `path_temp_resolve`. Table triggers keep
   `Known(false)`: the platform invokes them, and no call site carries their
-  receiver. A `var` parameter that is written, or forwarded once more, was
+  receiver. The CDO whole-program L4 digest
+  (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`) is re-frozen for
+  this change: 334 of 5479 routines move, all of them effects inside table
+  methods that were `Known(false)` (log in that directory's README). A `var` parameter that is written, or forwarded once more, was
   already substituted correctly. Pinned by
   `a_dependency_write_to_a_temporary_argument_is_not_physical`, with a
   discrimination proof.
