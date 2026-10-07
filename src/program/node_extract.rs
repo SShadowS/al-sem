@@ -143,6 +143,9 @@ pub struct ObjectNode {
     /// `receiver::resolve_dataitem_source_table` (Step 2b's dataitem-NAME
     /// receiver lookup, and the report implicit-Rec fallback).
     pub dataitems: Vec<DataitemNode>,
+    /// The object's `protected var` globals as `(name lowercased, declared type
+    /// text)`, document order: what an extension of it can read (S9.0e).
+    pub protected_vars: Vec<(String, String)>,
     /// `true` when the OWNING FILE's parse hit tree-sitter error recovery
     /// (`AlFile::parse_status == ParseStatus::Recovered` — receiver-closure
     /// plan, Task 1). File-level, not object- or routine-level: a `#if`
@@ -661,6 +664,14 @@ pub fn extract_nodes(
             page_controls,
             fields,
             dataitems,
+            protected_vars: obj
+                .protected_globals
+                .iter()
+                .filter_map(|name| {
+                    let g = obj.globals.iter().find(|g| g.name == *name)?;
+                    Some((name.fold_identifier(), g.ty.clone()?))
+                })
+                .collect(),
             parse_incomplete: file.parse_status != ParseStatus::Clean,
         });
         // Computed once per object — same value for every routine in the object.
@@ -820,6 +831,7 @@ pub(crate) mod test_fixtures {
                 name: "Customer".to_string(),
                 source_table: ObjectRef::Id(18),
             }],
+            protected_vars: vec![("item".to_string(), "Record Item".to_string())],
             parse_incomplete: true,
         }
     }

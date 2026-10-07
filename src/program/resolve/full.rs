@@ -2652,6 +2652,115 @@ mod tests {
         assert_eq!(got, want);
     }
 
+    /// S9.0e: `X[i].M()` on a declared `array[..] of T` types the receiver as `T`
+    /// (untrackedReceiver before; 368 sites in CDO's dependency bodies).
+    #[test]
+    fn array_element_receiver_types_by_the_element_type() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50002 D
+{
+    procedure Flag()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    var
+        G: array[2, 3] of Codeunit D;
+             procedure P()
+    var
+        M: array[2] of Codeunit D;
+        T: array[2] of Text[30];
+    begin
+             M[1].Flag();
+        G[1, 2].Flag();
+        T[1].ToUpper();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<String> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| ce.edge.routes.iter())
+            .map(|r| match &r.target {
+                RouteTarget::Routine(id) => id.name_lc.clone(),
+                RouteTarget::Builtin(b) => b.0.clone(),
+                _ => format!("{:?}", r.evidence.kind()),
+            })
+            .collect();
+        got.sort();
+        assert_eq!(got, vec!["Text::toupper", "flag", "flag"]);
+    }
+
+    /// S9.0e: an extension reads its base object's `protected var` globals
+    /// (untrackedReceiver before; e.g. Base Application's
+    /// `AsmRequisitionLine.TableExt.al` on `Requisition Line`'s `Item`). A plain
+    /// `var` of the base stays invisible.
+    #[test]
+    fn extension_reads_the_base_objects_protected_vars() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50002 Mgt
+{
+    procedure Calc()
+    begin
+    end;
+}
+             table 50001 T
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+             var
+        Hidden: Codeunit Mgt;
+
+    protected var
+        Other: Record T;
+        M: Codeunit Mgt;
+}
+             tableextension 50003 TX extends T
+{
+    procedure P()
+    begin
+             Other.Get('x');
+        M.Calc();
+        Hidden.Calc();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.site.span.start.line, to)
+                })
+            })
+            .collect();
+        got.sort();
+        let to: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(to, vec!["Record::get", "calc", "Unknown"], "{got:?}");
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

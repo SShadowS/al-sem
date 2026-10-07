@@ -13,6 +13,10 @@ pub struct ObjectDecl {
     pub name: String,
     pub routines: Vec<RoutineDecl>,
     pub globals: Vec<VarDecl>,
+    /// The names (unquoted, as written) of the [`Self::globals`] declared in a
+    /// `protected var` section, document order: an extension of this object can
+    /// read them.
+    pub protected_globals: Vec<String>,
     /// Object-level properties (`SourceTable`, `TableNo`, `PageType`, …) in source
     /// order. Needed by the engine to seed implicit-`Rec` table resolution and object
     /// classification; the value is the raw value text (trimmed).

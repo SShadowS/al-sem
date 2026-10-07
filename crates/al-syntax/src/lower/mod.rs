@@ -75,7 +75,12 @@ fn collect_objects(
     out: &mut Vec<ObjectDecl>,
 ) {
     for child in node.named_children() {
-        match object_kind_of(child.kind()) {
+        let kind = if child.kind() == RawKind::PreprocSplitDeclaration {
+            Some(split_declaration_kind(child))
+        } else {
+            object_kind_of(child.kind())
+        };
+        match kind {
             Some(kind) => out.push(lower_object(child, kind, source, ir, issues)),
             None => {
                 // Descend containers that may hold objects (namespace, preproc).
@@ -133,10 +138,43 @@ fn structural_children(node: RawNode) -> Vec<RawNode> {
         .collect()
 }
 
+/// The kind of a header split across `#if` arms (`preproc_split_declaration`): its
+/// FIRST header's object keyword, the first-branch-wins policy its name and id
+/// already follow. It can split any object kind; it used to be lowered as a
+/// Codeunit whatever it was (S9.0e: an `enum` in System Application).
+fn split_declaration_kind(node: RawNode) -> ObjectKind {
+    use ObjectKind as O;
+    node.named_children()
+        .into_iter()
+        .find_map(|c| {
+            Some(match c.kind() {
+                RawKind::CodeunitKeyword => O::Codeunit,
+                RawKind::EnumKeyword => O::Enum,
+                RawKind::TableKeyword => O::Table,
+                RawKind::PageKeyword => O::Page,
+                RawKind::ReportKeyword => O::Report,
+                RawKind::QueryKeyword => O::Query,
+                RawKind::XmlportKeyword => O::XmlPort,
+                RawKind::PermissionsetKeyword => O::PermissionSet,
+                RawKind::TableextensionKeyword => O::TableExtension,
+                RawKind::PageextensionKeyword => O::PageExtension,
+                RawKind::ReportextensionKeyword => O::ReportExtension,
+                RawKind::EnumextensionKeyword => O::EnumExtension,
+                RawKind::PermissionsetextensionKeyword => O::PermissionSetExtension,
+                RawKind::InterfaceKeyword => O::Interface,
+                _ => return None,
+            })
+        })
+        .unwrap_or(O::Other)
+}
+
 fn object_kind_of(k: RawKind) -> Option<ObjectKind> {
     use ObjectKind as O;
     Some(match k {
-        RawKind::CodeunitDeclaration | RawKind::PreprocSplitDeclaration => O::Codeunit,
+        RawKind::CodeunitDeclaration => O::Codeunit,
+        // Its kind is its header's (`split_declaration_kind`); `Other` here only
+        // keeps it an object for `enclosing_member` detection.
+        RawKind::PreprocSplitDeclaration => O::Other,
         RawKind::TableDeclaration => O::Table,
         RawKind::TableextensionDeclaration => O::TableExtension,
         RawKind::PageDeclaration => O::Page,
@@ -247,9 +285,11 @@ fn lower_object(
     // function's doc for the union-read + program-layer-degrade contract).
     let mut globals = Vec::new();
     let mut properties = Vec::new();
+    let mut protected_globals = Vec::new();
     if let Some(body) = node.field(FieldName::Body) {
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
+            collect_protected_names(member, source, &mut protected_globals);
             collect_properties(member, source, &mut properties);
         }
     }
@@ -260,6 +300,7 @@ fn lower_object(
         name,
         routines,
         globals,
+        protected_globals,
         properties,
         dataitems,
         extends_target,
@@ -764,6 +805,30 @@ fn dataitem_table_name(node: RawNode, source: &str) -> Option<String> {
     node.field(FieldName::TableName)
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty())
+}
+
+/// The names of the globals declared in a `protected var` section, descending
+/// preproc wrappers like [`collect_globals`]. An extension of the object can read
+/// them (AL "protected variables").
+fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
+    match node.kind() {
+        RawKind::VarSection
+            if node
+                .named_children()
+                .iter()
+                .any(|c| c.kind() == RawKind::ProtectedKeyword) =>
+        {
+            let mut decls = Vec::new();
+            extract_var_section(node, source, &mut decls);
+            out.extend(decls.into_iter().map(|d| d.name));
+        }
+        _ if is_preproc_wrapper(node) => {
+            for c in node.named_children() {
+                collect_protected_names(c, source, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Collect object-level var declarations, descending preproc wrappers (both
@@ -2231,6 +2296,52 @@ mod tests {
             }
         }
         panic!("no Case statement lowered");
+    }
+
+    /// S9.0e: a header split across `#if` arms takes its first header's kind
+    /// (System Application's `enum 8889 "Email Connector"` was lowered as a
+    /// Codeunit).
+    #[test]
+    fn split_declaration_takes_its_headers_kind() {
+        let src = "#if not CLEAN26
+enum 8889 \"Email Connector\" implements \"A\", \"B\"
+#else
+enum 8889 \"Email Connector\" implements \"A\"
+#endif
+{
+    Extensible = true;
+    value(0; X) { }
+}
+                   #if not CLEAN27
+table 50000 \"T One\"
+#else
+table 50000 \"T Two\"
+#endif
+{
+    fields { field(1; A; Integer) { } }
+}
+";
+        let af = parse(src);
+        let kinds: Vec<_> = af
+            .objects
+            .iter()
+            .map(|o| (o.kind, o.id, o.name.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    crate::ir::ObjectKind::Enum,
+                    Some(8889),
+                    "Email Connector".to_string()
+                ),
+                (
+                    crate::ir::ObjectKind::Table,
+                    Some(50000),
+                    "T One".to_string()
+                ),
+            ]
+        );
     }
 
     /// S9.0e: an XmlPort `tableelement(Name; Table)` is collected like a report

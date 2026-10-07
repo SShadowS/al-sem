@@ -1071,6 +1071,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency bodies: the rest of untrackedReceiver** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 1,790 -> 1,273 (untrackedReceiver 483 -> 3,
+  memberNotFound 28 -> 6); workspace metrics unchanged.
+  - `X[i].M()` on a declared `array[..] of T` types the receiver as `T` (368 sites).
+  - **Protected variables.** A table, page or report extension reads its base
+    object's `protected var` globals. The lowerer records them
+    (`ObjectDecl.protected_globals`), `ObjectNode.protected_vars` carries them across
+    files (pack schema 3 -> 4), and receiver Step 2c looks them up after the
+    extension's own scope. Record ops on them are still classified as plain member
+    calls, in both the program and the body walk (consistent; trigger edges for
+    `ProtectedRec.Modify(true)` are a known gap).
+  - **The enum-name collision rule is gone.** Step 4b declined `"X".FromInteger(...)`
+    when any non-enum object shared the name. The AL compiler (alc 18.0.41.45789)
+    binds the bare name to the enum: with a table, enum and codeunit all named
+    `"Dup Name"`, `"Dup Name".FromInteger(1)` compiles and `"Dup Name".Ping()` fails
+    with `AL0132: 'Enum "Dup Name"' does not contain a definition for 'Ping'`. The old
+    test of the rule passed no with-context, so it never reached the rule; it is now a
+    positive test.
+  - `CurrQuery` (query instance) and a report's `RequestOptionsPage` (MS Learn's
+    RequestPage methods) are singletons.
+  - **Lowerer: a header split across `#if` arms keeps its object kind.**
+    `preproc_split_declaration` can split any object header but was always lowered
+    as a Codeunit (System Application's `enum 8889 "Email Connector"`). It now takes
+    its first header's keyword.
+  - **Interface implementers are codeunits.** The implementer index took every object
+    with an `implements` clause, including enums (whose values map to codeunits that
+    declare the interface themselves), and listed an object once per `#if` arm of a
+    split header. Both corrected.
+
 - **Dependency bodies: XmlPort and `ProductName`** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 2,933 -> 1,790 (untrackedReceiver 1,527 -> 483,
   memberNotFound 123 -> 28); workspace metrics unchanged.

@@ -296,6 +296,13 @@ static VERSION: phf::Set<&'static str> = phf_set! {
     "build", "create", "major", "minor", "revision", "totext"
 };
 
+/// A report's `RequestOptionsPage`: MS Learn `requestpage-data-type`, "Instance
+/// methods" (S9.0e).
+static REQUEST_PAGE: phf::Set<&'static str> = phf_set! {
+    "activate", "caption", "close", "editable", "lookupmode", "objectid", "saverecord",
+    "setselectionfilter", "update"
+};
+
 /// `ProductName` static methods: MS Learn `productname-data-type` (S9.0e).
 static PRODUCTNAME: phf::Set<&'static str> = phf_set! {
     "full", "marketing", "short"
@@ -525,6 +532,7 @@ fn framework_lookup(fk: &FrameworkKind, method_lc: &str) -> bool {
         FrameworkKind::PageInstance => PAGE_INSTANCE.contains(method_lc),
         FrameworkKind::ReportInstance => REPORT_INSTANCE.contains(method_lc),
         FrameworkKind::XmlPortInstance => XMLPORT_INSTANCE.contains(method_lc),
+        FrameworkKind::RequestPage => REQUEST_PAGE.contains(method_lc),
         FrameworkKind::QueryInstance => QUERY_INSTANCE.contains(method_lc),
         FrameworkKind::Session => SESSION.contains(method_lc),
         FrameworkKind::NavApp => NAVAPP.contains(method_lc),

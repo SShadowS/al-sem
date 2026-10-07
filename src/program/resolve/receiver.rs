@@ -242,6 +242,8 @@ pub enum FrameworkKind {
     ReportInstance,
     /// `currXMLport` / an `XmlPort "X"` variable (S9.0e).
     XmlPortInstance,
+    /// A report's `RequestOptionsPage` (S9.0e).
+    RequestPage,
     // Query instance (from a variable's DECLARED type — `V: Query "Name"`),
     // never a receiver name. Unlike Page/Report there is no `CurrQuery`
     // singleton; the `Query.SaveAsXml(...)` STATIC form is a separate surface
@@ -838,6 +840,17 @@ pub fn infer_receiver_type(
     }
 
     // -----------------------------------------------------------------------
+    // Step 2c — a base object's `protected var` globals (S9.0e). A table, page
+    // or report extension reads its base object's protected variables as if
+    // they were its own globals (AL "protected variables"). Reached only on a
+    // Step 2 miss: the extension's own scope comes first.
+    // -----------------------------------------------------------------------
+
+    if let Some(ty) = base_protected_var_type(&lookup_lc, from_object, graph, index) {
+        return parsed_type_to_receiver(classify_type_text(&ty), from_object, graph, index);
+    }
+
+    // -----------------------------------------------------------------------
     // Step 2b — report DATAITEM-NAME receiver (dataitem-receivers plan, Task
     // 1). Reached ONLY on a Step 2 miss — a var/param/global of the same name
     // ALWAYS shadows a dataitem (AL scoping; mirrors L2's `report_dataitem_
@@ -1077,6 +1090,8 @@ pub fn infer_receiver_type(
         "currpage" | "page" => Some(FrameworkKind::PageInstance),
         "currreport" | "report" => Some(FrameworkKind::ReportInstance),
         "currxmlport" => Some(FrameworkKind::XmlPortInstance),
+        "currquery" => Some(FrameworkKind::QueryInstance),
+        "requestoptionspage" => Some(FrameworkKind::RequestPage),
         "session" => Some(FrameworkKind::Session),
         "navapp" => Some(FrameworkKind::NavApp),
         "database" => Some(FrameworkKind::Database),
@@ -1155,13 +1170,14 @@ pub fn infer_receiver_type(
     //    dependency closure (`ResolveIndex::resolve_object_ref`, the SAME
     //    fail-closed primitive `infer_receiver_type_for_expr`'s `Enum::"Type"`
     //    arm uses).
-    // 2. Zero objects of ANY OTHER kind share the identical normalized name,
-    //    ANYWHERE in the whole graph (`enum_type_name_collision_free` —
-    //    deliberately NOT closure-scoped, per the round-2 closer's literal
-    //    "over the whole object index": a same-name Table in an unrelated app
-    //    is still a real naming collision this engine has no compiler-level
-    //    disambiguation for, so it must decline rather than assume the Enum
-    //    reading).
+    // 2. (REMOVED 2026-10-07, S9.0e.) A same-named object of another kind
+    //    used to decline. The AL compiler (alc 18.0.41.45789) proves it does
+    //    not: with a table, an enum AND a codeunit all named "Dup Name",
+    //    `"Dup Name".FromInteger(1)` / `.Ordinals()` compile, and
+    //    `"Dup Name".Ping()` / `.Get('x')` fail with `AL0132: 'Enum "Dup Name"'
+    //    does not contain a definition`. A bare object name is a value only as
+    //    an enum type, so the name binds to the enum. The rule declined real
+    //    Base/System Application code (`"Tenant License State".FromInteger`).
     // 3. No same-named routine reachable via a parens-less bare call
     //    (`object_scope_has_bare_routine_shadow` — mirrors Step 3a's
     //    `table_scope_has_routine` precedent, generalized to every object
@@ -1195,7 +1211,6 @@ pub fn infer_receiver_type(
         };
         if let ObjectRefResolution::Unique(_) =
             index.resolve_object_ref(graph, from_object.id.clone(), ObjectKind::Enum, &object_ref)
-            && enum_type_name_collision_free(&name_lc, graph)
             && !object_scope_has_bare_routine_shadow(from_object, &name_lc, graph, index)
         {
             return ReceiverType::EnumTypeStatic { name_lc };
@@ -1269,23 +1284,6 @@ pub fn infer_receiver_type(
     ReceiverType::Unknown
 }
 
-/// The programmatic Enum collision rule (Task 4, receiver-closure-and-arg-
-/// increments plan, round-2 closer — BINDING: `same_normalized_name &&
-/// object_kind != Enum` over the WHOLE object index, never a hardcoded kind
-/// subset). Returns `true` when NO object of any non-`Enum` kind anywhere in
-/// `graph.objects` shares `name_lc` — i.e. it is safe to interpret a bare
-/// name as the enum TYPE reference. Deliberately whole-graph, not
-/// closure-scoped: a same-name Table in an app `from_object` doesn't even
-/// depend on is still a genuine naming collision this engine cannot resolve
-/// the real AL compiler's disambiguation for, so it must decline rather than
-/// assume the Enum reading.
-fn enum_type_name_collision_free(name_lc: &str, graph: &ProgramGraph) -> bool {
-    !graph
-        .objects
-        .iter()
-        .any(|o| o.id.kind != ObjectKind::Enum && o.name.eq_fold_identifier(name_lc))
-}
-
 /// Whether a same-named ROUTINE is reachable from `from_object` via a
 /// parens-less bare call — the routine-shadow half of Step 4b's gate. A bare
 /// enum-type-name receiver is syntactically identical to a parens-less call
@@ -1322,6 +1320,50 @@ fn object_scope_has_bare_routine_shadow(
             .next()
             .is_some(),
     }
+}
+
+/// The declared type of `name_lc` among the `protected var` globals of the object
+/// `from_object` extends (Step 2c). `None` when `from_object` is not an extension,
+/// its base does not resolve uniquely in its closure, or the base declares no such
+/// protected variable.
+fn base_protected_var_type(
+    name_lc: &str,
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<String> {
+    let base_kind = from_object.id.kind.extension_base_kind()?;
+    let extends = from_object.extends_target.as_deref()?;
+    let base_ref = ObjectRef::Name {
+        raw: extends.to_string(),
+        normalized_lc: extends.fold_identifier(),
+    };
+    let ObjectRefResolution::Unique(base_id) =
+        index.resolve_object_ref(graph, from_object.id.clone(), base_kind, &base_ref)
+    else {
+        return None;
+    };
+    object_by_id(graph, &base_id)?
+        .protected_vars
+        .iter()
+        .find(|(n, _)| n == name_lc)
+        .map(|(_, ty)| ty.clone())
+}
+
+/// The element type of an `array[N, ...] of T` type text: `T`. `None` for any other
+/// type text.
+fn array_element_type(ty: &str) -> Option<&str> {
+    let t = ty.trim();
+    if !t.get(..5)?.eq_ignore_ascii_case("array") {
+        return None;
+    }
+    let close = t.find(']')?;
+    let rest = t[close + 1..].trim_start();
+    if !rest.get(..2)?.eq_ignore_ascii_case("of") {
+        return None;
+    }
+    let element = rest[2..].trim();
+    (!element.is_empty() && rest[2..].starts_with(char::is_whitespace)).then_some(element)
 }
 
 /// Step 6's AST-native entry point: type an arbitrary `Expr` node directly
@@ -1377,7 +1419,9 @@ fn object_scope_has_bare_routine_shadow(
 ///   `arity: args.len()`. A `Call` whose `function` is anything else (a bare
 ///   identifier call, i.e. the Step-5 shape already handled at the TOP level
 ///   only — not recursively here) declines.
-/// - Anything else (`Index`, `Literal`, `Binary`, …) — declines. Fail-closed by
+/// - `Index{base, ..}` — `X[i]` where `X` is a declared `array[..] of T`: a `T`
+///   (S9.0e, [`array_element_type`]).
+/// - Anything else (`Literal`, `Binary`, …) — declines. Fail-closed by
 ///   construction: every arm either delegates to more fail-closed logic or
 ///   returns `Unknown` directly.
 ///
@@ -1433,6 +1477,23 @@ fn infer_receiver_type_for_expr(
                 None,
                 None,
             )
+        }
+        // `X[i]` (S9.0e): an element of a declared `array[..] of T` variable is
+        // a `T`. The same scope lookup Step 2 uses (params, locals, globals).
+        ExprKind::Index { base, .. } => {
+            let base_lc = match &file.ir.expr(*base).kind {
+                ExprKind::Identifier(n) => n.fold_identifier(),
+                ExprKind::QuotedIdentifier(n) => format!("\"{}\"", n.fold_identifier()),
+                _ => return ReceiverType::Unknown,
+            };
+            match receiver_declared_type(&base_lc, routine, object_globals)
+                .and_then(array_element_type)
+            {
+                Some(element) => {
+                    parsed_type_to_receiver(classify_type_text(element), from_object, graph, index)
+                }
+                None => ReceiverType::Unknown,
+            }
         }
         ExprKind::Member { object, member, .. } => infer_compound_member_receiver(
             file,
@@ -3291,6 +3352,7 @@ mod tests {
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             };
 
@@ -3414,6 +3476,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }
     }
@@ -4348,7 +4411,22 @@ mod tests {
         assert_eq!(result, ReceiverType::Framework(FrameworkKind::Session));
     }
 
-    /// S9.0e: `ProductName` and `currXMLport` are platform singletons.
+    #[test]
+    fn array_element_type_parses_the_element() {
+        assert_eq!(
+            array_element_type("array[2] of Record \"Sales Line\""),
+            Some("Record \"Sales Line\"")
+        );
+        assert_eq!(
+            array_element_type("Array[2, 3] OF Codeunit X"),
+            Some("Codeunit X")
+        );
+        assert_eq!(array_element_type("Record Arrays"), None);
+        assert_eq!(array_element_type("array[2] ofText"), None);
+    }
+
+    /// S9.0e: `ProductName`, `currXMLport`, `CurrQuery` and a report's
+    /// `RequestOptionsPage` are platform singletons.
     #[test]
     fn infer_singleton_productname_and_currxmlport() {
         let (graph, app) = build_test_graph();
@@ -4364,6 +4442,14 @@ mod tests {
         assert_eq!(
             infer("currxmlport"),
             ReceiverType::Framework(FrameworkKind::XmlPortInstance)
+        );
+        assert_eq!(
+            infer("currquery"),
+            ReceiverType::Framework(FrameworkKind::QueryInstance)
+        );
+        assert_eq!(
+            infer("requestoptionspage"),
+            ReceiverType::Framework(FrameworkKind::RequestPage)
         );
     }
 
@@ -8058,14 +8144,11 @@ codeunit 50100 "C"
         );
     }
 
-    /// NEGATIVE (collision rule): a same-named TABLE exists elsewhere in the
-    /// whole object index — the programmatic collision rule
-    /// (`same_normalized_name && kind != Enum`) declines even though the Enum
-    /// itself resolves uniquely too. Proves the rule is whole-index, not
-    /// closure-scoped or kind-hardcoded — the colliding Table lives in a
-    /// DIFFERENT app that `from_object`'s app does not even depend on.
+    /// POSITIVE (S9.0e): a same-named TABLE does not block the enum reading. The
+    /// AL compiler binds a bare object name used as a receiver to the enum (see
+    /// Step 4b's gate, rule 2). The table lives in a different app here.
     #[test]
-    fn bare_enum_type_name_collision_with_other_kind_declines() {
+    fn bare_enum_type_name_resolves_despite_a_same_named_table() {
         let mut apps = crate::program::node::AppRegistry::default();
         let enum_app = apps.intern(&AppId {
             guid: String::new(),
@@ -8100,6 +8183,7 @@ codeunit 50100 "C"
         let routine = build_test_routine();
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
 
+        let surface = DeclSurface::build(&graph, &[]);
         let result = infer_receiver_type(
             "\"ambiguous name\"",
             &routine,
@@ -8108,9 +8192,14 @@ codeunit 50100 "C"
             &graph,
             &index,
             None,
-            None,
+            Some((&surface, WithState::NoWithProven)),
         );
-        assert_eq!(result, ReceiverType::Unknown);
+        assert_eq!(
+            result,
+            ReceiverType::EnumTypeStatic {
+                name_lc: "ambiguous name".to_string()
+            }
+        );
     }
 
     /// NEGATIVE (routine shadow): the SAME name is ALSO a declared procedure

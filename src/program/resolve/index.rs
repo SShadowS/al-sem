@@ -477,12 +477,18 @@ impl ResolveIndex {
                     .push(obj.id.clone());
             }
 
-            // Interface implementers.
-            for iface in &obj.implements {
-                implementers
-                    .entry(iface.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
+            // Interface implementers: codeunits only. An enum's `implements`
+            // maps its VALUES to implementing codeunits (which declare the
+            // interface themselves); the enum has no methods to dispatch to
+            // (S9.0e). A header split across `#if` arms lists an interface once
+            // per arm, so each object is recorded once per interface.
+            if obj.id.kind == ObjectKind::Codeunit {
+                for iface in &obj.implements {
+                    let list = implementers.entry(iface.fold_identifier()).or_default();
+                    if !list.contains(&obj.id) {
+                        list.push(obj.id.clone());
+                    }
+                }
             }
         }
 
@@ -1194,6 +1200,7 @@ mod tests {
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }
     }
@@ -2273,6 +2280,29 @@ mod tests {
         let impls = idx.implementers_of("ifoo");
         assert_eq!(impls.len(), 1, "expected exactly one implementer of IFoo");
         assert_eq!(impls[0].app, a);
+        assert_eq!(impls[0].kind, ObjectKind::Codeunit);
+    }
+
+    /// S9.0e: an enum that `implements` the interface is not a method
+    /// implementer, and a codeunit listing the interface twice (one per `#if`
+    /// arm of a split header) is one implementer.
+    #[test]
+    fn implementers_of_is_codeunits_once_each() {
+        let (mut graph, _a, _b) = build_fixture();
+        let cu = graph
+            .objects
+            .iter_mut()
+            .find(|o| o.implements.iter().any(|i| i.eq_ignore_ascii_case("ifoo")))
+            .expect("fixture implementer");
+        cu.implements.push("IFoo".to_string());
+        let mut en = cu.clone();
+        en.id.kind = ObjectKind::Enum;
+        en.name = "IFooEnum".to_string();
+        graph.objects.push(en);
+        let idx = ResolveIndex::build(&graph);
+
+        let impls = idx.implementers_of("ifoo");
+        assert_eq!(impls.len(), 1, "{impls:?}");
         assert_eq!(impls[0].kind, ObjectKind::Codeunit);
     }
 

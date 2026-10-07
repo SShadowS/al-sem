@@ -4275,6 +4275,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4290,6 +4291,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4437,6 +4439,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4452,6 +4455,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4626,6 +4630,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -4641,6 +4646,7 @@ pageextension 52911 "ExtA" extends BasePage
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -4996,6 +5002,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -5011,6 +5018,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -5223,6 +5231,7 @@ codeunit 50612 "MixedCU2"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         }];
 
@@ -5367,6 +5376,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -5382,6 +5392,7 @@ codeunit 50612 "MixedCU2"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -6185,6 +6196,7 @@ codeunit 50300 "OverloadCU"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         };
         (graph, index, surface, from_obj)
@@ -10379,6 +10391,7 @@ codeunit 50000 "Caller"
             page_controls: vec![],
             fields: vec![],
             dataitems: vec![],
+            protected_vars: Vec::new(),
             parse_incomplete: false,
         });
 
@@ -12657,6 +12670,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -12672,6 +12686,7 @@ codeunit 53971 "OverloadNCaller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -13037,6 +13052,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -13052,6 +13068,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];
@@ -13222,6 +13239,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
             ObjectNode {
@@ -13237,6 +13255,7 @@ codeunit 53975 "Overload3Caller"
                 page_controls: vec![],
                 fields: vec![],
                 dataitems: vec![],
+                protected_vars: Vec::new(),
                 parse_incomplete: false,
             },
         ];

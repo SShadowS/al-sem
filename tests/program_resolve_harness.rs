@@ -12083,7 +12083,9 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// 6315 on 2026-10-07 (pinned `bc3ccb18` baseline), of 431,248 edges. 2979 after
 /// the catalogMiss family (DotNet leaves, scalar `ToText`, report-dataitem bare
 /// fields, the split-`if` phantom call). 1790 after the XmlPort family (table
-/// elements, `currXMLport`, XmlPort runs) and `ProductName`.
+/// elements, `currXMLport`, XmlPort runs) and `ProductName`. 1273 after array
+/// elements, protected variables, the enum-name collision rule, `CurrQuery` /
+/// `RequestOptionsPage`, split-header object kinds and codeunit-only implementers.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12098,7 +12100,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 1790;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 1273;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
