@@ -1747,12 +1747,13 @@ pub enum FanOutSiteContext {
 /// `Rec.Rename(...)` call site whose target table has an `OnRename` trigger
 /// would silently drop context here, fall into `route_applicability`'s
 /// fail-closed branch, and wrongly count the trigger's route a VIOLATION
-/// (flagging a genuinely sound route as a false positive).
+/// (flagging a genuinely sound route as a false positive). S9.0c: the same
+/// for `ModifyAll`/`DeleteAll`, which fire `OnModify`/`OnDelete` per row.
 fn record_op_kind_for_method(op_lc: &str) -> Option<RecordOpKind> {
     match op_lc {
         "insert" => Some(RecordOpKind::Insert),
-        "modify" => Some(RecordOpKind::Modify),
-        "delete" => Some(RecordOpKind::Delete),
+        "modify" | "modifyall" => Some(RecordOpKind::Modify),
+        "delete" | "deleteall" => Some(RecordOpKind::Delete),
         "rename" => Some(RecordOpKind::Rename),
         "validate" => Some(RecordOpKind::Validate),
         _ => None,

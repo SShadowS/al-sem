@@ -298,8 +298,15 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
     for ws in cross_app_fixtures() {
         let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx, None)
-            .expect("program model");
+        let (new, _) = assemble_and_resolve_cross_app_from_program(
+            &ws,
+            MI,
+            false,
+            &ctx,
+            None,
+            &Default::default(),
+        )
+        .expect("program model");
         // Not degenerate: dependency rows are present, ABI and parsed alike on the
         // fixture that has both kinds.
         let primary = new.primary_app.clone().expect("primary app");

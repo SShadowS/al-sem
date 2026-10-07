@@ -111,7 +111,14 @@ pub(crate) struct FileResolution {
     pub indeterminate: Vec<IndeterminateBuiltinDispatchSite>,
     /// See [`ProgramReport::site_facts`].
     pub site_facts: Vec<(ObligationId, SiteFacts)>,
+    /// The parens-less value reads this file's resolution kept as calls.
+    pub parenless: Vec<al_syntax::ir::ExprId>,
 }
+
+/// The parens-less value reads (`X.M` / `M` without `()`) the resolver kept as
+/// calls, by owning app and file (`ParsedFile::virtual_path`). The body walk
+/// takes these as calls too, so its call sites match the program's edges.
+pub type ParenlessCalls = HashMap<(AppRef, String), HashSet<al_syntax::ir::ExprId>>;
 
 /// What the resolver knew about one call site beyond its edge, for the B3
 /// adapter (engine-switch S3.2 interfaces, S6.0 receivers). Only member call
@@ -264,6 +271,8 @@ pub struct ProgramReport {
     /// dispatched over (engine-switch S3.2) and its receiver (S6.0). The edge
     /// itself does not carry them; the B3 adapter needs them.
     pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// See [`ParenlessCalls`]: the workspace files' parens-less calls.
+    pub parenless_calls: ParenlessCalls,
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +745,7 @@ pub(crate) fn resolve_file_obligations(
     let mut flagged: Vec<FlaggedBuiltinDispatchSite> = Vec::new();
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
+    let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
@@ -773,7 +783,24 @@ pub(crate) fn resolve_file_obligations(
                 routine_idx,
             );
 
+            // A declared variable shadows a same-named procedure, so a bare
+            // parens-less read of one is a variable read, never a call.
+            let shadows: HashSet<String> = routine
+                .params
+                .iter()
+                .map(|p| p.name.fold_identifier())
+                .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
+                .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+                .chain(obj.globals.iter().map(|v| v.name.fold_identifier()))
+                .collect();
+
             for site in &sites {
+                if site.parenless
+                    && let CalleeShape::Bare { name } = &site.shape
+                    && shadows.contains(&name.fold_identifier())
+                {
+                    continue;
+                }
                 let fp = callee_fp(&site.callee_text);
                 let obl_id = ObligationId::CallSite {
                     caller: caller.clone(),
@@ -799,6 +826,25 @@ pub(crate) fn resolve_file_obligations(
                     &mut facts,
                     &pf.text,
                 );
+                // A parens-less value read is a call only when it reaches a
+                // routine; otherwise it is a variable, field or built-in read.
+                // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
+                // as the compiler's graph does; keep it if built-in reads matter.
+                if site.parenless
+                    && (kind != EdgeKind::Call
+                        || routes.is_empty()
+                        || !routes.iter().all(|r| {
+                            matches!(
+                                r.target,
+                                RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }
+                            )
+                        }))
+                {
+                    continue;
+                }
+                if site.parenless {
+                    parenless.push(site.expr);
+                }
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
                 }
@@ -846,6 +892,7 @@ pub(crate) fn resolve_file_obligations(
         flagged,
         indeterminate,
         site_facts,
+        parenless,
     }
 }
 
@@ -964,6 +1011,7 @@ fn resolve_full_program_from_parts(
     Coverage,
     BuiltinDispatchAudit,
     HashMap<ObligationId, SiteFacts>,
+    ParenlessCalls,
 ) {
     let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
@@ -1007,16 +1055,32 @@ fn resolve_full_program_from_parts(
         })
         .collect();
 
-    let file_results: Vec<FileResolution> = crate::big_stack::big_stack_pool().install(|| {
-        files_to_resolve
-            .par_iter()
-            .map(|pf| {
-                resolve_file_obligations(pf, primary_app_ref, graph, &index, surface, &obj_node_map)
-            })
-            .collect()
-    });
+    let file_results: Vec<(String, FileResolution)> =
+        crate::big_stack::big_stack_pool().install(|| {
+            files_to_resolve
+                .par_iter()
+                .map(|pf| {
+                    let r = resolve_file_obligations(
+                        pf,
+                        primary_app_ref,
+                        graph,
+                        &index,
+                        surface,
+                        &obj_node_map,
+                    );
+                    (pf.virtual_path.clone(), r)
+                })
+                .collect()
+        });
 
-    for file_res in file_results {
+    let mut parenless_calls = ParenlessCalls::new();
+    for (path, file_res) in file_results {
+        if !file_res.parenless.is_empty() {
+            parenless_calls.insert(
+                (primary_app_ref, path),
+                file_res.parenless.into_iter().collect(),
+            );
+        }
         // T3 Task 6: `resolve_file_obligations` no longer inserts into
         // `obligation_id_set` inline (it has no access to this whole-run
         // accumulator) — insert from the returned edges' obligation ids
@@ -1089,6 +1153,7 @@ fn resolve_full_program_from_parts(
         coverage,
         builtin_dispatch_audit,
         site_facts,
+        parenless_calls,
     )
 }
 
@@ -1140,13 +1205,14 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit, site_facts) = resolve_full_program_from_parts(
-        graph,
-        parsed,
-        &ctx.decl_surface(),
-        primary_app_ref,
-        ws_file_set,
-    );
+    let (edges, coverage, builtin_dispatch_audit, site_facts, parenless_calls) =
+        resolve_full_program_from_parts(
+            graph,
+            parsed,
+            &ctx.decl_surface(),
+            primary_app_ref,
+            ws_file_set,
+        );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
     // Collect references to all underlying Edge structs.
@@ -1195,6 +1261,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
         recovered_files,
         builtin_dispatch_audit,
         site_facts,
+        parenless_calls,
     }
 }
 
@@ -1210,13 +1277,14 @@ pub fn resolve_full_program_for_export(
     workspace_root: &Path,
 ) -> Option<(ProgramGraph, Vec<ClassifiedEdge>, AppRef)> {
     let ctx = build_context(workspace_root)?;
-    let (edges, _coverage, _builtin_dispatch_audit, _site_facts) = resolve_full_program_from_parts(
-        &ctx.graph,
-        &ctx.parsed,
-        &ctx.decl_surface(),
-        ctx.primary_app_ref,
-        &ctx.ws_file_set,
-    );
+    let (edges, _coverage, _builtin_dispatch_audit, _site_facts, _parenless) =
+        resolve_full_program_from_parts(
+            &ctx.graph,
+            &ctx.parsed,
+            &ctx.decl_surface(),
+            ctx.primary_app_ref,
+            &ctx.ws_file_set,
+        );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
 
@@ -1409,9 +1477,15 @@ impl ProgramContext {
                 .collect()
         });
         let mut out = DependencyBodyResolution::default();
-        for r in results {
+        for ((app, pf), r) in files.iter().zip(results) {
             out.edges.extend(r.edges);
             out.site_facts.extend(r.site_facts);
+            if !r.parenless.is_empty() {
+                out.parenless_calls.insert(
+                    (*app, pf.virtual_path.clone()),
+                    r.parenless.into_iter().collect(),
+                );
+            }
         }
         out
     }
@@ -1424,6 +1498,8 @@ pub struct DependencyBodyResolution {
     pub edges: Vec<ClassifiedEdge>,
     /// The receiver/interface facts of those sites (see [`SiteFacts`]).
     pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// See [`ParenlessCalls`]: the dependency files' parens-less calls.
+    pub parenless_calls: ParenlessCalls,
 }
 
 pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String> {
@@ -2146,6 +2222,97 @@ mod tests {
         );
     }
 
+    /// S9.0c (found by the compiler oracle): a zero-argument call may drop its
+    /// `()`, also inside an expression. A bare `M` or `X.M` read as a value is a
+    /// call when it reaches a routine; a variable, a field or a shadowing local
+    /// of the same name is not.
+    #[test]
+    fn parenless_call_in_an_expression_is_a_call_site() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 R
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+             codeunit 50002 D
+{
+    procedure Flag(): Boolean
+    begin
+        exit(true);
+    end;
+}
+             codeunit 50000 C
+{
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+
+             procedure Caller()
+    var
+        Other: Codeunit D;
+        T: Record R;
+        B: Boolean;
+    begin
+             if IsOn then;
+             if not Other.Flag then;
+             B := IsOn;
+             if T.Code = '' then;
+             if B then;
+             exit;
+    end;
+
+             procedure Shadowed()
+    var
+        IsOn: Boolean;
+    begin
+             if IsOn then;
+    end;
+}
+",
+        )
+        .expect("write C.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let calls = |caller: &str| -> Vec<(u32, String)> {
+            let mut v: Vec<(u32, String)> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller && ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| {
+                    ce.edge.routes.iter().map(move |r| match &r.target {
+                        RouteTarget::Routine(id) => {
+                            (ce.edge.site.span.start.line, id.name_lc.clone())
+                        }
+                        other => (ce.edge.site.span.start.line, format!("{other:?}")),
+                    })
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        // Lines are 0-based: `if IsOn then;` is line 27.
+        assert_eq!(
+            calls("caller"),
+            vec![
+                (27, "ison".to_string()),
+                (28, "flag".to_string()),
+                (29, "ison".to_string()),
+            ],
+            "IsOn / Other.Flag read as values are calls; the field T.Code and the variable B are not"
+        );
+        assert_eq!(
+            calls("shadowed"),
+            vec![],
+            "a local named IsOn shadows the procedure"
+        );
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2285,7 +2452,7 @@ mod tests {
             let t5 = std::time::Instant::now();
             // The surface is built inside the timed window, so the total
             // still includes the DeclSurface build, as the label says.
-            let (edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
+            let (edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
                 &graph,
                 &parsed,
                 &DeclSurface::build(&graph, &parsed),
@@ -2409,7 +2576,7 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit, _ifaces) = resolve_full_program_from_parts(
+        let (full_edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
             graph,
             parsed,
             &ctx.decl_surface(),

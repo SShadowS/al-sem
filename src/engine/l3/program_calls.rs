@@ -708,6 +708,7 @@ pub fn assemble_and_resolve_workspace_program(
             model_instance_id,
             skip_roots_config,
             &ctx,
+            &report.parenless_calls,
         )?;
     attach_program_calls(&mut resolved, ctx, report);
     Some(resolved)
@@ -769,6 +770,7 @@ pub fn assemble_and_resolve_cross_app_program(
     };
     report.edges.extend(dependency.edges);
     report.site_facts.extend(dependency.site_facts);
+    report.parenless_calls.extend(dependency.parenless_calls);
     // S8.2: only what the workspace can reach, and the code around the dependency
     // events it subscribes to (`program::resolve::demand`).
     let demand = {
@@ -787,6 +789,7 @@ pub fn assemble_and_resolve_cross_app_program(
             skip_roots_config,
             &ctx,
             Some(&demand),
+            &report.parenless_calls,
         )?
     };
     let snap = ctx.snapshot();
@@ -1955,13 +1958,21 @@ pub(crate) fn build_models(
 > {
     use crate::program::resolve::full::{build_snapshot_res, fresh_program_from_snapshot};
     let (ctx, report) = fresh_program_from_snapshot(build_snapshot_res(workspace)?)?;
-    let l3 = crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(workspace)
-        .ok_or_else(|| {
-            format!(
-                "L3 model: fail-closed/empty layout at {}",
-                workspace.display()
-            )
-        })?;
+    // The production model (`assemble_and_resolve_workspace_program`), built from
+    // the same program parse and resolution.
+    let l3 = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
+        workspace,
+        crate::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        &ctx,
+        &report.parenless_calls,
+    )
+    .ok_or_else(|| {
+        format!(
+            "L3 model: fail-closed/empty layout at {}",
+            workspace.display()
+        )
+    })?;
     Ok((ctx, report, l3))
 }
 
@@ -3434,6 +3445,45 @@ mod adapter_tests {
             targets[0].body,
             Some(crate::program::registry::BodyState::Bodyless)
         );
+    }
+
+    /// S9.0c: a zero-argument call may drop its `()` inside an expression too
+    /// (`if IsOn then`). The resolver keeps it as a call; the body walk takes the
+    /// same read as a call site, so the adapter joins it rather than losing it as
+    /// a `program_only_site`. The variable read `B` stays a read.
+    #[test]
+    fn parenless_call_in_an_expression_reaches_the_model() {
+        let cu = "codeunit 50120 \"P\"
+{
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+
+    procedure Caller()
+    var
+        B: Boolean;
+    begin
+        if IsOn then;
+        B := IsOn;
+        if B then;
+    end;
+}
+";
+        let a = adapt(&[("src/p.al", cu)], None);
+        let sites: Vec<&str> = a
+            .routine("Caller")
+            .call_sites
+            .iter()
+            .map(|cs| cs.callee_text.as_str())
+            .collect();
+        assert_eq!(sites, vec!["IsOn", "IsOn"], "two parens-less calls, no `B`");
+        let is_on = a.routine("IsOn").id.clone();
+        for cs in &a.routine("Caller").call_sites {
+            let to: Vec<Option<String>> = a.edges(&cs.id).into_iter().map(|e| e.to).collect();
+            assert_eq!(to, vec![Some(is_on.clone())], "{}", cs.id);
+        }
+        assert_eq!(a.census.program_only_site, 0, "{:#?}", a.census);
     }
 
     /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to

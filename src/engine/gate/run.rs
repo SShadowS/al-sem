@@ -266,7 +266,13 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
-        assemble_and_resolve_workspace_from_program(ws_path, &model_instance_id, false, &ctx)
+        assemble_and_resolve_workspace_from_program(
+            ws_path,
+            &model_instance_id,
+            false,
+            &ctx,
+            &report.parenless_calls,
+        )
     };
     let Some(mut resolved) = resolved else {
         return AnalysisModel {

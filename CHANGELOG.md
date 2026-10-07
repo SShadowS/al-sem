@@ -1065,6 +1065,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A parens-less call inside an expression is a call** (engine-switch S9.0c, found
+  by the compiler oracle: 10 pairs on CDO). AL lets a zero-argument call drop its
+  `()`, also as a value: `if IsOn then`, `exit(GetSetup)`, `Foo(X.Bar)`. Syntax
+  cannot tell such a read from a variable or field read, so the extractor makes a
+  candidate site for every bare `M` or `X.M` read as a value (`RawSiteV2::parenless`),
+  and the resolver keeps it only when every route reaches a routine (source or ABI).
+  A declared variable, parameter or return name shadows a same-named procedure. A
+  parens-less built-in read (`Rec.Count`) is dropped, as the compiler's graph does.
+  - The kept reads travel as `ProgramReport::parenless_calls` (by app and file) into
+    the analyze model, whose body walk takes each one as a zero-argument call site,
+    so the adapter joins it instead of losing it (`program_only_site` was 11 on CDO).
+  - `adapter_census_for_workspace` (and the adapter tests) now measure the
+    production model (`assemble_and_resolve_workspace_from_program`), not L3's disk
+    model.
+  - CDO oracle: all 10 S1 pairs agree; no new Call disagreement. CDO histogram:
+    `unknown` 0, `ambiguousResolved` 23 (its pin), unchanged. No golden moved.
+  - The route-applicability checker's op table lacked `modifyall`/`deleteall` (the
+    resolver gained them in the previous entry): 5 false violations on CDO, now 0.
+
 - **A table write fires its trigger only when it asks to** (engine-switch S9.0c,
   found by the compiler oracle). Measured on BC 28: `Insert()`, `Modify()` and
   `Delete()` with no argument, or with `false`, run no table trigger; `true` runs
