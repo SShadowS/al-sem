@@ -43,6 +43,18 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   - S9.0c Three-way compare on CDO: compiler vs frozen L3-minted goldens vs program
     resolver. Triage every disagreement as our bug (fix it at the root), a compiler
     graph limit (recorded, e.g. `OverApprox` triggers), or a mapping defect.
+  - **S9.0c status (2026-10-07): the four workspace PROGRAM BUG causes are fixed**
+    (`docs/s9-oracle/cdo-workspace-triage.md`): RunTrigger (`2e7ca179`, S8+S10),
+    parens-less calls in expressions (`0eae46f0`, S1), ternary/`is`/`as`/list lowering
+    (`ca1e8b0d`, S3). Workspace oracle after: 6,878 pairs agree, 167 compiler-only,
+    258 program-only; every residual pair is a COMPILER LIMIT or MAPPING shape.
+    **Open, found by `--all-apps`:** dependency bodies resolved from their own app
+    (`resolve_dependency_bodies`, what cross-app analyze reads) carry ~8,000 `Unknown`
+    routes in 431,248 edges on CDO (UntrackedReceiver ~2,600, CatalogMiss ~3,340,
+    CompoundReceiver ~930, MemberNotFound ~615, ObjectNotInGraph 134,
+    AccessFilteredOverload 77, ...). `realUnknownRate` never measures them: it covers
+    workspace and publisher edges only. Most dependency-wide oracle disagreements are
+    these. Owner decision needed: a dependency-body resolution arc inside or after S9.
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.
