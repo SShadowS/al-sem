@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The AL compiler's call graph as an independent oracle** (engine-switch
+  S9.0b). The AL extension ships `altool graph`
+  (Microsoft.BusinessCentral.CallGraph). `altool graph extract-whole --corpus
+  <workspace> --corpus <dependency sources> --graph g.jsonl` compiles every app
+  together and writes the compiler's own call graph. The new
+  `aldump --compiler-oracle <g.jsonl> <workspace> [--all-apps]`
+  (`program::resolve::compiler_oracle`) compares it with the program resolver's
+  edges, caller->callee pair by pair. Pairs are the granularity both share: the
+  compiler graph keeps ONE edge per pair, at its first line.
+  - **Not compared:** built-in methods, self-recursion, interface declarations
+    (implementations are compared), and object runs (the compiler graph has
+    none). Instance runs (`CU.Run()`) are recognised as runs.
+  - **CDO:** extracting the 11-app corpus takes about 2 minutes and is
+    byte-deterministic. Workspace callers: 6,968 pairs agree, 77 are
+    compiler-only, 277 program-only. Whole program: 152,004 agree.
+  - **Triage of the workspace disagreements** (240 pairs):
+    - 37 are program-resolver bugs, fixed next in S9.0c. Triggers fire for
+      argument-less writes; parens-less calls inside expressions are missed;
+      `DeleteAll(true)`/`ModifyAll` raise no triggers; ternary/`in`/`is`/`as`
+      expressions are opaque to call extraction.
+    - 113 are compiler-graph limits: subscriber attributes recorded as calls,
+      `RunTrigger` ignored, no `Validate` edges.
+    - 90 are mapping differences, now handled by the comparison.
+  - This is the reference that replaces the L3 oracle for minting the
+    semantic-edges goldens (S9.0d); the product never depends on it.
+
 - **One detector-context builder for both modes** (engine-switch S8.1).
   `build_detector_context_with(resolved, demanded, cross)` takes an optional
   `CrossAppInputs`: the dependency routine ids (never primary roots or entry

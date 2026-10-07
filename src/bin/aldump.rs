@@ -133,6 +133,69 @@ fn switch_compare_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+/// `aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]`
+/// (engine-switch S9.0): compare the program resolver (FULL build) with the AL
+/// compiler's call graph from `altool graph extract-whole`, site by site. Writes
+/// the JSON report to stdout; the summary goes to stderr. Default scope: callers
+/// in the workspace app; `--all-apps` compares every app's callers.
+fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
+    use al_sem::program::profile::BuildProfile;
+    use al_sem::program::resolve::compiler_oracle::{CompilerGraph, compare, program_sites};
+    use al_sem::program::resolve::differential::project_fresh;
+    let (Some(graph_path), Some(ws)) = (args.first(), args.get(1)) else {
+        eprintln!("usage: aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]");
+        return ExitCode::FAILURE;
+    };
+    let all_apps = args.iter().any(|a| a == "--all-apps");
+    let compiler = match CompilerGraph::read(std::path::Path::new(graph_path)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (ctx, report, _) =
+        match al_sem::program::resolve::full::build_program_with_coverage_profiled(
+            std::path::Path::new(ws),
+            BuildProfile::FULL,
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("aldump: error: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let mut edges: Vec<_> = report.edges.iter().map(|ce| ce.edge.clone()).collect();
+    if all_apps {
+        // Dependency call sites are resolved separately, from their own app
+        // (`resolve_dependency_bodies`, as the cross-app model does).
+        edges.extend(
+            ctx.resolve_dependency_bodies()
+                .edges
+                .into_iter()
+                .map(|ce| ce.edge),
+        );
+    }
+    al_sem::program::resolve::compiler_oracle::reclassify_entry_runs(&mut edges, ctx.graph());
+    let program = program_sites(&project_fresh(&edges, &ctx.graph().apps));
+    let mut apps = std::collections::BTreeSet::new();
+    if !all_apps {
+        apps.insert(ctx.snapshot().workspace_app.guid.to_ascii_lowercase());
+    }
+    let r = compare(&compiler.sites, &program, &apps);
+    eprintln!(
+        "compiler edges {:?}, unmapped {}; callers {}; pairs agree {}, compiler-only {}, program-only {}",
+        compiler.edge_kinds,
+        compiler.unmapped_edges,
+        r.callers,
+        r.pairs_agree,
+        r.pairs_compiler_only,
+        r.pairs_program_only
+    );
+    println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
@@ -142,6 +205,7 @@ fn main() -> ExitCode {
     match raw.first().map(String::as_str) {
         Some("--switch-dump") => return switch_dump_cmd(&raw[1..]),
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
+        Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;
