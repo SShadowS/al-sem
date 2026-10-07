@@ -1071,6 +1071,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency bodies: compound receivers, first part** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 1,273 -> 680 (compoundReceiver 909 -> 312); workspace
+  metrics unchanged.
+  - `this.Func().M()` types by `Func`'s return, like any `Var.Func().M()` chain (it
+    declined as "deferred").
+  - Any member of a .NET value is a .NET leaf (`Enc.UTF8.GetBytes(...)`).
+  - `"Type"::Value.AsInteger()`: when `"Type"` types as nothing in scope but names a
+    unique Enum, the literal is an enum value. An option value takes the scalar
+    surface (the compiler types it `Integer`).
+  - 4 sites moved from compoundReceiver to overloadAmbiguous: they now reach their
+    target and stop at an overload choice.
+
 - **Dependency bodies: the rest of untrackedReceiver** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 1,790 -> 1,273 (untrackedReceiver 483 -> 3,
   memberNotFound 28 -> 6); workspace metrics unchanged.

@@ -2761,6 +2761,70 @@ mod tests {
         assert_eq!(to, vec!["Record::get", "calc", "Unknown"], "{got:?}");
     }
 
+    /// S9.0e compound receivers: `this.Func().M()` types by `Func`'s return; any
+    /// member of a .NET value is a .NET leaf; `"Type"::Value.AsInteger()` is an
+    /// enum value when `"Type"` is a unique Enum (compoundReceiver before).
+    #[test]
+    fn compound_this_dotnet_and_enum_literal_receivers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "enum 50001 \"My Kind\"
+{
+    value(0; A) { }
+    value(1; \"Big B\") { }
+}
+             codeunit 50002 Svc
+{
+    procedure Ping()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    procedure Service(): Codeunit Svc
+    begin
+    end;
+
+             procedure P()
+    var
+        Enc: DotNet Encoding;
+        I: Integer;
+    begin
+             this.Service().Ping();
+        Enc.UTF8.GetBytes('a');
+        I := \"My Kind\"::\"Big B\".AsInteger();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(u32, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.site.span.start.line, to)
+                })
+            })
+            .collect();
+        got.sort();
+        let to: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            to,
+            vec!["ping", "service", "DotNet::*::getbytes", "Enum::asinteger"],
+            "{got:?}"
+        );
+    }
+
     #[test]
     fn resolve_full_program_recovered_files_empty_when_workspace_is_clean() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -1615,6 +1615,35 @@ fn infer_receiver_type_for_expr(
                         name_lc: String::new(),
                     }
                 }
+                // An option value is an Integer to the compiler (`Opt::B` is
+                // `'Integer'` in AL0132), so it takes the scalar surface.
+                ReceiverType::Framework(FrameworkKind::Scalar) => {
+                    ReceiverType::Framework(FrameworkKind::Scalar)
+                }
+                // `"Type"::Value` where `"Type"` types as nothing in scope here
+                // (S9.0e): an Enum object of that unique name makes it an enum
+                // value. A shadowing option field the expression path cannot see
+                // would leave its member unresolved, never a wrong target.
+                ReceiverType::Unknown => match &file.ir.expr(*enum_type).kind {
+                    ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                        let object_ref = ObjectRef::Name {
+                            raw: n.clone(),
+                            normalized_lc: n.fold_identifier(),
+                        };
+                        match index.resolve_object_ref(
+                            graph,
+                            from_object.id.clone(),
+                            ObjectKind::Enum,
+                            &object_ref,
+                        ) {
+                            ObjectRefResolution::Unique(_) => ReceiverType::EnumType {
+                                name_lc: n.fold_identifier(),
+                            },
+                            _ => ReceiverType::Unknown,
+                        }
+                    }
+                    _ => ReceiverType::Unknown,
+                },
                 _ => ReceiverType::Unknown,
             }
         }
@@ -1705,8 +1734,21 @@ fn infer_compound_member_receiver(
 
     if is_this_identifier(file, object_expr_id) {
         if is_method {
-            // `this.Method(...)` call-result chaining — deferred, decline.
-            return ReceiverType::Unknown;
+            // `this.Func()` (S9.0e): the result of the object's own procedure,
+            // typed like any `Var.Func()` chain on a `SelfObject` base.
+            return surface
+                .and_then(|bm| {
+                    infer_cross_object_chain_receiver(
+                        &ReceiverType::SelfObject,
+                        &member_lc,
+                        arity,
+                        from_object,
+                        graph,
+                        index,
+                        bm,
+                    )
+                })
+                .unwrap_or(ReceiverType::Unknown);
         }
         return infer_this_member(&member_lc, object_globals, from_object, graph, index);
     }
@@ -1721,6 +1763,14 @@ fn infer_compound_member_receiver(
         index,
         surface,
     );
+
+    // Any member of a .NET value is a .NET value (or a primitive the platform
+    // converts): a leaf with no AL routine behind it (S9.0e).
+    if let ReceiverType::DotNet { .. } = &base_ty {
+        return ReceiverType::DotNet {
+            name_lc: "*".to_string(),
+        };
+    }
 
     if let ReceiverType::Framework(kind) = &base_ty {
         if let Some(returned) = zero_arg_aware_lookup(is_method, arity, |m, a| {
