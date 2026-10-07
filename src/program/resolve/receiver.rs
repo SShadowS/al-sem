@@ -240,6 +240,8 @@ pub enum FrameworkKind {
     // Page/Report singleton types (from receiver name, not declared type)
     PageInstance,
     ReportInstance,
+    /// `currXMLport` / an `XmlPort "X"` variable (S9.0e).
+    XmlPortInstance,
     // Query instance (from a variable's DECLARED type — `V: Query "Name"`),
     // never a receiver name. Unlike Page/Report there is no `CurrQuery`
     // singleton; the `Query.SaveAsXml(...)` STATIC form is a separate surface
@@ -254,6 +256,8 @@ pub enum FrameworkKind {
     System,
     CompanyProperty,
     SessionInformation,
+    /// `ProductName.Full()/Marketing()/Short()` (S9.0e).
+    ProductName,
     // Enum VALUE-instance surface (Task 4, receiver-closure-and-arg-increments
     // plan — the SPLIT catalog closer): `AsInteger()`/`Names()`/`Ordinals()`,
     // callable on an enum VALUE (a declared `Enum "X"`-typed var/field, or an
@@ -849,7 +853,8 @@ pub fn infer_receiver_type(
     // `CompoundReceiver` before it could ever reach this step. A dataitem
     // name is in scope as a record var across ALL the report's routines (not
     // merely the enclosing dataitem's own trigger — see `ObjectDecl.
-    // report_dataitems`'s doc), so this lookup is routine-independent.
+    // dataitems`'s doc), so this lookup is routine-independent. An XmlPort's
+    // `tableelement(Name; Table)` is the same kind of named record (S9.0e).
     //
     // Fail-closed collisions (`resolve_dataitem_source_table`, below): a
     // same-named report PROCEDURE anywhere in the visible object(s) declines
@@ -862,7 +867,7 @@ pub fn infer_receiver_type(
 
     if matches!(
         from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) && let Some(table_id) =
         resolve_dataitem_source_table(&lookup_lc, from_object, graph, index)
     {
@@ -1071,6 +1076,7 @@ pub fn infer_receiver_type(
     let singleton = match receiver_lc {
         "currpage" | "page" => Some(FrameworkKind::PageInstance),
         "currreport" | "report" => Some(FrameworkKind::ReportInstance),
+        "currxmlport" => Some(FrameworkKind::XmlPortInstance),
         "session" => Some(FrameworkKind::Session),
         "navapp" => Some(FrameworkKind::NavApp),
         "database" => Some(FrameworkKind::Database),
@@ -1079,6 +1085,7 @@ pub fn infer_receiver_type(
         "system" => Some(FrameworkKind::System),
         "companyproperty" => Some(FrameworkKind::CompanyProperty),
         "sessioninformation" => Some(FrameworkKind::SessionInformation),
+        "productname" => Some(FrameworkKind::ProductName),
         _ => None,
     };
     if let Some(kind) = singleton {
@@ -2399,8 +2406,8 @@ fn resolve_report_implicit_rec_table(
 /// - the name resolves to more than one DISTINCT (own ∪ base) source-table
 ///   `ObjectRef` — an unprovable duplicate, decline rather than pick one.
 ///   IDENTICAL duplicates (harmless `#if`/`#else` re-parse duplication —
-///   `collect_report_dataitems` walks both branches, mirroring `globals`/
-///   `locals`; see `ObjectDecl.report_dataitems`'s doc) are deduped first, so
+///   `collect_dataitems` walks both branches, mirroring `globals`/
+///   `locals`; see `ObjectDecl.dataitems`'s doc) are deduped first, so
 ///   they never manufacture an artificial ambiguity.
 fn resolve_dataitem_source_table(
     name_lc: &str,
@@ -2410,7 +2417,7 @@ fn resolve_dataitem_source_table(
 ) -> Option<ObjectNodeId> {
     if !matches!(
         from_object.id.kind,
-        ObjectKind::Report | ObjectKind::ReportExtension
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) {
         return None;
     }
@@ -4339,6 +4346,25 @@ mod tests {
             None,
         );
         assert_eq!(result, ReceiverType::Framework(FrameworkKind::Session));
+    }
+
+    /// S9.0e: `ProductName` and `currXMLport` are platform singletons.
+    #[test]
+    fn infer_singleton_productname_and_currxmlport() {
+        let (graph, app) = build_test_graph();
+        let index = ResolveIndex::build(&graph);
+        let routine = build_test_routine();
+        let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
+        let infer =
+            |r: &str| infer_receiver_type(r, &routine, &[], &from_obj, &graph, &index, None, None);
+        assert_eq!(
+            infer("productname"),
+            ReceiverType::Framework(FrameworkKind::ProductName)
+        );
+        assert_eq!(
+            infer("currxmlport"),
+            ReceiverType::Framework(FrameworkKind::XmlPortInstance)
+        );
     }
 
     #[test]

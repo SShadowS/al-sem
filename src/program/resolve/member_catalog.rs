@@ -296,6 +296,20 @@ static VERSION: phf::Set<&'static str> = phf_set! {
     "build", "create", "major", "minor", "revision", "totext"
 };
 
+/// `ProductName` static methods: MS Learn `productname-data-type` (S9.0e).
+static PRODUCTNAME: phf::Set<&'static str> = phf_set! {
+    "full", "marketing", "short"
+};
+
+/// XmlPort instance methods (`currXMLport` and an `XmlPort "X"` variable): MS Learn
+/// `xmlport-data-type`, "Instance methods" (S9.0e).
+static XMLPORT_INSTANCE: phf::Set<&'static str> = phf_set! {
+    "break", "breakunbound", "currentpath", "export", "fielddelimiter",
+    "fieldseparator", "filename", "import", "importfile", "quit", "recordseparator",
+    "run", "setdestination", "setsource", "settableview", "skip", "tableseparator",
+    "textencoding"
+};
+
 /// `Integer` / `BigInteger` / `Decimal` / `Boolean` / `Byte` instance methods: only
 /// `ToText` (MS Learn `integer-data-type`, `decimal-data-type`, `boolean-data-type`,
 /// `biginteger-totext-method`, `byte-totext-method`).
@@ -510,6 +524,7 @@ fn framework_lookup(fk: &FrameworkKind, method_lc: &str) -> bool {
         FrameworkKind::Dialog => DIALOG.contains(method_lc),
         FrameworkKind::PageInstance => PAGE_INSTANCE.contains(method_lc),
         FrameworkKind::ReportInstance => REPORT_INSTANCE.contains(method_lc),
+        FrameworkKind::XmlPortInstance => XMLPORT_INSTANCE.contains(method_lc),
         FrameworkKind::QueryInstance => QUERY_INSTANCE.contains(method_lc),
         FrameworkKind::Session => SESSION.contains(method_lc),
         FrameworkKind::NavApp => NAVAPP.contains(method_lc),
@@ -519,6 +534,7 @@ fn framework_lookup(fk: &FrameworkKind, method_lc: &str) -> bool {
         FrameworkKind::System => SYSTEM.contains(method_lc),
         FrameworkKind::CompanyProperty => COMPANY_PROPERTY.contains(method_lc),
         FrameworkKind::SessionInformation => SESSION_INFORMATION.contains(method_lc),
+        FrameworkKind::ProductName => PRODUCTNAME.contains(method_lc),
         FrameworkKind::Enum => ENUM_VALUE.contains(method_lc),
         FrameworkKind::EnumTypeStatic => ENUM_TYPE_STATIC.contains(method_lc),
         // Unknown/programmatic type — not in catalog.
@@ -638,10 +654,8 @@ pub fn member_builtin_id(kind: MemberCatalogKind<'_>, method_lc: &str) -> Option
 ///   now supplies the members; they stay out of THIS list, which is correct.
 ///   This is the same conflation the Page/Report catalog fixed once already —
 ///   see `is_metadata_sensitive_instance_method`'s history note.
-///   **`XmlPort` still has no catalog** and will fail the same way the moment a
-///   workspace declares an XmlPort variable and calls `Import`/`Export` on it.
-///   Left unbuilt deliberately: zero measured population today, and this repo's
-///   standing rule is to measure the population before building for it.
+///   `XmlPort` got its catalog (`XMLPORT_INSTANCE`) on 2026-10-07 (S9.0e), when
+///   CDO's dependency bodies gave it a population: ~575 `currXMLport.*` sites.
 pub const ENTRY_DISPATCH_BUILTIN_IDS: &[&str] = &[
     "PageInstance::run",
     "PageInstance::runmodal",

@@ -595,6 +595,7 @@ fn resolve_call_site_obligation(
                 "Codeunit" => Some(ObjectKind::Codeunit),
                 "Page" => Some(ObjectKind::Page),
                 "Report" => Some(ObjectKind::Report),
+                "XmlPort" => Some(ObjectKind::XmlPort),
                 _ => None,
             };
             if let Some(okind) = okind_opt {
@@ -769,6 +770,17 @@ pub(crate) fn resolve_file_obligations(
                     .unwrap_or(false)
             })
             .map(|v| v.name.fold_identifier())
+            // Report dataitems and XmlPort table elements are record variables too
+            // (S9.0e), so `Item.Modify(true)` on one is a record op with its trigger
+            // edge. An object global of the same name shadows the element.
+            // ponytail: a non-record LOCAL of the same name is not excluded here;
+            // receiver inference still types it by the local.
+            .chain(
+                obj.dataitems
+                    .iter()
+                    .map(|(name, _)| name.fold_identifier())
+                    .filter(|n| !obj.globals.iter().any(|g| g.name.fold_identifier() == *n)),
+            )
             .collect();
 
         for (routine_idx, routine) in obj.routines.iter().enumerate() {
@@ -2476,6 +2488,168 @@ mod tests {
             vec![EvidenceKind::Unknown],
             "a same-named report procedure shadows the field"
         );
+    }
+
+    /// S9.0e: an XmlPort `tableelement(Name; Table)` name is a record variable
+    /// across the XmlPort (untrackedReceiver before), and on it, as on a report
+    /// dataitem name, `Modify(true)` is a record op that fires the table trigger.
+    #[test]
+    fn xmlport_table_element_and_report_dataitem_are_record_variables() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "table 50001 T
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+             trigger OnModify()
+    begin
+    end;
+}
+             xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+             tableelement(Elem; T)
+            {
+                trigger OnAfterGetRecord()
+                begin
+             Elem.Modify(true);
+                    Elem.FieldCaption(Code);
+                end;
+            }
+        }
+    }
+}
+             report 50003 R
+{
+    dataset
+    {
+        dataitem(Di; T)
+        {
+             trigger OnPreDataItem()
+            begin
+                Di.Modify(true);
+            end;
+        }
+    }
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(String, EdgeKind, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                matches!(
+                    ce.edge.from.name_lc.as_str(),
+                    "onaftergetrecord" | "onpredataitem"
+                )
+            })
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.from.name_lc.clone(), ce.edge.kind, to)
+                })
+            })
+            .collect();
+        got.sort_by(|a, b| (&a.0, &a.2).cmp(&(&b.0, &b.2)));
+        assert!(
+            got.iter().all(|(_, _, to)| to != "Unknown"),
+            "no unknown route: {got:?}"
+        );
+        let triggers: Vec<&str> = got
+            .iter()
+            .filter(|(_, k, _)| *k == EdgeKind::ImplicitTrigger)
+            .map(|(from, _, to)| {
+                assert_eq!(to, "onmodify");
+                from.as_str()
+            })
+            .collect();
+        assert_eq!(
+            triggers,
+            vec!["onaftergetrecord", "onpredataitem"],
+            "{got:?}"
+        );
+    }
+
+    /// S9.0e: XmlPort calls (untrackedReceiver / memberNotFound before):
+    /// `currXMLport.Skip()` is an XmlPort instance builtin; `XmlPort.Run`/`Export`
+    /// with a static id and a variable's `Import()` run the XmlPort's own
+    /// `OnPreXmlPort`.
+    #[test]
+    fn xmlport_calls_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+             trigger OnBeforePassVariable()
+            begin
+                currXMLport.Skip();
+            end;
+        }
+    }
+             trigger OnPreXmlPort()
+    begin
+    end;
+}
+             codeunit 50000 C
+{
+    procedure P()
+    var
+        V: XmlPort X;
+        OutS: OutStream;
+    begin
+             XmlPort.Run(XmlPort::X);
+        Xmlport.Export(Xmlport::X, OutS);
+        V.Import();
+    end;
+}
+",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut got: Vec<(String, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| matches!(ce.edge.from.name_lc.as_str(), "p" | "onbeforepassvariable"))
+            .flat_map(|ce| {
+                ce.edge.routes.iter().map(move |r| {
+                    let to = match &r.target {
+                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Builtin(b) => b.0.clone(),
+                        _ => format!("{:?}", r.evidence.kind()),
+                    };
+                    (ce.edge.from.name_lc.clone(), to)
+                })
+            })
+            .collect();
+        got.sort();
+        let want: Vec<(String, String)> = [
+            ("onbeforepassvariable", "XmlPortInstance::skip"),
+            ("p", "onprexmlport"),
+            ("p", "onprexmlport"),
+            ("p", "onprexmlport"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        assert_eq!(got, want);
     }
 
     #[test]

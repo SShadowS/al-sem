@@ -285,6 +285,7 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
         "codeunit" => Some("Codeunit"),
         "page" => Some("Page"),
         "report" => Some("Report"),
+        "xmlport" => Some("XmlPort"),
         _ => None,
     }
 }
@@ -393,7 +394,10 @@ fn classify_call(
             if obj.origin.kind_text == "keyword_identifier" {
                 let obj_text = &src[obj.origin.byte.clone()];
                 if let Some(okind) = object_run_kind(obj_text)
-                    && (method_lc == "run" || (method_lc == "runmodal" && okind != "Codeunit"))
+                    && (method_lc == "run"
+                    || (method_lc == "runmodal" && matches!(okind, "Page" | "Report"))
+                    // Static `XmlPort.Import/Export(XmlPort::X, ...)` run X too.
+                    || (okind == "XmlPort" && matches!(method_lc.as_str(), "import" | "export")))
                 {
                     let (target_ref, target_is_name) =
                         match static_database_reference_target(file, args) {

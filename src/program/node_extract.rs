@@ -74,7 +74,7 @@ pub struct PageControlNode {
 /// One report `dataitem(Name; "Source Table")` declaration — Report /
 /// ReportExtension only, document order (dataitem-receivers plan, Task 1).
 /// Mirrors [`PageControlNode`]: `name_lc` is the lowercased UNQUOTED dataitem
-/// name (`al_syntax::ir::ObjectDecl.report_dataitems` is already
+/// name (`al_syntax::ir::ObjectDecl.dataitems` is already
 /// outer-quote-stripped, `ident_text`); `source_table` is the RAW `ObjectRef`
 /// parsed exactly like `SourceTable`/`TableNo` — resolved lazily via
 /// [`crate::program::resolve::receiver::resolve_source_table_ref`] at the
@@ -628,11 +628,15 @@ pub fn extract_nodes(
 
         // Report dataitems — Report/ReportExtension only, document order (Task 1,
         // dataitem-receivers plan). `d.0`/`d.1` are already outer-quote-stripped
-        // (`ident_text`, `al_syntax::lower::collect_report_dataitems`); the shared
+        // (`ident_text`, `al_syntax::lower::collect_dataitems`); the shared
         // `parse_object_ref_value` still normalizes the table half losslessly
         // (numeric vs quoted-name), mirroring `SourceTable`/`TableNo` above.
-        let dataitems = if matches!(obj.kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-            obj.report_dataitems
+        // XmlPort table elements are the same kind of named record (S9.0e).
+        let dataitems = if matches!(
+            obj.kind,
+            ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+        ) {
+            obj.dataitems
                 .iter()
                 .map(|(name, table)| DataitemNode {
                     name_lc: name.fold_identifier(),

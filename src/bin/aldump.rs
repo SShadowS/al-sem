@@ -702,10 +702,17 @@ fn main() -> ExitCode {
             for ce in &res.edges {
                 let app = graph.apps.resolve(ce.edge.from.object.app);
                 let span = &ce.edge.site.span;
-                for r in &ce.edge.routes {
-                    let Evidence::Unknown(reason) = &r.evidence else {
-                        continue;
-                    };
+                // The edges `unknown` counts, each with its first unknown reason
+                // (`unknown_reason_breakdown`'s rule).
+                if al_sem::program::resolve::edge::classify_obligation(&ce.edge)
+                    != al_sem::program::resolve::edge::ObligationOutcome::Unknown
+                {
+                    continue;
+                }
+                if let Some(reason) = ce.edge.routes.iter().find_map(|r| match &r.evidence {
+                    Evidence::Unknown(reason) => Some(reason),
+                    _ => None,
+                }) {
                     let line = texts
                         .get(&(app.guid.to_ascii_lowercase(), span.unit.as_str()))
                         .and_then(|t| t.lines().nth(span.start.line as usize))

@@ -1071,6 +1071,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency bodies: XmlPort and `ProductName`** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 2,933 -> 1,790 (untrackedReceiver 1,527 -> 483,
+  memberNotFound 123 -> 28); workspace metrics unchanged.
+  - An XmlPort `tableelement(Name; Table)` is a named record like a report dataitem: the
+    lowerer collects it (`ObjectDecl.dataitems`, renamed from `report_dataitems`), and
+    it types receivers (Step 2b) and seeds the body walk's record variables.
+  - Dataitem and table-element names are record variables for record-op
+    classification, so `Di.Modify(true)` on one gets its trigger edge. This was a gap
+    for report dataitems too.
+  - XmlPort got its instance catalog (MS Learn, 18 methods), the `currXMLport`
+    singleton, and the instance kind for an `XmlPort "X"` variable. `XmlPort.Run`,
+    `Import` and `Export` with a static id, and a variable's `Run()`/`Import()`/`Export()`,
+    dispatch to the XmlPort's `OnPreXmlPort`, as a report run reaches `OnPreReport`.
+  - `ProductName.Full()/Marketing()/Short()` is a platform singleton.
+  - `aldump --dependency-bodies-stats --sites` now lists exactly the edges `unknown`
+    counts (it listed every unknown-evidence route, including `honestDynamic` edges).
+
 - **Dependency bodies: the catalogMiss family** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 6,315 -> 2,979 (catalogMiss 3,341 -> 0); workspace
   metrics unchanged.

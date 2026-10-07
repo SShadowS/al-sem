@@ -1813,6 +1813,8 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
     match kind {
         ObjectKind::Page => "onopenpage",
         ObjectKind::Report => "onprereport",
+        // Like Report's `OnPreReport`: the trigger a run reaches after the init one.
+        ObjectKind::XmlPort => "onprexmlport",
         _ => "onrun",
     }
 }
@@ -2170,6 +2172,7 @@ fn object_instance_framework_kind(kind: ObjectKind) -> Option<FrameworkKind> {
         // `member_catalog::ENTRY_DISPATCH_BUILTIN_IDS`'s doc for why the
         // ENTRY-DISPATCH exclusion was never a reason to withhold the catalog.
         ObjectKind::Query => Some(FrameworkKind::QueryInstance),
+        ObjectKind::XmlPort => Some(FrameworkKind::XmlPortInstance),
         _ => None,
     }
 }
@@ -2476,6 +2479,8 @@ pub(crate) fn resolve_member_with_args(
                 ObjectKind::Page | ObjectKind::Report => {
                     method_lc == "run" || method_lc == "runmodal"
                 }
+                // An XmlPort runs its own triggers on Run, Import and Export.
+                ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
                 _ => false,
             };
             if is_entry_trigger_dispatch && arity <= 1 {

@@ -2107,8 +2107,11 @@ pub fn ir_record_variables(
     // routines (a dataitem may be referenced by name as a record typed to its source
     // table). Seed each, skipping any name already declared (never shadow). Mirrors
     // `project_routine_features`'s report_dataitem_record_vars block.
-    if matches!(o.kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-        for (di_name, di_table) in &o.report_dataitems {
+    if matches!(
+        o.kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+    ) {
+        for (di_name, di_table) in &o.dataitems {
             if out.iter().any(|v| v.name.eq_ignore_ascii_case(di_name)) {
                 continue;
             }

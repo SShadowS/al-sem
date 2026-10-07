@@ -17,13 +17,14 @@ pub struct ObjectDecl {
     /// order. Needed by the engine to seed implicit-`Rec` table resolution and object
     /// classification; the value is the raw value text (trimmed).
     pub properties: Vec<ObjectProperty>,
-    /// Report `dataitem(Name; "Source Table")` declarations (name, source-table), both
-    /// unquoted, document order — Report/ReportExtension only (empty otherwise). A
-    /// dataitem name is in scope as a record var across ALL the report's routines, so
+    /// Report `dataitem(Name; "Source Table")` and XmlPort `tableelement(Name; Table)`
+    /// declarations (name, source-table), both unquoted, document order —
+    /// Report/ReportExtension/XmlPort only (empty otherwise). The name is in scope as a
+    /// record var across ALL the object's routines, so
     /// the engine seeds each as a record variable in every routine. Distinct from a
     /// dataitem trigger's per-dataitem implicit `Rec` (see
     /// [`RoutineDecl::dataitem_source_table`]).
-    pub report_dataitems: Vec<(String, String)>,
+    pub dataitems: Vec<(String, String)>,
     /// The `extends <Target>` target name (unquoted) for an extension object
     /// (Table/Page/Report/Enum/PermissionSet extension), else `None`.
     pub extends_target: Option<String>,

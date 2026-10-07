@@ -198,11 +198,14 @@ fn lower_object(
         )
         .collect();
 
-    // Report dataitems (name, source-table) — a dataitem name is in scope as a record
-    // var across all the report's routines. Reports only (empty otherwise).
-    let mut report_dataitems = Vec::new();
-    if matches!(kind, ObjectKind::Report | ObjectKind::ReportExtension) {
-        collect_report_dataitems(node, source, &mut report_dataitems);
+    // Report dataitems and XmlPort table elements (name, source-table) — the name is
+    // in scope as a record var across all the object's routines. Empty otherwise.
+    let mut dataitems = Vec::new();
+    if matches!(
+        kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+    ) {
+        collect_dataitems(node, source, &mut dataitems);
     }
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
@@ -258,7 +261,7 @@ fn lower_object(
         routines,
         globals,
         properties,
-        report_dataitems,
+        dataitems,
         extends_target,
         implements,
         page_controls,
@@ -488,8 +491,26 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
 /// Collect every report `dataitem(Name; "Source Table")` (incl. nested) as
 /// `(name, source-table)`, both unquoted, document order. Mirrors the legacy
 /// `report_dataitem_record_vars`.
-fn collect_report_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)>) {
+fn collect_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)>) {
     for child in node.named_children() {
+        // `tableelement(Name; Table)` (S9.0e): an XmlPort's record variable.
+        if child.kind() == RawKind::XmlportElement
+            && child
+                .field(FieldName::ElementType)
+                .is_some_and(|t| t.kind() == RawKind::TableelementKeyword)
+        {
+            let name = child
+                .field(FieldName::Name)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            let table = child
+                .field(FieldName::Source)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            if !name.is_empty() && !table.is_empty() {
+                out.push((name, table));
+            }
+        }
         if child.kind() == RawKind::ReportDataitem {
             let name = child
                 .field(FieldName::Name)
@@ -502,7 +523,7 @@ fn collect_report_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, 
         }
         // Descend (nested dataitems live under a dataitem's body); routine bodies hold
         // no dataitems so the extra recursion is harmless.
-        collect_report_dataitems(child, source, out);
+        collect_dataitems(child, source, out);
     }
 }
 
@@ -2210,6 +2231,35 @@ mod tests {
             }
         }
         panic!("no Case statement lowered");
+    }
+
+    /// S9.0e: an XmlPort `tableelement(Name; Table)` is collected like a report
+    /// dataitem, at any nesting depth.
+    #[test]
+    fn xmlport_table_elements_are_collected() {
+        let src = "xmlport 50002 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Elem; T)
+            {
+                tableelement(\"Inner Line\"; \"Sales Line\") { }
+            }
+            textelement(Other) { }
+        }
+    }
+}
+";
+        let af = parse(src);
+        assert_eq!(
+            af.objects[0].dataitems,
+            vec![
+                ("Elem".to_string(), "T".to_string()),
+                ("Inner Line".to_string(), "Sales Line".to_string())
+            ]
+        );
     }
 
     /// S9.0e: `if C then begin` split across `#if` (`preproc_split_if_then_begin`,
