@@ -302,18 +302,12 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 ///      caused the exclusion but the reason-finder couldn't re-derive why —
 ///      should never happen, since the two functions apply the identical
 ///      per-`Access` rule).
-///    - **Exactly 1 visible AND `pre_filter_count == 1`** → the visible
-///      candidate WAS the only overload to begin with; access filtering
-///      changed nothing about cardinality → resolve it (subject to the
-///      collapse-marker guard below → `Unknown(AbiCollapsedOverload)`).
-///    - **Exactly 1 visible BUT `pre_filter_count > 1`** → access narrowed an
-///      originally-AMBIGUOUS same-arity set down to one. This is NOT a safe
-///      selection: the pre-filter set was ambiguous (no arg-type evidence to
-///      pick between overloads — full arg-type dispatch is deferred), so
-///      access removing the OTHER sibling(s) doesn't prove the call meant
-///      THIS one. Selecting the lone survivor would MANUFACTURE a false
-///      `Source` route from what is actually still an unproven overload
-///      choice → `Unknown(AccessFilteredOverload)`.
+///    - **Exactly 1 visible** → resolve it (subject to the collapse-marker
+///      guard below → `Unknown(AbiCollapsedOverload)`), whether it was the
+///      only overload or access narrowed a larger same-arity set to it. AL
+///      leaves an inaccessible overload out of overload resolution (S9.0e alc
+///      probe), so a compiling call binds to the survivor. (Before S9.0e the
+///      narrowed case declined as `AccessFilteredOverload`.)
 ///    - **>1 visible** → genuine unresolved ambiguity (mirrors the
 ///      interface-implementer fan-out's `>1 candidates → Unresolved` rule) →
 ///      `Unknown(OverloadAmbiguous)`. Never pick-first.
@@ -434,11 +428,14 @@ fn resolve_in_object(
                 .unwrap_or(UnknownReason::IndexIntegrationGap);
             Some((DispatchShape::Exact, vec![unresolved_route(reason)]))
         }
-        // Overload-narrowing guard: only select the lone survivor when it was
-        // ALSO the lone candidate before visibility filtering. If access
-        // narrowed an originally-ambiguous (`pre_filter_count > 1`) set down
-        // to one, that is NOT a safe selection — fall through to the `_` arm.
-        1 if pre_filter_count == 1 => {
+        // The lone visible candidate, whether or not access narrowed a larger
+        // same-arity set down to it. S9.0e: AL leaves an inaccessible overload
+        // out of overload resolution (alc 18.0.41.45789: with `P(Integer)`
+        // public and `local P(Text)`, an outside `A.P('abc')` fails with
+        // `AL0133: cannot convert from 'Text' to 'Integer'`), so a call that
+        // compiles binds to the survivor. This used to decline as
+        // `AccessFilteredOverload`.
+        1 => {
             let rid0 = visible[0];
             // PLAIN-DISPATCH MARKER GUARD (Task 2 round-2, the round-1
             // critical fold-in): before this fix, `abi_overload_collapsed`
@@ -488,15 +485,6 @@ fn resolve_in_object(
                 vec![make_routine_route(rid0, obj_tier, surface, graph)],
             ))
         }
-        // pre_filter_count == 1 was already handled by the guarded arm above;
-        // reaching `visible.len() == 1` here means `pre_filter_count > 1` —
-        // access narrowed an originally-ambiguous same-arity set down to one
-        // survivor. NOT a safe selection (see the doc above): the decided
-        // reason-split Task 2 label for this shape.
-        1 => Some((
-            DispatchShape::Exact,
-            vec![unresolved_route(UnknownReason::AccessFilteredOverload)],
-        )),
         // >1 visible: genuine unresolved ambiguity (sigfp-and-ambiguous-
         // reclassification plan, Task 4 — round-2 closer #1 PREVALIDATION):
         // every candidate must be CONCRETE — not collapse-marked (ABI or
@@ -961,8 +949,8 @@ enum ZeroMatchStrategy {
     /// check whether the routine NAME (any arity) is declared SOMEWHERE in
     /// scope, and if so forward to the first (deterministic, scope-order)
     /// name-bearing object so [`resolve_in_object`]'s own internal
-    /// diagnostic — `ArityMismatch`, `AccessFilteredOverload`,
-    /// `LocalNotVisible`, … — survives exactly as a single-object dispatch
+    /// diagnostic — `ArityMismatch`, `LocalNotVisible`, … — survives exactly
+    /// as a single-object dispatch
     /// would have produced it. See [`resolve_in_page_scope`]'s doc for the
     /// full "why Page/Report diverges from Table" rationale (the
     /// `ArityMismatch`-preservation requirement) and the al-compile probe
@@ -1254,8 +1242,8 @@ fn resolve_in_table_scope(
 /// has an arity+visibility match ANYWHERE, but the routine NAME (any arity)
 /// is declared somewhere in scope, the first (deterministic, scope-order)
 /// name-bearing object is still forwarded to [`resolve_in_object`] so its own
-/// internal per-object diagnostic (`ArityMismatch`, `AccessFilteredOverload`,
-/// `LocalNotVisible`, …) survives exactly as the single-object dispatch
+/// internal per-object diagnostic (`ArityMismatch`, `LocalNotVisible`, …)
+/// survives exactly as the single-object dispatch
 /// produced it pre-merge — required so the merge is a pure ADDITIVE gain
 /// (extensions become reachable) and never a diagnostic regression for a
 /// base-only call whose arity happens to be wrong. See
@@ -12535,14 +12523,14 @@ codeunit 53961 "LocNCaller"
     // collision either way: `resolve_in_object`'s `pre_filter_count` counts
     // every arity-matched candidate regardless of whether their ids are
     // identical or distinct, so the pre-filter set is genuinely ambiguous
-    // (2 same-arity candidates) purely from that count. Calling cross-app
-    // with 1 (unproven-type) argument must NEVER resolve to Source, even
-    // though exactly one physical overload (`Foo(Integer)`, `public`)
-    // happens to be visible and the other (`Foo(Text)`, `internal`) is
-    // cross-app-excluded — access alone cannot prove which overload the
-    // call meant.
+    // (2 same-arity candidates) purely from that count. Called cross-app,
+    // only `Foo(Integer)` (`public`) is visible; `Foo(Text)` (`internal`) is
+    // excluded. This used to decline ("access alone cannot prove which
+    // overload the call meant"); S9.0e's compiler probe shows AL leaves an
+    // inaccessible overload out of overload resolution, so it binds the
+    // visible one.
     #[test]
-    fn resolve_member_object_mixed_access_same_arity_overload_never_resolves_to_source() {
+    fn resolve_member_object_mixed_access_same_arity_overload_binds_the_visible_one() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let src_target: &'static str = r#"
@@ -12599,41 +12587,27 @@ codeunit 53971 "OverloadNCaller"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
+        // REBASELINE (S9.0e): cross-app, the `internal Foo(Text)` is invisible,
+        // and AL leaves an inaccessible overload out of overload resolution
+        // (alc probe: public `P(Integer)` + `local P(Text)`, an outside
+        // `A.P('abc')` fails AL0133 'cannot convert from Text to Integer'). So
+        // the call binds to the visible `Foo(Integer)`.
+        let RouteTarget::Routine(ref rid) = routes[0].target else {
+            panic!("expected the visible Foo(Integer); got {:?}", routes[0]);
+        };
+        assert_eq!(rid.name_lc, "foo");
         assert!(
-            !matches!(routes[0].target, RouteTarget::Routine(_)),
-            "mixed-access same-arity overload (public Foo(Integer) + \
-             internal Foo(Text)) called cross-app with an unproven-type arg \
-             must NEVER resolve to Source — access-narrowing to the lone \
-             visible overload would manufacture a false resolution (the \
-             overload-narrowing guard); got {:?}",
-            routes[0].target
+            graph
+                .routines
+                .iter()
+                .find(|r| &r.id == rid)
+                .is_some_and(|r| r.access == Access::Public),
+            "the public overload"
         );
-        assert_eq!(routes[0].target, RouteTarget::Unresolved);
-        // NOTE (reason-split Task 2 investigation; STALE-CLAIM CORRECTED
-        // Task 5 nit sweep, 2026-07-04): this comment originally claimed
-        // the fixture's TWO same-arity SOURCE overloads (`Foo(Integer)`/
-        // `Foo(Text)`) shared an IDENTICAL `RoutineNodeId` because "source
-        // `sig_fp` is always 0" — true only PRE the
-        // sigfp-and-ambiguous-reclassification plan's Task 2 (2026-07-03).
-        // Verified directly (debug-printed `foo_candidates` on this exact
-        // fixture): post-fix the two DO get genuinely distinct `sig_fp`s
-        // (`69875687941676757` vs `7629489990184319135`), so there is no
-        // `binary_search_by` id-collision non-determinism here anymore —
-        // the observed reason today is deterministically
-        // `Unknown(AccessFilteredOverload)` (verified, not `InternalNotVisible`
-        // as this comment used to describe), matching the SAME
-        // `AccessFilteredOverload` shape the sibling
-        // `resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_declines`
-        // test below deliberately constructs — the two tests are no longer
-        // meaningfully different w.r.t. id-collision, only in HOW the
-        // distinct ids arise (real source fingerprinting here vs. manual
-        // construction there). Left as the original generic
-        // `Evidence::Unknown(_)` assertion regardless (pinning the specific
-        // reason isn't this fixture's job).
-        assert!(matches!(routes[0].evidence, Evidence::Unknown(_)));
+        assert_eq!(routes[0].evidence, Evidence::Source);
     }
 
-    /// Reason-split Task 2 fixture: an `AccessFilteredOverload` probe that
+    /// Reason-split Task 2 fixture (the former `AccessFilteredOverload` probe) that
     /// manually constructs the graph (mirrors
     /// `plain_dispatch_marker_guard_fixture`'s pattern) with two DISTINCT
     /// `sig_fp` values so the two same-arity candidates get genuinely
@@ -12646,13 +12620,12 @@ codeunit 53971 "OverloadNCaller"
     /// ids today, verified — see that test's own corrected NOTE. This
     /// fixture's manual construction is no longer a workaround for a
     /// collision the sibling test suffers; it is simply a more explicit,
-    /// hand-controlled probe of the identical `AccessFilteredOverload`
-    /// shape.) One candidate `Public` (always visible), one `Internal` (excluded
+    /// hand-controlled probe of the identical access-narrowed shape.) One candidate `Public` (always visible), one `Internal` (excluded
     /// cross-app, no friendship declared) — access narrows the ORIGINALLY
     /// `pre_filter_count == 2` set down to exactly ONE visible survivor, and
-    /// the resolver must decline rather than select it.
+    /// (S9.0e) the resolver selects it; see the assertion's note.
     #[test]
-    fn resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_declines() {
+    fn resolve_member_object_two_distinct_sig_fp_overloads_access_narrowed_to_one_resolves() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let ws_id = make_app_id("AccessFilteredWS");
@@ -12790,19 +12763,23 @@ codeunit 53971 "OverloadNCaller"
 
         assert_eq!(shape, DispatchShape::Exact);
         assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].target, RouteTarget::Unresolved);
+        // REBASELINE (S9.0e): access narrows the pre_filter_count==2 set to the
+        // one visible survivor (Public, sig_fp 100), and the call binds to it.
+        // AL leaves an inaccessible overload out of overload resolution (alc
+        // probe: `A.P('abc')` against public `P(Integer)` + `local P(Text)`
+        // fails AL0133), so a compiling call can only mean the survivor. This
+        // used to decline as `AccessFilteredOverload`.
+        //
+        // This hand-built graph has an empty `DeclSurface`, so the selected
+        // survivor's route degrades to `IndexIntegrationGap` inside
+        // `make_routine_route`: reaching it proves the survivor was selected
+        // (the old outcome was `AccessFilteredOverload`). The real-source
+        // sibling test above proves the resulting `Source` route.
         assert_eq!(
             routes[0].evidence,
-            Evidence::Unknown(UnknownReason::AccessFilteredOverload),
-            "access narrowed an originally-ambiguous (pre_filter_count==2) \
-             same-arity set down to ONE visible survivor (Public) and \
-             declined rather than select it — reason-split Task 2's \
-             AccessFilteredOverload label; got {:?}",
-            routes[0].evidence
-        );
-        assert_eq!(
-            routes[0].receiver_tier, None,
-            "AccessFilteredOverload is not a MemberNotFound shape — no receiver_tier"
+            Evidence::Unknown(UnknownReason::IndexIntegrationGap),
+            "{:?}",
+            routes[0]
         );
     }
 
@@ -12816,9 +12793,9 @@ codeunit 53971 "OverloadNCaller"
     /// `Histogram` both agreeing this is NOT `unknown` — the pre-Task-4
     /// behavior (single `Unresolved(OverloadAmbiguous)` route, `Exact`
     /// shape) this test used to pin. This is the ONLY same-object overload
-    /// ambiguity shape henceforth; `AccessFilteredOverload` (the sibling test
-    /// above, where access narrows the visible set to exactly one) is
-    /// unaffected.
+    /// ambiguity shape henceforth; the access-narrowed shape (the sibling test
+    /// above, where access narrows the visible set to exactly one) resolves
+    /// since S9.0e.
     #[test]
     fn resolve_member_object_genuine_two_public_same_arity_overload_becomes_ambiguous_resolved() {
         use crate::program::resolve::receiver::ReceiverType;

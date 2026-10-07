@@ -1071,6 +1071,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lone visible overload survivor binds** (engine-switch S9.0e). CDO's
+  dependency-body unknown edges 136 -> 59; workspace metrics unchanged. When
+  access filtering left exactly one overload, `resolve_in_object` declined with
+  `AccessFilteredOverload` unless the pre-filter set was also one. The AL
+  compiler (alc 18.0.41.45789) excludes an inaccessible overload from overload
+  resolution: calling a `local` `Foo(Text)` sibling of a public `Foo(Integer)`
+  from outside fails with `AL0133: cannot convert from 'Text' to 'Integer'`,
+  so the call binds the visible one. The decline arm and the
+  `UnknownReason::AccessFilteredOverload` reason are removed. Two resolver tests
+  and `tests/r0-corpus/ws-object-interface-visibility/PROOF.md` row D-neg-3
+  (now D-pos-4) were rebaselined; restoring the guard fails both tests.
 - **A bare call in a report dataitem trigger reaches the dataitem table**
   (engine-switch S9.0e). CDO's dependency-body unknown edges 222 -> 136
   (reportRecExcluded 87 -> 0); workspace metrics unchanged. The AL compiler

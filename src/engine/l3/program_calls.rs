@@ -1902,7 +1902,6 @@ fn member_reason(reason: PReason) -> bool {
             | P::LocalNotVisible
             | P::InternalNotVisible
             | P::OverloadAmbiguous
-            | P::AccessFilteredOverload
     )
 }
 
@@ -1913,7 +1912,7 @@ fn member_reason(reason: PReason) -> bool {
 fn map_unknown(reason: PReason) -> Resolution {
     use PReason as P;
     match reason {
-        P::OverloadAmbiguous | P::AccessFilteredOverload => Resolution::Ambiguous,
+        P::OverloadAmbiguous => Resolution::Ambiguous,
         P::ArityMismatch
         | P::MemberNotFound
         | P::ProtectedNotVisible

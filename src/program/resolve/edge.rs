@@ -168,9 +168,9 @@ pub enum UnknownReason {
     /// [`Self::CompoundReceiver`]).
     UnclassifiedCallee,
     /// GENUINE overload ambiguity ONLY (reason-split Task 2 — narrowed from
-    /// its pre-Task-2 meaning, which also covered [`Self::ArityMismatch`],
-    /// [`Self::AbiCollapsedOverload`], and [`Self::AccessFilteredOverload`]
-    /// below): `>1` visible, arity-matched, DISTINCT `RoutineNodeId`
+    /// its pre-Task-2 meaning, which also covered [`Self::ArityMismatch`] and
+    /// [`Self::AbiCollapsedOverload`] below): `>1` visible, arity-matched,
+    /// DISTINCT `RoutineNodeId`
     /// candidates this engine cannot break by name+arity+visibility alone —
     /// the textbook case (e.g. two real 2-arg source overloads). Also used
     /// by table-scope/interface/trigger-fan-out sites structurally identical
@@ -190,14 +190,9 @@ pub enum UnknownReason {
     /// outside `resolve_in_object` are unchanged by Task 2 and still emit
     /// [`Self::OverloadAmbiguous`]).
     AbiCollapsedOverload,
-    /// Access filtering narrowed an originally-ambiguous (`pre_filter_count
-    /// > 1`) same-arity candidate set down to exactly ONE visible survivor,
-    /// and the resolver declined rather than select it (the pre-filter set
-    /// was ambiguous with no arg-type evidence to pick between overloads, so
-    /// access removing the other sibling(s) doesn't prove the call meant the
-    /// survivor) — a distinct diagnostic shape from a genuinely >1-visible
-    /// ambiguity (reason-split Task 2; `resolve_in_object` only).
-    AccessFilteredOverload,
+    // (`AccessFilteredOverload` was removed in S9.0e: access narrowing a
+    // same-arity set to one visible survivor now selects it — AL leaves an
+    // inaccessible overload out of overload resolution.)
     /// A bare-call table-scope candidate collides in name+arity with a
     /// global builtin or a bare-callable page/instance intrinsic — unproven
     /// precedence, fail closed rather than guess which wins.
@@ -270,7 +265,6 @@ impl UnknownReason {
             UnknownReason::OverloadAmbiguous => "overloadAmbiguous",
             UnknownReason::ArityMismatch => "arityMismatch",
             UnknownReason::AbiCollapsedOverload => "abiCollapsedOverload",
-            UnknownReason::AccessFilteredOverload => "accessFilteredOverload",
             UnknownReason::BuiltinPrecedenceCollision => "builtinPrecedenceCollision",
             UnknownReason::WithScopeGuard => "withScopeGuard",
             UnknownReason::CodeunitTableNoExcluded => "codeunitTableNoExcluded",
@@ -1364,10 +1358,6 @@ mod tests {
             UnknownReason::AbiCollapsedOverload.as_str(),
             "abiCollapsedOverload"
         );
-        assert_eq!(
-            UnknownReason::AccessFilteredOverload.as_str(),
-            "accessFilteredOverload"
-        );
         assert_eq!(UnknownReason::ObjectNotInGraph.as_str(), "objectNotInGraph");
         // Unchanged siblings still render their pre-existing keys.
         assert_eq!(
@@ -1379,7 +1369,6 @@ mod tests {
         let keys = [
             UnknownReason::ArityMismatch.as_str(),
             UnknownReason::AbiCollapsedOverload.as_str(),
-            UnknownReason::AccessFilteredOverload.as_str(),
             UnknownReason::ObjectNotInGraph.as_str(),
             UnknownReason::OverloadAmbiguous.as_str(),
             UnknownReason::MemberNotFound.as_str(),
