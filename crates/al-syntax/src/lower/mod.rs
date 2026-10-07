@@ -218,23 +218,24 @@ fn lower_object(
     // is force-reset to `false` on entering `requestpage` (REQUESTPAGE ISOLATION).
     let mut routine_nodes = Vec::new();
     collect_routines(node, None, None, false, source, &mut routine_nodes);
-    let routines = routine_nodes
-        .into_iter()
-        .map(
-            |(r, attr_items, di_table, member, in_dataset_modify_context)| {
-                lower_routine(
-                    r,
-                    attr_items,
-                    di_table,
-                    member,
-                    in_dataset_modify_context,
-                    source,
-                    ir,
-                    issues,
-                )
-            },
-        )
-        .collect();
+    // A `#if`-split header yields one routine per arm (see `header_arms`).
+    let mut routines = Vec::new();
+    for (r, attr_items, di_table, member, in_dataset_modify_context) in routine_nodes {
+        let (arms, shared_from) = header_arms(r);
+        for arm in arms {
+            routines.push(lower_routine(
+                r,
+                attr_items.clone(),
+                di_table.clone(),
+                member,
+                in_dataset_modify_context,
+                (&arm, shared_from),
+                source,
+                ir,
+                issues,
+            ));
+        }
+    }
 
     // Report dataitems and XmlPort table elements (name, source-table) — the name is
     // in scope as a record var across all the object's routines. Empty otherwise.
@@ -855,16 +856,151 @@ fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `in_dataset_modify_context`
+#[allow(clippy::too_many_arguments)]
+// 7 pre-existing params + `in_dataset_modify_context`
 // (dataitem-receivers plan, Task 1); each is a distinct piece of context
 // `collect_routines`'s DFS threads down — grouping would obscure the call
 // site, mirrors `infer_receiver_type`'s identical precedent.
+/// The header arms of a routine node, as byte ranges, plus where its shared tail
+/// starts. A `preproc_split_procedure` / `preproc_split_procedure_preamble` repeats
+/// its header (`name`, `parameters`, `modifier`, return, attributes and, for the
+/// preamble, a `var` section) once per `#if`/`#elif`/`#else` arm, and every build
+/// compiles exactly one arm with the shared body after `#endif`. Each arm is a real
+/// routine under some build, so each lowers to its own `RoutineDecl` (the union-read
+/// this lowerer applies to every `#if`; a whole procedure duplicated across arms
+/// already yields two, `preproc_both_arms_distinct_signature_yield_two_routine_decls`).
+/// Reading only the first arm made a call written for the `#else` signature an
+/// `arityMismatch` (Base App `MfgCalculateBOMTree.CalcRoutingLineCosts`).
+/// Any other routine node is one arm covering the whole node.
+fn header_arms(node: RawNode) -> (Vec<std::ops::Range<usize>>, usize) {
+    if !matches!(
+        node.kind(),
+        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
+    ) {
+        let r = node.byte_range();
+        return (vec![r.clone()], r.end);
+    }
+    let mut arms = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut shared_from = node.byte_range().end;
+    for c in node.named_children() {
+        match c.kind() {
+            RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse => {
+                if let Some(s) = open.take() {
+                    arms.push(s..c.byte_range().start);
+                }
+                open = Some(c.byte_range().end);
+            }
+            RawKind::PreprocEndif => {
+                if let Some(s) = open.take() {
+                    arms.push(s..c.byte_range().start);
+                }
+                shared_from = c.byte_range().end;
+            }
+            _ => {}
+        }
+    }
+    (arms, shared_from)
+}
+
+thread_local! {
+    /// The preprocessor symbols a split header's arm decides, set only while that
+    /// arm's body lowers (`lower_routine`). `#else` under `#if not CLEAN27` compiles
+    /// with `CLEAN27` defined, so a body `#if not CLEAN27` block is not in that arm's
+    /// build: Base App's `#else` arm of `CalcRoutingLineCosts` has no `sender`
+    /// parameter, and its body uses `sender` only inside such blocks. Empty
+    /// everywhere else, where every `#if` union-reads (`is_preproc_wrapper`).
+    /// ponytail: thread-local, not a lowering-context parameter; a lowering pass is
+    /// one file on one thread, so it never leaks across files.
+    static ARM_SYMBOLS: std::cell::RefCell<Vec<(String, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record the symbol values that make preprocessor condition `cond` equal `value`,
+/// where they follow (`A and B` true: both true; `A or B` false: both false).
+/// Symbols are matched by exact text: if alc folds case, this only prunes less.
+fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(String, bool)>) {
+    let kids = structural_children(cond);
+    match cond.kind() {
+        RawKind::Identifier => out.push((cond.text(source).trim().to_string(), value)),
+        RawKind::PreprocParenthesizedExpression => {
+            kids.into_iter()
+                .for_each(|k| assume_preproc(k, value, source, out));
+        }
+        RawKind::PreprocNotExpression => {
+            kids.into_iter()
+                .for_each(|k| assume_preproc(k, !value, source, out));
+        }
+        RawKind::PreprocAndExpression if value => {
+            kids.into_iter()
+                .for_each(|k| assume_preproc(k, true, source, out));
+        }
+        RawKind::PreprocOrExpression if !value => {
+            kids.into_iter()
+                .for_each(|k| assume_preproc(k, false, source, out));
+        }
+        _ => {}
+    }
+}
+
+/// Condition `cond` under `ARM_SYMBOLS`, three-valued: `None` when undecided.
+fn decide_preproc(cond: RawNode, source: &str, syms: &[(String, bool)]) -> Option<bool> {
+    let mut kids = structural_children(cond)
+        .into_iter()
+        .map(|k| decide_preproc(k, source, syms));
+    match cond.kind() {
+        RawKind::Identifier => {
+            let t = cond.text(source).trim();
+            syms.iter().find(|(s, _)| s == t).map(|(_, v)| *v)
+        }
+        RawKind::PreprocParenthesizedExpression => kids.next().flatten(),
+        RawKind::PreprocNotExpression => kids.next().flatten().map(|v| !v),
+        RawKind::PreprocAndExpression => {
+            let (a, b) = (kids.next().flatten(), kids.next().flatten());
+            match (a, b) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (Some(true), Some(true)) => Some(true),
+                _ => None,
+            }
+        }
+        RawKind::PreprocOrExpression => {
+            let (a, b) = (kids.next().flatten(), kids.next().flatten());
+            match (a, b) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The symbols arm `arm` of split routine `node` decides: its own `#if`/`#elif`
+/// condition true, every earlier arm's condition false.
+fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    for c in node.named_children() {
+        let end = c.byte_range().end;
+        if end > arm.start {
+            break;
+        }
+        if matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
+            && let Some(cond) = c.field(FieldName::Condition)
+        {
+            assume_preproc(cond, end == arm.start, source, &mut out);
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
 fn lower_routine<'t>(
     node: RawNode<'t>,
-    attr_items: Vec<RawNode<'t>>,
+    mut attr_items: Vec<RawNode<'t>>,
     dataitem_source_table: Option<String>,
     member: Option<RawNode<'t>>,
     in_dataset_modify_context: bool,
+    (arm, shared_from): (&std::ops::Range<usize>, usize),
     source: &str,
     ir: &mut Ir,
     issues: &mut Vec<SyntaxIssue>,
@@ -928,6 +1064,23 @@ fn lower_routine<'t>(
         RoutineKind::Procedure
     };
 
+    // A header field of THIS arm (`header_arms`); for an unsplit routine the arm is the
+    // whole node, so this is the field's first child, as `field` returns.
+    let in_arm = |n: RawNode| arm.contains(&n.byte_range().start);
+    let arm_field = |f: FieldName| node.children_by_field(f).into_iter().find(|c| in_arm(*c));
+    let split = matches!(
+        node.kind(),
+        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
+    );
+    if split {
+        // A split header's arm carries its own attributes inside the node.
+        attr_items.extend(
+            node.named_children()
+                .into_iter()
+                .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c)),
+        );
+    }
+
     // Attributes: lowercased names (for classify_kind / control-context guards) +
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
@@ -960,19 +1113,16 @@ fn lower_routine<'t>(
             args,
         });
     }
-    let name = node
-        .field(FieldName::Name)
+    let name = arm_field(FieldName::Name)
         .map(|n| routine_name_text(n, source))
         .unwrap_or_default();
     // Origin of the name identifier itself (for the LSP selection_range); fall back to
     // the whole-routine origin when the name node is absent.
-    let name_origin = node
-        .field(FieldName::Name)
+    let name_origin = arm_field(FieldName::Name)
         .map(origin_of)
         .unwrap_or_else(|| origin_of(node));
 
-    let params = node
-        .field(FieldName::Parameters)
+    let params = arm_field(FieldName::Parameters)
         .map(|pl| {
             pl.named_children()
                 .into_iter()
@@ -990,8 +1140,7 @@ fn lower_routine<'t>(
     // hidden/inlined directly onto `node`. Fall back to that child when the direct
     // field is absent, so a controladdin/interface procedure's declared return
     // type is captured with the same fidelity as an ordinary procedure's.
-    let return_type = node
-        .field(FieldName::ReturnType)
+    let return_type = arm_field(FieldName::ReturnType)
         .or_else(|| {
             node.named_children()
                 .into_iter()
@@ -1011,13 +1160,12 @@ fn lower_routine<'t>(
     // `interface_procedure`/`controladdin` signature-only declarations have no body to
     // reference a named return in anyway, so the fallback's extra reach is unneeded
     // here (a `None` there is correct: no binding to synthesize a scoped symbol from).
-    let return_name = node
-        .field(FieldName::ReturnValue)
+    let return_name = arm_field(FieldName::ReturnValue)
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty());
 
     // Access modifier (`local`/`internal`/`protected`); None = public / trigger.
-    let access_modifier = node.field(FieldName::Modifier).and_then(|m| {
+    let access_modifier = arm_field(FieldName::Modifier).and_then(|m| {
         match m.text(source).trim().to_ascii_lowercase().as_str() {
             "local" => Some("local".to_string()),
             "internal" => Some("internal".to_string()),
@@ -1026,12 +1174,21 @@ fn lower_routine<'t>(
         }
     });
 
-    // Locals: var_section child(ren) of the routine (+ preproc-wrapped).
+    // Locals: var_section child(ren) of the routine (+ preproc-wrapped): this arm's
+    // own (a split preamble's) plus the shared tail's.
     let mut locals = Vec::new();
     for child in node.named_children() {
-        collect_globals(child, source, &mut locals);
+        if in_arm(child) || child.byte_range().start >= shared_from {
+            collect_globals(child, source, &mut locals);
+        }
     }
 
+    let syms = if split {
+        arm_symbols(node, arm, source)
+    } else {
+        Vec::new()
+    };
+    let outer_syms = ARM_SYMBOLS.with(|s| s.replace(syms));
     let body = if let Some(cb) = node
         .field(FieldName::Body)
         .filter(|b| b.kind() == RawKind::CodeBlock)
@@ -1069,6 +1226,7 @@ fn lower_routine<'t>(
             })
             .map(|wrapper| lower_preproc_split_routine_body(wrapper, ir, issues, source, 0))
     };
+    ARM_SYMBOLS.with(|s| s.replace(outer_syms));
 
     RoutineDecl {
         kind,
@@ -1331,8 +1489,26 @@ fn lower_block_child(
     depth: u32,
 ) {
     if is_preproc_wrapper(node) {
+        // Union-read every branch, except one the enclosing split arm's own
+        // condition decides false (`ARM_SYMBOLS`; empty outside such an arm).
+        let syms = ARM_SYMBOLS.with(|s| s.borrow().clone());
+        let (mut live, mut taken) = (true, false);
         for c in node.named_children() {
-            lower_block_child(c, ir, issues, source, items, depth);
+            match c.kind() {
+                RawKind::PreprocIf | RawKind::PreprocElif => {
+                    let d = c
+                        .field(FieldName::Condition)
+                        .and_then(|e| decide_preproc(e, source, &syms));
+                    live = !taken && d != Some(false);
+                    taken |= d == Some(true);
+                }
+                RawKind::PreprocElse => live = !taken,
+                RawKind::PreprocEndif => live = true,
+                _ => {}
+            }
+            if live {
+                lower_block_child(c, ir, issues, source, items, depth);
+            }
         }
         return;
     }
@@ -3583,6 +3759,118 @@ codeunit 50100 T
             call_reachable(&af, body, "DoWork"),
             "the shared body's call must be a discoverable edge"
         );
+    }
+
+    /// A split header lowers to one routine per arm, each with its own parameters,
+    /// modifier, attributes and (for a preamble) `var` section, and the shared body.
+    /// Base App's `CalcRoutingLineCosts` has 6 parameters under `#if not CLEAN27` and
+    /// 5 under `#else`; reading only the first arm made the `#else` call an
+    /// `arityMismatch`.
+    #[test]
+    fn preproc_split_header_yields_one_routine_per_arm() {
+        let src = r#"
+codeunit 50102 T
+{
+#if not CLEAN27
+    [Obsolete('x', '27.0')]
+    local procedure Foo(A: Integer; B: Integer) R: Integer
+    var
+        X: Integer;
+#elif SOMETHING
+    internal procedure Foo(A: Integer; B: Integer; C: Integer)
+#else
+    procedure Foo(A: Integer)
+    var
+        Y: Integer;
+#endif
+    begin
+        DoWork(A);
+#if not CLEAN27
+        OnlyFirst(B);
+#else
+        OnlyLater(A);
+#endif
+#if SOMETHING
+        Undecided(A);
+#endif
+    end;
+}
+"#;
+        let af = parse(src);
+        let foos: Vec<_> = af.objects[0]
+            .routines
+            .iter()
+            .filter(|r| r.name == "Foo")
+            .collect();
+        let shape: Vec<_> = foos
+            .iter()
+            .map(|r| {
+                (
+                    r.params.len(),
+                    r.access_modifier.clone(),
+                    r.return_name.clone(),
+                    r.attributes.clone(),
+                    r.locals.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (
+                    2,
+                    Some("local".to_string()),
+                    Some("R".to_string()),
+                    vec!["obsolete".to_string()],
+                    vec!["X".to_string()]
+                ),
+                (3, Some("internal".to_string()), None, vec![], vec![]),
+                (1, None, None, vec![], vec!["Y".to_string()]),
+            ]
+        );
+        // Each arm's body keeps only the body branches its own condition allows:
+        // arm 1 has `CLEAN27` undefined; arms 2 and 3 have it defined; only arm 2
+        // decides `SOMETHING` (true), arm 3 decides it false.
+        let calls: Vec<Vec<bool>> = foos
+            .iter()
+            .map(|r| {
+                let body = r.body.expect("every arm carries the shared body");
+                ["DoWork", "OnlyFirst", "OnlyLater", "Undecided"]
+                    .iter()
+                    .map(|n| call_reachable(&af, body, n))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                vec![true, true, false, true],
+                vec![true, false, true, true],
+                vec![true, false, true, false],
+            ]
+        );
+    }
+
+    /// Outside a split header's arm nothing is decided: every branch union-reads.
+    #[test]
+    fn preproc_branches_outside_a_split_arm_union_read() {
+        let src = r#"
+codeunit 50103 T
+{
+    procedure Foo()
+    begin
+#if not CLEAN27
+        OnlyFirst();
+#else
+        OnlyLater();
+#endif
+    end;
+}
+"#;
+        let af = parse(src);
+        let body = af.objects[0].routines[0].body.expect("body");
+        assert!(call_reachable(&af, body, "OnlyFirst"));
+        assert!(call_reachable(&af, body, "OnlyLater"));
     }
 
     /// H-6: `preproc_split_procedure_preamble` — header AND `var` section differ

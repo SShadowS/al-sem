@@ -1078,6 +1078,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A procedure header split across `#if` arms is one routine per arm**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 4 -> 3;
+  workspace metrics unchanged (0 unknown, 23 `ambiguousResolved`).
+  - Base App's `CalcRoutingLineCosts` declares 6 parameters under
+    `#if not CLEAN27` and 5 under `#else`. The lowerer read only the first
+    header, so the `#else` call (5 arguments) was an `arityMismatch`. Each arm
+    of a `preproc_split_procedure` / `_preamble` now lowers to its own
+    `RoutineDecl`: that arm's name, parameters, modifier, return, attributes
+    and (preamble) `var` section, plus the shared body. A whole procedure
+    duplicated across arms already lowered this way.
+  - Each arm's body is lowered with the preprocessor symbols its own
+    condition decides (its condition true, every earlier arm's false). A body
+    `#if` branch that this decides false is left out; everything undecided
+    still union-reads. Without this, the `#else` arm (`CLEAN27` defined) kept
+    two `sender.RunOn..()` calls from `#if not CLEAN27` blocks, and `sender`
+    is a parameter only the first arm declares (2 new `untrackedReceiver`).
+    Symbols match by exact text, so a case-folding compiler only means less
+    pruning.
+  - Known cost: dependency `ambiguousResolved` 710 -> 716. Three call sites
+    now see both arms of one routine where the arms differ only in a type the
+    argument typer cannot split (`array[15] of Text[80]` vs `of Text`;
+    `SecretText` vs `Text`). Each call sits in a build that has only one of
+    them (its own `#if` branch, or a split caller's arm), but a call's build
+    context does not reach overload selection yet.
+  - Tests `preproc_split_header_yields_one_routine_per_arm`,
+    `preproc_branches_outside_a_split_arm_union_read` and
+    `split_header_arms_each_bind_their_own_call`. Keeping only the first arm
+    fails the first and third; lowering pruned branches anyway fails them too.
+  - `aldump --dependency-bodies-stats --sites` also lists `ambiguousSites`
+    (file, line, candidates as `name/arity`).
 - **A `this.Global.Method()` argument types by its return** (engine-switch
   S9.0e). CDO's dependency-body unknown edges 5 -> 4 and dependency
   `ambiguousResolved` 723 -> 710; workspace metrics unchanged. The

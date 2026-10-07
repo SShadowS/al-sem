@@ -12116,7 +12116,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// after a `#pragma` inside an argument list stops counting as an argument. 6
 /// after `CreateTask` (no bare global form) and SourceTable-less pages. 5 after
 /// `this.X()` in an extension reaches the base object. 4 after a
-/// `this.Global.Method()` argument types by its return.
+/// `this.Global.Method()` argument types by its return. 3 after a procedure
+/// header split across `#if` arms lowers to one routine per arm.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12131,7 +12132,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 4;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 3;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

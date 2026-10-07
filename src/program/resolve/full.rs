@@ -3046,6 +3046,75 @@ mod tests {
         assert_eq!(f_targets, vec![(DispatchShape::Exact, 1)]);
     }
 
+    /// S9.0e: a procedure header split across `#if`/`#else` is one routine per
+    /// arm, so the call written for each arm's signature binds that arm's routine
+    /// (Base App `MfgCalculateBOMTree.CalcRoutingLineCosts`, 6 vs 5 parameters).
+    /// The `#else` arm's body drops the `#if not CLEAN27` block that uses the
+    /// parameter only the first arm declares (`sender` there).
+    #[test]
+    fn split_header_arms_each_bind_their_own_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50000 C\n{\n    procedure P()\n    begin\n#if not CLEAN27\n        Callee(1, this);\n#else\n        Callee(1);\n#endif\n    end;\n\n\
+             procedure Hook()\n    begin\n    end;\n\n\
+             #if not CLEAN27\n    local procedure Callee(A: Integer; var sender: Codeunit C)\n#else\n    local procedure Callee(A: Integer)\n#endif\n    begin\n#if not CLEAN27\n        sender.Hook();\n#endif\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let unresolved: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| matches!(r.target, RouteTarget::Unresolved))
+            })
+            .map(|ce| (ce.edge.from.name_lc.clone(), ce.edge.from.params_count))
+            .collect();
+        assert_eq!(unresolved, vec![]);
+        let hook_callers: Vec<_> = report
+            .edges
+            .iter()
+            .filter(|ce| {
+                ce.edge.routes.iter().any(
+                    |r| matches!(&r.target, RouteTarget::Routine(rid) if rid.name_lc == "hook"),
+                )
+            })
+            .map(|ce| ce.edge.from.params_count)
+            .collect();
+        assert_eq!(hook_callers, vec![2]);
+        let mut targets: Vec<(DispatchShape, Vec<usize>)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "p")
+            .map(|ce| {
+                let arities = ce
+                    .edge
+                    .routes
+                    .iter()
+                    .filter_map(|r| match &r.target {
+                        RouteTarget::Routine(rid) if rid.name_lc == "callee" => {
+                            Some(rid.params_count)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (ce.edge.shape, arities)
+            })
+            .collect();
+        targets.sort_by_key(|(_, a)| a.clone());
+        assert_eq!(
+            targets,
+            vec![
+                (DispatchShape::Exact, vec![1]),
+                (DispatchShape::Exact, vec![2])
+            ]
+        );
+    }
+
     /// S9.0e, alc-probed: a bare `CreateTask()` has no global form (AL0118 in
     /// a codeunit), so in a report dataitem trigger the dataitem table's own
     /// `CreateTask` binds; and a page with no `SourceTable` binds a bare

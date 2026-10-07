@@ -70,19 +70,24 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     `ambiguousResolved` throughout; dependency `ambiguousResolved` 863 -> 710.
   - **The 4 left** (`target/cdo/aldump.exe --dependency-bodies-stats --sites
     U:/Git/DO-cdo-baseline/Cloud`):
-    1. arityMismatch `MfgCalculateBOMTree.Codeunit.al:207` (Base App): procedure
-       header split across `#if not CLEAN27` / `#else` (lines 266-270); the lowerer
-       keeps only the first header (6 params), the `#else` call passes 5. This is the
-       deferred "preproc-symbol fidelity" item, now with a real consumer. Likely fix:
-       lower one routine per header arm (union-read, as argument lists already are).
+    1. FIXED (4 -> 3): arityMismatch `MfgCalculateBOMTree.Codeunit.al:207` (Base
+       App), a procedure header split across `#if not CLEAN27` / `#else`. Each arm is
+       now its own routine, its body lowered with the symbols its condition decides.
+       Follow-up: dependency `ambiguousResolved` 710 -> 716, three sites
+       (`AccScheduleOverview.Page.al:2130/2139`, Continia Core
+       `CoreSessionManager.Codeunit.al:77/86` twice) where a call sees both arms of
+       one routine. Removing them needs the call's build context (its `#if` branch
+       and its caller's arm symbols) in overload selection (`resolve_in_object`).
     2-3. compoundReceiver `ReconcileCustandVendAccs.Report.al:507/535`:
        `QueryVar.EntryType.AsInteger()` — query columns are not modelled (need column
        name -> source field type).
     4. untrackedReceiver `ImportExportWorkflow.XmlPort.al:226`:
        `EventConditions.AddText(..)` — an XmlPort `textattribute(EventConditions)` used
        as a BigText; XmlPort text nodes are not modelled.
-  - Open question: no S9.0e lowerer fix bumped a cache version (`cache_prune.rs`).
-    Packs are not persisted in production; the R3a-4 summary cache was not checked.
+  - Answered: no S9.0e lowerer fix needs a cache-version bump. The only cache this
+    engine writes is `snapshot/cache.rs` (raw extracted `.al` text, keyed by the
+    `.app`'s blake3, before parsing). The R3a-4 dependency-cache artifacts that
+    `cache_prune.rs` versions are only read and pruned; nothing in `src/` mints one.
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.
