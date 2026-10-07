@@ -2918,12 +2918,13 @@ mod tests {
         std::fs::write(
             dir.path().join("C.al"),
             "table 50001 T\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n}\n\
-             codeunit 50000 C\n{\n    procedure P()\n    var\n        R: Record T;\n        FR: FieldRef;\n        TB: TextBuilder;\n        X: Text;\n        I: Integer;\n    begin\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        R: Record T;\n        FR: FieldRef;\n        EI: ErrorInfo;\n        TB: TextBuilder;\n        X: Text;\n        I: Integer;\n    begin\n\
              X := Format(I).Trim();\n\
              X := R.Count().ToText();\n\
              X := R.SystemCreatedAt.ToText();\n\
              I := R.RecordId.GetRecord().Number();\n\
              I := FR.Record().Number();\n\
+             I := EI.RecordId.GetRecord().Number();\n\
              X := TB.ToText().TrimEnd('|').ToLower();\n    end;\n}\n",
         )
         .expect("write C.al");
@@ -3013,6 +3014,40 @@ mod tests {
         ] {
             assert!(ids.contains(want), "{want} missing from {ids:?}");
         }
+    }
+
+    /// S9.0e: an unpicked overload set types its chain when every candidate
+    /// returns the same type (`Regex.Replace(..).Split(..)`); different return
+    /// types decline.
+    #[test]
+    fn same_return_overloads_type_their_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50001 R\n{\n    procedure Same(T: Text): Text\n    begin\n    end;\n\n    procedure Same(I: Integer): Text\n    begin\n    end;\n\n    procedure Mixed(T: Text): Text\n    begin\n    end;\n\n    procedure Mixed(I: Integer): Integer\n    begin\n    end;\n}\n\
+             codeunit 50000 C\n{\n    procedure P()\n    var\n        Reg: Codeunit R;\n        V: Variant;\n        X: Text;\n    begin\n\
+             X := Reg.Same(V).ToLower();\n\
+             X := Reg.Mixed(V).ToLower();\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let in_p = || report.edges.iter().filter(|ce| ce.edge.from.name_lc == "p");
+        let first = in_p()
+            .map(|ce| ce.edge.site.span.start.line)
+            .min()
+            .expect("edges in P");
+        let unknown: Vec<u32> = in_p()
+            .filter(|ce| {
+                ce.edge
+                    .routes
+                    .iter()
+                    .any(|r| r.evidence.kind() == EvidenceKind::Unknown)
+            })
+            .map(|ce| ce.edge.site.span.start.line)
+            .collect();
+        // Only the `Mixed(..).ToLower()` line declines.
+        assert_eq!(unknown, vec![first + 1]);
     }
 
     /// S9.0e: an operator result types its receiver — a comparison is a

@@ -2165,7 +2165,7 @@ fn infer_cross_object_chain_receiver(
     index: &ResolveIndex,
     surface: &DeclSurface,
 ) -> Option<ReceiverType> {
-    let (_shape, routes) = resolve_member(
+    let (shape, routes) = resolve_member(
         base_ty,
         member_lc,
         arity,
@@ -2174,6 +2174,18 @@ fn infer_cross_object_chain_receiver(
         index,
         surface,
     );
+    // An unpicked same-arity overload set (S9.0e, `Regex.Replace(..)`): the
+    // chain is typed when every candidate returns the same type, since then
+    // it does not matter which one the compiler binds.
+    if shape == crate::program::resolve::edge::DispatchShape::AmbiguousOverload && routes.len() > 1
+    {
+        let mut types = routes.iter().map(|r| {
+            routine_node_for_type_query(r, arity, from_object, graph, index)
+                .and_then(|node| receiver_from_routine_node(node, from_object, graph, index))
+        });
+        let first = types.next()??;
+        return types.all(|t| t.as_ref() == Some(&first)).then_some(first);
+    }
     let [route] = routes.as_slice() else {
         return None;
     };

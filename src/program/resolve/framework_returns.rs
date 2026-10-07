@@ -268,6 +268,17 @@ pub fn framework_return_kind(
         // already lists `containskey`/`get`); only the CONTAINER kind needs
         // representing here, not its generic parameters.
         (ErrorInfo, "customdimensions", true, 0) => Some(Dictionary),
+        // S9.0e: the other getters (methods-auto/errorinfo): `RecordId()`,
+        // `SystemId()`, the text properties and the numeric ids.
+        (ErrorInfo, "recordid", true, 0) => Some(RecordId),
+        (ErrorInfo, "systemid", true, 0) => Some(Guid),
+        (
+            ErrorInfo,
+            "message" | "detailedmessage" | "title" | "callstack" | "controlname",
+            true,
+            0,
+        ) => Some(Text),
+        (ErrorInfo, "fieldno" | "tableid" | "pageno", true, 0) => Some(Scalar),
 
         // ---------------------------------------------------------------
         // S9.0e (CDO dependency bodies: Base/System Application chains).
@@ -593,6 +604,14 @@ mod tests {
             Some(Scalar)
         );
         assert_eq!(framework_return_kind(&Text, "replace", false, 0), None);
+        assert_eq!(
+            framework_return_kind(&ErrorInfo, "recordid", true, 0),
+            Some(RecordId)
+        );
+        assert_eq!(
+            framework_return_kind(&ErrorInfo, "message", true, 0),
+            Some(Text)
+        );
         assert_eq!(
             framework_return_kind(&Dictionary, "keys", true, 0),
             Some(List)

@@ -12110,7 +12110,8 @@ fn adapter_loses_no_site_or_route_on_cdo() {
 /// `Rec.RecordId` and implicit-`Rec` member arguments are typed. 24 after a
 /// `List`/`Dictionary` element is typed from the collection's declared type.
 /// 19 after a page's bare instance-method calls bind the page (`Update()`). 14
-/// after operator results type their receiver (`(A - B).ToText()`).
+/// after operator results type their receiver (`(A - B).ToText()`). 12 after
+/// `ErrorInfo`'s getters and same-return overload sets type their chain.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -12125,7 +12126,7 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         "CDO precondition: {} dependency edges",
         h.total
     );
-    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 14;
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 12;
     assert!(
         h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
         "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \

@@ -1071,6 +1071,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ErrorInfo` getters and same-return overload sets type their chain**
+  (engine-switch S9.0e). CDO's dependency-body unknown edges 14 -> 12;
+  workspace metrics unchanged.
+  - `ErrorInfo.RecordId.GetRecord()` stayed `compoundReceiver`: the chain
+    table had only `CustomDimensions`. It now also has `RecordId`, `SystemId`,
+    the text properties and the numeric ids (methods-auto/errorinfo; all in
+    `member_catalog`'s `ERRORINFO`).
+  - `Regex.Replace(..).Split(..)` declined because `Replace` is an unpicked
+    overload set. The chain typer now types it when every candidate returns
+    the same type, since then the bound overload does not matter.
+    Different return types still decline.
+  - Tests `same_return_overloads_type_their_chain` (positive and negative)
+    and new rows in `builtin_and_record_chain_receivers_resolve`. Disabling
+    the rule, or the `recordid` row, fails them.
 - **An operator result types its receiver** (engine-switch S9.0e). CDO's
   dependency-body unknown edges 19 -> 14; workspace metrics unchanged.
   `(TotalDaysToPay / TotalNoOfInv).ToText()` and `(WorkDate() - "Posting
