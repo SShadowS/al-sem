@@ -54,7 +54,15 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     CompoundReceiver ~930, MemberNotFound ~615, ObjectNotInGraph 134,
     AccessFilteredOverload 77, ...). `realUnknownRate` never measures them: it covers
     workspace and publisher edges only. Most dependency-wide oracle disagreements are
-    these. Owner decision needed: a dependency-body resolution arc inside or after S9.
+    these.
+- **S9.0e Dependency-body unknowns to zero** (owner decision 2026-10-07: part of S9).
+  Baseline on CDO: 6,315 unknown edges of 431,248 (7,880 unknown routes:
+  catalogMiss 3,341, untrackedReceiver 2,617, compoundReceiver 929, memberNotFound
+  615, objectNotInGraph 134, reportRecExcluded 87, accessFilteredOverload 77,
+  overloadAmbiguous 41, receiverOutOfClosure 33, arityMismatch 3,
+  internalNotVisible 3). Measured with `aldump --dependency-bodies-stats --sites`;
+  held by the `dependency_body_unknown_ceiling_on_cdo` ratchet, lowered with every
+  fix. One family per commit, each root-caused against real source.
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.

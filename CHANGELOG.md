@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency-body unknowns are measured and ratcheted** (engine-switch S9.0e).
+  `aldump --dependency-bodies-stats --sites` lists every unknown route in dependency
+  code resolved from its own app, with its source line. The CDO test
+  `dependency_body_unknown_ceiling_on_cdo` holds their count (6,315 of 431,248 edges on
+  2026-10-07) and only moves down. `realUnknownRate` never counted these.
+
 - **The AL compiler's call graph as an independent oracle** (engine-switch
   S9.0b). The AL extension ships `altool graph`
   (Microsoft.BusinessCentral.CallGraph). `altool graph extract-whole --corpus

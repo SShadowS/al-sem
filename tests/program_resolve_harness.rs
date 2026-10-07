@@ -12073,3 +12073,34 @@ fn adapter_loses_no_site_or_route_on_cdo() {
     assert!(census.program_sites > 0, "CDO precondition: program sites");
     assert_eq!(census.losses(), vec![], "CDO adapter losses");
 }
+
+/// Engine-switch S9.0e: dependency bodies, resolved from their own app (what
+/// cross-app `alsem analyze` reads; `ProgramContext::resolve_dependency_bodies`),
+/// are not in `realUnknownRate`, which counts workspace and publisher edges only.
+/// This ceiling holds their `unknown` edge count; it only ever moves DOWN. Measure
+/// with `aldump --dependency-bodies-stats [--sites] <workspace>`.
+///
+/// 6315 on 2026-10-07 (pinned `bc3ccb18` baseline), of 431,248 edges.
+#[test]
+fn dependency_body_unknown_ceiling_on_cdo() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let ctx = al_sem::program::resolve::full::build_context(&ws).expect("CDO context");
+    let res = ctx.resolve_dependency_bodies();
+    let edges: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
+    let h = al_sem::program::resolve::edge::Histogram::of_edges(&edges);
+    assert!(
+        h.total > 400_000,
+        "CDO precondition: {} dependency edges",
+        h.total
+    );
+    const CDO_DEPENDENCY_BODY_UNKNOWN_CEILING: usize = 6315;
+    assert!(
+        h.unknown <= CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+        "dependency-body unknown edges {} exceed the ceiling {} — a new resolution \
+         hole in dependency code; find it with `aldump --dependency-bodies-stats --sites`",
+        h.unknown,
+        CDO_DEPENDENCY_BODY_UNKNOWN_CEILING,
+    );
+}

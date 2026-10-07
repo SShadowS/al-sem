@@ -61,7 +61,7 @@ fn usage() -> ExitCode {
          --l3-call-graph-stats-cross-app | --l3-unknown-breakdown | --l3-unknown-breakdown-cross-app | \
          --l3-event-graph | --l3-coverage | --r2.5a-merged-index | --l3-cross-app | \
          --r3a1-combined-graph | --r3a2-summary-core | --r3a3-cone-coverage | \
-         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats | \
+         --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats [--sites] | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | --b3 [--b3-deps] [--b3-triage <file.md>] | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
@@ -232,6 +232,7 @@ fn main() -> ExitCode {
     let mut r4_findings = false;
     let mut r4_findings_cross_app = false;
     let mut dependency_bodies_stats = false;
+    let mut sites = false;
     let mut r4f_root_classifications = false;
     let mut r4f_return_summaries = false;
     let mut r4f_snapshot = false;
@@ -345,6 +346,10 @@ fn main() -> ExitCode {
         }
         if arg == "--dependency-bodies-stats" {
             dependency_bodies_stats = true;
+            continue;
+        }
+        if arg == "--sites" {
+            sites = true;
             continue;
         }
         if arg == "--r4f-root-classifications" {
@@ -679,7 +684,45 @@ fn main() -> ExitCode {
         let all: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
         let apps: serde_json::Map<String, serde_json::Value> =
             per_app.iter().map(|(n, e)| (n.clone(), hist(e))).collect();
-        let out = serde_json::json!({ "all": hist(&all), "perApp": apps });
+        let mut out = serde_json::json!({ "all": hist(&all), "perApp": apps });
+        if sites {
+            // `--sites`: every unknown route's site with its source line, for triage.
+            use al_sem::program::resolve::edge::Evidence;
+            let mut texts: std::collections::HashMap<(String, &str), &str> =
+                std::collections::HashMap::new();
+            for u in ctx.dep_bodies().unwrap_or_default() {
+                for pf in &u.files {
+                    texts.insert(
+                        (u.app.guid.to_ascii_lowercase(), &pf.virtual_path),
+                        &pf.text,
+                    );
+                }
+            }
+            let mut rows = Vec::new();
+            for ce in &res.edges {
+                let app = graph.apps.resolve(ce.edge.from.object.app);
+                let span = &ce.edge.site.span;
+                for r in &ce.edge.routes {
+                    let Evidence::Unknown(reason) = &r.evidence else {
+                        continue;
+                    };
+                    let line = texts
+                        .get(&(app.guid.to_ascii_lowercase(), span.unit.as_str()))
+                        .and_then(|t| t.lines().nth(span.start.line as usize))
+                        .unwrap_or("")
+                        .trim();
+                    rows.push(serde_json::json!({
+                        "app": app.name,
+                        "file": span.unit,
+                        "line": span.start.line + 1,
+                        "routine": ce.edge.from.name_lc,
+                        "reason": reason.as_str(),
+                        "text": line,
+                    }));
+                }
+            }
+            out["unknownSites"] = serde_json::Value::Array(rows);
+        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return ExitCode::SUCCESS;
     }
