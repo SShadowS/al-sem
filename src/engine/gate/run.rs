@@ -108,6 +108,10 @@ pub struct AnalyzeArgs {
     /// `false` (the default, and ALWAYS in the parity harness) the JSON output is
     /// byte-identical to today (all new keys absent, `schemaVersion "1.0.0"`). (RE-8)
     pub with_evidence: bool,
+    /// `--single-app` — analyse the workspace alone, as before engine-switch S8.3.
+    /// The default analyses the workspace with the dependencies it requires (the
+    /// cross-app model: dependency bodies, events, d13/d16/d17).
+    pub single_app: bool,
 }
 
 /// Read the workspace root `app.json` identity (`id` / `publisher` / `name` / `version`)
@@ -166,11 +170,29 @@ pub enum ModelFailure {
     ProgramBuildFailed(String),
 }
 
+/// What the detectors run over: the workspace's own model, or the cross-app base
+/// (engine-switch S8.3, the default).
+pub enum AnalysisTarget {
+    SingleApp(Box<L3Resolved>),
+    CrossApp(Box<crate::engine::l4::capability_cone::R3a5CrossAppBase>),
+}
+
+impl AnalysisTarget {
+    /// The model the projections, diagnostics and formats read.
+    #[must_use]
+    pub fn resolved(&self) -> &L3Resolved {
+        match self {
+            AnalysisTarget::SingleApp(r) => r.as_ref(),
+            AnalysisTarget::CrossApp(b) => &b.resolved,
+        }
+    }
+}
+
 /// The model `alsem analyze`'s detectors read, plus the program build's coverage.
 pub struct AnalysisModel {
     /// The program engine's `FreshCoverage`, or its build error.
     pub fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
-    pub model: Result<L3Resolved, ModelFailure>,
+    pub model: Result<AnalysisTarget, ModelFailure>,
     /// The program graph's workspace physical rows (engine-switch S2b.3), kept
     /// past the program context's drop; `None` when the model was not built.
     pub physical: Option<crate::program::physical::PhysicalIndex>,
@@ -191,7 +213,16 @@ pub struct AnalysisModel {
 /// The model is assembled with the al-sem GATE modelInstanceId (content-derived,
 /// UNPINNED) so the internal RoutineIds embedded in each finding's rootCauseKey —
 /// and therefore the SARIF fingerprint hashed over them — byte-match the goldens.
-pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
+///
+/// `single_app == false` (analyze's default since engine-switch S8.3) builds the
+/// cross-app base instead: one `FULL` program build, the workspace plus the
+/// dependency code it demands. The switch harness dumps the single-app model (it
+/// needs the physical rows); the cross-app side is measured with
+/// `aldump --r4-findings-cross-app`.
+pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
+    if !single_app {
+        return build_cross_app_analysis_model(ws_path);
+    }
     let (fresh, program) = {
         let _s = pt::span("preflight", "preflight.fresh_program");
         match crate::program::resolve::full::build_program_with_coverage(ws_path) {
@@ -260,9 +291,47 @@ pub fn build_analysis_model(ws_path: &Path) -> AnalysisModel {
     crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
     AnalysisModel {
         fresh,
-        model: Ok(resolved),
+        model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
         physical,
         object_facts,
+    }
+}
+
+/// [`build_analysis_model`]'s cross-app half. A workspace whose cross-app build
+/// fails is classified as the single-app build would classify it; when that build
+/// succeeds, the cross-app failure is a program-build failure (never a quiet
+/// single-app run).
+fn build_cross_app_analysis_model(ws_path: &Path) -> AnalysisModel {
+    let model_instance_id = {
+        let _s = pt::span("gate", "gate.model_instance_id");
+        compute_gate_model_instance_id(ws_path)
+    };
+    let base = model_instance_id.as_deref().and_then(|mi| {
+        let _s = pt::span("crossapp", "crossapp.base_total");
+        crate::engine::l4::capability_cone::build_cross_app_base(ws_path, mi)
+    });
+    match base {
+        Some(base) => AnalysisModel {
+            fresh: Ok(base.coverage.clone()),
+            model: Ok(AnalysisTarget::CrossApp(Box::new(base))),
+            physical: None,
+            object_facts: None,
+        },
+        None => {
+            let single = build_analysis_model(ws_path, true);
+            let model = match single.model {
+                Ok(_) => Err(ModelFailure::ProgramBuildFailed(
+                    "the cross-app model could not be built".to_string(),
+                )),
+                Err(e) => Err(e),
+            };
+            AnalysisModel {
+                fresh: single.fresh,
+                model,
+                physical: None,
+                object_facts: None,
+            }
+        }
     }
 }
 
@@ -391,9 +460,9 @@ pub fn run_analyze_with_exit(
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
     let ws_path = Path::new(&args.workspace);
-    let AnalysisModel { fresh, model, .. } = build_analysis_model(ws_path);
-    let resolved = match model {
-        Ok(r) => r,
+    let AnalysisModel { fresh, model, .. } = build_analysis_model(ws_path, args.single_app);
+    let target = match model {
+        Ok(t) => t,
         // Fail-closed layout / unreadable workspace → empty output; preflight says
         // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
         Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
@@ -409,9 +478,20 @@ pub fn run_analyze_with_exit(
     // L4 + L5: run the selected detectors. Findings come pre-sorted by
     // (detector, primaryLocationKey, rootCauseKey) with dep-anchored findings already
     // role-scoped out (source-only ⇒ no-op).
+    let resolved = target.resolved();
     let run = {
         let _s = pt::span("l4_l5", "l4_l5.run_detectors");
-        run_detectors(&resolved, &detectors)
+        match &target {
+            AnalysisTarget::SingleApp(r) => run_detectors(r, &detectors),
+            // The cross-app runner drops dependency-anchored findings itself for
+            // `--scope primary` (routine, object and `dep:` location); `--scope all`
+            // keeps them for the scope filter below.
+            AnalysisTarget::CrossApp(base) => crate::engine::l5::registry::run_detectors_cross_app(
+                base,
+                &detectors,
+                args.scope == Scope::Primary,
+            ),
+        }
     };
     // Capture diagnostics + detector stats for the Json formatter (consumed after filtering).
     //
@@ -502,7 +582,7 @@ pub fn run_analyze_with_exit(
     // --- scope: primary drops dependency-anchored findings. Source-only ⇒ keep all. ---
     {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
-        let is_dependency = dependency_object_predicate(&resolved, &idx);
+        let is_dependency = dependency_object_predicate(resolved, &idx);
         let kept_ids: std::collections::HashSet<String> =
             scope_filter(summaries, args.scope, is_dependency)
                 .into_iter()
@@ -570,7 +650,7 @@ pub fn run_analyze_with_exit(
     // to the Json formatter. The preflight evaluation + exit-code gate follow below.
     let coverage = {
         let _s = pt::span("gate", "gate.coverage");
-        analysis_coverage(&resolved, ws_path, &fresh)
+        analysis_coverage(resolved, ws_path, &fresh)
     };
 
     // --- format ---
@@ -628,7 +708,7 @@ pub fn run_analyze_with_exit(
                 let primary_app = resolved.primary_app.as_ref();
                 format_html(&HtmlFormatInputs {
                     findings: &paired,
-                    resolved: &resolved,
+                    resolved,
                     coverage: &coverage,
                     primary_app,
                 })
@@ -681,7 +761,7 @@ pub fn run_analyze_with_exit(
         drop(run_diagnostics);
         drop(coverage);
         drop(run);
-        drop(resolved);
+        drop(target);
     }
 
     Ok((output, exit_code, stderr_warning))

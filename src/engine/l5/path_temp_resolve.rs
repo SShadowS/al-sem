@@ -221,14 +221,7 @@ fn step_one_frame(
     let Some(cs) = parent.call_sites.iter().find(|c| c.id == cs_id) else {
         return TempStateKind::Unknown;
     };
-    let Some(binding) = cs
-        .argument_bindings
-        .iter()
-        .find(|b| b.parameter_index == callee_param_index)
-    else {
-        return TempStateKind::Unknown;
-    };
-    match &binding.source_temp_state {
+    match cs.source_temp_state_for(callee_param_index) {
         Some(ts) => match TempStateKind::from_p_temp_state(ts) {
             TempStateKind::Known(v) => TempStateKind::Known(v),
             // Forwarded keyword-less by-var param: re-symbolize to the caller's own

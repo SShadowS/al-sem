@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One detector-context builder for both modes** (engine-switch S8.1).
+  `build_detector_context_with(resolved, demanded, cross)` takes an optional
+  `CrossAppInputs`: the dependency routine ids (never primary roots or entry
+  points), the fixed solver leaves, the dependency-internal edges the cone follows,
+  and d17's declared dependencies and versions. `build_detector_context_cross_app`
+  (230 lines that built every substrate whatever the detectors asked for) is deleted.
+  `run_detectors_cross_app` now demand-gates like `run_detectors`.
+  - CDO/DO cross-app findings are byte-identical to S8.2's, and every golden is
+    unchanged.
+  - A debug assertion that the solver's summaries carry no materialized db effects
+    now exempts fixed leaves, which arrive with their own direct rows by design.
+
+- **The cross-app model holds only the dependency code the workspace needs**
+  (engine-switch S8.2, the spec's demand policy). `program::resolve::demand::
+  cross_app_demand` walks the program edges of every body:
+  - forward from every primary routine: calls, runs, triggers, and the subscribers
+    of a raised event;
+  - reverse from each dependency event a primary routine subscribes to: the
+    publisher and its raisers, which then continue forward.
+
+  A dependency file keeps every object but only the demanded routines. Measured:
+  - CDO 104 s / 7.2 GB -> 42 s / 3.0 GB, DO 153 s -> 63 s / 3.1 GB.
+  - Findings equal the full run on both. Only d1's loop-catalog numbering differs,
+    because loops of routines no longer in the model drop out of the catalog;
+    dereferenced, every finding is identical.
+  - CDO's r3a5 summary went >2 GB -> 1.39 GB.
+
+  One S7.3 test fixture now raises its dependency event from the workspace: the
+  subscriber of an event no demanded routine raises is, rightly, not in the model.
+
+- **Cross-app run profiled; two output-identical speedups** (engine-switch S8.0).
+  Spans cover every cross-app phase (`crossapp.*`). CDO `--r4-findings-cross-app`
+  went 180 s -> 104 s, findings byte-identical on CDO and DO.
+  - The stable-id rewrite (`make_stable_finding_id_fn`) tried every routine id at
+    every character of every finding string. A cross-app model holds over 100k
+    routines, so that took 55 s; it now looks up one substring per distinct id
+    length (0.1 s). The longest-first rule is unchanged.
+  - Ordering facts and digests take only primary-app roots: a dependency routine's
+    root yields no finding the scope filter keeps. `reportable_roots` had the
+    primary test implicit, because the model used to hold the workspace only.
+
+  Remaining CDO cost (S8.2's target):
+  - ordering facts 44 s, over a snapshot of every routine;
+  - artifacts and direct facts 14 s;
+  - context 9 s;
+  - dropping the base 9 s;
+  - model assembly 9 s.
+
+  Peak is 7.2 GB. Single-app `analyze` is 632 MiB / 6 s.
+
 - **The cross-app detector context is complete** (engine-switch S7.6). It got no
   call-site index, root classifications or ordering facts, so d40/d41/d42/d47/d49/
   d50/d51/d53/d55/d61 were blind in cross-app mode. The base now keeps the cross-app
@@ -275,6 +325,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
 
 ### Changed
+
+- **d45 moves from DEFAULT to OPT-IN** (engine-switch S8, 2026-10-07; the owner
+  asked for the best solution).
+  - **The evidence:** the S8.4 sample was 20 true and 20 false. Of the S8.6
+    additions, 12 of 12 verified were false and 4 were unverified.
+  - **Why it is not fixed at the root:** the dominant cause explains 12 of the
+    16 S8.6 findings. A subscriber exits unless an event argument equals its
+    own app id, and the raiser reads that argument from a DATABASE ROW (Guided
+    Experience `"Extension ID"`). No sound static rule decides it, so field-value
+    tracking would not reach the 30% bar. The trackable cause (a field left
+    blank after `Init()`) explains 4 findings.
+  - The default set is now 40 detectors and the opt-in set 14 (d45 after d8).
+    Wake condition and causes: `OUTSTANDING.md`.
+  - **Goldens:** default stats slots drop the d45 row, and `all` slots reorder.
+    The ws-d8 gate default SARIF and PR summary lose the d45 finding.
+
+- **The cross-app cone follows every resolved call dependency code makes**
+  (engine-switch S8.6). It used to follow only S7's admitted own-app edges:
+  direct calls, resolved method calls and interface `Maybe` edges inside one
+  dependency app. It now also follows object runs (`Codeunit.Run` and friends)
+  and calls from one dependency app into another. The edges are typed by the
+  same rules as the workspace's (`build_combined_graph` over the dependency
+  callers' resolved calls). Event dispatch was already followed. The R3a-4
+  artifact keeps its own admit rule; only the cone input changed.
+  - **Cost:** S8.2's demand keeps the model to the dependency code the workspace
+    needs, so this measured +1 s and no extra memory on CDO and DO (46k
+    dependency edges). S7 had to stay narrow because the whole dependency world
+    took CDO's r3a5 projection to 9.8 GB.
+  - **Findings:** +27 on CDO (d43 9, d44 8, d45 10) and +16 on DO; none removed.
+    A triage of all 43 found every newly followed edge to be a real call, with
+    d43 10 of 10 real, d44 14 of 17 real and d45 0 of 12 real. The false
+    positives come from modelling gaps this change exposes; they are tracked in
+    `OUTSTANDING.md`.
+  - **Tests:** pinned by `the_cone_follows_every_dependency_call` (a
+    dependency-internal `Codeunit.Run`, and a call into a second dependency
+    app). Injecting only the old admitted edges, or none, fails both cases.
+
+- **d8 moves from DEFAULT to OPT-IN** (engine-switch S8, owner decision
+  2026-10-07). S8 gap 3 cut d8 from 36 to 9 findings on CDO and from 32 to 9 on
+  DO. The re-triage of the survivors still finds more than 30% false positives
+  among the verifiable ones, and the real findings are small, intended Commits
+  (setup wizard Finish, migration batches, `LogUsage`). The default set is now
+  41 detectors and the opt-in set 13; d8 sits after d17 in the opt-in order. The
+  remaining causes and the wake condition are in `OUTSTANDING.md` ("d8 after S8
+  gap 3"). Goldens moved:
+  - every `default` stats slot loses its d8 row;
+  - every `all` slot lists d8 after d17;
+  - the ws-d8 gate default SARIF and PR summary lose the d8 finding.
+
+- **Cross-app detector fixes from the CDO/DO triage** (engine-switch S8.4/S8.5).
+  Each fix is pinned by a test in `tests/r4/r4_cross_app_program.rs` with a
+  discrimination proof.
+  - **d45** now roots a DEPENDENCY event publisher when a primary routine
+    subscribes to it (owner decision 2026-10-06). The finding anchors on that
+    primary subscriber. It is reported only for tables a primary subscriber
+    writes. The triage sample was 20 true / 20 false positives; the false ones
+    come from engine gaps fixed later in S8 (constant-argument
+    guards, temp var parameters).
+  - **Virtual-table gate** (`op_targets_virtual_system_table`): a resolved
+    table numbered below 2000000000 is physical. A resolved platform table is
+    decided by the name allowlist, which gains `License Permission`. The
+    cross-app model now resolves `Field`, `AllObjWithCaption` and similar, so
+    "it resolved" no longer means "it is a user table". This removed all 20
+    sampled d1 false positives.
+  - **d3** (61.5% false positives on the sample) emits no finding when:
+    (A) the table is a virtual system table; (B) every loadable field is read
+    anyway, so there is nothing to trim; (C) the member read is not a field of
+    the table (a parens-less method call such as `Field.Count`); or (D) the
+    record escapes to code d3 cannot read: an unresolved, interface or dynamic
+    callee, an event publisher, or a `Variant`/`RecordRef` parameter.
+  - **d13** skips a caller that the callee's app names in
+    `internalsVisibleTo` (a friend). The friend map runs from the snapshot to
+    `DetectorContext.friends`. All 20 sampled findings were friend calls.
+  - **d17** compares `major.minor` only, and moves from DEFAULT to OPT-IN
+    (owner decision 2026-10-06). It needs MinVersion symbols the model rarely
+    has: 100% of the sample were false positives. The default set is now 42
+    detectors and the opt-in set is 12.
+  - Fixtures: `ws-inline-suppress`'s table gains an unread field (`City`), so
+    its d3 stays genuine under fix B. `ws-d13-member-call`'s dependency drops
+    `InternalsVisibleTo` and marks `InternalMethod` `[InternalProc]`, so it
+    pins a non-friend call. `ws-d8-commit-in-tx` loses its d3 finding: `No.`
+    is the primary key and `Header` escapes to `OnAfterPostSalesDoc`.
+
+- **`alsem analyze` is cross-app by default; `--single-app` keeps the old
+  analysis** (engine-switch S8.3, owner decision 2026-10-06).
+  - **What the default analyses.** The workspace together with the dependency code
+    it demands (S8.2): one `FULL` program build and the cross-app base, so
+    d13/d16/d17 and every detector see dependency bodies, events and versions.
+  - **The model builder.** `build_analysis_model(ws, single_app)` returns an
+    `AnalysisTarget`: `SingleApp` (the old model) or `CrossApp` (the base). The
+    switch harness keeps dumping the single-app model.
+  - **Scope.** `--scope primary` drops dependency-anchored findings in the cross-app
+    runner (routine, object, `dep:` location); `--scope all` keeps them.
+  - **Coverage** counts the primary app's routines only (`project_coverage`).
+  - **Measured (release-fast, default preset).** CDO: 2,599 findings in 21 s at a
+    2.95 GB peak, against 2,172 in 5 s at 634 MiB with `--single-app`. DO: 2,253 in
+    22 s / 3.06 GB, against 1,847 in 5 s / 614 MiB.
+  - **Goldens.** No golden moved: no golden fixture with dependencies goes through
+    `alsem analyze`. A test pins the default (d13 on `ws-d13-internal-call`) and
+    `--single-app` (none).
+
 
 - **The B3 adapter no longer runs L3's receiver inference** (engine-switch S6.0). It
   asked L3's `infer_receiver_type` over the model `SymbolTable` for three outputs:
@@ -874,6 +1025,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge the real fixture's sites into the local de-anonymization map).
 
 ### Fixed
+
+- **A record passed to an event keeps its temp state through the subscriber**
+  (engine-switch S8, S8.6 triage cause 5). AL binds an event subscriber's
+  parameters to the publisher's by NAME. A subscriber's write through its `var`
+  record parameter used to lose the raiser's temp state at the event edge
+  (`Unknown`, counted as physical).
+  - **Event-edge substitution:** both the L4 solver
+    (`summary_runner::substitute_pd_temp_state`) and the capability cone
+    (`substitute_entry`) now carry the subscriber's parameter, and its
+    constant-argument guards, into the publisher's frame by name
+    (`event_param_temp_state`). The raiser's argument then decides there.
+    Publisher summaries change from `unknown` to `parameter-dependent(i)`
+    (r3a2 goldens `ws-event-chains`, `ws-event-multi-sub-overlap`,
+    `ws-event-read-after-write`).
+  - **Closed-world proof (new `engine::l3::event_param_temp`):** a `local`
+    publisher can only be raised from its own object. When every raise is
+    resolved and passes a `temporary` record, each subscriber's same-named
+    parameter becomes `Known(true)` in the model. This matters because d44/d45
+    read subscriber cones on their own.
+  - **CDO/DO:** neither moves a finding. The triaged case (Continia Core's
+    `OnRequestAppFeatureInformation`) raises with the raiser's own parameter,
+    from a `public` procedure that any app may call, so it soundly stays
+    open.
+  - **Tests:** pinned by `a_local_event_raised_with_temporary_records_has_temporary_subscribers`,
+    the `event-raise` cases of `a_dependency_write_to_a_temporary_argument_is_not_physical`,
+    and `query_effects_event_raise_decides_the_subscribers_temp_state`, each with
+    a discrimination proof.
+
+- **d8/d9 count only the writes still uncommitted at the Commit** (engine-switch
+  S8, triage C gap 3; new `src/engine/l5/pending_writes.rs`). A transaction span
+  unioned every member's whole forward cone. That union held the Commit routine's
+  own writes, writes after the Commit, sibling branches and checked runs. d8
+  called a routine a "manager" from it, and 10 of 10 sampled cross-app d8
+  findings were false positives. A span now also carries its PENDING writes:
+  for each member, the sites that may run before its call toward the Commit.
+  - **Which sites run before the call:** earlier statements; the conditions on
+    the way; only the `if` arm or `case` branch that holds the call; and an
+    enclosing loop's whole body (an earlier iteration).
+  - **Earlier sites that do not count:** an `if` arm or `case` branch that
+    always exits or raises; anything before a `Commit()` statement, which commits
+    it; a checked run (`if Codeunit.Run(...)`, and `if CU.Run()` reaching an
+    `OnRun`), which is its own transaction.
+  - **The call toward the Commit itself never counts**, even in a loop. What it
+    reaches is the member's to count. Its own raised event counts, as does a
+    publisher's `publish`, which has no site.
+  - A site's effects are its physical writes and events, plus a call's whole
+    callee cone. The combined graph includes implicit-trigger edges, so an
+    `Insert(true)` before a Commit now counts its `OnInsert` writes too.
+  - **The span walk changed too:** it stops at a checked run, and it carries the
+    Commit's constant-argument guards (`param_guard`). A caller whose literal
+    makes the Commit unreachable is not in the span at all, for example
+    `MoveEMailToFile(..., true)`, which exits before its Commit.
+  - **d8's "manager" test** reads the member's own pending count. d9 reads the
+    span's pending tables and events, and its text now says "before it". The
+    old cone-union fields stay for d50, digest and prove.
+  - **CDO/DO cross-app:** d8 36 -> 9 and 32 -> 9; d9 38 -> 34 and 34 -> 34.
+    Wall time and memory are unchanged.
+  - **Still open:** the remaining d8 findings are mostly small intended Commits,
+    and their known false-positive causes are in `OUTSTANDING.md`.
+  - **Tests:** pinned by `d8_counts_only_the_writes_pending_at_the_commit`
+    (13 cases, each rule shown to make it fail when broken). Only the
+    `ws-d8-commit-in-tx` goldens moved. The partial-baseline SARIF test gained
+    the regen hook its siblings have.
+
+- **A write behind a boolean parameter is pruned when the caller passes the
+  opposite literal** (engine-switch S8, triage D gap 2). Continia Core writes its
+  activation cache only under `if UpdateCache then`. Every route from a CDO/DO
+  subscriber passes a literal `false`, but one other Core caller passes `true`,
+  so no per-routine rule can prune the write. The answer depends on the call
+  path, so it is carried like a `var` record parameter's temp state
+  (`src/engine/l4/param_guard.rs`). A capability-cone entry records the
+  parameter values its site requires: `if P`, `if not P`, `if P = false`, and
+  the early exit `if <guard> then exit;`. Each call edge substitutes the caller's
+  argument. A contradicting literal drops the fact, an agreeing literal drops
+  the requirement, and a forwarded parameter re-anchors it. A call made under a
+  guard adds its requirements to everything behind it.
+  - A parameter counts only when it is a by-value `Boolean`, never assigned, and
+    never passed to a `var` parameter, `Evaluate` or `Clear`.
+  - Only a non-recursive singleton's cone keeps guards; anywhere else they are
+    dropped, and the fact is unconditional as before. The cone key carries the
+    guard, so a guarded copy never hides an unguarded one.
+  - CDO cross-app: d44 24 -> 12, d45 227 -> 143. DO: d44 24 -> 12, d45 218 -> 134.
+    The removed findings are the Core activation, access-token and consent
+    tables (written only with `UpdateCache`/`SkipCache` = `true`), and the
+    document-sending writes behind `DocEMailSend(true, ...)`: with
+    `UseQueue = true` the mail is only queued. 20 (CDO) / 32 (DO) d45 findings
+    are new; they were hidden by the 16-per-publisher cap before. Wall time and
+    peak memory did not change (CDO 15-16 s, 2.9 GB).
+  - d35 does not move. Its triaged false positives need a guard on one conjunct
+    (`IsPrimarySetup and (...)`) and data-state reasoning (`OUTSTANDING.md`).
+  - Pinned by `a_dependency_write_behind_a_false_literal_is_not_reached` (seven
+    cases, with a discrimination proof). One r3a3 fact moved (`ws-d32`'s
+    `DriverC` calls `SingleCallSite(false)`). The BFS oracle pins that one prune
+    by its exact count.
+
+- **A table method's `Rec` is as temporary as the record it is called on**
+  (engine-switch S8, triage D gap 1). A Table/TableExtension procedure's
+  implicit `Rec` was seeded `Known(false)`, so `Buf.ClearBuffer()` on a
+  `temporary` buffer counted as a physical `DeleteAll`. On CDO this was 7 of 16
+  cross-app d44 findings (Continia Core activation buffers). `Rec` is now
+  parameter-dependent on a reserved receiver index (`RECEIVER_PARAM_INDEX`).
+  Each call site records its receiver's temp state
+  (`PCallSite::receiver_temp_state`: the member receiver, an object global, or
+  the caller's own `Rec` for a bare call). Every PD substitution reads it through
+  `PCallSite::source_temp_state_for`: the L4 solver, the capability cone,
+  d1's temp and liveness passes and `path_temp_resolve`. Table triggers keep
+  `Known(false)`: the platform invokes them, and no call site carries their
+  receiver. The CDO whole-program L4 digest
+  (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`) is re-frozen for
+  this change: 334 of 5479 routines move, all of them effects inside table
+  methods that were `Known(false)` (log in that directory's README). A `var` parameter that is written, or forwarded once more, was
+  already substituted correctly. Pinned by
+  `a_dependency_write_to_a_temporary_argument_is_not_physical`, with a
+  discrimination proof.
 
 - **`Temp Blob` is matched by its exact name** (engine-switch S7.6). The IO
   classifier took any type containing "temp blob", so `Codeunit "Temp Blob

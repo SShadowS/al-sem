@@ -14,9 +14,7 @@
 //! is plain `str::cmp` (byte order), used inline.
 
 use crate::engine::l3::l3_workspace::L3Resolved;
-use crate::engine::l5::detector_context::{
-    DetectorContext, build_detector_context, build_detector_context_cross_app,
-};
+use crate::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use crate::engine::l5::finding::{D1CohortIndex, Finding};
 use crate::engine::perf_trace as pt;
 use rayon::prelude::*;
@@ -443,8 +441,26 @@ pub fn run_detectors(resolved: &L3Resolved, detectors: &[Detector]) -> RunOutput
 pub(crate) fn run_detectors_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
     detectors: &[Detector],
+    scope_primary: bool,
 ) -> RunOutput {
-    let ctx = build_detector_context_cross_app(base);
+    // One builder for both modes (engine-switch S8.1), demand-gated like
+    // `run_detectors`.
+    let demanded = detectors.iter().fold(0u32, |acc, d| acc | d.requires);
+    let ctx = {
+        let _s = pt::span("crossapp", "crossapp.context_build");
+        crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            demanded,
+            Some(crate::engine::l5::detector_context::CrossAppInputs {
+                dep_routine_ids: &base.dep_routine_ids,
+                leaf_summaries: &base.leaf_summaries,
+                injected_typed_edges: &base.injected_typed_edges,
+                declared_dependencies: &base.declared_dependencies,
+                app_versions: &base.resolved_app_versions,
+                friends: &base.friends,
+            }),
+        )
+    };
     let summarize_diagnostics: Vec<Diagnostic> = ctx
         .summarize_diagnostics
         .iter()
@@ -491,13 +507,27 @@ pub(crate) fn run_detectors_cross_app(
     let findings: Vec<Finding> = findings
         .into_iter()
         .filter(|f| {
-            !f.primary_location.source_unit_id.starts_with("dep:")
+            !scope_primary
+                || !f.primary_location.source_unit_id.starts_with("dep:")
                 || f.actionable_anchor
                     .as_ref()
                     .is_some_and(|a| !a.source_unit_id.starts_with("dep:"))
         })
         .collect();
-    let scoped = role_scope_and_sort(findings, &role_by_routine);
+    let scoped = {
+        let _s = pt::span("crossapp", "crossapp.role_scope");
+        // `--scope all` (alsem analyze) keeps dependency-anchored findings: every
+        // routine reads as primary here, so only the sort applies.
+        if scope_primary {
+            role_scope_and_sort(findings, &role_by_routine)
+        } else {
+            role_scope_and_sort(findings, &std::collections::HashMap::new())
+        }
+    };
+    {
+        let _s = pt::span("crossapp", "crossapp.ctx_drop");
+        drop(ctx);
+    }
 
     RunOutput {
         findings: scoped,
@@ -816,7 +846,7 @@ mod tests {
             .into_iter()
             .find(|d| d.name == "d13-cross-app-internal-call")
             .unwrap();
-        let real = run_detectors_cross_app(&base, std::slice::from_ref(&d13));
+        let real = run_detectors_cross_app(&base, std::slice::from_ref(&d13), true);
         assert_eq!(real.findings.len(), 1, "the fixture's d13 finding");
         let mut moved = real.findings[0].clone();
         assert!(moved.primary_location.source_unit_id.starts_with("ws:"));
@@ -827,7 +857,7 @@ mod tests {
             run: dep_located_probe,
             requires: d13.requires,
         };
-        let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe));
+        let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe), true);
         assert_eq!(out.findings.len(), 0);
     }
 

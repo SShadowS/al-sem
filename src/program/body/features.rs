@@ -28,6 +28,7 @@
 //! model: a fact missing from a dump may still be modelled (#15). The complete
 //! list (`serde_skip_list_is_complete` keeps it in sync):
 //!   - `PCallSite.in_statement_position`
+//!   - `PCallSite.receiver_temp_state`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
@@ -215,6 +216,40 @@ pub struct PCallSite {
     /// is (baseline vectors deserialize the default and would compare unequal).
     #[serde(skip)]
     pub in_statement_position: bool,
+    /// The temp state of the RECORD this call is made on, when the callee may be
+    /// a table method: the member receiver (`Buf.ClearBuffer()` -> `Buf`), or the
+    /// caller's implicit `Rec` for a bare call. A table method's implicit `Rec` is
+    /// `ParameterDependent(RECEIVER_PARAM_INDEX)`, and this is the value the PD
+    /// substitution reads for that index ([`PCallSite::source_temp_state_for`]).
+    /// `None` when the receiver is not a record variable the caller declares.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`.
+    #[serde(skip)]
+    pub receiver_temp_state: Option<PTempState>,
+}
+
+/// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
+/// record the method is CALLED ON, so its temporariness is the caller's choice,
+/// exactly like a keyword-less `var` record parameter (engine-switch S8, triage D:
+/// `Buf.ClearBuffer()` on a `temporary` buffer was counted a physical
+/// `DeleteAll`). Reserved: no real parameter list reaches it.
+pub const RECEIVER_PARAM_INDEX: u32 = u32::MAX;
+
+impl PCallSite {
+    /// The caller-side temp state bound to callee parameter `i`: the argument
+    /// binding's source state, or the receiver's for [`RECEIVER_PARAM_INDEX`].
+    /// `None` when nothing is bound (every consumer reads that as Unknown).
+    #[must_use]
+    pub fn source_temp_state_for(&self, i: u32) -> Option<&PTempState> {
+        if i == RECEIVER_PARAM_INDEX {
+            return self.receiver_temp_state.as_ref();
+        }
+        self.argument_bindings
+            .iter()
+            .find(|b| b.parameter_index == i)
+            .and_then(|b| b.source_temp_state.as_ref())
+    }
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -724,7 +759,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 8, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 9, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 }

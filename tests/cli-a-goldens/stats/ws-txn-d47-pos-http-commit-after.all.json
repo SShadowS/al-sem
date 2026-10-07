@@ -41,14 +41,6 @@
   },
   {
     "candidatesConsidered": 1,
-    "detector": "d8-commit-in-transaction",
-    "findingsEmitted": 0,
-    "skipped": {
-      "other": 1
-    }
-  },
-  {
-    "candidatesConsidered": 1,
     "detector": "d9-transaction-span-summary",
     "findingsEmitted": 0,
     "skipped": {
@@ -90,12 +82,6 @@
   {
     "candidatesConsidered": 0,
     "detector": "d16-obsolete-routine-call",
-    "findingsEmitted": 0,
-    "skipped": {}
-  },
-  {
-    "candidatesConsidered": 0,
-    "detector": "d17-min-version-drift",
     "findingsEmitted": 0,
     "skipped": {}
   },
@@ -211,12 +197,6 @@
   },
   {
     "candidatesConsidered": 0,
-    "detector": "d45-event-transitive-table-exposure",
-    "findingsEmitted": 0,
-    "skipped": {}
-  },
-  {
-    "candidatesConsidered": 0,
     "detector": "d52-bulk-write-param-no-temp-guard",
     "findingsEmitted": 0,
     "skipped": {}
@@ -310,6 +290,26 @@
   {
     "candidatesConsidered": 1,
     "detector": "d51-retry-side-effect-duplication",
+    "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d17-min-version-drift",
+    "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 1,
+    "detector": "d8-commit-in-transaction",
+    "findingsEmitted": 0,
+    "skipped": {
+      "other": 1
+    }
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d45-event-transitive-table-exposure",
     "findingsEmitted": 0,
     "skipped": {}
   },

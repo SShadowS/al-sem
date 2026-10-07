@@ -60,7 +60,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
                 .collect(),
         );
     }
-    let built = build_analysis_model(ws);
+    let built = build_analysis_model(ws, true);
     if let Ok(fc) = &built.fresh {
         d.insert("ledger".into(), rows(&fc.ledger));
     }
@@ -74,7 +74,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
             format!("model={:?}", built.model.as_ref().map(|_| "ok")),
         ],
     );
-    let Ok(resolved) = built.model else {
+    let Ok(crate::engine::gate::run::AnalysisTarget::SingleApp(resolved)) = built.model else {
         return d;
     };
     let ws_model = &resolved.workspace;

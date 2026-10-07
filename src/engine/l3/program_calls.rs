@@ -683,6 +683,9 @@ fn attach_program_calls_with(
         drop(ctx);
     }
     resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
+    // A `local` event raised only with temporary records makes its subscribers'
+    // same-named `var` parameters temporary (engine-switch S8).
+    crate::engine::l3::event_param_temp::prove_event_param_temps(resolved);
 }
 
 /// `assemble_and_resolve_workspace_default` plus the production call
@@ -738,6 +741,9 @@ pub struct CrossAppProgram {
     pub dependency_apps: Vec<crate::program::model::workspace::DependencyApp>,
     /// The build's dependency coverage and ledger.
     pub coverage: crate::program::resolve::full::FreshCoverage,
+    /// `internalsVisibleTo`, lower-case guids: exposing app -> its friend apps
+    /// (engine-switch S8.5, d13).
+    pub friends: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
 }
 
 /// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
@@ -752,19 +758,53 @@ pub fn assemble_and_resolve_cross_app_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
-    let (ctx, mut report, coverage) =
+    use crate::engine::perf_trace as pt;
+    let (ctx, mut report, coverage) = {
+        let _s = pt::span("crossapp", "crossapp.program_build_full");
         crate::program::resolve::full::build_program_with_coverage_profiled(
             workspace,
             crate::program::profile::BuildProfile::FULL,
         )
-        .ok()?;
-    let (mut resolved, abi_rows) =
+        .ok()?
+    };
+    let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for u in &ctx.snapshot().apps {
+        for f in &u.internals_visible_to {
+            if !f.app_id.is_empty() {
+                friends
+                    .entry(u.id.guid.to_ascii_lowercase())
+                    .or_default()
+                    .insert(f.app_id.to_ascii_lowercase());
+            }
+        }
+    }
+    let dependency = {
+        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+        ctx.resolve_dependency_bodies()
+    };
+    report.edges.extend(dependency.edges);
+    report.site_facts.extend(dependency.site_facts);
+    // S8.2: only what the workspace can reach, and the code around the dependency
+    // events it subscribes to (`program::resolve::demand`).
+    let demand = {
+        let _s = pt::span("crossapp", "crossapp.demand");
+        crate::program::resolve::demand::cross_app_demand(
+            report.primary_app_ref,
+            ctx.graph(),
+            &report.edges,
+        )
+    };
+    let (mut resolved, abi_rows) = {
+        let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
             workspace,
             model_instance_id,
             skip_roots_config,
             &ctx,
-        )?;
+            Some(&demand),
+        )?
+    };
     let snap = ctx.snapshot();
     let declared_dependencies = snap
         .apps
@@ -803,15 +843,16 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    let dependency = ctx.resolve_dependency_bodies();
-    report.edges.extend(dependency.edges);
-    report.site_facts.extend(dependency.site_facts);
-    attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
+    {
+        let _s = pt::span("crossapp", "crossapp.attach_program_calls");
+        attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
+    }
     Some(CrossAppProgram {
         resolved,
         declared_dependencies,
         dependency_apps,
         coverage,
+        friends,
     })
 }
 

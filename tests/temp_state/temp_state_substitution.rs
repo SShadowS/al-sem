@@ -222,13 +222,15 @@ codeunit 50202 "TS7 C"
     );
 }
 
-// --- (d) event-subscriber PD stays Unknown ----------------------------------
+// --- (d) event-subscriber PD maps to the publisher's parameter -------------
 
 #[test]
-fn event_dispatch_pd_stays_unknown() {
-    // The event publisher's subscriber (an event-dispatch edge has callsite_id =
-    // None) inherits a PD effect. With no callsite binding, the substituted
-    // temp_state is Unknown.
+fn event_dispatch_pd_maps_to_the_publishers_param() {
+    // The event publisher inherits its subscriber's PD effect across the
+    // event-dispatch edge. AL binds a subscriber's parameters to the publisher's
+    // BY NAME, so the subscriber's `var Rec` (PD 0) becomes the publisher's own
+    // `var Rec` (PD 0), and the raiser `DoWork`, which passes a physical local,
+    // decides it: Known(false). (Engine-switch S8: it used to stop at Unknown.)
     let src = r#"
 table 50203 "TS7 Rec"
 {
@@ -261,12 +263,8 @@ codeunit 50204 "TS7 Subscriber"
 }
 "#;
     let proj = project(src);
-    // The dispatch edge from the publisher routine to the subscriber inherits the
-    // subscriber's PD(0) Modify. Across the event-dispatch boundary it must be
-    // Unknown (never Known(true), never a leaked PD index).
     // An event-dispatch edge folds with via "event-subscriber" (see
-    // via_for_edge_kind); it carries callsite_id = None so the substitution has
-    // no binding and must produce Unknown.
+    // via_for_edge_kind).
     let dispatch_inherited: Vec<&PDbEffect> = proj
         .summaries
         .iter()
@@ -280,11 +278,33 @@ codeunit 50204 "TS7 Subscriber"
     );
     for e in &dispatch_inherited {
         assert!(
-            matches!(e.temp_state, PDbEffectTempState::Unknown),
-            "event-dispatch PD inheritance must resolve Unknown; got: {:?}",
+            matches!(
+                e.temp_state,
+                PDbEffectTempState::ParameterDependent { parameter_index: 0 }
+            ),
+            "event-dispatch PD inheritance must map to the publisher's param 0; got: {:?}",
             e.temp_state
         );
     }
+    // The raiser passes a physical record: its inherited Modify is Known(false),
+    // and no effect anywhere is Unknown.
+    let all: Vec<&PDbEffect> = proj
+        .summaries
+        .iter()
+        .flat_map(|s| s.db_effects.iter())
+        .filter(|e| e.op == "Modify")
+        .collect();
+    assert!(
+        all.iter().any(|e| is_known(&e.temp_state, false)),
+        "the raiser's inherited Modify must be Known(false); got: {:?}",
+        modify_effects(&proj)
+    );
+    assert!(
+        !all.iter()
+            .any(|e| matches!(e.temp_state, PDbEffectTempState::Unknown)),
+        "no Modify may stay Unknown; got: {:?}",
+        modify_effects(&proj)
+    );
 }
 
 // --- (e) by-value record param is Known(false), not PD, not suppressed ------

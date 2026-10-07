@@ -1,7 +1,9 @@
 //! D45 — event transitive table exposure. Port of al-sem
 //! `src/detectors/d45-event-transitive-table-exposure.ts`.
 //!
-//! For each primary event PUBLISHER, walk the transitive subscriber chain
+//! For each primary event PUBLISHER — and, since engine-switch S8.4, each
+//! DEPENDENCY publisher with a primary routine in its chain, anchored on that
+//! routine — walk the transitive subscriber chain
 //! (`collect_relay_subscribers` — bridges event-graph dispatches + call-graph relays)
 //! and surface every table written by a chain subscriber. One finding per
 //! (publisher, table); id `d45/{publisher}|{table}`, severity info.
@@ -55,11 +57,7 @@ pub fn detect_d45(
         let Some(pub_summary) = ctx.summaries.get(&pub_routine.id) else {
             continue;
         };
-        // roleOf(pubRoutine) !== "primary" → skip. Source-only: every routine is
-        // primary, so this never skips (mirrors al-sem; primary_routines == all).
-        if !ix.primary_routines.contains(publisher) {
-            continue;
-        }
+        let publisher_is_primary = ix.primary_routines.contains(publisher);
         let pub_writes: BTreeSet<String> = ctx
             .cone_derived
             .writes_physical_tables_of(&pub_summary.routine_id)
@@ -77,6 +75,24 @@ pub fn detect_d45(
                 max_nodes: D45_MAX_NODES,
             },
         );
+
+        // A dependency publisher is a root only when a PRIMARY routine is in its
+        // subscriber chain (engine-switch S8.4, owner decision 2026-10-06): the
+        // workspace then takes part in that event. The finding anchors on the first
+        // such primary subscriber, the code the user owns. Single-app: every routine
+        // is primary, so nothing changes.
+        let primary_anchor = if publisher_is_primary {
+            None
+        } else {
+            match subscribers_by_depth
+                .keys()
+                .find(|s| ix.primary_routines.contains(*s))
+                .and_then(|s| ctx.routine_by_id.get(s.as_str()).copied())
+            {
+                Some(r) => Some(r),
+                None => continue,
+            }
+        };
 
         // Aggregate subscriber-induced writes; track worst coverage + writer sets.
         let mut writer_subs_by_table: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -121,6 +137,15 @@ pub fn detect_d45(
             .map(|s| s.to_string());
 
         for (table, writer_set) in &writer_subs_by_table {
+            // For a dependency publisher, only a table a PRIMARY subscriber writes is
+            // the workspace's exposure; another dependency's subscriber writing its
+            // own tables is not the workspace's to act on (S8.4: CDO 323 findings
+            // before, most of them Continia Core's own tables).
+            if primary_anchor.is_some()
+                && !writer_set.iter().any(|w| ix.primary_routines.contains(w))
+            {
+                continue;
+            }
             candidates += 1;
             let publisher_also_writes = if pub_writes.contains(table) {
                 "yes"
@@ -179,7 +204,10 @@ pub fn detect_d45(
                     capped_by: None,
                     evidence: Vec::new(),
                 },
-                primary_location: anchor_of(&pub_routine.source_anchor, pub_routine),
+                primary_location: match primary_anchor {
+                    Some(r) => anchor_of(&r.source_anchor, r),
+                    None => anchor_of(&pub_routine.source_anchor, pub_routine),
+                },
                 evidence_path: evidence,
                 additional_paths: None,
                 affected_objects: Vec::new(),

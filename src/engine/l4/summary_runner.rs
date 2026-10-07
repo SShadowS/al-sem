@@ -811,12 +811,23 @@ fn compose_roles_only(
 /// one cross-module caller, not because two solvers share it — moving this
 /// function to sit next to its only caller is a reasonable follow-up, out of
 /// scope here.
+///
+/// An `event-dispatch` edge (publisher -> subscriber) carries the subscriber's
+/// parameter into the PUBLISHER's frame by name ([`event_param_temp_state`],
+/// engine-switch S8); `callee` is the subscriber.
 pub(crate) fn substitute_pd_temp_state(
     edge: &super::combined_graph::CombinedEdge,
     callee_param_index: u32,
     routine: &L3Routine,
+    callee: Option<&L3Routine>,
 ) -> TempState {
-    // (1) event-dispatch / any to-less edge: no caller-frame binding.
+    if edge.kind == "event-dispatch" {
+        return match callee {
+            Some(subscriber) => event_param_temp_state(routine, subscriber, callee_param_index),
+            None => TempState::Unknown,
+        };
+    }
+    // (1) any other to-less edge: no caller-frame binding.
     let cs_id = match &edge.callsite_id {
         Some(id) => id,
         None => return TempState::Unknown,
@@ -830,6 +841,39 @@ pub(crate) fn substitute_pd_temp_state(
         return TempState::Unknown;
     }
     pd_temp_state_at_callsite(routine, cs_id, callee_param_index)
+}
+
+/// The temp state an event subscriber's parameter `sub_param` has in its
+/// PUBLISHER's frame. AL binds a subscriber's parameters to the publisher's by
+/// NAME (a subscriber may declare any subset), so the publisher parameter of the
+/// same name decides: its own record-variable temp state (`temporary` keyword ->
+/// `Known(true)`, keyword-less `var` -> `ParameterDependent(i)`, resolved further
+/// at the raiser's call site). No same-named record parameter -> `Unknown`.
+pub(crate) fn event_param_temp_state(
+    publisher: &L3Routine,
+    subscriber: &L3Routine,
+    sub_param: u32,
+) -> TempState {
+    let Some(name) = subscriber
+        .parameters
+        .iter()
+        .find(|p| p.index == sub_param)
+        .map(|p| p.name.trim().trim_matches('"'))
+    else {
+        return TempState::Unknown;
+    };
+    let Some(pp) = publisher
+        .parameters
+        .iter()
+        .find(|p| p.name.trim().trim_matches('"').eq_ignore_ascii_case(name))
+    else {
+        return TempState::Unknown;
+    };
+    publisher
+        .record_variables
+        .iter()
+        .find(|rv| rv.is_parameter && rv.parameter_index == Some(pp.index))
+        .map_or(TempState::Unknown, |rv| TempState::from_p(&rv.temp_state))
 }
 
 /// Steps (3)-(4) of [`substitute_pd_temp_state`], without the edge-kind gate:
@@ -847,15 +891,9 @@ pub(crate) fn pd_temp_state_at_callsite(
         Some(cs) => cs,
         None => return TempState::Unknown,
     };
-    // (3) the binding for the callee param the PD refers to.
-    let binding = match cs
-        .argument_bindings
-        .iter()
-        .find(|b| b.parameter_index == callee_param_index)
-    {
-        Some(b) => b,
-        None => return TempState::Unknown,
-    };
+    // (3) the binding for the callee param the PD refers to (the call's
+    // receiver for a table method's `Rec`, `RECEIVER_PARAM_INDEX`).
+    let source_temp_state = cs.source_temp_state_for(callee_param_index);
     // (4) substitution table over the binding's captured source temp state.
     //
     // A record-typed PARAMETER is present in the caller's
@@ -879,7 +917,7 @@ pub(crate) fn pd_temp_state_at_callsite(
     // ONLY because its source param IS Known(true). Around a recursive cycle a
     // PD chasing itself stays PD (monotone) and the fixed point converges — the
     // effect_key includes the PD index, so the state space stays finite.
-    match &binding.source_temp_state {
+    match source_temp_state {
         Some(ts) => match TempState::from_p(ts) {
             TempState::Known(v) => TempState::Known(v),
             // Caller's-own-param source (forwarded keyword-less by-var param):

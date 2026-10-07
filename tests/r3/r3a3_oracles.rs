@@ -373,11 +373,22 @@ fn oracle_r3a3_real_bfs_consistency() {
             .sum();
 
         // The INDEPENDENT BFS oracle and the production cone must agree on WHICH
-        // routines carry inherited facts.
+        // routines carry inherited facts — except where a constant-argument
+        // guard (engine-switch S8 gap 2) prunes every inherited fact of a
+        // routine. The BFS is plain reachability and cannot see that, so each
+        // such fixture is pinned with the exact number of routines it prunes.
+        let guard_pruned = match fx.as_str() {
+            // DriverC -> SingleCallSite(false): `if Flag then Message('x')`.
+            "ws-d32" => 1,
+            _ => 0,
+        };
         assert_eq!(
-            real.routines_with_inherited_facts, proj_routines_with_inherited,
-            "[{fx}] BFS oracle routinesWithInherited ({}) != projected ({})",
-            real.routines_with_inherited_facts, proj_routines_with_inherited
+            real.routines_with_inherited_facts,
+            proj_routines_with_inherited + guard_pruned,
+            "[{fx}] BFS oracle routinesWithInherited ({}) != projected ({}) + guard-pruned \
+             ({guard_pruned})",
+            real.routines_with_inherited_facts,
+            proj_routines_with_inherited
         );
         // A genuine >1-hop witness IS an inherited fact ⟹ count ≤ total inherited.
         assert!(
@@ -388,7 +399,7 @@ fn oracle_r3a3_real_bfs_consistency() {
         );
 
         total_real_routines += real.routines_with_inherited_facts;
-        total_proj_routines += proj_routines_with_inherited;
+        total_proj_routines += proj_routines_with_inherited + guard_pruned;
         total_more_than_1_hop += real.facts_with_more_than_1_hop_witness;
         total_inherited += proj_inherited;
         total_ties += real.equal_distance_ties;

@@ -137,6 +137,7 @@ fn inline_suppress_args(disable_suppression: bool) -> AnalyzeArgs {
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     }
 }
 
@@ -303,6 +304,7 @@ fn d8_args(baseline: Option<&str>, update: bool, fail_on: Option<&str>) -> Analy
         group_by: None,
         deterministic: false,
         with_evidence: false,
+        single_app: false,
     }
 }
 
@@ -324,6 +326,10 @@ fn baseline_partial_one_result_byte_matches() {
     let baseline_path = goldens_dir().join("ws-d8-commit-in-tx.partial-baseline.json");
     let args = d8_args(Some(&baseline_path.to_string_lossy()), false, None);
     let rust = run_analyze(&args, "engine-default").expect("run_analyze");
+    assert_eq!(sarif_result_count(&rust), 1, "partial baseline → 1 result");
+    if maybe_regen("ws-d8-commit-in-tx.partial-baselined.sarif.json", &rust) {
+        return;
+    }
     let golden = read_golden("ws-d8-commit-in-tx.partial-baselined.sarif.json");
     if rust != golden {
         first_diff("ws-d8.partial-baselined.sarif", &golden, &rust);

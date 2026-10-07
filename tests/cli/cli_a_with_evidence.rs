@@ -71,6 +71,7 @@ fn args_for(ws: &Path, with_evidence: bool) -> AnalyzeArgs {
         disable_inline_suppression: false,
         group_by: None,
         deterministic: true,
+        single_app: false,
         with_evidence,
     }
 }

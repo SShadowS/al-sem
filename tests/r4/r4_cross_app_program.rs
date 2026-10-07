@@ -36,7 +36,7 @@ fn shared_name_workspace(dir: &Path) {
     );
     write(
         &dir.join("src/Main.al"),
-        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n    begin\n        W.Work();\n    end;\n}\n",
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        W: Codeunit \"Dep Worker\";\n        E: Codeunit \"Dep Events\";\n    begin\n        W.Work();\n        E.OnFoo();\n    end;\n}\n",
     );
     let symbols = format!(
         r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Work","Parameters":[]}}]}},{{"Id":50101,"Name":"Shared Name","Methods":[{{"Name":"Foo","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
@@ -298,7 +298,7 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
     for ws in cross_app_fixtures() {
         let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx)
+        let (new, _) = assemble_and_resolve_cross_app_from_program(&ws, MI, false, &ctx, None)
             .expect("program model");
         // Not degenerate: dependency rows are present, ABI and parsed alike on the
         // fixture that has both kinds.
@@ -347,7 +347,9 @@ fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> 
 /// S7.3: in the cross-app model every body's calls come from the program engine —
 /// the workspace's call into the dependency now lands on the dependency's model
 /// routine, and the dependency's own calls resolve from its own view — and the
-/// event graph binds a subscriber that lives in the dependency.
+/// event graph binds a subscriber that lives in the dependency. (Since S8.2 the
+/// workspace raises the dependency event: a subscriber of an event no demanded
+/// routine raises is not in the model.)
 ///
 /// Discrimination (2026-10-06): limiting `Converter::model_apps` to the primary app
 /// turns the three calls into the dependency into to-less `ExternalTarget` edges
@@ -384,6 +386,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
             "50100.Work -> 50100.Helper Resolved",
             "50100.Work -> 50101.Foo Resolved",
             "50201.Go -> 50100.Work Resolved",
+            "50201.Go -> 50102.OnFoo Resolved",
         ]
     );
 
@@ -484,22 +487,23 @@ fn d13_count(dir: &Path) -> usize {
     project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
 }
 
-/// S7.4, end to end through the program-backed cross-app base: d13 flags a call
-/// into a dependency's `internal` procedure that the workspace may make — as a
-/// friend; that is the only way such code compiles. Without the friend entry the
-/// call cannot compile, the program resolver refuses it (`InternalNotVisible`),
-/// and there is no edge for d13 to flag. (The legacy L3 resolver ignored
-/// visibility and flagged both; `ws-d13-member-call`'s dependency now names its
-/// workspace as a friend for this reason.)
+/// d13 and calls into a dependency's `internal` procedure, end to end through the
+/// cross-app base. A FRIEND (named in the dependency's `<InternalsVisibleTo>`) was
+/// let in on purpose: no finding (engine-switch S8.5; 20 of 20 such cross-app
+/// findings on CDO/DO were friend calls). A stranger's call cannot compile: the
+/// program resolver refuses it (`InternalNotVisible`), so there is no edge to flag.
+/// d13's remaining positive is the `[InternalProc]` shape (`ws-d13-internal-call`'s
+/// golden).
 ///
-/// Discrimination (2026-10-06): making `resolver::internal_visible_across` always
-/// true (the legacy resolver's blindness to visibility) fails the stranger case
-/// (`left: 1`); restored, it passes.
+/// Discrimination (2026-10-06): removing the friend skip in `detect_d13` reports
+/// the friend case (`left: 1`); making `resolver::internal_visible_across` always
+/// true (the legacy resolver's blindness to visibility) reports the stranger case.
+/// Each fails the test; restored, it passes.
 #[test]
-fn d13_flags_a_friend_call_into_an_internal_procedure() {
+fn d13_does_not_flag_a_call_the_dependency_allows() {
     let friend = tempfile::tempdir().unwrap();
     internal_call_workspace(friend.path(), true);
-    assert_eq!(d13_count(friend.path()), 1);
+    assert_eq!(d13_count(friend.path()), 0);
     let stranger = tempfile::tempdir().unwrap();
     internal_call_workspace(stranger.path(), false);
     assert_eq!(d13_count(stranger.path()), 0);
@@ -891,4 +895,707 @@ fn d61_does_not_flag_a_write_that_runs_when_handled() {
         d61_workspace(dir.path(), guard);
         assert_eq!(d61_count(dir.path()), expected, "{guard}");
     }
+}
+
+/// S8.2 demand: which dependency routines the cross-app model holds.
+fn demand_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Main.al"),
+        "codeunit 50270 \"Ws Main\"\n{\n    procedure Go()\n    var\n        A: Codeunit \"Dep A\";\n    begin\n        A.Reached();\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnThing', '', false, false)]\n    local procedure OnThing()\n    begin\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            (
+                "src/A.al",
+                "codeunit 50170 \"Dep A\"\n{\n    procedure Reached()\n    begin\n        Transitive();\n    end;\n\n    procedure Transitive()\n    begin\n    end;\n\n    procedure Unreached()\n    begin\n    end;\n}\n",
+            ),
+            (
+                "src/Pub.al",
+                "codeunit 50171 \"Dep Pub\"\n{\n    procedure Raise()\n    begin\n        Prepare();\n        OnThing();\n    end;\n\n    procedure Prepare()\n    begin\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnThing()\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+}
+
+/// S8.2: forward from the workspace (`Reached` and what it calls, `Transitive`),
+/// reverse from a dependency event the workspace subscribes to (the publisher
+/// `OnThing`, its raiser `Raise`, and what the raiser calls, `Prepare`). A
+/// dependency routine nothing reaches (`Unreached`) is not in the model; its object
+/// is.
+///
+/// Discrimination (2026-10-06): dropping the reverse rule in `cross_app_demand`
+/// loses `OnThing`, `Raise` and `Prepare`; seeding no forward walk from the
+/// workspace loses `Reached` and `Transitive`. Each fails the test; restored, it
+/// passes.
+#[test]
+fn the_cross_app_model_holds_the_demanded_dependency_routines() {
+    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = tempfile::tempdir().unwrap();
+    demand_workspace(dir.path());
+    let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let ws = &x.resolved.workspace;
+    let mut dep: Vec<&str> = ws
+        .routines
+        .iter()
+        .filter(|r| r.app_guid == DEP_GUID)
+        .map(|r| r.name.as_str())
+        .collect();
+    dep.sort_unstable();
+    assert_eq!(
+        dep,
+        vec!["OnThing", "Prepare", "Raise", "Reached", "Transitive"]
+    );
+    assert!(
+        ws.objects.iter().any(|o| o.name == "Dep A"),
+        "objects stay whole"
+    );
+}
+
+/// Two workspace subscribers of a workspace event each call dependency `A.Run`,
+/// which calls `B.Write`, which writes `Dep Log`: the write is two dependency hops
+/// away, behind a dependency-internal edge.
+fn transitive_dep_write_workspace(dir: &Path) {
+    transitive_dep_write_workspace_with(
+        dir,
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n    begin\n        B.Write();\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+}
+
+/// [`transitive_dep_write_workspace`] with the dependency's `Dep A` / `Dep B`
+/// codeunit sources given.
+fn transitive_dep_write_workspace_with(dir: &Path, dep_a: &str, dep_b: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let sub = |n: u32| {
+        format!(
+            "codeunit {n} \"Ws Sub {n}\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Ws Hub\", 'OnGo', '', false, false)]\n    local procedure Handle()\n    var\n        A: Codeunit \"Dep A\";\n    begin\n        A.Run2();\n    end;\n}}\n"
+        )
+    };
+    write(&dir.join("src/Sub1.al"), &sub(50281));
+    write(&dir.join("src/Sub2.al"), &sub(50282));
+    write(
+        &dir.join("src/Hub.al"),
+        "codeunit 50280 \"Ws Hub\"\n{\n    procedure Go()\n    begin\n        OnGo();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnGo()\n    begin\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            ("src/A.al", dep_a),
+            ("src/B.al", dep_b),
+        ],
+        "",
+    );
+}
+
+/// S8.1: the one detector-context builder folds the dependency-internal edges (the
+/// R3a-4 intra-app edges) into the cone in cross-app mode, so a write two
+/// dependency hops away reaches the workspace subscribers and d44 pairs them.
+///
+/// Discrimination (2026-10-06): not extending `graph.typed_edges` with
+/// `injected_typed_edges` in `build_detector_context_with` loses the finding
+/// (`left: 0`); restored, it passes.
+#[test]
+fn a_dependency_internal_edge_reaches_the_cone() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace(dir.path());
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+}
+
+/// A workspace subscriber of a dependency event writes `Ws Log`.
+fn dep_publisher_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(&dir.join("src/Log.al"), &table(50290, "Ws Log"));
+    write(
+        &dir.join("src/Sub.al"),
+        "codeunit 50291 \"Ws Sub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnThing', '', false, false)]\n    local procedure OnThing()\n    var\n        Log: Record \"Ws Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Pub.al",
+            "codeunit 50171 \"Dep Pub\"\n{\n    procedure Raise()\n    begin\n        OnThing();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnThing()\n    begin\n    end;\n}\n",
+        )],
+        "",
+    );
+}
+
+/// S8.4 (owner decision): a DEPENDENCY publisher is a d45 root when a primary
+/// routine is in its subscriber chain, and the finding anchors on that workspace
+/// subscriber (the publisher's own location is dependency source).
+///
+/// Discrimination (2026-10-06): restoring the primary-publisher-only gate in
+/// `detect_d45` loses the finding (`left: 0`); restored, it passes.
+#[test]
+fn d45_reports_a_dependency_publisher_the_workspace_subscribes_to() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    dep_publisher_workspace(dir.path());
+    let names = vec!["d45-event-transitive-table-exposure".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
+    assert_eq!(
+        p.findings[0].primary_location.source_unit_id,
+        "ws:src/Sub.al"
+    );
+}
+
+/// One workspace: tables `Wide` (key + 3 fields), `Narrow` (key + 1 field) and the
+/// platform `Field` (2000000041, declared so it RESOLVES, as the cross-app model
+/// resolves it), and one codeunit whose `body` is the procedure under test.
+fn d3_workspace(dir: &Path, body: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Tables.al"),
+        "table 50300 Wide\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n        field(2; A; Text[50]) { }\n        field(3; B; Text[50]) { }\n        field(4; C; Text[50]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n}\n\ntable 50301 Narrow\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n        field(2; A; Text[50]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n}\n\ntable 2000000041 Field\n{\n    fields\n    {\n        field(1; TableNo; Integer) { }\n        field(2; \"No.\"; Integer) { }\n        field(3; FieldName; Text[30]) { }\n        field(4; Type; Integer) { }\n    }\n    keys { key(PK; TableNo, \"No.\") { Clustered = true; } }\n}\n",
+    );
+    write(
+        &dir.join("src/Main.al"),
+        &format!("codeunit 50302 \"D3 Probe\"\n{{\n{body}\n}}\n"),
+    );
+}
+
+fn d3_count(dir: &Path) -> usize {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d3-missing-setloadfields".to_string()];
+    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+}
+
+/// S8.5 triage fixes to d3 (61.5% false positives on the cross-app sample). Each
+/// procedure is a shape that must NOT be reported; the last one must be:
+/// - A: a virtual system table (`Field`) that RESOLVES — SetLoadFields saves
+///   nothing on metadata; the exemption assumed it never resolves.
+/// - B: every loadable field is read anyway — nothing to trim.
+/// - C: `Rec.Count` without parentheses is a method, not a field.
+/// - D: the record escapes to an event publisher, or into a RecordRef
+///   (`GetTable`) — the consumer may read any field.
+/// - real: `Wide.Get` then reading one of three fields.
+///
+/// Discrimination (2026-10-06), one break each, each fails the test: the gate
+/// treating any resolved table as physical (A); removing the nothing-to-trim skip
+/// (B); removing the table-field check (C); treating the publisher / platform
+/// callee as an analysable callee (D). Restored, it passes.
+#[test]
+fn d3_skips_what_setloadfields_cannot_help() {
+    let cases = [
+        (
+            "A",
+            "    procedure P()\n    var\n        F: Record Field;\n    begin\n        F.Get(18, 1);\n        Message(F.FieldName);\n    end;",
+            0,
+        ),
+        (
+            "B",
+            "    procedure P()\n    var\n        N: Record Narrow;\n    begin\n        N.Get('X');\n        Message(N.A);\n    end;",
+            0,
+        ),
+        (
+            "C",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(Format(W.Count));\n    end;",
+            0,
+        ),
+        (
+            "D-publisher",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(W.A);\n        OnAfterGet(W);\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnAfterGet(W: Record Wide)\n    begin\n    end;",
+            0,
+        ),
+        (
+            "D-recordref",
+            "    procedure P()\n    var\n        W: Record Wide;\n        R: RecordRef;\n    begin\n        W.Get('X');\n        Message(W.A);\n        R.GetTable(W);\n    end;",
+            0,
+        ),
+        (
+            "real",
+            "    procedure P()\n    var\n        W: Record Wide;\n    begin\n        W.Get('X');\n        Message(W.A);\n    end;",
+            1,
+        ),
+    ];
+    for (name, body, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        d3_workspace(dir.path(), body);
+        assert_eq!(d3_count(dir.path()), expected, "case {name}");
+    }
+}
+
+/// S8 engine gap 1 (triage D, d44 Group B): a dependency writes a record its
+/// own caller made `temporary`. No physical row is written, so the two workspace
+/// subscribers do not overlap. The Core shapes from the triage, each a case:
+/// - `var-param`: the helper writes its `var` parameter;
+/// - `forwarded`: the `var` parameter is forwarded once more before the write;
+/// - `table-method`: a table procedure writes `Rec` (`Buf.ClearBuffer()`);
+/// - `physical`: the control — a non-temporary local, so d44 reports;
+/// - `event-raise`: the record goes through a PUBLIC event (no closed world) to
+///   a subscriber that writes it; the event edge carries the subscriber's
+///   parameter into the publisher's frame by name, and the raiser's temporary
+///   argument decides (`event-raise-physical` is its control).
+///
+/// Discrimination for `event-raise` (2026-10-07): no `event-dispatch` arm in
+/// `substitute_entry` fails it (`left: 1`); restored, it passes.
+///
+/// `var-param` and `forwarded` already held; `table-method` was the gap: a table
+/// method's `Rec` was `Known(false)`. Discrimination (2026-10-06): seeding `Rec`
+/// `Known(false)` again in `ir_record_variables`, or reading only the argument
+/// bindings in `pd_temp_state_at_callsite` (ignoring the receiver), fails case
+/// `table-method` (`left: 1`); restored, it passes.
+#[test]
+fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let run2 = |decl: &str, call: &str| {
+        format!(
+            "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Buf: Record {decl};\n    begin\n        {call};\n    end;\n}}\n"
+        )
+    };
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure Write(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n\n    procedure Mid(var Log: Record \"Dep Log\")\n    begin\n        Write(Log);\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnFill(var Log: Record \"Dep Log\")\n    begin\n    end;\n}\n\ncodeunit 50184 \"Dep Sub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep B\", 'OnFill', '', false, false)]\n    local procedure Fill(var Log: Record \"Dep Log\")\n    begin\n        Log.Insert();\n    end;\n}\n\ntable 50183 \"Dep Buf\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    keys { key(PK; Code) { Clustered = true; } }\n\n    procedure ClearBuffer()\n    begin\n        DeleteAll();\n    end;\n}\n";
+    let cases = [
+        (
+            "var-param",
+            run2("\"Dep Log\" temporary", "B.Write(Buf)"),
+            0,
+        ),
+        ("forwarded", run2("\"Dep Log\" temporary", "B.Mid(Buf)"), 0),
+        (
+            "table-method",
+            run2("\"Dep Buf\" temporary", "Buf.ClearBuffer()"),
+            0,
+        ),
+        ("physical", run2("\"Dep Log\"", "B.Mid(Buf)"), 1),
+        (
+            "event-raise",
+            run2("\"Dep Log\" temporary", "B.OnFill(Buf)"),
+            0,
+        ),
+        (
+            "event-raise-physical",
+            run2("\"Dep Log\"", "B.OnFill(Buf)"),
+            1,
+        ),
+    ];
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    for (name, a, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        transitive_dep_write_workspace_with(dir.path(), &a, b);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
+    }
+}
+
+/// S8 engine gap 2 (triage D, d44 Group C): a dependency writes only under
+/// `if UpdateCache then`, and the dependency caller the workspace reaches passes
+/// a literal `false`. The write cannot run on that path, so the two workspace
+/// subscribers do not overlap. Each case is a `Dep A.Run2` body over the same
+/// `Dep B`:
+/// - `literal-false`: `B.GetState(false)` -> `if UpdateCache then Refresh()`;
+/// - `forwarded`: `B.Outer(false)` forwards its parameter to `GetState`;
+/// - `early-exit`: `if not UpdateCache then exit;` before the write;
+/// - `literal-true`, `assigned` and `cleared` (the callee overwrites the
+///   parameter) and `variable` (a local, not a literal): the controls, so d44
+///   reports.
+///
+/// Discrimination (2026-10-07), each break fails the named case (`left: 1`) and
+/// passes restored: a contradicting literal not dropping the fact
+/// (`literal-false`); a forwarded parameter dropping its requirement
+/// (`forwarded`); no early-exit guard (`early-exit`); the member's guarded call
+/// edge adding no requirement in `fact_cone_for_scc` (`literal-false`); `Clear`
+/// not counted as writing its argument in `guard_frames` (`cleared`).
+#[test]
+fn a_dependency_write_behind_a_false_literal_is_not_reached() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let run2 = |call: &str| {
+        format!(
+            "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Flag: Boolean;\n    begin\n        Flag := false;\n        {call};\n    end;\n}}\n"
+        )
+    };
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure GetState(UpdateCache: Boolean)\n    begin\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Outer(Update: Boolean)\n    begin\n        GetState(Update);\n    end;\n\n    procedure Guarded(UpdateCache: Boolean)\n    var\n        Log: Record \"Dep Log\";\n    begin\n        if not UpdateCache then\n            exit;\n        Log.Insert();\n    end;\n\n    procedure Assigned(UpdateCache: Boolean)\n    begin\n        UpdateCache := true;\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure IsAny(): Boolean\n    var\n        Buf: Record \"Dep Log\" temporary;\n    begin\n        GetAll(false, Buf);\n        exit(not Buf.IsEmpty());\n    end;\n\n    procedure GetAll(LoadLogos: Boolean; var Buf: Record \"Dep Log\" temporary)\n    var\n        Src: Record \"Dep Log\";\n        I: Integer;\n        L: List of [Integer];\n    begin\n        foreach I in L do begin\n            if Src.FindSet() then\n                repeat\n                    Buf := Src;\n                    if LoadLogos then begin\n                        Refresh();\n                    end;\n                    if not Buf.Insert() then;\n                until Src.Next() = 0;\n        end;\n    end;\n\n    procedure Cleared(UpdateCache: Boolean)\n    begin\n        Clear(UpdateCache);\n        if not UpdateCache then\n            Refresh();\n    end;\n\n    local procedure Refresh()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n";
+    let cases = [
+        ("literal-false", "B.GetState(false)", 0),
+        ("forwarded", "B.Outer(false)", 0),
+        ("early-exit", "B.Guarded(false)", 0),
+        ("literal-true", "B.GetState(true)", 1),
+        ("assigned", "B.Assigned(false)", 1),
+        ("cleared", "B.Cleared(true)", 1),
+        ("nested-loop-guard", "B.IsAny()", 0),
+        ("variable", "B.GetState(Flag)", 1),
+    ];
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    for (name, call, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        transitive_dep_write_workspace_with(dir.path(), &run2(call), b);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
+    }
+}
+
+/// One workspace: three physical tables, a `D8 Probe` codeunit whose `Caller`
+/// body is the case under test, `Committer` (commits; `own` decides whether it
+/// first writes all three tables), `W3` (writes all three), and `W3 CU`, whose
+/// `OnRun` writes all three.
+fn d8_workspace(dir: &Path, caller: &str, own: bool) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50499}}]}}"#
+        ),
+    );
+    let tables: String = (1..=3)
+        .map(|i| table(50400 + i, &format!("T{i}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(&dir.join("src/Tables.al"), &tables);
+    let writes = "        A.Insert();\n        B.Insert();\n        C.Insert();\n";
+    let vars = "    var\n        A: Record T1;\n        B: Record T2;\n        C: Record T3;\n";
+    let own_writes = if own { writes } else { "" };
+    write(
+        &dir.join("src/Probe.al"),
+        &format!(
+            "codeunit 50410 \"D8 Probe\"\n{{\n    procedure Caller(X: Boolean)\n    var\n        CU: Codeunit \"W3 CU\";\n    begin\n{caller}\n    end;\n\n    procedure Committer()\n{vars}    begin\n{own_writes}        Commit();\n    end;\n\n    procedure CommitIf(DoIt: Boolean)\n    begin\n        if not DoIt then\n            exit;\n        Commit();\n    end;\n\n    procedure W3()\n{vars}    begin\n{writes}    end;\n}}\n\ncodeunit 50411 \"W3 CU\"\n{{\n    trigger OnRun()\n{vars}    begin\n{writes}    end;\n}}\n"
+        ),
+    );
+}
+
+/// S8 engine gap 3 (triage C, d8 100% false positives cross-app): a routine is a
+/// transaction "manager" only by the physical tables it writes BEFORE its call
+/// toward the Commit, not by its whole cone. Each case is `Caller`'s body:
+/// - `commit-own-writes`: the Commit routine's own writes are not its caller's;
+/// - `after-commit`: writes after the call that commits;
+/// - `sibling-branch`: writes in the branch that does not commit;
+/// - `checked-run`: a checked `Codeunit.Run` writes in its own transaction;
+/// - `case-branch`: a `case` runs one branch, not the earlier ones too;
+/// - `earlier-commit`: a `Commit()` before the call commits what came before;
+/// - `exit-arm`: writes in an `if` arm that always exits never reach the call;
+/// - `checked-var-run`: `if CU.Run()` on a codeunit variable is a checked run;
+/// - `guarded-commit`: the Commit runs only when `DoIt`, and the caller passes
+///   `false`, so the caller is not in its transaction at all;
+/// - `before`, `loop` (an earlier iteration's writes) and `guarded-commit-true`:
+///   d8 reports.
+///
+/// Discrimination (2026-10-07), each break fails the named cases and passes
+/// restored, in `pending_writes.rs`: counting the call toward the Commit itself
+/// (`commit-own-writes`); collecting the statements after the target
+/// (`after-commit`, `sibling-branch`); collecting both branches of the `if`
+/// (`sibling-branch`, and with it `commit-own-writes`, `after-commit`); no
+/// checked-run skip (`checked-run`); no loop rule (`loop`). Then, also 2026-10-07:
+/// no `case` arm in `walk_node` (`case-branch`); no `out.clear()` at an earlier
+/// `Commit()` (`earlier-commit`); every `if` arm counted as reaching
+/// (`exit-arm`); no codeunit-variable `Run` in `is_checked_run`
+/// (`checked-var-run`); the span walk ignoring the caller's arguments
+/// (`guarded-commit`).
+#[test]
+fn d8_counts_only_the_writes_pending_at_the_commit() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let cases = [
+        ("commit-own-writes", "        Committer();", true, 0),
+        (
+            "after-commit",
+            "        Committer();\n        W3();",
+            false,
+            0,
+        ),
+        (
+            "sibling-branch",
+            "        if X then\n            W3()\n        else\n            Committer();",
+            false,
+            0,
+        ),
+        (
+            "checked-run",
+            "        if Codeunit.Run(Codeunit::\"W3 CU\") then;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "case-branch",
+            "        case X of\n            true:\n                W3();\n            false:\n                Committer();\n        end;",
+            false,
+            0,
+        ),
+        (
+            "earlier-commit",
+            "        W3();\n        Commit();\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "exit-arm",
+            "        if X then begin\n            W3();\n            exit;\n        end;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "checked-var-run",
+            "        if CU.Run() then;\n        Committer();",
+            false,
+            0,
+        ),
+        (
+            "guarded-commit",
+            "        W3();\n        CommitIf(false);",
+            false,
+            0,
+        ),
+        (
+            "guarded-commit-true",
+            "        W3();\n        CommitIf(true);",
+            false,
+            1,
+        ),
+        ("before", "        W3();\n        Committer();", false, 1),
+        (
+            "loop",
+            "        while X do begin\n            Committer();\n            W3();\n        end;",
+            false,
+            1,
+        ),
+    ];
+    let names = vec!["d8-commit-in-transaction".to_string()];
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, caller, own, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        d8_workspace(dir.path(), caller, own);
+        let p =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        if p.finding_count != expected {
+            wrong.push(format!("{name}: {} (want {expected})", p.finding_count));
+        }
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
+}
+
+const DEP2_GUID: &str = "dddd4444-0000-0000-0000-0000000000a7";
+
+/// S8.6: the cone follows EVERY resolved call dependency code makes, not only
+/// direct calls inside one dependency app. Each case is a `Dep A.Run2` whose write
+/// reaches the two workspace subscribers only through such a call, so d44 pairs
+/// them:
+/// - `codeunit-run`: `Codeunit.Run(Codeunit::"Dep B")`, whose `OnRun` writes;
+/// - `cross-dependency`: a call from `XDep` into a second app `XDep2`, which
+///   writes its own table.
+///
+/// Discrimination (2026-10-07): injecting only the S7 admitted own-app edges
+/// (direct, resolved method, interface `Maybe`, same app) fails both cases
+/// (`left: 0`); injecting none also fails both; restored, both pass.
+#[test]
+fn the_cone_follows_every_dependency_call() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let count = |dir: &Path| {
+        project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace_with(
+        dir.path(),
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    begin\n        Codeunit.Run(Codeunit::\"Dep B\");\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n    trigger OnRun()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+    let mut wrong: Vec<String> = Vec::new();
+    let n = count(dir.path());
+    if n != 1 {
+        wrong.push(format!("codeunit-run: {n}"));
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace_with(
+        dir.path(),
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        W: Codeunit \"Dep2 W\";\n    begin\n        W.Write();\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n}\n",
+    );
+    // XDep now depends on XDep2, which writes its own table.
+    let dep_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &dep_symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            (
+                "src/A.al",
+                "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        W: Codeunit \"Dep2 W\";\n    begin\n        W.Write();\n    end;\n}\n",
+            ),
+        ],
+        &format!(
+            r#"<Dependencies><Dependency Id="{DEP2_GUID}" Name="XDep2" Publisher="probe" MinVersion="1.0.0.0" /></Dependencies>"#
+        ),
+    );
+    let dep2_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP2_GUID}","Name":"XDep2","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep2_1.0.0.0.app"),
+        DEP2_GUID,
+        "XDep2",
+        "1.0.0.0",
+        &dep2_symbols,
+        &[
+            ("src/Log2.al", &table(50190, "Dep2 Log")),
+            (
+                "src/W.al",
+                "codeunit 50191 \"Dep2 W\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep2 Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+    let n = count(dir.path());
+    if n != 1 {
+        wrong.push(format!("cross-dependency: {n}"));
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
+}
+
+/// One workspace whose two subscribers write the `var Buf` of the dependency
+/// event `Dep Feat.OnRequest`, raised by `Dep Feat.Collect` with `buf` (a
+/// `Dep Log` declaration, `temporary` or not); `access` is the publisher's.
+/// `sub_body` is each subscriber's body.
+fn event_temp_workspace(dir: &Path, buf: &str, access: &str, sub_body: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    let sub = |n: u32| {
+        format!(
+            "codeunit {n} \"Ws Sub {n}\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Feat\", 'OnRequest', '', false, false)]\n    local procedure Handle(var Buf: Record \"Dep Log\")\n    begin\n{sub_body}\n    end;\n\n    local procedure Helper(var B: Record \"Dep Log\")\n    begin\n        B.Insert();\n    end;\n}}\n"
+        )
+    };
+    write(&dir.join("src/Sub1.al"), &sub(50281));
+    write(&dir.join("src/Sub2.al"), &sub(50282));
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            (
+                "src/Feat.al",
+                &format!(
+                    "codeunit 50183 \"Dep Feat\"\n{{\n    procedure Collect()\n    var\n        Tmp: Record {buf};\n    begin\n        OnRequest(Tmp);\n    end;\n\n    [IntegrationEvent(false, false)]\n    {access}procedure OnRequest(var Buf: Record \"Dep Log\")\n    begin\n    end;\n}}\n"
+                ),
+            ),
+        ],
+        "",
+    );
+}
+
+/// S8 (S8.6 triage cause 5): a `local` event raised only with a `temporary`
+/// record makes each subscriber's same-named `var` parameter temporary
+/// (`event_param_temp`), so two subscribers writing it do not overlap (d44):
+/// - `local-temp`: the subscribers write `Buf` directly;
+/// - `forwarded`: they pass it to a helper that writes it;
+/// - `physical-raise` and `public-publisher` (anyone may raise it): d44 reports.
+///
+/// Discrimination (2026-10-07): not calling `prove_event_param_temps` fails
+/// `local-temp` and `forwarded`; dropping the `local` access rule fails
+/// `public-publisher`; restored, all pass.
+#[test]
+fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let cases = [
+        (
+            "local-temp",
+            "\"Dep Log\" temporary",
+            "local ",
+            "        Buf.Insert();",
+            0,
+        ),
+        (
+            "forwarded",
+            "\"Dep Log\" temporary",
+            "local ",
+            "        Helper(Buf);",
+            0,
+        ),
+        (
+            "physical-raise",
+            "\"Dep Log\"",
+            "local ",
+            "        Buf.Insert();",
+            1,
+        ),
+        (
+            "public-publisher",
+            "\"Dep Log\" temporary",
+            "",
+            "        Buf.Insert();",
+            1,
+        ),
+    ];
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, buf, access, body, expected) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        event_temp_workspace(dir.path(), buf, access, body);
+        let n =
+            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names)
+                .finding_count;
+        if n != expected {
+            wrong.push(format!("{name}: {n} (want {expected})"));
+        }
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
 }

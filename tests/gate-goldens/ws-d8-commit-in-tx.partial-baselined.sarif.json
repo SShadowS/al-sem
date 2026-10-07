@@ -164,7 +164,7 @@
           "ruleId": "d8-commit-in-transaction",
           "level": "error",
           "message": {
-            "text": "Commit inside a posting transaction span — HandlePosted calls Commit while reachable from PostSalesDoc, which writes 3 tables. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written."
+            "text": "Commit inside a posting transaction span — HandlePosted calls Commit while reachable from PostSalesDoc, which writes 2 tables before it. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written."
           },
           "fingerprints": {
             "al-sem/v1": "dc5877f64fbaacd7"

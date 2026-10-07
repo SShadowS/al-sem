@@ -48,13 +48,80 @@ sizings marked pre-arc).
   real writes behind them are missed (the d44/d45 triage found five writes dropped
   "by luck" this way). Feeding every program edge to the cone grew CDO's r3a5
   projection from 329 MB to 9.8 GB. S8 decides the demand policy.
-- [ ] **`aldump --r3a5-cross-app-summary` on CDO exceeds 2 GB** (S7.4). It projects
-  every model routine; the cross-app model now holds every parsed dependency
-  routine (local procedures and triggers too), where the legacy symbol-only base held
-  only the public ABI surface (329 MB). Fixtures are unaffected (golden byte-equal).
-  Decide whether the projection should cover workspace routines only.
+- [ ] **`aldump --r3a5-cross-app-summary` on CDO is 1.39 GB** (S7.4; >2 GB before
+  S8.2's demand). It projects every model routine, demanded dependency routines
+  included; the legacy symbol-only base held only the public ABI surface (329 MB).
+  Fixtures are unaffected (golden byte-equal). Decide whether the projection should
+  cover workspace routines only.
 
 ## Open — buildable backlog (no blocker, pick up any time)
+
+- [ ] **False-positive causes exposed by S8.6** (recorded 2026-10-07; triage
+  `s86-triage.md`, 43 new CDO/DO findings, all newly followed edges real).
+  - **Event subscribers that exit on an event argument.** `if ExtensionId <> GetAppId()
+    then exit` and `case ObjectID of`. The raiser passes a FIELD value (a Guided
+    Experience item looked up by object id), not a literal. This explains all 12 d45
+    false positives (Company Information, Email Connector Logo, My Notifications).
+    Constant-argument guards cannot see it; it needs value tracking from the
+    record the raiser read.
+  - **Temporariness through an event's `var` record parameter:** the event
+    edge now substitutes by name, and a `local` event raised only with temporary
+    records is proven (2026-10-07). The triaged case still fires, and soundly
+    so. `OnRequestAppFeatureInformation` is raised with `GetAppFeatures`'s own
+    `var` parameter, and `GetAppFeatures` is `public`. Every known caller passes
+    a temporary record, but another app could pass a physical one.
+  - **A constant enum/option argument selecting a `case` branch:** not built.
+    `SetStatus("On Hold")` -> `SetStatusValue` runs only one branch, but both
+    findings it explains are also blocked by the blank-field cause below, so it
+    would remove none. Wake: a finding that only this cause explains.
+  - **A blank-field guard on a freshly initialised record.** The Job Queue
+    Category is created only if the entry has a category code, and every caller
+    leaves it blank.
+    Fixable by tracking a field left blank after `Init()` across calls (through
+    `Codeunit.Run(.., Rec)` into the `OnRun` record), but only the `Init()` path:
+    `Restart()` on an existing entry also needs foreign-key reasoning. Explains
+    4 findings.
+  - **d45 is OPT-IN since 2026-10-07** because of these causes. The first one
+    (an argument read from a database row) explains 12 of its 16 S8.6 findings,
+    and no sound static rule decides it. Wake: a data-model fact source, for
+    example "rows of table T are only inserted by app A with field F =
+    ModuleInfo.Id", or a measured d45 rate under 30% on a new sample.
+
+- [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (recorded
+  2026-10-07; triage `g3-d8-triage.md` of the 28 pre-fix survivors). The real ones
+  are small intended Commits (setup wizard Finish, send-code migration batches,
+  `LogUsage`). The open false-positive causes are listed below.
+  - **Guards on local values derived from parameters.** `IsEmailPreview := not
+    UseSMTP` makes the preview branch dead when the caller passes
+    `UseSMTP = true`. `param_guard` reads parameters only.
+  - **Data-dependent guards.** `if DOFile.IsEmpty() then CreateDocuments(...)` is
+    skipped when the caller has just filled `DOFile`.
+  - **`var` record parameters.** A caller passes a temporary record, but the
+    callee's cone counts the writes as physical. `pending_writes` takes each
+    callee's folded cone, which has no call-site PD substitution.
+  - **A callee that always commits** should end the pending set, as a
+    `Commit()` statement does. That needs a must-commit fact; only may-commit
+    exists.
+  - **Commits before a modal page** (`Commit(); Page.RunModal()`) and Commits
+    inside upgrade triggers (does the platform honour them?) are unverified.
+  - **d8 is OPT-IN since 2026-10-07** (owner decision) for this reason. Wake: these
+    causes fixed and a re-triage under 30% false positives.
+
+- [ ] **Constant-argument guards: what S8 gap 2 does not cover** (recorded 2026-10-07,
+  `src/engine/l4/param_guard.rs`). Each item keeps a fact that a literal argument
+  makes impossible; none adds a false prune.
+  - **Conjuncts.** Only a whole condition is a guard (`P`, `not P`, `P = false`).
+    `if IsPrimarySetup and (...) then Commit()` is not, so the Guided Experience
+    `Commit` at `GuidedExperienceImpl.Codeunit.al:115` still reaches CDO's setup
+    registration subscribers (d35, triage D Group 2). The THEN branch of an `and`
+    chain needs every simple conjunct; the ELSE branch needs nothing.
+  - **Data state.** The other Guided Experience `Commit` (`:121`) runs only when a
+    "Primary Guided Experience Item" exists for the extension, which only the
+    `IsPrimarySetup = true` overloads create. CDO and DO never call them. A guard
+    cannot express this; d35 Group 2 stays a false positive until it can.
+  - **Recursive SCCs and table triggers.** Guards are kept only in a non-recursive
+    singleton's cone, and the implicit-trigger path carries none.
+  - **`case P of`** and guards on non-boolean parameters (`if Mode = Mode::X`).
 
 - [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
   S3.4, which moved the existing rule into the program resolver UNCHANGED —

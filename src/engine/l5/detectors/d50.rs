@@ -612,6 +612,7 @@ mod tests {
             dep_routine_ids: BTreeSet::new(),
             declared_dependencies: Vec::new(),
             app_versions: HashMap::new(),
+            friends: HashMap::new(),
             root_classifications_by_routine,
             ordering_facts: std::sync::OnceLock::new(),
             ordering_source: None,
@@ -719,6 +720,9 @@ mod tests {
                 publishes_events: vec![],
                 span_roots: vec!["manager".to_string()],
                 coverage_complete: false,
+                pending_physical_tables: vec![],
+                pending_events: vec![],
+                pending_physical_by_routine: Default::default(),
             },
             TransactionSpan {
                 seed_kind: SeedKind::ExplicitCommit,
@@ -731,6 +735,9 @@ mod tests {
                 publishes_events: vec![],
                 span_roots: vec!["committer".to_string()],
                 coverage_complete: false,
+                pending_physical_tables: vec![],
+                pending_events: vec![],
+                pending_physical_by_routine: Default::default(),
             },
         ];
 
@@ -770,6 +777,7 @@ mod tests {
             dep_routine_ids: BTreeSet::new(),
             declared_dependencies: Vec::new(),
             app_versions: HashMap::new(),
+            friends: HashMap::new(),
             root_classifications_by_routine: HashMap::new(),
             ordering_facts: std::sync::OnceLock::new(),
             ordering_source: None,

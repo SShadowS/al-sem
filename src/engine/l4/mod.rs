@@ -35,6 +35,7 @@ pub mod effect_query;
 pub mod effect_query_cli;
 pub mod effect_store;
 pub mod effect_universe;
+pub(crate) mod param_guard;
 pub mod reverse_index;
 pub mod routine_interner;
 pub mod scc;

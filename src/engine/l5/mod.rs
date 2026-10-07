@@ -107,6 +107,8 @@ pub mod finding;
 pub mod fingerprint;
 pub mod path_temp_resolve;
 pub mod path_walker;
+// The writes pending at a Commit (engine-switch S8 gap 3): d8 / d9.
+pub(crate) mod pending_writes;
 pub mod registry;
 
 // R4-F Stage-2b — the CapabilitySnapshot CONSUMED-CORE port (composeSnapshot's

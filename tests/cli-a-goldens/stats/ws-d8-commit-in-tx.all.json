@@ -14,7 +14,7 @@
   {
     "candidatesConsidered": 3,
     "detector": "d3-missing-setloadfields",
-    "findingsEmitted": 1,
+    "findingsEmitted": 0,
     "skipped": {}
   },
   {
@@ -37,12 +37,6 @@
     "candidatesConsidered": 0,
     "detector": "d7-recursive-event-expansion",
     "findingsEmitted": 0,
-    "skipped": {}
-  },
-  {
-    "candidatesConsidered": 1,
-    "detector": "d8-commit-in-transaction",
-    "findingsEmitted": 1,
     "skipped": {}
   },
   {
@@ -94,12 +88,6 @@
     "skipped": {
       "other": 2
     }
-  },
-  {
-    "candidatesConsidered": 0,
-    "detector": "d17-min-version-drift",
-    "findingsEmitted": 0,
-    "skipped": {}
   },
   {
     "candidatesConsidered": 3,
@@ -225,12 +213,6 @@
     "skipped": {}
   },
   {
-    "candidatesConsidered": 1,
-    "detector": "d45-event-transitive-table-exposure",
-    "findingsEmitted": 1,
-    "skipped": {}
-  },
-  {
     "candidatesConsidered": 0,
     "detector": "d52-bulk-write-param-no-temp-guard",
     "findingsEmitted": 0,
@@ -326,6 +308,24 @@
     "candidatesConsidered": 0,
     "detector": "d51-retry-side-effect-duplication",
     "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 0,
+    "detector": "d17-min-version-drift",
+    "findingsEmitted": 0,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 1,
+    "detector": "d8-commit-in-transaction",
+    "findingsEmitted": 1,
+    "skipped": {}
+  },
+  {
+    "candidatesConsidered": 1,
+    "detector": "d45-event-transitive-table-exposure",
+    "findingsEmitted": 1,
     "skipped": {}
   },
   {

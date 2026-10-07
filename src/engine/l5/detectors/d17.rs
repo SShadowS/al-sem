@@ -62,6 +62,11 @@ fn cmp_version(a: &str, b: &str) -> i32 {
     0
 }
 
+/// `major.minor` of a dotted version (`"28.0.46665.0"` -> `"28.0"`).
+fn major_minor(v: &str) -> String {
+    v.split('.').take(2).collect::<Vec<_>>().join(".")
+}
+
 /// A captured sample callsite for one drifting dep.
 struct Sample {
     caller_routine_id: String,
@@ -148,7 +153,14 @@ pub fn detect_d17(
             skipped_other += 1;
             continue;
         };
-        if cmp_version(resolved_version, &dep.min_version) <= 0 {
+        // Only a MAJOR.MINOR drift can mean a missing API: a build/revision bump
+        // inside one release adds no API the workspace could depend on (engine-switch
+        // S8.5 triage: 8 of 10 cross-app findings on CDO/DO were build drift).
+        if cmp_version(
+            &major_minor(resolved_version),
+            &major_minor(&dep.min_version),
+        ) <= 0
+        {
             skipped_other += 1;
             continue;
         }
@@ -484,6 +496,7 @@ mod tests {
             dep_routine_ids,
             declared_dependencies: declared,
             app_versions,
+            friends: HashMap::new(),
             root_classifications_by_routine: HashMap::new(),
             ordering_facts: std::sync::OnceLock::new(),
             ordering_source: None,

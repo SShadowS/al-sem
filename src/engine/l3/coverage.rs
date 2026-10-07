@@ -243,9 +243,26 @@ impl L3Resolved {
         let ws = &self.workspace;
         let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
         let resolved = calls_for(self, &symbols);
-
-        let by_internal: HashMap<String, String> = ws
+        // Coverage is the primary app's: a cross-app model (engine-switch S8.3) also
+        // holds the dependency code the workspace demands, which is not the
+        // workspace's to cover. A single-app model holds nothing else.
+        let primary = self
+            .primary_app
+            .as_ref()
+            .map(|a| a.app_guid.to_ascii_lowercase());
+        let in_primary = |guid: &str| {
+            primary
+                .as_deref()
+                .is_none_or(|p| guid.eq_ignore_ascii_case(p))
+        };
+        let routines: Vec<L3Routine> = ws
             .routines
+            .iter()
+            .filter(|r| in_primary(&r.app_guid))
+            .cloned()
+            .collect();
+
+        let by_internal: HashMap<String, String> = routines
             .iter()
             .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
             .collect();
@@ -257,6 +274,7 @@ impl L3Resolved {
         let mut app_guids: Vec<String> = ws
             .objects
             .iter()
+            .filter(|o| in_primary(&o.app_guid))
             .map(|o| o.app_guid.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
@@ -268,7 +286,7 @@ impl L3Resolved {
             .collect();
 
         build_coverage(
-            &ws.routines,
+            &routines,
             &apps,
             &resolved.edges,
             units,

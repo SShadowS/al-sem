@@ -189,6 +189,7 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         control_context: None,
         order: None,
         in_statement_position: false,
+        receiver_temp_state: None,
     }
 }
 
@@ -275,6 +276,7 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         control_context: None,
         order: None,
         in_statement_position: false,
+        receiver_temp_state: None,
     }
 }
 
@@ -406,6 +408,7 @@ pub fn minimal_ctx<'a>(
         dep_routine_ids: std::collections::BTreeSet::new(),
         declared_dependencies: Vec::new(),
         app_versions: HashMap::new(),
+        friends: HashMap::new(),
         root_classifications_by_routine: HashMap::new(),
         ordering_facts: std::sync::OnceLock::new(),
         ordering_source: None,

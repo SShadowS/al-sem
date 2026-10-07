@@ -27,6 +27,7 @@ pub mod call_graph_projection;
 pub mod call_resolver;
 pub mod coverage;
 pub mod event_graph;
+pub mod event_param_temp;
 pub mod implicit_edges;
 pub mod l3_mint;
 pub mod member_builtins;

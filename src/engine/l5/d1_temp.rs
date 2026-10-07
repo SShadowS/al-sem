@@ -147,12 +147,20 @@ pub(crate) fn cross_hop(
         return out;
     };
 
-    for binding in &cs.argument_bindings {
-        let p = binding.parameter_index;
+    // Every argument binding, plus the call's receiver (a table method's `Rec`).
+    let bound = cs
+        .argument_bindings
+        .iter()
+        .map(|b| (b.parameter_index, b.source_temp_state.as_ref()))
+        .chain(std::iter::once((
+            crate::program::body::features::RECEIVER_PARAM_INDEX,
+            cs.receiver_temp_state.as_ref(),
+        )));
+    for (p, source_temp_state) in bound {
         if out.binary_search_by_key(&p, |&(i, _)| i).is_ok() {
             continue; // already proven Temp — the proof wins, binding ignored
         }
-        let val = match &binding.source_temp_state {
+        let val = match source_temp_state {
             Some(ts) => match TempStateKind::from_p_temp_state(ts) {
                 TempStateKind::Known(true) => ParamTemp::Temp,
                 TempStateKind::Known(false) => ParamTemp::Physical,
@@ -328,6 +336,7 @@ mod tests {
             control_context: None,
             order: None,
             in_statement_position: false,
+            receiver_temp_state: None,
         }
     }
 

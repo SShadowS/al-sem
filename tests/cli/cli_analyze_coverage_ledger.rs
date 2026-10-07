@@ -46,8 +46,8 @@ fn coverage_counts_only_the_files_the_model_analysed() {
         "codeunit 50001 \"Nested Cu\"\n{\n    procedure B()\n    begin\n    end;\n}\n",
     );
 
-    let built = build_analysis_model(ws);
-    let resolved = built.model.as_ref().expect("root app assembles");
+    let built = build_analysis_model(ws, true);
+    let resolved = built.model.as_ref().expect("root app assembles").resolved();
     let names: Vec<&str> = resolved
         .workspace
         .routines
@@ -113,7 +113,7 @@ fn ledger_workspace(ws: &Path) {
 fn ledger_records_missing_older_and_unreadable_dependencies() {
     let dir = tempfile::tempdir().unwrap();
     ledger_workspace(dir.path());
-    let built = build_analysis_model(dir.path());
+    let built = build_analysis_model(dir.path(), true);
     let fc = built.fresh.as_ref().expect("program builds");
     // (guid, found, below declared version, unreadable on disk)
     let rows: Vec<(&str, bool, bool, bool)> = fc
@@ -157,6 +157,7 @@ fn analyze_args(ws: &Path) -> AnalyzeArgs {
         group_by: None,
         deterministic: true,
         with_evidence: false,
+        single_app: false,
     }
 }
 
@@ -247,7 +248,10 @@ fn scope_primary_drops_a_finding_on_another_apps_object() {
         "codeunit 50004 \"Own Cu\"\n{\n    procedure A()\n    begin\n    end;\n}\n\
          codeunit 50005 \"Dep Cu\"\n{\n    procedure B()\n    begin\n    end;\n}\n",
     );
-    let mut resolved = build_analysis_model(ws).model.expect("model");
+    let mut resolved = match build_analysis_model(ws, true).model.expect("model") {
+        al_sem::engine::gate::run::AnalysisTarget::SingleApp(r) => *r,
+        al_sem::engine::gate::run::AnalysisTarget::CrossApp(_) => unreachable!("single-app build"),
+    };
     let dep = resolved
         .workspace
         .objects
@@ -330,8 +334,14 @@ report 50009 "Facts Report" { }
 reportextension 50010 "Facts Report Ext" extends "Facts Report" { }
 "#,
     );
-    let built = build_analysis_model(ws);
-    let objects = &built.model.as_ref().expect("model").workspace.objects;
+    let built = build_analysis_model(ws, true);
+    let objects = &built
+        .model
+        .as_ref()
+        .expect("model")
+        .resolved()
+        .workspace
+        .objects;
     let by_name = |n: &str| objects.iter().find(|o| o.name == n).expect(n);
     assert_eq!(
         by_name("Facts Page").source_table_name,
