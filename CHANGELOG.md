@@ -1071,6 +1071,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Overloads with a `Variant` parameter are picked by the compiler's
+  precedence** (engine-switch S9.0e). CDO's dependency-body unknown edges
+  40 -> 37 and dependency `ambiguousResolved` 863 -> 764; workspace metrics
+  unchanged. `pick_candidate` declined every call where one same-arity
+  overload took a `Variant`. An alc 18.0.41.45789 probe proved two rules, each
+  control failing with `AL0122`: an argument that exactly matches a
+  non-`Variant` overload binds it (RecordRef, Integer and Text vars, Integer and
+  Text literals); a `Variant` argument binds the `Variant` overload. Both are
+  implemented; with no exact non-`Variant` match the call still declines, and
+  `Any` still declines. Tests `pick_candidate_exact_non_variant_beats_variant`
+  and `pick_candidate_variant_argument_binds_variant_overload`; restoring the
+  blanket gate fails both.
 - **An interface call picks an implementer's overload by argument type**
   (engine-switch S9.0e). CDO's dependency-body unknown edges 59 -> 40. The
   interface fan-out sent a source implementer with more than one same-arity

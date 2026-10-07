@@ -54,12 +54,12 @@
 //!   text (length included) to match, and the arg must be
 //!   [`ArgDispatchInfo::var_passable`] (a literal/call-result is never
 //!   var-passable — a sound elimination, not a degrade).
-//! - **`Variant`/`Any` at a discriminating position degrades**
-//!   ([`pick_candidate`]): computed from the FULL candidate set BEFORE any
-//!   compatibility filtering — a Variant-bearing candidate degrades the call
-//!   even if it would otherwise have been "eliminated" by a naive
-//!   exclusion-style matcher (no compiler-fixture-proven Variant precedence
-//!   exists yet).
+//! - **`Any` at a discriminating position degrades** ([`pick_candidate`]):
+//!   computed from the FULL candidate set BEFORE any compatibility filtering
+//!   (no compiler-proven `Any` precedence exists). **`Variant` has a proven
+//!   precedence** (S9.0e, alc probe): an exactly matching non-`Variant`
+//!   overload beats a `Variant` one, and a `Variant` argument binds the
+//!   `Variant` overload — see [`pick_candidate`].
 //! - **Candidate-set-aware literal typing**: THIS increment types only the
 //!   fixture-proven literal families (Integer/Text/Bool/Decimal-with-point —
 //!   see [`literal_canonical`]) via ordinary exact-canonical-match
@@ -201,10 +201,16 @@ pub(crate) enum GenericArgType {
 }
 
 impl CanonicalArgType {
-    /// Whether this canonical type is the `Variant`/`Any` wildcard — see the
-    /// module doc's Variant-wildcard rule.
-    fn is_variant_or_any(&self) -> bool {
-        matches!(self, CanonicalArgType::Base(s) if s == "variant" || s == "any")
+    /// Whether this canonical type is `Variant` — see [`pick_candidate`]'s
+    /// Variant precedence rule.
+    fn is_variant(&self) -> bool {
+        matches!(self, CanonicalArgType::Base(s) if s == "variant")
+    }
+
+    /// Whether this canonical type is the `Any` wildcard, which still degrades
+    /// the pick (no compiler-proven precedence).
+    fn is_any(&self) -> bool {
+        matches!(self, CanonicalArgType::Base(s) if s == "any")
     }
 }
 
@@ -1550,10 +1556,11 @@ pub(crate) fn pick_candidate(
         return None;
     }
     for &pos in &discriminating {
-        // Variant/Any wildcard gate.
+        // `Any` wildcard gate: no compiler-proven precedence for `Any`.
+        // `Variant` is handled after this loop (S9.0e, proven below).
         let types_at_pos: Vec<&CanonicalArgType> =
             candidates.iter().map(|c| &c[pos].canonical).collect();
-        if types_at_pos.iter().any(|t| t.is_variant_or_any()) {
+        if types_at_pos.iter().any(|t| t.is_any()) {
             return None;
         }
         // C6 literal-forbidden-family gate, stated verbatim (module doc):
@@ -1571,8 +1578,56 @@ pub(crate) fn pick_candidate(
         }
     }
 
+    // `Variant` precedence (S9.0e), proven with alc 18.0.41.45789 on
+    // `Foo(var R: RecordRef)`/`Foo(V: Variant)`, `Bar(Integer)`/`Bar(Variant)`
+    // and `Qux(Text)`/`Qux(Variant)`, each control failing with AL0122:
+    // - an argument that exactly matches a non-`Variant` overload binds it,
+    //   never the `Variant` sibling (RecordRef, Integer and Text vars, Integer
+    //   and Text literals);
+    // - a `Variant` argument binds the `Variant` overload.
+    // So a candidate with `Variant` at a discriminating position competes
+    // only for `Variant` arguments; otherwise the pick runs over the rest.
+    let has_variant =
+        |c: &Vec<ParamDispatchInfo>| discriminating.iter().any(|&p| c[p].canonical.is_variant());
+    if candidates.iter().any(&has_variant) {
+        let variant_args = discriminating
+            .iter()
+            .filter(|&&p| args[p].canonical.as_ref().is_some_and(|t| t.is_variant()))
+            .count();
+        if variant_args == discriminating.len() {
+            // Every discriminating argument is a Variant: the one candidate
+            // that takes a Variant at every such position binds.
+            let mut pool = (0..candidates.len()).filter(|&i| {
+                discriminating
+                    .iter()
+                    .all(|&p| candidates[i][p].canonical.is_variant())
+            });
+            let picked = pool.next()?;
+            return pool.next().is_none().then_some(picked);
+        }
+        if variant_args > 0 {
+            return None;
+        }
+        let pool: Vec<usize> = (0..candidates.len())
+            .filter(|&i| !has_variant(&candidates[i]))
+            .collect();
+        return pick_exact(args, candidates, &discriminating, &pool);
+    }
+    let all: Vec<usize> = (0..candidates.len()).collect();
+    pick_exact(args, candidates, &discriminating, &all)
+}
+
+/// The exact-match-and-eliminate core of [`pick_candidate`], over the
+/// candidate indices in `pool`.
+fn pick_exact(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    discriminating: &[usize],
+    pool: &[usize],
+) -> Option<usize> {
     let mut exact_idx: Option<usize> = None;
-    for (i, params) in candidates.iter().enumerate() {
+    for &i in pool {
+        let params = &candidates[i];
         if discriminating
             .iter()
             .all(|&p| position_exact_match(&args[p], &params[p]))
@@ -1586,12 +1641,13 @@ pub(crate) fn pick_candidate(
     }
     let picked = exact_idx?;
 
-    // Every OTHER candidate must be PROVEN incompatible at some position —
-    // an undecided competitor blocks the pick (doc above).
-    for (i, params) in candidates.iter().enumerate() {
+    // Every OTHER candidate in the pool must be PROVEN incompatible at some
+    // position — an undecided competitor blocks the pick (doc above).
+    for &i in pool {
         if i == picked {
             continue;
         }
+        let params = &candidates[i];
         let eliminated = discriminating
             .iter()
             .any(|&p| position_provably_incompatible(&args[p], &params[p]));
@@ -1934,11 +1990,10 @@ mod tests {
         assert_eq!(pick_candidate(&args, &candidates), None);
     }
 
-    /// Variant wildcard: a Variant param at a discriminating position
-    /// degrades the WHOLE call, even though a naive exclusion-style matcher
-    /// would have eliminated the OTHER (non-Variant) candidate and left
-    /// Variant as the sole "survivor" — that survivor-by-elimination is
-    /// UNPROVEN, not a confident pick (Round-1 addendum I5).
+    /// Variant wildcard: when no non-Variant candidate exactly matches, the
+    /// Variant candidate is not picked as the "survivor" of eliminating the
+    /// others — that survivor-by-elimination is not picked (Round-1 addendum
+    /// I5); only the proven precedences below pick.
     #[test]
     fn pick_candidate_degrades_on_variant_at_discriminating_position() {
         let args = vec![base_arg("instream")];
@@ -1947,6 +2002,43 @@ mod tests {
             vec![base_param("integer", false)],
         ];
         assert_eq!(pick_candidate(&args, &candidates), None);
+    }
+
+    /// S9.0e, alc-proven: an argument that exactly matches a non-Variant
+    /// overload binds it over the Variant sibling (CDO's
+    /// `DataArchiveProvider.SaveRecord(RecordRef)`), for a var and a literal.
+    #[test]
+    fn pick_candidate_exact_non_variant_beats_variant() {
+        let candidates = vec![
+            vec![base_param("variant", false)],
+            vec![base_param("recordref", true)],
+        ];
+        assert_eq!(
+            pick_candidate(&[base_arg("recordref")], &candidates),
+            Some(1)
+        );
+        let candidates = vec![
+            vec![base_param("integer", false)],
+            vec![base_param("variant", false)],
+        ];
+        let literal = ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base("integer".into())),
+            exact_text: Some("integer".into()),
+            literal_kind: Some(LiteralKind::Integer),
+            var_passable: false,
+        };
+        assert_eq!(pick_candidate(&[literal], &candidates), Some(0));
+    }
+
+    /// S9.0e, alc-proven: a Variant argument binds the Variant overload
+    /// (CDO's `DataArchiveProvider.SaveRecord(RecordVariant)`).
+    #[test]
+    fn pick_candidate_variant_argument_binds_variant_overload() {
+        let candidates = vec![
+            vec![base_param("recordref", true)],
+            vec![base_param("variant", false)],
+        ];
+        assert_eq!(pick_candidate(&[base_arg("variant")], &candidates), Some(1));
     }
 
     /// An untyped argument position degrades the whole call, never merely
