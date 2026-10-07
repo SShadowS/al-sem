@@ -1241,7 +1241,7 @@ fn a_dependency_write_behind_a_false_literal_is_not_reached() {
             "codeunit 50181 \"Dep A\"\n{{\n    procedure Run2()\n    var\n        B: Codeunit \"Dep B\";\n        Flag: Boolean;\n    begin\n        Flag := false;\n        {call};\n    end;\n}}\n"
         )
     };
-    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure GetState(UpdateCache: Boolean)\n    begin\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Outer(Update: Boolean)\n    begin\n        GetState(Update);\n    end;\n\n    procedure Guarded(UpdateCache: Boolean)\n    var\n        Log: Record \"Dep Log\";\n    begin\n        if not UpdateCache then\n            exit;\n        Log.Insert();\n    end;\n\n    procedure Assigned(UpdateCache: Boolean)\n    begin\n        UpdateCache := true;\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Cleared(UpdateCache: Boolean)\n    begin\n        Clear(UpdateCache);\n        if not UpdateCache then\n            Refresh();\n    end;\n\n    local procedure Refresh()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n";
+    let b = "codeunit 50182 \"Dep B\"\n{\n    procedure GetState(UpdateCache: Boolean)\n    begin\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure Outer(Update: Boolean)\n    begin\n        GetState(Update);\n    end;\n\n    procedure Guarded(UpdateCache: Boolean)\n    var\n        Log: Record \"Dep Log\";\n    begin\n        if not UpdateCache then\n            exit;\n        Log.Insert();\n    end;\n\n    procedure Assigned(UpdateCache: Boolean)\n    begin\n        UpdateCache := true;\n        if UpdateCache then\n            Refresh();\n    end;\n\n    procedure IsAny(): Boolean\n    var\n        Buf: Record \"Dep Log\" temporary;\n    begin\n        GetAll(false, Buf);\n        exit(not Buf.IsEmpty());\n    end;\n\n    procedure GetAll(LoadLogos: Boolean; var Buf: Record \"Dep Log\" temporary)\n    var\n        Src: Record \"Dep Log\";\n        I: Integer;\n        L: List of [Integer];\n    begin\n        foreach I in L do begin\n            if Src.FindSet() then\n                repeat\n                    Buf := Src;\n                    if LoadLogos then begin\n                        Refresh();\n                    end;\n                    if not Buf.Insert() then;\n                until Src.Next() = 0;\n        end;\n    end;\n\n    procedure Cleared(UpdateCache: Boolean)\n    begin\n        Clear(UpdateCache);\n        if not UpdateCache then\n            Refresh();\n    end;\n\n    local procedure Refresh()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n";
     let cases = [
         ("literal-false", "B.GetState(false)", 0),
         ("forwarded", "B.Outer(false)", 0),
@@ -1249,6 +1249,7 @@ fn a_dependency_write_behind_a_false_literal_is_not_reached() {
         ("literal-true", "B.GetState(true)", 1),
         ("assigned", "B.Assigned(false)", 1),
         ("cleared", "B.Cleared(true)", 1),
+        ("nested-loop-guard", "B.IsAny()", 0),
         ("variable", "B.GetState(Flag)", 1),
     ];
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
@@ -1393,6 +1394,92 @@ fn d8_counts_only_the_writes_pending_at_the_commit() {
         if p.finding_count != expected {
             wrong.push(format!("{name}: {} (want {expected})", p.finding_count));
         }
+    }
+    assert!(wrong.is_empty(), "cases {wrong:?}");
+}
+
+const DEP2_GUID: &str = "dddd4444-0000-0000-0000-0000000000a7";
+
+/// S8.6: the cone follows EVERY resolved call dependency code makes, not only
+/// direct calls inside one dependency app. Each case is a `Dep A.Run2` whose write
+/// reaches the two workspace subscribers only through such a call, so d44 pairs
+/// them:
+/// - `codeunit-run`: `Codeunit.Run(Codeunit::"Dep B")`, whose `OnRun` writes;
+/// - `cross-dependency`: a call from `XDep` into a second app `XDep2`, which
+///   writes its own table.
+///
+/// Discrimination (2026-10-07): injecting only the S7 admitted own-app edges
+/// (direct, resolved method, interface `Maybe`, same app) fails both cases
+/// (`left: 0`); injecting none also fails both; restored, both pass.
+#[test]
+fn the_cone_follows_every_dependency_call() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
+    let count = |dir: &Path| {
+        project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace_with(
+        dir.path(),
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    begin\n        Codeunit.Run(Codeunit::\"Dep B\");\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n    trigger OnRun()\n    var\n        Log: Record \"Dep Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+    );
+    let mut wrong: Vec<String> = Vec::new();
+    let n = count(dir.path());
+    if n != 1 {
+        wrong.push(format!("codeunit-run: {n}"));
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    transitive_dep_write_workspace_with(
+        dir.path(),
+        "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        W: Codeunit \"Dep2 W\";\n    begin\n        W.Write();\n    end;\n}\n",
+        "codeunit 50182 \"Dep B\"\n{\n}\n",
+    );
+    // XDep now depends on XDep2, which writes its own table.
+    let dep_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &dep_symbols,
+        &[
+            ("src/Log.al", &table(50180, "Dep Log")),
+            (
+                "src/A.al",
+                "codeunit 50181 \"Dep A\"\n{\n    procedure Run2()\n    var\n        W: Codeunit \"Dep2 W\";\n    begin\n        W.Write();\n    end;\n}\n",
+            ),
+        ],
+        &format!(
+            r#"<Dependencies><Dependency Id="{DEP2_GUID}" Name="XDep2" Publisher="probe" MinVersion="1.0.0.0" /></Dependencies>"#
+        ),
+    );
+    let dep2_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP2_GUID}","Name":"XDep2","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep2_1.0.0.0.app"),
+        DEP2_GUID,
+        "XDep2",
+        "1.0.0.0",
+        &dep2_symbols,
+        &[
+            ("src/Log2.al", &table(50190, "Dep2 Log")),
+            (
+                "src/W.al",
+                "codeunit 50191 \"Dep2 W\"\n{\n    procedure Write()\n    var\n        Log: Record \"Dep2 Log\";\n    begin\n        Log.Insert();\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+    let n = count(dir.path());
+    if n != 1 {
+        wrong.push(format!("cross-dependency: {n}"));
     }
     assert!(wrong.is_empty(), "cases {wrong:?}");
 }

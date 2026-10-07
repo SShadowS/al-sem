@@ -56,6 +56,25 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **False-positive causes exposed by S8.6** (recorded 2026-10-07; triage
+  `s86-triage.md`, 43 new CDO/DO findings, all newly followed edges real).
+  - **Event subscribers that exit on an event argument.** `if ExtensionId <> GetAppId()
+    then exit` and `case ObjectID of`. The raiser passes a FIELD value (a Guided
+    Experience item looked up by object id), not a literal. This explains all 12 d45
+    false positives (Company Information, Email Connector Logo, My Notifications).
+    Constant-argument guards cannot see it; it needs value tracking from the
+    record the raiser read.
+  - **Temporariness through an event's `var` record parameter.** Every raise of
+    Continia Core's `OnRequestAppFeatureInformation` passes a temporary record,
+    but the subscribers' writes count as physical. The PD substitution does not
+    cross event-dispatch edges.
+  - **A constant enum/option argument selecting a `case` branch.**
+    `SetStatus("On Hold")` -> `SetStatusValue`, where only one branch runs.
+    `param_guard` reads Boolean parameters only.
+  - **A blank-field guard on a freshly initialised record.** The Job Queue
+    Category is created only if the entry has a category code, and every caller
+    leaves it blank.
+
 - [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (recorded
   2026-10-07; triage `g3-d8-triage.md` of the 28 pre-fix survivors). The real ones
   are small intended Commits (setup wizard Finish, send-code migration batches,

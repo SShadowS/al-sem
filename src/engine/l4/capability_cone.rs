@@ -3224,12 +3224,13 @@ impl R3a5CrossAppBase {
 ///   `direct_facts_for_routine` (a bodyless routine: `opaque-dependency`).
 ///
 /// - the combined graph (solver, SCC, detector traversals) takes the calls of
-///   WORKSPACE callers only; a dependency's own edges reach the CONE alone, as the
-///   R3a-4 artifact's admitted intra-app edges (direct, resolved method, interface
-///   `Maybe`), injected as `direct-call` typed edges. The program engine resolves
-///   far more inside a dependency (triggers, events, runs); feeding all of it to
-///   the cone took CDO's r3a5 projection from 329 MB to 9.8 GB, a growth of the
-///   analysed world that is S8's to decide.
+///   WORKSPACE callers only; a dependency's own calls reach the CONE alone, as
+///   typed edges built by the same rules as the workspace's (engine-switch S8.6):
+///   object runs and calls from one dependency into another included. S7 fed the
+///   cone only the R3a-4 artifact's admitted own-app edges, because the whole
+///   dependency world took CDO's r3a5 projection from 329 MB to 9.8 GB; since
+///   S8.2 the model holds only the DEMANDED dependency code, and S8.6 measured
+///   +1 s and no memory on CDO/DO.
 pub(crate) fn build_cross_app_base(
     workspace: &std::path::Path,
     model_instance_id: &str,
@@ -3290,28 +3291,27 @@ pub(crate) fn build_cross_app_base(
 
     drop(_s_graph);
     let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_artifacts_facts");
-    // The dependency's own edges, cone-only (see the doc above).
-    let artifacts = crate::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x);
-    let mut consumer =
-        crate::engine::deps::dep_artifact_l4::ConsumerModel::with_routine_ids(nodes.clone());
-    crate::engine::deps::dep_artifact_l4::inject_intra_app_call_edges(&mut consumer, &artifacts);
-    let mut injected_typed_edges: Vec<TypedEdge> = Vec::new();
-    for e in &consumer.injected_typed_edges {
-        injected_typed_edges.push(TypedEdge {
-            kind: e.kind.clone(),
-            from: e.from.clone(),
-            to: Some(e.to.clone()),
-            callsite_id: Some(e.callsite_id.clone()),
-            operation_id: None,
-            event_id: None,
-            receiver_type: None,
-            interface_name: None,
-            candidate_count: None,
-            target_object: None,
-            target_id_source: None,
-            object_type: None,
-        });
-    }
+    // The dependency code's own calls, cone-only (see the doc above): every
+    // resolved call a dependency routine makes, typed by the same rules as the
+    // workspace's (object runs, resolved methods, interface `Maybe`, calls into
+    // another dependency). Event dispatch is already in `graph`.
+    let dep_calls = crate::program::model::calls::ResolvedCalls {
+        edges: all_calls
+            .edges
+            .iter()
+            .filter(|e| dep_routine_ids.contains(&e.from))
+            .cloned()
+            .collect(),
+        upgraded_bindings: all_calls.upgraded_bindings.clone(),
+        diagnostics: Vec::new(),
+        external_targets: all_calls.external_targets.clone(),
+    };
+    let no_events = EventGraph {
+        events: Vec::new(),
+        edges: Vec::new(),
+    };
+    let injected_typed_edges: Vec<TypedEdge> =
+        build_combined_graph(ws, &dep_calls, &no_events).typed_edges;
     graph
         .typed_edges
         .extend(injected_typed_edges.iter().cloned());

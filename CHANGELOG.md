@@ -326,6 +326,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The cross-app cone follows every resolved call dependency code makes**
+  (engine-switch S8.6). It used to follow only S7's admitted own-app edges:
+  direct calls, resolved method calls and interface `Maybe` edges inside one
+  dependency app. It now also follows object runs (`Codeunit.Run` and friends)
+  and calls from one dependency app into another. The edges are typed by the
+  same rules as the workspace's (`build_combined_graph` over the dependency
+  callers' resolved calls). Event dispatch was already followed. The R3a-4
+  artifact keeps its own admit rule; only the cone input changed.
+  - **Cost:** S8.2's demand keeps the model to the dependency code the workspace
+    needs, so this measured +1 s and no extra memory on CDO and DO (46k
+    dependency edges). S7 had to stay narrow because the whole dependency world
+    took CDO's r3a5 projection to 9.8 GB.
+  - **Findings:** +27 on CDO (d43 9, d44 8, d45 10) and +16 on DO; none removed.
+    A triage of all 43 found every newly followed edge to be a real call, with
+    d43 10 of 10 real, d44 14 of 17 real and d45 0 of 12 real. The false
+    positives come from modelling gaps this change exposes; they are tracked in
+    `OUTSTANDING.md`.
+  - **Tests:** pinned by `the_cone_follows_every_dependency_call` (a
+    dependency-internal `Codeunit.Run`, and a call into a second dependency
+    app). Injecting only the old admitted edges, or none, fails both cases.
+
 - **d8 moves from DEFAULT to OPT-IN** (engine-switch S8, owner decision
   2026-10-07). S8 gap 3 cut d8 from 36 to 9 findings on CDO and from 32 to 9 on
   DO. The re-triage of the survivors still finds more than 30% false positives
