@@ -800,6 +800,15 @@ not by assertion.
 - Group changes under: Added, Changed, Deprecated, Removed, Fixed, Security
 - **Format per-file with `rustfmt <file>`**, never `cargo fmt`. Stage only intended paths;
   never `git add -A`. Never push or merge to `master` without an explicit request.
+- **Edit files with the built-in Edit / Write tools, never with a script.** No
+  `python - <<EOF ... s.replace(...)`, `sed -i`, `perl -pi` or heredoc rewrites of
+  source, tests, docs or CHANGELOG. A scripted edit is invisible to the user's
+  review, bypasses the Read-before-Edit check, and silently does nothing when its
+  pattern drifts (a `replace` that matches zero times still exits 0). This holds for
+  discrimination proofs too: make the break with Edit, run the test, revert it with
+  Edit. Bulk mechanical changes across many files are still one Edit per site (use
+  `replace_all` within a file). Files a repo script generates (`gen-syntax`, golden
+  regen, `rustfmt`) are the only exception.
 - **Autonomous-flow exception to the merge rule.** The issue orchestrator
   (`/orchestrate` → `/issue`, executor `scripts/agentflow/`) may write to `master`
   in exactly two cases without a per-change request: (1) the gated squash-merge of
