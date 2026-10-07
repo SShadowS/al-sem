@@ -714,6 +714,57 @@ pub fn assemble_and_resolve_workspace_program(
     Some(resolved)
 }
 
+/// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
+/// files (engine-switch S9.2), for tests that state their AL in code. The files
+/// and an `app.json` with id `app_guid` are written to a temporary directory and
+/// built exactly as on disk, so the model is the production one: unit ids are
+/// `ws:<relative path>` (as the L3 inline builder spells them), `primary_app` is
+/// that `app.json`, and no `roots.config.json` is read.
+///
+/// # Panics
+/// On an absolute or `..` path, an I/O failure, or a failed build: test input.
+#[must_use]
+pub fn assemble_and_resolve_inline_program(
+    files: &[(String, String)],
+    app_guid: &str,
+    model_instance_id: &str,
+) -> crate::engine::l3::l3_workspace::L3Resolved {
+    let dir = tempfile::tempdir().expect("temp workspace");
+    let app = serde_json::json!({
+        "id": app_guid,
+        "name": "Inline",
+        "publisher": "Inline",
+        "version": "1.0.0.0",
+    });
+    std::fs::write(dir.path().join("app.json"), app.to_string()).expect("write app.json");
+    for (name, source) in files {
+        let rel = std::path::Path::new(name);
+        assert!(
+            rel.components()
+                .all(|c| matches!(c, std::path::Component::Normal(_))),
+            "inline file name must be a plain relative path: {name}"
+        );
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
+        std::fs::write(&path, source).unwrap_or_else(|e| panic!("write {name}: {e}"));
+    }
+    assemble_and_resolve_workspace_program(dir.path(), model_instance_id, true)
+        .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+}
+
+/// [`assemble_and_resolve_inline_program`] with the default model-instance id.
+#[must_use]
+pub fn assemble_and_resolve_inline_program_default(
+    files: &[(String, String)],
+    app_guid: &str,
+) -> crate::engine::l3::l3_workspace::L3Resolved {
+    assemble_and_resolve_inline_program(
+        files,
+        app_guid,
+        crate::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+    )
+}
+
 /// The CROSS-APP detector model and what the cross-app base reads besides it.
 pub struct CrossAppProgram {
     /// The model, with calls and events attached for every body in it.
@@ -2006,6 +2057,97 @@ mod tests {
     use super::*;
 
     const APP_JSON: &str = r#"{"id":"b3b3b3b3-0000-0000-0000-000000000001","name":"B3 Census","publisher":"T","version":"1.0.0.0"}"#;
+
+    /// Everything a consumer reads from a model, as `Debug` text, minus
+    /// `primary_app` (its name/publisher/version come from `app.json`, which the
+    /// inline builder writes itself; the guid is compared).
+    fn model_text(m: &crate::engine::l3::l3_workspace::L3Resolved) -> Vec<String> {
+        let mut out = vec![
+            format!("{:?}", m.primary_app.as_ref().map(|a| &a.app_guid)),
+            format!("{:?}", m.root_classifications),
+            format!("{:?}", m.infra_diagnostics),
+            format!("{:?}", m.precomputed_events),
+        ];
+        out.extend(m.workspace.objects.iter().map(|o| format!("{o:?}")));
+        out.extend(m.workspace.tables.iter().map(|t| format!("{t:?}")));
+        out.extend(m.workspace.routines.iter().map(|r| format!("{r:?}")));
+        let calls = m.precomputed_calls.as_ref().expect("program calls");
+        out.extend(calls.edges.iter().map(|e| format!("{e:?}")));
+        out
+    }
+
+    /// S9.2: the inline builder is the disk builder. Every single-app r0-corpus
+    /// fixture (one root `app.json`, no `.alpackages`), passed inline with its
+    /// relative paths, gives the same model as the fixture built from disk.
+    #[test]
+    fn the_inline_program_model_is_the_disk_model() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut compared = 0;
+        for entry in std::fs::read_dir(&corpus).unwrap() {
+            let ws = entry.unwrap().path();
+            let Ok(app) = std::fs::read_to_string(ws.join("app.json")) else {
+                continue;
+            };
+            let mut files = Vec::new();
+            let mut single_app = !ws.join(".alpackages").exists();
+            for f in walkdir::WalkDir::new(&ws).sort_by_file_name() {
+                let f = f.unwrap();
+                let rel = f.path().strip_prefix(&ws).unwrap();
+                if f.file_name() == "app.json" && rel != std::path::Path::new("app.json") {
+                    single_app = false;
+                }
+                if f.path().extension().is_some_and(|e| e == "al") {
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    files.push((rel, std::fs::read_to_string(f.path()).unwrap()));
+                }
+            }
+            if !single_app || files.is_empty() {
+                continue;
+            }
+            let guid: serde_json::Value = serde_json::from_str(&app).unwrap();
+            let guid = guid["id"].as_str().unwrap();
+            let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
+            let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
+            assert_eq!(model_text(&inline), model_text(&disk), "{}", ws.display());
+            compared += 1;
+        }
+        assert!(compared >= 20, "only {compared} fixtures compared");
+    }
+
+    /// The inputs inline tests pass: an app id that is no hex GUID, files at the
+    /// root and in a folder. Units are spelled `ws:<path>`, calls resolve.
+    #[test]
+    fn inline_program_builder_takes_test_shaped_input() {
+        let files = [
+            (
+                "A.Codeunit.al".to_string(),
+                "codeunit 50100 A\n{\n    procedure P()\n    var\n        B: Codeunit B;\n    begin\n        B.Q();\n    end;\n}\n".to_string(),
+            ),
+            (
+                "src/B.Codeunit.al".to_string(),
+                "codeunit 50101 B\n{\n    procedure Q()\n    begin\n    end;\n}\n".to_string(),
+            ),
+        ];
+        let m = assemble_and_resolve_inline_program_default(
+            &files,
+            "11111111-0000-0000-0000-0000000g1abc",
+        );
+        let units: Vec<&str> = m
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.source_anchor.source_unit_id.as_str())
+            .collect();
+        assert_eq!(units, ["ws:A.Codeunit.al", "ws:src/B.Codeunit.al"]);
+        assert!(
+            m.workspace
+                .routines
+                .iter()
+                .all(|r| r.app_guid == "11111111-0000-0000-0000-0000000g1abc")
+        );
+        let calls = &m.precomputed_calls.as_ref().unwrap().edges;
+        assert!(calls.iter().any(|e| e.to.is_some()), "{calls:?}");
+    }
 
     /// Write `files` (relative path, bytes) under a fresh workspace with a root
     /// `app.json`, then run the census.

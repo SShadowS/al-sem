@@ -104,6 +104,15 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
 - **S9.2 Inline program builder.** Files + app id -> temp workspace ->
   `assemble_and_resolve_workspace_program`, with a test that it equals the disk path.
   Decide the model-instance id and unit-id spelling.
+  - **Done (2026-10-08):** `program_calls::assemble_and_resolve_inline_program(files,
+    app_guid, model_instance_id)` and its `_default` (`r0`). Decisions: the
+    model-instance id stays a parameter with the same `r0` default; unit ids are
+    `ws:<relative path>`, exactly the L3 inline spelling, because the files are
+    written at the paths given. Two differences from the L3 inline builder that S9.5
+    will meet: `primary_app` is set (the builder writes an `app.json`), and calls and
+    events are the program engine's. `the_inline_program_model_is_the_disk_model`
+    checks every single-app r0-corpus fixture (rows, calls, events, root
+    classifications) against the disk build.
 - **S9.3 The r4/r4f helper uses the production builder.** Triage any move (expected
   none if S2b.4's census holds).
 - **S9.4 Move the keepers out of `engine/l3`** (pure moves): the adapter

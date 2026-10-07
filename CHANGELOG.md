@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An inline builder for the program-backed model** (engine-switch S9.2).
+  `program_calls::assemble_and_resolve_inline_program(files, app_guid,
+  model_instance_id)` (and `_default`) takes `(relative path, source)` pairs,
+  writes them with an `app.json` to a temporary directory and builds the model
+  exactly as `alsem analyze` does. Unit ids are `ws:<relative path>`, as in the
+  L3 inline builder it will replace in tests (S9.5). A test checks that every
+  single-app r0-corpus fixture passed inline gives the same model as built from
+  disk.
+
 - **A `cdo` cargo profile for correctness loops.** Optimized, but no LTO, 16
   codegen units and incremental builds. `scripts/cdo-gate` now uses it: after a
   one-line edit the gate took 236 s, against ~375 s on `release-fast` (lib-test
