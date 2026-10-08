@@ -121,13 +121,13 @@
 //! (`ts_id` was deleted outright — it was written once by the lowerer and read
 //! by no production code; see the pack-cache spec §17.3.)
 //!
-//! **`dep_meta`/`dep_texts`/`workspace_root` (T3 Task 11 review
+//! **`dep_meta`/`dep_lines`/`workspace_root` (T3 Task 11 review
 //! fix-wave — the three `LspSnapshot` fields Task 11 added for
 //! dependency-source real-span coverage, after this gate was already
 //! written).** All three are now compared, closing what would otherwise be
 //! an invisible-divergence hole in a PERMANENT gate. On THIS fixture
 //! (`tests/fixtures/lsp-incr/`, workspace-only — no dependency apps) `dep_meta`/
-//! `dep_texts` are trivially empty on both sides and `workspace_root` is
+//! `dep_lines` are trivially empty on both sides and `workspace_root` is
 //! trivially identical (`copy_fixture_to_tempdir`'s one tempdir), so this
 //! addition exercises the comparison PLUMBING now without yet proving
 //! anything non-vacuous about dependency-bearing rung 1/2 transitions — a
@@ -173,14 +173,14 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use al_sem::lsp::snapshot::{DeclEntry, LspSnapshot};
+use al_sem::lsp::snapshot::{DeclEntry, LspEdge, LspSnapshot, LspTarget};
 use al_sem::lsp::updater::{ChangeEvent, Rung, Updater};
-use al_sem::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use al_sem::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
 use al_sem::program::resolve::edge::{
-    CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind,
-    OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, SourcePos, Witness,
+    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, Route, RouteTarget, SetCompleteness,
+    SiteId, SourcePos, Witness,
 };
-use al_sem::program::resolve::full::{ClassifiedEdge, ObligationId};
+use al_sem::program::resolve::full::ObligationId;
 use al_sem::snapshot::ParsedUnit;
 
 // ---------------------------------------------------------------------------
@@ -222,44 +222,24 @@ fn build_full_with_parsed(dir: &Path) -> (LspSnapshot, ParsedUnit) {
 /// One route's comparison identity: its target, evidence-kind, and its
 /// OWN sorted `Condition` set (`fires_by_default`/`default_reachable_routes`
 /// gate traversal on exactly this field — see the module doc).
-type CanonRoute = (RouteTarget, EvidenceKind, Vec<Condition>);
-
-fn canon_route(r: &Route) -> CanonRoute {
-    let mut conditions = r.conditions.clone();
-    conditions.sort();
-    (r.target.clone(), r.evidence.kind(), conditions)
-}
-
 /// One edge's comparison identity: the obligation it answers (`ObligationId`
 /// — not the brief's originally-suggested raw `SiteId`; see the module
-/// doc's "Why `ObligationId`" section), the edge's own classification
-/// (`kind`/`shape`/`completeness` — review fix-wave addition: real
-/// semantics `classify_obligation`/`real_unknown_rate` read, not incidental
-/// data), plus the sorted set of routes it carries.
-type CanonEdge = (
-    ObligationId,
-    EdgeKind,
-    DispatchShape,
-    SetCompleteness,
-    Vec<CanonRoute>,
-);
+/// doc's "Why `ObligationId`" section), its kind, its sorted targets and its
+/// route count. Since engine-switch S10.5 the snapshot stores only these
+/// (`LspEdge`): route evidence, conditions, dispatch shape and completeness
+/// stay in the program report, which no rung touches.
+type CanonEdge = (ObligationId, EdgeKind, Vec<LspTarget>, u32);
 
-fn canon_edge(ce: &ClassifiedEdge) -> CanonEdge {
-    let mut routes: Vec<CanonRoute> = ce.edge.routes.iter().map(canon_route).collect();
-    routes.sort();
-    (
-        ce.obligation_id.clone(),
-        ce.edge.kind,
-        ce.edge.shape,
-        ce.edge.completeness,
-        routes,
-    )
+fn canon_edge(e: &LspEdge) -> CanonEdge {
+    let mut targets = e.targets.to_vec();
+    targets.sort();
+    (e.obligation_id(), e.kind, targets, e.route_count)
 }
 
 /// A file's (or `event_edges`'s) edge bucket as an order-independent
 /// multiset: sorted, so two buckets containing the same edges in different
 /// orders compare equal.
-fn canon_edges(edges: &[ClassifiedEdge]) -> Vec<CanonEdge> {
+fn canon_edges(edges: &[LspEdge]) -> Vec<CanonEdge> {
     let mut v: Vec<CanonEdge> = edges.iter().map(canon_edge).collect();
     v.sort();
     v
@@ -311,7 +291,7 @@ fn canon_dep_meta(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, CanonDecl> {
                 k.clone(),
                 (
                     k.clone(),
-                    v.name.clone(),
+                    v.name.to_string(),
                     canon_origin(&v.origin),
                     canon_origin(&v.name_origin),
                 ),
@@ -329,13 +309,13 @@ fn canon_dep_meta(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, CanonDecl> {
 /// build (see the module doc).
 fn canon_incoming(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, Vec<ObligationId>> {
     let mut out: BTreeMap<RoutineNodeId, Vec<ObligationId>> = BTreeMap::new();
-    for (target, refs) in &snap.incoming {
-        let mut obligations: Vec<ObligationId> = refs
-            .iter()
-            .map(|r| snap.edge(r).obligation_id.clone())
+    for target in snap.all_incoming().into_keys() {
+        let mut obligations: Vec<ObligationId> = snap
+            .incoming(&target)
+            .map(|r| snap.edge(r).obligation_id())
             .collect();
         obligations.sort();
-        out.insert(target.clone(), obligations);
+        out.insert(target, obligations);
     }
     out
 }
@@ -364,11 +344,18 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
         );
     }
 
-    let inc_event = canon_edges(&incremental.event_edges);
-    let fresh_event = canon_edges(&fresh.event_edges);
+    // Both parts separately (engine-switch S10.4): the workspace part, and
+    // the shared dependency-only part every rung forwards.
+    let inc_event = canon_edges(&incremental.ws_event_edges);
+    let fresh_event = canon_edges(&fresh.ws_event_edges);
     assert_eq!(
         inc_event, fresh_event,
-        "{context}: event_edges' multiset diverged (incremental vs fresh build_full)"
+        "{context}: ws_event_edges' multiset diverged (incremental vs fresh build_full)"
+    );
+    assert_eq!(
+        canon_edges(&incremental.dep_events.edges),
+        canon_edges(&fresh.dep_events.edges),
+        "{context}: the dependency event links diverged (incremental vs fresh build_full)"
     );
 
     let mut inc_decl_files: Vec<&String> = incremental.decls_by_file.keys().collect();
@@ -413,11 +400,15 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
     // (no EdgeRef/position indirection to canonicalize — every value is a
     // positionless `RoutineNodeId -> usize` count).
     assert_eq!(
-        incremental.publisher_fanout, fresh.publisher_fanout,
+        incremental.ws_publisher_fanout, fresh.ws_publisher_fanout,
         "{context}: publisher_fanout diverged (incremental vs fresh build_full)"
     );
+    assert_eq!(
+        incremental.dep_events.publisher_fanout, fresh.dep_events.publisher_fanout,
+        "{context}: the dependency links' publisher_fanout diverged (incremental vs fresh)"
+    );
 
-    // T3 Task 11 review fix-wave: dep_meta/dep_texts/workspace_root —
+    // T3 Task 11 review fix-wave: dep_meta/dep_lines/workspace_root —
     // trivially equal on this dep-less fixture (see the module doc's note);
     // still compared so a future regression can't slip through silently.
     assert_eq!(
@@ -426,8 +417,8 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
         "{context}: dep_meta diverged (incremental vs fresh build_full)"
     );
     assert_eq!(
-        *incremental.dep_texts, *fresh.dep_texts,
-        "{context}: dep_texts diverged (incremental vs fresh build_full)"
+        *incremental.dep_lines, *fresh.dep_lines,
+        "{context}: dep_lines diverged (incremental vs fresh build_full)"
     );
     assert_eq!(
         incremental.workspace_root, fresh.workspace_root,
@@ -720,12 +711,9 @@ fn delete_file_stays_equivalent() {
         .expect("Beta.Process decl")
         .id
         .clone();
-    let incoming_before = base
-        .incoming
-        .get(&beta_process)
-        .expect("Beta.Process must have incoming callers before delete");
     assert!(
-        incoming_before.iter().any(|r| &*r.file == "MyPage.al"),
+        base.incoming(&beta_process)
+            .any(|r| &*r.file == "MyPage.al"),
         "baseline: MyPage.al must be one of Beta.Process's incoming callers"
     );
 
@@ -757,21 +745,15 @@ fn delete_file_stays_equivalent() {
 /// order is a multiset for equivalence purposes — see the module doc — so
 /// this test must not rely on it; a line number is a stable, meaningful
 /// identity a real call site actually has).
-fn calc_target_at_line(edges: &[ClassifiedEdge], line: u32) -> RoutineNodeId {
-    let ce = edges
+fn calc_target_at_line(edges: &[LspEdge], line: u32) -> RoutineNodeId {
+    let e = edges
         .iter()
-        .find(|ce| ce.edge.site.span.start.line == line)
+        .find(|e| e.span.start.line == line)
         .unwrap_or_else(|| panic!("no call site at line {line}"));
-    let route = ce
-        .edge
-        .routes
-        .iter()
-        .find(|r| matches!(&r.target, RouteTarget::Routine(t) if t.name_lc == "calc"))
-        .unwrap_or_else(|| panic!("line {line}'s edge does not route to a Calc overload"));
-    let RouteTarget::Routine(target) = &route.target else {
-        unreachable!("just matched on RouteTarget::Routine above")
-    };
-    target.clone()
+    e.routine_targets()
+        .find(|t| t.name_lc == "calc")
+        .unwrap_or_else(|| panic!("line {line}'s edge does not route to a Calc overload"))
+        .clone()
 }
 
 #[test]
@@ -855,29 +837,21 @@ codeunit 50100 "Alpha"
          DefSurface fingerprint (routine set/arity/param types) is unaffected"
     );
 
-    let calc_edges: Vec<&ClassifiedEdge> = new_snap.edges_by_file["Alpha.al"]
+    let calc_edges: Vec<&LspEdge> = new_snap.edges_by_file["Alpha.al"]
         .iter()
-        .filter(|ce| {
-            ce.edge
-                .routes
-                .iter()
-                .any(|r| matches!(&r.target, RouteTarget::Routine(t) if t.name_lc == "calc"))
-        })
+        .filter(|e| e.routine_targets().any(|t| t.name_lc == "calc"))
         .collect();
     assert_eq!(
         calc_edges.len(),
         2,
         "both Calc() call sites must still be present after the swap"
     );
-    for ce in &calc_edges {
+    for e in &calc_edges {
         assert!(
-            ce.edge
-                .routes
-                .iter()
-                .any(|r| r.evidence.kind() == EvidenceKind::Source),
-            "each flipped call site must still cleanly resolve (Evidence::Source), \
-             proving the incremental path re-ran arg-type dispatch against the \
-             fresh file rather than a stale cached DeclSurface"
+            e.route_count == 1 && matches!(e.targets[..], [LspTarget::Routine(_)]),
+            "each flipped call site must still cleanly resolve (one route, to a \
+             routine), proving the incremental path re-ran arg-type dispatch \
+             against the fresh file rather than a stale cached DeclSurface"
         );
     }
 
@@ -919,7 +893,7 @@ fn event_subscriber_attribute_edit_stays_equivalent() {
     let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
 
     assert!(
-        !base.event_edges.is_empty(),
+        base.event_edges().next().is_some(),
         "baseline: Alpha.OnAfterWork -> Beta.HandleAfterWork must be wired"
     );
 
@@ -955,12 +929,9 @@ fn event_subscriber_attribute_edit_stays_equivalent() {
          event_subscribers item"
     );
 
-    let still_wired = new_snap.event_edges.iter().any(|ce| {
-        ce.edge
-            .routes
-            .iter()
-            .any(|r| matches!(&r.target, RouteTarget::Routine(t) if t.name_lc == "handleafterwork"))
-    });
+    let still_wired = new_snap
+        .event_edges()
+        .any(|e| e.routine_targets().any(|t| t.name_lc == "handleafterwork"));
     assert!(
         !still_wired,
         "the subscriber must no longer receive Alpha's OnAfterWork event once \
@@ -1241,24 +1212,14 @@ codeunit 50100 "Alpha"
 // Meta-test: canon_edge's discriminating power (review fix-wave)
 // ---------------------------------------------------------------------------
 
-/// Proves the widened `CanonEdge` key (review fix-wave: added `EdgeKind`,
-/// `DispatchShape`, `SetCompleteness`, and each route's `Condition` set) is
-/// not vacuous: 4 pairs of hand-constructed `ClassifiedEdge`s, each pair
-/// IDENTICAL in everything the PRE-fix-wave key covered (`ObligationId`/
-/// `RouteTarget`/`EvidenceKind`) but differing in exactly ONE of these 4
-/// newly-added dimensions, must canonicalize UNEQUAL.
-///
-/// Calibration performed for this review fix-wave (temporary, reverted —
-/// described in the task-10 report's fix-wave section): narrowed
-/// `canon_edge`/`CanonEdge` back to the pre-fix-wave shape (dropping
-/// `kind`/`shape`/`completeness` from the edge tuple and `conditions` from
-/// `canon_route`, keeping only `(ObligationId, Vec<(RouteTarget,
-/// EvidenceKind)>)`) and re-ran this exact test — all 4 `assert_ne!`s below
-/// failed (each pair collapsed to the SAME `CanonEdge`), confirming the
-/// widened key is what makes them distinguishable, not an accident of
-/// `ObligationId` already differing between the pairs.
+/// Proves the `CanonEdge` key covers every fact the snapshot stores for an
+/// edge (`LspEdge`, engine-switch S10.5): edges with the same obligation but
+/// a different kind, a different target, or a different route count (an
+/// extra route the LSP does not show) must canonicalize UNEQUAL. (Before
+/// S10.5 the key also covered dispatch shape, completeness and conditions;
+/// the snapshot no longer stores them.)
 #[test]
-fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
+fn canon_edge_distinguishes_kind_targets_and_route_count() {
     fn rid(name: &str) -> RoutineNodeId {
         RoutineNodeId {
             object: ObjectNodeId {
@@ -1266,7 +1227,7 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
                 kind: al_syntax::ir::ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -1298,53 +1259,42 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
         }
     }
 
-    fn classified(edge: Edge) -> ClassifiedEdge {
-        ClassifiedEdge {
-            obligation_id: ObligationId::CallSite {
-                caller: edge.from.clone(),
-                span: edge.site.span.clone(),
-                callee_fp: edge.site.callee_fingerprint,
-            },
-            edge,
-        }
+    fn lsp(edge: &Edge) -> LspEdge {
+        LspEdge::project(edge, &SharedStr::from("F.al"))
     }
 
     let caller = rid("caller");
     let target = rid("target");
-    let base_canon = canon_edge(&classified(base_edge(caller.clone(), target.clone())));
+    let base_canon = canon_edge(&lsp(&base_edge(caller.clone(), target.clone())));
 
     let mut kind_variant = base_edge(caller.clone(), target.clone());
     kind_variant.kind = EdgeKind::Run;
     assert_ne!(
-        canon_edge(&classified(kind_variant)),
+        canon_edge(&lsp(&kind_variant)),
         base_canon,
         "two edges differing only in EdgeKind must NOT canonicalize equal"
     );
 
-    let mut shape_variant = base_edge(caller.clone(), target.clone());
-    shape_variant.shape = DispatchShape::Multicast;
+    let target_variant = base_edge(caller.clone(), rid("other"));
     assert_ne!(
-        canon_edge(&classified(shape_variant)),
+        canon_edge(&lsp(&target_variant)),
         base_canon,
-        "two edges differing only in DispatchShape must NOT canonicalize equal"
+        "two edges differing only in a target must NOT canonicalize equal"
     );
 
-    let mut completeness_variant = base_edge(caller.clone(), target.clone());
-    completeness_variant.completeness = SetCompleteness::Partial {
-        reason: OpenWorldReason::RuntimeTypeUnbounded,
-    };
+    let mut count_variant = base_edge(caller, target);
+    count_variant.routes.push(Route {
+        target: RouteTarget::Unresolved,
+        evidence: Evidence::Source,
+        conditions: vec![],
+        witness: Witness::None,
+        receiver_tier: None,
+    });
     assert_ne!(
-        canon_edge(&classified(completeness_variant)),
+        canon_edge(&lsp(&count_variant)),
         base_canon,
-        "two edges differing only in SetCompleteness must NOT canonicalize equal"
-    );
-
-    let mut condition_variant = base_edge(caller, target);
-    condition_variant.routes[0].conditions = vec![Condition::ManualBinding];
-    assert_ne!(
-        canon_edge(&classified(condition_variant)),
-        base_canon,
-        "two edges differing only in a route's Condition set must NOT canonicalize equal"
+        "two edges differing only in a route the LSP does not show must NOT \
+         canonicalize equal"
     );
 }
 
@@ -1352,7 +1302,7 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
 // Script 10 (T3 Task 14 Step 5, plan-amended): dep-bearing fixture arm.
 //
 // Every script above runs on `tests/fixtures/lsp-incr/`, which declares no
-// dependencies — so the module doc's `dep_meta`/`dep_texts`/
+// dependencies — so the module doc's `dep_meta`/`dep_lines`/
 // `workspace_root` comparisons in `assert_snapshots_equivalent` (added in
 // the Task 10/11 review fix-waves) are trivially vacuous there (both sides
 // empty/identical for a structural, not a proven, reason). This script uses
@@ -1362,7 +1312,7 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
 // shipping `codeunit 60100 "Source Mgt"`'s actual AL source inside the
 // package — see `tests/fixtures/lsp-diff-deps/app.json`'s declared
 // dependencies) — giving these three fields NON-VACUOUS coverage: a real
-// `dep_meta` entry for `Source Mgt.DoWork`, a real `dep_texts` entry
+// `dep_meta` entry for `Source Mgt.DoWork`, a real `dep_lines` entry
 // for its embedded source, through both a rung-1 (body-only) and a rung-2
 // (signature-change) transition on the WORKSPACE caller file. Per the
 // design doc's `dep_layer` Arc-sharing rationale (`snapshot.rs`'s own
@@ -1399,8 +1349,8 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
         "fixture sanity: dep_meta must carry Source Lib's embedded DoWork"
     );
     assert!(
-        !base.dep_texts.is_empty(),
-        "fixture sanity: dep_texts must carry Source Mgt.al's embedded source text"
+        !base.dep_lines.is_empty(),
+        "fixture sanity: dep_lines must index Source Mgt.al's embedded source"
     );
     let base_dep_decls = canon_dep_meta(&base);
 
@@ -1450,7 +1400,7 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
 
     // Rung 2: a SIGNATURE change on the workspace caller (adds a parameter)
     // — must rebuild the workspace layer while REUSING the cached dep
-    // layer; dep_meta/dep_texts must stay non-vacuous AND identical.
+    // layer; dep_meta/dep_lines must stay non-vacuous AND identical.
     let signature_change = r#"codeunit 50000 "Caller"
 {
     procedure CallSymbolOnlyDep(Extra: Integer)
@@ -1491,43 +1441,6 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
         base_dep_decls,
         "rung 2 must reuse the cached, unchanged dep layer — dep_meta identical across a workspace-only signature-change rebuild"
     );
-}
-
-/// Perf safe-wins Task 1: embedded dependency source text must be ONE shared
-/// allocation — `dep_texts`'s `Arc<str>` and the `AppSetSnapshot`'s own
-/// `SourceFile.text` must be pointer-equal, never independent copies (the
-/// perf doc's T1/T2 duplication).
-#[test]
-fn dep_texts_share_the_snapshot_source_text_allocation() {
-    let dir = copy_fixture_lsp_diff_deps_to_tempdir();
-    let (base, _parsed) = build_full_with_parsed(dir.path());
-
-    assert!(
-        !base.dep_texts.is_empty(),
-        "fixture sanity: dep_texts must carry Source Mgt.al's embedded source"
-    );
-    for ((app_ref, vp), dep_text) in base.dep_texts.iter() {
-        let app_id = base.graph.apps.resolve(*app_ref);
-        let unit = base
-            .snap
-            .apps
-            .iter()
-            .find(|u| &u.id == app_id)
-            .expect("dep_texts app must exist in snap");
-        let sf = unit
-            .source
-            .as_ref()
-            .expect("dep with texts has embedded source")
-            .files
-            .iter()
-            .find(|f| &f.virtual_path == vp)
-            .expect("dep_texts path must exist in snap source");
-        assert!(
-            std::sync::Arc::ptr_eq(dep_text, &sf.text),
-            "dep_texts[({app_ref:?}, {vp})] must share the snapshot's text \
-             allocation, not copy it"
-        );
-    }
 }
 
 /// Perf safe-wins Task 2: `build_full_with_parsed` must NOT run a second
@@ -1589,7 +1502,7 @@ fn build_full_with_parsed_returns_only_the_workspace_unit() {
 /// which is the only externally observable point from this integration
 /// test crate — `Updater`'s fields are private).
 #[test]
-fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
+fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_lines_by_arc_identity() {
     let dir = copy_fixture_lsp_diff_deps_to_tempdir();
     let (base, parsed) = build_full_with_parsed(dir.path());
     assert!(
@@ -1629,8 +1542,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "apply_batch's Rung1 arm must forward dep_meta by Arc identity, never rebuild it"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&base.dep_texts, &rung1_snap.dep_texts),
-        "apply_batch's Rung1 arm must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&base.dep_lines, &rung1_snap.dep_lines),
+        "apply_batch's Rung1 arm must forward dep_lines by Arc identity"
     );
 
     // ── Rung 2, same Updater: a signature change on the workspace caller ──
@@ -1663,8 +1576,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "apply_rung2 must forward dep_meta by Arc identity, never rebuild it"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&rung1_snap.dep_texts, &rung2_snap.dep_texts),
-        "apply_rung2 must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&rung1_snap.dep_lines, &rung2_snap.dep_lines),
+        "apply_rung2 must forward dep_lines by Arc identity"
     );
 
     // ── Path 2: spawn_updater's hot loop — a SEPARATE Updater/thread, so it
@@ -1679,7 +1592,7 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
     let dir2 = copy_fixture_lsp_diff_deps_to_tempdir();
     let (base2, parsed2) = build_full_with_parsed(dir2.path());
     let base2_dep_meta = Arc::clone(&base2.dep_meta);
-    let base2_dep_texts = Arc::clone(&base2.dep_texts);
+    let base2_dep_lines = Arc::clone(&base2.dep_lines);
     let shared = Arc::new(SharedSnapshot::new(Arc::new(base2)));
     let (tx, rx) = mpsc::channel();
 
@@ -1711,8 +1624,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "spawn_updater's hot-loop rung-1 path must forward dep_meta by Arc identity"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&base2_dep_texts, &hot_loop_snap.dep_texts),
-        "spawn_updater's hot-loop rung-1 path must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&base2_dep_lines, &hot_loop_snap.dep_lines),
+        "spawn_updater's hot-loop rung-1 path must forward dep_lines by Arc identity"
     );
 }
 
@@ -1733,25 +1646,12 @@ fn dep_overload_dispatch_resolves_through_frozen_tier_after_arena_drop() {
     let (base, parsed) = build_full_with_parsed(dir.path());
 
     fn dep_routine_target(snap: &LspSnapshot) -> RoutineNodeId {
-        let edges = &snap.edges_by_file["Caller.al"];
-        let dowork_edge = edges
+        snap.edges_by_file["Caller.al"]
             .iter()
-            .find(|ce| {
-                ce.edge.routes.iter().any(
-                    |r| matches!(&r.target, RouteTarget::Routine(id) if id.name_lc == "dowork"),
-                )
-            })
-            .expect("Caller.al must carry an edge routing to Source Mgt.DoWork");
-        let route = dowork_edge
-            .edge
-            .routes
-            .iter()
-            .find(|r| matches!(&r.target, RouteTarget::Routine(id) if id.name_lc == "dowork"))
-            .expect("route to DoWork must exist");
-        match &route.target {
-            RouteTarget::Routine(id) => id.clone(),
-            other => panic!("expected RouteTarget::Routine, got {other:?}"),
-        }
+            .flat_map(|e| e.routine_targets())
+            .find(|id| id.name_lc == "dowork")
+            .expect("Caller.al must carry an edge routing to Source Mgt.DoWork")
+            .clone()
     }
 
     let base_target = dep_routine_target(&base);
@@ -1804,7 +1704,7 @@ fn dep_overload_dispatch_resolves_through_frozen_tier_after_arena_drop() {
 }
 
 /// Every `RouteTarget::Routine(id)` naming a DEPENDENCY routine must resolve
-/// through `decl_and_text` (served by `dep_meta` since the `dep_decl_by_id`
+/// through `decl_and_line_table` (served by `dep_meta` since the `dep_decl_by_id`
 /// deletion) — the fail-closed "never guess" contract must not lose a single
 /// id in the migration.
 #[test]
@@ -1813,20 +1713,16 @@ fn every_dep_routine_route_target_resolves_via_dep_meta() {
     let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
     let workspace_app = snap.graph.apps.find(&snap.snap.workspace_app);
     let mut dep_targets = 0usize;
-    for edges in snap
-        .edges_by_file
-        .values()
-        .map(|a| a.as_slice())
-        .chain(std::iter::once(snap.event_edges.as_slice()))
-    {
-        for ce in edges {
-            for route in &ce.edge.routes {
-                if let RouteTarget::Routine(rid) = &route.target
-                    && Some(rid.object.app) != workspace_app
-                {
+    for edges in snap.edges_by_file.values().map(|a| a.as_slice()).chain([
+        snap.ws_event_edges.as_slice(),
+        snap.dep_events.edges.as_slice(),
+    ]) {
+        for e in edges {
+            for rid in e.routine_targets() {
+                if Some(rid.object.app) != workspace_app {
                     dep_targets += 1;
                     assert!(
-                        snap.decl_and_text(rid).is_some(),
+                        snap.decl_and_line_table(rid).is_some(),
                         "dep routine target {rid:?} must resolve via dep_meta"
                     );
                 }
@@ -1953,14 +1849,14 @@ codeunit 50100 "Alpha"
     // ---- incoming: sorted-multiset equality against a fresh build_incoming
     // over the SAME post-edit edges_by_file/event_edges. ----
     let (fresh_incoming, fresh_publisher_fanout) =
-        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.event_edges);
+        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.ws_event_edges);
     let sort_refs = |v: &[al_sem::lsp::snapshot::EdgeRef]| {
         let mut v: Vec<(String, u32)> = v.iter().map(|r| (r.file.to_string(), r.idx)).collect();
         v.sort();
         v
     };
     let mut all_targets: Vec<RoutineNodeId> = new_snap
-        .incoming
+        .ws_incoming
         .keys()
         .cloned()
         .chain(fresh_incoming.keys().cloned())
@@ -1969,7 +1865,7 @@ codeunit 50100 "Alpha"
     all_targets.dedup();
     for target in &all_targets {
         let patched: Vec<(String, u32)> = new_snap
-            .incoming
+            .ws_incoming
             .get(target)
             .map(|v| sort_refs(v))
             .unwrap_or_default();
@@ -1987,7 +1883,7 @@ codeunit 50100 "Alpha"
     // ---- publisher_fanout: Arc-forwarded at rung 1, must be byte-identical
     // to a fresh rebuild off the unchanged event_edges. ----
     assert_eq!(
-        *new_snap.publisher_fanout, fresh_publisher_fanout,
+        *new_snap.ws_publisher_fanout, fresh_publisher_fanout,
         "rung-1 Arc-forwarded publisher_fanout must equal a fresh build_incoming's"
     );
 
@@ -2072,14 +1968,14 @@ codeunit 50100 "Alpha"
     assert_eq!(rung, Rung::One, "a body-only edit must take rung 1");
 
     let (fresh_incoming, _) =
-        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.event_edges);
+        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.ws_event_edges);
     let sort_refs = |v: &[al_sem::lsp::snapshot::EdgeRef]| {
         let mut v: Vec<(String, u32)> = v.iter().map(|r| (r.file.to_string(), r.idx)).collect();
         v.sort();
         v
     };
     let mut all_targets: Vec<RoutineNodeId> = new_snap
-        .incoming
+        .ws_incoming
         .keys()
         .cloned()
         .chain(fresh_incoming.keys().cloned())
@@ -2092,7 +1988,7 @@ codeunit 50100 "Alpha"
     );
     for target in &all_targets {
         let patched: Vec<(String, u32)> = new_snap
-            .incoming
+            .ws_incoming
             .get(target)
             .map(|v| sort_refs(v))
             .unwrap_or_default();

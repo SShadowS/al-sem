@@ -183,8 +183,8 @@ pub(crate) fn find_routine_by_origin(
 ///   `event_subscriptions.get(qname).len()` term (rule R5's "subscribed" half).
 #[must_use]
 pub(crate) fn effective_incoming_count(snap: &LspSnapshot, id: &RoutineNodeId) -> usize {
-    let direct = snap.incoming.get(id).map(Vec::len).unwrap_or(0);
-    let as_publisher_fan_out = snap.publisher_fanout.get(id).copied().unwrap_or(0);
+    let direct = snap.incoming_count(id);
+    let as_publisher_fan_out = snap.publisher_fanout(id);
     direct + as_publisher_fan_out
 }
 
@@ -314,10 +314,7 @@ mod tests {
             .find(|d| d.name == "CalledProc")
             .expect("CalledProc decl");
         assert_eq!(
-            snap.incoming
-                .get(&called_decl.id)
-                .map(Vec::len)
-                .unwrap_or(0),
+            snap.incoming_count(&called_decl.id),
             2,
             "sanity: snap.incoming must agree with the lens's own count"
         );

@@ -5,6 +5,8 @@ pub use al_syntax::ir::ObjectKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub use crate::program::str_pool::SharedStr;
+
 /// Interned handle for an `AppId` (cheap to copy/compare/sort).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct AppRef(pub u32);
@@ -75,7 +77,8 @@ impl AppRegistry {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ObjKey {
     Id(i64),
-    Name(String),
+    /// Shared text (engine-switch S10.2, see `crate::program::str_pool`).
+    Name(SharedStr),
 }
 
 /// Serde "remote" mirror of `al_syntax::ir::ObjectKind` (T3 Task 11 — `LspSnapshot`'s
@@ -173,8 +176,9 @@ impl ObjectNodeId {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct RoutineNodeId {
     pub object: ObjectNodeId,
-    pub name_lc: String,
-    pub enclosing_member_lc: Option<String>,
+    /// Shared text (engine-switch S10.2, see `crate::program::str_pool`).
+    pub name_lc: SharedStr,
+    pub enclosing_member_lc: Option<SharedStr>,
     pub params_count: usize,
     /// Stable fingerprint of the parameter type-text sequence (FNV-1a hash);
     /// `0` when `params_count == 0` in EITHER tier. Non-zero whenever two
@@ -203,6 +207,29 @@ pub struct RoutineNodeId {
     /// [`sig_fp_as_string`].
     #[serde(with = "sig_fp_as_string")]
     pub sig_fp: u64,
+}
+
+impl crate::program::str_pool::ShareStrings for ObjKey {
+    fn share_strings(&mut self, pool: &mut crate::program::str_pool::StrPool) {
+        match self {
+            ObjKey::Id(_) => {}
+            ObjKey::Name(name) => pool.share(name),
+        }
+    }
+}
+
+impl crate::program::str_pool::ShareStrings for ObjectNodeId {
+    fn share_strings(&mut self, pool: &mut crate::program::str_pool::StrPool) {
+        self.key.share_strings(pool);
+    }
+}
+
+impl crate::program::str_pool::ShareStrings for RoutineNodeId {
+    fn share_strings(&mut self, pool: &mut crate::program::str_pool::StrPool) {
+        self.object.share_strings(pool);
+        pool.share(&mut self.name_lc);
+        pool.share_opt(&mut self.enclosing_member_lc);
+    }
 }
 
 /// `u64`-as-JSON-string serde helper — see [`RoutineNodeId::sig_fp`]'s doc
@@ -298,7 +325,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: "foo".to_string(),
+            name_lc: "foo".into(),
             enclosing_member_lc: None,
             params_count: 2,
             // u64::MAX - 1: comfortably past 2^53 (9_007_199_254_740_992) —
@@ -348,7 +375,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: "foo".to_string(),
+            name_lc: "foo".into(),
             enclosing_member_lc: None,
             params_count: 2,
             sig_fp: u64::MAX - 1,

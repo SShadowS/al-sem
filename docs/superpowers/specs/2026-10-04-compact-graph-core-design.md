@@ -341,6 +341,40 @@ These lose no information, so both profiles get them, except the last two items.
 Order: 1, then 2, then 3, then 4-5. Each item is priced by the probe right before it is built.
 No fixed saving is promised here, because steps 1 and 2 change the base.
 
+**Re-priced 2026-10-08 (owner decision: build biggest first).** The S10 baseline
+(`tools/census-probe/runs-s10-base/`, master after the engine switch) priced the items on CG
+(7 roots, `embedded`; the dependency tier is shared, so these are counted once): item 5,
+dependency source text, **108.3 MiB** of root 1's 251.2 MiB; item 2, strings, 23.8 MiB (18.4
+saved by interning, plus about 19.5 MiB of per-allocation overhead, estimated at 24 B per
+allocation, not counted); item 3, `dep_meta`, 31.5
+MiB of entries plus 8.5 MiB of parameter lists; item 1, ids, **22.0 MiB** inline plus 5.5 MiB
+of their strings (step 2's removal of `routines_by_obj_name` took most copies: 801,553 at step
+0, 239,758 now). §11's heap targets are already met (CG idle with updaters 327.5 MiB, build
+peak 297.2 MiB); the container acceptance run is still owed. The LSP never displays dependency
+source: it reads it only to turn byte offsets into editor positions (`LspSnapshot::
+decl_and_line_table`), so item 5's condition holds. New order: **5** (S10.1), **2** (S10.2),
+**3** (S10.3), **1** (S10.4), **4** (S10.5).
+
+**Status.** S10.1 done (plans `2026-10-08-s10-1-dependency-line-index.md` and
+`…-s10-1b-defer-dependency-text.md`). S10.2 done as shared `Arc<str>` (`SharedStr`) pooled per
+dependency tier rather than `u32` symbols (owner decision 2026-10-08; reasons in
+`2026-10-08-s10-2-shared-strings.md`); it also shrank every id copy (`RoutineNodeId` 96 → 72 B),
+so item 1's inline price above is now lower (that 22.0 MiB was root 1's walk alone; over all 7
+roots it was 31.04 MiB, now 23.28). Re-price items 3 and 1 before building them.
+S10.3 done (`dep_meta` as a column; plan `2026-10-08-s10-3-dep-meta-columns.md`; packing priced
+at about 4 MiB, not built). S10.4 re-scoped by the owner: most id copies outside the canonical
+rows (110,206 of 111,307 on CG) were in per-root event links identical in every root, so those
+links are now shared per dependency tier (plan
+`2026-10-08-s10-4-shared-dependency-event-links.md`); the numeric ids of item 1 then re-price
+at about 1.2 MiB of copies outside the canonical rows on CG (all copies 9.13 MiB) and are not
+built. S10.5 done (item 4, plan `2026-10-08-s10-5-lsp-edges.md`): the LSP keeps an
+`LspEdge` per call site (targets and route count, no witness, evidence, conditions or repeated
+caller copies); CDO idle with updaters 201.5 → 184.7 MiB, CG 145.3 → 142.0. The full facts stay in the
+program report, so no tool loses them. It is built as the LSP snapshot's own stored form, not
+as a `BuildProfile` field: the LSP snapshot is the only light view (as with
+`empty_event_edges` above), and classification still runs on the complete edge. The resolver's linear object scans (item 1's speed
+part) stay open.
+
 ## §9 — How the effort runs
 
 - **Step 0 (before step 1): measure the running server.** Extend the census probe to start

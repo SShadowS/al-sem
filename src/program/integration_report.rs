@@ -163,7 +163,7 @@ pub fn build_report(
                 object: object_name(&sub_id.object, &obj_by_id),
                 procedure: rtn_by_id
                     .get(sub_id)
-                    .map_or_else(|| sub_id.name_lc.clone(), |r| r.name.clone()),
+                    .map_or_else(|| sub_id.name_lc.to_string(), |r| r.name.to_string()),
                 conditions: conditions(&r.conditions),
                 cross_app,
             });
@@ -192,7 +192,7 @@ pub fn build_report(
                 object: object_name(&ce.edge.from.object, &obj_by_id),
                 event: rtn_by_id
                     .get(&ce.edge.from)
-                    .map_or_else(|| ce.edge.from.name_lc.clone(), |r| r.name.clone()),
+                    .map_or_else(|| ce.edge.from.name_lc.to_string(), |r| r.name.to_string()),
                 kind: pub_kind.to_string(),
             },
             subscribers,
@@ -242,7 +242,7 @@ fn app_name(graph: &ProgramGraph, app: AppRef) -> String {
 fn object_name(oid: &ObjectNodeId, obj_by_id: &HashMap<&ObjectNodeId, &ObjectNode>) -> String {
     obj_by_id
         .get(oid)
-        .map_or_else(|| format!("{:?}", oid.key), |o| o.name.clone())
+        .map_or_else(|| format!("{:?}", oid.key), |o| o.name.to_string())
 }
 
 fn publisher_kind_str(pk: PublisherKind) -> &'static str {
@@ -363,7 +363,7 @@ mod tests {
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -380,7 +380,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(obj_id),
             },
-            name_lc: name.to_ascii_lowercase(),
+            name_lc: name.to_ascii_lowercase().into(),
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,

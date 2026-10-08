@@ -1,0 +1,244 @@
+size_of: RoutineNodeId=96 ObjectNodeId=32 RoutineNode=280 ObjectNode=344 RoutineMeta=200 ClassifiedEdge=416 Route=240 DeclEntry=240 EdgeRef=24 ParsedFileEntry=128
+
+######## root 1 = U:/Git/DO-cdo-baseline/Cloud (Embedded) built in 3.1s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live     148.0  in-phase peak     148.1  live allocs    +158677
+  2.parse                                  end-live     339.8  in-phase peak     340.4  live allocs   +1709130
+  3.dep_layer                              end-live     340.6  in-phase peak     408.1  live allocs   +1672124
+  4.assemble_graph                         end-live     346.9  in-phase peak     348.7  live allocs   +1719235
+  5.index+surface+dep_meta+dep_lines       end-live     368.0  in-phase peak     368.0  live allocs   +1808785
+  6.resolve_workspace_files                end-live     391.0  in-phase peak     391.5  live allocs   +1998505
+  7.event_edges                            end-live     395.5  in-phase peak     410.5  live allocs   +2018492
+  8.incoming+decl_by_id                    end-live     392.5  in-phase peak     395.5  live allocs   +1992625
+  9.publish_snapshot                       end-live     275.8  in-phase peak     392.6  live allocs   +1972034
+  10.returned                              end-live     275.7  in-phase peak     275.8  live allocs   +1971449
+  BUILD PEAK 410.5 MiB; retained after settle 275.7 MiB in 1971449 allocs
+  + diagnostics map 3.64 MiB in 7351 allocs
+  shape: objects 11330 (shared 10746 own 584), routines 127282 (shared 121075 own 6207), dep_meta 121075, dep_lines 10881, ws files 582, edges_by_file edges 20721, event_edges 2380, incoming keys 6746, decl_by_id 5512
+  event_edges classes: dep->dep only 2292 | dep publisher w/ ws subscriber 81 | ws publisher 7 | routes into ws 95 | dep->dep set identical to root 1: None
+
+ALL 1 ROOTS LIVE: 279.4 MiB in 1978802 allocs
+
+==== Q2 walk: root 1 only (U:/Git/DO-cdo-baseline/Cloud) ====
+-- strings by (structure, field), len bytes; 'saved' = bytes/allocs removed by interning WITHIN the field
+  structure              field                               count       MiB   distinct  dist MiB     saved     save%
+  dep_meta               virtual_path                       121075      6.07       7460      0.39      5.68     93.6%
+  dep.routine            param_sig_key                       70594      2.78      23817      1.44      1.34     48.1%
+  dep_meta               param.ty                           171215      2.69       3715      0.11      2.57     95.8%
+  dep.routine            name                               121075      2.37      58330      1.50      0.87     36.6%
+  dep_meta               name                               121075      2.37      58330      1.50      0.87     36.6%
+  dep.routine            rid.name_lc                        121075      2.37      58184      1.50      0.87     36.7%
+  dep_meta               rid.name_lc                        121075      2.37      58184      1.50      0.87     36.7%
+  edges_by_file          edge.site.span.unit                 20721      1.14        456      0.03      1.11     97.7%
+  edges_by_file          obligation.span.unit                20721      1.14        456      0.03      1.11     97.7%
+  edges_by_file          rid.name_lc                         71675      1.12       2686      0.05      1.07     95.5%
+  dep_lines              key.virtual_path                    10881      0.57      10833      0.57      0.00      0.5%
+  dep.object             field.name_lc                       35179      0.51      10327      0.18      0.33     65.3%
+  edges_by_file          witness.file                         9512      0.48        488      0.03      0.45     94.6%
+  dep_meta               rid.enclosing_member_lc             24313      0.32       7239      0.11      0.21     64.8%
+  dep_meta               enclosing_member                    24313      0.32       7268      0.11      0.21     64.8%
+  dep.routine            rid.enclosing_member_lc             24313      0.32       7239      0.11      0.21     64.8%
+  decl_by_id             virtual_path                         5512      0.30        480      0.03      0.27     91.0%
+  decls_by_file          virtual_path                         5512      0.30        480      0.03      0.27     91.0%
+  event_edges            rid.name_lc                         10760      0.29       3325      0.10      0.18     64.0%
+  dep.object             field.type_text                     35179      0.28        685      0.02      0.26     93.5%
+  dep.object             name                                10746      0.23      10218      0.22      0.01      4.7%
+  event_edges            witness.file                         3620      0.20        636      0.03      0.16     82.4%
+  edges_by_file          witness.catalog_version              6156      0.18          1      0.00      0.18    100.0%
+  dep.routine            return_type                         22950      0.18        411      0.01      0.17     94.3%
+  incoming               rid.name_lc                          6746      0.16       4975      0.13      0.04     21.7%
+  decl_by_id             rid.name_lc                         11024      0.16       2555      0.05      0.11     69.9%
+  edges_by_file          rid.enclosing_member_lc             10537      0.15        545      0.01      0.14     94.4%
+  dep.object             objref.normalized_lc                 9001      0.13       2014      0.04      0.08     67.4%
+  dep.object             objref.raw                           9001      0.13       2014      0.04      0.08     67.4%
+  ws.routine             name                                 6207      0.09       2583      0.05      0.04     47.3%
+  ws.routine             rid.name_lc                          6207      0.09       2572      0.05      0.04     47.4%
+  dep.routine            sub.event_name                       3530      0.09       1467      0.04      0.04     52.6%
+  edges_by_file          route.builtin                        6156      0.08        285      0.00      0.08     94.5%
+  edges_by_file          witness.catalog_id                   6156      0.08        285      0.00      0.08     94.5%
+  event_edges            edge.site.span.unit                  1685      0.08        470      0.02      0.06     71.5%
+  decls_by_file          rid.name_lc                          5512      0.08       2555      0.05      0.03     39.9%
+  decls_by_file          name                                 5512      0.08       2566      0.05      0.03     39.7%
+  decl_by_id             name                                 5512      0.08       2566      0.05      0.03     39.7%
+  ws.routine             param_sig_key                        2151      0.07        900      0.05      0.02     34.0%
+  dep.routine            sub.publisher_name                   3527      0.06        735      0.01      0.05     78.0%
+  publisher_fanout       rid.name_lc                          2380      0.06       1512      0.04      0.02     29.4%
+  dep.object             page_control.name_lc                 3397      0.05        546      0.01      0.04     84.3%
+  decl_by_id             rid.enclosing_member_lc              3340      0.05        565      0.01      0.04     80.9%
+  decls_by_file          key                                   582      0.03        582      0.03      0.00      0.0%
+  edges_by_file          key                                   582      0.03        582      0.03      0.00      0.0%
+  parsed                 virtual_path                          582      0.03        582      0.03      0.00      0.0%
+  snap.source            virtual_path                          582      0.03        582      0.03      0.00      0.0%
+  parsed                 key                                   582      0.03        582      0.03      0.00      0.0%
+  ws ParsedUnit          virtual_path                          582      0.03        582      0.03      0.00      0.0%
+  dep.object             dataitem.name_lc                     2281      0.03        681      0.01      0.02     63.7%
+  dep.object             dataitem.name                        2281      0.03        686      0.01      0.02     63.5%
+  decls_by_file          rid.enclosing_member_lc              1670      0.02        565      0.01      0.01     61.9%
+  ws.routine             rid.enclosing_member_lc              1670      0.02        565      0.01      0.01     61.9%
+  dep.routine            sub.publisher_object_type            3530      0.02          5      0.00      0.02     99.9%
+  dep_meta               rid.object.objkey(name)               828      0.02        159      0.00      0.01     80.1%
+  dep.routine            rid.object.objkey(name)               828      0.02        159      0.00      0.01     80.1%
+  ws.object              field.name_lc                        1084      0.02        575      0.01      0.01     42.2%
+  ws.object              name                                  584      0.01        569      0.01      0.00      2.3%
+  ws.routine             return_type                          1405      0.01         47      0.00      0.01     91.8%
+  ws.object              objref.normalized_lc                  423      0.01        178      0.00      0.00     53.7%
+  ws.object              objref.raw                            423      0.01        178      0.00      0.00     53.7%
+  dep.object             extends_target                        434      0.01        328      0.01      0.00     21.8%
+  ws.object              field.type_text                      1084      0.01         52      0.00      0.01     90.6%
+  dep.object             objkey(name)                          305      0.01        257      0.01      0.00     21.9%
+  dep.object             implements                            335      0.01        129      0.00      0.00     58.7%
+  ws.object              extends_target                        127      0.00        127      0.00      0.00      0.0%
+  ws.routine             sub.event_name                         95      0.00         73      0.00      0.00     16.7%
+  ws.object              page_control.name_lc                  222      0.00         56      0.00      0.00     67.6%
+  ws.routine             sub.publisher_name                     91      0.00         52      0.00      0.00     37.4%
+  decl_by_id             rid.object.objkey(name)                66      0.00         10      0.00      0.00     82.0%
+  dep.routine            sub.element                            80      0.00         47      0.00      0.00     38.6%
+  incoming               rid.enclosing_member_lc                37      0.00         33      0.00      0.00     13.7%
+  ws.routine             sub.publisher_object_type              95      0.00          4      0.00      0.00     96.5%
+  ws.routine             rid.object.objkey(name)                33      0.00         10      0.00      0.00     64.0%
+  decls_by_file          rid.object.objkey(name)                33      0.00         10      0.00      0.00     64.0%
+  ws.object              dataitem.name                          22      0.00         20      0.00      0.00      2.9%
+  ws.object              dataitem.name_lc                       22      0.00         20      0.00      0.00      2.9%
+  ws.object              implements                             15      0.00          8      0.00      0.00     44.6%
+  ws.object              objkey(name)                           10      0.00         10      0.00      0.00      0.0%
+  ws.routine             sub.element                             8      0.00          6      0.00      0.00     19.0%
+  ALL STRINGS: 1320441 strings, 31.11 MiB; GLOBAL distinct 196871 (5.95 MiB) => interning saves 25.17 MiB string bytes and 1123570 allocs (+25.72 MiB at 24 B/alloc LFH overhead)
+-- Vec backing buffers (len * size_of)
+  dep_meta               params[]                            70594 vecs      9.14 MiB
+  edges_by_file          routes[]                            15688 vecs      3.60 MiB
+  dep.object             fields[]                             2156 vecs      1.61 MiB
+  event_edges            routes[]                             2380 vecs      0.83 MiB
+  dep.routine            event_subscribers[]                  3530 vecs      0.40 MiB
+  incoming               edgerefs[]                           6746 vecs      0.30 MiB
+  dep.object             page_controls[]                      1323 vecs      0.26 MiB
+  dep.object             dataitems[]                           678 vecs      0.21 MiB
+  ws.object              fields[]                               90 vecs      0.05 MiB
+  ws.object              page_controls[]                       113 vecs      0.02 MiB
+  ws.routine             event_subscribers[]                    95 vecs      0.01 MiB
+  dep.object             implements[]                          307 vecs      0.01 MiB
+  ws.object              dataitems[]                             8 vecs      0.00 MiB
+  event_edges            route.conditions[]                   1540 vecs      0.00 MiB
+  ws.object              implements[]                           15 vecs      0.00 MiB
+  edges_by_file          route.conditions[]                     47 vecs      0.00 MiB
+-- container elements (inline struct bytes: count * size_of)
+  dep_meta                           121075 elems     34.18 MiB
+  dep.routine                        121075 elems     32.33 MiB
+  edges_by_file                       20721 elems      8.22 MiB
+  dep.object                          10746 elems      3.53 MiB
+  decl_by_id                           5512 elems      1.77 MiB
+  ws.routine                           6207 elems      1.66 MiB
+  decls_by_file                        5512 elems      1.26 MiB
+  event_edges                          2380 elems      0.94 MiB
+  dep_lines                           10881 elems      0.83 MiB
+  incoming                             6746 elems      0.77 MiB
+  publisher_fanout                     2380 elems      0.24 MiB
+  ws.object                             584 elems      0.19 MiB
+-- Arc<str> texts (once per pointer)
+  incoming.edgeref.file(Arc<str>)               434 texts      0.02 MiB
+  workspace text                                582 texts      4.86 MiB
+-- per node kind (n, inline + owned heap MiB)
+  dep.routine    Codeunit                   56319     20.39 MiB
+  dep.routine    Page                       29759      9.10 MiB
+  dep.routine    Table                      24029      7.92 MiB
+  dep.object     Table                       2092      3.09 MiB
+  dep.routine    Report                      8361      2.67 MiB
+  dep.object     Page                        3011      1.54 MiB
+  dep.object     Codeunit                    2753      0.99 MiB
+  ws.routine     Codeunit                    1877      0.65 MiB
+  ws.routine     Page                        2067      0.62 MiB
+  dep.object     Report                       675      0.52 MiB
+  ws.routine     Table                       1473      0.45 MiB
+  dep.routine    XmlPort                     1115      0.35 MiB
+  dep.object     Enum                         795      0.28 MiB
+  dep.routine    Interface                    697      0.24 MiB
+  dep.object     PermissionSet                478      0.17 MiB
+  ws.routine     PageExtension                493      0.15 MiB
+  dep.routine    PageExtension                304      0.09 MiB
+  ws.object      Table                         67      0.09 MiB
+  dep.routine    TableExtension               255      0.09 MiB
+  ws.object      Page                         197      0.08 MiB
+  dep.object     PageExtension                214      0.08 MiB
+  dep.object     TableExtension               100      0.07 MiB
+  dep.object     Query                        159      0.06 MiB
+  ws.object      PageExtension                 93      0.05 MiB
+  dep.object     Interface                    133      0.05 MiB
+  dep.object     XmlPort                       44      0.05 MiB
+  ws.object      Codeunit                     125      0.04 MiB
+  ws.routine     Report                       139      0.04 MiB
+  dep.routine    ControlAddIn                 131      0.04 MiB
+  dep.object     Entitlement                  100      0.04 MiB
+  ws.routine     TableExtension               125      0.04 MiB
+  dep.object     PermissionSetExtension        60      0.02 MiB
+  ws.object      TableExtension                31      0.02 MiB
+  dep.routine    ReportExtension               54      0.02 MiB
+  dep.object     EnumExtension                 46      0.02 MiB
+  dep.routine    Query                         51      0.02 MiB
+  dep.object     Profile                       43      0.02 MiB
+  ws.object      Enum                          37      0.01 MiB
+  dep.object     ControlAddIn                  29      0.01 MiB
+  ws.object      Report                        14      0.01 MiB
+  dep.object     ReportExtension               14      0.01 MiB
+  ws.routine     Interface                     17      0.01 MiB
+  ws.routine     ControlAddIn                  16      0.01 MiB
+  ws.object      Interface                      7      0.00 MiB
+  ws.object      PermissionSet                  6      0.00 MiB
+  ws.object      EnumExtension                  3      0.00 MiB
+  ws.object      ControlAddIn                   3      0.00 MiB
+  ws.object      Query                          1      0.00 MiB
+-- RoutineNodeId copies by (structure, field); inline 96 B each
+  dep.routine            id                             121075 copies     11.08 MiB inline
+  dep_meta               key                            121075 copies     11.08 MiB inline
+  edges_by_file          obligation.caller               20721 copies      1.90 MiB inline
+  edges_by_file          edge.from                       20721 copies      1.90 MiB inline
+  edges_by_file          edge.site.caller                20721 copies      1.90 MiB inline
+  edges_by_file          route.target                     9512 copies      0.87 MiB inline
+  incoming               key                              6746 copies      0.62 MiB inline
+  ws.routine             id                               6207 copies      0.57 MiB inline
+  decl_by_id             id                               5512 copies      0.50 MiB inline
+  decls_by_file          id                               5512 copies      0.50 MiB inline
+  decl_by_id             key                              5512 copies      0.50 MiB inline
+  event_edges            route.target                     3620 copies      0.33 MiB inline
+  event_edges            edge.from                        2380 copies      0.22 MiB inline
+  event_edges            edge.site.caller                 2380 copies      0.22 MiB inline
+  event_edges            obligation.publisher             2380 copies      0.22 MiB inline
+  publisher_fanout       key                              2380 copies      0.22 MiB inline
+  RoutineNodeId: 356454 copies of 127282 distinct (2.80 copies/id); copies histogram 1:0 2:115505 3:0 4-5:4741 6-10:4262 11+:2774
+  RoutineNodeId bytes across copies: inline 32.63 MiB + owned strings 7.63 MiB
+  ObjectNodeId: 367784 copies of 11330 distinct (incl. the one inside every RoutineNodeId); inline 32 B each
+
+==== drop deltas (reverse build order) ====
+drop-delta breakdown for U:/Git/DO-cdo-baseline/Cloud:
+  diagnostics (compute_all output)                                1.01 MiB       6769 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.21 MiB       3497 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      3.22 MiB      25455 allocs
+  decls_by_file                                                   2.37 MiB      19884 allocs
+  incoming                                                        1.89 MiB      13964 allocs
+  publisher_fanout                                                0.47 MiB       2382 allocs
+  edges_by_file                                                  20.53 MiB     169249 allocs
+  event_edges                                                     4.54 MiB      19987 allocs
+  parsed (ws AlFile IR + text + LineTable)                       43.32 MiB     180632 allocs
+  graph.objects (own part + own_pos)                              0.49 MiB       4282 allocs
+  graph.workspace_rows                                            1.64 MiB      13323 allocs
+  graph.routines (own part + own_pos)                             3.33 MiB      18059 allocs
+  graph.obj_index                                                 0.88 MiB      11331 allocs
+  graph.apps                                                      0.00 MiB         98 allocs
+  graph.topology                                                  0.00 MiB         12 allocs
+  graph.friends                                                   0.00 MiB          6 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.01 MiB        116 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  SHARED dep tier: objects                                        9.67 MiB     127413 allocs
+  SHARED dep tier: routines                                      42.21 MiB     377650 allocs
+  SHARED dep tier: abi_ingest_errors                              0.00 MiB          0 allocs
+  SHARED dep tier: dep_meta                                      99.64 MiB     825705 allocs
+  SHARED dep tier: recovered                                      0.00 MiB          0 allocs
+  SHARED dep tier: bodies (Keep only)                             0.00 MiB          0 allocs
+  SHARED dep tier: dep_lines                                     12.44 MiB      21883 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)     26.26 MiB     134947 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      4.92 MiB       1188 allocs
+  snap: rest                                                      0.04 MiB        726 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 279.09 MiB in 1978562 allocs
+residual after all roots + DepCache dropped: 0.26 MiB in 125 allocs

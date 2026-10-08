@@ -1544,7 +1544,7 @@ fn demanded_population(
                 kind: o.kind,
                 key: match o.id {
                     Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(o.name.fold_identifier()),
+                    None => ObjKey::Name(o.name.fold_identifier().into()),
                 },
             };
             let routines = o

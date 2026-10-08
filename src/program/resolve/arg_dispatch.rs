@@ -1411,7 +1411,7 @@ fn abi_param_canonical(
 
     let tuple_ref = if let Some(name) = &p.subtype_raw_name {
         Some(ObjectRef::Name {
-            raw: name.clone(),
+            raw: name.to_string(),
             normalized_lc: name.fold_identifier(),
         })
     } else {
@@ -3190,7 +3190,7 @@ mod tests {
                 kind: al_syntax::ir::ObjectKind::Table,
                 key: ObjKey::Id(18),
             },
-            name: "Customer".to_string(),
+            name: "Customer".into(),
             declared_id: Some(18),
             extends_target: None,
             implements: vec![],
@@ -3200,8 +3200,8 @@ mod tests {
             source_table_temporary: false,
             page_controls: vec![],
             fields: vec![FieldNode {
-                name_lc: field_name_lc.to_string(),
-                type_text: field_type_text.to_string(),
+                name_lc: field_name_lc.into(),
+                type_text: field_type_text.into(),
             }],
             dataitems: vec![],
             query_columns: Vec::new(),
@@ -3214,7 +3214,7 @@ mod tests {
                 kind: al_syntax::ir::ObjectKind::Codeunit,
                 key: ObjKey::Id(999),
             },
-            name: "CallerCu".to_string(),
+            name: "CallerCu".into(),
             declared_id: Some(999),
             extends_target: None,
             implements: vec![],
@@ -3995,7 +3995,7 @@ codeunit 50100 "C"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -4096,12 +4096,12 @@ codeunit 50700 "Caller"
         subtype_tag: SubtypeTag,
     ) -> AbiParamRetained {
         AbiParamRetained {
-            name: String::new(),
-            type_text: type_text.to_string(),
+            name: Default::default(),
+            type_text: type_text.into(),
             is_var,
             is_temporary: false,
             subtype_id,
-            subtype_raw_name: subtype_raw_name.map(str::to_string),
+            subtype_raw_name: subtype_raw_name.map(Into::into),
             subtype_tag,
         }
     }
@@ -4119,7 +4119,7 @@ codeunit 50700 "Caller"
                 kind: ObjectKind::Table,
                 key: ObjKey::Id(table_id),
             },
-            name: table_name.to_string(),
+            name: table_name.into(),
             declared_id: Some(table_id),
             extends_target: None,
             implements: vec![],
@@ -4160,7 +4160,7 @@ codeunit 50700 "Caller"
                     kind: ObjectKind::Table,
                     key: ObjKey::Id(*table_id),
                 },
-                name: table_name.to_string(),
+                name: (*table_name).into(),
                 declared_id: Some(*table_id),
                 extends_target: None,
                 implements: vec![],
@@ -4200,12 +4200,12 @@ codeunit 50700 "Caller"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
             },
-            name: name_lc.to_string(),
+            name: name_lc.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::SymbolOnly,
@@ -4215,7 +4215,7 @@ codeunit 50700 "Caller"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -4233,7 +4233,7 @@ codeunit 50700 "Caller"
         use crate::snapshot::TrustTier;
         let object = ObjectNode {
             id: obj_id.clone(),
-            name: "DepWorker".to_string(),
+            name: "DepWorker".into(),
             declared_id: None,
             extends_target: None,
             implements: vec![],

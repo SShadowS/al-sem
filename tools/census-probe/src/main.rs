@@ -19,15 +19,15 @@ use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 use al_sem::lsp::encoding::PositionEncoding;
-use al_sem::lsp::snapshot::{DeclEntry, EdgeRef, LspSnapshot, ParsedFileEntry};
+use al_sem::lsp::snapshot::{DeclEntry, EdgeRef, LspEdge, LspSnapshot, LspTarget, ParsedFileEntry};
 use al_sem::program::build::DepLayer;
 use al_sem::program::dep_cache::{DepCache, DepNodes};
 use al_sem::program::graph::ProgramGraph;
 use al_sem::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
 use al_sem::program::node_extract::{AbiParams, ObjectNode, ObjectRef, RoutineNode};
 use al_sem::program::resolve::decl_surface::RoutineMeta;
-use al_sem::program::resolve::edge::{AbiRoutineKey, Route, RouteTarget, Witness};
-use al_sem::program::resolve::full::{ClassifiedEdge, ObligationId};
+use al_sem::program::resolve::edge::{AbiRoutineKey, Route};
+use al_sem::program::resolve::full::ClassifiedEdge;
 use al_sem::snapshot::DependencySource;
 use al_sem::snapshot::parse::ParsedUnit;
 
@@ -158,24 +158,27 @@ fn drop_root_by_field(r: Root) {
         snap,
         parsed,
         edges_by_file,
-        event_edges,
-        incoming,
-        publisher_fanout,
+        ws_event_edges,
+        dep_events,
+        ws_incoming,
+        ws_publisher_fanout,
         decls_by_file,
         decl_by_id,
-        dep_texts,
+        dep_lines,
         dep_meta,
         workspace_root,
         ..
     } = snap;
     step("snapshot.dep_meta (Arc clone)", dep_meta);
-    step("snapshot.dep_texts (Arc clone)", dep_texts);
+    step("snapshot.dep_lines (Arc clone)", dep_lines);
+    step("snapshot.dep_events (Arc clone)", dep_events);
     step("decl_by_id", decl_by_id);
     step("decls_by_file", decls_by_file);
-    step("incoming", incoming);
-    step("publisher_fanout", publisher_fanout);
+    // S10.4: these three now hold only the workspace part of the event links.
+    step("incoming", ws_incoming);
+    step("publisher_fanout", ws_publisher_fanout);
     step("edges_by_file", edges_by_file);
-    step("event_edges", event_edges);
+    step("event_edges", ws_event_edges);
     step("parsed (ws AlFile IR + text + LineTable)", parsed);
     match Arc::try_unwrap(graph) {
         Ok(g) => {
@@ -187,8 +190,10 @@ fn drop_root_by_field(r: Root) {
                 obj_index,
                 friends,
                 abi_ingest_errors,
+                workspace_rows,
             } = g;
             step("graph.objects (own part + own_pos)", objects);
+            step("graph.workspace_rows", workspace_rows);
             step("graph.routines (own part + own_pos)", routines);
             step("graph.obj_index", obj_index);
             step("graph.apps", apps);
@@ -229,7 +234,12 @@ fn drop_root_by_field(r: Root) {
                         recovered,
                         bodies,
                         lsp,
+                        lsp_events,
                     } = n;
+                    step(
+                        "SHARED dep tier: dependency event links",
+                        lsp_events.into_inner(),
+                    );
                     step("SHARED dep tier: objects", objects);
                     step("SHARED dep tier: routines", routines);
                     step("SHARED dep tier: abi_ingest_errors", abi_ingest_errors);
@@ -240,7 +250,7 @@ fn drop_root_by_field(r: Root) {
                     step("SHARED dep tier: bodies (Keep only)", bodies);
                     match lsp.into_inner().map(Arc::try_unwrap) {
                         Some(Ok(t)) => {
-                            step("SHARED dep tier: dep_texts", t.dep_texts);
+                            step("SHARED dep tier: dep_lines", t.dep_lines);
                         }
                         Some(Err(t)) => {
                             step("SHARED dep tier: lsp (held elsewhere)", t);
@@ -297,6 +307,9 @@ struct StrStat<'a> {
     count: u64,
     bytes: u64,
     distinct: HashMap<&'a str, u32>,
+    /// Text allocations actually held (S10.2: a `SharedStr` shares one), by
+    /// data pointer -> length.
+    allocs: HashMap<usize, u64>,
 }
 
 #[derive(Default)]
@@ -309,6 +322,7 @@ struct VecStat {
 struct W<'a> {
     strs: HashMap<Key, StrStat<'a>>,
     global: HashMap<&'a str, u32>,
+    global_allocs: HashMap<usize, u64>,
     vecs: HashMap<Key, VecStat>,
     /// inline element bytes of containers: (structure) -> (elements, bytes)
     elems: HashMap<&'static str, (u64, u64)>,
@@ -334,11 +348,14 @@ impl<'a> W<'a> {
         st.count += 1;
         st.bytes += v.len() as u64;
         *st.distinct.entry(v).or_default() += 1;
+        st.allocs.insert(v.as_ptr() as usize, v.len() as u64);
         *self.global.entry(v).or_default() += 1;
+        self.global_allocs
+            .insert(v.as_ptr() as usize, v.len() as u64);
         v.len() as u64
     }
-    fn os(&mut self, k: Key, v: &'a Option<String>) -> u64 {
-        v.as_deref().map_or(0, |x| self.s(k, x))
+    fn os<S: AsRef<str>>(&mut self, k: Key, v: &'a Option<S>) -> u64 {
+        v.as_ref().map_or(0, |x| self.s(k, x.as_ref()))
     }
     fn v<T>(&mut self, k: Key, v: &[T]) -> u64 {
         if v.is_empty() {
@@ -457,8 +474,9 @@ impl<'a> W<'a> {
         e.0 += 1;
         e.1 += b + size_of::<RoutineNode>() as u64;
     }
-    fn meta(&mut self, s: &'static str, k: &'a RoutineNodeId, m: &'a RoutineMeta) {
-        self.rid((s, "key"), k);
+    /// S10.3: a `DepMeta` entry's key is the tier row's own id (counted under
+    /// `dep.routine`), so only the value is walked here.
+    fn meta(&mut self, s: &'static str, m: &'a RoutineMeta) {
         self.s((s, "name"), &m.name);
         self.os((s, "enclosing_member"), &m.enclosing_member);
         self.v((s, "params[]"), &m.params);
@@ -472,50 +490,21 @@ impl<'a> W<'a> {
         self.s((s, "abikey.object_name_lc"), &k.object_name_lc);
         self.s((s, "abikey.routine_name_lc"), &k.routine_name_lc);
     }
-    fn cedge(&mut self, s: &'static str, ce: &'a ClassifiedEdge) {
-        match &ce.obligation_id {
-            ObligationId::CallSite { caller, span, .. } => {
-                self.rid((s, "obligation.caller"), caller);
-                self.s((s, "obligation.span.unit"), &span.unit);
-            }
-            ObligationId::Publisher(r) => {
-                self.rid((s, "obligation.publisher"), r);
-            }
-        }
-        let e = &ce.edge;
+    /// S10.5: the LSP's stored edge (`LspEdge`).
+    fn cedge(&mut self, s: &'static str, e: &'a LspEdge) {
         self.rid((s, "edge.from"), &e.from);
-        self.rid((s, "edge.site.caller"), &e.site.caller);
-        self.s((s, "edge.site.span.unit"), &e.site.span.unit);
-        self.v((s, "routes[]"), &e.routes);
-        for r in &e.routes {
-            self.route(s, r);
-        }
-    }
-    fn route(&mut self, s: &'static str, r: &'a Route) {
-        match &r.target {
-            RouteTarget::Routine(id) => {
-                self.rid((s, "route.target"), id);
+        self.s((s, "edge.span.unit"), &e.span.unit);
+        self.v((s, "targets[]"), &e.targets);
+        for t in e.targets.iter() {
+            match t {
+                LspTarget::Routine(id) => {
+                    self.rid((s, "target"), id);
+                }
+                LspTarget::Abi(key) => {
+                    self.v((s, "target.abi(Box)"), std::slice::from_ref(&**key));
+                    self.abikey(s, key);
+                }
             }
-            RouteTarget::Builtin(b) => {
-                self.s((s, "route.builtin"), &b.0);
-            }
-            RouteTarget::AbiSymbol { key } => self.abikey(s, key),
-            RouteTarget::Unresolved => {}
-        }
-        self.v((s, "route.conditions[]"), &r.conditions);
-        match &r.witness {
-            Witness::SourceSpan { file, .. } => {
-                self.s((s, "witness.file"), file);
-            }
-            Witness::AbiSymbol { key } => self.abikey(s, key),
-            Witness::CatalogEntry {
-                id,
-                catalog_version,
-            } => {
-                self.s((s, "witness.catalog_id"), &id.0);
-                self.s((s, "witness.catalog_version"), catalog_version);
-            }
-            Witness::None => {}
         }
     }
     fn decl(&mut self, s: &'static str, d: &'a DeclEntry) {
@@ -548,45 +537,77 @@ impl<'a> W<'a> {
             self.routine("ws.routine", r);
         }
         if self.first(Arc::as_ptr(&l.dep_meta)) {
-            self.elems::<(RoutineNodeId, RoutineMeta)>("dep_meta", l.dep_meta.len());
-            for (k, m) in l.dep_meta.iter() {
-                self.meta("dep_meta", k, m);
+            // S10.3: a column of metas plus a `u32` row per meta (orphans,
+            // expected none, are reported in the shape line).
+            self.elems::<RoutineMeta>("dep_meta", l.dep_meta.len());
+            self.elems::<u32>("dep_meta.key_row", l.dep_meta.len());
+            for m in l.dep_meta.values() {
+                self.meta("dep_meta", m);
             }
         }
-        if self.first(Arc::as_ptr(&l.dep_texts)) {
-            self.elems::<((u32, String), Arc<str>)>("dep_texts", l.dep_texts.len());
-            for ((_, vp), t) in l.dep_texts.iter() {
-                self.s(("dep_texts", "key.virtual_path"), vp);
-                self.text("dep_texts", t);
+        // S10.1: a text-free line index per dependency file (its own heap is
+        // measured by the drop steps, not walked here).
+        if self.first(Arc::as_ptr(&l.dep_lines)) {
+            self.elems::<(
+                (
+                    al_sem::program::node::AppRef,
+                    al_sem::program::node::SharedStr,
+                ),
+                al_sem::lsp::encoding::LineIndex,
+            )>("dep_lines", l.dep_lines.len());
+            for ((_, vp), _) in l.dep_lines.iter() {
+                self.s(("dep_lines", "key.virtual_path"), vp);
             }
         }
         for (k, v) in &l.edges_by_file {
             self.s(("edges_by_file", "key"), k);
             if self.first(Arc::as_ptr(v)) {
-                self.elems::<ClassifiedEdge>("edges_by_file", v.len());
+                self.elems::<LspEdge>("edges_by_file", v.len());
                 for ce in v.iter() {
                     self.cedge("edges_by_file", ce);
                 }
             }
         }
-        if self.first(Arc::as_ptr(&l.event_edges)) {
-            self.elems::<ClassifiedEdge>("event_edges", l.event_edges.len());
-            for ce in l.event_edges.iter() {
+        // S10.4: `event_edges`/`incoming`/`publisher_fanout` are the
+        // workspace part; the shared dependency part is walked once, as
+        // `dep_events.*`.
+        if self.first(Arc::as_ptr(&l.ws_event_edges)) {
+            self.elems::<LspEdge>("event_edges", l.ws_event_edges.len());
+            for ce in l.ws_event_edges.iter() {
                 self.cedge("event_edges", ce);
             }
         }
-        self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("incoming", l.incoming.len());
-        for (k, v) in &l.incoming {
+        self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("incoming", l.ws_incoming.len());
+        for (k, v) in &l.ws_incoming {
             self.rid(("incoming", "key"), k);
             self.v(("incoming", "edgerefs[]"), v);
             for e in v {
                 self.text("incoming.edgeref.file(Arc<str>)", &e.file);
             }
         }
-        if self.first(Arc::as_ptr(&l.publisher_fanout)) {
-            self.elems::<(RoutineNodeId, usize)>("publisher_fanout", l.publisher_fanout.len());
-            for k in l.publisher_fanout.keys() {
+        if self.first(Arc::as_ptr(&l.ws_publisher_fanout)) {
+            self.elems::<(RoutineNodeId, usize)>("publisher_fanout", l.ws_publisher_fanout.len());
+            for k in l.ws_publisher_fanout.keys() {
                 self.rid(("publisher_fanout", "key"), k);
+            }
+        }
+        if self.first(Arc::as_ptr(&l.dep_events)) {
+            let d = &l.dep_events;
+            self.elems::<LspEdge>("dep_events.edges", d.edges.len());
+            for ce in &d.edges {
+                self.cedge("dep_events.edges", ce);
+            }
+            self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("dep_events.incoming", d.incoming.len());
+            for (k, v) in &d.incoming {
+                self.rid(("dep_events.incoming", "key"), k);
+                self.v(("dep_events.incoming", "edgerefs[]"), v);
+            }
+            self.elems::<(RoutineNodeId, usize)>(
+                "dep_events.publisher_fanout",
+                d.publisher_fanout.len(),
+            );
+            for k in d.publisher_fanout.keys() {
+                self.rid(("dep_events.publisher_fanout", "key"), k);
             }
         }
         for (k, v) in &l.decls_by_file {
@@ -641,8 +662,20 @@ impl<'a> W<'a> {
             "-- strings by (structure, field), len bytes; 'saved' = bytes/allocs removed by interning WITHIN the field"
         );
         println!(
-            "  {:<22} {:<30} {:>10} {:>9} {:>10} {:>9} {:>9} {:>9}",
-            "structure", "field", "count", "MiB", "distinct", "dist MiB", "saved", "save%"
+            "-- 'held' = text allocations actually held, once per data pointer (a shared string, S10.2, counts once)"
+        );
+        println!(
+            "  {:<22} {:<30} {:>10} {:>9} {:>10} {:>9} {:>9} {:>9} {:>10} {:>9}",
+            "structure",
+            "field",
+            "count",
+            "MiB",
+            "distinct",
+            "dist MiB",
+            "saved",
+            "save%",
+            "held",
+            "held MiB"
         );
         let mut rows: Vec<_> = self.strs.iter().collect();
         rows.sort_by(|a, b| b.1.bytes.cmp(&a.1.bytes));
@@ -652,7 +685,7 @@ impl<'a> W<'a> {
             tc += st.count;
             tb += st.bytes;
             println!(
-                "  {:<22} {:<30} {:>10} {:>9.2} {:>10} {:>9.2} {:>9.2} {:>8.1}%",
+                "  {:<22} {:<30} {:>10} {:>9.2} {:>10} {:>9.2} {:>9.2} {:>8.1}% {:>10} {:>9.2}",
                 s,
                 f,
                 st.count,
@@ -660,7 +693,9 @@ impl<'a> W<'a> {
                 st.distinct.len(),
                 mibu(db),
                 mibu(st.bytes - db),
-                100.0 * (st.bytes - db) as f64 / st.bytes.max(1) as f64
+                100.0 * (st.bytes - db) as f64 / st.bytes.max(1) as f64,
+                st.allocs.len(),
+                mibu(st.allocs.values().sum())
             );
         }
         let gdb: u64 = self.global.keys().map(|k| k.len() as u64).sum();
@@ -673,6 +708,11 @@ impl<'a> W<'a> {
             mibu(tb - gdb),
             tc - self.global.len() as u64,
             mibu((tc - self.global.len() as u64) * 24)
+        );
+        println!(
+            "  HELD: {} text allocations, {:.2} MiB (all strings above, each allocation counted once)",
+            self.global_allocs.len(),
+            mibu(self.global_allocs.values().sum())
         );
         // String headers (24 B each) are inline in their parent: counted under elems/vecs.
 
@@ -783,12 +823,11 @@ fn event_edge_classes(l: &LspSnapshot) -> (u64, u64, u64, u64, Vec<u64>) {
     // (dep->dep only, dep pub with some ws subscriber, ws publisher, total routes to ws) + hashes of dep-only
     let (mut lib, mut mixed, mut ws, mut ws_routes) = (0, 0, 0, 0);
     let mut hashes = Vec::new();
-    for ce in l.event_edges.iter() {
-        let e = &ce.edge;
+    // S10.4: one edge per publisher, both parts merged (as before the split).
+    for e in &l.merged_event_edges() {
         let to_ws = e
-            .routes
-            .iter()
-            .filter(|r| matches!(&r.target, RouteTarget::Routine(id) if id.object.app.0 == 0))
+            .routine_targets()
+            .filter(|id| id.object.app.0 == 0)
             .count() as u64;
         ws_routes += to_ws;
         if e.from.object.app.0 == 0 {
@@ -859,9 +898,8 @@ impl Acc {
 }
 
 fn q6(ws: PathBuf) {
-    use al_sem::engine::l3::l3_workspace::{
-        L3Resolved, L3Workspace, assemble_and_resolve_workspace,
-    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+    use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
         al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
@@ -872,13 +910,15 @@ fn q6(ws: PathBuf) {
         al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
     })
     .expect("model instance id");
-    let resolved = phase("assemble_and_resolve_workspace", || {
-        assemble_and_resolve_workspace(&ws, &id, false)
+    // The production model (engine-switch S6/S9): one program build, the model
+    // projected from its parse, the program engine's calls and events attached.
+    let resolved = phase("assemble_and_resolve_workspace_program", || {
+        assemble_and_resolve_workspace_program(&ws, &id, false)
     })
     .expect("assemble");
     settle();
     println!(
-        "    L3: {} objects, {} tables, {} routines; call_sites {}, statement_tree Some {}",
+        "    model: {} objects, {} tables, {} routines; call_sites {}, statement_tree Some {}",
         resolved.workspace.objects.len(),
         resolved.workspace.tables.len(),
         resolved.workspace.routines.len(),
@@ -913,14 +953,15 @@ fn q6(ws: PathBuf) {
     // (a) drop deltas
     settle();
     let (t0, ta0) = live();
-    let L3Resolved {
+    let Model {
         workspace,
         root_classifications,
         primary_app,
         infra_diagnostics,
-        precomputed_calls: _,
+        calls,
+        events,
     } = resolved;
-    let L3Workspace {
+    let ModelEntities {
         objects,
         tables,
         routines,
@@ -928,9 +969,9 @@ fn q6(ws: PathBuf) {
     let mut top = Acc::default();
     let mut rf = Acc::default();
     let nroutines = routines.len();
-    let rcap = routines.capacity() * size_of::<al_sem::engine::l3::l3_workspace::L3Routine>();
+    let rcap = routines.capacity() * size_of::<ModelRoutine>();
     for r in routines {
-        let al_sem::engine::l3::l3_workspace::L3Routine {
+        let ModelRoutine {
             id,
             stable_routine_id,
             object_id,
@@ -1007,21 +1048,23 @@ fn q6(ws: PathBuf) {
     top.drop_as("root_classifications", root_classifications);
     top.drop_as("primary_app", primary_app);
     top.drop_as("infra_diagnostics", infra_diagnostics);
+    top.drop_as("calls (program engine)", calls);
+    top.drop_as("events (program engine)", events);
     let (t2, ta2) = live();
     let total = t0 - t2;
     println!(
-        "  (a) L3Resolved retained: {:.2} MiB in {} allocs; routines {} = {:.2} MiB in {} allocs (Vec<L3Routine> backing {:.2} MiB, {} B each)",
+        "  (a) Model retained: {:.2} MiB in {} allocs; routines {} = {:.2} MiB in {} allocs (Vec<ModelRoutine> backing {:.2} MiB, {} B each)",
         mib(total),
         ta0 - ta2,
         nroutines,
         mib(routines_total),
         ta0 - ta1,
         mib(rcap as isize),
-        size_of::<al_sem::engine::l3::l3_workspace::L3Routine>()
+        size_of::<ModelRoutine>()
     );
     println!("  top-level (besides routines):");
     top.print(total);
-    println!("  L3Routine fields (owned heap freed per field, summed; share of all L3Resolved):");
+    println!("  ModelRoutine fields (owned heap freed per field, summed; share of all Model):");
     rf.print(total);
 }
 
@@ -1133,7 +1176,7 @@ fn updaters_mode(
 /// `Rung1Context::build`, not taken from a running updater.
 fn index_split_mode(built: Vec<Root>) {
     use al_sem::program::resolve::decl_surface::DeclSurface;
-    use al_sem::program::resolve::full::workspace_object_map;
+    use al_sem::program::resolve::full::app_object_map;
     use al_sem::program::resolve::index::ResolveIndex;
     println!("\n==== --index-split: Rung1Context pieces per root ====");
     let mut sums: Vec<(String, f64, isize)> = Vec::new();
@@ -1166,7 +1209,7 @@ fn index_split_mode(built: Vec<Root>) {
         let idx = ResolveIndex::build(graph);
         settle();
         let (b1, a1) = live();
-        let map = workspace_object_map(graph, primary);
+        let map = app_object_map(graph, primary);
         settle();
         let (b2, a2) = live();
         let surf = DeclSurface::build(graph, std::slice::from_ref(&r.ws))
@@ -1232,7 +1275,8 @@ fn main() {
     let source = match args.next().as_deref() {
         Some("embedded") => DependencySource::Embedded,
         Some("symbols") => DependencySource::Symbols,
-        Some("l3") => {
+        // Q6, the analyze model's cost (was `l3` before engine-switch S9).
+        Some("model") => {
             q6(PathBuf::from(args.next().expect("workspace")));
             return;
         }
@@ -1248,7 +1292,7 @@ fn main() {
     al_sem::census_hook::HOOK.set(on_mark).unwrap();
 
     println!(
-        "size_of: RoutineNodeId={} ObjectNodeId={} RoutineNode={} ObjectNode={} RoutineMeta={} ClassifiedEdge={} Route={} DeclEntry={} EdgeRef={} ParsedFileEntry={}",
+        "size_of: RoutineNodeId={} ObjectNodeId={} RoutineNode={} ObjectNode={} RoutineMeta={} ClassifiedEdge={} Route={} LspEdge={} LspTarget={} DeclEntry={} EdgeRef={} ParsedFileEntry={}",
         size_of::<RoutineNodeId>(),
         size_of::<ObjectNodeId>(),
         size_of::<RoutineNode>(),
@@ -1256,6 +1300,8 @@ fn main() {
         size_of::<RoutineMeta>(),
         size_of::<ClassifiedEdge>(),
         size_of::<Route>(),
+        size_of::<LspEdge>(),
+        size_of::<LspTarget>(),
         size_of::<DeclEntry>(),
         size_of::<EdgeRef>(),
         size_of::<ParsedFileEntry>()
@@ -1313,7 +1359,7 @@ fn main() {
             a2 - a1
         );
         println!(
-            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {}, dep_texts {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
+            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {} (orphans {}), dep_lines {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
             snap.graph.objects.len(),
             snap.graph.objects.shared().len(),
             snap.graph.objects.own().len(),
@@ -1321,11 +1367,12 @@ fn main() {
             snap.graph.routines.shared().len(),
             snap.graph.routines.own().len(),
             snap.dep_meta.len(),
-            snap.dep_texts.len(),
+            snap.dep_meta.orphan_count(),
+            snap.dep_lines.len(),
             snap.parsed.len(),
             snap.edges_by_file.values().map(|v| v.len()).sum::<usize>(),
-            snap.event_edges.len(),
-            snap.incoming.len(),
+            snap.event_edges().count(),
+            snap.all_incoming().len(),
             snap.decl_by_id.len()
         );
         let (lib, mixed, wsn, wsr, h) = event_edge_classes(&snap);
@@ -1336,10 +1383,10 @@ fn main() {
         );
         if let Some(r0) = built.first() {
             println!(
-                "  sharing vs root 1: dep_nodes ptr_eq {} | dep_meta ptr_eq {} | dep_texts ptr_eq {} | objects.shared ptr_eq {}",
+                "  sharing vs root 1: dep_nodes ptr_eq {} | dep_meta ptr_eq {} | dep_lines ptr_eq {} | objects.shared ptr_eq {}",
                 Arc::ptr_eq(&r0.snap.dep_layer.dep_nodes, &snap.dep_layer.dep_nodes),
                 Arc::ptr_eq(&r0.snap.dep_meta, &snap.dep_meta),
-                Arc::ptr_eq(&r0.snap.dep_texts, &snap.dep_texts),
+                Arc::ptr_eq(&r0.snap.dep_lines, &snap.dep_lines),
                 Arc::ptr_eq(snap.graph.objects.shared(), r0.snap.graph.objects.shared()),
             );
         }

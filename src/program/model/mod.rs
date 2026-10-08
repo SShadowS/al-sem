@@ -46,7 +46,7 @@ pub fn model_object_id(graph: &ProgramGraph, id: &ObjectNodeId) -> String {
 pub fn model_routine_key(graph: &ProgramGraph, id: &RoutineNodeId) -> String {
     let name = match &id.enclosing_member_lc {
         Some(member) => format!("{member}::{}", id.name_lc),
-        None => id.name_lc.clone(),
+        None => id.name_lc.to_string(),
     };
     format!(
         "{}::{name}/{}",

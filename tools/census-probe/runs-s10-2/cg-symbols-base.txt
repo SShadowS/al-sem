@@ -1,0 +1,594 @@
+size_of: RoutineNodeId=72 ObjectNodeId=24 RoutineNode=224 ObjectNode=320 RoutineMeta=176 ClassifiedEdge=344 Route=240 DeclEntry=216 EdgeRef=24 ParsedFileEntry=128
+
+######## root 1 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Core (Symbols) built in 2.3s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live      24.2  in-phase peak      43.5  live allocs    +123490
+  2.parse                                  end-live      24.6  in-phase peak      24.7  live allocs    +124070
+  3.dep_layer                              end-live      55.0  in-phase peak     126.4  live allocs    +284168
+  4.assemble_graph                         end-live      55.9  in-phase peak      56.2  live allocs    +293982
+  5.index+surface+dep_meta+dep_lines       end-live      60.1  in-phase peak      60.1  live allocs    +323507
+  6.resolve_workspace_files                end-live      60.1  in-phase peak      60.2  live allocs    +323835
+  7.event_edges                            end-live      60.0  in-phase peak      67.0  live allocs    +323623
+  8.incoming+decl_by_id                    end-live      55.8  in-phase peak      60.0  live allocs    +294095
+  9.publish_snapshot                       end-live      55.8  in-phase peak      55.8  live allocs    +294114
+  10.returned                              end-live      55.8  in-phase peak      55.8  live allocs    +294105
+  BUILD PEAK 126.4 MiB; retained after settle 55.8 MiB in 294105 allocs
+  + diagnostics map 0.01 MiB in 46 allocs
+  shape: objects 9656 (shared 9650 own 6), routines 54284 (shared 54272 own 12), dep_meta 0, dep_lines 0, ws files 6, edges_by_file edges 19, event_edges 0, incoming keys 4, decl_by_id 12
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: None
+
+######## root 2 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Fleet (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.5  live allocs       +368
+  2.parse                                  end-live       0.4  in-phase peak       0.4  live allocs      +1356
+  3.dep_layer                              end-live       0.4  in-phase peak       0.4  live allocs      +1394
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.4  live allocs     +10787
+  5.index+surface+dep_meta+dep_lines       end-live       5.3  in-phase peak       5.3  live allocs     +40311
+  6.resolve_workspace_files                end-live       5.2  in-phase peak       5.4  live allocs     +40616
+  7.event_edges                            end-live       5.2  in-phase peak      12.2  live allocs     +40374
+  8.incoming+decl_by_id                    end-live       1.0  in-phase peak       5.2  live allocs     +10844
+  9.publish_snapshot                       end-live       1.0  in-phase peak       1.0  live allocs     +10867
+  10.returned                              end-live       1.0  in-phase peak       1.0  live allocs     +10856
+  BUILD PEAK 12.2 MiB; retained after settle 1.0 MiB in 10856 allocs
+  + diagnostics map 0.01 MiB in 41 allocs
+  shape: objects 9658 (shared 9650 own 8), routines 54282 (shared 54272 own 10), dep_meta 0, dep_lines 0, ws files 8, edges_by_file edges 22, event_edges 1, incoming keys 5, decl_by_id 10
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 1 | routes into ws 1 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+######## root 3 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Integration (Symbols) built in 0.7s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +358
+  2.parse                                  end-live       0.3  in-phase peak       0.4  live allocs      +1012
+  3.dep_layer                              end-live       0.3  in-phase peak       0.3  live allocs      +1080
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.4  live allocs     +10466
+  5.index+surface+dep_meta+dep_lines       end-live       5.3  in-phase peak       5.3  live allocs     +39932
+  6.resolve_workspace_files                end-live       5.2  in-phase peak       5.4  live allocs     +40195
+  7.event_edges                            end-live       5.1  in-phase peak      12.1  live allocs     +39955
+  8.incoming+decl_by_id                    end-live       0.9  in-phase peak       5.1  live allocs     +10467
+  9.publish_snapshot                       end-live       0.9  in-phase peak       0.9  live allocs     +10480
+  10.returned                              end-live       0.9  in-phase peak       0.9  live allocs     +10474
+  BUILD PEAK 12.1 MiB; retained after settle 0.9 MiB in 10474 allocs
+  + diagnostics map 0.00 MiB in 22 allocs
+  shape: objects 9653 (shared 9650 own 3), routines 54277 (shared 54272 own 5), dep_meta 0, dep_lines 0, ws files 3, edges_by_file edges 14, event_edges 0, incoming keys 2, decl_by_id 5
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+######## root 4 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Leasing (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +358
+  2.parse                                  end-live       0.4  in-phase peak       0.4  live allocs      +1161
+  3.dep_layer                              end-live       0.3  in-phase peak       0.4  live allocs      +1186
+  4.assemble_graph                         end-live       1.1  in-phase peak       1.4  live allocs     +10539
+  5.index+surface+dep_meta+dep_lines       end-live       5.3  in-phase peak       5.3  live allocs     +40014
+  6.resolve_workspace_files                end-live       5.2  in-phase peak       5.4  live allocs     +40305
+  7.event_edges                            end-live       5.2  in-phase peak      12.2  live allocs     +40066
+  8.incoming+decl_by_id                    end-live       1.0  in-phase peak       5.2  live allocs     +10562
+  9.publish_snapshot                       end-live       1.0  in-phase peak       1.0  live allocs     +10575
+  10.returned                              end-live       1.0  in-phase peak       1.0  live allocs     +10569
+  BUILD PEAK 12.2 MiB; retained after settle 1.0 MiB in 10569 allocs
+  + diagnostics map 0.01 MiB in 28 allocs
+  shape: objects 9653 (shared 9650 own 3), routines 54276 (shared 54272 own 4), dep_meta 0, dep_lines 0, ws files 3, edges_by_file edges 22, event_edges 0, incoming keys 0, decl_by_id 4
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+######## root 5 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Rental (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.5  live allocs       +374
+  2.parse                                  end-live       0.4  in-phase peak       0.5  live allocs      +1349
+  3.dep_layer                              end-live       0.3  in-phase peak       0.4  live allocs      +1211
+  4.assemble_graph                         end-live       1.2  in-phase peak       1.5  live allocs     +11084
+  5.index+surface+dep_meta+dep_lines       end-live       5.4  in-phase peak       5.4  live allocs     +40621
+  6.resolve_workspace_files                end-live       5.4  in-phase peak       5.5  live allocs     +40988
+  7.event_edges                            end-live       5.3  in-phase peak      12.3  live allocs     +40776
+  8.incoming+decl_by_id                    end-live       1.1  in-phase peak       5.3  live allocs     +11232
+  9.publish_snapshot                       end-live       1.1  in-phase peak       1.1  live allocs     +11257
+  10.returned                              end-live       1.1  in-phase peak       1.1  live allocs     +11245
+  BUILD PEAK 12.3 MiB; retained after settle 1.1 MiB in 11245 allocs
+  + diagnostics map 0.01 MiB in 56 allocs
+  shape: objects 9659 (shared 9650 own 9), routines 54283 (shared 54272 own 11), dep_meta 0, dep_lines 0, ws files 9, edges_by_file edges 40, event_edges 0, incoming keys 5, decl_by_id 11
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+######## root 6 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Reporting (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.4  live allocs       +362
+  2.parse                                  end-live       0.2  in-phase peak       0.2  live allocs       +930
+  3.dep_layer                              end-live       0.2  in-phase peak       0.2  live allocs       +976
+  4.assemble_graph                         end-live       0.9  in-phase peak       1.3  live allocs     +10191
+  5.index+surface+dep_meta+dep_lines       end-live       5.1  in-phase peak       5.1  live allocs     +39626
+  6.resolve_workspace_files                end-live       5.1  in-phase peak       5.2  live allocs     +39866
+  7.event_edges                            end-live       5.0  in-phase peak      12.0  live allocs     +39601
+  8.incoming+decl_by_id                    end-live       0.8  in-phase peak       5.0  live allocs     +10128
+  9.publish_snapshot                       end-live       0.8  in-phase peak       0.8  live allocs     +10137
+  10.returned                              end-live       0.8  in-phase peak       0.8  live allocs     +10133
+  BUILD PEAK 12.0 MiB; retained after settle 0.8 MiB in 10133 allocs
+  + diagnostics map 0.00 MiB in 4 allocs
+  shape: objects 9651 (shared 9650 own 1), routines 54272 (shared 54272 own 0), dep_meta 0, dep_lines 0, ws files 1, edges_by_file edges 0, event_edges 0, incoming keys 0, decl_by_id 0
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+######## root 7 = C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Test (Symbols) built in 0.5s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live       0.0  in-phase peak       5.5  live allocs       +388
+  2.parse                                  end-live       0.5  in-phase peak       0.7  live allocs      +2039
+  3.dep_layer                              end-live       0.5  in-phase peak       0.5  live allocs      +2093
+  4.assemble_graph                         end-live       1.4  in-phase peak       1.6  live allocs     +11750
+  5.index+surface+dep_meta+dep_lines       end-live       5.6  in-phase peak       5.6  live allocs     +41295
+  6.resolve_workspace_files                end-live       5.7  in-phase peak       5.7  live allocs     +42124
+  7.event_edges                            end-live       5.6  in-phase peak      12.6  live allocs     +41906
+  8.incoming+decl_by_id                    end-live       1.4  in-phase peak       5.6  live allocs     +12386
+  9.publish_snapshot                       end-live       1.4  in-phase peak       1.4  live allocs     +12405
+  10.returned                              end-live       1.4  in-phase peak       1.4  live allocs     +12396
+  BUILD PEAK 12.6 MiB; retained after settle 1.4 MiB in 12396 allocs
+  + diagnostics map 0.01 MiB in 22 allocs
+  shape: objects 9656 (shared 9650 own 6), routines 54298 (shared 54272 own 26), dep_meta 0, dep_lines 0, ws files 6, edges_by_file edges 164, event_edges 0, incoming keys 5, decl_by_id 26
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 0 | ws publisher 0 | routes into ws 0 | dep->dep set identical to root 1: Some(true)
+  sharing vs root 1: dep_nodes ptr_eq true | dep_meta ptr_eq true | dep_lines ptr_eq true | objects.shared ptr_eq true
+
+ALL 7 ROOTS LIVE: 62.0 MiB in 360005 allocs
+
+==== Q2 walk: root 1 only (C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Core) ====
+-- strings by (structure, field), len bytes; 'saved' = bytes/allocs removed by interning WITHIN the field
+-- 'held' = text allocations actually held, once per data pointer (a shared string, S10.2, counts once)
+  structure              field                               count       MiB   distinct  dist MiB     saved     save%       held  held MiB
+  dep.routine            abi_param.type_text                119249      1.78       2072      0.06      1.72     96.9%       2072      0.06
+  dep.routine            name                                54272      1.33      37544      1.03      0.30     22.7%      37544      1.03
+  dep.routine            rid.name_lc                         54272      1.33      37476      1.03      0.30     22.8%      37476      1.03
+  dep.routine            abi_param.subtype_raw_name          56263      0.89       1940      0.04      0.85     95.8%       1940      0.04
+  dep.object             field.name_lc                       32739      0.48       9471      0.16      0.31     66.1%       9471      0.16
+  dep.object             field.type_text                     32739      0.26        612      0.02      0.24     93.8%        612      0.02
+  dep.object             name                                 9648      0.20       9189      0.19      0.01      4.2%       9189      0.19
+  dep.routine            return_type                         11700      0.09        225      0.00      0.09     95.0%        225      0.00
+  dep.routine            return_type_id.0                      756      0.02        134      0.00      0.01     83.3%        134      0.00
+  dep.object             extends_target                        260      0.01        203      0.00      0.00     21.4%        203      0.00
+  dep.object             implements                            260      0.00         73      0.00      0.00     70.3%         73      0.00
+  edges_by_file          rid.name_lc                            62      0.00         10      0.00      0.00     81.4%         11      0.00
+  edges_by_file          edge.site.span.unit                    19      0.00          3      0.00      0.00     82.8%         19      0.00
+  edges_by_file          obligation.span.unit                   19      0.00          3      0.00      0.00     82.8%         19      0.00
+  decl_by_id             rid.name_lc                            24      0.00         11      0.00      0.00     53.5%         12      0.00
+  dep.object             objkey(name)                           18      0.00         18      0.00      0.00      0.0%         18      0.00
+  decls_by_file          virtual_path                           12      0.00          5      0.00      0.00     54.1%         12      0.00
+  decl_by_id             virtual_path                           12      0.00          5      0.00      0.00     54.1%         12      0.00
+  edges_by_file          witness.catalog_version                 9      0.00          1      0.00      0.00     88.9%          9      0.00
+  ws.routine             name                                   12      0.00         11      0.00      0.00      7.0%         12      0.00
+  decls_by_file          rid.name_lc                            12      0.00         11      0.00      0.00      7.0%         12      0.00
+  decls_by_file          name                                   12      0.00         11      0.00      0.00      7.0%         12      0.00
+  decl_by_id             name                                   12      0.00         11      0.00      0.00      7.0%         12      0.00
+  ws.routine             rid.name_lc                            12      0.00         11      0.00      0.00      7.0%         12      0.00
+  parsed                 key                                     6      0.00          6      0.00      0.00      0.0%          6      0.00
+  ws ParsedUnit          virtual_path                            6      0.00          6      0.00      0.00      0.0%          6      0.00
+  parsed                 virtual_path                            6      0.00          6      0.00      0.00      0.0%          6      0.00
+  decls_by_file          key                                     6      0.00          6      0.00      0.00      0.0%          6      0.00
+  snap.source            virtual_path                            6      0.00          6      0.00      0.00      0.0%          6      0.00
+  edges_by_file          key                                     6      0.00          6      0.00      0.00      0.0%          6      0.00
+  ws.routine             param_sig_key                           9      0.00          5      0.00      0.00     35.0%          9      0.00
+  edges_by_file          witness.file                            5      0.00          3      0.00      0.00     38.9%          5      0.00
+  ws.object              field.name_lc                           7      0.00          7      0.00      0.00      0.0%          7      0.00
+  ws.object              name                                    6      0.00          5      0.00      0.00     22.0%          6      0.00
+  incoming               rid.name_lc                             4      0.00          4      0.00      0.00      0.0%          4      0.00
+  edges_by_file          witness.catalog_id                      9      0.00          5      0.00      0.00     45.8%          9      0.00
+  edges_by_file          route.builtin                           9      0.00          5      0.00      0.00     45.8%          9      0.00
+  ws.object              field.type_text                         7      0.00          4      0.00      0.00     42.0%          7      0.00
+  decl_by_id             rid.object.objkey(name)                 2      0.00          1      0.00      0.00     50.0%          1      0.00
+  ws.object              implements                              2      0.00          1      0.00      0.00     50.0%          2      0.00
+  ws.routine             return_type                             6      0.00          3      0.00      0.00     50.0%          6      0.00
+  ws.object              objkey(name)                            1      0.00          1      0.00      0.00      0.0%          1      0.00
+  decls_by_file          rid.object.objkey(name)                 1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.routine             rid.object.objkey(name)                 1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ALL STRINGS: 372498 strings, 6.39 MiB; GLOBAL distinct 96217 (2.48 MiB) => interning saves 3.91 MiB string bytes and 276281 allocs (+6.32 MiB at 24 B/alloc LFH overhead)
+  HELD: 96405 text allocations, 2.49 MiB (all strings above, each allocation counted once)
+-- Vec backing buffers (len * size_of)
+  dep.routine            abi_params[]                        45742 vecs      8.19 MiB
+  dep.object             fields[]                             1953 vecs      1.00 MiB
+  dep.object             implements[]                          249 vecs      0.00 MiB
+  edges_by_file          routes[]                               14 vecs      0.00 MiB
+  ws.object              fields[]                                1 vecs      0.00 MiB
+  incoming               edgerefs[]                              4 vecs      0.00 MiB
+  ws.object              implements[]                            2 vecs      0.00 MiB
+-- container elements (inline struct bytes: count * size_of)
+  dep.routine                         54272 elems     11.59 MiB
+  dep.object                           9650 elems      2.94 MiB
+  edges_by_file                          19 elems      0.01 MiB
+  decl_by_id                             12 elems      0.00 MiB
+  ws.routine                             12 elems      0.00 MiB
+  decls_by_file                          12 elems      0.00 MiB
+  ws.object                               6 elems      0.00 MiB
+  incoming                                4 elems      0.00 MiB
+  dep_lines                               0 elems      0.00 MiB
+  event_edges                             0 elems      0.00 MiB
+  publisher_fanout                        0 elems      0.00 MiB
+  dep_meta                                0 elems      0.00 MiB
+-- Arc<str> texts (once per pointer)
+  incoming.edgeref.file(Arc<str>)                 3 texts      0.00 MiB
+  workspace text                                  6 texts      0.00 MiB
+-- per node kind (n, inline + owned heap MiB)
+  dep.routine    Codeunit                   32894     15.99 MiB
+  dep.routine    Table                      14410      6.16 MiB
+  dep.object     Table                       1910      2.33 MiB
+  dep.routine    Page                        4169      1.74 MiB
+  dep.routine    Report                      2069      1.03 MiB
+  dep.object     Page                        2875      0.94 MiB
+  dep.object     Codeunit                    2335      0.77 MiB
+  dep.object     Enum                         728      0.24 MiB
+  dep.object     Report                       661      0.22 MiB
+  dep.routine    Interface                    399      0.15 MiB
+  dep.object     PermissionSet                464      0.15 MiB
+  dep.routine    TableExtension               179      0.08 MiB
+  dep.object     PageExtension                163      0.06 MiB
+  dep.object     TableExtension                97      0.06 MiB
+  dep.object     Query                        161      0.05 MiB
+  dep.routine    XmlPort                       99      0.04 MiB
+  dep.object     Interface                     76      0.02 MiB
+  dep.object     PermissionSetExtension        55      0.02 MiB
+  dep.object     XmlPort                       47      0.02 MiB
+  dep.object     EnumExtension                 46      0.02 MiB
+  dep.routine    Query                         39      0.01 MiB
+  dep.routine    PageExtension                 14      0.01 MiB
+  dep.object     ControlAddIn                  18      0.01 MiB
+  dep.object     ReportExtension               14      0.00 MiB
+  ws.routine     Codeunit                       8      0.00 MiB
+  ws.object      Codeunit                       3      0.00 MiB
+  ws.routine     Table                          3      0.00 MiB
+  ws.object      Table                          1      0.00 MiB
+  ws.object      Enum                           1      0.00 MiB
+  ws.object      Interface                      1      0.00 MiB
+  ws.routine     Interface                      1      0.00 MiB
+-- RoutineNodeId copies by (structure, field); inline 72 B each
+  dep.routine            id                              54272 copies      3.73 MiB inline
+  edges_by_file          obligation.caller                  19 copies      0.00 MiB inline
+  edges_by_file          edge.site.caller                   19 copies      0.00 MiB inline
+  edges_by_file          edge.from                          19 copies      0.00 MiB inline
+  decl_by_id             key                                12 copies      0.00 MiB inline
+  decls_by_file          id                                 12 copies      0.00 MiB inline
+  ws.routine             id                                 12 copies      0.00 MiB inline
+  decl_by_id             id                                 12 copies      0.00 MiB inline
+  edges_by_file          route.target                        5 copies      0.00 MiB inline
+  incoming               key                                 4 copies      0.00 MiB inline
+  RoutineNodeId: 54386 copies of 54284 distinct (1.00 copies/id); copies histogram 1:54272 2:0 3:0 4-5:2 6-10:6 11+:4
+  RoutineNodeId bytes across copies: inline 3.73 MiB + owned strings 1.33 MiB
+  ObjectNodeId: 64042 copies of 9656 distinct (incl. the one inside every RoutineNodeId); inline 24 B each
+
+==== Q2 walk: all 7 roots (shared Arcs counted once) ====
+-- strings by (structure, field), len bytes; 'saved' = bytes/allocs removed by interning WITHIN the field
+-- 'held' = text allocations actually held, once per data pointer (a shared string, S10.2, counts once)
+  structure              field                               count       MiB   distinct  dist MiB     saved     save%       held  held MiB
+  dep.routine            abi_param.type_text                119249      1.78       2072      0.06      1.72     96.9%       2072      0.06
+  dep.routine            name                                54272      1.33      37544      1.03      0.30     22.7%      37544      1.03
+  dep.routine            rid.name_lc                         54272      1.33      37476      1.03      0.30     22.8%      37476      1.03
+  dep.routine            abi_param.subtype_raw_name          56263      0.89       1940      0.04      0.85     95.8%       1940      0.04
+  dep.object             field.name_lc                       32739      0.48       9471      0.16      0.31     66.1%       9471      0.16
+  dep.object             field.type_text                     32739      0.26        612      0.02      0.24     93.8%        612      0.02
+  dep.object             name                                 9648      0.20       9189      0.19      0.01      4.2%       9189      0.19
+  dep.routine            return_type                         11700      0.09        225      0.00      0.09     95.0%        225      0.00
+  edges_by_file          rid.name_lc                           897      0.02         58      0.00      0.02     94.1%         78      0.00
+  dep.routine            return_type_id.0                      756      0.02        134      0.00      0.01     83.3%        134      0.00
+  edges_by_file          edge.site.span.unit                   281      0.01         21      0.00      0.01     92.0%        281      0.01
+  edges_by_file          obligation.span.unit                  281      0.01         21      0.00      0.01     92.0%        281      0.01
+  dep.object             extends_target                        260      0.01        203      0.00      0.00     21.4%        203      0.00
+  dep.object             implements                            260      0.00         73      0.00      0.00     70.3%         73      0.00
+  decl_by_id             rid.name_lc                           136      0.00         58      0.00      0.00     58.3%         68      0.00
+  decls_by_file          virtual_path                           68      0.00         24      0.00      0.00     62.0%         68      0.00
+  decl_by_id             virtual_path                           68      0.00         24      0.00      0.00     62.0%         68      0.00
+  edges_by_file          witness.file                           54      0.00         11      0.00      0.00     79.3%         54      0.00
+  ws.routine             name                                   68      0.00         58      0.00      0.00     16.7%         68      0.00
+  decl_by_id             name                                   68      0.00         58      0.00      0.00     16.7%         68      0.00
+  decls_by_file          rid.name_lc                            68      0.00         58      0.00      0.00     16.7%         68      0.00
+  ws.routine             rid.name_lc                            68      0.00         58      0.00      0.00     16.7%         68      0.00
+  decls_by_file          name                                   68      0.00         58      0.00      0.00     16.7%         68      0.00
+  edges_by_file          witness.catalog_version                37      0.00          1      0.00      0.00     97.3%         37      0.00
+  parsed                 key                                    36      0.00         36      0.00      0.00      0.0%         36      0.00
+  decls_by_file          key                                    36      0.00         36      0.00      0.00      0.0%         36      0.00
+  ws ParsedUnit          virtual_path                           36      0.00         36      0.00      0.00      0.0%         36      0.00
+  snap.source            virtual_path                           36      0.00         36      0.00      0.00      0.0%         36      0.00
+  edges_by_file          key                                    36      0.00         36      0.00      0.00      0.0%         36      0.00
+  parsed                 virtual_path                           36      0.00         36      0.00      0.00      0.0%         36      0.00
+  ws.routine             param_sig_key                          43      0.00         18      0.00      0.00     44.2%         43      0.00
+  ws.object              name                                   36      0.00         35      0.00      0.00      3.6%         36      0.00
+  ws.object              field.name_lc                          54      0.00         41      0.00      0.00     21.9%         54      0.00
+  ws.object              field.type_text                        54      0.00         13      0.00      0.00     64.9%         54      0.00
+  dep.object             objkey(name)                           18      0.00         18      0.00      0.00      0.0%         18      0.00
+  incoming               rid.name_lc                            21      0.00         21      0.00      0.00      0.0%         21      0.00
+  edges_by_file          route.builtin                          37      0.00         19      0.00      0.00     34.8%         37      0.00
+  edges_by_file          witness.catalog_id                     37      0.00         19      0.00      0.00     34.8%         37      0.00
+  ws.routine             return_type                            17      0.00          5      0.00      0.00     73.0%         17      0.00
+  ws.routine             sub.event_name                          5      0.00          4      0.00      0.00     21.4%          5      0.00
+  event_edges            rid.name_lc                             4      0.00          2      0.00      0.00     52.3%          2      0.00
+  ws.routine             sub.publisher_name                      5      0.00          3      0.00      0.00     41.7%          5      0.00
+  ws.object              implements                              3      0.00          1      0.00      0.00     66.7%          3      0.00
+  decl_by_id             rid.object.objkey(name)                 2      0.00          1      0.00      0.00     50.0%          1      0.00
+  ws.routine             sub.publisher_object_type               5      0.00          1      0.00      0.00     80.0%          5      0.00
+  event_edges            witness.file                            1      0.00          1      0.00      0.00      0.0%          1      0.00
+  event_edges            edge.site.span.unit                     1      0.00          1      0.00      0.00      0.0%          1      0.00
+  decls_by_file          rid.object.objkey(name)                 1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.object              objkey(name)                            1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.routine             rid.object.objkey(name)                 1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.object              extends_target                          1      0.00          1      0.00      0.00      0.0%          1      0.00
+  publisher_fanout       rid.name_lc                             1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.object              objref.raw                              1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ws.object              objref.normalized_lc                    1      0.00          1      0.00      0.00      0.0%          1      0.00
+  ALL STRINGS: 374886 strings, 6.44 MiB; GLOBAL distinct 96415 (2.49 MiB) => interning saves 3.96 MiB string bytes and 278471 allocs (+6.37 MiB at 24 B/alloc LFH overhead)
+  HELD: 97875 text allocations, 2.52 MiB (all strings above, each allocation counted once)
+-- Vec backing buffers (len * size_of)
+  dep.routine            abi_params[]                        45742 vecs      8.19 MiB
+  dep.object             fields[]                             1953 vecs      1.00 MiB
+  edges_by_file          routes[]                              187 vecs      0.04 MiB
+  dep.object             implements[]                          249 vecs      0.00 MiB
+  ws.object              fields[]                                8 vecs      0.00 MiB
+  incoming               edgerefs[]                             21 vecs      0.00 MiB
+  ws.routine             event_subscribers[]                     5 vecs      0.00 MiB
+  event_edges            routes[]                                1 vecs      0.00 MiB
+  ws.object              implements[]                            3 vecs      0.00 MiB
+-- container elements (inline struct bytes: count * size_of)
+  dep.routine                         54272 elems     11.59 MiB
+  dep.object                           9650 elems      2.94 MiB
+  edges_by_file                         281 elems      0.09 MiB
+  decl_by_id                             68 elems      0.02 MiB
+  ws.routine                             68 elems      0.01 MiB
+  decls_by_file                          68 elems      0.01 MiB
+  ws.object                              36 elems      0.01 MiB
+  incoming                               21 elems      0.00 MiB
+  event_edges                             1 elems      0.00 MiB
+  publisher_fanout                        1 elems      0.00 MiB
+  dep_lines                               0 elems      0.00 MiB
+  dep_meta                                0 elems      0.00 MiB
+-- Arc<str> texts (once per pointer)
+  incoming.edgeref.file(Arc<str>)                15 texts      0.00 MiB
+  workspace text                                 36 texts      0.04 MiB
+-- per node kind (n, inline + owned heap MiB)
+  dep.routine    Codeunit                   32894     15.99 MiB
+  dep.routine    Table                      14410      6.16 MiB
+  dep.object     Table                       1910      2.33 MiB
+  dep.routine    Page                        4169      1.74 MiB
+  dep.routine    Report                      2069      1.03 MiB
+  dep.object     Page                        2875      0.94 MiB
+  dep.object     Codeunit                    2335      0.77 MiB
+  dep.object     Enum                         728      0.24 MiB
+  dep.object     Report                       661      0.22 MiB
+  dep.routine    Interface                    399      0.15 MiB
+  dep.object     PermissionSet                464      0.15 MiB
+  dep.routine    TableExtension               179      0.08 MiB
+  dep.object     PageExtension                163      0.06 MiB
+  dep.object     TableExtension                97      0.06 MiB
+  dep.object     Query                        161      0.05 MiB
+  dep.routine    XmlPort                       99      0.04 MiB
+  dep.object     Interface                     76      0.02 MiB
+  dep.object     PermissionSetExtension        55      0.02 MiB
+  ws.routine     Codeunit                      64      0.02 MiB
+  dep.object     XmlPort                       47      0.02 MiB
+  dep.object     EnumExtension                 46      0.02 MiB
+  dep.routine    Query                         39      0.01 MiB
+  ws.object      Codeunit                      22      0.01 MiB
+  dep.routine    PageExtension                 14      0.01 MiB
+  dep.object     ControlAddIn                  18      0.01 MiB
+  ws.object      Table                          8      0.01 MiB
+  dep.object     ReportExtension               14      0.00 MiB
+  ws.object      Enum                           3      0.00 MiB
+  ws.routine     Table                          3      0.00 MiB
+  ws.object      Interface                      1      0.00 MiB
+  ws.object      EnumExtension                  1      0.00 MiB
+  ws.object      Query                          1      0.00 MiB
+  ws.routine     Interface                      1      0.00 MiB
+-- RoutineNodeId copies by (structure, field); inline 72 B each
+  dep.routine            id                              54272 copies      3.73 MiB inline
+  edges_by_file          edge.from                         281 copies      0.02 MiB inline
+  edges_by_file          obligation.caller                 281 copies      0.02 MiB inline
+  edges_by_file          edge.site.caller                  281 copies      0.02 MiB inline
+  decl_by_id             id                                 68 copies      0.00 MiB inline
+  decl_by_id             key                                68 copies      0.00 MiB inline
+  ws.routine             id                                 68 copies      0.00 MiB inline
+  decls_by_file          id                                 68 copies      0.00 MiB inline
+  edges_by_file          route.target                       54 copies      0.00 MiB inline
+  incoming               key                                21 copies      0.00 MiB inline
+  event_edges            route.target                        1 copies      0.00 MiB inline
+  event_edges            obligation.publisher                1 copies      0.00 MiB inline
+  event_edges            edge.site.caller                    1 copies      0.00 MiB inline
+  event_edges            edge.from                           1 copies      0.00 MiB inline
+  publisher_fanout       key                                 1 copies      0.00 MiB inline
+  RoutineNodeId: 55467 copies of 54340 distinct (1.02 copies/id); copies histogram 1:54272 2:0 3:0 4-5:2 6-10:26 11+:40
+  RoutineNodeId bytes across copies: inline 3.81 MiB + owned strings 1.35 MiB
+  ObjectNodeId: 65153 copies of 9686 distinct (incl. the one inside every RoutineNodeId); inline 24 B each
+
+==== drop deltas (reverse build order) ====
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Test:
+  diagnostics (compute_all output)                                0.00 MiB         16 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         41 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.01 MiB         53 allocs
+  decls_by_file                                                   0.01 MiB         97 allocs
+  incoming                                                        0.00 MiB         10 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.12 MiB        552 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.26 MiB       1327 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB          8 allocs
+  graph.workspace_rows                                            0.01 MiB         34 allocs
+  graph.routines (own part + own_pos)                             0.01 MiB         82 allocs
+  graph.obj_index                                                 0.84 MiB       9655 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.02 MiB         16 allocs
+  snap: rest                                                      0.02 MiB        335 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 1.31 MiB in 12366 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Reporting:
+  diagnostics (compute_all output)                                0.00 MiB          3 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         11 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB          0 allocs
+  decls_by_file                                                   0.00 MiB          3 allocs
+  incoming                                                        0.00 MiB          0 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.00 MiB          3 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.00 MiB         21 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB         16 allocs
+  graph.workspace_rows                                            0.00 MiB          2 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB          0 allocs
+  graph.obj_index                                                 0.84 MiB       9650 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.00 MiB          6 allocs
+  snap: rest                                                      0.02 MiB        319 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 0.87 MiB in 10174 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Rental:
+  diagnostics (compute_all output)                                0.01 MiB         47 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         59 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB         23 allocs
+  decls_by_file                                                   0.01 MiB         57 allocs
+  incoming                                                        0.00 MiB          8 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.03 MiB        172 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.14 MiB        672 allocs
+  graph.objects (own part + own_pos)                              0.01 MiB         47 allocs
+  graph.workspace_rows                                            0.00 MiB         22 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB         41 allocs
+  graph.obj_index                                                 0.84 MiB       9658 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.01 MiB         22 allocs
+  snap: rest                                                      0.02 MiB        315 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 1.07 MiB in 11283 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Leasing:
+  diagnostics (compute_all output)                                0.00 MiB         25 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         23 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB          9 allocs
+  decls_by_file                                                   0.00 MiB         20 allocs
+  incoming                                                        0.00 MiB          0 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.01 MiB         84 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.06 MiB        261 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB         29 allocs
+  graph.workspace_rows                                            0.00 MiB          9 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB         16 allocs
+  graph.obj_index                                                 0.84 MiB       9652 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.00 MiB         10 allocs
+  snap: rest                                                      0.02 MiB        311 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 0.95 MiB in 10589 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Integration:
+  diagnostics (compute_all output)                                0.00 MiB         19 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         23 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB         11 allocs
+  decls_by_file                                                   0.00 MiB         24 allocs
+  incoming                                                        0.00 MiB          5 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.01 MiB         70 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.03 MiB        171 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB         18 allocs
+  graph.workspace_rows                                            0.00 MiB         10 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB         22 allocs
+  graph.obj_index                                                 0.84 MiB       9652 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.00 MiB         10 allocs
+  snap: rest                                                      0.02 MiB        311 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 0.92 MiB in 10486 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Fleet:
+  diagnostics (compute_all output)                                0.01 MiB         33 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         53 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB         21 allocs
+  decls_by_file                                                   0.01 MiB         52 allocs
+  incoming                                                        0.00 MiB         10 allocs
+  publisher_fanout                                                0.00 MiB          2 allocs
+  edges_by_file                                                   0.01 MiB         84 allocs
+  event_edges                                                     0.00 MiB          5 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.09 MiB        415 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB         43 allocs
+  graph.workspace_rows                                            0.00 MiB         20 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB         48 allocs
+  graph.obj_index                                                 0.84 MiB       9657 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  dep_nodes (held by other roots)                                 0.00 MiB          0 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)      0.00 MiB          1 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.01 MiB         20 allocs
+  snap: rest                                                      0.02 MiB        311 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 1.00 MiB in 10912 allocs
+drop-delta breakdown for C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/93047126-2327-48bd-bf4a-2708402a15d3/scratchpad/cgref/Core:
+  diagnostics (compute_all output)                                0.01 MiB         40 allocs
+  updater workspace ParsedUnit (shells; Arcs shared w/ parsed)      0.00 MiB         41 allocs
+  snapshot.dep_meta (Arc clone)                                   0.00 MiB          0 allocs
+  snapshot.dep_lines (Arc clone)                                  0.00 MiB          0 allocs
+  decl_by_id                                                      0.00 MiB         25 allocs
+  decls_by_file                                                   0.01 MiB         55 allocs
+  incoming                                                        0.00 MiB          8 allocs
+  publisher_fanout                                                0.00 MiB          1 allocs
+  edges_by_file                                                   0.01 MiB        107 allocs
+  event_edges                                                     0.00 MiB          1 allocs
+  parsed (ws AlFile IR + text + LineTable)                        0.05 MiB        265 allocs
+  graph.objects (own part + own_pos)                              0.00 MiB         27 allocs
+  graph.workspace_rows                                            0.00 MiB         20 allocs
+  graph.routines (own part + own_pos)                             0.00 MiB         45 allocs
+  graph.obj_index                                                 0.84 MiB       9655 allocs
+  graph.apps                                                      0.00 MiB         58 allocs
+  graph.topology                                                  0.00 MiB          7 allocs
+  graph.friends                                                   0.00 MiB          2 allocs
+  graph.abi_ingest_errors                                         0.00 MiB          0 allocs
+  dep_layer.apps/topology/friends/errors                          0.00 MiB         67 allocs
+  dep_layer.dep_objects/routines (Arc clones)                     0.00 MiB          0 allocs
+  SHARED dep tier: objects                                        6.54 MiB      19272 allocs
+  SHARED dep tier: routines                                      23.95 MiB     140897 allocs
+  SHARED dep tier: abi_ingest_errors                              0.00 MiB          0 allocs
+  SHARED dep tier: dep_meta                                       0.00 MiB          1 allocs
+  SHARED dep tier: recovered                                      0.00 MiB          0 allocs
+  SHARED dep tier: bodies (Keep only)                             0.00 MiB          0 allocs
+  SHARED dep tier: dep_lines                                      0.00 MiB          1 allocs
+  snap: ABI packages (ParsedAppPackage; shared via DepCache)     24.22 MiB     123114 allocs
+  snap: source roots (SourceFile texts; shared via DepCache)      0.00 MiB         16 allocs
+  snap: rest                                                      0.02 MiB        311 allocs
+  workspace_root                                                  0.00 MiB          2 allocs
+  TOTAL freed by this root: 55.68 MiB in 294040 allocs
+residual after all roots + DepCache dropped: 0.21 MiB in 101 allocs

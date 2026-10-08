@@ -833,7 +833,7 @@ fn build_fan_out_site_context(
             for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
                 let obj_key = match obj.id {
                     Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(obj.name.fold_identifier()),
+                    None => ObjKey::Name(obj.name.fold_identifier().into()),
                 };
                 let obj_node_id = ObjectNodeId {
                     app: primary_app_ref,
@@ -986,7 +986,7 @@ fn target_is_on_table_or_extension(
         return true;
     }
     let table_name_lc: String = match &table_id.key {
-        ObjKey::Name(s) => s.clone(),
+        ObjKey::Name(s) => s.to_string(),
         ObjKey::Id(_) => graph
             .objects
             .iter()
@@ -1414,12 +1414,12 @@ mod tests {
             id: ObjectNodeId {
                 app,
                 kind,
-                key: ObjKey::Name(name.to_ascii_lowercase()),
+                key: ObjKey::Name(name.to_ascii_lowercase().into()),
             },
-            name: name.to_string(),
+            name: name.into(),
             declared_id: None,
             extends_target: None,
-            implements: implements.into_iter().map(str::to_string).collect(),
+            implements: implements.into_iter().map(Into::into).collect(),
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,
@@ -1437,12 +1437,12 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id.clone(),
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
             },
-            name: name.to_string(),
+            name: name.into(),
             is_trigger: matches!(
                 name.to_ascii_lowercase().as_str(),
                 "oninsert" | "onmodify" | "ondelete" | "onrename" | "onvalidate"
@@ -1455,7 +1455,7 @@ mod tests {
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,

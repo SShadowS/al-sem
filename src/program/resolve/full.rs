@@ -831,7 +831,7 @@ pub(crate) fn resolve_file_obligations(
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier()),
+            None => ObjKey::Name(obj.name.fold_identifier().into()),
         };
         let obj_node_id = ObjectNodeId {
             app: caller_app,
@@ -1029,7 +1029,7 @@ fn receiver_fact(
                 },
             };
             let i = graph.objects.binary_search_by(|o| o.id.cmp(&id)).ok()?;
-            Some(graph.objects[i].name.clone())
+            Some(graph.objects[i].name.to_string())
         };
     // AL spelling: quoted when the name is not a plain identifier.
     let al_name = |n: &str| {
@@ -1607,6 +1607,15 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 ///
 /// When `dep_cache` hits, the dependencies are not parsed again; a `Keep`
 /// profile still gets [`ProgramContext::dep_bodies`] from the shared tier.
+///
+/// Dependency text is extracted only when something will read it
+/// (engine-switch S10.1b). The snapshot is first built without the text of
+/// any source the cache already knows. If such a source is present, the build
+/// continues only on a live shared tier whose LSP products are already
+/// built: the hit skips the dependency parse and `LspSnapshot::from_context`
+/// reuses those products, so nothing reads dependency text. The tier is held
+/// until the build returns, so it cannot die in between. Otherwise the
+/// snapshot is built again with the text.
 #[must_use]
 pub fn build_context_with(
     workspace_root: &Path,
@@ -1614,18 +1623,37 @@ pub fn build_context_with(
     profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Option<ProgramContext> {
-    let snap = (SnapshotBuilder {
+    let builder = SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
         // Local providers are NOT part of `DepKey`: a caller that sets them
         // must extend the key (provenance tier + content hash), or a local
         // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
-    })
-    .build_with_options(dependency_source, dep_cache)
-    .map(|(snap, _dropped)| snap)
-    .ok()?;
+    };
+    let (snap, _dropped) = builder
+        .build_deferring_dependency_text(dependency_source, dep_cache)
+        .ok()?;
+    let mut held = None;
+    let snap = if snap.has_deferred_dependency_text() {
+        held = dep_cache
+            .get(&DepKey::of(&snap, profile))
+            .filter(|tier| tier.lsp.get().is_some());
+        if held.is_some() {
+            snap
+        } else {
+            drop(snap);
+            builder
+                .build_with_options(dependency_source, dep_cache)
+                .ok()?
+                .0
+        }
+    } else {
+        snap
+    };
     crate::census_hook::mark("1.snapshot");
-    build_context_from_snapshot_cached(snap, profile, dep_cache).ok()
+    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache).ok();
+    drop(held);
+    ctx
 }
 
 /// Step 1 of [`build_context_res`], split out so a caller can inspect the
@@ -2178,7 +2206,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2383,7 +2411,7 @@ mod tests {
                 .flat_map(|ce| {
                     ce.edge.routes.iter().map(move |r| match &r.target {
                         RouteTarget::Routine(id) => {
-                            (ce.edge.site.span.start.line, id.name_lc.clone())
+                            (ce.edge.site.span.start.line, id.name_lc.to_string())
                         }
                         other => (ce.edge.site.span.start.line, format!("{other:?}")),
                     })
@@ -2454,7 +2482,9 @@ mod tests {
             .filter(|ce| ce.edge.from.name_lc == "caller" && ce.edge.kind == EdgeKind::Call)
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| match &r.target {
-                    RouteTarget::Routine(id) => (ce.edge.site.span.start.line, id.name_lc.clone()),
+                    RouteTarget::Routine(id) => {
+                        (ce.edge.site.span.start.line, id.name_lc.to_string())
+                    }
                     other => (ce.edge.site.span.start.line, format!("{other:?}")),
                 })
             })
@@ -2539,7 +2569,7 @@ mod tests {
                 .filter(|ce| ce.edge.from.name_lc == caller)
                 .flat_map(|ce| ce.edge.routes.iter())
                 .map(|r| match &r.target {
-                    RouteTarget::Routine(id) => id.name_lc.clone(),
+                    RouteTarget::Routine(id) => id.name_lc.to_string(),
                     _ => format!("{:?}", r.evidence),
                 })
                 .collect()
@@ -2673,10 +2703,10 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
-                    (ce.edge.from.name_lc.clone(), ce.edge.kind, to)
+                    (ce.edge.from.name_lc.to_string(), ce.edge.kind, to)
                 })
             })
             .collect();
@@ -2749,11 +2779,11 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
-                    (ce.edge.from.name_lc.clone(), to)
+                    (ce.edge.from.name_lc.to_string(), to)
                 })
             })
             .collect();
@@ -2808,7 +2838,7 @@ mod tests {
             .filter(|ce| ce.edge.from.name_lc == "p")
             .flat_map(|ce| ce.edge.routes.iter())
             .map(|r| match &r.target {
-                RouteTarget::Routine(id) => id.name_lc.clone(),
+                RouteTarget::Routine(id) => id.name_lc.to_string(),
                 RouteTarget::Builtin(b) => b.0.clone(),
                 _ => format!("{:?}", r.evidence.kind()),
             })
@@ -2866,7 +2896,7 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
@@ -2955,7 +2985,7 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };

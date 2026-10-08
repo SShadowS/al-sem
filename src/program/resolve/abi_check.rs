@@ -373,14 +373,14 @@ pub fn abi_ingestion_integrity_from_graph(
         // Reconstruct the key as `make_routine_route` would.
         let (obj_num, obj_name_lc) = match &routine.id.object.key {
             ObjKey::Id(n) => (*n, String::new()),
-            ObjKey::Name(s) => (0i64, s.clone()),
+            ObjKey::Name(s) => (0i64, s.to_string()),
         };
         let key = AbiRoutineKey {
             app: routine.id.object.app,
             object_type: format!("{:?}", routine.id.object.kind).to_ascii_lowercase(),
             object_number: obj_num,
             object_name_lc: obj_name_lc,
-            routine_name_lc: routine.id.name_lc.clone(),
+            routine_name_lc: routine.id.name_lc.to_string(),
             params_count: routine.id.params_count,
             param_type_fp: routine.id.sig_fp,
             routine_kind: routine

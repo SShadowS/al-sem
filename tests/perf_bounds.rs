@@ -850,7 +850,7 @@ mod release_checks {
         let sanity_dir = corpus_dir(1000);
         let sanity_snap = LspSnapshot::build_full(sanity_dir.path()).expect("build_full");
         assert_eq!(
-            sanity_snap.event_edges.len(),
+            sanity_snap.ws_event_edges.len(),
             1000 * perf_support::PUBLISHERS_PER_FILE,
             "sanity: this 1000-file event-bearing corpus must have \
              PUBLISHERS_PER_FILE publisher declarations per file"

@@ -279,11 +279,11 @@ fn write_str(h: &mut Hasher, s: &str) {
     h.update(s.as_bytes());
 }
 
-fn write_opt_str(h: &mut Hasher, s: &Option<String>) {
+fn write_opt_str(h: &mut Hasher, s: &Option<impl AsRef<str>>) {
     match s {
         Some(v) => {
             write_tag(h, 1);
-            write_str(h, v);
+            write_str(h, v.as_ref());
         }
         None => write_tag(h, 0),
     }

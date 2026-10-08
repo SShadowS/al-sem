@@ -26,7 +26,7 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::{FieldNode, ObjectNode, ObjectRef};
 use crate::program::resolve::edge::Condition;
 use crate::program::resolve::event::{ParsedSubscriberArgs, subscriber_arity_bound};
@@ -240,7 +240,7 @@ impl SubscriberIndex {
         // on the second `insert` — corrupting the subscriber-candidate
         // filter below into either double-counting or dropping a legitimate
         // publisher (beyond-1B.3b Task 2 review fix).
-        let mut routine_indices_by_obj_name: HashMap<(ObjectNodeId, String), Vec<usize>> =
+        let mut routine_indices_by_obj_name: HashMap<(ObjectNodeId, SharedStr), Vec<usize>> =
             HashMap::new();
         for (i, r) in graph.routines.iter().enumerate() {
             let key = (r.id.object.clone(), r.id.name_lc.clone());
@@ -264,8 +264,8 @@ impl SubscriberIndex {
                     subscriptions.push(Subscription {
                         subscriber: sub_routine.id.clone(),
                         ordinal,
-                        publisher_object_type: args.publisher_object_type.clone(),
-                        publisher_name: args.publisher_name.clone(),
+                        publisher_object_type: args.publisher_object_type.to_string(),
+                        publisher_name: args.publisher_name.to_string(),
                         publisher_id: args.publisher_id,
                         event_name_lc: args.event_name.fold_identifier(),
                         element: entry.element.clone(),
@@ -288,7 +288,7 @@ impl SubscriberIndex {
                 //     params_count >= sub_params. Counts every matching
                 //     routine even when two share a `RoutineNodeId`.
                 let candidates: Vec<RoutineNodeId> = routine_indices_by_obj_name
-                    .get(&(pub_obj_id.clone(), event_name_lc.clone()))
+                    .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
                     .map(Vec::as_slice)
                     .unwrap_or(&[])
                     .iter()
@@ -1050,7 +1050,7 @@ fn build_entry(
     SubscriberEntry {
         subscriber: sub_routine.id.clone(),
         conditions,
-        element: args.element.clone(),
+        element: args.element.as_deref().map(str::to_string),
     }
 }
 
@@ -1185,14 +1185,14 @@ mod tests {
     ) -> ObjectNode {
         let key = match declared_id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(name.to_ascii_lowercase()),
+            None => ObjKey::Name(name.to_ascii_lowercase().into()),
         };
         ObjectNode {
             id: ObjectNodeId { app, kind, key },
-            name: name.to_string(),
+            name: name.into(),
             declared_id,
-            extends_target: extends_target.map(str::to_string),
-            implements: implements.into_iter().map(str::to_string).collect(),
+            extends_target: extends_target.map(SharedStr::from),
+            implements: implements.into_iter().map(SharedStr::from).collect(),
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,
@@ -1210,12 +1210,12 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
             },
-            name: name.to_string(),
+            name: name.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::Workspace,
@@ -1225,7 +1225,7 @@ mod tests {
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: SharedStr::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1245,12 +1245,12 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
             },
-            name: name.to_string(),
+            name: name.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::Workspace,
@@ -1260,7 +1260,7 @@ mod tests {
             include_sender,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: SharedStr::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1280,12 +1280,12 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
             },
-            name: name.to_string(),
+            name: name.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::Workspace,
@@ -1295,7 +1295,7 @@ mod tests {
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: SharedStr::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1307,10 +1307,10 @@ mod tests {
 
     fn sub_args(pub_name: &str, event: &str) -> ParsedSubscriberArgs {
         ParsedSubscriberArgs {
-            publisher_object_type: "codeunit".to_string(),
-            publisher_name: pub_name.to_string(),
+            publisher_object_type: "codeunit".into(),
+            publisher_name: pub_name.into(),
             publisher_id: None,
-            event_name: event.to_string(),
+            event_name: event.into(),
             element: None,
             skip_on_missing_license: false,
             skip_on_missing_permission: false,
@@ -2002,8 +2002,8 @@ mod tests {
         find_obj_mut(&mut graph, &customer_id)
             .fields
             .push(FieldNode {
-                name_lc: "no.".to_string(),
-                type_text: "Code[20]".to_string(),
+                name_lc: "no.".into(),
+                type_text: "Code[20]".into(),
             });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2017,8 +2017,8 @@ mod tests {
         assert_eq!(
             found,
             Some(FieldNode {
-                name_lc: "no.".to_string(),
-                type_text: "Code[20]".to_string(),
+                name_lc: "no.".into(),
+                type_text: "Code[20]".into(),
             })
         );
     }
@@ -2030,8 +2030,8 @@ mod tests {
         find_obj_mut(&mut graph, &customer_id)
             .fields
             .push(FieldNode {
-                name_lc: "no.".to_string(),
-                type_text: "Code[20]".to_string(),
+                name_lc: "no.".into(),
+                type_text: "Code[20]".into(),
             });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2056,8 +2056,8 @@ mod tests {
             key: ObjKey::Id(50100),
         };
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
-            name_lc: "ext blob".to_string(),
-            type_text: "Blob".to_string(),
+            name_lc: "ext blob".into(),
+            type_text: "Blob".into(),
         });
         let idx = ResolveIndex::build(&graph);
         // Referencing object lives in App A — sees both Customer (its dep,
@@ -2074,8 +2074,8 @@ mod tests {
         assert_eq!(
             found,
             Some(FieldNode {
-                name_lc: "ext blob".to_string(),
-                type_text: "Blob".to_string(),
+                name_lc: "ext blob".into(),
+                type_text: "Blob".into(),
             }),
             "an extension field visible in from_object's closure must fold into the base scope"
         );
@@ -2090,8 +2090,8 @@ mod tests {
             key: ObjKey::Id(50100),
         };
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
-            name_lc: "ext blob".to_string(),
-            type_text: "Blob".to_string(),
+            name_lc: "ext blob".into(),
+            type_text: "Blob".into(),
         });
         let idx = ResolveIndex::build(&graph);
         // Referencing object lives in App B — App B does NOT depend on App A
@@ -2125,12 +2125,12 @@ mod tests {
         find_obj_mut(&mut graph, &customer_id)
             .fields
             .push(FieldNode {
-                name_lc: "dup field".to_string(),
-                type_text: "Blob".to_string(),
+                name_lc: "dup field".into(),
+                type_text: "Blob".into(),
             });
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
-            name_lc: "dup field".to_string(),
-            type_text: "Text[50]".to_string(),
+            name_lc: "dup field".into(),
+            type_text: "Text[50]".into(),
         });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2159,12 +2159,12 @@ mod tests {
         let customer_id = customer_table_id(b);
         let obj = find_obj_mut(&mut graph, &customer_id);
         obj.fields.push(FieldNode {
-            name_lc: "no.".to_string(),
-            type_text: "Code[20]".to_string(),
+            name_lc: "no.".into(),
+            type_text: "Code[20]".into(),
         });
         obj.fields.push(FieldNode {
-            name_lc: "no.".to_string(),
-            type_text: "Code[20]".to_string(),
+            name_lc: "no.".into(),
+            type_text: "Code[20]".into(),
         });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2178,8 +2178,8 @@ mod tests {
         assert_eq!(
             found,
             Some(FieldNode {
-                name_lc: "no.".to_string(),
-                type_text: "Code[20]".to_string(),
+                name_lc: "no.".into(),
+                type_text: "Code[20]".into(),
             }),
             "an identical (object, name, type) duplicate must dedupe to one candidate, not decline"
         );
@@ -2298,10 +2298,10 @@ mod tests {
             .iter_mut()
             .find(|o| o.implements.iter().any(|i| i.eq_ignore_ascii_case("ifoo")))
             .expect("fixture implementer");
-        cu.implements.push("IFoo".to_string());
+        cu.implements.push("IFoo".into());
         let mut en = cu.clone();
         en.id.kind = ObjectKind::Enum;
-        en.name = "IFooEnum".to_string();
+        en.name = "IFooEnum".into();
         graph.objects.push(en);
         let idx = ResolveIndex::build(&graph);
 
@@ -2392,7 +2392,7 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2439,14 +2439,14 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
         };
         let pub_onbeforex_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onbeforex".to_string(),
+            name_lc: "onbeforex".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2500,7 +2500,7 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2548,14 +2548,14 @@ mod tests {
         };
         let pub_onafterx_1param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
         };
         let pub_onafterx_2param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 2,
             sig_fp: 0,
@@ -2620,7 +2620,7 @@ mod tests {
         };
         let pub_arity0 = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2670,7 +2670,7 @@ mod tests {
         };
         let pub_arity0 = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2733,7 +2733,7 @@ mod tests {
         let mut bad_type = sub_args("pub", "onafterx");
         // Not a kind `kind_from_object_type_str` maps (`xmlport` would be, and
         // would then fail at the object lookup instead).
-        bad_type.publisher_object_type = "controladdin".to_string();
+        bad_type.publisher_object_type = "controladdin".into();
         let (graph, _, _) = build_event_fixture(
             vec![make_publisher(
                 ObjectNodeId {
@@ -2933,14 +2933,14 @@ mod tests {
         };
         let pub_onafterx_0param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
         };
         let pub_onafterx_1param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
@@ -3002,7 +3002,7 @@ mod tests {
         let mut license = sub_args("pub", "onafterx");
         license.skip_on_missing_license = true;
         let mut element = sub_args("pub", "onafterx");
-        element.element = Some("Field1".to_string());
+        element.element = Some("Field1".into());
         let (graph, _, _) = build_event_fixture(
             vec![
                 make_publisher(
@@ -3056,7 +3056,7 @@ mod tests {
         );
         let publisher = |name: &str, params: usize| RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,

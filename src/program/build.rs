@@ -11,10 +11,11 @@ use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
-use crate::program::resolve::decl_surface::DepMetaMap;
+use crate::program::resolve::decl_surface::{DepMeta, RoutineMeta};
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
+use crate::program::str_pool::{ShareStrings, StrPool};
 use crate::program::topology::DependencyGraph;
 use crate::snapshot::{AppSetSnapshot, ParsedUnit, TrustTier, parse_snapshot};
 
@@ -194,15 +195,27 @@ fn build_dep_nodes(
     // `RoutineMeta` into `dep_meta` (in parse order, so a true same-key
     // collision keeps the last one, as `DeclSurface::build` does), and its
     // recovered flag into `recovered`. Nothing summary-shaped survives.
+    //
+    // Equal strings become one allocation as they arrive (engine-switch
+    // S10.2), so every later clone of a tier value shares it. `dep_meta`'s
+    // entries are kept in parse order and become a column beside the sorted
+    // rows below (S10.3), keeping the map's last-wins rule.
+    let mut pool = StrPool::default();
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
-    let mut dep_meta = DepMetaMap::new();
+    let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::new();
     let mut recovered: Vec<String> = Vec::new();
     for unit in summaries {
-        for file in unit.files {
+        for mut file in unit.files {
+            file.objects.share_strings(&mut pool);
+            file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
             routines.extend(file.routines);
-            dep_meta.extend(file.routine_meta);
+            dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, mut meta)| {
+                id.share_strings(&mut pool);
+                meta.share_strings(&mut pool);
+                (id, meta)
+            }));
             if file.parse_status_recovered {
                 recovered.push(crate::snapshot::parse::recovered_path(
                     &unit.app.name,
@@ -231,8 +244,11 @@ fn build_dep_nodes(
                 message,
             });
         }
-        objects.extend(result.objects);
-        routines.extend(result.routines);
+        let (mut abi_objects, mut abi_routines) = (result.objects, result.routines);
+        abi_objects.share_strings(&mut pool);
+        abi_routines.share_strings(&mut pool);
+        objects.extend(abi_objects);
+        routines.extend(abi_routines);
     }
 
     // ── Step 4: sort for determinism, then dedup this (non-primary) population ──
@@ -247,15 +263,17 @@ fn build_dep_nodes(
     objects.dedup_by(|a, b| a.id == b.id);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
+    let routines = Arc::new(routines);
 
     DepNodes {
         objects: Arc::new(objects),
-        routines: Arc::new(routines),
+        dep_meta: Arc::new(DepMeta::build(Arc::clone(&routines), dep_meta)),
+        routines,
         abi_ingest_errors,
-        dep_meta: Arc::new(dep_meta),
         recovered,
         bodies,
         lsp: Default::default(),
+        lsp_events: Default::default(),
     }
 }
 
@@ -542,6 +560,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             };
             let synth_id = RoutineNodeId {
                 object: pub_obj.id.clone(),
+                // The subscriber's own (pooled) text: a clone, not a copy.
                 name_lc: args.event_name.clone(),
                 enclosing_member_lc: None,
                 params_count: PLATFORM_EVENT_PUBLISHER_ARITY,
@@ -561,7 +580,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             }
             synth.push(RoutineNode {
                 id: synth_id,
-                name: platform_event_display_name(&args.event_name).to_string(),
+                name: platform_event_display_name(&args.event_name).into(),
                 is_trigger: false,
                 access: Access::Public,
                 tier: pub_obj.tier,
@@ -576,7 +595,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 include_sender: None,
                 abi_routine_kind: None,
                 abi_event_kind: None,
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 return_type: None,
                 return_type_id: None,
                 abi_overload_collapsed: false,
@@ -1137,7 +1156,7 @@ codeunit 50100 "Ws2 Cu"
                 .routines
                 .iter()
                 .filter(|r| r.id.object.app == ws_ref)
-                .map(|r| r.name.clone())
+                .map(|r| r.name.to_string())
                 .collect();
             names.sort();
             names
@@ -1296,12 +1315,12 @@ codeunit 50100 "Ws2 Cu"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
             },
-            name: name_lc.to_string(),
+            name: name_lc.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::SymbolOnly,
@@ -1311,7 +1330,7 @@ codeunit 50100 "Ws2 Cu"
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1338,12 +1357,12 @@ codeunit 50100 "Ws2 Cu"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
             },
-            name: name_lc.to_string(),
+            name: name_lc.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::Workspace,
@@ -1353,7 +1372,7 @@ codeunit 50100 "Ws2 Cu"
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: param_sig_key.to_string(),
+            param_sig_key: param_sig_key.into(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1748,7 +1767,7 @@ codeunit 50301 "Preproc Dup Sig"
 
         let mut objects = Vec::new();
         let mut routines = Vec::new();
-        let mut dep_meta = DepMetaMap::new();
+        let mut dep_meta = HashMap::new();
         for f in units.iter().flat_map(|u| &u.files) {
             objects.extend(f.objects.iter().cloned());
             routines.extend(f.routines.iter().cloned());

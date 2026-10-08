@@ -14,7 +14,7 @@ use crate::program::graph::AbiIngestError;
 use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
 use crate::program::profile::{BuildProfile, DependencyBodies};
-use crate::program::resolve::decl_surface::DepMetaMap;
+use crate::program::resolve::decl_surface::DepMeta;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
 use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
@@ -26,7 +26,16 @@ use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
 pub struct DepCache {
     nodes: Mutex<HashMap<DepKey, Weak<DepNodes>>>,
     packages: Mutex<HashMap<(PathBuf, AppFileStamp), Weak<ParsedAppPackage>>>,
-    sources: Mutex<HashMap<(PathBuf, AppFileStamp), WeakSource>>,
+    /// One entry per `.app` path: what the last load at that stamp found.
+    sources: Mutex<HashMap<PathBuf, (AppFileStamp, KnownSource)>>,
+}
+
+/// What a load of one `.app` found (see [`DepCache::source`]).
+enum KnownSource {
+    /// Embedded source; the entry outlives its text.
+    Source(WeakSource),
+    /// The `.app` ships no source.
+    NoSource,
 }
 
 /// A `SourceRoot` whose file list is held weakly (see [`DepCache::source`]).
@@ -45,16 +54,23 @@ impl WeakSource {
         }
     }
 
-    fn is_live(&self) -> bool {
-        self.files.strong_count() > 0
-    }
-
     fn upgrade(&self) -> Option<SourceRoot> {
         Some(SourceRoot {
             files: self.files.upgrade()?,
             tier: self.tier,
             content_hash: self.content_hash.clone(),
         })
+    }
+
+    /// The source without its text: an empty file list, the same tier and
+    /// content hash. No provider loads `Some` with no files, so an empty list
+    /// on a dependency means exactly this.
+    fn deferred(&self) -> SourceRoot {
+        SourceRoot {
+            files: Arc::new(Vec::new()),
+            tier: self.tier,
+            content_hash: self.content_hash.clone(),
+        }
     }
 }
 
@@ -68,7 +84,7 @@ pub struct DepNodes {
     /// The frozen `DeclSurface` tier: every dependency routine's
     /// `RoutineMeta`, built with the nodes. Every consumer reads dependency
     /// metadata from here, never from dependency `ParsedUnit`s.
-    pub dep_meta: Arc<DepMetaMap>,
+    pub dep_meta: Arc<DepMeta>,
     /// `"<app name>::<virtual path>"` of every dependency file whose parse
     /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
     /// not parse the dependencies) still reports them.
@@ -83,15 +99,22 @@ pub struct DepNodes {
     /// that builds them). Keyed by this tier's AppRefs, so they are valid
     /// exactly where the tier itself is shared.
     pub lsp: OnceLock<Arc<DepLspTier>>,
+    /// The dependency-only event links of this tier (engine-switch S10.4),
+    /// set by the first snapshot that computes them. Separate from `lsp`: they
+    /// read no dependency text, so S10.1b's deferral does not wait for them.
+    pub lsp_events: OnceLock<Arc<crate::lsp::snapshot::DepEventLinks>>,
 }
 
 /// Dependency-derived LSP data, shared with [`DepNodes`].
 pub struct DepLspTier {
-    pub dep_texts: Arc<DepTexts>,
+    pub dep_lines: Arc<DepLines>,
 }
 
-/// Dependency file texts by `(app, virtual path)`.
-pub(crate) type DepTexts = HashMap<(AppRef, String), Arc<str>>;
+/// A text-free line index of every dependency file, by `(app, virtual path)`:
+/// what the LSP needs to turn a dependency position into an editor column. The
+/// LSP keeps no dependency text (engine-switch S10.1).
+pub(crate) type DepLines =
+    HashMap<(AppRef, crate::program::str_pool::SharedStr), crate::lsp::encoding::LineIndex>;
 
 impl DepCache {
     /// The live entry for `key`, or `build()`'s result (now cached). The lock
@@ -119,8 +142,10 @@ impl DepCache {
 
     /// The live entry for `key`, if any. Never builds. Any live entry is a
     /// hit: it always carries `dep_meta` and `recovered` (and the bodies when
-    /// `key` keeps them), and its LSP products (`dep_texts`) can be built
-    /// from any snapshot, so a hit never needs to parse the dependencies.
+    /// `key` keeps them), and its LSP products (`dep_lines`) are either built
+    /// already or built from the fresh snapshot (which then holds the
+    /// dependency text: `build_context_with` extracts it whenever the tier has
+    /// no LSP products yet), so a hit never needs to parse the dependencies.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
         self.lock().get(key).and_then(Weak::upgrade)
     }
@@ -155,41 +180,62 @@ impl DepCache {
 
     /// The `.app`'s extracted embedded source, with every file text shared
     /// with any live snapshot that already holds it, or `load()`'s result
-    /// (now cached). `stamp` must be the one taken before the file was read;
-    /// without one nothing is cached. A failed or empty (`None`) load caches
+    /// (now remembered). `stamp` must be the one taken before the file was
+    /// read; without one nothing is remembered. A failed load remembers
     /// nothing.
+    ///
+    /// What is remembered outlives the text: a `.app` that ships no source
+    /// answers `None` again without `load()`, and with `defer_text` a `.app`
+    /// whose text no snapshot holds any more answers its source WITHOUT the
+    /// text ([`WeakSource::deferred`]) instead of extracting it again. Only a
+    /// build that will read no dependency text asks for that (see
+    /// `build_context_with`, engine-switch S10.1b). One entry per path: a
+    /// load at a new stamp replaces the old one.
     ///
     /// Representation: the map holds a `Weak` to the source's file list
     /// (`SourceRoot.files: Arc<Vec<SourceFile>>`), never a `Weak` into a
     /// text. A hit shares that same list. When the last `SourceRoot` holding
     /// the list is dropped, the list and every text it owns are freed; the
-    /// dead map entry then pins only the list's small `Arc` header until a
-    /// later miss purges it. (A `Weak<str>` would pin the whole text: an
-    /// `Arc<str>` stores its bytes in the same allocation as its counts.)
+    /// entry then pins only the list's small `Arc` header. (A `Weak<str>`
+    /// would pin the whole text: an `Arc<str>` stores its bytes in the same
+    /// allocation as its counts.)
     pub fn source(
         &self,
         path: &Path,
         stamp: Option<AppFileStamp>,
+        defer_text: bool,
         load: impl FnOnce() -> anyhow::Result<Option<SourceRoot>>,
     ) -> anyhow::Result<Option<SourceRoot>> {
         let Some(stamp) = stamp else {
             return load();
         };
-        let key = (path.to_path_buf(), stamp);
         let lock = || self.sources.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(live) = lock().get(&key).and_then(WeakSource::upgrade) {
-            return Ok(Some(live));
+        match lock().get(path) {
+            Some((s, KnownSource::NoSource)) if *s == stamp => return Ok(None),
+            Some((s, KnownSource::Source(w))) if *s == stamp => {
+                if let Some(live) = w.upgrade() {
+                    return Ok(Some(live));
+                }
+                if defer_text {
+                    return Ok(Some(w.deferred()));
+                }
+            }
+            _ => {}
         }
-        let Some(built) = load()? else {
-            return Ok(None);
-        };
+        let built = load()?;
         let mut map = lock();
-        map.retain(|_, w| w.is_live());
-        if let Some(live) = map.get(&key).and_then(WeakSource::upgrade) {
+        if let Some((s, KnownSource::Source(w))) = map.get(path)
+            && *s == stamp
+            && let Some(live) = w.upgrade()
+        {
             return Ok(Some(live));
         }
-        map.insert(key, WeakSource::of(&built));
-        Ok(Some(built))
+        let known = match &built {
+            Some(root) => KnownSource::Source(WeakSource::of(root)),
+            None => KnownSource::NoSource,
+        };
+        map.insert(path.to_path_buf(), (stamp, known));
+        Ok(built)
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<DepKey, Weak<DepNodes>>> {
@@ -436,7 +482,7 @@ mod tests {
                 let mut all: Vec<_> = s
                     .edges_by_file
                     .values()
-                    .flat_map(|v| v.iter().map(|c| c.edge.clone()))
+                    .flat_map(|v| v.iter().cloned())
                     .collect();
                 all.sort();
                 all
@@ -574,7 +620,7 @@ mod tests {
     /// The dependency's embedded source as a snapshot holds it. Returning the
     /// shared file list (not just its texts) keeps it alive, as a live
     /// snapshot would: the cache shares only a list some root still holds.
-    fn dep_texts(cache: &DepCache, root: &Path) -> Arc<Vec<SourceFile>> {
+    fn dep_source(cache: &DepCache, root: &Path) -> Arc<Vec<SourceFile>> {
         use crate::snapshot::SnapshotBuilder;
         let (snap, _) = (SnapshotBuilder {
             workspace_root: root.to_path_buf(),
@@ -603,45 +649,38 @@ mod tests {
     fn roots_share_one_extracted_source_per_app() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
-        let a = dep_texts(&cache, &fx.root_a);
-        let b = dep_texts(&cache, &fx.root_b);
+        let a = dep_source(&cache, &fx.root_a);
+        let b = dep_source(&cache, &fx.root_b);
         assert!(same_allocations(&a, &b), "same app, same stamp: shared");
 
-        let solo = dep_texts(&DepCache::default(), &fx.root_a);
+        let solo = dep_source(&DepCache::default(), &fx.root_a);
         assert!(!same_allocations(&a, &solo), "no shared cache: not shared");
 
         write_dep_app(
             &fx.alpackages,
             r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
         );
-        let c = dep_texts(&cache, &fx.root_a);
+        let c = dep_source(&cache, &fx.root_a);
         assert!(!same_allocations(&a, &c), "new stamp: not served stale");
         assert!(c.len() > a.len(), "the new file's source is the new one");
     }
 
-    /// Dropping the last root frees the dependency's texts: the cache keeps
-    /// no `Weak` into a text (an `Arc<str>`'s bytes share the allocation with
-    /// its counts, so such a `Weak` would pin the whole text).
+    /// The LSP keeps no dependency text (S10.1), stated directly: a snapshot
+    /// built first on the same cache holds the extracted texts, and the LSP
+    /// root built next shares those very allocations (the cache serves a list
+    /// some root still holds). Once that first holder is dropped the texts are
+    /// gone, while the LSP root is still alive: neither its tier
+    /// (`dep_lines`), nor its retained snapshot, nor the cache (no `Weak` into
+    /// a text: an `Arc<str>`'s bytes share the allocation with its counts, so
+    /// such a `Weak` would pin the whole text) holds one.
     #[test]
-    fn dependency_texts_are_freed_with_their_last_root() {
+    fn the_lsp_keeps_no_dependency_text() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
+        let src = dep_source(&cache, &fx.root_a);
+        let text = Arc::downgrade(&src[0].text);
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let text = a
-            .snap
-            .apps
-            .iter()
-            .find(|u| u.id.guid == DEP_GUID)
-            .and_then(|u| u.source.as_ref())
-            .and_then(|s| s.files.first())
-            .map(|f| Arc::downgrade(&f.text))
-            .expect("precondition: the dependency ships embedded source");
-        let live = text.upgrade().expect("held by the snapshot");
-        assert!(
-            a.dep_texts.values().any(|t| Arc::ptr_eq(t, &live)),
-            "precondition: the text is the one the LSP surface serves"
-        );
-        drop(live);
+        assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         // Checked while the text is alive: `Weak::weak_count` reads 0 once
         // the strong count is 0, whoever still holds a `Weak`.
         assert_eq!(
@@ -649,10 +688,12 @@ mod tests {
             1,
             "the cache holds no Weak into the text (only this test does)"
         );
+        drop(src);
+        assert!(
+            text.upgrade().is_none(),
+            "the live LSP root holds no dependency text"
+        );
         drop(a);
-        // No dependency tree outlives the build (LIGHT drops each one during
-        // the parse), so the last strong holder goes with `a`.
-        assert!(text.upgrade().is_none(), "no strong holder is left");
     }
 
     #[test]
@@ -668,15 +709,15 @@ mod tests {
     }
 
     /// Roots sharing a dependency tier share its `dep_meta` (held by the
-    /// tier's nodes) and `dep_texts`, and the texts are the shared
-    /// extracted-source allocations.
+    /// tier's nodes) and `dep_lines`, which index exactly the dependency's
+    /// embedded source files.
     #[test]
-    fn roots_share_dep_meta_and_dep_texts() {
+    fn roots_share_dep_meta_and_dep_lines() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
-        assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         assert!(!a.dep_meta.is_empty(), "precondition: dependency decls");
         assert!(Arc::ptr_eq(&a.dep_meta, &a.dep_layer.dep_nodes.dep_meta));
         assert!(Arc::ptr_eq(
@@ -684,30 +725,29 @@ mod tests {
             &b.dep_layer.dep_nodes.dep_meta
         ));
         assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
-        assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
-        let src = dep_texts(&cache, &fx.root_a);
-        assert!(
-            a.dep_texts
-                .values()
-                .all(|t| src.iter().any(|s| Arc::ptr_eq(&s.text, t))),
-            "dep_texts values are the shared extracted-source Arcs"
-        );
+        assert!(Arc::ptr_eq(&a.dep_lines, &b.dep_lines));
+        let src = dep_source(&cache, &fx.root_a);
+        let mut indexed: Vec<&str> = a.dep_lines.keys().map(|(_, vp)| vp.as_str()).collect();
+        let mut files: Vec<&str> = src.iter().map(|f| f.virtual_path.as_str()).collect();
+        indexed.sort_unstable();
+        files.sort_unstable();
+        assert_eq!(indexed, files, "one index per embedded source file");
     }
 
     /// A dropped last root leaves nothing behind: the next root's tier
-    /// (`dep_meta`, `recovered`, `dep_texts`) is fresh and equals a
+    /// (`dep_meta`, `recovered`, `dep_lines`) is fresh and equals a
     /// cache-less build.
     #[test]
     fn dep_tier_after_the_last_root_is_dropped_is_fresh_and_correct() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let old_texts = Arc::downgrade(&a.dep_texts);
+        let old_lines = Arc::downgrade(&a.dep_lines);
         let old_meta = Arc::downgrade(&a.dep_layer.dep_nodes.dep_meta);
         drop(a);
         assert!(
-            old_texts.upgrade().is_none(),
-            "nothing retains the dropped texts"
+            old_lines.upgrade().is_none(),
+            "nothing retains the dropped line indexes"
         );
         assert!(
             old_meta.upgrade().is_none(),
@@ -716,11 +756,8 @@ mod tests {
         assert_eq!(cache.live_entries(), 0, "the dropped tier is not live");
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
-        assert!(!b.dep_texts.is_empty());
-        assert_eq!(b.dep_texts.len(), solo.dep_texts.len());
-        for (k, v) in b.dep_texts.iter() {
-            assert_eq!(solo.dep_texts.get(k).map(|s| &**s), Some(&**v));
-        }
+        assert!(!b.dep_lines.is_empty());
+        assert_eq!(*b.dep_lines, *solo.dep_lines);
         assert!(!b.dep_meta.is_empty(), "precondition: dependency decls");
         assert_eq!(*b.dep_meta, *solo.dep_meta);
         assert_eq!(
@@ -734,11 +771,8 @@ mod tests {
     /// with routes, on both sides.
     fn answers(s: &LspSnapshot) -> String {
         use std::collections::BTreeMap;
-        let sorted = |v: &[crate::program::resolve::full::ClassifiedEdge]| {
-            let mut v: Vec<_> = v
-                .iter()
-                .map(|c| (c.obligation_id.clone(), c.edge.clone()))
-                .collect();
+        let sorted = |v: &[crate::lsp::snapshot::LspEdge]| {
+            let mut v: Vec<_> = v.iter().map(|e| (e.obligation_id(), e.clone())).collect();
             v.sort();
             v
         };
@@ -753,29 +787,30 @@ mod tests {
             .map(|(f, e)| (f.clone(), sorted(e)))
             .collect();
         let incoming: BTreeMap<_, _> = s
-            .incoming
-            .iter()
-            .map(|(t, refs)| {
-                let mut o: Vec<_> = refs
-                    .iter()
-                    .map(|r| s.edge(r).obligation_id.clone())
-                    .collect();
+            .all_incoming()
+            .into_keys()
+            .map(|t| {
+                let mut o: Vec<_> = s.incoming(&t).map(|r| s.edge(r).obligation_id()).collect();
                 o.sort();
-                (t.clone(), o)
+                (t, o)
             })
             .collect();
-        let fanout: BTreeMap<_, _> = s.publisher_fanout.iter().collect();
+        let fanout: BTreeMap<_, _> = s
+            .ws_publisher_fanout
+            .keys()
+            .chain(s.dep_events.publisher_fanout.keys())
+            .map(|p| (p.clone(), s.publisher_fanout(p)))
+            .collect();
         let by_id: BTreeMap<_, _> = s
             .decl_by_id
             .iter()
             .map(|(k, d)| (k.clone(), format!("{d:?}")))
             .collect();
         let dep_meta: BTreeMap<_, _> = s.dep_meta.iter().collect();
-        let mut dep_texts: Vec<_> = s.dep_texts.keys().collect();
-        dep_texts.sort();
+        let dep_lines: BTreeMap<_, _> = s.dep_lines.iter().collect();
         format!(
-            "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_texts:#?}",
-            sorted(&s.event_edges)
+            "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_lines:#?}",
+            s.merged_event_edges()
         )
     }
 
@@ -783,39 +818,39 @@ mod tests {
     /// event raised in it and subscribed to by the workspace.
     fn assert_non_trivial(s: &LspSnapshot) {
         assert!(!s.dep_meta.is_empty(), "precondition: dependency decls");
-        assert!(!s.dep_texts.is_empty(), "precondition: dependency texts");
-        assert!(!s.event_edges.is_empty(), "precondition: event edges");
+        assert!(!s.dep_lines.is_empty(), "precondition: dependency files");
         assert!(
-            s.event_edges.iter().any(|e| !e.edge.routes.is_empty()),
-            "precondition: the workspace subscriber is wired {:#?}",
-            s.event_edges.iter().map(|e| &e.edge).collect::<Vec<_>>()
+            s.event_edges().next().is_some(),
+            "precondition: event edges"
         );
         assert!(
-            !s.publisher_fanout.is_empty(),
+            s.ws_event_edges.iter().any(|e| !e.targets.is_empty()),
+            "precondition: the workspace subscriber is wired {:#?}",
+            s.event_edges().collect::<Vec<_>>()
+        );
+        assert!(
+            !s.ws_publisher_fanout.is_empty(),
             "precondition: publisher fan-out"
         );
         // The call must hit the dependency routine `Post` (declared only in
         // its embedded source, not in the symbols) and resolve from source,
-        // not through the ABI or a builtin.
+        // not through the ABI or a builtin: a routine target (an ABI call is
+        // an `Abi` target, a builtin none) declared in the tier's source
+        // metadata.
         assert!(
-            s.incoming.iter().any(|(t, refs)| {
+            s.ws_incoming.iter().any(|(t, refs)| {
                 t.object.app != AppRef(0)
                     && t.object.key == crate::program::node::ObjKey::Id(80) // "Sales-Post"
                     && t.name_lc == "post"
-                    && refs.iter().any(|r| {
-                        s.edge(r).edge.routes.iter().any(|route| {
-                            route.evidence == crate::program::resolve::edge::Evidence::Source
-                                && matches!(
-                                    &route.target,
-                                    crate::program::resolve::edge::RouteTarget::Routine(_)
-                                )
-                        })
-                    })
+                    && s.dep_meta.contains_key(t)
+                    && refs
+                        .iter()
+                        .any(|r| s.edge(r).routine_targets().any(|x| x == t))
             }),
-            "precondition: the workspace calls Sales-Post.Post with Source evidence {:#?}",
+            "precondition: the workspace calls Sales-Post.Post, resolved from source {:#?}",
             s.edges_by_file
                 .values()
-                .flat_map(|v| v.iter().map(|c| &c.edge))
+                .flat_map(|v| v.iter())
                 .collect::<Vec<_>>()
         );
     }
@@ -835,6 +870,310 @@ mod tests {
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert_non_trivial(&solo);
         assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// S10.1b: root B, built while root A holds the shared tier with its LSP
+    /// products, extracts no dependency text (no root holds it after S10.1,
+    /// and nothing would read it), and still answers like a cache-less build.
+    #[test]
+    fn a_root_on_a_live_lsp_tier_extracts_no_dependency_text() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            1,
+            "precondition: root A extracted the text"
+        );
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(
+            Arc::ptr_eq(&a.dep_lines, &b.dep_lines),
+            "precondition: B was built on A's tier"
+        );
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            1,
+            "root B extracted no dependency text"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// S10.1b: once the tier died, the cache still knows the dependency's
+    /// source but no longer its text, and nothing can supply the parse; the
+    /// build extracts the text again and answers like a cache-less build.
+    #[test]
+    fn a_root_after_the_tier_died_extracts_the_text_again() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        drop(build(&fx.root_a, DependencySource::Embedded, &cache));
+        assert_eq!(cache.live_entries(), 0, "precondition: the tier died");
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            2,
+            "root B extracted the text again"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// A `.app` that ships no source is opened for it once per stamp, not on
+    /// every build (here: a second root build, which also rebuilds its
+    /// snapshot because the tier died).
+    #[test]
+    fn a_source_less_app_is_extracted_once() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        write_compiled_root(&fx.alpackages, GUID_B, "RootB", 50002);
+        let compiled = fx.alpackages.join("Microsoft_RootB_1.0.0.0.app");
+        let cache = DepCache::default();
+        drop(build(&fx.root_a, DependencySource::Embedded, &cache));
+        assert_eq!(
+            extractions_under(&compiled),
+            1,
+            "precondition: root A loads the source-less sibling app"
+        );
+        let again = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert_eq!(extractions_under(&compiled), 1);
+        assert!(
+            again.graph.objects.iter().any(|o| o.name == "RootB Lib"),
+            "the source-less app is still loaded"
+        );
+    }
+
+    /// S10.2: every id text in the shared tier is one allocation per distinct
+    /// text (routine ids and `dep_meta` keys alike), and a second root's
+    /// event links name tier routines with that same allocation.
+    #[test]
+    fn equal_id_texts_are_one_allocation_across_the_tier_and_roots() {
+        use crate::program::str_pool::SharedStr;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        let tier = &a.dep_layer.dep_nodes;
+        let mut first: HashMap<String, SharedStr> = HashMap::new();
+        let mut same_text = 0;
+        let mut seen = |s: &SharedStr| {
+            let f = first.entry(s.to_string()).or_insert_with(|| s.clone());
+            if !std::ptr::eq(f, s) {
+                same_text += 1;
+                assert!(SharedStr::ptr_eq(f, s), "{s:?} is a second allocation");
+            }
+        };
+        for r in tier.routines.iter() {
+            seen(&r.id.name_lc);
+        }
+        for id in tier.dep_meta.keys() {
+            seen(&id.name_lc);
+        }
+        assert!(same_text > 0, "precondition: equal texts to share");
+        let mut links = 0;
+        for e in b.event_edges() {
+            if let Some(r) = tier.routines.iter().find(|r| r.id == e.from) {
+                assert!(SharedStr::ptr_eq(&r.id.name_lc, &e.from.name_lc));
+                links += 1;
+            }
+        }
+        assert!(links > 0, "precondition: root B links a tier publisher");
+    }
+
+    /// S10.2: the built tier holds one allocation per distinct text across
+    /// every pooled field (ids, `dep_meta` keys, node names, types, subscriber
+    /// arguments, ...): a fresh pool over a copy of it merges nothing.
+    #[test]
+    fn the_tier_holds_one_allocation_per_text() {
+        use crate::program::str_pool::SharedStr;
+        use crate::program::str_pool::{ShareStrings, StrPool};
+        let fx = two_roots_one_alpackages();
+        // Repeated texts in both node kinds: `Run` in two codeunits, and one
+        // field type in two fields of a table.
+        let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
+        let symbols =
+            r#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#;
+        let table = "table 82 \"T\"\n{\n    fields\n    {\n        field(1; \"A\"; Code[20]) { }\n        field(2; \"B\"; Code[20]) { }\n    }\n}\n";
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+            ("src/SalesPost.Codeunit.al", SALES_POST_SRC.as_bytes()),
+            (
+                "src/Extra.Codeunit.al",
+                b"codeunit 81 \"Extra\" { procedure Run() begin end; }",
+            ),
+            ("src/T.Table.al", table.as_bytes()),
+            (
+                "src/S.Codeunit.al",
+                b"codeunit 83 \"S\"\n{\n    [EventSubscriber(ObjectType::Table, Database::\"T\", 'OnAfterInsertEvent', '', false, false)]\n    local procedure H(var Rec: Record \"T\")\n    begin\n    end;\n}\n",
+            ),
+        ]);
+        std::fs::write(
+            fx.alpackages.join("Microsoft_Base Application_28.4.app"),
+            app,
+        )
+        .unwrap();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let tier = &a.dep_layer.dep_nodes;
+        let mut objects = (*tier.objects).clone();
+        let mut routines = (*tier.routines).clone();
+        let fields = &objects
+            .iter()
+            .find(|o| o.name == "T")
+            .expect("precondition: the table loads")
+            .fields;
+        assert_eq!(fields.len(), 2, "precondition: two fields");
+        assert!(SharedStr::ptr_eq(
+            &fields[0].type_text,
+            &fields[1].type_text
+        ));
+        let mut keys: Vec<crate::program::node::RoutineNodeId> =
+            tier.dep_meta.keys().cloned().collect();
+        let runs: Vec<_> = routines.iter().filter(|r| r.name == "Run").collect();
+        assert!(runs.len() >= 2, "precondition: a node name repeats");
+        // Stated directly, not through `ShareStrings` (whose field list the
+        // pool check below shares with the build).
+        assert!(SharedStr::ptr_eq(&runs[0].name, &runs[1].name));
+        let meta_runs: Vec<_> = tier.dep_meta.values().filter(|m| m.name == "Run").collect();
+        assert!(meta_runs.len() >= 2, "precondition: in two files");
+        assert_ne!(meta_runs[0].virtual_path, meta_runs[1].virtual_path);
+        assert!(SharedStr::ptr_eq(&meta_runs[0].name, &meta_runs[1].name));
+        assert!(SharedStr::ptr_eq(&meta_runs[0].name, &runs[0].name));
+        // A synthesized platform-event publisher id (built per root) holds the
+        // subscriber's own text, not a copy.
+        let sub_event = routines
+            .iter()
+            .flat_map(|r| &r.event_subscribers)
+            .find(|s| s.event_name == "onafterinsertevent")
+            .expect("precondition: the dependency subscribes to a platform event")
+            .event_name
+            .clone();
+        let synth = a
+            .event_edges()
+            .find(|e| e.from.name_lc == "onafterinsertevent")
+            .expect("precondition: the platform publisher is linked");
+        assert!(SharedStr::ptr_eq(&synth.from.name_lc, &sub_event));
+        let mut metas: Vec<_> = tier.dep_meta.values().cloned().collect();
+        let mut pool = StrPool::default();
+        objects.share_strings(&mut pool);
+        routines.share_strings(&mut pool);
+        keys.share_strings(&mut pool);
+        metas.share_strings(&mut pool);
+        let (seen, distinct, merged) = pool.counts();
+        assert!(seen > distinct, "precondition: equal texts to share");
+        assert_eq!(merged, 0, "a text is held in more than one allocation");
+    }
+
+    /// S10.4: a dependency publisher with a dependency subscriber AND a
+    /// workspace subscriber is split: the dependency route goes to the
+    /// tier's shared links (one `Arc` for every root), the workspace route to
+    /// the root's own. Both subscribers still see the publisher as an
+    /// incoming caller, its fan-out counts both, and every answer equals a
+    /// cache-less build's.
+    #[test]
+    fn dependency_event_links_are_shared_and_split_from_the_workspace_ones() {
+        let fx = two_roots_one_alpackages();
+        let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
+        let symbols =
+            r#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#;
+        let dep_sub = "codeunit 81 \"DepSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Sales-Post\", 'OnAfterRun', '', false, false)]\n    local procedure HandleInDep()\n    begin\n    end;\n}\n";
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+            ("src/SalesPost.Codeunit.al", SALES_POST_SRC.as_bytes()),
+            ("src/DepSub.Codeunit.al", dep_sub.as_bytes()),
+        ]);
+        std::fs::write(
+            fx.alpackages.join("Microsoft_Base Application_28.4.app"),
+            app,
+        )
+        .unwrap();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(
+            Arc::ptr_eq(&a.dep_events, &b.dep_events),
+            "the roots share one dependency-link set"
+        );
+
+        let targets = |edges: &[crate::lsp::snapshot::LspEdge]| -> Vec<String> {
+            edges
+                .iter()
+                .filter(|e| e.from.name_lc == "onafterrun")
+                .flat_map(|e| e.routine_targets())
+                .map(|id| id.name_lc.to_string())
+                .collect()
+        };
+        assert_eq!(targets(&a.dep_events.edges), ["handleindep"]);
+        assert_eq!(targets(&a.ws_event_edges), ["handleafterrun"]);
+
+        let publisher = a
+            .dep_events
+            .edges
+            .iter()
+            .find(|e| e.from.name_lc == "onafterrun")
+            .unwrap()
+            .from
+            .clone();
+        assert_eq!(a.publisher_fanout(&publisher), 2);
+        for sub in ["handleindep", "handleafterrun"] {
+            let id = a
+                .event_edges()
+                .flat_map(|e| e.routine_targets())
+                .find(|id| id.name_lc == sub)
+                .unwrap()
+                .clone();
+            assert!(
+                a.incoming(&id).any(|r| a.edge(r).from == publisher),
+                "{sub} has the publisher as an incoming caller"
+            );
+        }
+
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// A source remembered at one stamp is never served, with or without its
+    /// text, for another stamp of the same path.
+    #[test]
+    fn a_deferred_source_is_served_only_at_its_stamp() {
+        let cache = DepCache::default();
+        let path = Path::new("x.app");
+        let at = |len| {
+            Some(AppFileStamp {
+                len,
+                modified: None,
+            })
+        };
+        let root = |hash: &str| {
+            Ok(Some(SourceRoot {
+                files: Arc::new(vec![SourceFile {
+                    virtual_path: "a.al".into(),
+                    text: Arc::from("codeunit 1 A { }"),
+                }]),
+                tier: TrustTier::EmbeddedSource,
+                content_hash: hash.into(),
+            }))
+        };
+        let old = cache.source(path, at(1), true, || root("old")).unwrap();
+        drop(old);
+        let deferred = cache
+            .source(path, at(1), true, || panic!("known at this stamp"))
+            .unwrap()
+            .expect("source");
+        assert!(deferred.files.is_empty(), "served without its text");
+        assert_eq!(deferred.content_hash, "old");
+        let new = cache.source(path, at(2), true, || root("new")).unwrap();
+        assert_eq!(new.expect("source").content_hash, "new");
+        let text = cache
+            .source(path, at(1), false, || root("reloaded"))
+            .unwrap()
+            .expect("source");
+        assert_eq!(text.content_hash, "reloaded", "the old stamp was replaced");
     }
 
     /// Any live tier is a hit, even one whose LSP products were never
@@ -1082,7 +1421,7 @@ mod tests {
             let report = report_text(&ctx);
             let (snap, _) = LspSnapshot::from_context(ctx, &ws);
             assert!(
-                !snap.dep_meta.is_empty() && !snap.dep_texts.is_empty(),
+                !snap.dep_meta.is_empty() && !snap.dep_lines.is_empty(),
                 "precondition: {profile:?} has a dependency tier"
             );
             (has_bodies, report, answers(&snap))

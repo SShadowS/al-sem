@@ -476,7 +476,7 @@ mod tests {
                     by_ref: true,
                 },
                 ParamMeta {
-                    name: String::new(),
+                    name: Default::default(),
                     ty: None,
                     by_ref: false,
                 },
@@ -757,7 +757,10 @@ mod tests {
             |p: &mut DepPack| p.app_version.push('x'),
             |p: &mut DepPack| p.files[0].virtual_path.push('x'),
             |p: &mut DepPack| p.files[0].parse_status_recovered = false,
-            |p: &mut DepPack| p.files[0].routine_meta[0].1.name.push('x'),
+            |p: &mut DepPack| {
+                let name = &mut p.files[0].routine_meta[0].1.name;
+                *name = format!("{name}x").into();
+            },
             |p: &mut DepPack| p.files[0].routine_meta[0].1.origin.byte.end += 1,
             |p: &mut DepPack| p.files[0].routine_meta[0].1.params[0].by_ref = false,
             |p: &mut DepPack| p.files[0].routine_meta[0].0.sig_fp += 1,

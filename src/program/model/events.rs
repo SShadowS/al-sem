@@ -460,7 +460,7 @@ pub fn program_event_graph(
                                 publisher_routine_id: None,
                                 publisher_stable_routine_id: None,
                                 event_name: node
-                                    .map(|n| n.name.clone())
+                                    .map(|n| n.name.to_string())
                                     .unwrap_or_else(|| s.event_name_lc.clone()),
                                 event_kind: event_kind.to_string(),
                                 element_name: element,

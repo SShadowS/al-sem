@@ -156,7 +156,7 @@ fn make_routine_route(
         // obligation metric, matching L3's External treatment of dep symbols.
         let (obj_num, obj_name_lc) = match &rid.object.key {
             ObjKey::Id(n) => (*n, String::new()),
-            ObjKey::Name(s) => (0i64, s.clone()),
+            ObjKey::Name(s) => (0i64, s.to_string()),
         };
         // Read the ABI-sourced routine/event kinds from the graph node.
         // `graph.routines` is sorted by RoutineNodeId (see build.rs), enabling
@@ -178,7 +178,7 @@ fn make_routine_route(
             object_type: format!("{:?}", rid.object.kind).to_ascii_lowercase(),
             object_number: obj_num,
             object_name_lc: obj_name_lc,
-            routine_name_lc: rid.name_lc.clone(),
+            routine_name_lc: rid.name_lc.to_string(),
             params_count: rid.params_count,
             param_type_fp: rid.sig_fp,
             routine_kind,
@@ -2154,7 +2154,7 @@ pub(crate) fn object_receiver_target<'g>(
 fn opaque_entry_route(target_id: &ObjectNodeId, trigger_name: &str) -> Route {
     let (obj_num, obj_name_lc) = match &target_id.key {
         ObjKey::Id(n) => (*n, String::new()),
-        ObjKey::Name(s) => (0i64, s.clone()),
+        ObjKey::Name(s) => (0i64, s.to_string()),
     };
     opaque_boundary_route(AbiRoutineKey {
         app: target_id.app,
@@ -3132,7 +3132,7 @@ fn resolve_abi_prefix_routine<'g>(
     let obj_key = if key.object_number != 0 {
         ObjKey::Id(key.object_number)
     } else {
-        ObjKey::Name(key.object_name_lc.clone())
+        ObjKey::Name(key.object_name_lc.as_str().into())
     };
     let obj_id = ObjectNodeId {
         app: key.app,
@@ -4681,7 +4681,7 @@ pageextension 52911 "ExtA" extends BasePage
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -4852,7 +4852,7 @@ pageextension 52911 "ExtA" extends BasePage
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: Some("Codeunit \"Dep Http Content\"".into()),
             return_type_id: Some(("Dep Http Content".into(), 60101)),
             abi_overload_collapsed: collapsed,
@@ -5042,7 +5042,7 @@ pageextension 52911 "ExtA" extends BasePage
                 include_sender: None,
                 abi_routine_kind: Some(AbiRoutineKind::Procedure),
                 abi_event_kind: Some(AbiEventKind::None),
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 return_type: None,
                 return_type_id: None,
                 abi_overload_collapsed: false,
@@ -5199,7 +5199,7 @@ codeunit 50611 "MixedCU"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -5286,7 +5286,7 @@ codeunit 50612 "MixedCU2"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -5426,7 +5426,7 @@ codeunit 50612 "MixedCU2"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: collapsed,
@@ -5640,7 +5640,7 @@ codeunit 50612 "MixedCU2"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: collapsed,
@@ -5805,7 +5805,7 @@ codeunit 50612 "MixedCU2"
             include_sender: Some(false),
             abi_routine_kind: Some(AbiRoutineKind::EventPublisher),
             abi_event_kind: Some(AbiEventKind::Integration),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -5840,7 +5840,7 @@ codeunit 50612 "MixedCU2"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::EventSubscriber),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: collapsed,
@@ -10946,7 +10946,7 @@ codeunit 50000 "Caller"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::EventPublisher),
             abi_event_kind: Some(AbiEventKind::Integration),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -10974,7 +10974,7 @@ codeunit 50000 "Caller"
             include_sender: None,
             abi_routine_kind: Some(AbiRoutineKind::Procedure),
             abi_event_kind: Some(AbiEventKind::None),
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -13622,7 +13622,7 @@ codeunit 53975 "Overload3Caller"
                 include_sender: None,
                 abi_routine_kind: Some(AbiRoutineKind::Procedure),
                 abi_event_kind: Some(AbiEventKind::None),
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 return_type: None,
                 return_type_id: None,
                 abi_overload_collapsed: true,
@@ -13648,7 +13648,7 @@ codeunit 53975 "Overload3Caller"
                 include_sender: None,
                 abi_routine_kind: Some(AbiRoutineKind::Procedure),
                 abi_event_kind: Some(AbiEventKind::None),
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 return_type: None,
                 return_type_id: None,
                 abi_overload_collapsed: false,

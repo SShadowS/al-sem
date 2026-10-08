@@ -1110,7 +1110,7 @@ impl<'a> Converter<'a> {
     fn type_ref(&self, key: &ObjectKey) -> Option<ExternalTypeRef> {
         self.objects.get(key).map(|o| ExternalTypeRef {
             kind: format!("{:?}", o.id.kind),
-            name: o.name.clone(),
+            name: o.name.to_string(),
         })
     }
 
@@ -1420,10 +1420,10 @@ impl<'a> Converter<'a> {
                     key: if key.object_number != 0 {
                         ObjKey::Id(key.object_number)
                     } else {
-                        ObjKey::Name(key.object_name_lc.clone())
+                        ObjKey::Name(key.object_name_lc.as_str().into())
                     },
                 },
-                name_lc: key.routine_name_lc.clone(),
+                name_lc: key.routine_name_lc.as_str().into(),
                 // ABI routines are object-level (`abi_ingest`).
                 enclosing_member_lc: None,
                 params_count: key.params_count,
@@ -1496,7 +1496,7 @@ impl<'a> Converter<'a> {
                 let okey = if key.object_number != 0 {
                     ObjKey::Id(key.object_number)
                 } else {
-                    ObjKey::Name(key.object_name_lc.clone())
+                    ObjKey::Name(key.object_name_lc.as_str().into())
                 };
                 Some(self.type_ref(&(key.app, key.object_type.clone(), okey)))
             }
@@ -1538,10 +1538,10 @@ impl<'a> Converter<'a> {
                     key: if key.object_number != 0 {
                         ObjKey::Id(key.object_number)
                     } else {
-                        ObjKey::Name(key.object_name_lc.clone())
+                        ObjKey::Name(key.object_name_lc.as_str().into())
                     },
                 },
-                name_lc: key.routine_name_lc.clone(),
+                name_lc: key.routine_name_lc.as_str().into(),
                 enclosing_member_lc: None,
                 params_count: key.params_count,
                 sig_fp: key.param_type_fp,
@@ -1613,7 +1613,7 @@ impl<'a> Converter<'a> {
                         key: if key.object_number != 0 {
                             ObjKey::Id(key.object_number)
                         } else {
-                            ObjKey::Name(key.object_name_lc.clone())
+                            ObjKey::Name(key.object_name_lc.as_str().into())
                         },
                     });
                 }
@@ -1646,7 +1646,7 @@ impl<'a> Converter<'a> {
             .iter()
             .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
             .min_by_key(|o| o.id.app != self.primary)
-            .map_or_else(|| name_lc.clone(), |o| o.name.clone());
+            .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
         let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
             let mut v: Vec<&ObjectNode> = self
                 .graph
@@ -1765,7 +1765,9 @@ impl<'a> Converter<'a> {
             // (`TriggerSiteRule`); this only cross-checks that it agrees with the
             // model's own record operation (expected 0), and filters nothing.
             let applies = op.run_trigger != Some(false)
-                && (!is_validate || (field_lc.is_some() && id.enclosing_member_lc == field_lc));
+                && (!is_validate
+                    || (field_lc.is_some()
+                        && id.enclosing_member_lc.as_deref() == field_lc.as_deref()));
             if !applies {
                 c.adapter_trigger_routes_filtered += 1;
             }

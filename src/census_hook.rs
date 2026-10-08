@@ -62,7 +62,7 @@ mod tests {
                 "2.parse",
                 "3.dep_layer",
                 "4.assemble_graph",
-                "5.index+surface+dep_meta+dep_texts",
+                "5.index+surface+dep_meta+dep_lines",
                 "6.resolve_workspace_files",
                 "7.event_edges",
                 "8.incoming+decl_by_id",

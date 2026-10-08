@@ -430,6 +430,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The LSP server keeps no dependency source text** (engine-switch S10.1, compact-graph
+  spec §8 item 5, built first by the owner's biggest-first decision). It used the text only to
+  turn a dependency declaration's byte offsets into editor columns, so each dependency file
+  now has a text-free `LineIndex` (each line's length plus its non-ASCII characters; it
+  answers `LineTable::col_out` exactly, both encodings). The shared tier holds `dep_lines`
+  instead of `dep_texts`, and the retained snapshot drops dependency `SourceRoot.files`
+  (`source` stays `Some`). Counted heap (`tools/census-probe/runs-s10-base/` →
+  `runs-s10-1/`): CG, 7 roots idle with updaters, 327.5 → 228.4 MiB; CDO 393.7 → 287.9 MiB;
+  `symbols` mode unchanged. The text freed was 109.45 MiB; the line indexes cost 11.69 MiB
+  (CDO 12.44). Cost: each later root re-extracts the text while it builds, because
+  `DepCache::source` keeps it only weakly (CG roots 2-7: build peak +109 MiB; a rung-3 rebuild
+  likewise by the code, not measured). By arithmetic the build-time heap peak at root 7 goes
+  from about 311 to about 321 MiB; with updaters running the idle heap was already 327.5 MiB
+  before, so the server's peak does not rise. RSS peak working set 435 → 508 MiB (one run,
+  context only). Every LSP position is unchanged: pinned by
+  `dependency_decl_columns_equal_the_line_table_over_the_text` and
+  `line_index_answers_col_out_exactly_as_line_table`; `the_lsp_keeps_no_dependency_text`
+  pins the drop (each with a discrimination proof).
+- **A root built on a live dependency tier no longer extracts dependency text**
+  (engine-switch S10.1b; removes S10.1's cost above). `DepCache::source` now remembers each
+  `.app`'s source descriptor (tier, content hash) after its text dies, and remembers `.app`s
+  that ship no source (no longer re-hashed on every build). `build_context_with` first builds
+  the snapshot without the text of known sources, and continues only on a live tier whose LSP
+  products already exist, holding it until the build returns; otherwise it builds the snapshot
+  again with the text. `parse_for_build` and `build_dep_lines` assert they never see a
+  dependency source without its text. Counted heap (`tools/census-probe/runs-s10-1/` →
+  `runs-s10-1b/`, `cg-embedded-base`): CG roots 2-7 build peak 134.2-134.6 → 24.8-25.1 MiB
+  (pre-S10.1: 24.8-25.2), their snapshot phase ending 109.5 → 0.0 MiB above its start.
+  Retained and idle heap unchanged (±0.2 MiB). By arithmetic (roots built one after another,
+  as the probe does) the build-time heap peak is now root 1's 297.2 MiB (root 7: 186.6 + 25.1
+  ≈ 212), against about 321 MiB after S10.1 and about 311 before it. RSS peak working set
+  508 → 431 MiB (`cg-embedded-updaters`, one run, context only). Not measured: a rung-3
+  rebuild takes the same path by the code, but nothing counts its extractions; and a root
+  whose tier died now builds its snapshot twice (without, then with the text).
+  Pinned by `a_root_on_a_live_lsp_tier_extracts_no_dependency_text`,
+  `a_root_after_the_tier_died_extracts_the_text_again`, `a_source_less_app_is_extracted_once`
+  and `a_deferred_source_is_served_only_at_its_stamp` (each with a discrimination proof).
+- **Engine strings are stored once** (engine-switch S10.2, compact-graph spec §8 item 2). A new
+  `SharedStr` (`src/program/str_pool.rs`, an `Arc<str>` that compares, hashes, orders, prints
+  and serializes exactly as its text) replaces `String` in routine and object ids
+  (`RoutineNodeId.name_lc`/`.enclosing_member_lc`, `ObjKey::Name`), node fields (names, field
+  and return types, `param_sig_key`, subscriber arguments, ABI parameters, page controls,
+  dataitems, query columns, protected vars) and dependency metadata (`RoutineMeta`,
+  `ParamMeta`); `dep_lines` is keyed by it. `build_dep_nodes` runs one `StrPool` over the tier
+  as it is built, so equal texts are one allocation, and clones of tier values (event links,
+  `incoming`, a second root's copies of dependency ids) share it; a synthesized platform-event
+  publisher id, built per root, clones its subscriber's text. Workspace strings are not pooled.
+  `ObjectRef` stays `String`: the resolver builds one per lookup, and the stored ones total
+  0.24 MiB on CG. No output moved: no golden, and the CDO `--program-call-graph-stats` and
+  `--dependency-bodies-stats --sites` JSON are byte-identical to the S10.1b binary's (SHA-256
+  `2009fab1…3c25` and `659e744a…f1cd`). Counted heap (`tools/census-probe/runs-s10-1b/` →
+  `runs-s10-2/`): idle with updaters, CG 7 roots 228.4 → 186.0 MiB, CDO 288.0 → 243.0, and in
+  `symbols` mode CG 106.0 → 91.4, CDO 161.2 → 145.3; build peak CG root 1 297.2 → 274.8,
+  roots 2-7 24.8-25.1 → 19.2-19.6, CDO 410.5 → 363.6 (`embedded`). Live allocations at 7 CG
+  roots 1,658,289 → 595,730. Where it comes from (CG, all roots live, the probe's string walk):
+  1,151,282 strings with 27.63 MiB of text, each its own allocation before (all `String`), are
+  now held in 239,224 allocations (7.90 MiB); the smaller fields shrink every struct that holds
+  them (`RoutineNodeId` 96 → 72 B, `RoutineNode` 280 → 224, `RoutineMeta` 200 → 176,
+  `ClassifiedEdge` 416 → 344). Pinned by `equal_id_texts_are_one_allocation_across_the_tier_and_roots`
+  and `the_tier_holds_one_allocation_per_text` (each with a discrimination proof); the census
+  probe's string walk gains a "held" column (allocations counted once per data pointer).
+- **Dependency metadata is a column beside the routine rows** (engine-switch S10.3, spec §8
+  item 3). `DepMeta` (`decl_surface.rs`) replaces the tier's `HashMap<RoutineNodeId,
+  RoutineMeta>`: the metas in id order, each pointing at the first tier row with its id, so the
+  tier holds neither a second copy of each id nor a hash table. It answers exactly as the map
+  built from the same entries (a same-id collision keeps the last); an entry whose id matches no
+  row is kept in a small `orphans` map (0 on CG and CDO). No output moved: no golden, and both
+  CDO stats JSON files (`--program-call-graph-stats`, `--dependency-bodies-stats --sites`) are
+  byte-identical. Counted heap (`tools/census-probe/runs-s10-2/` → `runs-s10-3/`): idle with
+  updaters, CG 7 roots 186.0 → 174.1 MiB, CDO 243.0 → 201.5; the dependency-layer phase peak
+  (which repeats exactly between runs) CG root 1 274.8 → 269.8, CDO 363.6 → 339.9, though the
+  overall build peak can now be set by the parse phase, which varies between runs of identical
+  code (CG 268.0-275.4, CDO 333.8-349.1); `symbols` mode unchanged. CDO gains more because its
+  table was under-filled (arithmetic, matched by the drop steps to 0.01 MiB: 121,075 entries in
+  262,144 slots by hashbrown's power-of-two sizing; CG 111,637 in 131,072). Pinned by
+  `dep_meta_answers_as_the_map_it_replaces` (with a discrimination proof) and the existing
+  sibling-app test, which now also checks no orphans. Packing `RoutineMeta`'s two `Origin`s is
+  priced, not built: about 4 MiB, owner's call.
+- **Dependency event links are shared by every root** (engine-switch S10.4, re-scoped by the
+  owner from numeric ids after re-pricing). Each routed event link is split: the part touching
+  the workspace stays in the root (`LspSnapshot::ws_event_edges`, `ws_incoming`,
+  `ws_publisher_fanout`); the dependency-only part (`DepEventLinks`: edges, `incoming`,
+  fan-out) is built once per dependency tier (`DepNodes::lsp_events`) and every root and rung
+  holds the same `Arc`. A dependency publisher with subscribers on both sides is split in two.
+  Readers use `LspSnapshot::incoming(id)`, `incoming_count`, `publisher_fanout(id)` and
+  `edge(r)`, which add both parts and answer as before; `event_edges()` lists a split
+  publisher once per part (`merged_event_edges` gives one edge per publisher). Debug builds
+  assert that every rung-2 rebuild's, and every cache-sharing later root's, own dependency part
+  equals the shared one (a first or cache-less root has nothing to compare with). No golden
+  moved; CDO stats JSON byte-identical. Counted heap (`tools/census-probe/runs-s10-3/` →
+  `runs-s10-4/`, `cg-embedded-base`): each CG root after the first keeps 0.9-1.6 MiB instead of
+  5.9-6.3 in `embedded` mode; CG 7 roots idle with updaters 174.1 → 145.3 MiB; CDO (one root)
+  and `symbols` mode unchanged within ±0.2. Pinned by
+  `dependency_event_links_are_shared_and_split_from_the_workspace_ones` (with a discrimination
+  proof). Numeric ids re-priced on what is left: about 1.2 MiB of id copies outside the
+  canonical rows on CG (all copies 9.13 MiB), not built.
+- **The LSP stores only the edge facts it reads** (engine-switch S10.5, spec §8 item 4).
+  `LspEdge` (`src/lsp/snapshot.rs`: caller, kind, span with the file name shared per file,
+  callee fingerprint, the routine and ABI targets, the route count) replaces the resolver's
+  `ClassifiedEdge` in the LSP snapshot, for workspace edges, workspace event links and the
+  shared dependency links. Evidence, conditions, witness, dispatch shape, completeness, the
+  repeated caller copies and builtin/unresolved routes stay in the program report, which is
+  unchanged. Every call site is kept, so the CLI index report and telemetry counts do not move;
+  `LspEdge::obligation_id()` recomputes the resolver's identity (checked by a debug assertion
+  at projection). No golden moved; CDO stats JSON byte-identical to the S10.1b binary's.
+  Counted heap (`tools/census-probe/runs-s10-4/` → `runs-s10-5/`): CDO idle with updaters
+  201.5 → 184.7 MiB (`edges_by_file` 17.44 → 3.67, shared dependency links 4.92 → 1.82;
+  `symbols` mode 145.4 → 131.7); CG 7 roots idle with updaters 145.3 → 142.0 (shared links
+  4.82 → 1.80). Build peaks cannot move (they are set before the projection runs); one CG run
+  read 272.5 against 269.8, the parse phase's run-to-run noise. Pinned by
+  `project_keeps_the_routine_and_abi_targets_and_counts_every_route` and
+  `a_call_site_without_an_lsp_target_is_kept` (each with a discrimination proof). **The rung
+  tests check less:** the incremental-parity key, the rung-1 Calc test and the S10.4
+  shared-link debug check now compare only what the LSP stores (obligation, kind, targets,
+  route count). A rung drift in evidence, conditions, shape or completeness alone is invisible
+  to every LSP consumer and is no longer tested; the goldens cover the full-build resolver,
+  which the rungs call, not the rung path itself.
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

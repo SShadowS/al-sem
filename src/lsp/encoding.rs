@@ -35,8 +35,8 @@ pub fn negotiate(client_encodings: Option<&[String]>) -> PositionEncoding {
 /// Lazy per-line byte<->UTF-16 conversion table for one file's text.
 ///
 /// Owns its source text (`Arc<str>`, a cheap refcount-bump clone whenever
-/// the caller already holds one — `ParsedFileEntry::text`/`dep_texts`
-/// values both do) rather than borrowing it, so a `LineTable` is
+/// the caller already holds one — `ParsedFileEntry::text` does) rather than
+/// borrowing it, so a `LineTable` is
 /// lifetime-free and can be memoized behind a `OnceLock` on the very struct
 /// that owns the text it was built from (`ParsedFileEntry::line_table`,
 /// `src/lsp/snapshot.rs`) — a borrowed `LineTable<'t>` could never be
@@ -141,9 +141,120 @@ impl LineTable {
     }
 }
 
+/// Outbound column conversion, the one operation every position-bearing LSP
+/// answer needs: a workspace file's [`LineTable`] or a dependency file's
+/// [`LineIndex`].
+pub trait ColOut {
+    /// UTF-8 byte column -> column in `enc` (see [`LineTable::col_out`]).
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32;
+}
+
+impl ColOut for LineTable {
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32 {
+        LineTable::col_out(self, line, byte_col, enc)
+    }
+}
+
+impl ColOut for LineIndex {
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32 {
+        LineIndex::col_out(self, line, byte_col, enc)
+    }
+}
+
+/// A [`LineTable`] without the text: answers [`LineTable::col_out`] exactly,
+/// in both encodings and with the same clamps, from each line's byte length
+/// (`\r` stripped) plus the position and widths of every non-ASCII character.
+/// The LSP keeps one per DEPENDENCY file instead of the file's text (engine-
+/// switch S10.1): dependency positions are only ever converted outward (a
+/// declaration's `origin` / `name_origin`), never inward, so `col_in` is not
+/// offered. AL source is nearly all ASCII, so this is mostly 4 bytes per line
+/// (11.69 MiB for a 7-root CG corpus's 9,919 dependency files, against 109.45
+/// MiB of source; `tools/census-probe/runs-s10-1/`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct LineIndex {
+    line_lens: Vec<u32>,
+    /// Every non-ASCII character, in (line, start) order.
+    wide: Vec<WideChar>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WideChar {
+    line: u32,
+    /// Byte offset within the line.
+    start: u32,
+    len8: u8,
+    len16: u8,
+}
+
+impl LineIndex {
+    /// Line boundaries as [`LineTable::new`] draws them.
+    pub fn new(text: &str) -> Self {
+        let mut line_lens = Vec::new();
+        let mut wide = Vec::new();
+        for (line, part) in text.split('\n').enumerate() {
+            let part = part.strip_suffix('\r').unwrap_or(part);
+            line_lens.push(part.len() as u32);
+            if !part.is_ascii() {
+                wide.extend(part.char_indices().filter(|(_, c)| !c.is_ascii()).map(
+                    |(start, c)| WideChar {
+                        line: line as u32,
+                        start: start as u32,
+                        len8: c.len_utf8() as u8,
+                        len16: c.len_utf16() as u8,
+                    },
+                ));
+            }
+        }
+        line_lens.shrink_to_fit();
+        wide.shrink_to_fit();
+        LineIndex { line_lens, wide }
+    }
+
+    /// [`LineTable::col_out`]: UTF-8 byte column -> column in `enc`. Clamps to
+    /// the line end; an out-of-range line is an empty line; a `byte_col` inside
+    /// a multi-byte character counts that character whole.
+    pub fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32 {
+        let len = self.line_lens.get(line as usize).copied().unwrap_or(0);
+        let b = byte_col.min(len);
+        if enc == PositionEncoding::Utf8 {
+            return b;
+        }
+        let first = self.wide.partition_point(|w| w.line < line);
+        self.wide[first..]
+            .iter()
+            .take_while(|w| w.line == line && w.start < b)
+            .fold(b, |units, w| {
+                units - u32::from(w.len8).min(b - w.start) + u32::from(w.len16)
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `LineIndex::col_out` equals `LineTable::col_out` at every byte column
+    /// (in range, mid-character, past the end) of every line (and past the
+    /// last), both encodings: CRLF and LF lines, an empty line, a last line
+    /// with no newline, 2-, 3- and 4-byte characters (a surrogate pair), a line
+    /// ending in a wide character, and pure ASCII.
+    #[test]
+    fn line_index_answers_col_out_exactly_as_line_table() {
+        let text = "æøå x\r\n🚀 y\n\nplain\r\nx🚀\n€a€b€\r\nAL \"Kunde Nr.\" æ\nno newline 😀";
+        let (table, index) = (LineTable::new(text), LineIndex::new(text));
+        let lines = text.split('\n').count() as u32;
+        for line in 0..=lines + 1 {
+            for byte_col in 0..=40 {
+                for enc in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+                    assert_eq!(
+                        index.col_out(line, byte_col, enc),
+                        table.col_out(line, byte_col, enc),
+                        "line {line} byte_col {byte_col} {enc:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn utf16_conversion_danish_and_emoji() {
