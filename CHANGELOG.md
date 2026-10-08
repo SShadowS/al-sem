@@ -431,8 +431,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page that does not exist is unresolved. The manifest matrices follow. Two
   regressions the census exposed were fixed first (enum value arguments, the
   Variant fallback; see `### Fixed`), so `ws-overload-enum-discriminator` and
-  `CallVariant` now agree with L3. The r3 vector tests still use L3's inline
-  builder (their files are named without `.al`).
+  `CallVariant` now agree with L3. The r3a1/2/3 vector tests build the
+  program model too (their fixture names get `.al`, which the program engine
+  needs); every vector passes unchanged.
 
 - **The cli stats, diff and fingerprint differentials build the production
   model** (engine-switch S9.5b). Four goldens move, each triaged against its
