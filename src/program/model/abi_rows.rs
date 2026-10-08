@@ -1,22 +1,22 @@
 //! Dependency model rows from a symbol-only dependency's ABI (engine-switch S7.2,
 //! moved from `engine::deps::cross_app_l3`): the `ProjectedObject`/`ProjectedTable`/
 //! `ProjectedRoutine` of `engine::deps::projection::project_abi_to_index` turned into
-//! the detector model's `L3Object`/`L3Table`/`L3Routine`. A dependency routine known
+//! the detector model's `ModelObject`/`ModelTable`/`ModelRoutine`. A dependency routine known
 //! only from symbols is bodyless and carries no features; its record-typed
 //! parameters become record variables so the temp-state rules see them.
 
 use crate::engine::deps::projection::{ProjectedObject, ProjectedRoutine, ProjectedTable};
 use crate::program::body::scope::{ts_known, ts_param_dependent};
 use crate::program::model::workspace::{
-    L3Field, L3Object, L3PageControl, L3Parameter, L3Routine, L3Table, L3Workspace,
-    PageControlKind, RoutineVariables,
+    ModelEntities, ModelField, ModelObject, ModelPageControl, ModelParameter, ModelRoutine,
+    ModelTable, PageControlKind, RoutineVariables,
 };
 
 /// Convert one projected dep object into the L3 object shape (identical to the
-/// native source path's `L3Object`). The dep object carries the same identity
+/// native source path's `ModelObject`). The dep object carries the same identity
 /// (StableObjectId-independent internal id) the native path mints.
-pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> L3Object {
-    L3Object {
+pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
+    ModelObject {
         id: o.id.clone(),
         app_guid: o.app_guid.clone(),
         object_type: o.object_type.clone(),
@@ -26,23 +26,23 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> L3Object {
         extends_target_name: o.extends_target_name.clone(),
         implements_interfaces: o.implements_interfaces.clone(),
         // The ABI projection DOES carry `object_subtype` (projection.rs:116) —
-        // forward it so native + ABI agree on the L3Object shape (d46 reads it).
+        // forward it so native + ABI agree on the ModelObject shape (d46 reads it).
         object_subtype: o.object_subtype.clone(),
         // The ABI projection DOES carry `page_type` (projection.rs) — forward it so
-        // native + ABI agree on the L3Object shape and a cross-app `PageType=API`
+        // native + ABI agree on the ModelObject shape and a cross-app `PageType=API`
         // dependency page classifies as `api-page` (mirrors the `object_subtype`
         // forward above and al-sem dependency-projection.ts).
         page_type: o.page_type.clone(),
         // The ABI projection DOES carry `inherent_commit_behavior` (projection.rs:121,
         // symbol_reference.rs:99) in canonical lower-case form — forward it so native
-        // + ABI agree on the L3Object shape. Consumed by return_summary to merge
+        // + ABI agree on the ModelObject shape. Consumed by return_summary to merge
         // object-level commit behavior into each dep routine's commitBehavior.
         inherent_commit_behavior: o.inherent_commit_behavior.clone(),
         source_table_temporary: None,
         page_controls: o
             .page_controls
             .iter()
-            .map(|(n, k, t)| L3PageControl {
+            .map(|(n, k, t)| ModelPageControl {
                 name: n.clone(),
                 kind: match k.as_str() {
                     "systempart" => PageControlKind::SystemPart,
@@ -65,8 +65,8 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> L3Object {
 }
 
 /// Convert one projected dep field into the L3 field shape.
-fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> L3Field {
-    L3Field {
+fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> ModelField {
+    ModelField {
         id: f.id.clone(),
         physical_table_id: f.physical_table_id.clone(),
         declaring_object_id: f.declaring_object_id.clone(),
@@ -80,8 +80,8 @@ fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> L3Fie
 }
 
 /// Convert one projected dep table into the L3 table shape.
-pub(crate) fn dep_table_to_l3(t: &ProjectedTable) -> L3Table {
-    L3Table {
+pub(crate) fn dep_table_to_l3(t: &ProjectedTable) -> ModelTable {
+    ModelTable {
         id: t.id.clone(),
         app_guid: t.app_guid.clone(),
         table_number: t.table_number,
@@ -105,7 +105,7 @@ pub(crate) fn dep_table_to_l3(t: &ProjectedTable) -> L3Table {
 /// al-sem's dep routines under `noDepSummaries:true`. The `parameters` (for arity +
 /// the event-graph publisher param shape), `attributes_parsed` (the event-graph
 /// inputs), `kind`, and identity fields ARE carried.
-pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Routine {
+pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> ModelRoutine {
     // objectId = `${appGuid}/${objectType}/${objectNumber}` — recover the parts.
     let parts: Vec<&str> = r.object_id.split('/').collect();
     let app_guid = parts.first().copied().unwrap_or("").to_string();
@@ -129,7 +129,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
     // the ABI symbol format carries the subtype in the type text, so this is sufficient.
     // If the type text yields no table name, `table_name` stays None (resolve leaves
     // `table_id` None; the base temp_state still holds — engine never throws).
-    let record_variables: Vec<crate::program::model::workspace::L3RecordVariable> = r
+    let record_variables: Vec<crate::program::model::workspace::ModelRecordVariable> = r
         .parameters
         .iter()
         .filter(|p| p.is_record)
@@ -142,7 +142,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
             } else {
                 ts_known(false)
             };
-            crate::program::model::workspace::L3RecordVariable {
+            crate::program::model::workspace::ModelRecordVariable {
                 id: format!("{}/rv/{}", r.id, p.name.to_lowercase()),
                 name: p.name.clone(),
                 table_name: crate::program::model::record_types::record_table_name_of(&p.type_text),
@@ -162,7 +162,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
     let parameters = r
         .parameters
         .iter()
-        .map(|p| L3Parameter {
+        .map(|p| ModelParameter {
             index: p.index as u32,
             name: p.name.clone(),
             type_text: p.type_text.clone(),
@@ -179,7 +179,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
         })
         .collect();
 
-    L3Routine {
+    ModelRoutine {
         id: r.id.clone(),
         stable_routine_id: r.stable_routine_id.clone(),
         object_id: r.object_id.clone(),
@@ -201,7 +201,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
         // The ABI symbol reference DOES expose access modifiers (`IsInternal`/`IsLocal`),
         // and `project_abi_to_index` already computes `ProjectedRoutine.access_modifier`
         // from them — faithful to al-sem `dependency-projection.ts`, which populates a dep
-        // routine's `accessModifier`. Forward it (byte-invariant today: L3Routine.access_modifier
+        // routine's `accessModifier`. Forward it (byte-invariant today: ModelRoutine.access_modifier
         // is not serialized into any gate, and d32 skips bodyless dep routines — but d13
         // cross-app-internal-call WILL read it, so dropping it would mis-scope d13 later).
         access_modifier: r.access_modifier.clone(),
@@ -234,7 +234,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
         condition_references: Vec::new(),
         // Dep routines are ABI symbol-only (no AST parent wrapper) — the enclosing-member
         // capture (E1) is a native-parser-only signal, so these are always `None` for a
-        // projected dep routine. Additive: `L3Routine` is not `Serialize`-derived.
+        // projected dep routine. Additive: `ModelRoutine` is not `Serialize`-derived.
         enclosing_member: None,
         originating_object: None,
         enclosing_member_range: None,
@@ -247,7 +247,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> L3Ro
 /// (already present), deps LAST. The routine→object_type lookup is built from the
 /// dep objects so each dep routine carries its owning object's type.
 pub(crate) fn append_dep_entities(
-    workspace: &mut L3Workspace,
+    workspace: &mut ModelEntities,
     objects: &[ProjectedObject],
     tables: &[ProjectedTable],
     routines: &[ProjectedRoutine],

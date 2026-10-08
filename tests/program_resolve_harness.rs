@@ -1,8 +1,9 @@
-//! Phase 0: span-based site matcher fixture matrix (no env needed).
+//! The program resolver's harness: fixture tests, ABI ingestion integrity, the
+//! Histogram taxonomy, the semantic-edges goldens and the CDO ratchets.
 //!
-//! Exercises [`match_sites`] — the cascade-resistance spine of the
-//! L3-INDEPENDENT site matcher.  All tests construct synthetic edges via
-//! [`canonical_call_edge_for_test`] so no real workspace is required.
+//! Engine-switch S9.8 deleted the Phase 0 span-based site matcher tests
+//! (`match_sites`): the matcher paired fresh edges with the L3 oracle's, and L3
+//! is gone.
 //!
 //! 1B.3b Task 3: the four live dual-run "fresh vs L3" comparison gates that
 //! used to live here (`run_harness`/`run_site_harness`/
@@ -17,8 +18,7 @@
 
 use al_sem::program::node::{AppRegistry, ObjKey, ObjectKind, ObjectNodeId, RoutineNodeId};
 use al_sem::program::resolve::differential::{
-    SiteMatch, canonical_call_edge_for_test, match_sites, project_fresh_event_rows,
-    verify_event_subscriber_route,
+    project_fresh_event_rows, verify_event_subscriber_route,
 };
 use al_sem::snapshot::{AppId, ParsedFile, ParsedUnit, Provenance, TrustTier};
 
@@ -58,112 +58,6 @@ fn cdo_shared() -> Option<&'static CdoShared> {
         .as_ref()
 }
 
-// ---------------------------------------------------------------------------
-// Test 1 (from brief): one missing L3 site must NOT cascade
-// ---------------------------------------------------------------------------
-
-/// Verifies the core cascade-resistance guarantee: when the L3 oracle is
-/// missing exactly one site that the fresh side emits, that site becomes a
-/// single `FreshOnly` and all other pairings are undisturbed.
-#[test]
-fn one_missing_site_does_not_cascade() {
-    // Build 5 fresh sites at increasing spans; L3 has the same 5 minus the 2nd.
-    let mk = |start: u32, fp: u64| canonical_call_edge_for_test("cu:c:run", start, fp);
-    let fresh = vec![mk(10, 1), mk(20, 2), mk(30, 3), mk(40, 4), mk(50, 5)];
-    let l3 = vec![mk(10, 1), mk(30, 3), mk(40, 4), mk(50, 5)];
-    let matches = match_sites(&fresh, &l3);
-    let paired = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::Paired(_, _)))
-        .count();
-    let fresh_only = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::FreshOnly(_)))
-        .count();
-    let l3_only = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::L3Only(_)))
-        .count();
-    let unaligned = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::Unaligned(_, _)))
-        .count();
-    // 4 clean pairs; the 2nd fresh site is the single FreshOnly; NO cascade on 3/4/5.
-    assert_eq!(paired, 4, "matches: {matches:?}");
-    assert_eq!(fresh_only, 1);
-    assert_eq!(
-        matches.len(),
-        5,
-        "every site must be in exactly one bucket: {matches:?}"
-    );
-    assert_eq!(l3_only, 0, "no L3-only sites in this test");
-    assert_eq!(unaligned, 0, "no unaligned duplicates in this test");
-}
-
-// ---------------------------------------------------------------------------
-// Test 2: duplicate calls on the same line pair cleanly
-// ---------------------------------------------------------------------------
-
-/// When two fresh sites and two L3 sites share the same strong key
-/// `(unit, start_line, callee_fp)` (e.g. identical back-to-back calls on one
-/// line), the matcher pairs them positionally — 2 `Paired`, no `Unaligned`.
-#[test]
-fn duplicate_calls_on_same_line_pair_cleanly() {
-    let mk = |start: u32, fp: u64| canonical_call_edge_for_test("cu:c:run", start, fp);
-    // Two identical sites in both fresh and L3.
-    let fresh = vec![mk(10, 1), mk(10, 1)];
-    let l3 = vec![mk(10, 1), mk(10, 1)];
-    let matches = match_sites(&fresh, &l3);
-    let paired = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::Paired(_, _)))
-        .count();
-    let unaligned = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::Unaligned(_, _)))
-        .count();
-    assert_eq!(paired, 2, "matches: {matches:?}");
-    assert_eq!(
-        unaligned, 0,
-        "equal-count duplicates must not produce Unaligned"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 3: FreshOnly in a different (from,kind) group does not cascade
-// ---------------------------------------------------------------------------
-
-/// A fresh site whose caller has NO L3 peer at all (different `from` key →
-/// different partition) is emitted as `FreshOnly`.  The two other sites from
-/// the first caller still pair cleanly — proving that one partition's
-/// mismatch is invisible to another partition.
-#[test]
-fn fresh_only_different_caller_does_not_cascade() {
-    let mk = |caller: &str, start: u32, fp: u64| canonical_call_edge_for_test(caller, start, fp);
-    let fresh = vec![
-        mk("cu:c:run", 10, 1),
-        mk("cu:c:run", 20, 2),
-        mk("cu:c:post", 10, 1), // different caller — no L3 peer
-    ];
-    let l3 = vec![mk("cu:c:run", 10, 1), mk("cu:c:run", 20, 2)];
-    let matches = match_sites(&fresh, &l3);
-    let paired = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::Paired(_, _)))
-        .count();
-    let fresh_only = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::FreshOnly(_)))
-        .count();
-    let l3_only = matches
-        .iter()
-        .filter(|m| matches!(m, SiteMatch::L3Only(_)))
-        .count();
-    // 2 clean pairs in "cu:c:run"; 1 FreshOnly in "cu:c:post"; no L3Only.
-    assert_eq!(paired, 2, "matches: {matches:?}");
-    assert_eq!(fresh_only, 1, "the cu:c:post site has no L3 peer");
-    assert_eq!(l3_only, 0);
-}
 // ---------------------------------------------------------------------------
 // Test 10 (Phase 4b Task 4; converted 1B.3b Task 1 Step 4): Fixture —
 // L3-INDEPENDENT EventFlow target-set baseline
@@ -2904,33 +2798,17 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests 14–16: 1B.3a Task 4 — L3-validated semantic golden + applicability
+// Tests 14–16: the compiler-graph semantic golden + applicability
 // ---------------------------------------------------------------------------
 
 use al_sem::program::resolve::semantic_golden::{
-    ANON_GOLDEN_SCHEMA_VERSION, AdjudicatedOverride, GoldenSiteKey, SemanticGolden,
-    VERDICT_L3_ERROR_INTRINSIC, adjudicated_overrides_path, cdo_anon_golden_path,
-    cdo_event_anon_golden_path, cdo_trigger_anon_golden_path, load_adjudicated_overrides,
-    load_anon_event_golden, load_anon_golden, mint_fresh_golden_for_kind, run_cdo_event_audit_on,
-    run_cdo_semantic_audit_on, run_cdo_semantic_audit_on_raw, run_cdo_trigger_audit_on,
-    run_route_applicability, run_route_applicability_on, run_semantic_diff,
+    SemanticGolden, mint_fresh_golden_for_kind, run_route_applicability,
+    run_route_applicability_on, run_semantic_diff,
     run_unknown_include_sender_plus1_subscribers_preflight_on,
 };
 
-// beyond-1B.3b Task 3: the INDEPENDENT adjudication test's inputs — the
-// structural builtin catalog (the SAME data the fresh resolver's `builtin`
-// classification itself is built on; using it directly here is sanctioned by
-// the brief's "structural catalog" independence criterion) and a hasher for
-// the `source_sha256` drift check. Deliberately NOT importing
-// `resolve_full_program`/`Edge`/`CanonicalEdge` anywhere near the adjudicator
-// — see `cdo_genuine_wrong_is_precedence_adjudicated`'s doc comment.
-use al_sem::program::resolve::builtins::is_global_builtin;
-use al_sem::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
-use al_sem::program::resolve::receiver::{FrameworkKind, ParsedType, classify_type_text};
-use sha2::{Digest, Sha256};
-
 // 1B.3b Task 1 originally defined `cdo_ws_or_enforce()` here, scoped to only
-// the three frozen-golden audits it added (Tests 16–18). Task T0.2 routes
+// the three frozen-golden audits it added (since replaced by Test 16). Task T0.2 routes
 // EVERY bare CDO_WS gate in this file (and in `program_graph.rs` /
 // `snapshot_robustness.rs`) through the same guard, so the definition moved
 // to the shared `tests/common/cdo.rs` (imported near the top of this file as
@@ -3035,37 +2913,19 @@ fn child_probe_library_under_enforcement() {
         "precondition: the driver must set ENFORCE_CDO_WS=1 for this probe to mean anything"
     );
 
+    // The compiler audit's drift check point (S9.0d), driven on a temp dir: an
+    // empty directory has no git HEAD, so it cannot match the golden's stamp.
+    use al_sem::program::resolve::compiler_golden::{
+        cdo_compiler_golden_path, check_drift, load_compiler_golden,
+    };
+    let golden = load_compiler_golden(&cdo_compiler_golden_path())
+        .expect("precondition: the committed compiler golden must load");
     let tmp = tempfile::tempdir().expect("tempdir");
-    let report =
-        al_sem::program::resolve::semantic_golden::run_cdo_trigger_audit(tmp.path(), record);
-
-    assert!(
-        report.golden_loaded,
-        "precondition: the committed trigger golden must load, or the drift check \
-         point is never reached"
-    );
+    check_drift(&golden, tmp.path(), record);
     assert_eq!(
         PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
         1,
-        "the trigger audit's drift check point must have fired against a temp dir"
-    );
-
-    // The EVENT audit's check point too. Its path wrapper falls through to the
-    // check point on an empty directory, so it can be driven here. The semantic
-    // audit has no path wrapper any more (#47): it returned before its check
-    // point on an empty directory, and driving it on the real `semantic-golden`
-    // fixture would merge that fixture's sites into the developer's local
-    // `cdo-deanon-map.json`, so it was never driven and was removed.
-    let report = al_sem::program::resolve::semantic_golden::run_cdo_event_audit(tmp.path(), record);
-    assert!(
-        report.golden_loaded,
-        "precondition: the committed event golden must load, or its drift check \
-         point is never reached"
-    );
-    assert_eq!(
-        PROBE_DRIFT_CALLS.load(Ordering::SeqCst),
-        2,
-        "the event audit's drift check point must have fired as well"
+        "the compiler audit's drift check point must have fired against a temp dir"
     );
     println!("{PROBE_DONE}");
 }
@@ -3283,7 +3143,7 @@ fn probe_driver_rejects_a_child_that_ran_nothing() {
 /// reached after `cdo_ws_or_enforce()` returned `Some` (i.e. `CDO_WS` is
 /// present), so "unconditional" here means "whenever CDO_WS is set", which is
 /// exactly the scope Fix 3 closes: before this fix, an orphaned anonymization
-/// key (mint and audit hashing under different keys, so every `AnonSiteKey`
+/// key (mint and audit hashing under different keys, so every anonymized
 /// lookup silently misses) was caught ONLY on the gated/internal runner
 /// (`ENFORCE_CDO_WS=1`) — the default local dev path (`CDO_WS` set, `ENFORCE`
 /// unset) compared nothing and reported success. A golden that loaded but
@@ -3306,81 +3166,37 @@ fn enforce_audit_ran(golden_loaded: bool, checked_sites: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 14 (fixture): fresh edges match the L3-minted semantic golden
+// Test 14 (fixture): the program resolver agrees with the AL compiler
 // ---------------------------------------------------------------------------
 
-/// Asserts the in-repo L3-validated semantic golden: no `fresh_wrong` and no
-/// `fresh_missing` over the `semantic-golden` fixture workspace.
-///
-/// The golden file (`tests/goldens/semantic-edges/fixture.json`) is minted from
-/// L3 and committed.  Regenerate with `REGEN_TEMP_GOLDENS=1 cargo test
-/// fixture_semantic_golden_matches_l3`.
-///
-/// Critical invariants:
-///   - `fresh_wrong == 0`: fresh never resolves to a confidently-wrong target.
-///   - `fresh_missing == 0`: fresh matches every L3-resolved site.
+/// S9.0d: the in-repo fixture against its compiler-minted golden
+/// (`fixture-compiler-anon.json`; re-mint with `scripts/compiler-graph
+/// tests/fixtures/semantic-golden <out>` then `mint-goldens --fixture
+/// --compiler-graph <out>/whole/graph.jsonl --compiler <extension>
+/// tests/fixtures/semantic-golden`). The compiler's one comparable pair is
+/// `SemanticGoldenCU.Caller -> SemanticGoldenCU.ProcA` (not the same-named
+/// `OtherGoldenCU.ProcA`); `NoSuchProc()` and the dynamic `Codeunit.Run(CuId)`
+/// reach no routine in either engine. Runs without CDO.
 #[test]
-fn fixture_semantic_golden_matches_l3() {
+fn fixture_agrees_with_the_compiler_graph() {
+    use al_sem::program::resolve::compiler_golden::{
+        fixture_compiler_golden_path, load_compiler_golden, run_compiler_audit,
+    };
+    // The fixture's workspace is this repository: no stamp, no drift to check.
+    fn no_drift(_: &str) {}
     let fixture =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/semantic-golden");
-    let golden_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/goldens/semantic-edges/fixture.json");
-
-    if regen::regen_mode() {
-        let golden = al_sem::engine::l3::l3_mint::mint_l3_validated_golden(&fixture);
-        let mut json =
-            serde_json::to_string_pretty(&golden).expect("golden must serialize to JSON");
-        // Task T0.6 R1 fix: the committed golden carries a trailing newline (the
-        // convention every other regen path in this repo follows); this write
-        // previously omitted it, so a byte-identical regen was impossible.
-        json.push('\n');
-        std::fs::create_dir_all(golden_path.parent().unwrap())
-            .expect("create goldens/semantic-edges dir");
-        std::fs::write(&golden_path, &json).expect("write fixture golden");
-        eprintln!(
-            "REGEN: wrote {} site(s) to {}",
-            golden.entries.len(),
-            golden_path.display()
-        );
-        return;
-    }
-
-    let json = std::fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "golden file missing: {}\n\
-             Run `REGEN_TEMP_GOLDENS=1 cargo test fixture_semantic_golden_matches_l3` \
-             to mint it from L3.",
-            golden_path.display()
-        )
-    });
-    let golden: SemanticGolden = serde_json::from_str(&json).expect("golden JSON must deserialize");
-
-    let diff = run_semantic_diff(&fixture, &golden);
-
-    assert!(
-        diff.fresh_wrong.is_empty(),
-        "fresh_wrong MUST be empty — fresh resolved to a confidently-wrong target.\n\
-         {} violation(s):\n{:#?}",
-        diff.fresh_wrong.len(),
-        diff.fresh_wrong,
+    let golden = load_compiler_golden(&fixture_compiler_golden_path());
+    assert!(golden.is_some(), "fixture-compiler-anon.json must load");
+    let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
+    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+    let audit = run_compiler_audit(&ctx, &report, &fixture, golden.as_ref(), no_drift, None);
+    assert_eq!(
+        (audit.compiler_pairs, audit.program_pairs, audit.agree),
+        (1, 1, 1),
+        "{audit:#?}"
     );
-    assert!(
-        diff.fresh_missing.is_empty(),
-        "fresh_missing MUST be empty — fresh failed to match an L3-resolved site.\n\
-         {} gap(s):\n{:#?}",
-        diff.fresh_missing.len(),
-        diff.fresh_missing,
-    );
-
-    eprintln!(
-        "Test 14 — semantic golden: paired={} matches={} fresh_extra={} \
-         fresh_novel={} golden_missing={}",
-        diff.total_paired,
-        diff.matches,
-        diff.fresh_extra.len(),
-        diff.fresh_novel,
-        diff.golden_missing,
-    );
+    assert!(audit.disagreements.is_empty(), "{audit:#?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -3819,1845 +3635,189 @@ fn cdo_unknown_include_sender_plus1_subscribers_preflight_is_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 16 (CDO env-gated; load-frozen since 1B.3b Task 1): L3 semantic
-// audit — no fresh_wrong
+// Test 16 (CDO env-gated): the compiler audit — every disagreement explained
 // ---------------------------------------------------------------------------
 
-/// CDO semantic audit: compares the fresh resolver target-set against the
-/// COMMITTED, ANONYMIZED, FROZEN L3 verdict (`cdo-anon.json`) over the real
-/// CDO workspace.
-///
-/// 1B.3b Task 1: this no longer mints L3 live — `run_cdo_semantic_audit_on`
-/// LOADS the committed golden. `audit.genuine_wrong_sites` stays PLAINTEXT
-/// `GoldenSiteKey` (fresh's OWN identity, recovered from the anonymized
-/// fresh-side comparison via the reverse index — see `anon.rs`'s
-/// "re-hash-don't-decrypt" principle), so the manifest set-membership check
-/// below is UNCHANGED from 1B.3a.
-///
-/// Guards: requires `CDO_WS` env var pointing at a real BC workspace.
-/// `ENFORCE_CDO_WS=1` (the gated/internal runner) hard-fails if `CDO_WS` is
-/// missing, the committed golden failed to load, or the audit paired zero
-/// sites (`cdo_ws_or_enforce`/`enforce_audit_ran`).
-///
-/// ## What this test enforces
-///
-/// The `fresh_wrong` bucket (sites where both L3 and fresh resolved but to
-/// different targets) is split into two adjudicated classes:
-///
-/// - **`fresh_ahead_dispatch`** (ALLOWED): fresh's targets REFINE L3's —
-///   either L3's target is a subset of fresh's, or L3 resolved to an interface
-///   and fresh resolved to concrete implementors. Phase-4 Interface/Polymorphic
-///   fan-out. Not a bug.
-///
-/// - **`genuine_wrong`** (HARD GATE): fresh confidently resolved to a target
-///   DISJOINT from L3's — a different object or procedure with no refinement
-///   relationship. This is a real resolver bug. Every `genuine_wrong` site's
-///   `(unit, line, callee_fp)` key MUST be present in the committed manifest
-///   `tests/goldens/semantic-edges/known-genuine-divergences.json`. A site NOT
-///   in the manifest = a NEW confidently-wrong edge → test FAILS immediately
-///   with the offending site(s) printed. A count-only gate is insufficient: a
-///   swap (fix one adjudicated site + introduce one new disjoint site) holds
-///   the count constant and passes silently, defeating the gate entirely.
-///
-/// `fresh_missing` (L3 resolved but fresh didn't) is informational — tracked
-/// over time. The known deferred buckets total 163; anything beyond is a new gap.
+/// S9.0d (owner decision R1): the program resolver against the AL COMPILER's call
+/// graph, pair by pair (`cdo-compiler-anon.json`, minted by `mint-goldens` from
+/// `scripts/compiler-graph`). Every disagreeing pair must be explained by a
+/// `Verdict` rule; the counts per (side, class, verdict) are pinned, so a new
+/// pair of a known shape is triaged too, not only an unexplained one.
 #[test]
-fn cdo_l3_semantic_audit_no_fresh_wrong() {
+fn cdo_compiler_audit_explains_every_disagreement() {
+    use al_sem::program::resolve::compiler_golden::{
+        cdo_compiler_golden_path, load_compiler_golden, run_compiler_audit,
+    };
     let Some(ws) = cdo_ws_or_enforce() else {
         return;
     };
     let Some(shared) = cdo_shared() else {
         return;
     };
-
-    let audit = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
-    enforce_audit_ran(audit.golden_loaded, audit.paired);
-    assert!(
-        audit.golden_loaded,
-        "cdo-anon.json missing/invalid at {}; run the dev-mint tool \
-         (`cargo run --bin mint-goldens`) with CDO_WS set",
-        cdo_anon_golden_path().display(),
+    let golden = load_compiler_golden(&cdo_compiler_golden_path());
+    let deanon = al_sem::program::resolve::semantic_golden::cdo_deanon_map_path();
+    let audit = run_compiler_audit(
+        &shared.ctx,
+        &shared.report,
+        &ws,
+        golden.as_ref(),
+        drift_handler,
+        Some(&deanon),
     );
-
+    enforce_audit_ran(audit.golden_loaded, audit.agree);
     eprintln!(
-        "\n\
-         ═══════════════════════════════════════════════════════════════\n\
-         1B.3a Task 4 — CDO L3 semantic audit\n\
-         ═══════════════════════════════════════════════════════════════\n\
-         l3_total={} fresh_total={}\n\
-         paired={} matches={} ({}%)\n\
-         fresh_wrong={} [fresh_ahead_dispatch={} genuine_wrong={}]\n\
-         fresh_missing={} fresh_extra={}\n\
-         fresh_novel={} golden_missing={}\n\
-         digest={}\n\
-         ═══════════════════════════════════════════════════════════════",
-        audit.l3_total,
-        audit.fresh_total,
-        audit.paired,
-        audit
-            .paired
-            .saturating_sub(audit.fresh_wrong_count)
-            .saturating_sub(audit.fresh_missing_count)
-            .saturating_sub(audit.fresh_extra_count),
-        audit
-            .paired
-            .saturating_sub(audit.fresh_wrong_count)
-            .saturating_sub(audit.fresh_missing_count)
-            .saturating_sub(audit.fresh_extra_count)
-            .saturating_mul(100)
-            .checked_div(audit.paired)
-            .unwrap_or(0),
-        audit.fresh_wrong_count,
-        audit.fresh_ahead_dispatch_count,
-        audit.genuine_wrong_count,
-        audit.fresh_missing_count,
-        audit.fresh_extra_count,
-        audit.fresh_novel,
-        audit.golden_missing,
-        audit.digest,
+        "compiler audit: compiler {} program {} agree {} disagreements {:#?} digest {}",
+        audit.compiler_pairs, audit.program_pairs, audit.agree, audit.disagreements, audit.digest
     );
-
-    // ── HARD GATE: genuine_wrong SET MEMBERSHIP against adjudicated manifest ──
-    // genuine_wrong sites are real resolver bugs (Cat-D different-object or
-    // wrong overload pick). They are enumerated in the committed manifest:
-    //   tests/goldens/semantic-edges/known-genuine-divergences.json
-    // Every genuine_wrong site's (unit, line, callee_fp) key MUST be in the
-    // manifest set. A COUNT-only gate is insufficient: a swap (fix one adjudicated
-    // site while introducing one new disjoint site) keeps the count at 42 and
-    // passes silently — hiding the new bug. Set membership catches swaps.
-    let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/goldens/semantic-edges/known-genuine-divergences.json");
-    let manifest_json = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|_| panic!("manifest missing: {}", manifest_path.display()));
-    let manifest: serde_json::Value =
-        serde_json::from_str(&manifest_json).expect("manifest must be valid JSON");
-    let manifest_entries = manifest
-        .get("entries")
-        .and_then(|e| e.as_array())
-        .expect("manifest must have 'entries' array");
-    let manifest_keys: std::collections::HashSet<(String, u32, u64)> = manifest_entries
-        .iter()
-        .map(|entry| {
-            let unit = entry["unit"]
-                .as_str()
-                .expect("manifest entry missing 'unit'")
-                .to_string();
-            let line = entry["line"]
-                .as_u64()
-                .expect("manifest entry missing 'line'") as u32;
-            let callee_fp = entry["callee_fp"]
-                .as_u64()
-                .expect("manifest entry missing 'callee_fp'");
-            (unit, line, callee_fp)
-        })
-        .collect();
-
-    // SET MEMBERSHIP: every genuine_wrong site must be in the manifest.
-    let new_genuine_wrong: Vec<&GoldenSiteKey> = audit
-        .genuine_wrong_sites
-        .iter()
-        .filter(|site| !manifest_keys.contains(&(site.unit.clone(), site.line, site.callee_fp)))
-        .collect();
     assert!(
-        new_genuine_wrong.is_empty(),
-        "genuine_wrong gate FAILED: {} site(s) NOT in the adjudicated manifest \
-         (tests/goldens/semantic-edges/known-genuine-divergences.json).\n\
-         A NEW confidently-wrong edge appeared — investigate and either fix the \
-         resolver or extend the manifest with a root-cause explanation.\n\
-         Offending sites:\n{:#?}",
-        new_genuine_wrong.len(),
-        new_genuine_wrong,
+        audit.unexplained.is_empty(),
+        "{} disagreeing pair(s) no verdict explains (a resolver bug to fix, or a new \
+         compiler-limit shape to add as a rule after triage):\n{}",
+        audit.unexplained.len(),
+        audit.unexplained.join("\n")
     );
-    // Secondary sanity: count must not exceed the manifest (a decrease is a win).
-    assert!(
-        audit.genuine_wrong_count <= manifest_keys.len(),
-        "genuine_wrong_count {} exceeds manifest size {} — all sites passed \
-         membership but count exceeds manifest length (logic error?)",
-        audit.genuine_wrong_count,
-        manifest_keys.len(),
+    // Pinned on the bc3ccb18 baseline with ms-dynamics-smb.al-18.0.2732683. Both
+    // directions are a change to triage: a pair that starts agreeing is a fix or
+    // a lost compiler limit, a new pair of a known shape still needs a look.
+    use al_sem::program::resolve::compiler_golden::{Side, Verdict};
+    use al_sem::program::resolve::compiler_oracle::EdgeClass;
+    let expected: std::collections::BTreeMap<_, usize> = [
+        (
+            (
+                Side::CompilerOnly,
+                EdgeClass::Call,
+                Some(Verdict::SubscriberAttribute),
+            ),
+            22,
+        ),
+        (
+            (
+                Side::CompilerOnly,
+                EdgeClass::Trigger,
+                Some(Verdict::RunTriggerFalse),
+            ),
+            145,
+        ),
+        (
+            (
+                Side::ProgramOnly,
+                EdgeClass::Call,
+                Some(Verdict::InactivePreprocArm),
+            ),
+            2,
+        ),
+        (
+            (Side::ProgramOnly, EdgeClass::Run, Some(Verdict::ObjectRun)),
+            147,
+        ),
+        (
+            (
+                Side::ProgramOnly,
+                EdgeClass::Trigger,
+                Some(Verdict::ValidateTrigger),
+            ),
+            40,
+        ),
+        (
+            (
+                Side::ProgramOnly,
+                EdgeClass::Trigger,
+                Some(Verdict::UnqualifiedRecordOp),
+            ),
+            8,
+        ),
+        (
+            (
+                Side::ProgramOnly,
+                EdgeClass::Event,
+                Some(Verdict::PlatformPageEvent),
+            ),
+            5,
+        ),
+    ]
+    .into();
+    assert_eq!(audit.disagreements, expected);
+    assert_eq!((audit.compiler_pairs, audit.agree), (7045, 6878));
+
+    let again = run_compiler_audit(
+        &shared.ctx,
+        &shared.report,
+        &ws,
+        golden.as_ref(),
+        drift_handler,
+        None,
     );
-    // beyond-1B.3b Task 3 (grown to 52 entries by record-field chains plan
-    // Task 4, then to 54 by argtype-dispatch-and-page-catalog plan Task 1's
-    // 2 `PageInstanceVar` duplicate-trigger-name sites): ALL manifest
-    // entries are now adjudicated `l3_error_intrinsic` and overlaid
-    // (`run_cdo_semantic_audit_on` applies `adjudicated-overrides.json` in-memory
-    // before diffing) — fresh is compared against the ADJUDICATED target for
-    // these sites, which fresh matches by construction (that agreement is
-    // what the independent adjudication in
-    // `cdo_genuine_wrong_is_precedence_adjudicated` confirms). So
-    // `genuine_wrong_count` must now be EXACTLY 0: a nonzero count means
-    // either the overlay failed to apply (a wiring bug) or a genuinely NEW
-    // disjoint divergence appeared that is not one of the 54 known/adjudicated
-    // sites — both are real bugs, not "still-acceptable known wrongness". The
-    // manifest/set-membership checks above stay as defense-in-depth for that
-    // second case.
-    //
-    // pageext-merge-and-final-residual plan, Task 2: entry index 9 (site
-    // `.dependencies/CDO/Page/CDOEMailJobs.Page.al:124`, `callee_fp
-    // 2876017921644654500`, bare `Run()`) was CORRECTED IN PLACE (the entry
-    // COUNT stays 54) from its stale `builtin-catalog-fp-collision`
-    // adjudication (`receiver_kind: Global`, `catalog_key: run` — adjudicated
-    // when fresh's own disposition for this site WAS `Catalog`/`Builtin`,
-    // because `resolve_bare`'s Step 3 either predated this site or its
-    // PROBE-THEN-DECIDE guard already fired to `Unknown` at the time, either
-    // way never reaching `genuine_wrong`) to the NEW `SameAppSourceProcedure`
-    // shape: Task 2's grounded suppression makes fresh now resolve this bare
-    // `Run()` to the SourceTable's OWN `procedure Run()`
-    // (`Table 6175280 "CDO E-Mail Job"`), so the entry stays
-    // `l3_error_intrinsic`, just with a corrected override target.
-    //
-    // CORRECTED 2026-07-04 (pageext-merge-and-final-residual plan, Task 2
-    // REVIEW fix): the sentence this replaces claimed L3's frozen golden
-    // "still pairs this site with an unrelated/no target" — FALSE. An
-    // independent HMAC-based re-verification of the RAW, un-overridden L3
-    // golden (`cdo-anon.json`) for this exact site established that its
-    // recorded target has ALWAYS been `Table 6175280 "CDO E-Mail Job".Run` —
-    // IDENTICAL to fresh's post-Task-2 resolution. L3 was never wrong here;
-    // the actual (now-closed) defect was fresh's OWN pre-Task-2 answer
-    // (`Catalog`/`Builtin(run)`), which Task 2 fixed for an unrelated reason
-    // (the `INSTANCE_ONLY_NEVER_BARE` grounding). This site is consequently
-    // now a plain MATCH between fresh and the raw L3 golden — the
-    // `adjudicated-overrides.json` entry for this key is a documented NO-OP
-    // (it writes back the exact target the raw golden already supplies).
-    // Retained rather than deleted (see the manifest's own description field
-    // for the full rationale); entry count is unaffected either way.
     assert_eq!(
-        audit.genuine_wrong_count, 0,
-        "genuine_wrong_count={} (expected 0): all 54 known-genuine-divergences.json sites \
-         are adjudicated l3_error_intrinsic and should have been overlaid to match fresh \
-         exactly (see adjudicated-overrides.json / apply_adjudicated_overrides). A nonzero \
-         count means either the overlay didn't apply (check for an \
-         'Adjudication overlay: N/54' log line above — N should be 54) or a genuinely NEW \
-         divergence appeared beyond the 54 adjudicated ones.",
-        audit.genuine_wrong_count,
-    );
-
-    // fresh_ahead_dispatch is always ALLOWED (printed above for visibility).
-
-    // ── COMPLETENESS FLOOR (1B.3b whole-branch fix): re-instate the deleted
-    // `regression_unexplained == 0` leg as a pinned CEILING on `fresh_missing`.
-    //
-    // `fresh_missing` (L3 resolved a target, fresh emitted nothing) was
-    // previously informational-only: a dropped trigger/event/member target at
-    // CDO scale could increment this counter silently and the test would
-    // still pass. History: 191 (1B.3b, `page_rec=115 + codeunit_implicit_rec=24
-    // + trigger=38 + other=14`, CHANGELOG.md 1B.3a Task 4) → beyond-1B.3b
-    // Tasks 5–7 drained most of `page_rec` (Task 5, 191→176) and ALL of
-    // `codeunit_implicit_rec` (Task 6, 174→150) and `compound_receiver`
-    // (Task 7, 150→102) → 102 (beyond-1B.3b Task 8, re-measured 2026-07-01).
-    // Task 8's characterization (throwaway diagnostic, not committed — see
-    // task-8-report.md) of the 102-site residual: 82/102 were a DIFFERENT
-    // object than the caller, source-verified as the SAME root cause across
-    // every sampled site — a BARE (unqualified) call inside a Page/Report
-    // trigger that falls through to the object's own `SourceTable`'s global
-    // procedures (verified: `Page 6175272 "CDO E-Mail Templates"`'s
-    // `OnAfterGetRecord` calls bare `GetReportSelection()`/`GetReportName()`,
-    // both defined on `SourceTable = "CDO E-Mail Template Header"`, table
-    // 6175283) — this was `resolve_bare`'s own documented "Step 3:
-    // Implicit-Rec (deferred)" TODO. 12/102 a same-object nested-trigger gap;
-    // 8 mixed overload sets.
-    //
-    // follow-up plan v2.1 Task 3 (`resolve_bare` Step 3 — bare implicit-Rec
-    // dispatch, IMPLEMENTED) re-measured 2026-07-01: **4** — beyond the
-    // predicted 82-site bucket, the remaining 12+8 residual ALSO drained
-    // almost entirely (not individually re-characterized site-by-site this
-    // pass — a possible root cause is that `resolve_in_table_scope`'s
-    // visibility-scoped search subsumes some of those cases too, since a
-    // nested field-trigger's enclosing object is still one of Step 3's four
-    // eligible kinds, but this is NOT independently confirmed here). Task 4
-    // (FINAL, arc capstone) RE-CONFIRMED the same **4** by an independent
-    // re-run on 2026-07-01 (byte-identical to Task 3's own measurement, no
-    // drift after the Task-3 fix-pass's 2 additional TableExtension/
-    // PageExtension-caller fixtures, which are workspace-fixture-only and do
-    // not touch CDO). 10 tightens the ceiling to the new floor with a tiny
-    // margin (was 15, was 110 before that — a ratchet never loosens);
-    // raising it further requires re-justifying the new value against a real
-    // characterization, not just bumping the number.
-    //
-    // TIGHTENED 2026-07-03 (applicability-param-subtype-recfield plan v2.1,
-    // Task 4): 10→5, measured 3 (one of the 4 prior `fresh_missing` sites is
-    // newly resolved by Step 3a's bare implicit-Rec quoted-field arm to a
-    // target that EXACTLY MATCHES L3's golden — moving it into `matches`
-    // rather than `fresh_missing`; `genuine_wrong` stays 0). 5 keeps a small
-    // margin above the measured 3 (same "tiny margin, not zero-tolerance"
-    // policy this ceiling has always used).
-    //
-    // CORRECTED 2026-07-04 (receiver-closure-and-arg-increments plan, Task 5
-    // nit sweep): the "measured 3" note above went STALE without anyone
-    // updating it — the live value is, and was already, **1** by the time
-    // Task 2 of this same plan ran (`.superpowers/sdd/task-2-report.md`
-    // independently recorded `fresh_missing (1)`, byte-identical
-    // before/after Task 2, so the drop predates Task 2 — most likely a side
-    // effect of Task 1's CurrPage UserControl trigger-adjacent resolution,
-    // not independently re-attributed here). Re-confirmed 1 again at this
-    // task's own capstone re-measure.
-    //
-    // CORRECTED 2026-07-04 (pageext-merge-and-final-residual plan, Task 2
-    // REVIEW fix): the "1" above was itself measured against a report-table
-    // ledger transcription that turned out to be wrong (see the dated
-    // correction section in `.superpowers/sdd/task-2-report.md` §4) — the
-    // TRUE post-Task-2 value is **0** (Site B, `.dependencies/CDO/Page/
-    // CDOEMailJobs.Page.al:124`'s bare `Run()`, was the sole `fresh_missing`
-    // occupant and moved into `matches` once Task 2's grounded suppression
-    // let it resolve to the SourceTable's own `procedure Run()` — an
-    // HMAC-verified exact match with L3's own frozen target; `matches`
-    // itself stayed flat at 6120 because Site A independently moved
-    // `matches` -> `fresh_extra` in the same commit, netting zero). Tightened
-    // 5 -> 2 (a small margin above the measured 0, same non-zero-tolerance
-    // policy this ceiling has always used — never a hard 0, since this is a
-    // completeness metric, not the hard-gated `genuine_wrong` invariant).
-    const FRESH_MISSING_CEILING: usize = 2;
-    assert!(
-        audit.fresh_missing_count <= FRESH_MISSING_CEILING,
-        "COMPLETENESS REGRESSION: fresh_missing_count={} exceeds the recorded \
-         ceiling {} (baseline pinned 2026-07-03 post applicability-param-subtype-recfield \
-         Task 4 [bare implicit-Rec quoted-field receivers]: measured 3 at pin time, but \
-         ACTUALLY 1 by 2026-07-04 — see the CORRECTED note above; was 4 post follow-up \
-         plan v2.1 Task 4, 102 pre-follow-up; see CHANGELOG.md). The fresh resolver \
-         lost an L3-resolved target it used to find — investigate before raising the \
-         ceiling.",
-        audit.fresh_missing_count,
-        FRESH_MISSING_CEILING,
-    );
-
-    // ── Divergence ratchet: `fresh_wrong` COUNT ceiling ───────────────────────
-    // `fresh_wrong` (both L3 and fresh resolved, to DIFFERENT targets) splits
-    // into `fresh_ahead_dispatch` (allowed, fresh refines L3) and
-    // `genuine_wrong` (hard-gated to exactly 0 above). A count-only ceiling on
-    // the SUM is still useful defense-in-depth: `genuine_wrong == 0` alone
-    // cannot see a new confidently-wrong edge that happens to also satisfy the
-    // (heuristic, non-adjudicated) `fresh_ahead_dispatch` refinement test —
-    // pinning the total means any such site still trips a review, even though
-    // it would pass the `genuine_wrong` set-membership gate. History: 139
-    // (beyond-1B.3b Task 7/8) → follow-up plan v2.1 Task 3 (`resolve_bare`
-    // Step 3) newly resolves many former `fresh_missing` sites, and several
-    // land in `fresh_ahead_dispatch` rather than an exact `matches` (expected
-    // collateral movement from closing a real completeness gap, NOT a
-    // regression — `genuine_wrong` stays hard-gated to 0 above regardless).
-    // Recorded 2026-07-01: `fresh_wrong_count=149` (all 149 adjudicated
-    // `fresh_ahead_dispatch`, 0 `genuine_wrong`). Task 4 (FINAL, arc
-    // capstone) RE-CONFIRMED the same 149 by an independent re-run
-    // (byte-identical, no drift) and pinned the ceiling to EXACTLY the
-    // measured value — zero margin, matching `genuine_wrong`'s own
-    // zero-tolerance philosophy — so that even ONE new `fresh_wrong` site
-    // (whether a genuine `fresh_ahead_dispatch` refinement or a
-    // misclassified `genuine_wrong`) trips this gate for manual review
-    // rather than silently passing inside slack; a ratchet never loosens.
-    //
-    // TIGHTENED 2026-07-02 (uniform-access-and-compound-receiver plan,
-    // Task 1): 149→148 — an IMPROVEMENT (not a soundness-forced rise like
-    // the `unknown` ceilings above). `resolve_in_object`'s new per-candidate
-    // access filter reclassified one former `fresh_wrong` site (fresh
-    // resolved to a WRONG target, per the L3 golden) into an honest `Unknown`
-    // — which the L3-comparison now counts among `matches` (both sides
-    // agree there's no confident target) rather than a mismatch.
-    //
-    // RAISED 2026-07-02 (uniform-access-and-compound-receiver plan, Task 1.5,
-    // inserted after Task 1): 148→149. Task 1.5 models `internalsVisibleTo`
-    // friend apps, correctly resolving cross-app `internal` calls the
-    // declaring app's manifest explicitly authorizes (CDO→CTS-CDN) to
-    // `Source`. The RETIRED al-sem/L3 TS reference — frozen at golden-mint
-    // time — never modeled `InternalsVisibleTo` either, so it still emits
-    // `Unknown`/no-edge for the SAME 67 sites (60 `InternalNotVisible` +
-    // 7 sites that were mislabeled `ReceiverOutOfClosure` by the
-    // documented `resolve_bare` reason-overwrite gap, see
-    // `cdo_full_program_coverage_and_self_reported_metric`'s comment for the
-    // 407→340 unknown-count drop). This is a case of the retired reference
-    // being WRONG (a known, accepted divergence per this project's charter:
-    // "no byte-to-byte parity with al-sem" — fresh is Rust-owned and
-    // intentionally more accurate) — 1 of those 67 now diverges from L3 as
-    // `fresh_wrong` (fresh: `Source`; L3: something else) rather than falling
-    // into `fresh_missing`/`fresh_extra`/`fresh_novel`; the adjudication
-    // overlay classifies it (and all 148 prior sites) as `fresh_ahead_
-    // dispatch`, confirmed by `genuine_wrong == 0` above. `fresh_missing`
-    // stays unchanged at 4 (verified — see the metric gate). Ratchet raised
-    // to the exact measured value (zero margin, per this ceiling's own
-    // established zero-tolerance philosophy).
-    //
-    // RE-CONFIRMED 2026-07-03 (applicability-param-subtype-recfield plan
-    // v2.1, Task 4): still EXACTLY 149 (byte-identical) — the ONE new
-    // divergence Task 4's bare implicit-Rec quoted-field arm exposed at
-    // `Table 6175281 CDO Setup.al:332`'s `.Trim()` call (a genuine L3
-    // golden defect, `known-genuine-divergences.json` entry 52) is
-    // adjudicated `l3_error_intrinsic` and overlaid IN-MEMORY before this
-    // diff runs, so it never surfaces here as a raw `fresh_wrong` count —
-    // net movement zero, ceiling unchanged.
-    const FRESH_WRONG_CEILING: usize = 149;
-    assert!(
-        audit.fresh_wrong_count <= FRESH_WRONG_CEILING,
-        "DIVERGENCE REGRESSION: fresh_wrong_count={} exceeds the recorded \
-         ceiling {} (recorded 2026-07-02 post uniform-access-and-compound-receiver \
-         Task 1.5: 149, all fresh_ahead_dispatch, genuine_wrong=0; was 148 post \
-         Task 1, 149 post follow-up plan v2.1 Task 4) — a new site diverged \
-         from the L3-validated golden; investigate (is it a new \
-         fresh_ahead_dispatch refinement, or a genuine_wrong that the \
-         adjudication heuristic mis-classified?) before raising the ceiling.",
-        audit.fresh_wrong_count,
-        FRESH_WRONG_CEILING,
-    );
-
-    // ── Determinism: two consecutive runs produce the same digest ─────────────
-    let audit2 = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
-    assert_eq!(
-        audit.digest, audit2.digest,
-        "CDO semantic audit must be deterministic (digest differs between runs)"
+        audit.digest, again.digest,
+        "the audit must be deterministic"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Test 17 (CDO env-gated, 1B.3b Task 1): ImplicitTrigger frozen-golden audit
+// Test 19 (UNCONDITIONAL — no CDO_WS needed, public CI): committed compiler
+// golden metadata validation
 // ---------------------------------------------------------------------------
 
-/// CDO ImplicitTrigger audit: compares fresh's `ImplicitTrigger` resolution
-/// against the committed, anonymized, frozen L3 verdict
-/// (`cdo-trigger-anon.json`). See [`AnonTriggerAuditReport`]'s doc comment
-/// (in `semantic_golden.rs`) for this audit's scope — it proves the
-/// frozen-load mechanism works for the ImplicitTrigger dispatch kind and
-/// backs `ENFORCE_CDO_WS`'s `checked_sites>0` requirement. The zero-tolerance
-/// ImplicitTrigger gate is this frozen audit plus the
-/// `implicit_trigger_fixture_resolves_exact_target_set` fixture test and the
-/// ported applicability teeth (`fan_out_applicability_zero_violations`) — the
-/// old live, CDO-gated `run_implicit_trigger_harness` dual-run gate was
-/// deleted in 1B.3b Task 3.
-#[test]
-fn cdo_trigger_audit_frozen_load() {
-    let Some(ws) = cdo_ws_or_enforce() else {
-        return;
-    };
-    let Some(shared) = cdo_shared() else {
-        return;
-    };
-
-    let audit = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
-    enforce_audit_ran(audit.golden_loaded, audit.total_paired);
-    assert!(
-        audit.golden_loaded,
-        "cdo-trigger-anon.json missing/invalid at {}; run the dev-mint tool \
-         (`cargo run --bin mint-goldens`) with CDO_WS set",
-        cdo_trigger_anon_golden_path().display(),
-    );
-
-    eprintln!(
-        "Test 17 — CDO ImplicitTrigger frozen audit: l3_total={} fresh_total={} \
-         total_paired={} matches={} fresh_wrong={} fresh_missing={} fresh_extra={} \
-         fresh_novel={} golden_missing={} digest={}",
-        audit.l3_total,
-        audit.fresh_total,
-        audit.total_paired,
-        audit.matches,
-        audit.fresh_wrong_count,
-        audit.fresh_missing,
-        audit.fresh_extra,
-        audit.fresh_novel,
-        audit.golden_missing,
-        audit.digest,
-    );
-
-    // ── COMPLETENESS FLOOR (1B.3b whole-branch fix): re-instate the deleted
-    // `regression_unexplained == 0` leg for ImplicitTrigger.
-    //
-    // Zero tolerance for fresh confidently resolving a paired trigger site to
-    // the WRONG target set — this mirrors the old live gate's hard
-    // zero-tolerance and currently holds (`fresh_wrong_count == 0`).
-    assert_eq!(
-        audit.fresh_wrong_count, 0,
-        "COMPLETENESS REGRESSION: ImplicitTrigger fresh_wrong_count={} (must be 0) \
-         — fresh disagreeing with a frozen, L3-verified trigger target is a real \
-         resolver bug, investigate.",
-        audit.fresh_wrong_count,
-    );
-    // `fresh_missing` (L3 resolved a trigger target, fresh emitted nothing) is
-    // NOT presently zero: this golden carries a SMALL, STABLE, pre-existing
-    // gap of 3 sites that was already present at golden MINT time (1B.3b
-    // Task 1, `.superpowers/sdd/task-1-report.md`: "total_paired=188
-    // matches=185 fresh_wrong=0 fresh_missing=3") and has been UNCHANGED
-    // through every capstone verification since (1B.3b Task 4 capstone:
-    // identical `matches=185`; reproduced again on 2026-07-01 for this fix:
-    // identical `total_paired=188 matches=185 fresh_missing=3`). It predates
-    // the gate-completeness deletion this fix restores, so asserting literal
-    // `matches == total_paired` would fail on a KNOWN, already-accepted gap,
-    // not a new one. Pin it as a CEILING instead (same pattern as Test 16):
-    // any NEW drop is a real completeness regression and FAILS.
-    //
-    // S9.0c (2026-10-07) raised it 3 -> 103, and the golden is the one that is
-    // wrong. Measured on BC 28: `Insert()`/`Modify()`/`Delete()` with no
-    // RunTrigger argument, or with `false`, run NO table trigger. L3 minted a
-    // trigger edge for every write, so this golden claims a trigger at sites
-    // that cannot fire one. All 103 missing sites, read back through the local
-    // deanon map, are such writes: insert() 69, delete() 16, modify() 11,
-    // insert(false) 7. None passes `true`. S9.0d re-mints this golden from the
-    // compiler's graph with the measured rule, and the ceiling goes back down.
-    const FRESH_MISSING_CEILING: usize = 103;
-    assert!(
-        audit.fresh_missing <= FRESH_MISSING_CEILING,
-        "COMPLETENESS REGRESSION: ImplicitTrigger fresh_missing={} exceeds the \
-         recorded ceiling {} (see the S9.0c note above). A NEW dropped \
-         trigger target. Investigate before raising the ceiling.",
-        audit.fresh_missing,
-        FRESH_MISSING_CEILING,
-    );
-
-    // Determinism.
-    let audit2 = run_cdo_trigger_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
-    assert_eq!(
-        audit.digest, audit2.digest,
-        "CDO trigger audit must be deterministic (digest differs between runs)"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 18 (CDO env-gated, 1B.3b Task 1): EventFlow frozen-golden audit
-// ---------------------------------------------------------------------------
-
-/// CDO EventFlow audit: compares fresh's resolved EventFlow
-/// publisher→subscriber pairs against the committed, anonymized, frozen L3
-/// verdict (`cdo-event-anon.json`). Arity-agnostic pair-set comparison only —
-/// see [`AnonEventAuditReport`]'s doc comment. The zero-tolerance EventFlow
-/// gate is this frozen audit plus the `event_fixture_two_stage_join` fixture
-/// test and the ported event-route teeth — the old live, CDO-gated
-/// `run_event_flow_gate` dual-run gate was deleted in 1B.3b Task 3.
-#[test]
-fn cdo_event_audit_frozen_load() {
-    let Some(ws) = cdo_ws_or_enforce() else {
-        return;
-    };
-    let Some(shared) = cdo_shared() else {
-        return;
-    };
-
-    let audit = run_cdo_event_audit_on(&shared.ctx, &ws, drift_handler);
-    enforce_audit_ran(audit.golden_loaded, audit.matched_pairs);
-    assert!(
-        audit.golden_loaded,
-        "cdo-event-anon.json missing/invalid at {}; run the dev-mint tool \
-         (`cargo run --bin mint-goldens`) with CDO_WS set",
-        cdo_event_anon_golden_path().display(),
-    );
-
-    eprintln!(
-        "Test 18 — CDO EventFlow frozen audit: l3_total={} fresh_total={} \
-         matched_pairs={} pair_l3_only={} pair_fresh_only={} digest={}",
-        audit.l3_total,
-        audit.fresh_total,
-        audit.matched_pairs,
-        audit.pair_l3_only,
-        audit.pair_fresh_only,
-        audit.digest,
-    );
-
-    // ── COMPLETENESS FLOOR (1B.3b whole-branch fix): re-instate the deleted
-    // `regression_unexplained == 0` leg for EventFlow. Zero tolerance: every
-    // frozen L3 publisher→subscriber pair must still be found by fresh.
-    assert_eq!(
-        audit.pair_l3_only, 0,
-        "COMPLETENESS REGRESSION: {} frozen L3 EventFlow pair(s) are missing from \
-         fresh (pair_l3_only must be 0) — fresh lost a publisher\u{2192}subscriber \
-         pair it used to resolve, investigate.",
-        audit.pair_l3_only,
-    );
-    assert_eq!(
-        audit.matched_pairs, audit.l3_total,
-        "COMPLETENESS REGRESSION: matched_pairs={} != l3_total={} — every frozen \
-         L3 EventFlow pair must be matched by fresh.",
-        audit.matched_pairs, audit.l3_total,
-    );
-
-    // Determinism.
-    let audit2 = run_cdo_event_audit_on(&shared.ctx, &ws, drift_handler);
-    assert_eq!(
-        audit.digest, audit2.digest,
-        "CDO event audit must be deterministic (digest differs between runs)"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 19 (UNCONDITIONAL — no CDO_WS needed, public CI): committed golden
-// metadata validation
-// ---------------------------------------------------------------------------
-
-/// Public-CI metadata validation (1B.3b Task 1): asserts the THREE committed
-/// anonymized goldens exist, parse, carry the current schema version, and
-/// have non-trivial per-dispatch-kind coverage — WITHOUT needing `CDO_WS` (no
-/// CDO source is required to validate a committed artifact's shape). This is
-/// the floor public CI (which never has CDO access) can verify; the per-site
-/// diff itself only runs on the gated/internal runner (Tests 16–18).
-///
-/// Also validates the pre-existing `known-genuine-divergences.json` manifest
-/// carries exactly 42 entries (1B.3a's adjudicated genuine_wrong baseline —
-/// unrelated to `cdo-anon.json`'s anonymization, but co-located metadata this
-/// test is the natural unconditional home for).
+/// Public-CI shape check of the committed compiler goldens (S9.0d). The pair
+/// diff needs `CDO_WS` (Test 16); this checks what every machine can see: both
+/// goldens parse, carry the current schema, are sorted and duplicate-free, and
+/// the CDO golden is stamped (workspace, closure, compiler) and covers the three
+/// compared classes.
 #[test]
 fn committed_goldens_metadata_is_valid() {
-    let golden = load_anon_golden(&cdo_anon_golden_path()).unwrap_or_else(|| {
-        panic!(
-            "cdo-anon.json missing/invalid at {} — committed goldens must always \
-             parse, even without CDO_WS",
-            cdo_anon_golden_path().display(),
-        )
-    });
-    assert_eq!(golden.schema_version, ANON_GOLDEN_SCHEMA_VERSION);
-    assert!(
-        !golden.entries.is_empty(),
-        "cdo-anon.json must be non-empty"
-    );
-    let mut by_edge_kind: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
-    for e in &golden.entries {
-        *by_edge_kind.entry(e.site.edge_kind).or_insert(0) += 1;
-    }
-    eprintln!(
-        "cdo-anon.json: {} entries, by edge_kind: {by_edge_kind:?}",
-        golden.entries.len()
-    );
-    // edge_kind 0=Call, 1=Run are the dispatch kinds this golden covers
-    // (Member/Interface — see semantic_golden.rs's module docs); at least one
-    // of each must be present for the golden to be meaningfully non-trivial.
-    assert!(
-        by_edge_kind.get(&0).copied().unwrap_or(0) > 0,
-        "cdo-anon.json must contain at least one Call-kind (edge_kind=0) entry"
-    );
-
-    let trigger_golden = load_anon_golden(&cdo_trigger_anon_golden_path()).unwrap_or_else(|| {
-        panic!(
-            "cdo-trigger-anon.json missing/invalid at {}",
-            cdo_trigger_anon_golden_path().display(),
-        )
-    });
-    assert_eq!(trigger_golden.schema_version, ANON_GOLDEN_SCHEMA_VERSION);
-    assert!(
-        !trigger_golden.entries.is_empty(),
-        "cdo-trigger-anon.json must be non-empty"
-    );
-
-    let event_golden = load_anon_event_golden(&cdo_event_anon_golden_path()).unwrap_or_else(|| {
-        panic!(
-            "cdo-event-anon.json missing/invalid at {}",
-            cdo_event_anon_golden_path().display(),
-        )
-    });
-    assert_eq!(event_golden.schema_version, ANON_GOLDEN_SCHEMA_VERSION);
-    assert!(
-        !event_golden.entries.is_empty(),
-        "cdo-event-anon.json must be non-empty"
-    );
-
-    eprintln!(
-        "Test 19 — committed golden metadata: cdo-anon entries={} trigger entries={} \
-         event entries={}",
-        golden.entries.len(),
-        trigger_golden.entries.len(),
-        event_golden.entries.len(),
-    );
-
-    // The pre-existing genuine_wrong manifest — co-located metadata, also
-    // unconditionally checkable.
-    let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/goldens/semantic-edges/known-genuine-divergences.json");
-    let manifest_json = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|_| panic!("manifest missing: {}", manifest_path.display()));
-    let manifest: serde_json::Value =
-        serde_json::from_str(&manifest_json).expect("manifest must be valid JSON");
-    let manifest_entries = manifest
-        .get("entries")
-        .and_then(|e| e.as_array())
-        .expect("manifest must have 'entries' array");
-
-    // ── beyond-1B.3b Task 3: manifest + overlay invariants (replaces the bare
-    // `assert_eq!(len, 42)`) ────────────────────────────────────────────────
-    //
-    // Every `known-genuine-divergences.json` entry now carries an adjudicated
-    // `verdict` (Task 3). Split: 42 `l3_error_intrinsic` / 0
-    // `fresh_false_builtin` (would mean Tasks 1-2 left a real fresh bug
-    // unabsorbed) / 0 `needs_manual_review` (fail-closed — an unresolved
-    // dimension is never silently treated as passing).
-    let mut manifest_site_keys: std::collections::HashSet<(String, u64, u64)> =
-        std::collections::HashSet::new();
-    let mut manifest_intrinsic_keys: std::collections::HashSet<(String, u64, u64)> =
-        std::collections::HashSet::new();
-    for entry in manifest_entries {
-        let unit = entry["unit"]
-            .as_str()
-            .expect("manifest entry missing 'unit'")
-            .to_string();
-        let line = entry["line"]
-            .as_u64()
-            .expect("manifest entry missing 'line'");
-        let callee_fp = entry["callee_fp"]
-            .as_u64()
-            .expect("manifest entry missing 'callee_fp'");
-        let verdict = entry["verdict"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                panic!("manifest entry {unit}:{line} missing non-empty 'verdict' (Task 3)")
-            });
-        assert!(
-            matches!(
-                verdict,
-                "l3_error_intrinsic" | "fresh_false_builtin" | "needs_manual_review"
-            ),
-            "manifest entry {unit}:{line} has unrecognized verdict {verdict:?}"
-        );
-        let key = (unit.clone(), line, callee_fp);
-        assert!(
-            manifest_site_keys.insert(key.clone()),
-            "duplicate site key in known-genuine-divergences.json: {unit}:{line} fp={callee_fp}"
-        );
-        if verdict == "l3_error_intrinsic" {
-            manifest_intrinsic_keys.insert(key);
-        }
-    }
-    // BASELINE-SCOPED, not universal. This used to pin exactly 54 entries with a
-    // long provenance note. That count described ONE workspace — the 2026-07
-    // CDO tree, whose recorded mint SHA exists in no checkout any more. When the
-    // baseline moved to a pinned, reproducible commit, the population it counted
-    // ceased to exist, and a hard-coded 54 would only have forced the next author
-    // to invent entries to satisfy it.
-    //
-    // A COUNT was never the right guard here anyway: this test is unconditional
-    // (no CDO_WS), so it can check the manifest's SHAPE but cannot know how many
-    // divergences the live workspace actually has. The teeth live in the
-    // CDO-gated `cdo_genuine_wrong_is_precedence_adjudicated`, which asserts the
-    // overlay's key set EQUALS the raw (pre-overlay) genuine_wrong set — so an
-    // empty overlay passes only when there is genuinely nothing to adjudicate,
-    // and emptying the file to silence a real divergence fails.
-    assert_eq!(
-        manifest_intrinsic_keys.len(),
-        manifest_entries.len(),
-        "every known-genuine-divergences.json entry must be adjudicated          l3_error_intrinsic; a shortfall means a fresh_false_builtin or          needs_manual_review survivor slipped through — investigate before          relying on the overlay"
-    );
-
-    // ARTIFACT RATCHET — pins the COMMITTED files, which this test can see.
-    //
-    // An earlier revision deleted every exact count here, arguing an unconditional
-    // test 'cannot know the count'. That conflated two different things (caught by
-    // gpt-5.6-sol in review): it cannot derive the LIVE WORKSPACE's divergence
-    // count without CDO_WS, but it can absolutely pin what is COMMITTED. Without
-    // that, both files could be emptied in lockstep and sail through every machine
-    // where CDO_WS is unset -- which is most of them, and all of public CI.
-    //
-    // 0 is the real committed value for the pinned bc3ccb18 baseline: the raw
-    // pre-overlay audit reports no genuine_wrong sites there, so there is nothing
-    // to adjudicate. Moving the baseline is a deliberate act; so is updating this.
-    const COMMITTED_ADJUDICATED_ENTRIES: usize = 0;
-    assert_eq!(
-        manifest_entries.len(),
-        COMMITTED_ADJUDICATED_ENTRIES,
-        "known-genuine-divergences.json must carry exactly {} entries for the \
-         committed bc3ccb18 baseline. A change here is either a real baseline move \
-         (update this constant deliberately, with the new population triaged) or \
-         tampering. Do NOT relax it to make a red gate green.",
-        COMMITTED_ADJUDICATED_ENTRIES,
-    );
-
-    // The adjudication overlay itself (`adjudicated-overrides.json`) — also
-    // unconditionally checkable (pure JSON, no CDO_WS needed to validate its
-    // SHAPE; the CDO-gated `cdo_genuine_wrong_is_precedence_adjudicated` test
-    // re-verifies its CONTENT against live source).
-    let overrides =
-        load_adjudicated_overrides(&adjudicated_overrides_path()).unwrap_or_else(|| {
-            panic!(
-                "adjudicated-overrides.json missing/invalid at {}",
-                adjudicated_overrides_path().display(),
-            )
-        });
-    let mut override_site_keys: std::collections::HashSet<(String, u64, u64)> =
-        std::collections::HashSet::new();
-    for ov in &overrides.entries {
-        assert!(!ov.callee_text.is_empty(), "override missing callee_text");
-        // `catalog_key` is required for the `builtin-catalog-fp-collision` shape;
-        // the `CrossAppSourceProcedure` shape (beyond-1B.3b Task 5.5) and the
-        // `SameAppSourceProcedure` shape (pageext-merge-and-final-residual
-        // plan Task 2) both carry an empty `catalog_key` and populate
-        // `target_*` instead.
-        assert!(
-            !ov.catalog_key.is_empty()
-                || ((ov.receiver_kind == "CrossAppSourceProcedure"
-                    || ov.receiver_kind == "SameAppSourceProcedure")
-                    && ov.target_kind.is_some()
-                    && ov.target_app_guid.is_some()
-                    && ov.target_object_lc.is_some()
-                    && ov.target_routine_lc.is_some()),
-            "override missing catalog_key (and not a fully-populated \
-             CrossAppSourceProcedure/SameAppSourceProcedure target)"
-        );
-        assert!(
-            !ov.receiver_kind.is_empty(),
-            "override missing receiver_kind"
-        );
-        assert_eq!(
-            ov.source_sha256.len(),
-            64,
-            "override source_sha256 must be a 64-hex-char SHA-256 digest (unit={})",
-            ov.unit
-        );
-        assert!(
-            ov.source_sha256
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "override source_sha256 must be lowercase hex (unit={})",
-            ov.unit
-        );
-        assert!(!ov.verdict.is_empty(), "override missing verdict");
-        let key = (ov.unit.clone(), ov.line as u64, ov.callee_fp);
-        assert!(
-            override_site_keys.insert(key),
-            "duplicate site key in adjudicated-overrides.json: {}:{} fp={}",
-            ov.unit,
-            ov.line,
-            ov.callee_fp
-        );
-    }
-    // Every `l3_error_intrinsic` manifest entry must have a matching overlay
-    // entry (also verdict `l3_error_intrinsic`) — the overlay is what
-    // actually makes `run_cdo_semantic_audit_on` stop flagging these sites, so a
-    // manifest entry without a matching overlay entry would silently keep
-    // failing the CDO gate despite claiming to be adjudicated.
-    let override_intrinsic_keys: std::collections::HashSet<(String, u64, u64)> = overrides
-        .entries
-        .iter()
-        .filter(|ov| ov.verdict == "l3_error_intrinsic")
-        .map(|ov| (ov.unit.clone(), ov.line as u64, ov.callee_fp))
-        .collect();
-    assert_eq!(
-        manifest_intrinsic_keys, override_intrinsic_keys,
-        "every known-genuine-divergences.json entry adjudicated l3_error_intrinsic must \
-         have a matching adjudicated-overrides.json entry (also l3_error_intrinsic), and \
-         vice versa — the two sets diverged"
-    );
-    assert_eq!(
-        overrides.entries.len(),
-        manifest_entries.len(),
-        "adjudicated-overrides.json must carry exactly one entry per          known-genuine-divergences.json site — the two files are 1:1 by          construction. (This replaced a hard-coded 54: that count described the          2026-07 CDO tree, and this test is unconditional, so it cannot know how          many divergences the live workspace has. The population itself is pinned          where reality is available — cdo_genuine_wrong_is_precedence_adjudicated          asserts the overlay's key set EQUALS the raw pre-overlay genuine_wrong          set.)"
-    );
-
-    // ── Non-circularity invariant (testable): overlay entries hold CANONICAL
-    // CATALOG KEYS / expected-route FACTS, never a serialized fresh edge id.
-    // Parse the raw JSON (not the typed struct, which would silently drop an
-    // unexpected field) and assert no entry's key set contains anything
-    // shaped like a fresh-computed graph/edge/routine identifier.
-    let overrides_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(adjudicated_overrides_path())
-            .expect("adjudicated-overrides.json must be readable"),
-    )
-    .expect("adjudicated-overrides.json must be valid JSON");
-    const FORBIDDEN_FRESH_EDGE_ID_FIELDS: &[&str] = &[
-        "resolved_target",
-        "resolved_target_id",
-        "fresh_edge_id",
-        "fresh_target",
-        "edge_id",
-        "routine_node_id",
-        "object_node_id",
-        "target_id",
-        "route_target",
-    ];
-    for ov in overrides_json["entries"]
-        .as_array()
-        .expect("overrides 'entries' must be an array")
-    {
-        let obj = ov
-            .as_object()
-            .expect("override entry must be a JSON object");
-        for forbidden in FORBIDDEN_FRESH_EDGE_ID_FIELDS {
-            assert!(
-                !obj.contains_key(*forbidden),
-                "adjudicated-overrides.json entry carries a fresh-edge-id-shaped field \
-                 {forbidden:?} — overlay entries must hold only canonical catalog keys \
-                 (name+arity+receiver-kind) derived independently of fresh's output, \
-                 NEVER a serialized fresh edge/route/graph-node id (non-circularity \
-                 invariant)"
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test 19b (CDO env-gated, beyond-1B.3b Task 3): genuine_wrong sites are
-// precedence-adjudicated from INDEPENDENT source criteria
-// ---------------------------------------------------------------------------
-
-/// Case-insensitive, whole-token scan for a LOCAL `procedure <name>(`
-/// declaration anywhere in `unit_content` — the lookup-precedence "does a
-/// source competitor shadow the catalog hit" check (Task 1: Source shadows
-/// Catalog).
-///
-/// Pure text search over the SAME live CDO source the test reads — no
-/// engine/resolver/graph involvement whatsoever. Deliberately permissive
-/// (matches any object member named `name`, not just ones reachable from a
-/// specific call site) so it stays conservative: a false POSITIVE here would
-/// only push a site toward `fresh_false_builtin`/re-investigation, never
-/// toward a false PASS.
-fn unit_declares_procedure_named(unit_content: &str, name_lc: &str) -> bool {
-    let lc = unit_content.to_ascii_lowercase();
-    let bytes = lc.as_bytes();
-    let needle = "procedure";
-    let mut start = 0usize;
-    while let Some(pos) = lc[start..].find(needle) {
-        let abs = start + pos;
-        let before_ok = abs == 0 || {
-            let c = bytes[abs - 1];
-            !(c.is_ascii_alphanumeric() || c == b'_')
-        };
-        let after_idx = abs + needle.len();
-        let after_ok = after_idx < bytes.len() && bytes[after_idx].is_ascii_whitespace();
-        if before_ok && after_ok {
-            let mut i = after_idx;
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            let tok_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let tok = &lc[tok_start..i];
-            if tok == name_lc {
-                let mut j = i;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j] == b'(' {
-                    return true;
-                }
-            }
-        }
-        start = abs + needle.len();
-    }
-    false
-}
-
-/// Case-insensitive, quote-agnostic, LINE-based scan for a `<var_name>: Page
-/// ...` variable declaration anywhere in `unit_content` — the independent
-/// (source-only) confirmation that a bare member-call receiver token really
-/// is a Page-typed variable, for the `PageInstanceVar` adjudication shape
-/// (argtype-dispatch-and-page-catalog plan, Task 1: general declared
-/// Page-typed variables, as opposed to the `CurrPage`/`Page` singleton
-/// `PageInstance` shape [`assert_shape_matches_receiver_kind`] already
-/// checks).
-///
-/// AL variable declarations are one per line (`Name: Page "X";` / `Name:
-/// Page X;`, optionally quoted on the name side) inside a `var` section, so a
-/// per-line `<name> :` prefix match followed immediately by `page` (after
-/// stripping an optional quote and whitespace) is sound for the declaration
-/// shapes this overlay's sites use. Deliberately whole-unit (not scoped to
-/// one routine's `var` section) — same conservative-permissive stance as
-/// [`unit_declares_procedure_named`]: a false POSITIVE only pushes a site
-/// toward re-investigation via a mismatched independent verdict elsewhere,
-/// never toward a false PASS of an otherwise-unverified claim.
-fn unit_declares_page_typed_var(unit_content: &str, var_name: &str) -> bool {
-    let needle_name = var_name.trim_matches('"').to_ascii_lowercase();
-    for line in unit_content.lines() {
-        let lc_line = line.trim().trim_start_matches('"').to_ascii_lowercase();
-        let Some(rest) = lc_line.strip_prefix(&needle_name) else {
-            continue;
-        };
-        let Some(rest) = rest.trim_start_matches('"').trim_start().strip_prefix(':') else {
-            continue;
-        };
-        if rest.trim_start().starts_with("page") {
-            return true;
-        }
-    }
-    false
-}
-
-/// Independently re-derive an [`AdjudicatedOverride`]'s verdict from LIVE
-/// `unit_content` plus the structural builtin catalog — see
-/// `semantic_golden.rs`'s `AdjudicatedOverride` doc comment for the full
-/// independence contract this function embodies: it calls ONLY
-/// [`is_global_builtin`]/[`member_builtin`] (the structural catalog) and
-/// [`unit_declares_procedure_named`] (a plain-text scan of the SAME unit) —
-/// never `resolve_full_program`, never a fresh-computed `Edge`.
-///
-/// `"Framework"` (record-field chains plan Task 4, entry 52): `catalog_key`'s
-/// PREFIX (before `::`, e.g. `"Text"`) is run through [`classify_type_text`]
-/// — the SAME pure string→shape classifier the resolver itself uses (never a
-/// bespoke re-implementation) — and MUST parse to `ParsedType::Framework`; an
-/// unrecognized prefix or a non-Framework shape (e.g. `Record`/`Primitive`)
-/// fails closed to `needs_manual_review` rather than silently skipping the
-/// catalog check. This covers a bare QUOTED FIELD receiver typed by its
-/// declared type text (`infer_receiver_type`'s Step 3a / `infer_compound_
-/// member_receiver`'s record-field arm) — unlike `PageInstance`/`Record`/
-/// `RecordRef`, the receiver is not a fixed keyword, so
-/// [`assert_shape_matches_receiver_kind`] does not apply a fixed-token check
-/// to it (only the catalog-membership + shadow checks below apply).
-///
-/// `"PageInstanceVar"` (argtype-dispatch-and-page-catalog plan, Task 1):
-/// SAME catalog (`PAGE_INSTANCE` is one shared platform-intrinsic catalog
-/// regardless of whether the receiver is the `CurrPage`/`Page` singleton or a
-/// general declared `Page`-typed variable — see
-/// `resolver::is_metadata_sensitive_instance_method`'s doc), so this arm
-/// delegates to the exact same `member_builtin` check as `"PageInstance"`.
-/// The two receiver_kinds differ only in what
-/// [`assert_shape_matches_receiver_kind`] independently verifies about the
-/// receiver TOKEN (a fixed CurrPage/Page keyword vs. a declared-variable
-/// name) — the catalog-membership question this function answers is
-/// identical either way.
-fn derive_verdict(ov: &AdjudicatedOverride, unit_content: &str) -> &'static str {
-    let method_lc = ov
-        .catalog_key
-        .rsplit("::")
-        .next()
-        .unwrap_or(&ov.catalog_key)
-        .to_ascii_lowercase();
-
-    let catalog_match = match ov.receiver_kind.as_str() {
-        "Global" => is_global_builtin(&method_lc),
-        "PageInstance" | "PageInstanceVar" => member_builtin(
-            MemberCatalogKind::Framework(&FrameworkKind::PageInstance),
-            &method_lc,
-        ),
-        "Record" => member_builtin(MemberCatalogKind::Record, &method_lc),
-        "RecordRef" => member_builtin(MemberCatalogKind::RecordRef, &method_lc),
-        "Framework" => {
-            let prefix = ov.catalog_key.split("::").next().unwrap_or("");
-            match classify_type_text(prefix) {
-                ParsedType::Framework(kind) => {
-                    member_builtin(MemberCatalogKind::Framework(&kind), &method_lc)
-                }
-                _ => return "needs_manual_review", // prefix isn't a recognized Framework type
-            }
-        }
-        _ => return "needs_manual_review", // unrecognized receiver kind — fail closed
+    use al_sem::program::resolve::compiler_golden::{
+        COMPILER_GOLDEN_SCHEMA_VERSION, cdo_compiler_golden_path, fixture_compiler_golden_path,
+        load_compiler_golden,
     };
-    if !catalog_match {
-        // The claimed catalog member doesn't actually exist for this
-        // receiver kind — fresh's builtin claim would be unsupported.
-        return "fresh_false_builtin";
-    }
-    if unit_declares_procedure_named(unit_content, &method_lc) {
-        // A source competitor shadows the catalog hit (Task 1 lookup
-        // precedence: Source shadows Catalog) — fresh should have picked the
-        // source routine, so a `builtin` claim here would be a fresh bug.
-        return "fresh_false_builtin";
-    }
-    "l3_error_intrinsic"
-}
+    use al_sem::program::resolve::compiler_oracle::EdgeClass;
 
-/// The call SHAPE parsed straight from `callee_text`, independent of the
-/// overlay's own `receiver_kind`: a bare GLOBAL call (no `.`) or a MEMBER
-/// call `<receiver>.<method>`, split on the FINAL `.`. Every `callee_text`
-/// in the overlay is a simple `Receiver.Method` token pair — no
-/// chained/qualified receivers appear among the 42 adjudicated sites — so a
-/// single `rfind('.')` split is sufficient. Deliberately lightweight: this
-/// is a syntax check, not a type-inferring parser (see
-/// `assert_shape_matches_receiver_kind`'s doc comment for what it does and
-/// does not prove).
-enum CallShape<'a> {
-    Global(&'a str),
-    Member { receiver: &'a str, method: &'a str },
-}
-
-fn parse_callee_shape(callee_text: &str) -> CallShape<'_> {
-    match callee_text.rfind('.') {
-        Some(idx) => CallShape::Member {
-            receiver: &callee_text[..idx],
-            method: &callee_text[idx + 1..],
-        },
-        None => CallShape::Global(callee_text),
-    }
-}
-
-/// Review-fix (beyond-1B.3b Task 3 fix pass): independently cross-check
-/// `ov.receiver_kind` and `ov.catalog_key`'s method component against the
-/// call SHAPE parsed straight from `ov.callee_text`, BEFORE `derive_verdict`
-/// is allowed to trust `receiver_kind` as given. Closes the review gap where
-/// a mislabeled `receiver_kind` (e.g. `"Global"` recorded for what is
-/// actually a member call `X.Method(...)` whose method name also happens to
-/// be a valid global builtin) would otherwise sail through `derive_verdict`
-/// unchallenged.
-///
-/// Checks performed (a lightweight SYNTAX check, not full type inference of
-/// the receiver variable's declared type — the shadow-absence and
-/// catalog-membership checks in `derive_verdict` already bound that; this
-/// only needs to catch a Global-vs-member/page-instance MISLABEL):
-/// - `Global` receiver_kind ⟺ `callee_text` has no `.`.
-/// - `PageInstance`/`PageInstanceVar`/`Record`/`RecordRef` receiver_kind ⟺
-///   `callee_text` has a `.` (a member call).
-/// - For a member call with `receiver_kind == "PageInstance"`, the receiver
-///   token (text before the final `.`) must be `CurrPage` or `Page` — the
-///   only page-instance-SINGLETON forms this overlay uses.
-/// - For a member call with `receiver_kind == "PageInstanceVar"` (argtype-
-///   dispatch-and-page-catalog plan, Task 1): the receiver token must NOT be
-///   `CurrPage`/`Page` (that shape is `"PageInstance"`) and `unit_content`
-///   (independent source text, the SAME unit the caller already read for the
-///   `source_sha256`/callee_text checks — never a fresh-computed value) must
-///   declare a `<receiver>: Page ...` variable somewhere in the unit
-///   ([`unit_declares_page_typed_var`]) — the source-only confirmation that
-///   this really is a Page-typed receiver, not merely a name that happens to
-///   end in "Page".
-/// - In both shapes, the parsed method token must match `catalog_key`'s
-///   method component (the part after `::`, or the whole key for a bare
-///   global).
-///
-/// Panics via `assert!`/`assert_eq!` on any mismatch — a hard, load-bearing
-/// check, not advisory.
-fn assert_shape_matches_receiver_kind(ov: &AdjudicatedOverride, unit_content: &str) {
-    let expected_method_lc = ov
-        .catalog_key
-        .rsplit("::")
-        .next()
-        .unwrap_or(&ov.catalog_key)
-        .to_ascii_lowercase();
-    match parse_callee_shape(&ov.callee_text) {
-        CallShape::Global(method) => {
-            assert_eq!(
-                ov.receiver_kind, "Global",
-                "{}:{}: callee_text {:?} is a bare (dot-free) call, but receiver_kind is \
-                 {:?} not \"Global\" — shape/receiver_kind mismatch",
-                ov.unit, ov.line, ov.callee_text, ov.receiver_kind,
-            );
-            assert_eq!(
-                method.to_ascii_lowercase(),
-                expected_method_lc,
-                "{}:{}: callee_text {:?} does not match catalog_key {:?}'s method component",
-                ov.unit,
-                ov.line,
-                ov.callee_text,
-                ov.catalog_key,
-            );
-        }
-        CallShape::Member { receiver, method } => {
-            assert!(
-                matches!(
-                    ov.receiver_kind.as_str(),
-                    "PageInstance" | "PageInstanceVar" | "Record" | "RecordRef" | "Framework"
-                ),
-                "{}:{}: callee_text {:?} is a member call (`<receiver>.<method>`), but \
-                 receiver_kind is {:?} — expected \
-                 PageInstance/PageInstanceVar/Record/RecordRef/Framework",
-                ov.unit,
-                ov.line,
-                ov.callee_text,
-                ov.receiver_kind,
-            );
-            if ov.receiver_kind == "PageInstance" {
-                assert!(
-                    receiver.eq_ignore_ascii_case("CurrPage")
-                        || receiver.eq_ignore_ascii_case("Page"),
-                    "{}:{}: PageInstance member call {:?} has receiver token {:?}, expected \
-                     CurrPage or Page (the page-instance forms this overlay uses)",
-                    ov.unit,
-                    ov.line,
-                    ov.callee_text,
-                    receiver,
-                );
-            }
-            if ov.receiver_kind == "PageInstanceVar" {
-                assert!(
-                    !receiver.eq_ignore_ascii_case("CurrPage")
-                        && !receiver.eq_ignore_ascii_case("Page"),
-                    "{}:{}: PageInstanceVar member call {:?} has receiver token {:?} — the \
-                     CurrPage/Page singleton shape must use receiver_kind \"PageInstance\" \
-                     instead",
-                    ov.unit,
-                    ov.line,
-                    ov.callee_text,
-                    receiver,
-                );
-                assert!(
-                    unit_declares_page_typed_var(unit_content, receiver),
-                    "{}:{}: PageInstanceVar member call {:?} has receiver token {:?}, but no \
-                     `{receiver}: Page ...` variable declaration was found anywhere in the \
-                     unit — cannot independently verify this is a Page-instance receiver",
-                    ov.unit,
-                    ov.line,
-                    ov.callee_text,
-                    receiver,
-                );
-            }
-            assert_eq!(
-                method.to_ascii_lowercase(),
-                expected_method_lc,
-                "{}:{}: callee_text {:?}'s method {:?} does not match catalog_key {:?}'s \
-                 method component",
-                ov.unit,
-                ov.line,
-                ov.callee_text,
-                method,
-                ov.catalog_key,
-            );
-        }
-    }
-}
-
-/// Count the top-level (paren/quote-depth-aware) comma-separated arguments
-/// of the call to `callee_text` found on `line_text` — an independent arity
-/// cross-check against `ov.arity`, so that field is load-bearing rather than
-/// vestigial (review-fix, beyond-1B.3b Task 3 fix pass).
-///
-/// Returns `None` — a deliberate, conservative bail-out, NOT arity 0 — when
-/// `callee_text` isn't immediately followed by `(` on this line, or when the
-/// argument list doesn't close before line end (e.g. a call whose arguments
-/// wrap onto a following line). Robustly counting arguments from source text
-/// is not reliable for every call form; callers must treat `None` as
-/// "cannot cross-check this site", never as a synthesized answer.
-///
-/// Quote-aware (both `'...'` string literals and `"..."` quoted
-/// identifiers, including the AL doubled-quote escape `''`/`""`) so commas
-/// inside string/identifier literals are never miscounted, and
-/// paren-depth-aware so a nested call's arguments (e.g. `CopyStr(X, 1,
-/// MaxStrLen(X))`) are not double-counted at the outer level.
-fn count_call_arity_on_line(line_text: &str, callee_text: &str) -> Option<usize> {
-    let lc_line = line_text.to_ascii_lowercase();
-    let lc_callee = callee_text.to_ascii_lowercase();
-    let start = lc_line.find(&lc_callee)?;
-    let after_callee = start + callee_text.len();
-    let bytes = line_text.as_bytes();
-
-    let mut i = after_callee;
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    if bytes.get(i) != Some(&b'(') {
-        return None; // not a call at this occurrence — cannot cross-check
-    }
-    i += 1; // past the opening '('
-    let arg_start = i;
-
-    let mut depth = 1i32;
-    let mut quote: Option<u8> = None;
-    let mut commas_at_top = 0usize;
-    let mut close_idx = None;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if let Some(q) = quote {
-            if c == q {
-                if bytes.get(i + 1) == Some(&q) {
-                    i += 2; // doubled-quote escape — stays inside the quote
-                    continue;
-                }
-                quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match c {
-            b'\'' | b'"' => quote = Some(c),
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    close_idx = Some(i);
-                    break;
-                }
-            }
-            b',' if depth == 1 => commas_at_top += 1,
-            _ => {}
-        }
-        i += 1;
-    }
-
-    let close_idx = close_idx?; // unbalanced by line end — bail out, don't guess
-    let inner = line_text[arg_start..close_idx].trim();
-    if inner.is_empty() {
-        Some(0)
-    } else {
-        Some(commas_at_top + 1)
-    }
-}
-
-/// Whether a source-level top-level comma count is a SOUND oracle for the
-/// overlay's recorded `arity` at this call (review-fix, beyond-1B.3b Task 3
-/// fix pass).
-///
-/// It is NOT sound for the "object-run static" dispatch forms —
-/// `Page.RunModal` / `Page.Run` / `Report.Run` / `Report.RunModal` /
-/// `Codeunit.Run` / `Query.Open` / `XmlPort.*` — whose FIRST syntactic
-/// argument is an object DESIGNATOR (`Page::"…"`) rather than a value
-/// argument. Whether that designator counts toward "arity" is a convention
-/// the committed overlay does NOT fix consistently: the two `Page.RunModal`
-/// entries disagree — `Page.RunModal(Page::"User Setup")` records arity 1
-/// (counting the designator), while `Page.RunModal(Page::"CDO Field List",
-/// Field)` records arity 1 (NOT counting it, i.e. only the record). Because
-/// `arity` is descriptive metadata only (it is NOT part of the site key and
-/// is never consumed by `apply_adjudicated_overrides`/the audit), this
-/// inconsistency is cosmetic; rather than false-fail a valid entry on an
-/// ambiguous convention we skip the numeric arity oracle for exactly these
-/// forms and document it (the shape/receiver-kind cross-check STILL runs for
-/// them). For every OTHER call form — bare globals and `CurrPage`/Record/
-/// RecordRef member calls — the parenthesized arguments are all value
-/// arguments and the count is a sound oracle.
-fn arity_source_count_is_sound(callee_text: &str) -> bool {
-    match parse_callee_shape(callee_text) {
-        CallShape::Member { receiver, .. } => !matches!(
-            receiver.to_ascii_lowercase().as_str(),
-            "page" | "report" | "codeunit" | "query" | "xmlport"
-        ),
-        CallShape::Global(_) => true,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// beyond-1B.3b Task 5.5: independent verification for the `CrossAppSourceProcedure`
-// override shape — a REAL procedure declared in a dependency app's own embedded
-// (ShowMyCode) source, verified WITHOUT reading any fresh-computed edge.
-// ---------------------------------------------------------------------------
-
-/// Find the `.app` file in `ws`'s `.alpackages` whose NavxManifest `App@Id`
-/// equals `guid` (case-insensitive). Scans every `.app` present — mirrors
-/// `crate::dependencies::load_all_apps`'s "every package found is parsed"
-/// discovery, independent of any snapshot/graph the fresh resolver built.
-fn find_app_by_guid(ws: &std::path::Path, guid: &str) -> std::path::PathBuf {
-    let alpackages = ws.join(".alpackages");
-    let entries = std::fs::read_dir(&alpackages)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", alpackages.display()));
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("app") {
-            continue;
-        }
-        if let Ok(pkg) = al_sem::app_package::extract_app_package(&path)
-            && pkg.metadata.app_id.eq_ignore_ascii_case(guid)
-        {
-            return path;
-        }
-    }
-    panic!(
-        "no .app in {} carries App@Id={guid:?}",
-        alpackages.display()
-    );
-}
-
-/// Independently confirm that `app_path`'s OWN embedded (ShowMyCode) AL
-/// source declares a `procedure <routine_lc>(` inside an object block headed
-/// `<object_kind_word> <object_lc> "..."` (or `<object_kind_word> <object_lc>` /
-/// unquoted for a name-only key) — a plain-text scan of the TARGET app's real
-/// source, structurally identical in spirit to [`unit_declares_procedure_named`]
-/// but reading the DEPENDENCY's source, not the CDO-side caller's. Returns the
-/// matching source file's virtual path for diagnostics, or `None` if no such
-/// declaration is found anywhere in the embedded source.
-fn target_app_declares_procedure(
-    app_path: &std::path::Path,
-    object_lc: &str,
-    routine_lc: &str,
-) -> Option<String> {
-    let files = al_sem::snapshot::embedded::extract_embedded_source(app_path).unwrap_or_else(|e| {
-        panic!(
-            "cannot extract embedded source from {}: {e}",
-            app_path.display()
-        )
-    });
-    let object_header_needle = format!(" {object_lc} ");
-    for f in &files {
-        let lc = f.text.to_ascii_lowercase();
-        if !lc.contains(&object_header_needle) {
-            continue;
-        }
-        if unit_declares_procedure_named(&f.text, routine_lc) {
-            return Some(f.virtual_path.clone());
-        }
-    }
-    None
-}
-
-/// beyond-1B.3b Task 5.5: independently verify one `CrossAppSourceProcedure`
-/// override entry — the counterpart to [`assert_shape_matches_receiver_kind`]
-/// and [`derive_verdict`] for the `builtin-catalog-fp-collision` shape, but for
-/// a cross-app SOURCE-PROCEDURE target instead of a platform-builtin one.
-///
-/// Confirms, entirely from LIVE data never touching a fresh-computed edge:
-/// 1. `callee_text` is a member call whose method component matches
-///    `target_routine_lc` (shape sanity — catches a stale/typo'd override).
-/// 2. The claimed target app (`target_app_guid`) has a `.app` present in
-///    `ws`'s `.alpackages` ([`find_app_by_guid`]).
-/// 3. That app's OWN embedded source really declares
-///    `procedure <target_routine_lc>(` on object `target_object_lc`
-///    ([`target_app_declares_procedure`]).
-///
-/// Panics (fail-closed) on any check failure — never silently skipped.
-fn verify_cross_app_source_procedure_override(ov: &AdjudicatedOverride, ws: &std::path::Path) {
-    let target_kind = ov.target_kind.unwrap_or_else(|| {
-        panic!(
-            "{}:{}: CrossAppSourceProcedure override missing target_kind",
-            ov.unit, ov.line
-        )
-    });
-    let target_app_guid = ov.target_app_guid.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: CrossAppSourceProcedure override missing target_app_guid",
-            ov.unit, ov.line
-        )
-    });
-    let target_object_lc = ov.target_object_lc.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: CrossAppSourceProcedure override missing target_object_lc",
-            ov.unit, ov.line
-        )
-    });
-    let target_routine_lc = ov.target_routine_lc.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: CrossAppSourceProcedure override missing target_routine_lc",
-            ov.unit, ov.line
-        )
-    });
-
-    // ── shape sanity: callee_text's method/name matches target_routine_lc ───
-    // Two caller-side shapes are admissible: a qualified MEMBER call
-    // (`X.Method(...)`, the original Task 5.5 shape) and, since beyond-1B.3b
-    // Task 3 (bare implicit-Rec dispatch), a BARE call (`Method(...)`) whose
-    // name IS the routine being invoked — AL's implicit-`Rec` fallback for a
-    // Page/Table/TableExtension/PageExtension bare call. Both are sound: the
-    // callee TEXT unambiguously names the routine either way; only the
-    // presence/absence of an explicit receiver differs.
-    match parse_callee_shape(&ov.callee_text) {
-        CallShape::Member { method, .. } => assert_eq!(
-            method.to_ascii_lowercase(),
-            target_routine_lc,
-            "{}:{}: callee_text {:?}'s method does not match target_routine_lc {:?}",
-            ov.unit,
-            ov.line,
-            ov.callee_text,
-            target_routine_lc,
-        ),
-        CallShape::Global(name) => assert_eq!(
-            name.to_ascii_lowercase(),
-            target_routine_lc,
-            "{}:{}: bare callee_text {:?} does not match target_routine_lc {:?}",
-            ov.unit,
-            ov.line,
-            ov.callee_text,
-            target_routine_lc,
-        ),
-    }
-
-    // ── target app + object/routine really exist in the target's own source ──
-    let app_path = find_app_by_guid(ws, target_app_guid);
-    let found = target_app_declares_procedure(&app_path, target_object_lc, target_routine_lc);
-    assert!(
-        found.is_some(),
-        "{}:{}: target app {} ({}) has no embedded source declaring `procedure {}(` on \
-         object {} — the CrossAppSourceProcedure override target is unverifiable",
-        ov.unit,
-        ov.line,
-        target_app_guid,
-        app_path.display(),
-        target_routine_lc,
-        target_object_lc,
-    );
-    eprintln!(
-        "CrossAppSourceProcedure verified: {}:{} -> target_app={target_app_guid} \
-         target_object={target_object_lc} target_routine={target_routine_lc} \
-         (found in {})",
-        ov.unit,
-        ov.line,
-        found.unwrap(),
-    );
-    // `target_kind` itself has no independent source-side representation to
-    // cross-check (object-kind words in AL source are unambiguous — a
-    // mismatched `target_kind` would only matter for the OVERLAY's applied
-    // GoldenTarget shape, checked structurally by `apply_adjudicated_overrides`
-    // matching `differential.rs`'s own `object_kind_str_to_tag` encoding).
-    let _ = target_kind;
-}
-
-/// The `SameAppSourceProcedure` analog of [`verify_cross_app_source_procedure_override`]
-/// (pageext-merge-and-final-residual plan, Task 2): the target routine lives
-/// in the CALLER'S OWN app, so `target_app_guid` is never looked up via
-/// `.alpackages` (a workspace never carries its OWN compiled `.app` as one of
-/// its own dependency packages — only genuine dependencies live there,
-/// verified: CDO_WS's `.alpackages` contains only its Continia dependency
-/// apps, never a copy of Continia Document Output itself). Instead
-/// `target_unit` names the target's OWN file directly in the live workspace
-/// source tree, read the SAME way `ov.unit` (the caller's file) already is.
-fn verify_same_app_source_procedure_override(ov: &AdjudicatedOverride, ws: &std::path::Path) {
-    let target_kind = ov.target_kind.unwrap_or_else(|| {
-        panic!(
-            "{}:{}: SameAppSourceProcedure override missing target_kind",
-            ov.unit, ov.line
-        )
-    });
-    let target_app_guid = ov.target_app_guid.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: SameAppSourceProcedure override missing target_app_guid",
-            ov.unit, ov.line
-        )
-    });
-    let target_object_lc = ov.target_object_lc.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: SameAppSourceProcedure override missing target_object_lc",
-            ov.unit, ov.line
-        )
-    });
-    let target_routine_lc = ov.target_routine_lc.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: SameAppSourceProcedure override missing target_routine_lc",
-            ov.unit, ov.line
-        )
-    });
-    let target_unit = ov.target_unit.as_deref().unwrap_or_else(|| {
-        panic!(
-            "{}:{}: SameAppSourceProcedure override missing target_unit",
-            ov.unit, ov.line
-        )
-    });
-
-    // ── same-app sanity: this shape is ONLY for a target in the caller's own
-    // app — a genuine cross-app target belongs in a CrossAppSourceProcedure
-    // entry instead, never this one. ──────────────────────────────────────
-    assert_eq!(
-        target_app_guid, ov.from_app_guid,
-        "{}:{}: SameAppSourceProcedure requires target_app_guid == from_app_guid \
-         (a cross-app target belongs in a CrossAppSourceProcedure entry instead)",
-        ov.unit, ov.line
-    );
-
-    // ── shape sanity: callee_text's method/name matches target_routine_lc ───
-    // Mirrors `verify_cross_app_source_procedure_override`'s identical check
-    // — both a qualified MEMBER call and a BARE call (AL's implicit-Rec
-    // fallback) are admissible shapes here.
-    match parse_callee_shape(&ov.callee_text) {
-        CallShape::Member { method, .. } => assert_eq!(
-            method.to_ascii_lowercase(),
-            target_routine_lc,
-            "{}:{}: callee_text {:?}'s method does not match target_routine_lc {:?}",
-            ov.unit,
-            ov.line,
-            ov.callee_text,
-            target_routine_lc,
-        ),
-        CallShape::Global(name) => assert_eq!(
-            name.to_ascii_lowercase(),
-            target_routine_lc,
-            "{}:{}: bare callee_text {:?} does not match target_routine_lc {:?}",
-            ov.unit,
-            ov.line,
-            ov.callee_text,
-            target_routine_lc,
-        ),
-    }
-
-    // ── target object + routine really exist in the target's OWN unit,
-    // read directly from the live workspace (never `.alpackages`) ──────────
-    let target_path = ws.join(target_unit);
-    let target_content = std::fs::read_to_string(&target_path).unwrap_or_else(|e| {
-        panic!(
-            "{}:{}: cannot read SameAppSourceProcedure target_unit {}: {e}",
-            ov.unit,
-            ov.line,
-            target_path.display(),
-        )
-    });
-    let target_lc = target_content.to_ascii_lowercase();
-    assert!(
-        target_lc.contains(&format!(" {target_object_lc} "))
-            || target_lc.contains(&format!(" {target_object_lc}\r"))
-            || target_lc.contains(&format!(" {target_object_lc}\n")),
-        "{}:{}: target_unit {} does not appear to declare object id/name {:?} \
-         (object-header sanity check failed)",
-        ov.unit,
-        ov.line,
-        target_unit,
-        target_object_lc,
-    );
-    assert!(
-        unit_declares_procedure_named(&target_content, target_routine_lc),
-        "{}:{}: target_unit {} has no `procedure {}(` declaration — the \
-         SameAppSourceProcedure override target is unverifiable",
-        ov.unit,
-        ov.line,
-        target_unit,
-        target_routine_lc,
-    );
-    eprintln!(
-        "SameAppSourceProcedure verified: {}:{} -> target_app={target_app_guid} \
-         target_object={target_object_lc} target_routine={target_routine_lc} \
-         (found in {target_unit})",
-        ov.unit, ov.line,
-    );
-    // Same non-independently-checkable note as the CrossAppSourceProcedure
-    // sibling: `target_kind` has no independent source-side representation.
-    let _ = target_kind;
-}
-
-/// beyond-1B.3b Task 3: for every entry in the committed adjudication overlay
-/// (`adjudicated-overrides.json`), INDEPENDENTLY re-derive/cross-check it
-/// from LIVE CDO source + the structural builtin catalog (never from
-/// fresh's output, never from this override's own committed fields) and
-/// assert agreement. Concretely, for each entry this test:
-///
-/// 1. Re-hashes the unit at test time and FAILS LOUDLY on any
-///    `source_sha256` mismatch (source drift — CDO_WS is a dirty live
-///    workspace with uncommitted edits) rather than silently trusting a
-///    possibly-stale adjudication.
-/// 2. Confirms `callee_text` still appears on the claimed line (line-drift
-///    catch).
-/// 3. Cross-checks the call SHAPE parsed straight from `callee_text` against
-///    `receiver_kind` and `catalog_key`'s method component
-///    ([`assert_shape_matches_receiver_kind`]) — BEFORE anything downstream
-///    is allowed to trust `receiver_kind` as given. Catches a
-///    Global-vs-member (and page-instance) mislabel.
-/// 4. Cross-checks `arity` against an independently-counted top-level
-///    argument count parsed from the call site
-///    ([`count_call_arity_on_line`]), when that count can be determined
-///    soundly from the single source line (a conservative bail-out
-///    otherwise — see that function's doc comment).
-/// 5. Re-derives the `verdict` itself ([`derive_verdict`]) from the
-///    structural catalog + a same-unit source-shadow scan, and asserts it
-///    matches the committed value.
-///
-/// This does NOT re-derive every field of [`AdjudicatedOverride`] — the site
-/// KEY fields (`from_app_guid`/`from_object_kind`/`from_object_lc`/
-/// `from_routine_lc`/`edge_kind`/`unit`/`line`/`callee_fp`) are identity
-/// fields used only to locate the site, not independently re-computed facts.
-///
-/// Fail-closed: ANY `needs_manual_review` or `fresh_false_builtin` survivor
-/// is a real bug (a mis-adjudicated site, or a genuine fresh-catalog gap
-/// Tasks 1-2 should have absorbed) and fails the test — never auto-passed.
-#[test]
-fn cdo_genuine_wrong_is_precedence_adjudicated() {
-    let Some(ws) = cdo_ws_or_enforce() else {
-        return;
-    };
-    let Some(shared) = cdo_shared() else {
-        return;
-    };
-
-    let overrides =
-        load_adjudicated_overrides(&adjudicated_overrides_path()).unwrap_or_else(|| {
-            panic!(
-                "adjudicated-overrides.json missing/invalid at {}",
-                adjudicated_overrides_path().display(),
-            )
-        });
-
-    // ── The overlay must correct EXACTLY the divergences that exist ─────────
-    //
-    // This replaces a bare `assert!(!overrides.entries.is_empty())`. That
-    // assertion assumed the adjudicated population would always be non-empty,
-    // which stopped being true when the baseline moved to a pinned workspace
-    // where the engine produces no genuine divergences at all. Worse, it guarded
-    // the wrong thing: it checked the FILE, not its use, so an empty overlay was
-    // simply rejected while a full-but-stale one sailed through.
-    //
-    // The check that actually holds: run the audit RAW (no overlay) to learn
-    // which sites genuinely diverge, and require the overlay's key set to EQUAL
-    // that set.
-    //
-    //   O == G      O = overlay's site keys, G = raw genuine_wrong site keys
-    //
-    // Empty then passes ONLY when G is empty too. Delete a needed override and G
-    // still contains the site while O does not — the assertion fires. Keep a
-    // stale override for a site that no longer diverges and O exceeds G — it
-    // fires again. Neither direction can be silenced by editing the file.
-    let raw = run_cdo_semantic_audit_on_raw(&shared.ctx, &shared.report, &ws, drift_handler);
-    let raw_genuine: std::collections::BTreeSet<(String, u32, u64)> = raw
-        .genuine_wrong_sites
-        .iter()
-        .map(|k| (k.unit.clone(), k.line, k.callee_fp))
-        .collect();
-    // O is built from the entries the overlay ACTUALLY APPLIES, i.e. the
-    // `l3_error_intrinsic` ones -- `apply_adjudicated_overrides_detailed` skips
-    // every other verdict. Mapping ALL entries here was a real hole (found by
-    // gemini-3.8-flash in review): an entry with any other verdict would satisfy
-    // O == G while never being applied, so the divergence it names would survive
-    // into the effective audit unadjudicated. The effective genuine_wrong_count
-    // assertion below is the backstop, but the set itself must describe reality.
-    let overlay_keys: std::collections::BTreeSet<(String, u32, u64)> = overrides
-        .entries
-        .iter()
-        .filter(|ov| ov.verdict == VERDICT_L3_ERROR_INTRINSIC)
-        .map(|ov| (ov.unit.clone(), ov.line, ov.callee_fp))
-        .collect();
-    // An entry with any other verdict is never applied, so it can only mislead.
-    assert!(
-        overrides
-            .entries
-            .iter()
-            .all(|ov| ov.verdict == VERDICT_L3_ERROR_INTRINSIC),
-        "adjudicated-overrides.json holds an entry whose verdict is not \
-         l3_error_intrinsic; such an entry is silently NOT applied by the \
-         overlay, so it would claim to adjudicate a divergence it never touches"
-    );
-
-    // Non-vacuity FIRST: a raw audit that paired nothing makes `raw_genuine`
-    // trivially empty, which would make the equality below meaningless. This is
-    // the exact failure that hid a broken baseline for two months — the audit
-    // reported `checked_sites == 0` and its genuine_wrong=0 was read as a pass.
-    assert!(
-        raw.paired > 0,
-        "raw semantic audit paired ZERO sites — the golden and the workspace do          not line up, so every downstream count is vacuous. Do NOT read this as          'no divergences'. Check CDO_WS against the golden's mint stamp."
-    );
-
-    assert_eq!(
-        overlay_keys, raw_genuine,
-        "adjudicated-overrides.json must correct exactly the sites that raw          (pre-overlay) auditing reports as genuine_wrong.
-  overlay-only (stale          overrides, correcting nothing): {:?}
-  raw-only (real divergences with          NO adjudication): {:?}
-An empty overlay is legitimate ONLY when the raw          genuine_wrong set is also empty.",
-        overlay_keys.difference(&raw_genuine).collect::<Vec<_>>(),
-        raw_genuine.difference(&overlay_keys).collect::<Vec<_>>(),
-    );
-
-    // Every override must actually CHANGE the oracle. A no-op override — one
-    // that rewrites a site with the value it already held — is indistinguishable
-    // from a live one in every count, so a stale overlay can look maintained
-    // forever. The committed overlay already contained one such entry.
-    let effective = run_cdo_semantic_audit_on(&shared.ctx, &shared.report, &ws, drift_handler);
-    assert!(
-        effective.overlay.no_op_sites.is_empty(),
-        "override(s) changed nothing — they rewrite a target the golden already          had, so they correct no divergence and only look like maintenance: {:?}",
-        effective.overlay.no_op_sites,
-    );
-    assert!(
-        effective.overlay.unmatched_sites.is_empty(),
-        "override(s) name a site the golden does not contain — a stale          adjudication, or a re-mint that moved the site: {:?}",
-        effective.overlay.unmatched_sites,
-    );
-    assert_eq!(
-        effective.genuine_wrong_count, 0,
-        "genuine_wrong survivors AFTER the adjudicated overlay — the overlay did          not cover every real divergence"
-    );
-
-    let mut l3_error_intrinsic = 0usize;
-    let mut fresh_false_builtin = 0usize;
-    let mut needs_manual_review = 0usize;
-
-    for ov in &overrides.entries {
-        let path = ws.join(&ov.unit);
-        let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read adjudicated unit {}: {e}", path.display()));
-
-        // ── source_sha256 drift check — FAIL, never silently skip ──────────
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        let actual_sha: String = hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        assert_eq!(
-            actual_sha,
-            ov.source_sha256,
-            "SOURCE DRIFT at {} ({}:{}): the CDO unit has changed since this adjudication \
-             was recorded. Re-verify the site against the CURRENT source, then update \
-             adjudicated-overrides.json's source_sha256 (and re-derive the verdict if the \
-             call site itself changed).",
-            path.display(),
-            ov.unit,
-            ov.line,
-        );
-
-        // ── callee_text sanity: still on the claimed (1-based) line ────────
-        let line_1based = ov.line as usize + 1;
-        let lines: Vec<&str> = content.lines().collect();
-        let line_text = lines.get(line_1based - 1).copied().unwrap_or("");
+    let cdo = load_compiler_golden(&cdo_compiler_golden_path())
+        .expect("cdo-compiler-anon.json must parse, even without CDO_WS");
+    let fixture = load_compiler_golden(&fixture_compiler_golden_path())
+        .expect("fixture-compiler-anon.json must parse");
+    for (name, g) in [("cdo", &cdo), ("fixture", &fixture)] {
+        assert_eq!(g.schema_version, COMPILER_GOLDEN_SCHEMA_VERSION, "{name}");
+        assert!(!g.pairs.is_empty(), "{name} golden must be non-empty");
         assert!(
-            line_text
-                .to_ascii_lowercase()
-                .contains(&ov.callee_text.to_ascii_lowercase()),
-            "callee_text {:?} not found on {}:{} (line drifted?) — line reads: {:?}",
-            ov.callee_text,
-            ov.unit,
-            line_1based,
-            line_text,
+            g.pairs.windows(2).all(|w| w[0] < w[1]),
+            "{name} golden pairs must be sorted and duplicate-free"
         );
-
-        // ── CrossAppSourceProcedure shape (beyond-1B.3b Task 5.5): a SEPARATE
-        // independent-verification path — the target is a real cross-app
-        // procedure, not a structural-catalog builtin, so the builtin-shape
-        // checks below (shape/receiver_kind, arity, catalog-membership
-        // verdict derivation) do not apply. Verify against the TARGET app's
-        // own embedded source instead, then move to the next entry.
-        if ov.receiver_kind == "CrossAppSourceProcedure" {
-            verify_cross_app_source_procedure_override(ov, &ws);
-            assert_eq!(
-                ov.verdict, VERDICT_L3_ERROR_INTRINSIC,
-                "{}:{}: CrossAppSourceProcedure entries must be verdict l3_error_intrinsic",
-                ov.unit, ov.line
-            );
-            l3_error_intrinsic += 1;
-            continue;
-        }
-
-        // ── SameAppSourceProcedure shape (pageext-merge-and-final-residual
-        // plan, Task 2): the same-app analog of CrossAppSourceProcedure — the
-        // target routine lives in the CALLER'S OWN app (a compiler-grounded
-        // bare-implicit-Rec dispatch that L3's frozen golden mis-paired or
-        // missed), so it is verified against the LIVE workspace source tree
-        // directly (`target_unit`), never `.alpackages`. ─────────────────────
-        if ov.receiver_kind == "SameAppSourceProcedure" {
-            verify_same_app_source_procedure_override(ov, &ws);
-            assert_eq!(
-                ov.verdict, VERDICT_L3_ERROR_INTRINSIC,
-                "{}:{}: SameAppSourceProcedure entries must be verdict l3_error_intrinsic",
-                ov.unit, ov.line
-            );
-            l3_error_intrinsic += 1;
-            continue;
-        }
-
-        // ── shape / receiver_kind cross-check — BEFORE trusting either ──────
-        assert_shape_matches_receiver_kind(ov, &content);
-
-        // ── arity cross-check — BEFORE trusting `arity` ─────────────────────
-        // Only where source-level comma counting is a sound oracle for the
-        // recorded arity (see `arity_source_count_is_sound`: the object-run
-        // static forms carry an object-designator first argument whose
-        // arity convention the overlay does not fix, so they are skipped).
-        if arity_source_count_is_sound(&ov.callee_text) {
-            match count_call_arity_on_line(line_text, &ov.callee_text) {
-                Some(counted_arity) => {
-                    assert_eq!(
-                        counted_arity, ov.arity,
-                        "{}:{}: counted {counted_arity} top-level argument(s) for {:?} at the \
-                         call site, but the committed arity is {} — arity cross-check mismatch \
-                         (re-verify the site)",
-                        ov.unit, ov.line, ov.callee_text, ov.arity,
-                    );
-                }
-                None => {
-                    eprintln!(
-                        "NOTE: arity cross-check skipped for {}:{} ({:?}) — could not robustly \
-                         parse a single-line balanced argument list (conservative bail-out, not \
-                         a failure)",
-                        ov.unit, ov.line, ov.callee_text,
-                    );
-                }
-            }
-        } else {
-            eprintln!(
-                "NOTE: arity cross-check skipped for {}:{} ({:?}) — object-run static dispatch \
-                 form (object-designator first argument makes source comma count an unsound \
-                 arity oracle; shape/receiver-kind still checked)",
-                ov.unit, ov.line, ov.callee_text,
-            );
-        }
-
-        // ── independent verdict re-derivation ───────────────────────────────
-        let verdict = derive_verdict(ov, &content);
-        assert_eq!(
-            verdict, ov.verdict,
-            "independently-derived verdict for {}:{} (catalog_key={:?}, receiver_kind={:?}) \
-             is {:?}, but the committed adjudication says {:?} — re-investigate before \
-             trusting the overlay.",
-            ov.unit, ov.line, ov.catalog_key, ov.receiver_kind, verdict, ov.verdict,
+        // Line 0 = no line in the compiler graph (`Interface`/`Event` edges);
+        // a Trigger edge always has one.
+        assert!(
+            g.pairs
+                .iter()
+                .all(|p| p.line >= 1 || p.class != EdgeClass::Trigger),
+            "{name} golden: a Trigger pair has no line"
         );
-
-        match verdict {
-            "l3_error_intrinsic" => l3_error_intrinsic += 1,
-            "fresh_false_builtin" => fresh_false_builtin += 1,
-            _ => needs_manual_review += 1,
-        }
     }
 
-    eprintln!(
-        "Test 19b — independent source adjudication: l3_error_intrinsic={l3_error_intrinsic} \
-         fresh_false_builtin={fresh_false_builtin} needs_manual_review={needs_manual_review} \
-         (total={})",
-        overrides.entries.len(),
+    let m = &cdo.metadata;
+    assert!(
+        m.workspace_git_sha
+            .as_deref()
+            .is_some_and(|s| s.len() == 40),
+        "cdo golden must stamp the workspace's full git sha"
     );
-
-    assert_eq!(
-        needs_manual_review, 0,
-        "needs_manual_review must be 0 — any survivor is an unresolved adjudication \
-         dimension (fail-closed, never auto-passed)"
+    assert_eq!(m.workspace_dirty, Some(false), "minted from a clean tree");
+    assert!(
+        m.dependency_closure_sha256
+            .as_deref()
+            .is_some_and(|c| c.starts_with("closure-v2:")),
+        "cdo golden must stamp the dependency closure"
     );
-    assert_eq!(
-        fresh_false_builtin, 0,
-        "fresh_false_builtin must be 0 — any survivor is a real fresh-catalog bug that \
-         Tasks 1-2 should have absorbed (source shadows catalog, or the claimed catalog \
-         member doesn't actually exist)"
+    assert!(
+        cdo.compiler.extension.starts_with("ms-dynamics-smb.al-"),
+        "cdo golden must name the AL extension its graph came from"
     );
+    for class in [EdgeClass::Call, EdgeClass::Trigger, EdgeClass::Event] {
+        assert!(
+            cdo.pairs.iter().any(|p| p.class == class),
+            "cdo golden must contain {class:?} pairs"
+        );
+    }
+    // The fixture's workspace is this repository: no stamps (mint-goldens --fixture).
+    assert_eq!(fixture.metadata, Default::default());
 }
 
 // ---------------------------------------------------------------------------
@@ -6659,28 +4819,45 @@ fn assert_stays_ambiguous_resolved(report: &ProgramReport, caller_name_lc: &str)
     );
 }
 
-/// Test 23j: `CallVariant(S: InStream)` calls `T.V(S)` where `V` overloads
-/// on `(Variant)` / `(Integer)` — the Round-1 addendum's Variant-wildcard
-/// rule (I5): a Variant candidate at a discriminating position degrades the
-/// WHOLE call, even though a naive exclusion-style matcher would have
-/// eliminated `Integer` (InStream vs Integer are disjoint) and left Variant
-/// as an UNPROVEN "sole survivor" — that is not a confident pick.
-#[test]
-fn ws_overload_negatives_call_variant_stays_ambiguous_resolved() {
-    assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callvariant");
+fn ws_overload_negatives_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/r0-corpus/ws-overload-negatives")
 }
 
-/// Test 23k: `CallIndistinct(A: Integer; B: Text)` calls `T.I(A, B)` where
-/// `I` overloads on `(Integer, Text)` / `(Integer, Code[20])` — position 0
-/// is identical on both (non-discriminating); position 1's declared `Text`
-/// arg EXACTLY matches the `Text` candidate, but `Code[20]` is NOT
-/// eliminated (Text and Code are the SAME "text-ish" soft family — AL's own
-/// Text<->Code conversions mean a declared Text var is not PROVEN
-/// incompatible with a `Code[20]` parameter). The undecided `Code[20]`
-/// candidate blocks the pick.
+/// Test 23j, renamed from `..._call_variant_stays_ambiguous_resolved`
+/// (S9.5c; it pinned Round-1 addendum I5, "never pick the Variant
+/// survivor"): `CallVariant(S: InStream)` calls `T.V(S)` over `(Variant)` /
+/// `(Integer)`. An InStream cannot become an Integer (AL0133), so `V(Variant)`
+/// is the one overload that applies and binds — the compiler's choice (altool
+/// graph on this fixture: `CallVariant -> Neg Target.V` at the Variant
+/// declaration).
 #[test]
-fn ws_overload_negatives_call_indistinct_stays_ambiguous_resolved() {
-    assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callindistinct");
+fn ws_overload_negatives_call_variant_binds_the_variant_overload() {
+    let report = ws_overload_negatives_report();
+    assert_binds_param(
+        &report,
+        &ws_overload_negatives_dir(),
+        "callvariant",
+        "variant",
+    );
+}
+
+/// Test 23k, renamed from `..._call_indistinct_stays_ambiguous_resolved`
+/// (S9.5c): `CallIndistinct(A: Integer; B: Text)` calls `T.I(A, B)` over
+/// `(Integer, Text)` / `(Integer, Code[20])`. The Text argument exactly
+/// matches the first; the second needs a Text-to-Code conversion, and an
+/// exact match beats a conversion — the compiler binds `I(Integer; Text)`
+/// (altool graph on this fixture). Until S9.5c the convertible sibling
+/// blocked the pick.
+#[test]
+fn ws_overload_negatives_call_indistinct_binds_the_exact_text_overload() {
+    let report = ws_overload_negatives_report();
+    assert_binds_param(
+        &report,
+        &ws_overload_negatives_dir(),
+        "callindistinct",
+        "b: text",
+    );
 }
 
 /// Test 23l: `CallObject(L: Codeunit "Neg Target")` calls `T.O(L)` where `O`
@@ -6692,20 +4869,138 @@ fn ws_overload_negatives_call_object_stays_ambiguous_resolved() {
     assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callobject");
 }
 
-/// Test 23m (deferred-increment guard): `ws-overload-enum-discriminator`'s
-/// `Run()` calls `T.P("Probe Kind"::Open)` — a qualified-enum-value
-/// argument (`ExprKind::QualifiedEnum`) is NOT a bare identifier/param/local/
-/// global reference NOR a literal; this increment's `type_one_arg` leaves it
-/// untyped (deferred — Enum::Value arg typing is a documented future
-/// increment). Must stay `AmbiguousResolved`, proving the deferral is
-/// honored rather than silently mistyped.
+/// Test 23m, renamed from `..._stays_ambiguous_resolved` (engine-switch S9.5c):
+/// `ws-overload-enum-discriminator`'s `Run()` calls `T.P("Probe Kind"::Open)`
+/// over `P(Enum "Probe Kind")`/`P(InStream)`. An enum value now types as its
+/// enum, so the call binds the Enum overload, as the compiler does (altool graph
+/// on this fixture: `Run -> EN Target.P` at the Enum declaration). Until S9.5c
+/// the argument was untyped and the call stayed ambiguous.
 #[test]
-fn ws_overload_enum_discriminator_stays_ambiguous_resolved() {
+fn ws_overload_enum_discriminator_binds_the_enum_overload() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r0-corpus/ws-overload-enum-discriminator");
     let report = resolve_full_program(&fixture)
         .expect("resolve_full_program must succeed on ws-overload-enum-discriminator");
-    assert_stays_ambiguous_resolved(&report, "run");
+    assert_binds_param(&report, &fixture, "run", "enum");
+}
+
+/// The one routine the OUTER call of `caller_name_lc` binds must declare a
+/// parameter whose type text contains `param_type_lc`. `root` is the workspace
+/// the report was built from (the witness file is relative to it).
+fn assert_binds_param(
+    report: &ProgramReport,
+    root: &std::path::Path,
+    caller_name_lc: &str,
+    param_type_lc: &str,
+) {
+    let edge = &outer_call_edge(report, caller_name_lc).edge;
+    assert_eq!(
+        edge.shape,
+        DispatchShape::Exact,
+        "{caller_name_lc}: {edge:?}"
+    );
+    let [route] = edge.routes.as_slice() else {
+        panic!(
+            "{caller_name_lc}: expected one route, got {:?}",
+            edge.routes
+        );
+    };
+    let Witness::SourceSpan { ref file, span } = route.witness else {
+        panic!("{caller_name_lc}: expected a source witness, got {route:?}");
+    };
+    let src = std::fs::read_to_string(root.join(file)).expect("read witness file");
+    let decl = src[span.0 as usize..span.1 as usize].to_ascii_lowercase();
+    assert!(
+        decl.contains(param_type_lc),
+        "{caller_name_lc}: bound `{decl}`, expected a `{param_type_lc}` parameter"
+    );
+}
+
+/// Engine-switch S9.5c: enum-value arguments, stated inline. `EI` overloads on
+/// `(Enum "SV Kind")`/`(Integer)`. The compiler (alc 18.0.41.45789, altool
+/// graph) binds `EI("SV Kind"::Open)` to the Enum overload and an option
+/// value (`R.Opt::A`, an option variable's `K::A`, also when the variable is
+/// named like the enum) to the Integer one. Only the
+/// enum value is typed; the option values stay untyped, so those calls stay
+/// ambiguous (never mistyped as the enum).
+#[test]
+fn enum_value_arguments_type_as_their_enum_and_option_values_do_not() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-5e5e5e5e5e5e", "name": "ProbeSV", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50170, "to": 50179 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"enum 50170 "SV Kind"
+{
+    Extensible = true;
+    value(0; Open) { }
+    value(1; Closed) { }
+}
+
+table 50171 "SV Rec"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Opt; Option) { OptionMembers = A,B; }
+    }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50172 "SV Target"
+{
+    procedure EI(K: Enum "SV Kind"): Integer begin exit(0); end;
+    procedure EI(I: Integer): Integer begin exit(1); end;
+}
+
+codeunit 50173 "SV Caller"
+{
+    procedure EnumValue()
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI("SV Kind"::Open);
+    end;
+
+    procedure OptionField(R: Record "SV Rec")
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI(R.Opt::A);
+    end;
+
+    procedure OptionVar()
+    var
+        T: Codeunit "SV Target";
+        K: Option A,B;
+    begin
+        T.EI(K::A);
+    end;
+
+    procedure ShadowingVar()
+    var
+        T: Codeunit "SV Target";
+        "SV Kind": Option Open,Closed;
+    begin
+        T.EI("SV Kind"::Open);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "enumvalue", "enum");
+    assert_stays_ambiguous_resolved(&report, "optionfield");
+    assert_stays_ambiguous_resolved(&report, "optionvar");
+    // A local option variable named like the enum shadows it: the compiler binds
+    // `EI(Integer)` (probe `ShadowVarToEI`), so the value must not type as the enum.
+    assert_stays_ambiguous_resolved(&report, "shadowingvar");
 }
 
 /// Test 23n (deferred-increment guard): `ws-overload-field-discriminator`'s
@@ -6928,17 +5223,18 @@ fn non_discriminating_untyped_arg_sibling_picks() {
     assert_picks_init_new(&report, tmp.path(), "runoptionvar", "lineno: integer");
 }
 
-/// Negatives the fix must keep: `Text` vs `Code[20]` stays ambiguous because
-/// a pick needs an EXACT match (a `Text` var matches neither overload
-/// exactly). `Text`->`Integer` is provably incompatible, so AL itself would
-/// bind `Code[20]`; this pins our conservative rule, not AL behaviour. A `Decimal` field
-/// exactly matches neither overload; and an untyped arg AT the discriminating
-/// position still degrades the whole call.
+/// Neither overload matches exactly, but only one can take the argument, so
+/// it binds (S9.5c; until then both stayed ambiguous, "our conservative rule,
+/// not AL behaviour"). A `Text` cannot become an `Integer` (AL0133), so
+/// `RunTextVar` binds `Code[20]`; a `Decimal` cannot become a `Code` (AL0133)
+/// but converts to `Integer`, so `RunDecimalField` binds `Integer` — both the
+/// compiler's picks for this shape (altool graph, probe `F15`). An untyped arg
+/// AT the discriminating position still degrades the whole call.
 #[test]
-fn non_discriminating_untyped_arg_negatives_stay_ambiguous() {
-    let (_tmp, report) = non_discriminating_untyped_report();
-    assert_stays_ambiguous_resolved(&report, "runtextvar");
-    assert_stays_ambiguous_resolved(&report, "rundecimalfield");
+fn non_discriminating_untyped_arg_sole_applicable_binds_and_untyped_stays_ambiguous() {
+    let (tmp, report) = non_discriminating_untyped_report();
+    assert_picks_init_new(&report, tmp.path(), "runtextvar", "valuecode: code[20]");
+    assert_picks_init_new(&report, tmp.path(), "rundecimalfield", "lineno: integer");
     assert_stays_ambiguous_resolved(&report, "rununtypeddisc");
 }
 
@@ -12052,7 +10348,7 @@ fn routines_in_object_equals_the_old_per_routine_map_on_cdo() {
 /// `app.json`) are not single workspaces and are skipped.
 #[test]
 fn adapter_loses_no_site_or_route_on_the_fixtures() {
-    use al_sem::engine::l3::program_calls::adapter_census_for_workspace;
+    use al_sem::program::model::program_calls::adapter_census_for_workspace;
     let mut checked = 0;
     let mut failures = Vec::new();
     let mut dirs: Vec<_> = std::fs::read_dir("tests/r0-corpus")
@@ -12088,7 +10384,7 @@ fn adapter_loses_no_site_or_route_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
         return;
     };
-    let census = al_sem::engine::l3::program_calls::adapter_census_for_workspace(&ws)
+    let census = al_sem::program::model::program_calls::adapter_census_for_workspace(&ws)
         .expect("census of CDO_WS");
     assert!(census.program_sites > 0, "CDO precondition: program sites");
     assert_eq!(census.losses(), vec![], "CDO adapter losses");
@@ -12153,9 +10449,16 @@ fn dependency_body_unknown_ceiling_on_cdo() {
     // Dependency `ambiguousResolved` (closed overload candidate sets): 863 at
     // the start of S9.0e, 710 before the `#if` split-header fix, 716 after it
     // (calls seeing both arms of one routine), 710 again once overload
-    // selection narrows candidates to the call's build. A rise is lost
-    // precision; list the sites with `--sites` (`ambiguousSites`).
-    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 710;
+    // selection narrows candidates to the call's build, 679 once an enum
+    // value argument types as its enum (S9.5c; 20 of the 31 sites checked
+    // against the compiler graph, all on the Enum overload, the other 11 are
+    // repeat calls the graph keeps one edge for), 459 once an exact match beats
+    // a conversion and a sole applicable overload binds (S9.5c; all 220 sites
+    // checked against the compiler graph: 178 on the compiler's overload at the
+    // same line, 42 repeat calls on an overload the compiler binds from that
+    // file, 0 wrong). A rise is lost precision; list the sites with `--sites`
+    // (`ambiguousSites`).
+    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 459;
     assert!(
         h.ambiguous_resolved <= CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
         "dependency-body ambiguousResolved edges {} exceed the ceiling {}; list them \

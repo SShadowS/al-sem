@@ -2,7 +2,6 @@
 #[path = "../common/regen.rs"]
 mod regen;
 
-mod r3a0_unfetched_dep_opaque;
 mod r3a1_differential;
 mod r3a1_oracles;
 mod r3a1_vectors;

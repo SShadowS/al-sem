@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -19,19 +18,20 @@ use crate::engine::l5::ordering_facts::{
     stable_routine_id_for_routine, to_severity,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d49-uncommitted-write-before-ui";
 
 fn to_src(
     contract: Option<&crate::engine::l5::digest::ProjectedEvidence>,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
 ) -> Option<SourceAnchor> {
     crate::engine::l5::ordering_facts::to_source_anchor(contract, &routine.id)
 }
 
 fn build_d49_finding(
     fp: &FingerprintIndex,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     of: &OrderingFacts,
     fact: &OrderingFact,
     sev: &str,
@@ -115,7 +115,7 @@ fn build_d49_finding(
 }
 
 pub fn detect_d49(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

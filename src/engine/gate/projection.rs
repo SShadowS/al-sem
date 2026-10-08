@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
 use crate::engine::l5::finding::{Finding, SourceAnchor};
+use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 /// `FindingLocation` (finding-summary.ts). `line`/`column` are 1-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,12 +47,12 @@ pub struct FindingSummary {
 
 /// Per-model id indexes for the projection (mirror `indexFor`).
 pub struct ProjectionIndex<'a> {
-    pub objects_by_id: HashMap<&'a str, &'a L3Object>,
-    pub routines_by_id: HashMap<&'a str, &'a L3Routine>,
+    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
+    pub routines_by_id: HashMap<&'a str, &'a ModelRoutine>,
 }
 
 impl<'a> ProjectionIndex<'a> {
-    pub fn build(objects: &'a [L3Object], routines: &'a [L3Routine]) -> Self {
+    pub fn build(objects: &'a [ModelObject], routines: &'a [ModelRoutine]) -> Self {
         ProjectionIndex {
             objects_by_id: objects.iter().map(|o| (o.id.as_str(), o)).collect(),
             routines_by_id: routines.iter().map(|r| (r.id.as_str(), r)).collect(),
@@ -234,8 +234,8 @@ mod tests {
     /// answer 1.
     #[test]
     fn cohort_bearing_path_count_counts_cohorts_not_the_dropped_field() {
-        let objects: Vec<L3Object> = Vec::new();
-        let routines: Vec<L3Routine> = Vec::new();
+        let objects: Vec<ModelObject> = Vec::new();
+        let routines: Vec<ModelRoutine> = Vec::new();
         let idx = ProjectionIndex::build(&objects, &routines);
 
         let f = finding(Some(vec![cohort(), cohort(), cohort()]), None);

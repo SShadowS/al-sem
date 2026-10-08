@@ -13,8 +13,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::event_graph::EventSymbol;
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
@@ -22,13 +20,15 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::{ObsoleteState, parse_routine_attributes};
+use crate::program::model::events::EventSymbol;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 use super::anchor_of;
 
 const DETECTOR: &str = "d38-subscriber-to-obsolete-event";
 
 pub fn detect_d38(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;
@@ -56,7 +56,7 @@ pub fn detect_d38(
         let Some(subscriber) = ctx.routine_by_id.get(edge.subscriber_routine_id.as_str()) else {
             continue;
         };
-        let subscriber: &L3Routine = subscriber;
+        let subscriber: &ModelRoutine = subscriber;
         // roleOf(subscriber) !== "primary" → skip. Source-only ⇒ always primary.
         if subscriber.parse_incomplete {
             continue;
@@ -73,7 +73,7 @@ pub fn detect_d38(
             skipped_publisher_missing += 1;
             continue;
         };
-        let publisher: &L3Routine = publisher;
+        let publisher: &ModelRoutine = publisher;
         candidates_considered += 1;
 
         let attrs = parse_routine_attributes(&publisher.attributes_parsed);

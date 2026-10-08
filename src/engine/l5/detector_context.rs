@@ -15,17 +15,11 @@
 //!
 //! The R4-G wave wired `reachable_roots` + `internal_reachable_externally` (D14):
 //! `reachable_roots` is built via `entry_points::find_reachable_roots` over the
-//! `access_modifiers` map harvested from `L3Routine.access_modifier`;
+//! `access_modifiers` map harvested from `ModelRoutine.access_modifier`;
 //! `internal_reachable_externally` DEFAULTS to `false` (see field doc).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::engine::l2::features::PCallSite;
-use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding, calls_for};
-use crate::engine::l3::event_graph::events_for;
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
-use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
@@ -47,6 +41,10 @@ use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::{ReverseCallGraph, build_reverse_call_graph};
 use crate::engine::l5::transaction_spans::{TransactionSpan, compute_transaction_spans};
 use crate::engine::perf_trace as pt;
+use crate::program::body::features::PCallSite;
+use crate::program::model::calls::{CallEdge, UpgradedBinding};
+use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 use serde_json::json;
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
@@ -589,9 +587,9 @@ pub struct DetectorContext<'a> {
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
     /// captured here rather than recomputed.
     pub event_graph: EventGraph,
-    pub routine_by_id: HashMap<&'a str, &'a L3Routine>,
-    pub objects_by_id: HashMap<&'a str, &'a L3Object>,
-    pub table_by_id: HashMap<&'a str, &'a L3Table>,
+    pub routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
+    pub table_by_id: HashMap<&'a str, &'a ModelTable>,
     pub reverse_call_graph: ReverseCallGraph,
     /// Trigger + event-subscriber roots — transaction-span boundaries.
     pub entry_points: BTreeSet<String>,
@@ -675,7 +673,7 @@ pub struct DetectorContext<'a> {
     /// event-subscriber) PLUS the procedures al-sem cannot prove app-scoped
     /// (non-`local`; `internal` only when `internal_reachable_externally`). Built
     /// by `entry_points::find_reachable_roots` over the `access_modifiers` map
-    /// harvested from `L3Routine.access_modifier`. Sorted; d14 BFS-seeds from it.
+    /// harvested from `ModelRoutine.access_modifier`. Sorted; d14 BFS-seeds from it.
     pub reachable_roots: BTreeSet<String>,
     /// al-sem `(model.identity.primaryInternalsVisibleTo?.length ?? 0) > 0` — true
     /// when some other app is granted `internal` access (so `internal` procedures
@@ -723,7 +721,7 @@ pub struct DetectorContext<'a> {
     /// The resolved model `get_ordering_facts()` computes from. `None` for the
     /// cross-app context (whose ordering facts are ALWAYS empty — d13/d16/d17
     /// never read them; matches the previous eager `HashMap::new()`).
-    pub ordering_source: Option<&'a L3Resolved>,
+    pub ordering_source: Option<&'a Model>,
     /// G-19 — the closed-world proven-temp `(routineId, paramIndex)` set: a
     /// keyword-less by-var record param of a `local` procedure ALL of whose
     /// resolved callers (and the routine's complete, fully-resolved same-object
@@ -823,8 +821,8 @@ impl DetectorContext<'_> {
     }
 }
 
-/// Build the shared context. Runs the SOURCE-ONLY L3→L4 substrate (symbols →
-/// resolve_calls → event_graph → combined_graph → cone) to assemble the combined
+/// Build the shared context. Runs the L4 substrate over the model's calls and
+/// event graph (combined_graph → cone) to assemble the combined
 /// graph + the always-built eager indexes, then builds ONLY the expensive substrates
 /// named in `demanded` (see `registry::substrate`).
 ///
@@ -849,7 +847,7 @@ impl DetectorContext<'_> {
 /// and every summary carries `capability_facts_inherited: None`. With it the cone
 /// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
 /// byte-identical to the pre-Task-3 build.
-pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorContext<'_> {
+pub fn build_detector_context(resolved: &Model, demanded: u32) -> DetectorContext<'_> {
     build_detector_context_with(resolved, demanded, None)
 }
 
@@ -872,7 +870,7 @@ pub(crate) struct CrossAppInputs<'b> {
 /// for both since engine-switch S8.1; the cross-app one (which built every
 /// substrate whatever the detectors asked for) is gone.
 pub(crate) fn build_detector_context_with<'a>(
-    resolved: &'a L3Resolved,
+    resolved: &'a Model,
     demanded: u32,
     cross: Option<CrossAppInputs<'_>>,
 ) -> DetectorContext<'a> {
@@ -902,21 +900,14 @@ pub(crate) fn build_detector_context_with<'a>(
          cone would silently build empty; OR in substrate::SUMMARIES alongside it"
     );
 
-    // --- L3→L4 substrate (source-only: no deps) ----------------------------
-    // `symbols` feeds BOTH spans below (`calls_for` here, `events_for` in the next
-    // stage; each reads the program engine's result when `resolved` carries one,
-    // engine-switch S3/S4), so it is built at this outer scope instead of inside either
-    // span's own block — the two spans are closed explicitly (`drop`) at their
-    // semantic stage ends rather than by a block boundary (same pattern as
-    // `gate/run.rs`'s `gate.project_filter_scope_baseline_suppress`).
+    // --- L3→L4 substrate: the model's calls and events (the program engine's) ---
     let _symbols_span = pt::span("context", "context.symbols_resolve_calls");
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     // Owned: the body below drains `calls.edges`/`upgraded_bindings` by move.
-    let mut calls = calls_for(resolved, &symbols).into_owned();
+    let mut calls = (*resolved.calls).clone();
     drop(_symbols_span);
 
     let _graph_span = pt::span("context", "context.event_combined_graph");
-    let event_graph = events_for(resolved, &symbols).into_owned();
+    let event_graph = resolved.events.graph.clone();
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
     if let Some(c) = &cross {
         graph
@@ -1138,15 +1129,15 @@ pub(crate) fn build_detector_context_with<'a>(
     crate::engine::l4::cone_census::emit_full_census(&summaries, &cone_derived);
 
     // --- Eager indexes -----------------------------------------------------
-    let routine_by_id: HashMap<&str, &L3Routine> =
+    let routine_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
-    let objects_by_id: HashMap<&str, &L3Object> =
+    let objects_by_id: HashMap<&str, &ModelObject> =
         ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
     // G-5: REAL table wins an id collision with a tableextension stub (the stub's
     // id reuses the extension's own object number) — otherwise rootCause text
     // renders the EXTENSION's name for ops on the real table.
-    let table_by_id: HashMap<&str, &L3Table> =
-        crate::engine::l3::l3_workspace::table_by_id_preferring_real(&ws.tables);
+    let table_by_id: HashMap<&str, &ModelTable> =
+        crate::program::model::workspace::table_by_id_preferring_real(&ws.tables);
 
     let reverse_call_graph = build_reverse_call_graph(&graph);
 
@@ -1156,7 +1147,7 @@ pub(crate) fn build_detector_context_with<'a>(
             .collect();
 
     // D14 reachable-roots wiring. Build the RoutineId → AccessModifier map from
-    // `L3Routine.access_modifier` ("local"/"internal"/"protected"/None). al-sem maps
+    // `ModelRoutine.access_modifier` ("local"/"internal"/"protected"/None). al-sem maps
     // "local" → Local, "internal" → Internal, "protected"/None/anything-else →
     // Public (default-access). A routine with NO entry is treated as Public by
     // `find_reachable_roots`, so we only need to insert the non-Public cases — but we
@@ -1618,6 +1609,42 @@ fn first_resolved_edge_per_callsite(edges: Vec<CallEdge>) -> HashMap<String, Cal
 mod tests {
     use super::*;
 
+    /// States a routine-id collision across the WHOLE model, by assignment: every
+    /// routine named `name` gets the id `shared`, and so does every precomputed
+    /// call and event edge end that named one of their old ids. The program-backed
+    /// model resolves its calls and events once, at build time (the L3 builder
+    /// re-resolved them from the routines on every read), so re-keying only the
+    /// routines would leave their edges pointing at ids no routine carries.
+    /// Returns how many routines were re-keyed.
+    fn force_shared_id(resolved: &mut Model, name: &str, shared: &str) -> usize {
+        let mut old = std::collections::HashSet::new();
+        let mut forced = 0;
+        for r in resolved.workspace.routines.iter_mut() {
+            if r.name.eq_ignore_ascii_case(name) {
+                old.insert(std::mem::replace(&mut r.id, shared.to_string()));
+                forced += 1;
+            }
+        }
+        let rekey = |id: &mut String| {
+            if old.contains(id.as_str()) {
+                *id = shared.to_string();
+            }
+        };
+        for e in &mut std::sync::Arc::make_mut(&mut resolved.calls).edges {
+            rekey(&mut e.from);
+            e.to.as_mut().map(rekey);
+            e.candidates.iter_mut().flatten().for_each(rekey);
+        }
+        let graph = &mut std::sync::Arc::make_mut(&mut resolved.events).graph;
+        for e in &mut graph.edges {
+            rekey(&mut e.subscriber_routine_id);
+        }
+        for s in &mut graph.events {
+            s.publisher_routine_id.as_mut().map(rekey);
+        }
+        forced
+    }
+
     /// S3.6 audit, precondition by assignment: one call site with two targeted
     /// edges (an interface site with two implementers) and a to-less one first.
     /// The map keeps the first TARGETED edge, never the to-less one or the last.
@@ -1639,8 +1666,8 @@ mod tests {
     #[test]
     fn ordering_facts_are_lazy_and_parity_with_direct_compute() {
         // Empty workspace: cheap, and exercises the full lazy path end-to-end.
-        let resolved = crate::engine::l3::l3_workspace::L3Resolved {
-            workspace: crate::engine::l3::l3_workspace::L3Workspace {
+        let resolved = crate::program::model::workspace::Model {
+            workspace: crate::program::model::workspace::ModelEntities {
                 objects: Vec::new(),
                 tables: Vec::new(),
                 routines: Vec::new(),
@@ -1648,8 +1675,8 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
-            precomputed_calls: None,
-            precomputed_events: None,
+            calls: Default::default(),
+            events: Default::default(),
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
@@ -1665,22 +1692,22 @@ mod tests {
         );
     }
 
-    /// The seam is USED, not just present: a hand-made `ResolvedCalls` attached to
-    /// an empty workspace (which on its own resolves ZERO edges) must show up in
-    /// BOTH the detector context and the ordering-facts substrate
-    /// (`compose_snapshot` → `build_r3a3_source_only_base`). Reverting either site
-    /// to `resolve_calls` makes its assertion fail.
+    /// The model's calls are USED, not just present: a hand-made `ResolvedCalls` on
+    /// an empty workspace must show up in the detector context, the ordering-facts
+    /// substrate (`compose_snapshot` → `build_r3a3_source_only_base`) and coverage.
+    /// (Until engine-switch S9.6 the calls were optional; reverting a site to L3's
+    /// own resolver failed its assertion.)
     #[test]
-    fn precomputed_calls_reach_detector_context_and_ordering_base() {
-        use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
-        use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
+    fn model_calls_reach_detector_context_and_ordering_base() {
+        use crate::program::model::calls::{CallEdge, ResolvedCalls};
+        use crate::program::model::taxonomy::{DispatchKind, Resolution};
         let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
         edge.to = Some("to-r".to_string());
         // Dynamic so the coverage path (`dynamic_dispatch_sites`) shows it too.
         edge.dispatch_kind = DispatchKind::Dynamic;
         edge.resolution = Resolution::Resolved;
-        let resolved = crate::engine::l3::l3_workspace::L3Resolved {
-            workspace: crate::engine::l3::l3_workspace::L3Workspace {
+        let resolved = crate::program::model::workspace::Model {
+            workspace: crate::program::model::workspace::ModelEntities {
                 objects: Vec::new(),
                 tables: Vec::new(),
                 routines: Vec::new(),
@@ -1688,19 +1715,19 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
-            precomputed_calls: Some(std::sync::Arc::new(ResolvedCalls {
+            calls: std::sync::Arc::new(ResolvedCalls {
                 edges: vec![edge],
                 upgraded_bindings: HashMap::new(),
                 diagnostics: Vec::new(),
                 external_targets: Vec::new(),
-            })),
-            precomputed_events: None,
+            }),
+            events: Default::default(),
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
             ctx.resolved_call_edge_by_callsite
                 .contains_key("distinct-callsite"),
-            "build_detector_context ignored precomputed_calls"
+            "build_detector_context ignored the model's calls"
         );
         let base = crate::engine::l4::capability_cone::build_r3a3_source_only_base(&resolved);
         assert!(
@@ -1708,7 +1735,7 @@ mod tests {
                 .edges
                 .iter()
                 .any(|e| e.callsite_id == "distinct-callsite"),
-            "the ordering-facts base ignored precomputed_calls"
+            "the ordering-facts base ignored the model's calls"
         );
         let coverage = resolved.project_coverage(&[], &[]);
         assert!(
@@ -1716,7 +1743,7 @@ mod tests {
                 .dynamic_dispatch_sites
                 .iter()
                 .any(|s| s.contains("distinct-op")),
-            "project_coverage ignored precomputed_calls"
+            "project_coverage ignored the model's calls"
         );
     }
 
@@ -1744,8 +1771,8 @@ mod tests {
     /// [`hand_stated_id_collision_keeps_a_real_summary_and_derived_row`] below.
     #[test]
     fn colliding_routine_ids_keep_a_real_summary_and_derived_row() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 table 50811 "CP Setup"
@@ -1788,7 +1815,10 @@ page 50811 "CP Wizard"
 }
 "#;
         let files = vec![("src/CPWizard.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "11111111-0000-0000-0000-0000000cp001");
+        let resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "11111111-0000-0000-0000-0000000cp001",
+        );
         let ctx = build_detector_context(&resolved, substrate::SUMMARIES);
 
         // Without this the whole test would pass identically on an EMPTY store —
@@ -1799,7 +1829,7 @@ page 50811 "CP Wizard"
              assertions below are vacuous"
         );
 
-        let on_actions: Vec<&crate::engine::l3::l3_workspace::L3Routine> = resolved
+        let on_actions: Vec<&crate::program::model::workspace::ModelRoutine> = resolved
             .workspace
             .routines
             .iter()
@@ -1860,14 +1890,14 @@ page 50811 "CP Wizard"
     /// XMLport same-name elements at different nesting paths).
     ///
     /// This test never asks `compute_routine_id` for a collision — it STATES one:
-    /// two `L3Routine`s built from ordinary, non-colliding source are forced to carry
+    /// two `ModelRoutine`s built from ordinary, non-colliding source are forced to carry
     /// the literal same `id` by direct field assignment after assembly, before
     /// `build_detector_context` runs. That holds under ANY id schema, forever,
     /// because it does not depend on what the schema would have produced.
     #[test]
     fn hand_stated_id_collision_keeps_a_real_summary_and_derived_row() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 table 50812 "CP2 Setup"
@@ -1910,25 +1940,20 @@ page 50812 "CP2 Wizard"
 }
 "#;
         let files = vec![("src/CP2Wizard.al".to_string(), src.to_string())];
-        let mut resolved =
-            assemble_and_resolve_default(&files, "22222222-0000-0000-0000-0000000cp002");
+        let mut resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "22222222-0000-0000-0000-0000000cp002",
+        );
 
         // State the collision by hand: force the two `OnAction` triggers to carry the
         // literal SAME id via direct field assignment — never by relying on
         // `compute_routine_id` happening to agree (it does today; it need not
-        // tomorrow). `build_detector_context` re-derives everything else (symbol
-        // table, call resolution, combined graph) from `resolved.workspace.routines`
-        // fresh on every call, reading whatever id is on each routine AT CALL TIME —
-        // so overwriting here, before that call, is sufficient to force the collision
-        // all the way through the pipeline it exercises.
+        // tomorrow). The model's calls and events were resolved at build time from
+        // the original ids, so `force_shared_id` re-keys their edges too; the rest
+        // (symbol table, combined graph) `build_detector_context` derives from the
+        // routines at call time.
         const SHARED_ID: &str = "hand-stated-collision-id";
-        let mut forced = 0usize;
-        for r in resolved.workspace.routines.iter_mut() {
-            if r.name.eq_ignore_ascii_case("OnAction") {
-                r.id = SHARED_ID.to_string();
-                forced += 1;
-            }
-        }
+        let forced = force_shared_id(&mut resolved, "OnAction", SHARED_ID);
         assert_eq!(
             forced, 2,
             "fixture precondition: both OnAction trigger bodies must be in the model"
@@ -1966,8 +1991,8 @@ page 50812 "CP2 Wizard"
     /// before/after run).
     #[test]
     fn core_summaries_stay_lean_while_the_bundle_carries_the_db_effect_rows() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 table 50900 "FX1 Setup"
@@ -1987,7 +2012,10 @@ codeunit 50900 "FX1 Touch"
 }
 "#;
         let files = vec![("src/FX1Touch.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "11111111-0000-0000-0000-0000000fx001");
+        let resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "11111111-0000-0000-0000-0000000fx001",
+        );
         // CORE_SUMMARIES alone is enough to reach the `compute_summaries_v2_bundle`
         // call (gated independently of SUMMARIES — see `build_detector_context`'s
         // own doc), so this test does not need the cone/SUMMARIES substrate at all.
@@ -2026,8 +2054,8 @@ codeunit 50900 "FX1 Touch"
     /// vacuously.
     #[test]
     fn reverse_effect_index_is_built_only_when_its_bit_is_demanded() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 table 50901 "FX2 Ledger"
@@ -2047,7 +2075,10 @@ codeunit 50901 "FX2 Touch"
 }
 "#;
         let files = vec![("src/FX2Touch.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "11111111-0000-0000-0000-0000000fx002");
+        let resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "11111111-0000-0000-0000-0000000fx002",
+        );
 
         // The bit is NOT in `ALL` — asserted directly, so folding it in there
         // fails here first.
@@ -2131,8 +2162,8 @@ codeunit 50901 "FX2 Touch"
     /// empty slices.
     #[test]
     fn equal_uncertainty_sets_are_hash_consed_to_one_allocation() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 codeunit 50914 "HC Ring"
@@ -2150,7 +2181,10 @@ codeunit 50914 "HC Ring"
 }
 "#;
         let files = vec![("src/HCRing.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "44444444-0000-0000-0000-0000000hc001");
+        let resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "44444444-0000-0000-0000-0000000hc001",
+        );
         let ctx = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
 
         let id_of = |name: &str| -> String {
@@ -2213,13 +2247,17 @@ codeunit 50914 "HC Ring"
     /// The fixture is built so the two harvests are distinguishable: each `OnAction`
     /// makes its OWN unresolved call (⇒ a non-empty `uncertainty_edges_by_from`
     /// entry, without which the naive drain would `continue` instead of overwriting,
-    /// and the bug would not manifest) AND calls `Touch()`, which makes a further
-    /// unresolved call (⇒ an INHERITED uncertainty that lives ONLY in the core
-    /// summary). The union must therefore carry a `Touch`-owned callsite.
+    /// and the bug would not manifest) AND calls `Touch()`, which runs a codeunit
+    /// chosen at run time (⇒ a `dynamic-dispatch` uncertainty, an INHERITED one that
+    /// lives ONLY in the core summary). The union must therefore carry a
+    /// `Touch`-owned operation. (Until S9.5 `Touch` called a missing procedure,
+    /// which L3 labelled `unknown`; the program engine labels it
+    /// `member-not-found`, a callsite-local kind that is by design never inherited
+    /// — `db_effect_solver::is_callsite_local_kind` — so it stated nothing.)
     #[test]
     fn colliding_ids_keep_the_full_summary_union_not_just_the_edges() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
         use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 table 50813 "CP3 Setup"
@@ -2258,24 +2296,21 @@ page 50813 "CP3 Wizard"
     local procedure Touch()
     var
         Setup: Record "CP3 Setup";
+        N: Integer;
     begin
         Setup.Insert();
-        MissingDeeper();
+        Codeunit.Run(N);
     end;
 }
 "#;
         let files = vec![("src/CP3Wizard.al".to_string(), src.to_string())];
-        let mut resolved =
-            assemble_and_resolve_default(&files, "33333333-0000-0000-0000-0000000cp003");
+        let mut resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "33333333-0000-0000-0000-0000000cp003",
+        );
 
         const SHARED_ID: &str = "hand-stated-uncertainty-collision-id";
-        let mut forced = 0usize;
-        for r in resolved.workspace.routines.iter_mut() {
-            if r.name.eq_ignore_ascii_case("OnAction") {
-                r.id = SHARED_ID.to_string();
-                forced += 1;
-            }
-        }
+        let forced = force_shared_id(&mut resolved, "OnAction", SHARED_ID);
         assert_eq!(
             forced, 2,
             "fixture precondition: both OnAction trigger bodies must be in the model"
@@ -2320,9 +2355,10 @@ page 50813 "CP3 Wizard"
         let inherited: Vec<&&Uncertainty> = union
             .iter()
             .filter(|u| {
-                u.callsite_id
-                    .as_deref()
-                    .is_some_and(|cs| cs.starts_with(&format!("{touch_id}/")))
+                u.kind == "dynamic-dispatch"
+                    && u.operation_id
+                        .as_deref()
+                        .is_some_and(|op| op.starts_with(&format!("{touch_id}/")))
             })
             .collect();
         assert!(

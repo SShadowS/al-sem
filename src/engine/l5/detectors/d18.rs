@@ -13,8 +13,6 @@
 //!
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order).
 
-use crate::engine::l2::features::PExpressionInfo;
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, unquoted_field_name};
@@ -22,6 +20,8 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PExpressionInfo;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d18-constant-filter-in-loop";
 
@@ -44,7 +44,7 @@ fn is_literal_expression(info: &PExpressionInfo) -> bool {
 }
 
 pub fn detect_d18(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

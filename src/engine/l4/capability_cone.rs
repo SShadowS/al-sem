@@ -35,11 +35,9 @@ use super::cone_census;
 use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact_is_known_temp};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
-use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
-use crate::engine::l3::call_resolver::calls_for;
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, events_for};
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
-use crate::engine::l3::symbol_table::SymbolTable;
+use crate::program::body::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
+use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 // ===========================================================================
 // Internal CapabilityFact (FULL form — internal ids). Mirrors al-sem
@@ -82,7 +80,7 @@ pub enum ValueSource {
 pub enum CapabilityExtra {
     Table {
         record_variable_id: Option<String>,
-        temp_state: Option<crate::engine::l2::features::PTempState>,
+        temp_state: Option<crate::program::body::features::PTempState>,
         op_subtype: Option<String>,
     },
     Dispatch {
@@ -525,7 +523,7 @@ fn strip_double_quotes(s: &str) -> &str {
 /// Opaque / parse-incomplete routines yield `([], "unknown", reasons)` mirroring
 /// the summary-runner.ts:553-559 override.
 pub(crate) fn direct_facts_for_routine(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     publisher_events: &[&EventSymbol],
 ) -> (Vec<CapabilityFact>, String, Vec<String>) {
     if !routine.body_available {
@@ -581,7 +579,7 @@ pub(crate) fn direct_facts_for_routine(
             unreachable_op_ids.insert(op.id.clone());
         }
     }
-    let record_ops: Vec<&crate::engine::l3::l3_workspace::L3RecordOperation> = routine
+    let record_ops: Vec<&crate::program::model::workspace::ModelRecordOperation> = routine
         .record_operations
         .iter()
         .filter(|op| !unreachable_op_ids.contains(&op.id))
@@ -1368,7 +1366,7 @@ pub(crate) fn extra_to_json(e: &CapabilityExtra) -> serde_json::Value {
     }
 }
 
-fn temp_state_to_json(ts: &crate::engine::l2::features::PTempState) -> serde_json::Value {
+fn temp_state_to_json(ts: &crate::program::body::features::PTempState) -> serde_json::Value {
     use serde_json::json;
     match ts.kind.as_str() {
         "known" => json!({"kind":"known","value": ts.value.unwrap_or(false)}),
@@ -1520,8 +1518,8 @@ fn substitute_entry(
     key: &Arc<str>,
     entry: &ConeFactEntry,
     edge: &TypedOutEdge,
-    caller: Option<&L3Routine>,
-    callee: Option<&L3Routine>,
+    caller: Option<&ModelRoutine>,
+    callee: Option<&ModelRoutine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
     edge_reqs: &[super::param_guard::Req],
 ) -> Option<(Arc<str>, ConeFactEntry)> {
@@ -1555,7 +1553,7 @@ fn substitute_entry(
             TempState::Known(true) => {
                 let mut r = (*entry.rep).clone();
                 if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut r.extra {
-                    *temp_state = Some(crate::engine::l2::features::PTempState {
+                    *temp_state = Some(crate::program::body::features::PTempState {
                         kind: "known".to_string(),
                         value: Some(true),
                         parameter_index: None,
@@ -1739,9 +1737,9 @@ fn inherited_facts_for_singleton<'g>(
     g: &'g TypedEdgeGraph,
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
-    caller: Option<&L3Routine>,
+    caller: Option<&ModelRoutine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
-    routines_by_id: &HashMap<&str, &L3Routine>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
@@ -2238,8 +2236,8 @@ fn site_reqs<'f>(
 /// have a usable guard parameter, over the typed graph's call edges.
 fn guard_frames(
     g: &TypedEdgeGraph,
-    routines: &[L3Routine],
-    routines_by_id: &HashMap<&str, &L3Routine>,
+    routines: &[ModelRoutine],
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> HashMap<String, super::param_guard::FrameGuards> {
     let mut out = HashMap::new();
     for r in routines {
@@ -2268,11 +2266,11 @@ struct PdAnchor<'a> {
     out_edges: &'a [TypedOutEdge],
     scc_id_by_routine: &'a HashMap<String, usize>,
     /// The member's L3 routine (its call sites carry the argument bindings).
-    caller: Option<&'a L3Routine>,
+    caller: Option<&'a ModelRoutine>,
     /// The member's guard frame, when it has a usable guard parameter.
     frame: Option<&'a super::param_guard::FrameGuards>,
     /// Every routine, for an edge's callee (an event subscriber's parameters).
-    routines_by_id: &'a HashMap<&'a str, &'a L3Routine>,
+    routines_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
 }
 
 /// Build one SCC's coverage cone (includes self). Mirrors `coverageConeForScc`.
@@ -2352,7 +2350,7 @@ fn compose_inherited_cones(
     direct_raw: &HashMap<String, Vec<CapabilityFact>>,
     cov: &RoutineDirectCoverage,
     routine_ids: &BTreeSet<String>,
-    routines_by_id: &HashMap<&str, &L3Routine>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
 ) -> (HashMap<String, InheritedConeResult>, ConeDerivedStore) {
@@ -2675,7 +2673,7 @@ pub fn compose_cone_over_graph(
     nodes: &[String],
     direct_in: &HashMap<String, Vec<CapabilityFact>>,
     coverage_in: &HashMap<String, (String, Vec<String>)>,
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     mode: ConeOutput,
 ) -> ConeOutcome {
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
@@ -2741,7 +2739,7 @@ pub fn compose_cone_over_graph(
         _t_dedup,
     );
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
-    let routines_by_id: HashMap<&str, &L3Routine> =
+    let routines_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, routines, &routines_by_id);
     let (cones, derived) = compose_inherited_cones(
@@ -3078,9 +3076,9 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 /// `project_r3a2` uses) — the cone reads only the typed-edge SCC, but the
 /// uncertainties are a property of the call-resolution fixed point.
 fn compute_uncertainty_coverage_reasons(
-    ws: &L3Workspace,
+    ws: &ModelEntities,
     graph: &CombinedGraph,
-    calls: &crate::engine::l3::call_resolver::ResolvedCalls,
+    calls: &crate::program::model::calls::ResolvedCalls,
 ) -> HashMap<String, BTreeSet<String>> {
     use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2};
 
@@ -3222,7 +3220,7 @@ pub struct R3a5CrossAppBase {
     /// `resolved`, and the context reads its root classifications and ordering
     /// facts from it. [`Self::ws_routines`] and [`Self::objects`] are views onto
     /// it.
-    pub resolved: crate::engine::l3::l3_workspace::L3Resolved,
+    pub resolved: crate::program::model::workspace::Model,
     pub dep_routine_ids: BTreeSet<String>,
     /// The combined graph WITH the injected dep intra-app typed edges folded in
     /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
@@ -3230,7 +3228,7 @@ pub struct R3a5CrossAppBase {
     pub graph: CombinedGraph,
     pub combined_scc: SccResult,
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
-    pub upgraded_bindings: HashMap<String, Vec<crate::engine::l3::call_resolver::UpgradedBinding>>,
+    pub upgraded_bindings: HashMap<String, Vec<crate::program::model::calls::UpgradedBinding>>,
     pub event_graph: EventGraph,
     /// Fixed-leaf (dep) RETAINED summaries.
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
@@ -3253,11 +3251,11 @@ pub struct R3a5CrossAppBase {
 
 impl R3a5CrossAppBase {
     /// Every model routine: the workspace's, then each dependency's.
-    pub fn ws_routines(&self) -> &Vec<L3Routine> {
+    pub fn ws_routines(&self) -> &Vec<ModelRoutine> {
         &self.resolved.workspace.routines
     }
 
-    pub fn objects(&self) -> &Vec<crate::engine::l3::l3_workspace::L3Object> {
+    pub fn objects(&self) -> &Vec<crate::program::model::workspace::ModelObject> {
         &self.resolved.workspace.objects
     }
 }
@@ -3294,12 +3292,12 @@ pub(crate) fn build_cross_app_base(
     model_instance_id: &str,
 ) -> Option<R3a5CrossAppBase> {
     use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
-    let mut x = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+    let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         workspace,
         model_instance_id,
         false,
     )?;
-    let ws: &L3Workspace = &x.resolved.workspace;
+    let ws: &ModelEntities = &x.resolved.workspace;
     let primary = x
         .resolved
         .primary_app
@@ -3313,7 +3311,7 @@ pub(crate) fn build_cross_app_base(
         .map(|r| r.id.clone())
         .collect();
 
-    let all_calls = x.resolved.precomputed_calls.as_ref()?;
+    let all_calls = &x.resolved.calls;
     let calls = crate::program::model::calls::ResolvedCalls {
         edges: all_calls
             .edges
@@ -3325,7 +3323,7 @@ pub(crate) fn build_cross_app_base(
         diagnostics: all_calls.diagnostics.clone(),
         external_targets: all_calls.external_targets.clone(),
     };
-    let event_graph: EventGraph = x.resolved.precomputed_events.as_ref()?.graph.clone();
+    let event_graph: EventGraph = x.resolved.events.graph.clone();
     let _s_graph = crate::engine::perf_trace::span("crossapp", "crossapp.base_graph");
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
@@ -3383,7 +3381,7 @@ pub(crate) fn build_cross_app_base(
                 .push(evt);
         }
     }
-    let routines_by_id: HashMap<String, &L3Routine> =
+    let routines_by_id: HashMap<String, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.clone(), r)).collect();
     let mut leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
         HashMap::new();
@@ -3411,7 +3409,7 @@ pub(crate) fn build_cross_app_base(
         .map(|a| (a.guid.clone(), a.version.clone()))
         .collect();
     let mut resolved = x.resolved;
-    resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
+    resolved.calls = std::sync::Arc::new(calls);
     Some(R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
@@ -3506,7 +3504,7 @@ pub fn project_r3a5_cross_app(
 /// projection is byte-identical to the from-scratch one).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_r3a5_from_parts(
-    ws_routines: &[L3Routine],
+    ws_routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
     core_summaries: &HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     cones: &HashMap<String, ConeResultPub>,
@@ -3647,7 +3645,7 @@ pub(crate) fn project_r3a5_from_parts(
 }
 
 // ===========================================================================
-// project_r3a3 — the L3Resolved entry point.
+// project_r3a3 — the Model entry point.
 // ===========================================================================
 
 /// Run the full source-only pipeline (call-resolve → combined graph → typed-edge
@@ -3655,12 +3653,11 @@ pub(crate) fn project_r3a5_from_parts(
 /// cone+coverage surface. READ-once; no dep hooks; no JACOBI summary core
 /// (the cone reads ONLY the direct facts + the typed edges, exactly as al-sem's
 /// post-fixed-point cone pass does over the source-only model).
-pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
-    let ws: &L3Workspace = &resolved.workspace;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols);
-    let event_graph = events_for(resolved, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
+    let ws: &ModelEntities = &resolved.workspace;
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
 
     // Typed-edge graph (cone substrate) + Tarjan SCC over it.
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
@@ -3693,7 +3690,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     // downgraded complete→partial so the coverage cone forwards the reason (+ adds
     // the routine to unknownTargets). Source-only `interfaceImplsKnowledgePartial`
     // is false, so the `interface-impls-unknown-in-deps` add-on never fires.
-    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, &calls);
+    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, calls);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
@@ -3754,7 +3751,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
-    let routines_by_id: HashMap<&str, &L3Routine> =
+    let routines_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
     let (cones, _derived) = compose_inherited_cones(
@@ -3840,7 +3837,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
 // helper exposes that substrate's RAW (internal-id) parts so `engine::l5::snapshot`
 // reshapes + rewrites-to-stable + sorts WITHOUT re-deriving any fact/edge/cone.
 //
-// Mirrors the inline assembly of `project_r3a3` (resolve_calls → build_event_graph
+// Mirrors the inline assembly of `project_r3a3` (the model's calls and events
 // → build_combined_graph → direct_facts_for_routine + uncertainty-folded coverage →
 // compose_cone_over_graph), but returns the parts instead of projecting them.
 // ===========================================================================
@@ -3849,11 +3846,11 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
 /// snapshot derivers consume. Built by `build_r3a3_source_only_base`.
 pub struct R3a3SourceBase {
     /// Workspace routines (clone) — the universe + per-routine features.
-    pub ws_routines: Vec<L3Routine>,
+    pub ws_routines: Vec<ModelRoutine>,
     /// The combined graph (typed edges + call substrate).
     pub graph: CombinedGraph,
     /// The resolved call edges (for the callsite-resolution ledger).
-    pub calls: crate::engine::l3::call_resolver::ResolvedCalls,
+    pub calls: crate::program::model::calls::ResolvedCalls,
     /// The event graph (publisher symbols + subscriber edges).
     pub event_graph: EventGraph,
     /// Per-routine RAW direct capability facts (full, ordered — NOT deduped).
@@ -3867,13 +3864,12 @@ pub struct R3a3SourceBase {
 /// Assemble the RAW source-only cone/graph base (mirrors `project_r3a3`'s inline
 /// assembly, returning the parts). Fail-closed callers get an empty base via the
 /// resolved workspace having zero routines.
-pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
+pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
-    let ws: &L3Workspace = &resolved.workspace;
+    let ws: &ModelEntities = &resolved.workspace;
     let _s0 = pt::span("r3a3", "r3a3.calls_graph");
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols).into_owned();
-    let event_graph: EventGraph = events_for(resolved, &symbols).into_owned();
+    let calls = (*resolved.calls).clone();
+    let event_graph: EventGraph = resolved.events.graph.clone();
     let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_s0);
     let _s1 = pt::span("r3a3", "r3a3.direct_facts");
@@ -3978,12 +3974,11 @@ pub struct R3a3RealMatrix {
 
 /// Compute the REAL (BFS-derived) anti-degenerate counts over a resolved
 /// source-only workspace. Independent of `project_r3a3`'s cone path.
-pub fn compute_r3a3_real_matrix(resolved: &L3Resolved) -> R3a3RealMatrix {
-    let ws: &L3Workspace = &resolved.workspace;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols);
-    let event_graph = events_for(resolved, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
+    let ws: &ModelEntities = &resolved.workspace;
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     let g = build_typed_edge_graph(&graph, &nodes);

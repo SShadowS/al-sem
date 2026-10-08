@@ -20,7 +20,7 @@
 //! var, keeping `record_variables` NAME-UNIQUE so the record-type pass-1
 //! last-wins index resolves each name to the single (innermost) declaration.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
@@ -48,8 +48,10 @@ codeunit 50902 "CdoProbe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     let routine = resolved
         .routine_by_name("Clear")
@@ -114,8 +116,10 @@ codeunit 50902 "CdoProbe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // The global-using routine still resolves the temp global → Known(true).
     let global_routine = resolved

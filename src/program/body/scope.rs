@@ -30,8 +30,8 @@ pub struct RecordVariable {
 }
 
 /// `{ kind: "known", value }` — the single shared PTempState "known" constructor.
-/// `pub(crate)` so the L3 record-type override (`record_types.rs`) and the ABI→L3
-/// projection (`deps/cross_app_l3.rs`) reuse ONE definition (compiler-enforced on
+/// `pub(crate)` so the record-type override (`record_types.rs`) and the ABI row
+/// projection (`program/model/abi_rows.rs`) reuse ONE definition (compiler-enforced on
 /// any future `PTempState` shape change), instead of duplicating the literal.
 pub(crate) fn ts_known(value: bool) -> PTempState {
     PTempState {
@@ -83,7 +83,7 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// Unescape an AL quoted identifier's inner text: a doubled `""` inside the
 /// quotes is one literal `"`.
 ///
-/// THE single definition — the L3 workspace stores `L3Routine.enclosing_member`
+/// THE single definition — the L3 workspace stores `ModelRoutine.enclosing_member`
 /// through it and [`super::ir_walk::ir_enclosing_member`] feeds the routine-id
 /// discriminator through it, and those two strings MUST be the same string.
 /// (The raw IR value is only outer-quote-stripped.)

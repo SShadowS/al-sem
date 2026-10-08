@@ -13,7 +13,7 @@
 //! as record operations because `classify_receiver` returns `ReceiverClass::Record` for a
 //! variable whose `declaredType == "RecordRef"`.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "1c000000-0000-0000-0000-0000000c6afe";
 
@@ -49,7 +49,8 @@ codeunit 50200 "G6 GetTable Temp"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6GetTableTemp", src)], APP_GUID);
+    let resolved =
+        assemble_and_resolve_inline_program_default(&[al("G6GetTableTemp", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("ClearTemp")
         .expect("ClearTemp must be resolved");
@@ -85,7 +86,8 @@ codeunit 50201 "G6 GetTable Phys"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6GetTablePhys", src)], APP_GUID);
+    let resolved =
+        assemble_and_resolve_inline_program_default(&[al("G6GetTablePhys", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("ClearPhys")
         .expect("ClearPhys must be resolved");
@@ -125,7 +127,7 @@ codeunit 50202 "G6 OpenTemp"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6OpenTemp", src)], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&[al("G6OpenTemp", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("DoWork")
         .expect("DoWork must be resolved");
@@ -160,7 +162,7 @@ codeunit 50203 "G6 OpenPhys"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6OpenPhys", src)], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&[al("G6OpenPhys", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("DoWork")
         .expect("DoWork must be resolved");
@@ -195,7 +197,8 @@ codeunit 50204 "G6 OpenExplicitFalse"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6OpenExplicitFalse", src)], APP_GUID);
+    let resolved =
+        assemble_and_resolve_inline_program_default(&[al("G6OpenExplicitFalse", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("DoWork")
         .expect("DoWork must be resolved");
@@ -235,7 +238,8 @@ codeunit 50205 "G6 GetTable Cond"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6GetTableCond", src)], APP_GUID);
+    let resolved =
+        assemble_and_resolve_inline_program_default(&[al("G6GetTableCond", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("MaybeTemp")
         .expect("MaybeTemp must be resolved");
@@ -274,7 +278,7 @@ codeunit 50206 "G6 Open Cond"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6OpenCond", src)], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&[al("G6OpenCond", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("MaybeOpen")
         .expect("MaybeOpen must be resolved");
@@ -311,7 +315,7 @@ codeunit 50207 "G6 Open Var"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6OpenVar", src)], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&[al("G6OpenVar", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("DoWork")
         .expect("DoWork must be resolved");
@@ -348,7 +352,8 @@ codeunit 50208 "G6 GetTable Member"
     end;
 }
 "#;
-    let resolved = assemble_and_resolve_default(&[al("G6GetTableMember", src)], APP_GUID);
+    let resolved =
+        assemble_and_resolve_inline_program_default(&[al("G6GetTableMember", src)], APP_GUID);
     let routine = resolved
         .routine_by_name("DoWork")
         .expect("DoWork must be resolved");

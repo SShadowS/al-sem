@@ -1,5 +1,5 @@
 //! Synthetic-input constructors shared by the L5 native-oracle tests. NOT a
-//! golden fixture — these build minimal `L3Routine` / `CombinedGraph` /
+//! golden fixture — these build minimal `ModelRoutine` / `CombinedGraph` /
 //! `CapabilityFact` / `FullRoutineSummary` values directly so each oracle
 //! exercises the query functions on hand-built inputs (mirroring al-sem's
 //! probe-style soundness oracles, not a byte-diff).
@@ -10,15 +10,15 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l2::features::{
-    PAnchor, PCallArgumentBinding, PCallSite, PCallee, PLoop, POperationSite, PTempState,
-};
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, RoutineVariables};
 use crate::engine::l4::capability_cone::{CapabilityFact, CoverageRecord};
 use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
 use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeDerivedStore};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::program::body::features::{
+    PAnchor, PCallArgumentBinding, PCallSite, PCallee, PLoop, POperationSite, PTempState,
+};
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, RoutineVariables};
 
 /// ⟨C1⟩ The derived cone substrate for a set of hand-built summaries — each
 /// routine's literal `reachable()` sequence folded into a row. Fixture summaries
@@ -107,11 +107,11 @@ pub fn graph_from_edges(nodes: &[&str], edges: &[CombinedEdge]) -> CombinedGraph
     }
 }
 
-/// A minimal `L3Routine` with the given internal id + kind. All other fields are
+/// A minimal `ModelRoutine` with the given internal id + kind. All other fields are
 /// empty / defaulted — only the L5-substrate-relevant ones (id, kind,
 /// operation_sites, call_sites) are exercised by the oracles.
-pub fn routine(id: &str, kind: &str) -> L3Routine {
-    L3Routine {
+pub fn routine(id: &str, kind: &str) -> ModelRoutine {
+    ModelRoutine {
         id: id.to_string(),
         stable_routine_id: format!("stable::{id}"),
         object_id: "app/Codeunit/1".to_string(),
@@ -149,7 +149,7 @@ pub fn routine(id: &str, kind: &str) -> L3Routine {
 }
 
 /// A routine with `kind` carrying `commit` operation sites for each given op id.
-pub fn op_commit_routine(id: &str, kind: &str, commit_op_ids: &[&str]) -> L3Routine {
+pub fn op_commit_routine(id: &str, kind: &str, commit_op_ids: &[&str]) -> ModelRoutine {
     let mut r = routine(id, kind);
     for op_id in commit_op_ids {
         r.operation_sites.push(POperationSite {
@@ -329,7 +329,7 @@ pub fn edge_kind(from: &str, to: &str, callsite_id: &str, kind: &str) -> Combine
     }
 }
 
-/// A minimal `L3RecordOperation` (`temp_state` defaults to `None`; callers
+/// A minimal `ModelRecordOperation` (`temp_state` defaults to `None`; callers
 /// mutate `.temp_state` for the PD/Known cases).
 #[allow(clippy::too_many_arguments)]
 pub fn record_op(
@@ -339,8 +339,8 @@ pub fn record_op(
     table_id: Option<&str>,
     loop_stack: Vec<String>,
     in_until_condition: bool,
-) -> L3RecordOperation {
-    L3RecordOperation {
+) -> ModelRecordOperation {
+    ModelRecordOperation {
         id: id.to_string(),
         op: op.to_string(),
         record_variable_name: record_variable_name.to_string(),
@@ -362,11 +362,11 @@ pub fn record_op(
 /// `D1Edge.loop_depth` derives non-zero when an edge's callsite carries a
 /// `loop_stack`). Everything else is empty / default.
 pub fn minimal_ctx<'a>(
-    routines: &'a [L3Routine],
+    routines: &'a [ModelRoutine],
     graph_edges: HashMap<String, Vec<CombinedEdge>>,
     summaries: HashMap<String, FullRoutineSummary>,
 ) -> DetectorContext<'a> {
-    let routine_by_id: HashMap<&'a str, &'a L3Routine> =
+    let routine_by_id: HashMap<&'a str, &'a ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let call_site_by_id: HashMap<&'a str, &'a PCallSite> = routines
         .iter()
@@ -381,7 +381,7 @@ pub fn minimal_ctx<'a>(
     };
     DetectorContext {
         graph,
-        event_graph: crate::engine::l3::event_graph::EventGraph {
+        event_graph: crate::program::model::events::EventGraph {
             events: vec![],
             edges: vec![],
         },

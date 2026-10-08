@@ -3,7 +3,7 @@
 //!
 //! For each committed al-sem golden under `tests/r3a2-goldens/<fixture>.r3a2.golden.json`,
 //! run the Rust source-only L0→L3→buildCombinedGraph→tarjanScc→computeSummaries→projectR3a2
-//! (`assemble_and_resolve_workspace_default(...)` → `project_r3a2(...)`) over the matching
+//! (`assemble_and_resolve_workspace_with_program_calls(...)` → `project_r3a2(...)`) over the matching
 //! `tests/r0-corpus/<fixture>` workspace and assert it BYTE-MATCHES the golden (structural
 //! positional diff over the already-canonically-sorted projection). The SAME `ws-*`
 //! SOURCE-ONLY corpus the al-sem dump read.
@@ -42,8 +42,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::summary::{R3a2Projection, project_r3a2};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use serde_json::Value;
 
 use crate::regen;
@@ -409,7 +409,7 @@ fn differential_r3a2_summary_core_match_goldens() {
         // computeSummaries → projectR3a2 → JSON. Fail-closed layouts yield an empty
         // projection (never throws); the al-sem dump EXCLUDED those, so the golden set
         // never carries one.
-        let projection = match assemble_and_resolve_workspace_default(&fixture_dir) {
+        let projection = match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
             Some(resolved) => project_r3a2(&resolved),
             None => R3a2Projection { summaries: vec![] },
         };

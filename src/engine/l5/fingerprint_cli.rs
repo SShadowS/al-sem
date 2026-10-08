@@ -29,7 +29,6 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::l5::fingerprint_query::{
@@ -41,6 +40,7 @@ use crate::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, build_inventory_envelope, compose_full_snapshot,
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
+use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 /// The format the fingerprint command outputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,7 +548,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 /// shared by the strict gate, the B0 envelope path, and the query JSON envelope.
 fn analyzer_diags_for(
     workspace: &std::path::Path,
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
 ) -> Vec<(String, String, String)> {
     let default_detectors: Vec<_> = registered_detectors()
         .into_iter()

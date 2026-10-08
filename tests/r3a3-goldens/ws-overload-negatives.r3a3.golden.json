@@ -104,12 +104,10 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Codeunit:50111#e32bf3968403e18c91e66dfba278fd2967d5b2ebfa4fab4f053f6911ec197f45",
-				"directStatus": "partial",
-				"inheritedStatus": "partial",
-				"reasons": ["ambiguous-overload"],
-				"unknownTargets": [
-					"bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Codeunit:50111#e32bf3968403e18c91e66dfba278fd2967d5b2ebfa4fab4f053f6911ec197f45"
-				]
+				"directStatus": "complete",
+				"inheritedStatus": "complete",
+				"reasons": [],
+				"unknownTargets": []
 			}
 		}
 	]

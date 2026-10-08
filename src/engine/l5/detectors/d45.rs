@@ -17,12 +17,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::event_flow::{RelayWalkOptions, collect_relay_subscribers, event_kind_of};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 use super::{anchor_of, group_and_cap};
 
@@ -32,7 +32,7 @@ const D45_MAX_NODES: usize = 256;
 const D45_MAX_PER_PUBLISHER: usize = 16;
 
 pub fn detect_d45(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;

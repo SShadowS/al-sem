@@ -2225,7 +2225,29 @@ fn collect_case_branches(
     else_block: &mut Option<BlockId>,
     depth: u32,
 ) {
-    for child in node.named_children() {
+    collect_case_branches_in(
+        node.named_children(),
+        ir,
+        issues,
+        source,
+        branches,
+        else_block,
+        depth,
+    );
+}
+
+/// [`collect_case_branches`] over a list of children (one `#if` arm's, or a
+/// whole `case_body`'s).
+fn collect_case_branches_in(
+    children: Vec<RawNode>,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    branches: &mut Vec<CaseBranch>,
+    else_block: &mut Option<BlockId>,
+    depth: u32,
+) {
+    for child in children {
         match child.kind() {
             RawKind::CaseBranch => push_case_branch(child, ir, issues, source, branches, depth),
             RawKind::CaseElseBranch => {
@@ -2236,25 +2258,38 @@ fn collect_case_branches(
             // `#if`-conditional case content: every arm's `case_branch`/`case_else_branch`
             // children are direct, FLAT children of this ONE wrapper (VERIFIED against the
             // pinned grammar — `preproc_conditional_case` is not re-nested per arm) —
-            // union-read, recurse into the same wrapper node. Previously unmatched here
-            // (silently skipped, no trace at all — worse than an empty branch).
+            // union-read, each arm under its own branch symbols (`preproc_branches`; an
+            // arm the build context decides false is left out, as for statements).
+            // Previously unmatched here (silently skipped, no trace at all — worse than
+            // an empty branch).
             RawKind::PreprocConditionalCase => {
-                collect_case_branches(child, ir, issues, source, branches, else_block, depth);
+                for (syms, live, arm) in preproc_branches(child, source, &build_context()) {
+                    if live {
+                        with_build_context(&syms, ir, |ir| {
+                            collect_case_branches_in(
+                                arm, ir, issues, source, branches, else_block, depth,
+                            );
+                        });
+                    }
+                }
             }
             // "#if adds complete branches + provides a header for the next shared branch":
             // any direct `case_branch` children are complete extra branches (additive,
-            // real pattern+body of their own); the wrapper's OWN flattened `pattern`
-            // fields (unioned across every `#if`/`#elif`/`#else` arm's header-only
-            // pattern, plus the shared trailing pattern) plus its single shared `body`
-            // field make ONE more branch. Previously unmatched here (same silent-skip as
-            // above).
+            // real pattern+body of their own, each under its arm's symbols); the
+            // wrapper's OWN flattened `pattern` fields (unioned across every
+            // `#if`/`#elif`/`#else` arm's header-only pattern, plus the shared trailing
+            // pattern) plus its single shared `body` field make ONE more branch, compiled
+            // in every build. Previously unmatched here (same silent-skip as above).
             RawKind::PreprocSplitCaseExtended => {
-                for extra in child
-                    .named_children()
-                    .into_iter()
-                    .filter(|c| c.kind() == RawKind::CaseBranch)
-                {
-                    push_case_branch(extra, ir, issues, source, branches, depth);
+                for (syms, live, arm) in preproc_branches(child, source, &build_context()) {
+                    if live {
+                        with_build_context(&syms, ir, |ir| {
+                            for extra in arm.into_iter().filter(|c| c.kind() == RawKind::CaseBranch)
+                            {
+                                push_case_branch(extra, ir, issues, source, branches, depth);
+                            }
+                        });
+                    }
                 }
                 let patterns = case_patterns(child, ir, issues, source, depth);
                 if !patterns.is_empty() || child.field(FieldName::Body).is_some() {
@@ -4207,29 +4242,60 @@ codeunit 50104 T
         InNotY();
     end;
 #endif
+
+    procedure Cased(X: Integer)
+    begin
+        case X of
+#if DOSMTP
+            1:
+                InSmtp();
+            2:
+#else
+            2, 1:
+#endif
+                Shared();
+        end;
+    end;
+
+    procedure Arms(X: Integer)
+    begin
+        case X of
+#if DOSMTP
+            1:
+                InSmtp();
+#else
+            1:
+                NotSmtp();
+#endif
+            2:
+                Shared();
+        end;
+    end;
 }
 "#;
         fn call_in(af: &crate::ir::AlFile, b: crate::ir::BlockId, name: &str) -> crate::ir::ExprId {
-            af.ir
-                .block(b)
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    crate::ir::BlockItem::Stmt(sid) => match &af.ir.stmt(*sid).kind {
-                        StmtKind::Call(eid) => matches!(
-                            &af.ir.expr(match &af.ir.expr(*eid).kind {
-                                ExprKind::Call { function, .. } => *function,
-                                _ => *eid,
-                            })
-                            .kind,
-                            ExprKind::Identifier(n) if n == name
-                        )
-                        .then_some(*eid),
-                        _ => None,
-                    },
+            find_call(af, b, name).unwrap_or_else(|| panic!("no direct call to {name}"))
+        }
+        fn find_call(
+            af: &crate::ir::AlFile,
+            b: crate::ir::BlockId,
+            name: &str,
+        ) -> Option<crate::ir::ExprId> {
+            af.ir.block(b).items.iter().find_map(|item| match item {
+                crate::ir::BlockItem::Stmt(sid) => match &af.ir.stmt(*sid).kind {
+                    StmtKind::Call(eid) => matches!(
+                        &af.ir.expr(match &af.ir.expr(*eid).kind {
+                            ExprKind::Call { function, .. } => *function,
+                            _ => *eid,
+                        })
+                        .kind,
+                        ExprKind::Identifier(n) if n == name
+                    )
+                    .then_some(*eid),
                     _ => None,
-                })
-                .unwrap_or_else(|| panic!("no direct call to {name}"))
+                },
+                _ => None,
+            })
         }
         let s = |v: &[(&str, bool)]| -> Vec<(String, bool)> {
             v.iter().map(|(n, b)| (n.to_string(), *b)).collect()
@@ -4237,7 +4303,7 @@ codeunit 50104 T
         let af = parse(src);
         let routines = &af.objects[0].routines;
         let ctx_of = |i: usize| routines[i].preproc_context.clone();
-        assert_eq!(routines.len(), 5);
+        assert_eq!(routines.len(), 7);
         assert_eq!(ctx_of(0), s(&[("A", true), ("B", true)]));
         assert_eq!(ctx_of(1), Vec::new(), "`A and B` false decides neither");
         assert_eq!(ctx_of(2), s(&[("CLEAN27", false)]));
@@ -4257,6 +4323,34 @@ codeunit 50104 T
         assert_eq!(at(3, "Plain"), s(&[("CLEAN27", true)]));
         assert_eq!(at(4, "InY"), s(&[("Y", true)]));
         assert_eq!(at(4, "InNotY"), s(&[("Y", false)]));
+        // A `case` split across `#if` arms: an arm's own branch carries the arm's
+        // symbols, the shared branch none (CDO `CDOEMail.Codeunit.al:241`).
+        let case_branches = |r: usize, name: &str| -> Vec<(String, bool)> {
+            let StmtKind::Case { branches, .. } = &af
+                .ir
+                .stmt(
+                    match af.ir.block(routines[r].body.expect("body")).items[0] {
+                        crate::ir::BlockItem::Stmt(s) => s,
+                        _ => panic!("statement"),
+                    },
+                )
+                .kind
+            else {
+                panic!("case");
+            };
+            branches
+                .iter()
+                .find_map(|b| find_call(&af, b.body, name))
+                .map(|e| af.ir.preproc_context(e).to_vec())
+                .unwrap_or_else(|| panic!("no branch calls {name}"))
+        };
+        assert_eq!(case_branches(5, "InSmtp"), s(&[("DOSMTP", true)]));
+        assert_eq!(case_branches(5, "Shared"), Vec::new());
+        // Whole branches under `#if` arms (`preproc_conditional_case`): each arm's
+        // branches carry that arm's symbols.
+        assert_eq!(case_branches(6, "InSmtp"), s(&[("DOSMTP", true)]));
+        assert_eq!(case_branches(6, "NotSmtp"), s(&[("DOSMTP", false)]));
+        assert_eq!(case_branches(6, "Shared"), Vec::new());
     }
 
     /// Outside a split header's arm nothing is decided: every branch union-reads.

@@ -11,13 +11,13 @@
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::{PAnchor, PCFNNode, PCallee};
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::{PAnchor, PCFNNode, PCallee};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d62-telemetry-before-success";
 
@@ -183,7 +183,7 @@ fn mutually_exclusive(tree: &PCFNNode, a: &Locator, b: &Locator) -> bool {
 }
 
 pub fn detect_d62(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

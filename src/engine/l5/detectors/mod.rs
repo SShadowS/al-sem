@@ -69,11 +69,11 @@ use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::{PAnchor, PCFNNode, PCallSite, PCallee, PExpressionInfo};
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Table};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::SourceAnchor;
 use crate::engine::l5::registry::{Detector, substrate};
+use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PCallee, PExpressionInfo};
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, ModelTable};
 
 /// `beforeAnchor(a, b)` — true iff `a` is strictly before `b` by source position.
 /// Port of al-sem `src/engine/source-anchor.ts:beforeAnchor`.
@@ -176,7 +176,7 @@ impl LoadPoint<'_> {
 ///
 /// [`puts_in_loaded_state`]: crate::engine::l4::summary::RecordRoleSummary::puts_in_loaded_state
 pub(crate) fn record_load_points<'a>(
-    routine: &'a L3Routine,
+    routine: &'a ModelRoutine,
     ctx: &DetectorContext,
 ) -> HashMap<String, Vec<LoadPoint<'a>>> {
     use crate::engine::l4::summary_runner::record_flow_role;
@@ -235,7 +235,7 @@ pub(crate) fn record_load_points<'a>(
 /// from outside (`local`; `internal` when no app gets internal access — the same
 /// facts d14 uses). A public routine with no workspace caller has its owner
 /// outside the workspace, so the finding must stay on the routine itself.
-pub(crate) fn owner_is_judged(routine: &L3Routine, ctx: &DetectorContext) -> bool {
+pub(crate) fn owner_is_judged(routine: &ModelRoutine, ctx: &DetectorContext) -> bool {
     let access = routine.access_modifier.as_deref();
     let closed = access == Some("local")
         || (access == Some("internal") && !ctx.internal_reachable_externally);
@@ -249,7 +249,7 @@ pub(crate) fn owner_is_judged(routine: &L3Routine, ctx: &DetectorContext) -> boo
 /// need load coverage (d3) and PK entry-requirements never force a wider
 /// narrow (d42). An empty/missing first key excludes nothing — when the PK
 /// cannot be determined the detectors keep firing.
-pub(crate) fn primary_key_field_names_lc(table: &L3Table) -> HashSet<String> {
+pub(crate) fn primary_key_field_names_lc(table: &ModelTable) -> HashSet<String> {
     let field_name_by_id: HashMap<&str, &str> = table
         .fields
         .iter()
@@ -274,7 +274,7 @@ pub(crate) fn primary_key_field_names_lc(table: &L3Table) -> HashSet<String> {
 /// narrow on the forwarded record (d42): adding it to `SetLoadFields` would be
 /// a no-op. Used to drop FlowField/FlowFilter entries from d42's required set.
 /// An unresolved table excludes nothing — the detector keeps firing.
-pub(crate) fn flow_field_names_lc(table: &L3Table) -> HashSet<String> {
+pub(crate) fn flow_field_names_lc(table: &ModelTable) -> HashSet<String> {
     table
         .fields
         .iter()
@@ -333,7 +333,7 @@ const TABLE_TRIGGERS_REC_AUTO_PERSIST: &[&str] = &["OnInsert", "OnModify", "OnDe
 /// kind / object type / trigger name / receiver) returns `false` — the
 /// detectors keep firing.
 pub(crate) fn is_platform_loaded_trigger_rec(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     record_variable_name: &str,
 ) -> bool {
     if !record_variable_name.eq_fold_identifier("rec") {
@@ -367,7 +367,10 @@ pub(crate) fn is_platform_loaded_trigger_rec(
 /// trigger exit is NOT discarded — d39 (record-left-dirty) must not flag the
 /// trigger for "never persists after the call". When unsure returns `false` —
 /// the detector keeps firing.
-pub(crate) fn is_auto_persist_trigger_rec(routine: &L3Routine, record_variable_name: &str) -> bool {
+pub(crate) fn is_auto_persist_trigger_rec(
+    routine: &ModelRoutine,
+    record_variable_name: &str,
+) -> bool {
     if !record_variable_name.eq_fold_identifier("rec") {
         return false;
     }
@@ -423,7 +426,7 @@ const PLATFORM_LOADER_METHODS: &[&str] = &["GetBySystemId"];
 /// variable, non-loading callee, cross-app context with no resolved-edge
 /// index) returns `false` — the detectors keep firing.
 pub(crate) fn record_loaded_by_call_before(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     record_variable_name: &str,
     op_anchor: &PAnchor,
@@ -479,7 +482,7 @@ fn callee_loads_by_var_arg(ctx: &DetectorContext, cs: &PCallSite, var_lc: &str) 
 /// recursive wrappers.
 fn callee_loads_param(
     ctx: &DetectorContext,
-    callee: &L3Routine,
+    callee: &ModelRoutine,
     param_lc: &str,
     remaining_hops: u32,
 ) -> bool {
@@ -527,7 +530,7 @@ fn callee_applies_op_to_by_var_arg(
     ctx: &DetectorContext,
     cs: &PCallSite,
     var_lc: &str,
-    param_check: impl Fn(&L3Routine, &str) -> bool,
+    param_check: impl Fn(&ModelRoutine, &str) -> bool,
 ) -> bool {
     let Some(edge) = ctx.resolved_call_edge_by_callsite.get(&cs.id) else {
         return false;
@@ -590,7 +593,7 @@ const MAX_ASSIGN_CHAIN_DEPTH: u32 = 3;
 /// (expression RHS, field write, unknown/unloaded RHS, assignment after the
 /// op) returns `false` — the detectors keep firing.
 pub(crate) fn record_loaded_by_assignment_before(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     record_variable_name: &str,
     op_anchor: &PAnchor,
@@ -608,7 +611,7 @@ pub(crate) fn record_loaded_by_assignment_before(
 /// strictly before `anchor` whose RHS is provably loaded at that assignment?
 /// Consumes one unit of `depth` per link.
 fn assigned_from_loaded_var_before(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     var_lc: &str,
     anchor: &PAnchor,
@@ -636,7 +639,7 @@ fn assigned_from_loaded_var_before(
 /// another loaded var. A non-record or unknown identifier matches none of
 /// these and returns `false`.
 fn variable_proven_loaded_before(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     var_lc: &str,
     anchor: &PAnchor,
@@ -699,7 +702,7 @@ pub(crate) const RECORD_FILTER_OPS: &[&str] = &["SetRange", "SetFilter"];
 /// variable, non-filtering callee, call after the op) returns `false` —
 /// d33 keeps firing.
 pub(crate) fn record_filtered_by_call_before(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     record_variable_name: &str,
     op_anchor: &PAnchor,
@@ -775,7 +778,7 @@ fn call_is_set_selection_filter_on(cs: &PCallSite, var_lc: &str) -> bool {
 /// Every uncertainty (unresolved receiver table, no such method, missing
 /// body, parse-incomplete) returns `false` — d33 keeps firing.
 fn receiver_table_method_net_filters_self(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     ctx: &DetectorContext,
     var_lc: &str,
     method: &str,
@@ -816,7 +819,7 @@ fn receiver_table_method_net_filters_self(
 /// LAST filter-relevant event (by source position) must be a filter
 /// (`RECORD_FILTER_OPS`), not a `Reset` — mirrors `callee_net_filters_param`.
 /// No filter-relevant event at all returns `false`.
-fn callee_net_filters_implicit_self(callee: &L3Routine) -> bool {
+fn callee_net_filters_implicit_self(callee: &ModelRoutine) -> bool {
     /// `Some(true)` = filter, `Some(false)` = Reset, `None` = not filter-relevant.
     fn filter_event(name: &str) -> Option<bool> {
         if RECORD_FILTER_OPS.iter().any(|m| m.eq_fold_identifier(name)) {
@@ -865,9 +868,9 @@ fn callee_net_filters_implicit_self(callee: &L3Routine) -> bool {
 /// `bulk_op` in source order with no intervening `Reset` (which would wipe filters).
 /// (Was d33's private `was_filtered_before`; shared with d52.)
 pub(crate) fn record_filter_applied_before(
-    ops: &[crate::engine::l3::l3_workspace::L3RecordOperation],
+    ops: &[crate::program::model::workspace::ModelRecordOperation],
     var_key: &str,
-    bulk_op: &crate::engine::l3::l3_workspace::L3RecordOperation,
+    bulk_op: &crate::program::model::workspace::ModelRecordOperation,
 ) -> bool {
     let mut filtered = false;
     for other in ops {
@@ -894,8 +897,8 @@ pub(crate) fn record_filter_applied_before(
 /// `SetFilter` / `Reset`) on that parameter and checks the LAST one (by
 /// source position) is a filter — a trailing `Reset` un-filters the record.
 /// No filter-relevant op at all returns `false`.
-fn callee_net_filters_param(callee: &L3Routine, param_lc: &str) -> bool {
-    let mut last: Option<&L3RecordOperation> = None;
+fn callee_net_filters_param(callee: &ModelRoutine, param_lc: &str) -> bool {
+    let mut last: Option<&ModelRecordOperation> = None;
     for op in &callee.record_operations {
         if op.record_variable_name.to_lowercase() != param_lc {
             continue;
@@ -955,9 +958,9 @@ pub(crate) fn is_virtual_system_table(name: &str) -> bool {
 /// variables). When unsure (resolved table, unknown variable, no declared type,
 /// unlisted name) returns `false` — the detectors keep firing.
 pub(crate) fn op_targets_virtual_system_table(
-    op: &L3RecordOperation,
-    routine: &L3Routine,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    routine: &ModelRoutine,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> bool {
     // A type that resolved to a table numbered below the platform range is a
     // physical table (a user's, or a dependency's) — never virtual. A resolved
@@ -989,7 +992,7 @@ pub(crate) fn op_targets_virtual_system_table(
 /// skipped; a mid-body `Next` on another cursor (or ANY non-Next db op) keeps firing.
 /// Shared by d1 (interprocedural terminals + in-loop op gate) and d2 (subscriber
 /// db-op selection).
-pub(crate) fn is_terminator_next(op: &L3RecordOperation) -> bool {
+pub(crate) fn is_terminator_next(op: &ModelRecordOperation) -> bool {
     op.op == "Next" && op.in_until_condition
 }
 
@@ -1025,7 +1028,7 @@ pub(crate) enum WholeSetBreak {
 /// `ir_expression_info`), so `Next(+1)` and `Next(-1)` lower to unary
 /// expressions rather than `Literal::Int` and are correctly rejected, as are
 /// `Next(0)`, `Next(Step)` and any other expression.
-pub(crate) fn is_unit_advance(op: &L3RecordOperation) -> bool {
+pub(crate) fn is_unit_advance(op: &ModelRecordOperation) -> bool {
     match op.field_argument_infos.as_deref() {
         Some([]) => true,
         Some([only]) => only.kind == "integer" && only.value.as_deref() == Some("1"),
@@ -1041,7 +1044,7 @@ pub(crate) fn is_unit_advance(op: &L3RecordOperation) -> bool {
 /// is the caller's job — see [`whole_set_advance`] — because a
 /// per-op predicate cannot count.
 pub(crate) fn whole_set_break(
-    op: &L3RecordOperation,
+    op: &ModelRecordOperation,
     candidate_loop: &str,
 ) -> Option<WholeSetBreak> {
     match op.op.as_str() {
@@ -1094,15 +1097,15 @@ pub(crate) fn whole_set_break(
 /// ask whether an op is loop control, not whether the loop exhausts (#49).
 /// Callers exclude the returned op from their [`whole_set_break`] scan.
 pub(crate) fn whole_set_advance<'a>(
-    ops_in_loop: &[&'a L3RecordOperation],
+    ops_in_loop: &[&'a ModelRecordOperation],
     driver: &str,
-    lp: &crate::engine::l2::features::PLoop,
+    lp: &crate::program::body::features::PLoop,
 ) -> Option<&'a str> {
     let (var, advance_id) = lp.exhausting_advance.as_ref()?;
     if var != driver {
         return None;
     }
-    let advances: Vec<&&L3RecordOperation> = ops_in_loop
+    let advances: Vec<&&ModelRecordOperation> = ops_in_loop
         .iter()
         .filter(|op| op.op == "Next" && op.record_variable_name.to_lowercase() == driver)
         .collect();
@@ -1116,8 +1119,8 @@ pub(crate) fn whole_set_advance<'a>(
 /// always sets `{kind:"unknown"}`) is NOT a known-temp. Shared by d1 and d2
 /// (and mirrors d33's inline gate): an op provably on a temporary record does no
 /// physical-db work.
-pub(crate) fn is_known_temp(op: &L3RecordOperation) -> bool {
-    crate::engine::l2::features::temp_state_suppresses(op.temp_state.as_ref())
+pub(crate) fn is_known_temp(op: &ModelRecordOperation) -> bool {
+    crate::program::body::features::temp_state_suppresses(op.temp_state.as_ref())
 }
 
 /// Anchor containment: `inner` sits fully inside `outer` (inclusive bounds).
@@ -1132,12 +1135,14 @@ pub(crate) fn anchor_within(inner: &PAnchor, outer: &PAnchor) -> bool {
 }
 
 /// The record-VARIABLE analogue of [`is_known_temp`]: `temp_state.kind == "known"
-/// && value == Some(true)` on an `L3RecordVariable`. A provably-temporary record
+/// && value == Some(true)` on an `ModelRecordVariable`. A provably-temporary record
 /// var is an in-memory buffer — ops on it do no physical-db work. Used by d56 to
 /// exclude a temp-buffer source (materialize-into-persisted is not a redundant
 /// cursor re-write).
-pub(crate) fn is_known_temp_var(rv: &crate::engine::l3::l3_workspace::L3RecordVariable) -> bool {
-    crate::engine::l2::features::temp_state_suppresses(Some(&rv.temp_state))
+pub(crate) fn is_known_temp_var(
+    rv: &crate::program::model::workspace::ModelRecordVariable,
+) -> bool {
+    crate::program::body::features::temp_state_suppresses(Some(&rv.temp_state))
 }
 
 /// `unquotedFieldName` from `model/expression.ts`:
@@ -1155,7 +1160,7 @@ pub(crate) fn unquoted_field_name(info: &PExpressionInfo) -> String {
 /// Build the internal `SourceAnchor` from an L2 `PAnchor` + the owning routine.
 /// Drops `enclosingRoutineId` from the PAnchor (which doesn't carry one) and
 /// stamps the routine's own id. Hash fields default to `None`.
-pub(crate) fn anchor_of(a: &PAnchor, routine: &L3Routine) -> SourceAnchor {
+pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
     SourceAnchor {
         source_unit_id: a.source_unit_id.clone(),
         start_line: a.start_line,
@@ -1551,13 +1556,13 @@ pub fn registered_detectors() -> Vec<Detector> {
 #[cfg(test)]
 mod issue21_predicate_tests {
     use super::*;
-    use crate::engine::l2::features::{PAnchor, PExpressionInfo};
+    use crate::program::body::features::{PAnchor, PExpressionInfo};
 
     /// Hand-stated: an op is built literally, never asked of production code.
     /// The `None` case below is the reason this test has to exist at all --
     /// see the module test's doc.
-    fn next_op(args: Option<Vec<PExpressionInfo>>) -> L3RecordOperation {
-        L3RecordOperation {
+    fn next_op(args: Option<Vec<PExpressionInfo>>) -> ModelRecordOperation {
+        ModelRecordOperation {
             id: "op0".to_string(),
             op: "Next".to_string(),
             record_variable_name: "R".to_string(),

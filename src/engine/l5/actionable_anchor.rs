@@ -7,7 +7,7 @@
 //!
 //! ## Role resolution (source-only note)
 //! al-sem's `roleOf(r)` reads `r.analysisRole` (absent ⇒ "primary"). The Rust
-//! `L3Routine` carries no `analysisRole` field — in the SOURCE-ONLY pipeline
+//! `ModelRoutine` carries no `analysisRole` field — in the SOURCE-ONLY pipeline
 //! every routine is "primary", exactly as `registry::run_detectors` documents.
 //! To keep the port faithful AND testable, the caller supplies a
 //! `role_by_routine` map (the SAME map `run_detectors` builds: routine id →

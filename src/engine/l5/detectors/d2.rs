@@ -30,7 +30,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Table};
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l4::cone_derived::ConeDerivedStore;
 use crate::engine::l4::summary::{Uncertainty, dedupe_uncertainties};
@@ -50,6 +49,7 @@ use crate::engine::l5::path_walker::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::table_display::{DescribeOp, describe_table};
+use crate::program::model::workspace::{Model, ModelRoutine, ModelTable};
 
 const DETECTOR: &str = "d2-event-fanout-in-loop";
 
@@ -60,9 +60,9 @@ const BOUNDS: WalkBounds = WalkBounds {
 
 /// `${op} on ${describeTable(op, routine, tableById)}` — the terminal step note.
 fn table_note(
-    op: &crate::engine::l3::l3_workspace::L3RecordOperation,
-    routine: Option<&L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &crate::program::model::workspace::ModelRecordOperation,
+    routine: Option<&ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> String {
     let describe = DescribeOp {
         table_id: op.table_id.as_deref(),
@@ -86,11 +86,11 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 /// ops; expand over non-event-dispatch db-reaching edges). It is the SUPPLEMENTARY
 /// walk that locates the exact DB op inside a witness subscriber.
 struct D2Policy<'a> {
-    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
-    table_by_id: &'a HashMap<&'a str, &'a L3Table>,
+    routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    table_by_id: &'a HashMap<&'a str, &'a ModelTable>,
     summaries: &'a HashMap<String, crate::engine::l5::full_summary::FullRoutineSummary>,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
-    call_site_by_id: &'a HashMap<&'a str, &'a crate::engine::l2::features::PCallSite>,
+    call_site_by_id: &'a HashMap<&'a str, &'a crate::program::body::features::PCallSite>,
     /// ⟨C1 Task 2⟩ The derived cone substrate `expand`'s `touchesDb` gate reads.
     cone_derived: &'a ConeDerivedStore,
 }
@@ -229,10 +229,7 @@ impl<'a> WalkPolicy for D2Policy<'a> {
     }
 }
 
-pub fn detect_d2(
-    resolved: &L3Resolved,
-    ctx: &DetectorContext,
-) -> Result<DetectorOutput, DetectorError> {
+pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
 

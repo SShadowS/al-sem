@@ -7,7 +7,7 @@
 //! `xRec` that are structurally known to be temporary — the SourceTable is always
 //! loaded as a temporary copy in such pages. After L3 resolution:
 //!
-//! - `L3Object.source_table_temporary == Some(true)` (Part A: property capture)
+//! - `ModelObject.source_table_temporary == Some(true)` (Part A: property capture)
 //! - The page trigger's `Rec.DeleteAll()` resolves `Known(true)` (Part B)
 //! - The page trigger's `xRec.Get(...)` resolves `Known(true)` (Part B: RV-8)
 //!
@@ -15,12 +15,12 @@
 //! NOT have its implicit Rec/xRec force-upgraded — the override is strictly
 //! additive toward `Known(true)`.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000005aa";
 
 /// (a) A page with `SourceTableTemporary = true` has:
-///   - `L3Object.source_table_temporary == Some(true)`
+///   - `ModelObject.source_table_temporary == Some(true)`
 ///   - implicit `Rec` op resolves `Known(true)`
 ///   - implicit `xRec` op resolves `Known(true)` (RV-8)
 #[test]
@@ -52,8 +52,10 @@ page 50700 "TmpPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // Part A: the page object must carry source_table_temporary == Some(true).
     let obj = resolved
@@ -65,7 +67,7 @@ page 50700 "TmpPage"
     assert_eq!(
         obj.source_table_temporary,
         Some(true),
-        "SourceTableTemporary = true must set L3Object.source_table_temporary == Some(true)",
+        "SourceTableTemporary = true must set ModelObject.source_table_temporary == Some(true)",
     );
 
     // Part B: OnOpenPage's implicit Rec.DeleteAll() must resolve Known(true).
@@ -117,8 +119,10 @@ page 50710 "PhysPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // The page object must carry source_table_temporary == None (absent).
     let obj = resolved
@@ -175,8 +179,10 @@ page 50720 "FalseTmpPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // source_table_temporary == Some(false) when present but false.
     let obj = resolved
@@ -188,7 +194,7 @@ page 50720 "FalseTmpPage"
     assert_eq!(
         obj.source_table_temporary,
         Some(false),
-        "SourceTableTemporary = false must set L3Object.source_table_temporary == Some(false)",
+        "SourceTableTemporary = false must set ModelObject.source_table_temporary == Some(false)",
     );
 
     // Rec op must NOT be upgraded to Known(true).

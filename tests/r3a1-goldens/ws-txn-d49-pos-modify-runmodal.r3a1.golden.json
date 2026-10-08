@@ -1,7 +1,25 @@
 {
   "combinedEdges": [],
-  "uncertaintyEdges": [],
-  "typedEdges": [],
+  "uncertaintyEdges": [
+    {
+      "from": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
+      "uncertainty": {
+        "kind": "unresolved-call",
+        "callsiteId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721/cs0"
+      }
+    }
+  ],
+  "typedEdges": [
+    {
+      "kind": "object-run-unresolved",
+      "from": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
+      "callsiteId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721/cs0",
+      "objectType": "Page",
+      "targetIdSource": {
+        "kind": "unknown"
+      }
+    }
+  ],
   "sccs": [
     {
       "members": [

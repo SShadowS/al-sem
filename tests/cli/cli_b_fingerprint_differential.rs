@@ -34,7 +34,6 @@
 use std::path::PathBuf;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, FingerprintOptions, FingerprintOutput, ShardMode, run_fingerprint_pipeline,
 };
@@ -43,6 +42,7 @@ use al_sem::engine::l5::snapshot_full::{
     FullSnapshotOptions, compose_full_snapshot, serialize_cbor, serialize_cbor_gz,
     serialize_sharded,
 };
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 use crate::regen;
 
@@ -130,7 +130,7 @@ fn compose_full_for(
     fixture: &str,
 ) -> (
     al_sem::engine::gate::cbor::CborValue,
-    al_sem::engine::l3::l3_workspace::L3Resolved,
+    al_sem::program::model::workspace::Model,
     PathBuf,
 ) {
     let ws = fixture_dir(fixture);
@@ -141,7 +141,7 @@ fn compose_full_for(
     );
     let model_id = compute_gate_model_instance_id(&ws)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
-    let resolved = assemble_and_resolve_workspace(&ws, &model_id, false)
+    let resolved = assemble_and_resolve_workspace_program(&ws, &model_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
         workspace_dir: &ws,

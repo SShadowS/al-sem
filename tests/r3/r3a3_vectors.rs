@@ -11,8 +11,8 @@
 //! al-sem — the fix is in the Rust code (NEVER the vector). A mismatch on the
 //! `equal_distance_tie` vector is a real tie-breaker bug.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve;
 use al_sem::engine::l4::capability_cone::project_r3a3;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program as assemble_and_resolve;
 use serde_json::Value;
 
 const MODEL_INSTANCE_ID: &str = "r0";
@@ -42,12 +42,19 @@ fn load_vectors() -> VectorsDoc {
     serde_json::from_str(raw).expect("r3a3-vectors.json parses into VectorsDoc")
 }
 
+/// The vector's files for the program-backed builder (engine-switch S9.5c),
+/// which reads only `.al` files: a fixture name without the extension gets it.
 fn files_of(files: &[Vec<String>]) -> Vec<(String, String)> {
     files
         .iter()
         .map(|pair| {
             assert_eq!(pair.len(), 2, "each file entry is [name, source]");
-            (pair[0].clone(), pair[1].clone())
+            let name = if pair[0].ends_with(".al") {
+                pair[0].clone()
+            } else {
+                format!("{}.al", pair[0])
+            };
+            (name, pair[1].clone())
         })
         .collect()
 }

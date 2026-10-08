@@ -6,13 +6,14 @@
 //!
 //! ## What the producer does (the embedded-source path)
 //!
+//! Since engine-switch S7.5 it reads the cross-app model (`dep_artifacts_from_model`):
+//! the dependency's routines are the model's own rows (`dep:<appGuid>:<path>`
+//! units), its calls the program engine's. Before, each `.app`'s embedded source
+//! was parsed into an isolated L3 model and resolved with L3's resolver (both
+//! deleted in S9.6). Per dependency:
+//!
 //! ```text
-//! .app bytes
-//!   → iterate_embedded_source (.al entries inside the ZIP, sorted by name)
-//!   → assemble_workspace_units (isolated dep L3 model, analysisRole "dependency",
-//!        sourceUnitId = dep:<appGuid>:<relativePath>)
-//!   → resolve (build_symbol_table → resolve_record_types → merge_extension_fields)
-//!   → resolve_calls (the dep callGraph)         ← intraAppCallEdges
+//!   the model's calls from its routines         ← intraAppCallEdges
 //!   → apply_operation_order per routine          ← depOrderIndex order data
 //!   → direct_facts_for_routine per routine       ← citedOperationEvidence witnesses
 //!   → compute_dep_return_summary per routine     ← depOrderIndex return summaries
@@ -22,11 +23,10 @@
 //!        stamp). summaryMode gating: only "full" produces the order index.
 //! ```
 //!
-//! It reuses the engine's OWN already-ported pipeline (L0 parser → L2 body walk +
-//! operation-order + control-context → L3 resolve + call resolver → the L4 direct
-//! capability extractor `direct_facts_for_routine`) over the ISOLATED dep model —
-//! the producer is the engine running on the dep's embedded source, then a compact
-//! projection. NO new analysis algorithm lives here.
+//! It reuses the engine's OWN pipeline (the body walk + operation-order +
+//! control-context, the program engine's calls, the L4 direct capability
+//! extractor `direct_facts_for_routine`) — then a compact projection. NO new
+//! analysis algorithm lives here.
 //!
 //! ## summaryMode (parity with al-sem `buildAppModel`)
 //!
@@ -47,12 +47,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 
 use crate::engine::deps::app_package_zip::app_zip_bytes;
-use crate::engine::l2::operation_order::apply_operation_order;
-use crate::engine::l3::event_graph::EventSymbol;
-use crate::engine::l3::l3_workspace::L3Routine;
-use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::engine::l4::capability_cone::direct_facts_for_routine;
 use crate::program::attributes::{AttributeInfo, find_attribute, has_attribute};
+use crate::program::body::operation_order::apply_operation_order;
+use crate::program::model::events::EventSymbol;
+use crate::program::model::taxonomy::{DispatchKind, Resolution};
+use crate::program::model::workspace::ModelRoutine;
 
 /// Schema version for the dep order index. Mirrors al-sem
 /// `DEP_ORDER_INDEX_SCHEMA_VERSION` (`src/deps/dep-order-types.ts`).
@@ -290,15 +290,10 @@ pub struct DependencyArtifactL4 {
 /// resolver, once per product (this producer, `recover_dep_retained`, the R3a-4
 /// id stabilizer). A symbol-only dependency's artifact has no routines, as before.
 pub fn dep_artifacts_from_model(
-    x: &crate::engine::l3::program_calls::CrossAppProgram,
+    x: &crate::program::model::program_calls::CrossAppProgram,
 ) -> Vec<DependencyArtifactL4> {
-    let empty_calls: &[crate::program::model::calls::CallEdge] = &[];
-    let calls = x
-        .resolved
-        .precomputed_calls
-        .as_ref()
-        .map_or(empty_calls, |c| c.edges.as_slice());
-    let events = x.resolved.precomputed_events.as_ref().map(|e| &e.graph);
+    let calls = x.resolved.calls.edges.as_slice();
+    let events = &x.resolved.events.graph;
     x.dependency_apps
         .iter()
         .map(|app| artifact_from_model(app, &x.resolved.workspace.routines, calls, events))
@@ -307,12 +302,12 @@ pub fn dep_artifacts_from_model(
 
 fn artifact_from_model(
     app: &crate::program::model::workspace::DependencyApp,
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     calls: &[crate::program::model::calls::CallEdge],
-    events: Option<&crate::engine::l3::event_graph::EventGraph>,
+    events: &crate::program::model::events::EventGraph,
 ) -> DependencyArtifactL4 {
     let app_guid = &app.guid;
-    let mut own: Vec<L3Routine> = if app.has_source {
+    let mut own: Vec<ModelRoutine> = if app.has_source {
         routines
             .iter()
             .filter(|r| &r.app_guid == app_guid)
@@ -367,7 +362,7 @@ fn artifact_from_model(
     // operationSites first (displayText = op.kind), recordOperations overwrite
     // (displayText = `${rv}.${op}`, controlContext from the matching operationSite).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
-    for evt in events.map_or(&[][..], |g| g.events.as_slice()) {
+    for evt in &events.events {
         if let Some(pr) = &evt.publisher_routine_id {
             publisher_events_by_routine
                 .entry(pr.clone())
@@ -482,11 +477,11 @@ pub fn admitted_intra_app_edge(ce: &crate::program::model::calls::CallEdge) -> b
 /// so the producer runs it here over the routine's L3-carried features.
 ///
 /// Returns the `DepScopeFrame` projection of the routine's frame table.
-fn apply_dep_operation_order(r: &mut L3Routine) -> Vec<DepScopeFrame> {
+fn apply_dep_operation_order(r: &mut ModelRoutine) -> Vec<DepScopeFrame> {
     // Reconstruct a minimal PFeatures the order walker reads: statement_tree +
     // op/callsite records. The walker mutates `order` on each op/callsite and
     // returns the scope-frame table.
-    use crate::engine::l2::features::PFeatures;
+    use crate::program::body::features::PFeatures;
 
     let mut features = PFeatures {
         loops: Vec::new(),
@@ -537,7 +532,7 @@ fn apply_dep_operation_order(r: &mut L3Routine) -> Vec<DepScopeFrame> {
 /// dependency-pipeline.ts:508-616). Returns `None` when not "full" mode, when no
 /// own routine has a parsed body, or when there is no useful order data.
 fn build_dep_order_index(
-    own: &[L3Routine],
+    own: &[ModelRoutine],
     app_guid: &str,
     version: &str,
     summary_mode: &str,
@@ -643,7 +638,7 @@ fn build_dep_order_index(
 /// Compute a dep routine's returnability summary (port of al-sem
 /// `computeRoutineReturnSummary`, `src/engine/return-summary.ts`). Structural walk
 /// over the CFN statement tree, with the TryFunction / no-body / no-tree barriers.
-pub fn compute_dep_return_summary(r: &L3Routine) -> DepReturnSummaryRecord {
+pub fn compute_dep_return_summary(r: &ModelRoutine) -> DepReturnSummaryRecord {
     let has_try_function = has_attribute(&r.attributes_parsed, "TryFunction");
     let commit_behavior = parse_commit_behavior(&r.attributes_parsed);
 
@@ -707,7 +702,7 @@ struct SubtreeReach {
 
 /// Walk a CFN subtree for normal-return reachability / all-paths-error (port of
 /// al-sem `walkSubtree`, `return-summary.ts`).
-fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
+fn walk_subtree(node: &crate::program::body::features::PCFNNode) -> SubtreeReach {
     match node.kind.as_str() {
         "error" => SubtreeReach {
             has_normal: false,
@@ -833,7 +828,7 @@ fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
     }
 }
 
-fn walk_subtree_list(nodes: &[crate::engine::l2::features::PCFNNode]) -> SubtreeReach {
+fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> SubtreeReach {
     if nodes.is_empty() {
         return SubtreeReach {
             has_normal: true,

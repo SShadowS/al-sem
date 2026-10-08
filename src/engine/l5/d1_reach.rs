@@ -56,8 +56,6 @@ use std::collections::{BTreeMap, HashMap};
 #[cfg(test)]
 use std::collections::{HashSet, VecDeque};
 
-use crate::engine::l2::features::PLoop;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Table};
 #[cfg(test)]
 use crate::engine::l4::summary::{Uncertainty, dedupe_uncertainties};
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
@@ -85,6 +83,8 @@ use crate::engine::l5::detectors::d1::{
 };
 use crate::engine::l5::finding::{EvidenceStep, LoopCatalogEntry};
 use crate::engine::l5::path_merge::sev_rank;
+use crate::program::body::features::PLoop;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, ModelTable};
 
 /// One (loop, terminal-op) aggregate: the old `process_group`/`solve_group`/
 /// `solve_batch` oracle output shape. `search_loops_cohorts` (the production
@@ -92,7 +92,7 @@ use crate::engine::l5::path_merge::sev_rank;
 /// (`TerminalCohorts`) — so this type is `#[cfg(test)]`-only.
 #[cfg(test)]
 pub(crate) struct LoopTerminalAgg<'a> {
-    pub loop_routine: &'a L3Routine,
+    pub loop_routine: &'a ModelRoutine,
     pub loop_id: &'a str,
     pub loop_info: &'a PLoop,
     pub terminal: D1Terminal<'a>,
@@ -115,10 +115,10 @@ pub(crate) struct LoopTerminalAgg<'a> {
 
 /// A direct in-loop db op (old branch (a)) folded into the same aggregation.
 pub(crate) struct DirectOp<'a> {
-    pub routine: &'a L3Routine,
+    pub routine: &'a ModelRoutine,
     pub loop_id: &'a str,
     pub loop_info: &'a PLoop,
-    pub op: &'a L3RecordOperation,
+    pub op: &'a ModelRecordOperation,
 }
 
 /// One BFS label: the identity triple `(temp_vec, depth_bucket, unc)` plus the
@@ -157,8 +157,8 @@ struct Candidate<'a> {
     effective_loop_depth: i64,
     discovery: usize,
     kind: CandKind<'a>,
-    terminal_op: &'a L3RecordOperation,
-    terminal_owner: &'a L3Routine,
+    terminal_op: &'a ModelRecordOperation,
+    terminal_owner: &'a ModelRoutine,
     terminal_local_depth: i64,
     entry_callsite_id: Option<&'a str>,
 }
@@ -169,9 +169,9 @@ struct Candidate<'a> {
 #[cfg(test)]
 enum CandKind<'a> {
     Direct {
-        routine: &'a L3Routine,
+        routine: &'a ModelRoutine,
         loop_info: &'a PLoop,
-        op: &'a L3RecordOperation,
+        op: &'a ModelRecordOperation,
     },
     Transitive {
         label_idx: usize,
@@ -194,8 +194,8 @@ pub(crate) fn node_has_uncertainty(ctx: &DetectorContext, node_id: &str) -> bool
 /// `build_finding`'s verdict computation (`d1.rs:404-421`), forward-composed.
 pub(crate) fn flowfield_verdict(
     pt: ParamTemp,
-    op: &L3RecordOperation,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> TempVerdict {
     match pt {
         ParamTemp::Physical => TempVerdict::Physical,
@@ -326,7 +326,7 @@ fn push_label<'g, 'a>(
 }
 
 /// A branch-(b) loop step (`d1.rs:1141-1148` / `d1.rs:1052-1059`).
-pub(crate) fn loop_step_ev(routine: &L3Routine, loop_info: &PLoop) -> EvidenceStep {
+pub(crate) fn loop_step_ev(routine: &ModelRoutine, loop_info: &PLoop) -> EvidenceStep {
     EvidenceStep {
         routine_id: routine.id.clone(),
         operation_id: None,
@@ -371,8 +371,8 @@ fn materialize_transitive<'a>(
     graph: &D1Graph<'a>,
     ctx: &DetectorContext,
     seeds: &[D1Seed<'a>],
-    terminal_owner: &L3Routine,
-    terminal_op: &L3RecordOperation,
+    terminal_owner: &ModelRoutine,
+    terminal_op: &ModelRecordOperation,
 ) -> (Vec<EvidenceStep>, Vec<Uncertainty>) {
     // Collect (from_node, edge) hops and the node ids on the path, terminal -> seed.
     let mut hops_rev: Vec<(NodeIx, &D1Edge)> = Vec::new();
@@ -443,7 +443,7 @@ pub(crate) fn process_group<'g, 'a>(
     direct_ops: &[DirectOp<'a>],
     ctx: &'a DetectorContext,
     cw: &ClosedWorldTempParams,
-    loop_routine: &'a L3Routine,
+    loop_routine: &'a ModelRoutine,
     loop_id: &'a str,
     loop_info: &'a PLoop,
     seed_indices: &[usize],
@@ -946,18 +946,18 @@ pub(crate) fn search_loops_cohorts<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::l3_workspace::L3Workspace;
     use crate::engine::l4::combined_graph::CombinedEdge;
     use crate::engine::l5::d1_graph::build_d1_graph;
     use crate::engine::l5::full_summary::FullRoutineSummary;
     use crate::engine::l5::test_support::{
         call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op, routine, summary,
     };
+    use crate::program::model::workspace::ModelEntities;
 
     /// A built fixture: the owned routines + the `edges_by_from` map + the
     /// per-routine summaries `minimal_ctx` / `build_d1_graph` consume.
     type Fixture = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         HashMap<String, Vec<CombinedEdge>>,
         HashMap<String, FullRoutineSummary>,
     );
@@ -973,8 +973,8 @@ mod tests {
         )
     }
 
-    fn ws(routines: &[L3Routine]) -> L3Workspace {
-        L3Workspace {
+    fn ws(routines: &[ModelRoutine]) -> ModelEntities {
+        ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.to_vec(),
@@ -1556,7 +1556,7 @@ mod tests {
         // group, in a DELIBERATELY reversed order, then apply rule 8's own
         // sort.
         #[allow(clippy::type_complexity)]
-        let mut ref_groups: Vec<(&L3Routine, &str, &PLoop, Vec<usize>, Vec<usize>)> = Vec::new();
+        let mut ref_groups: Vec<(&ModelRoutine, &str, &PLoop, Vec<usize>, Vec<usize>)> = Vec::new();
         for (i, seed) in seeds.iter().enumerate() {
             let key = (seed.loop_routine.id.as_str(), seed.loop_id);
             if let Some(g) = ref_groups
@@ -1644,8 +1644,8 @@ mod tests {
 
         // Build a candidate varying exactly the 5 selection dimensions.
         fn cand<'a>(
-            op: &'a L3RecordOperation,
-            owner: &'a L3Routine,
+            op: &'a ModelRecordOperation,
+            owner: &'a ModelRoutine,
             severity: &'static str,
             verdict: TempVerdict,
             unc: bool,
@@ -1875,7 +1875,7 @@ mod tests {
             false,
         )];
 
-        let mut routines: Vec<L3Routine> = Vec::new();
+        let mut routines: Vec<ModelRoutine> = Vec::new();
         let mut graph_edges: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
 

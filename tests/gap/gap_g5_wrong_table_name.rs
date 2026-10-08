@@ -11,16 +11,16 @@
 //! names the table of the record var the terminal op ACTUALLY operates on — never
 //! a different sub-loop's var/table.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g5abc";
 
 /// Run d1 over an inline workspace and return its findings.
 fn run_d1(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == "d1-db-op-in-loop")
@@ -213,7 +213,7 @@ codeunit 50171 "G5 Merge Tables"
 
 /// The ACTUAL G-5 shape (CDO batch 2/3): a `tableextension` whose OWN object
 /// number equals a REAL table's number in the same app. Both were indexed as
-/// `L3Table` under the SAME internal id `{appGuid}/table/{number}`, so the
+/// `ModelTable` under the SAME internal id `{appGuid}/table/{number}`, so the
 /// last-wins `table_by_id` maps rendered ops on the REAL table with the
 /// EXTENSION's name (e.g. real op on "CDO Merge Table Top/Bottom" reported as
 /// "CDOReturnShipmentHeader"). Each sub-loop's finding must name the REAL table.

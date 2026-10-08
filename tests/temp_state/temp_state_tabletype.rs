@@ -13,14 +13,14 @@
 //! `Known(true)` to false, and never forces `Known(false)`. The only signal is
 //! the structural `TableType` property (Part A), so the upgrade is sound.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
 /// (a) A `table 50800 "ThatTable" { TableType = Temporary; ... }` plus a codeunit
 /// with a LOCAL `Rec: Record "ThatTable";` (NO `temporary` keyword) doing
 /// `Rec.DeleteAll();`. The op must resolve `Known(true)` — the table-level
-/// override beats the ABSENT keyword — and `L3Table.is_temporary == true`.
+/// override beats the ABSENT keyword — and `ModelTable.is_temporary == true`.
 #[test]
 fn tabletype_temporary_table_is_marked_and_local_var_op_upgraded() {
     let source = r#"
@@ -41,8 +41,10 @@ codeunit 50801 "Probe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // Part A: the table is structurally temporary.
     let table = resolved
@@ -50,7 +52,7 @@ codeunit 50801 "Probe"
         .expect("ThatTable must be indexed");
     assert!(
         table.is_temporary(),
-        "TableType = Temporary must set L3Table.is_temporary == true",
+        "TableType = Temporary must set ModelTable.is_temporary == true",
     );
 
     // Part B: the op on a NO-keyword local var of that table is force-upgraded.
@@ -106,8 +108,10 @@ codeunit 50801 "Probe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // By-var param of a temp table → Known(true) (override beats the L2 PD(i)).
     let by_var = resolved

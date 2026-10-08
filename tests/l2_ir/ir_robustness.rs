@@ -15,7 +15,7 @@
 //!   4. `ir_object_type` must equal the legacy `object_type_for` for every object kind.
 //!   5. `al_syntax::parse` + the L2 entry points must not panic on garbage input.
 
-use al_sem::engine::l2::l2_workspace::project_named_routine;
+use al_sem::program::body::l2_workspace::project_named_routine;
 
 /// A parse error in one routine must not drop a FOLLOWING well-formed routine (the
 /// binary trust-boundary risk: a malformed routine swallowing the rest of the
@@ -133,7 +133,7 @@ fn extension_object_number_is_declaration_id() {
 /// is retired.
 #[test]
 fn ir_object_type_labels_every_kind() {
-    use al_sem::engine::l2::ir_walk::ir_object_type;
+    use al_sem::program::body::ir_walk::ir_object_type;
     // (source declaring exactly one object, expected L2 label or None when excluded)
     let cases: &[(&str, Option<&str>)] = &[
         ("codeunit 50100 X\n{\n}\n", Some("Codeunit")),
@@ -200,8 +200,8 @@ fn no_panic_on_garbage() {
 /// modeling is validated independent of the L3 emitter.
 #[test]
 fn report_dataitem_implicit_rec_and_name_vars_seeded() {
-    use al_sem::engine::l2::ir_walk;
-    use al_sem::engine::l2::scope::{ParameterSymbol, compute_routine_id};
+    use al_sem::program::body::ir_walk;
+    use al_sem::program::body::scope::{ParameterSymbol, compute_routine_id};
     let src = concat!(
         "report 50100 \"My Report\"\n{\n",
         "    dataset\n    {\n",

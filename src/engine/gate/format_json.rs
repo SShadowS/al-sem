@@ -25,9 +25,9 @@
 //! newline — the caller appends one, matching al-sem's `process.stdout.write`).
 
 use crate::engine::gate::projection::FindingSummary;
-use crate::engine::l3::coverage::AnalysisCoverage;
 use crate::engine::l5::finding::StableEvidenceStep;
 use crate::engine::l5::registry::{DetectorStats, Diagnostic};
+use crate::program::model::coverage::AnalysisCoverage;
 
 /// Per-finding opt-in evidence augmentation (only built/consumed under
 /// `--with-evidence`). Aligned BY INDEX with `JsonFormatInputs.findings`.

@@ -14,14 +14,14 @@
 //! `calleeParameterIsVar` live on `ctx.upgraded_bindings_by_callsite`, joined
 //! POSITIONALLY with `cs.argument_bindings` by index.
 
-use crate::engine::l3::call_resolver::UpgradedBinding;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved};
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::workspace::{Model, ModelRecordOperation};
 
 const DETECTOR: &str = "d41-transitive-filter-loss";
 
@@ -40,7 +40,7 @@ const FILTER_SENSITIVE_OPS: &[&str] = &[
 ];
 
 pub fn detect_d41(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -103,7 +103,7 @@ pub fn detect_d41(
                 candidates_considered += 1;
 
                 // Ops on this variable, in source order (record_operations preserves it).
-                let ops_on_var: Vec<&L3RecordOperation> = routine
+                let ops_on_var: Vec<&ModelRecordOperation> = routine
                     .record_operations
                     .iter()
                     .filter(|op| op.record_variable_name.to_lowercase() == source_name_lc)
@@ -118,7 +118,7 @@ pub fn detect_d41(
                 // intervening Reset) fires when no filter was active (Gap-T FP).
                 // The witness is the LAST filter-set op still in effect.
                 let mut filtered = false;
-                let mut witness_filter: Option<&L3RecordOperation> = None;
+                let mut witness_filter: Option<&ModelRecordOperation> = None;
                 for op in &ops_on_var {
                     if !before_anchor(&op.source_anchor, &cs.source_anchor) {
                         continue;

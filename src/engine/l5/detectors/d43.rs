@@ -27,13 +27,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::features::{PAnchor, PCFNNode, PConditionReference};
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::event_flow::{event_kind_of, is_handled_re};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
 };
+use crate::program::body::features::{PAnchor, PCFNNode, PConditionReference};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 use super::anchor_of;
 
@@ -70,7 +70,7 @@ fn is_boolean_type(type_text: &str) -> bool {
 /// guard analysis. Faithful port.
 fn enumerate_dispatch_sites(
     ctx: &DetectorContext,
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> Vec<DispatchSite> {
     let mut out: Vec<DispatchSite> = Vec::new();
 
@@ -284,12 +284,12 @@ fn is_assignment_nested_in_tree(assignment_anchor: &PAnchor, tree: Option<&PCFNN
 /// `classifySubscriber` — mustSetTrue / maySetTrue / noSetTrue. Faithful port.
 fn classify_subscriber(
     subscriber: &str,
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> SetterClassification {
     let Some(r) = routine_by_id.get(subscriber).copied() else {
         return SetterClassification::NoSetTrue;
     };
-    let sets: Vec<&crate::engine::l2::features::PVarAssignment> = r
+    let sets: Vec<&crate::program::body::features::PVarAssignment> = r
         .var_assignments
         .iter()
         .filter(|a| is_handled_re(&a.lhs_name) && a.rhs_literal_value.as_deref() == Some("true"))
@@ -354,7 +354,7 @@ fn classify_confidence(site: &DispatchSite, setter: SetterClassification) -> &'s
 // ===========================================================================
 
 pub fn detect_d43(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<crate::engine::l5::registry::DetectorOutput, crate::engine::l5::registry::DetectorError>
 {

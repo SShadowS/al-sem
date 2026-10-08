@@ -26,7 +26,6 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
@@ -34,6 +33,7 @@ use crate::engine::l5::event_flow::{
     ChainNode, ChainReport, ChainWalkOptions, FanoutCoverage, FanoutReport, Scope,
     compute_chain_report, compute_fanout_report,
 };
+use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -462,7 +462,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
 /// diagnostics (e.g. `d43-event-ishandled-skip`) surface exactly as al-sem does.
 fn analyze_workspace_diagnostic_lines(
     workspace: &std::path::Path,
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
 ) -> Vec<String> {
     let default_detectors: Vec<_> = registered_detectors()
         .into_iter()
@@ -568,11 +568,11 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::event_graph::{EventEdge, EventGraph, EventSymbol, Evidence};
     use crate::engine::l5::event_flow::{
         ChainWalkOptions, Scope, build_event_flow_indexes, compute_chain_report,
         compute_fanout_report,
     };
+    use crate::program::model::events::{EventEdge, EventGraph, EventSymbol, Evidence};
     use std::collections::{BTreeSet, HashMap};
 
     fn ev_sym(id: &str, pub_routine: Option<&str>, name: &str) -> EventSymbol {
@@ -626,7 +626,7 @@ mod tests {
 
         let dep_ids: BTreeSet<String> = BTreeSet::new();
         // Build routines list (minimal — primary_routines = {P, S1})
-        let routines: Vec<crate::engine::l3::l3_workspace::L3Routine> = Vec::new();
+        let routines: Vec<crate::program::model::workspace::ModelRoutine> = Vec::new();
         let ix = build_event_flow_indexes(&event_graph, &routines, &dep_ids);
 
         let walk_opts = ChainWalkOptions::default();
@@ -671,7 +671,7 @@ mod tests {
             edges: vec![ev_edge("E1", "S1")],
         };
         let dep_ids: BTreeSet<String> = BTreeSet::new();
-        let routines: Vec<crate::engine::l3::l3_workspace::L3Routine> = Vec::new();
+        let routines: Vec<crate::program::model::workspace::ModelRoutine> = Vec::new();
         let ix = build_event_flow_indexes(&event_graph, &routines, &dep_ids);
 
         let walk_opts = ChainWalkOptions {
@@ -706,7 +706,7 @@ mod tests {
             edges: vec![],
         };
         let dep_ids: BTreeSet<String> = BTreeSet::new();
-        let routines: Vec<crate::engine::l3::l3_workspace::L3Routine> = Vec::new();
+        let routines: Vec<crate::program::model::workspace::ModelRoutine> = Vec::new();
         let ix = build_event_flow_indexes(&event_graph, &routines, &dep_ids);
         let summaries: HashMap<String, crate::engine::l5::full_summary::FullRoutineSummary> =
             HashMap::new();
@@ -733,7 +733,7 @@ mod tests {
             edges: vec![],
         };
         let dep_ids: BTreeSet<String> = BTreeSet::new();
-        let routines: Vec<crate::engine::l3::l3_workspace::L3Routine> = Vec::new();
+        let routines: Vec<crate::program::model::workspace::ModelRoutine> = Vec::new();
         let ix = build_event_flow_indexes(&event_graph, &routines, &dep_ids);
         let walk_opts = ChainWalkOptions::default();
         let report = compute_chain_report(&ix, &walk_opts, Scope::All);

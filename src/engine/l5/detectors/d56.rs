@@ -18,7 +18,7 @@
 //! Key-field-reassignment skip (closes the prior opt-in residual): a
 //! PERSISTED-source clone is NOT flagged when, between the clone assignment and
 //! the write, a field WRITE on the clone targets a KEY field — the target
-//! table's PRIMARY KEY (`L3Table.keys` first entry) or a field named in a
+//! table's PRIMARY KEY (`ModelTable.keys` first entry) or a field named in a
 //! `SetCurrentKey` call on the SOURCE cursor in the SAME routine (the current
 //! key, which need not be the PK). Such a write retargets the clone at a
 //! DIFFERENT physical row, so the clone is functionally required — the
@@ -37,7 +37,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
@@ -48,6 +47,7 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d56-clone-before-write-in-loop";
 
@@ -55,7 +55,7 @@ const CURSOR_OPS: &[&str] = &["FindSet", "Find", "FindFirst", "Next"];
 const WRITE_BACK_OPS: &[&str] = &["Modify", "Delete"];
 
 pub fn detect_d56(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

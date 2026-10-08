@@ -1,4 +1,7 @@
 //! Umbrella test crate: temp-state detector suites (test-crate consolidation, 2026-07-15 spec).
+#[path = "../common/symbol_app.rs"]
+mod symbol_app;
+
 mod temp_state_abi;
 mod temp_state_calcfields;
 mod temp_state_capture;

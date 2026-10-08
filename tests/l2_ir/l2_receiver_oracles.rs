@@ -58,8 +58,8 @@
 //! `src/engine/l2/` (classify / record_op / body_walk). As of this gate every case
 //! passes with no `src/engine/l2/**` change required.
 
-use al_sem::engine::l2::features::PFeatures;
-use al_sem::engine::l2::features_for_named_routine;
+use al_sem::program::body::features::PFeatures;
+use al_sem::program::body::features_for_named_routine;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const MODEL_INSTANCE_ID: &str = "r0";
@@ -114,8 +114,8 @@ fn classify_single(f: &PFeatures, record_op_method_lc: &str) -> Classification {
 }
 
 /// Lowercased invoked method name of a call-site (member method, or bare name).
-fn callsite_method_lc(cs: &al_sem::engine::l2::features::PCallSite) -> Option<String> {
-    use al_sem::engine::l2::features::PCallee;
+fn callsite_method_lc(cs: &al_sem::program::body::features::PCallSite) -> Option<String> {
+    use al_sem::program::body::features::PCallee;
     match &cs.callee {
         PCallee::Member { method, .. } => Some(method.to_lowercase()),
         PCallee::Bare { name } => Some(name.to_lowercase()),

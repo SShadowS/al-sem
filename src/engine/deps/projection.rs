@@ -106,7 +106,7 @@ pub struct ProjectedTable {
     pub fields: Vec<ProjectedField>,
     pub keys: Vec<ProjectedKey>,
     /// Task 6 (G7, RV-4): the table declares `TableType = Temporary`. Forwarded to
-    /// `L3Table.is_temporary` so the merged-whole `resolve()` applies the SAME
+    /// `ModelTable.is_temporary` so the merged-whole `resolve()` applies the SAME
     /// table-level temp override (Task 4) to ABI record vars as to native ones.
     pub is_temporary: bool,
 }

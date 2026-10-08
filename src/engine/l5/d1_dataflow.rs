@@ -72,8 +72,8 @@
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::engine::l2::features::PLoop;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
+use crate::program::body::features::PLoop;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 // Owned-value uncertainties survive only on the `#[cfg(test)]` oracle path
 // (`build_transitive_witness`); the production cohort path interns them into the
 // sink's `UncertaintyTable` and carries `UncertaintyId`s.
@@ -181,9 +181,9 @@ enum WorkItem {
 #[cfg(test)]
 enum CandSource<'a> {
     Direct {
-        routine: &'a L3Routine,
+        routine: &'a ModelRoutine,
         loop_info: &'a PLoop,
-        op: &'a L3RecordOperation,
+        op: &'a ModelRecordOperation,
     },
     TransReach {
         reach_fact: usize,
@@ -204,8 +204,8 @@ struct Candidate<'a> {
     depth_bucket: i64,
     discovery: usize,
     source: CandSource<'a>,
-    terminal_op: &'a L3RecordOperation,
-    terminal_owner: &'a L3Routine,
+    terminal_op: &'a ModelRecordOperation,
+    terminal_owner: &'a ModelRoutine,
     terminal_local_depth: i64,
 }
 
@@ -362,8 +362,8 @@ fn build_transitive_witness<'a>(
     hops: &[(NodeIx, usize)],
     seed_index: usize,
     terminal_node: NodeIx,
-    terminal_owner: &'a L3Routine,
-    terminal_op: &'a L3RecordOperation,
+    terminal_owner: &'a ModelRoutine,
+    terminal_op: &'a ModelRecordOperation,
     terminal_local_depth: i64,
     graph: &D1Graph<'a>,
     ctx: &DetectorContext,
@@ -429,7 +429,7 @@ pub(crate) fn solve_group<'a>(
     direct_ops: &[DirectOp<'a>],
     ctx: &'a DetectorContext,
     cw: &ClosedWorldTempParams,
-    loop_routine: &'a L3Routine,
+    loop_routine: &'a ModelRoutine,
     loop_id: &'a str,
     loop_info: &'a PLoop,
     seed_indices: &[usize],
@@ -845,7 +845,7 @@ pub(crate) const BATCH_WIDTH: usize = 64;
 /// belong to it. `search_loops` assigns groups to lanes in the existing sorted
 /// `(loop_routine_id, loop_id)` order.
 pub(crate) struct GroupSpec<'a> {
-    pub loop_routine: &'a L3Routine,
+    pub loop_routine: &'a ModelRoutine,
     pub loop_id: &'a str,
     pub loop_info: &'a PLoop,
     pub seed_indices: Vec<usize>,
@@ -1582,8 +1582,8 @@ enum ReadPlan {
 /// node), the entry's key `(owner.id, op.id)` is unique across the plan.
 struct TermEntry<'a> {
     node: NodeIx,
-    op: &'a L3RecordOperation,
-    owner: &'a L3Routine,
+    op: &'a ModelRecordOperation,
+    owner: &'a ModelRoutine,
     local_depth: i64,
     read: ReadPlan,
 }
@@ -1697,9 +1697,9 @@ pub(crate) fn build_terminal_plan<'a>(
 #[derive(Clone, Copy)]
 enum BestSource<'a> {
     Direct {
-        routine: &'a L3Routine,
+        routine: &'a ModelRoutine,
         loop_info: &'a PLoop,
-        op: &'a L3RecordOperation,
+        op: &'a ModelRecordOperation,
         // Read back only by the `#[cfg(test)]` oracle (`emit_lane_aggregates`)
         // — `build_cohort_rep` (live) derives a Direct winner's witness from
         // `routine`/`loop_info`/`op` alone via `direct_witness`, ignoring this.
@@ -1739,9 +1739,9 @@ struct DirectCand<'a> {
     severity: &'static str,
     depth_bucket: i64,
     rank: (i32, i32, i32, i64, i64),
-    routine: &'a L3Routine,
+    routine: &'a ModelRoutine,
     loop_info: &'a PLoop,
-    op: &'a L3RecordOperation,
+    op: &'a ModelRecordOperation,
     local_depth: i64,
 }
 
@@ -1828,8 +1828,8 @@ fn emit_lane_aggregates<'a>(
     vmask: &[u64; 4],
     lanes: usize,
     batch: &[GroupSpec<'a>],
-    owner: &'a L3Routine,
-    op: &'a L3RecordOperation,
+    owner: &'a ModelRoutine,
+    op: &'a ModelRecordOperation,
     local_depth: i64,
     solver: &BatchSolver,
     graph: &D1Graph<'a>,
@@ -2587,8 +2587,8 @@ fn build_cohort_rep<'a>(
     graph: &D1Graph<'a>,
     ctx: &DetectorContext,
     seeds: &[D1Seed<'a>],
-    owner: &'a L3Routine,
-    op: &'a L3RecordOperation,
+    owner: &'a ModelRoutine,
+    op: &'a ModelRecordOperation,
     term_node: Option<NodeIx>,
     cache: &mut PathUncertaintyCache,
 ) -> CohortRep {
@@ -2837,8 +2837,8 @@ struct EmitBatch<'a, 'b> {
 
 fn sink_emit<'a>(
     sink: &mut TerminalSink<'a>,
-    owner: &'a L3Routine,
-    op: &'a L3RecordOperation,
+    owner: &'a ModelRoutine,
+    op: &'a ModelRecordOperation,
     best: &[Option<BestRef<'a>>; BATCH_WIDTH],
     vmask: &[u64; 4],
     term_node: Option<NodeIx>,
@@ -3576,7 +3576,6 @@ pub(crate) fn run_batch_fixpoint_for_test<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::l3_workspace::L3Workspace;
     use crate::engine::l4::combined_graph::CombinedEdge;
     use crate::engine::l5::d1_graph::build_d1_graph;
     use crate::engine::l5::d1_liveness::compute_liveness;
@@ -3585,9 +3584,10 @@ mod tests {
     use crate::engine::l5::test_support::{
         call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op, routine, summary,
     };
+    use crate::program::model::workspace::ModelEntities;
 
     type Fixture = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         HashMap<String, Vec<CombinedEdge>>,
         HashMap<String, FullRoutineSummary>,
     );
@@ -3601,8 +3601,8 @@ mod tests {
         )
     }
 
-    fn ws(routines: &[L3Routine]) -> L3Workspace {
-        L3Workspace {
+    fn ws(routines: &[ModelRoutine]) -> ModelEntities {
+        ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.to_vec(),
@@ -3625,7 +3625,7 @@ mod tests {
         let liveness = compute_liveness(graph, ctx, cw);
 
         struct Group<'a> {
-            loop_routine: &'a L3Routine,
+            loop_routine: &'a ModelRoutine,
             loop_info: &'a PLoop,
             seed_indices: Vec<usize>,
             direct_indices: Vec<usize>,
@@ -4490,7 +4490,7 @@ mod tests {
             false,
         )];
 
-        let mut routines: Vec<L3Routine> = Vec::new();
+        let mut routines: Vec<ModelRoutine> = Vec::new();
         let mut graph_edges: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
 

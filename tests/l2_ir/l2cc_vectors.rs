@@ -15,7 +15,7 @@
 //!   - single file  = src/vec.al  →  sourceUnitId = "ws:src/vec.al"
 //!   - modelInstanceId = "r0"
 
-use al_sem::engine::l2::control_context::{ControlContext, analyze_named_routine};
+use al_sem::program::body::control_context::{ControlContext, analyze_named_routine};
 use std::collections::BTreeSet;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

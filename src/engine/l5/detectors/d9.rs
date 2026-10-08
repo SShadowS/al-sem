@@ -9,7 +9,6 @@
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -18,13 +17,14 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d9-transaction-span-summary";
 const MIN_INTERESTING_ROUTINES: usize = 2;
 const MIN_INTERESTING_TABLES: usize = 2;
 
 pub fn detect_d9(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;

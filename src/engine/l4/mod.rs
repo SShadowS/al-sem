@@ -29,7 +29,7 @@ pub mod effect_lattice;
 // ⟨Task 6⟩ The db-effect QUERY surface: `effect_query` is the facade over
 // `reverse_index`'s transpose (down / up-global / the ancestor-scoped
 // up-query), `effect_query_cli` its `alsem query` transport + the
-// `RoutineIx -> L3Routine` join that turns an index answer into a
+// `RoutineIx -> ModelRoutine` join that turns an index answer into a
 // user-facing one.
 pub mod effect_query;
 pub mod effect_query_cli;

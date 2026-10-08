@@ -1,0 +1,31 @@
+{
+  "events": [
+    {
+      "id": "unknown:codeunit:0:50::onfoo::a4c640d04c5694f88e713222a161479c475f941bf7363c2ac098a7b70ddf9a13",
+      "publisherObjectId": "unknown:codeunit:0:50",
+      "eventName": "onfoo",
+      "eventKind": "unknown",
+      "signatureHash": "a4c640d04c5694f88e713222a161479c475f941bf7363c2ac098a7b70ddf9a13",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter",
+          "note": "target object not in indexed source"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "eventId": "unknown:codeunit:0:50::onfoo::a4c640d04c5694f88e713222a161479c475f941bf7363c2ac098a7b70ddf9a13",
+      "subscriberRoutineId": "11111111-0000-0000-0000-00000000d190:Codeunit:50500#da46d009315f219bfee68877cf1d548839eb3b4314bdfb2958a9465a61fe84a8",
+      "subscriberAppId": "11111111-0000-0000-0000-00000000d190",
+      "resolution": "unknown",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    }
+  ]
+}

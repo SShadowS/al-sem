@@ -315,7 +315,7 @@ pub fn compute_ordering(
         if !is_db_write(&occ.effect_type) {
             continue;
         }
-        let is_known_temp = crate::engine::l2::features::known_temp_suppresses(
+        let is_known_temp = crate::program::body::features::known_temp_suppresses(
             effects[i]
                 .temp_state
                 .as_ref()

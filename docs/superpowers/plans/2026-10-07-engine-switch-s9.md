@@ -91,6 +91,11 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   - S9.0d `mint-goldens` mints from the compiler graph (anonymized as today, stamped
     with the extension version); the in-repo fixture golden too. `l3_mint` is then
     unused and goes with L3 in S9.6.
+  - **S9.0d done (2026-10-08).** `scripts/compiler-graph` + `mint-goldens
+    --compiler-graph` write `cdo-compiler-anon.json` (7,045 pairs) and
+    `fixture-compiler-anon.json`. The CDO audit pins every disagreement by rule
+    (`compiler_golden::Verdict`): 6,878 agree, 369 explained, 0 unexplained. The
+    L3-minted goldens, the adjudication overlay and their audits are deleted.
 
 - **S9.1 Cut the production legacy calls.** Remove the adapter's L3 trigger
   comparison and its counters; the adapter's `SymbolTable` becomes table-only.
@@ -99,31 +104,122 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
 - **S9.2 Inline program builder.** Files + app id -> temp workspace ->
   `assemble_and_resolve_workspace_program`, with a test that it equals the disk path.
   Decide the model-instance id and unit-id spelling.
+  - **Done (2026-10-08):** `program_calls::assemble_and_resolve_inline_program(files,
+    app_guid, model_instance_id)` and its `_default` (`r0`). Decisions: the
+    model-instance id stays a parameter with the same `r0` default; unit ids are
+    `ws:<relative path>`, exactly the L3 inline spelling, because the files are
+    written at the paths given. Two differences from the L3 inline builder that S9.5
+    will meet: `primary_app` is set (the builder writes an `app.json`), and calls and
+    events are the program engine's. `the_inline_program_model_is_the_disk_model`
+    checks every single-app r0-corpus fixture (rows, calls, events, root
+    classifications) against the disk build.
 - **S9.3 The r4/r4f helper uses the production builder.** Triage any move (expected
-  none if S2b.4's census holds).
+  none if S2b.4's census holds). **Done (2026-10-08): zero goldens moved.**
 - **S9.4 Move the keepers out of `engine/l3`** (pure moves): the adapter
   (`program_calls`), `event_param_temp`, binding helpers, `coverage` (minus
   `project_coverage_cross_app`), `calls_for`/`events_for`/`isolated_event_ids`.
+  - **Done (2026-10-08), partly by design.** Moved to `program::model`:
+    `program_calls`, `event_param_temp`, the binding helpers and
+    `object_run_dispatch_kind` (into `calls`), `isolated_event_ids` (into `events`);
+    the old `engine::l3` paths re-export them until S9.7. **Not moved:**
+    `calls_for`, `events_for` and `coverage`. Their `None` fallback is L3's own
+    `resolve_calls`/`build_event_graph`, so in `program/` they would break the S1
+    guard (`program_has_no_legacy_engine_imports`: the program engine never
+    imports L3). They move in S9.6, when `precomputed_calls/_events` become
+    mandatory and the fallback goes. Same reason: the adapter tests compare with
+    `resolve_calls`, so their file is `engine/l3/program_calls_adapter_tests.rs`
+    (a `#[path]` child module of `program_calls`); S9.6 reworks or deletes them.
 - **S9.5 Switch every test that uses L3 only as a model builder**, family by family,
   each with a golden triage: gap, temp_state, src unit tests, cli_b_*, cli_a_stats,
   d1_downgraded, cli_p1, r3a1/2/3 (goldens move), l4_summary_differential (re-freeze),
   perf_bounds. Replace r2a and r2d with program-backed goldens; add a program
   event-graph golden in place of r2c.
+  - **Census (2026-10-08):** pointing every L3 builder at the program builder
+    moved 25 tests. Not moved at all: temp_state, `l4_summary_differential` (no
+    re-freeze needed), every gap test but G-18's stated collision. Moved:
+    the 3 stated-collision tests; `cli_a_stats` and `cli_b_fingerprint` on
+    `ws-d35` only (numeric `ObjectType::Codeunit, 50` subscriber targets: L3
+    dropped them, the program engine keeps them as `unknown`); r3a1/2/3
+    differential goldens; the r2d coverage golden; the r3 and `tests/l3` vector
+    tests (file names without `.al`). `tests/l3` measures L3 itself and goes in
+    S9.6; `perf_bounds` is release-only and was not in the census.
+  - **S9.5a done (2026-10-08):** l5 unit tests, gap, temp_state,
+    d1_downgraded (50 files); the 3 collision tests re-key the precomputed
+    edges.
+  - **S9.5b-e done (2026-10-08):** cli stats/diff/fingerprint (b); r3a1/2/3
+    differentials, oracles, vectors (c, after two overload fixes the census
+    exposed: enum value arguments, exact-vs-conversion and the sole-applicable
+    rule); l4_summary_differential re-frozen and perf_bounds (d); r2a and r2d
+    on the production model, and r2c projects the program engine's event
+    graph (e). **Decision:** r2c is not deleted in S9.6 — it IS the program
+    event-graph golden now (the stable projection moved to
+    `program::model::events`); its `.l3eg` file names are legacy, like the
+    `L3*` types. Still on L3's builders, deleted with L3 in S9.6: `tests/l3`,
+    r2b (`project_call_graph`), `r3a0_unfetched_dep_opaque`, `aldump_smoke`'s
+    event-graph emitter test.
 - **S9.6 Delete the legacy engine:** resolver chain, event-graph builder and
   projections, `implicit_edges`, `receiver*`, `static_arg`, `type_ref`, `type_rel`,
   `al_type`, `al_builtins`, `member_builtins`, `resolution_class`,
   `call_graph_projection`, `b3_diff`, `l3_mint` (per decision R1),
   `deps/cross_app_l3.rs`, the L3-parse half of `workspace.rs`, the routine half of
-  `SymbolTable`, the L3 aldump modes, `tests/l3`, r2b, r2c, r2-5b-*, `b3_triage_r0`,
+  `SymbolTable`, the L3 aldump modes, `tests/l3`, r2b, r2-5b-*, `b3_triage_r0`,
   `r3a0`, `docs/b3-triage/*.md`. `precomputed_calls/_events` become mandatory.
   `scripts/check-goldens`, the pre-commit hook and CLAUDE.md change with it.
+  - **S9.6a DONE:** the L3-measuring tests, goldens, triage tables and aldump modes
+    are gone. Four tests that compared with L3 now state their contract directly
+    (cross-app row order, analyze == detectors over the program model, r3a2
+    opaque-callee and ABI temp state over the production cross-app model). The
+    pre-commit hook needed no edit (its path pattern is generic).
+  - **S9.6b DONE** in three commits: (1) modules with no consumer left
+    (`b3_diff`, `call_graph_projection`, `l3_mint`, `resolution_class`,
+    `cross_app_l3`, `merged_index`); (2) L3's own parse (`assemble_workspace*`,
+    `assemble_and_resolve*`, `assemble_l3_workspace_from_disk`); (3) the resolver,
+    the event-graph builder and the routine half of `SymbolTable`, with the
+    calls/events made mandatory through a `ModelRows` type that only
+    `attach_program_calls` turns into a model. `calls_for`/`events_for` are gone;
+    coverage lives in `program::model`; `engine::l3` is path aliases only. No golden
+    moved.
 - **S9.7 Rename** the `L3*` model types and `l3_workspace`; remove `engine/l3/mod.rs`
   and the `engine::l2` alias. Mechanical; zero goldens move (no type name is
-  serialized).
+  serialized). **DONE.** Owner chose the `Model*` names (`L3Resolved` → `Model`,
+  `L3Workspace` → `ModelEntities`, `L3Routine` → `ModelRoutine`, …) and allowed a
+  one-off word-boundary script for this rename. `L3Only` (in
+  `program::resolve::differential`'s `match_sites`) is L3-oracle tooling with no
+  caller but its own tests: S9.8 deletes it.
 - **S9.8 Acceptance inventory:** `rg` finds no `resolve_calls`, `build_event_graph`,
   `implicit_trigger_edge_for_op`, `assemble_l3_workspace_from_disk`, `cross_app_l3`;
   `src/engine/l3` is gone; every cross-app context field mapped (G14 includes
   `abi_ingest_errors` "gets a reader": verify).
+  - **Result (2026-10-08):**
+    - Names: `resolve_calls`, `implicit_trigger_edge_for_op`,
+      `assemble_l3_workspace_from_disk`, `cross_app_l3`, `merged_index`, `l3_mint`,
+      `b3_diff`, `project_call_graph`, `calls_for`, `events_for`,
+      `precomputed_calls` have zero code occurrences; what remains is history in
+      comments and the S1 guard's own pattern strings. `build_event_graph` survives
+      only as `semantic_golden`'s unrelated local test helper (it builds a program
+      graph).
+    - Surviving implementations: the L3 oracle's span matcher `match_sites`
+      (`SiteMatch`, `canonical_call_edge_for_test`) had no caller but its three
+      harness tests; deleted with them. The adapter (`program_calls`) contains no
+      resolver: a site the program engine gives no usable edge is
+      `Unknown(NoProgramSite)` (S3.1), a record op with none gets no edge (S3.5).
+    - `src/engine/l3` and the `engine::l2` alias are gone; `cargo check
+      --all-targets --all-features` is clean.
+    - Cross-app context (`CrossAppL3`, deleted) → `CrossAppProgram`: `resolved` →
+      `.resolved` (a `Model`); `declared_dep_app_guids` → `.declared_dependencies`
+      (guid, name, minimum version, incl. the implicit Microsoft tier);
+      `fetched_app_guids` → the ledger (`.coverage.ledger`, found vs missing);
+      `apps` (guid, sourceKind) → `.dependency_apps[].has_source` + the ledger's
+      trust tier; `dep_app_versions` → `.dependency_apps[].version`. G14:
+      `abi_ingest_errors` is read into `LedgerApp::ingest_error`, which preflight
+      (`gate/preflight.rs`) and the `dependencies` diagnostics (`gate/run.rs`) read.
+    - Regeneration paths: goldens (`check-goldens --regen`) and the fixture
+      semantic-edges mint (`mint-goldens --fixture`) are both stopped by the
+      golden-regen hook, which requires a `MOVED:` line, and none is expected; the
+      owner runs them (expect zero diff). The builtin catalog generator
+      (`tools/gen-al-builtins`) never touched L3; this machine's AL extension
+      (18.0.2732683) is newer than the catalog's (18.0.2293710), so a run here would
+      be an upgrade, not a check.
 
 ## Decisions
 

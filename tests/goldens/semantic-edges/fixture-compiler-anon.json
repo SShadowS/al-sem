@@ -1,0 +1,1 @@
+{"schema_version":1,"metadata":{"workspace_git_sha":null,"workspace_dirty":null,"dependency_closure_sha256":null},"compiler":{"extension":"ms-dynamics-smb.al-18.0.2732683"},"pairs":[{"caller":"4971db903637d99f046e4a5d31b4f1ce","caller_kind":"codeunit","class":"Call","target":"b1d609401757e6413069b30e64e05d02","line":22}]}

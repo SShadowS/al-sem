@@ -4,13 +4,13 @@
       "id": "11111111-0000-0000-0000-00000000d290:Table:51300::OnAfterModifyEvent::c04e52678d23f5da3a96e63ca6cf90c8175ac002e640c00a6ebdd371b863ff47",
       "publisherObjectId": "11111111-0000-0000-0000-00000000d290:Table:51300",
       "eventName": "OnAfterModifyEvent",
-      "eventKind": "unknown",
+      "eventKind": "trigger",
       "signatureHash": "c04e52678d23f5da3a96e63ca6cf90c8175ac002e640c00a6ebdd371b863ff47",
       "parameters": [],
       "provenance": [
         {
-          "source": "tree-sitter",
-          "note": "publisher not indexed"
+          "source": "program",
+          "note": "platform event"
         }
       ]
     },
@@ -18,13 +18,27 @@
       "id": "11111111-0000-0000-0000-00000000d290:Table:51300::OnBeforeDeleteEvent::4f1b4463a92835d6b13d796057a9e5759e08781200761ac49a7e51bd4f98567d",
       "publisherObjectId": "11111111-0000-0000-0000-00000000d290:Table:51300",
       "eventName": "OnBeforeDeleteEvent",
-      "eventKind": "unknown",
+      "eventKind": "trigger",
       "signatureHash": "4f1b4463a92835d6b13d796057a9e5759e08781200761ac49a7e51bd4f98567d",
       "parameters": [],
       "provenance": [
         {
+          "source": "program",
+          "note": "platform event"
+        }
+      ]
+    },
+    {
+      "id": "unknown:codeunit:0:50::onafterpost::65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "publisherObjectId": "unknown:codeunit:0:50",
+      "eventName": "onafterpost",
+      "eventKind": "unknown",
+      "signatureHash": "65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "parameters": [],
+      "provenance": [
+        {
           "source": "tree-sitter",
-          "note": "publisher not indexed"
+          "note": "target object not in indexed source"
         }
       ]
     }
@@ -34,7 +48,7 @@
       "eventId": "11111111-0000-0000-0000-00000000d290:Table:51300::OnAfterModifyEvent::c04e52678d23f5da3a96e63ca6cf90c8175ac002e640c00a6ebdd371b863ff47",
       "subscriberRoutineId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#2444ebaf8c87fd15d1372f411726e2ee0f62c32c161adcd7e9e0b3aeed56c729",
       "subscriberAppId": "11111111-0000-0000-0000-00000000d290",
-      "resolution": "maybe",
+      "resolution": "resolved",
       "provenance": [
         {
           "source": "tree-sitter"
@@ -45,7 +59,7 @@
       "eventId": "11111111-0000-0000-0000-00000000d290:Table:51300::OnAfterModifyEvent::c04e52678d23f5da3a96e63ca6cf90c8175ac002e640c00a6ebdd371b863ff47",
       "subscriberRoutineId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#82f666c0eaebc63968584c2ae92c028a93863b7c42bcd0f8a3daa1e09d6c8a4d",
       "subscriberAppId": "11111111-0000-0000-0000-00000000d290",
-      "resolution": "maybe",
+      "resolution": "resolved",
       "provenance": [
         {
           "source": "tree-sitter"
@@ -56,7 +70,18 @@
       "eventId": "11111111-0000-0000-0000-00000000d290:Table:51300::OnBeforeDeleteEvent::4f1b4463a92835d6b13d796057a9e5759e08781200761ac49a7e51bd4f98567d",
       "subscriberRoutineId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#611afff1b132b12e74aefd16efe50d39b41d5085a6da83aac8ccb5a277a0b31f",
       "subscriberAppId": "11111111-0000-0000-0000-00000000d290",
-      "resolution": "maybe",
+      "resolution": "resolved",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    },
+    {
+      "eventId": "unknown:codeunit:0:50::onafterpost::65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "subscriberRoutineId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#f8cb2c5b997560ce5f358ca9a162b6146d290093fe75f4582b832bf2391e7231",
+      "subscriberAppId": "11111111-0000-0000-0000-00000000d290",
+      "resolution": "unknown",
       "provenance": [
         {
           "source": "tree-sitter"

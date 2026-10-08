@@ -18,8 +18,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::engine::l2::features::PAnchor;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved};
 use crate::engine::l4::summary::FieldList;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -29,6 +27,8 @@ use crate::engine::l5::detectors::{
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PAnchor;
+use crate::program::model::workspace::{Model, ModelRecordOperation};
 
 const DETECTOR: &str = "d42-cross-call-wrong-setloadfields";
 
@@ -45,7 +45,7 @@ enum Narrow {
 /// `computeNarrowAtCallsite` — source-ordered, intra-routine cumulative narrow for a
 /// record variable at a callsite anchor. Port of the al-sem helper.
 fn compute_narrow_at_callsite(
-    ops: &[L3RecordOperation],
+    ops: &[ModelRecordOperation],
     var_name_lc: &str,
     callsite_anchor: &PAnchor,
 ) -> Narrow {
@@ -101,7 +101,7 @@ fn compute_narrow_at_callsite(
 }
 
 pub fn detect_d42(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

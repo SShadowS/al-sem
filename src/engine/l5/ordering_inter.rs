@@ -12,7 +12,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::operation_order::{OperationOrder, ScopeFrame};
 use crate::engine::l5::digest::QueryWitnessHop;
 use crate::engine::l5::ordering::{
     OrderedOp, Quantifier, dom, dominates_return, may_co_execute, may_precede_success_return,
@@ -22,6 +21,7 @@ use crate::engine::l5::snapshot::{
     CapabilitySnapshot, SnapshotCallsiteEvidence, SnapshotCallsiteResolution,
 };
 use crate::engine::return_summary::RoutineReturnSummary;
+use crate::program::body::operation_order::{OperationOrder, ScopeFrame};
 
 // ---------------------------------------------------------------------------
 // CallChain / CallLink (call-chain.ts)
@@ -1230,7 +1230,7 @@ mod tests {
         id: &str,
         order: u32,
         dom_ret: bool,
-        frames: Vec<crate::engine::l2::operation_order::ScopeFrame>,
+        frames: Vec<crate::program::body::operation_order::ScopeFrame>,
     ) -> crate::engine::l5::ordering::OrderedOp {
         crate::engine::l5::ordering::OrderedOp {
             occurrence_id: id.to_string(),
@@ -1246,8 +1246,8 @@ mod tests {
         parent: i64,
         kind: &str,
         fall_through: Option<bool>,
-    ) -> crate::engine::l2::operation_order::ScopeFrame {
-        crate::engine::l2::operation_order::ScopeFrame {
+    ) -> crate::program::body::operation_order::ScopeFrame {
+        crate::program::body::operation_order::ScopeFrame {
             frame_id: id,
             parent_frame_id: parent,
             kind: kind.to_string(),

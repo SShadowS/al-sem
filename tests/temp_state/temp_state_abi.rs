@@ -5,12 +5,12 @@
 //! native source path produces (the native+ABI shape-parity rule).
 //!
 //! (a)/(b) assert at the `parse_symbol_reference` (AbiTable/AbiParameter) level.
-//! (c) asserts at the ABI→L3 projection level: after `project_abi_to_index` +
-//! `dep_routine_to_l3`, a record param exposes a record var whose `temp_state`
-//! matches the native rule, and a param typed on a `TableType=Temporary` ABI table
-//! resolves to `Known(true)` via the table-level override that `resolve()` runs.
+//! (c) asserts on the production cross-app model of a workspace that depends on
+//! the synthetic `.app`: each dependency record param exposes a record var whose
+//! `temp_state` matches the native rule, and a param typed on a
+//! `TableType=Temporary` ABI table resolves to `Known(true)` via the table-level
+//! override that `resolve()` runs.
 
-use al_sem::engine::deps::projection::project_abi_to_index;
 use al_sem::engine::deps::symbol_reference::parse_symbol_reference;
 
 /// A SymbolReference.json with:
@@ -128,22 +128,43 @@ fn abi_param_reads_typedefinition_temporary() {
 
 // --- (c) ABI→L3 projection per-param record-var temp shapes -----------------
 
-/// Resolve the cross-app L3 for the synthetic dep, then return one routine's
-/// record-variables (the projected dep routine after `resolve()` over the merged
-/// whole). Uses the public projection + the test-only helper on cross_app_l3.
-fn project_and_resolve() -> al_sem::engine::l3::l3_workspace::L3Workspace {
-    use al_sem::engine::deps::cross_app_l3::project_dep_abi_to_l3_for_test;
-    let abi = parse_symbol_reference(SYMBOL_REFERENCE);
-    let projected = project_abi_to_index(
-        &abi,
-        "11111111-2222-3333-4444-555555555555",
-        "test-instance",
+/// Build the production cross-app model of a workspace that depends on the
+/// synthetic symbol-only `.app`, and return its rows (the dependency's ABI rows
+/// after `resolve()` over the merged whole, so the table-level override has run).
+/// The workspace calls every dependency procedure, so each is in the model.
+fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dep = "11111111-2222-3333-4444-555555555555";
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        format!(
+            r#"{{"id":"aaaaaaaa-0000-0000-0000-000000000001","name":"TempWs","publisher":"P","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{dep}","name":"TempDep","publisher":"P","version":"1.0.0.0"}}]}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("Main.al"),
+        "codeunit 50200 \"Ws Main\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Proc\";\n        N: Record \"Normal Table\";\n        T: Record \"Temp Buffer\";\n    begin\n        D.TempMarkedParam(N);\n        D.ByVarUnmarked(N);\n        D.ByValueUnmarked(N);\n        D.TempTableParam(T);\n    end;\n}\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join(".alpackages")).unwrap();
+    crate::symbol_app::write_symbol_app(
+        &dir.path().join(".alpackages/P_TempDep_1.0.0.0.app"),
+        dep,
+        "TempDep",
+        "1.0.0.0",
+        SYMBOL_REFERENCE,
     );
-    project_dep_abi_to_l3_for_test(&projected)
+    assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+        .expect("cross-app model")
+        .resolved
+        .workspace
 }
 
 fn temp_kind(
-    ws: &al_sem::engine::l3::l3_workspace::L3Workspace,
+    ws: &al_sem::program::model::workspace::ModelEntities,
     routine_name: &str,
 ) -> (String, Option<bool>, Option<u32>) {
     let r = ws

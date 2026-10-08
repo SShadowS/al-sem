@@ -35,7 +35,6 @@
 //! the d40 `source_temp_state` gate. Physical/Unknown keep firing
 //! (suppression-direction safe).
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -44,13 +43,14 @@ use crate::engine::l5::detectors::{
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d39-record-left-dirty-across-chain";
 
 const PERSIST_OPS: &[&str] = &["Modify", "Insert", "Rename"];
 
 pub fn detect_d39(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -140,7 +140,7 @@ pub fn detect_d39(
 
                 // G-13: skip Known(true) TEMPORARY source records — a temp
                 // record left dirty has no SQL consequence (same gate as d40).
-                if crate::engine::l2::features::temp_state_suppresses(
+                if crate::program::body::features::temp_state_suppresses(
                     binding.source_temp_state.as_ref(),
                 ) {
                     skipped_temp_record += 1;

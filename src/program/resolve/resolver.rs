@@ -2013,13 +2013,24 @@ fn opaque_boundary_route(key: AbiRoutineKey) -> Route {
 }
 
 /// Shared entry-trigger dispatch machinery: given an ALREADY-RESOLVED target
-/// object, look up its entry trigger ([`entry_trigger_name`]) and build the
-/// resulting route — collapse-marker guard, Opaque-boundary-when-absent, and
-/// Source-route-when-present. Used by BOTH `resolve_object_run` (T1.3,
-/// keyword-receiver form: `Codeunit.Run` / `Page.RunModal` / `Report.RunModal`)
-/// and the typed-variable `Run`/`RunModal` special case in
-/// `resolve_member_with_args`'s `ReceiverType::Object` arm — the SAME
-/// machinery for both populations, never a parallel resolver (T1.3 brief).
+/// object, the entry triggers ([`entry_trigger_name`]) a run of it reaches.
+/// Used by BOTH `resolve_object_run` (T1.3, keyword-receiver form:
+/// `Codeunit.Run` / `Page.RunModal` / `Report.RunModal`) and the
+/// typed-variable `Run`/`RunModal` special case in `resolve_member_with_args`'s
+/// `ReceiverType::Object` arm — the SAME machinery for both populations, never
+/// a parallel resolver (T1.3 brief).
+///
+/// S9.0e/S9.0d (the compiler-oracle triage): a page or report run also runs
+/// the entry trigger of every page/report EXTENSION of it (an extension's
+/// triggers run after the base object's), so for those kinds this is a
+/// `Multicast` over the base object's trigger and each extension's, `Partial`
+/// like [`resolve_implicit_trigger`] (a reverse dependent can add an
+/// extension). A codeunit or XmlPort has no extensions: its declared trigger,
+/// or none. An object whose SOURCE declares no entry trigger runs none, so no
+/// route is invented for it; this used to emit an Opaque `onopenpage` boundary
+/// for a workspace `ConfirmationDialog` page that declares no triggers. The
+/// Opaque boundary stays for a `TrustTier::SymbolOnly` object, whose triggers
+/// the ABI does not list.
 fn dispatch_entry_trigger(
     target_id: &ObjectNodeId,
     target_tier: TrustTier,
@@ -2027,52 +2038,135 @@ fn dispatch_entry_trigger(
     graph: &ProgramGraph,
     index: &ResolveIndex,
     surface: &DeclSurface,
-) -> (DispatchShape, Vec<Route>) {
+) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
-    let candidates = index.routines_in_object(graph, target_id, trigger_name);
-
-    // Object-level triggers have `enclosing_member_lc == None`.
-    let entry_rid = candidates
-        .clone()
-        .find(|r| r.enclosing_member_lc.is_none())
-        .or_else(|| candidates.clone().next());
-
-    let Some(entry_rid) = entry_rid else {
-        // Trigger not found in index — Opaque (e.g. an object with no explicit trigger).
-        let (obj_num, obj_name_lc) = match &target_id.key {
-            ObjKey::Id(n) => (*n, String::new()),
-            ObjKey::Name(s) => (0i64, s.clone()),
-        };
-        let key = AbiRoutineKey {
-            app: target_id.app,
-            object_type: format!("{:?}", target_id.kind).to_ascii_lowercase(),
-            object_number: obj_num,
-            object_name_lc: obj_name_lc,
-            routine_name_lc: trigger_name.to_string(),
-            params_count: 0,
-            param_type_fp: 0,
-            routine_kind: AbiRoutineKind::Procedure,
-            event_kind: AbiEventKind::None,
-        };
-        return (DispatchShape::Exact, vec![opaque_boundary_route(key)]);
+    // The object-level trigger of `object` (`enclosing_member_lc == None`),
+    // else any routine of that name.
+    let entry_of = |object: &ObjectNodeId| -> Option<&RoutineNodeId> {
+        let candidates = index.routines_in_object(graph, object, trigger_name);
+        candidates
+            .clone()
+            .find(|r| r.enclosing_member_lc.is_none())
+            .or_else(|| candidates.clone().next())
+    };
+    // COLLAPSE-MARKER GUARD (Task 2 review fix): this lookup bypasses
+    // `resolve_in_object`'s name+arity selection entirely (it picks by ROLE —
+    // the object-level trigger — never by counting candidates), so it must
+    // consult the marker itself; see `routine_is_collapse_marked`'s doc for
+    // the full enumeration of guarded sites.
+    let route_to = |rid: &RoutineNodeId, tier: TrustTier| -> Route {
+        if routine_is_collapse_marked(rid, graph) {
+            unresolved_route(UnknownReason::OverloadAmbiguous)
+        } else {
+            make_routine_route(rid, tier, surface, graph)
+        }
     };
 
-    // COLLAPSE-MARKER GUARD (Task 2 review fix): this entry-trigger lookup
-    // bypasses `resolve_in_object`'s name+arity selection entirely (it picks
-    // by ROLE — the object-level trigger — never by counting candidates), so
-    // it must consult the marker itself; see `routine_is_collapse_marked`'s
-    // doc for the full enumeration of guarded sites.
-    if routine_is_collapse_marked(entry_rid, graph) {
-        return (
-            DispatchShape::Exact,
-            vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
-        );
+    let mut routes = Vec::new();
+    match entry_of(target_id) {
+        Some(rid) => routes.push(route_to(rid, target_tier)),
+        None if target_tier == TrustTier::SymbolOnly => {
+            routes.push(opaque_entry_route(target_id, trigger_name))
+        }
+        None => {}
     }
 
+    let extensions: &[ObjectNodeId] = match object_kind {
+        ObjectKind::Page | ObjectKind::Report => {
+            let Some(base) = graph.objects.iter().find(|o| &o.id == target_id) else {
+                return (DispatchShape::Exact, SetCompleteness::Complete, routes);
+            };
+            let name_lc = base.name.fold_identifier();
+            if object_kind == ObjectKind::Page {
+                index.page_extensions_of(&name_lc)
+            } else {
+                index.report_extensions_of(&name_lc)
+            }
+        }
+        _ => {
+            // No extension mechanism: the declared trigger, or a closed empty set.
+            let shape = if routes.is_empty() {
+                DispatchShape::Multicast
+            } else {
+                DispatchShape::Exact
+            };
+            return (shape, SetCompleteness::Complete, routes);
+        }
+    };
+    for ext_id in extensions {
+        let ext_tier = graph
+            .objects
+            .iter()
+            .find(|o| &o.id == ext_id)
+            .map_or(TrustTier::Workspace, |o| o.tier);
+        if let Some(rid) = entry_of(ext_id) {
+            routes.push(route_to(rid, ext_tier));
+        }
+    }
     (
-        DispatchShape::Exact,
-        vec![make_routine_route(entry_rid, target_tier, surface, graph)],
+        DispatchShape::Multicast,
+        SetCompleteness::Partial {
+            reason: OpenWorldReason::ReverseDependentExtensions,
+        },
+        routes,
     )
+}
+
+/// The object a static run (`Page.Run(Page::X)`, `Codeunit.Run(50000)`) names,
+/// from the calling app's closure; `None` when it is in no graph.
+pub(crate) fn object_run_target<'g>(
+    from: AppRef,
+    object_kind: ObjectKind,
+    target_ref: &str,
+    target_is_name: bool,
+    graph: &'g ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<&'g ObjectNode> {
+    if target_is_name {
+        graph.resolve_object(from, object_kind, target_ref)
+    } else {
+        match target_ref.parse::<i64>() {
+            Ok(n) => index
+                .object_by_number(graph, from, object_kind, n)
+                .and_then(|oid| graph.objects.iter().find(|o| o.id == oid)),
+            Err(_) => None,
+        }
+    }
+}
+
+/// The object an object-typed receiver (`PageVar.RunModal()`) names: the id
+/// Phase A already proved, else a by-name lookup from the caller's app.
+pub(crate) fn object_receiver_target<'g>(
+    kind: &ObjectKind,
+    name_lc: &str,
+    id: Option<&ObjectNodeId>,
+    from_object: &ObjectNode,
+    graph: &'g ProgramGraph,
+) -> Option<&'g ObjectNode> {
+    match id {
+        Some(id) => graph.objects.iter().find(|o| &o.id == id),
+        None => graph.resolve_object(from_object.id.app, *kind, name_lc),
+    }
+}
+
+/// The Opaque boundary for a symbol-only object's entry trigger: the trigger
+/// may exist, and the ABI does not say.
+fn opaque_entry_route(target_id: &ObjectNodeId, trigger_name: &str) -> Route {
+    let (obj_num, obj_name_lc) = match &target_id.key {
+        ObjKey::Id(n) => (*n, String::new()),
+        ObjKey::Name(s) => (0i64, s.clone()),
+    };
+    opaque_boundary_route(AbiRoutineKey {
+        app: target_id.app,
+        object_type: format!("{:?}", target_id.kind).to_ascii_lowercase(),
+        object_number: obj_num,
+        object_name_lc: obj_name_lc,
+        routine_name_lc: trigger_name.to_string(),
+        params_count: 0,
+        param_type_fp: 0,
+        routine_kind: AbiRoutineKind::Procedure,
+        event_kind: AbiEventKind::None,
+    })
 }
 
 /// Resolve an `ObjectRun` dispatch (Codeunit.Run / Page.RunModal / Report.Run …)
@@ -2084,14 +2178,16 @@ fn dispatch_entry_trigger(
 /// |-----------|-------|-------------|--------|
 /// | `target_ref` is `None` (runtime variable) | `DynamicOpen` | `Partial{RuntimeTypeUnbounded}` | `[{Unresolved, Unknown, None}]` |
 /// | Target named/numbered but absent from graph | `Exact` | `Complete` | `[{AbiSymbol, Opaque, AbiSymbol}]` |
-/// | Target found; entry trigger resolved | `Exact` | `Complete` | `[{Routine(trigger), Source/Abi, SourceSpan/…}]` |
-/// | Target found; entry trigger absent from index | `Exact` | `Complete` | `[{AbiSymbol, Opaque, AbiSymbol}]` |
+/// | Codeunit/XmlPort found; entry trigger declared | `Exact` | `Complete` | `[{Routine(trigger), Source/Abi, SourceSpan/…}]` |
+/// | Codeunit/XmlPort found in SOURCE; no entry trigger | `Multicast` | `Complete` | `[]` (honest empty) |
+/// | Page/Report found | `Multicast` | `Partial{ReverseDependentExtensions}` | base trigger + each extension's (see [`dispatch_entry_trigger`]) |
+/// | Target found SYMBOL-ONLY; no entry trigger indexed | as above | as above | `[{AbiSymbol, Opaque, AbiSymbol}]` |
 ///
 /// # Opaque-vs-Unknown choice (Phase 2 note)
 ///
-/// When the target is not found in the graph or the entry trigger is not indexed,
-/// we use `Evidence::Opaque` with `RouteTarget::AbiSymbol` because we know the
-/// target *exists* somewhere — it just isn't in our source snapshot.
+/// When a symbol-only target's entry trigger is not indexed,
+/// we use `Evidence::Opaque` with `RouteTarget::AbiSymbol` because the
+/// trigger may exist — the ABI does not list triggers.
 /// The `classify_obligation` metric counts a route with `AbiSymbol` target and
 /// `Opaque` evidence as `Resolved` (not `Unknown`) because the symbol boundary
 /// is known and retains its identity; this aligns with L3's External classification.
@@ -2115,19 +2211,9 @@ pub fn resolve_object_run(
         );
     };
 
-    // Resolve the target object.
-    let target_obj: Option<&ObjectNode> = if target_is_name {
-        graph.resolve_object(from, object_kind, target_ref)
-    } else {
-        match target_ref.parse::<i64>() {
-            Ok(n) => index
-                .object_by_number(graph, from, object_kind, n)
-                .and_then(|oid| graph.objects.iter().find(|o| o.id == oid)),
-            Err(_) => None,
-        }
-    };
-
-    let Some(target_obj) = target_obj else {
+    let Some(target_obj) =
+        object_run_target(from, object_kind, target_ref, target_is_name, graph, index)
+    else {
         // Target is named/numbered but absent from the entire graph (not in
         // workspace source, not in any dep's SymbolReference). We do NOT know
         // which app owns it, so creating an AbiSymbol with `app = from`
@@ -2144,17 +2230,16 @@ pub fn resolve_object_run(
         );
     };
 
-    // Look up the entry trigger and build the route — shared machinery (T1.3)
+    // Look up the entry triggers and build the routes — shared machinery (T1.3)
     // with the typed-variable special case in `resolve_member_with_args`.
-    let (shape, routes) = dispatch_entry_trigger(
+    dispatch_entry_trigger(
         &target_obj.id,
         target_obj.tier,
         object_kind,
         graph,
         index,
         surface,
-    );
-    (shape, SetCompleteness::Complete, routes)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2637,10 +2722,7 @@ pub(crate) fn resolve_member_with_args(
             // Phase A already verified unique (e.g. a same-named object
             // resolving differently), silently substituting the WRONG
             // subpage for the one the control's `target` actually names.
-            let target = match id {
-                Some(id) => graph.objects.iter().find(|o| &o.id == id),
-                None => graph.resolve_object(from_object.id.app, *kind, name_lc),
-            };
+            let target = object_receiver_target(kind, name_lc, id.as_ref(), from_object, graph);
             let Some(target) = target else {
                 // Target not in the graph — honest Unknown (not Opaque: we have no
                 // identity for an unresolvable typed receiver). Reason-split
@@ -2669,7 +2751,10 @@ pub(crate) fn resolve_member_with_args(
                 _ => false,
             };
             if is_entry_trigger_dispatch && arity <= 1 {
-                let (shape, routes) =
+                // ponytail: completeness is re-derived from the shape by the
+                // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
+                // `Partial` there; both classify as honest-empty.
+                let (shape, _, routes) =
                     dispatch_entry_trigger(&target_id, target_tier, *kind, graph, index, surface);
                 return (shape, routes);
             }
@@ -6032,7 +6117,8 @@ codeunit 50200 "TargetCU"
     }
 
     // -----------------------------------------------------------------------
-    // Task-5 (b): Page.RunModal to a page → Exact, OnOpenPage (NOT OnRun)
+    // Task-5 (b): Page.RunModal to a page → OnOpenPage (NOT OnRun); since S9.0d
+    // a `Multicast` open to extensions (a page extension's OnOpenPage runs too)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -6063,8 +6149,13 @@ page 50300 "SomePage"
             &surface,
         );
 
-        assert_eq!(shape, DispatchShape::Exact);
-        assert_eq!(completeness, SetCompleteness::Complete);
+        assert_eq!(shape, DispatchShape::Multicast);
+        assert_eq!(
+            completeness,
+            SetCompleteness::Partial {
+                reason: OpenWorldReason::ReverseDependentExtensions
+            }
+        );
         assert_eq!(routes.len(), 1);
         let RouteTarget::Routine(ref rid) = routes[0].target else {
             panic!("target must be Routine, got {:?}", routes[0].target)
@@ -6194,11 +6285,15 @@ codeunit 50202 "AnotherCaller"
     }
 
     // -----------------------------------------------------------------------
-    // Task-5 (d-ii): Target in graph but entry trigger not found → AbiSymbol Opaque
+    // Task-5 (d-ii), rebaselined S9.0d: a SOURCE target that declares no entry
+    // trigger runs none — a closed empty set (honest empty), not the Opaque
+    // `onrun` boundary this test used to pin (a callee that does not exist).
+    // The Opaque boundary is kept for a symbol-only target:
+    // `object_run_symbol_only_target_keeps_the_opaque_trigger_boundary`.
     // -----------------------------------------------------------------------
 
     #[test]
-    fn object_run_entry_trigger_not_found_emits_opaque() {
+    fn object_run_entry_trigger_not_declared_is_a_closed_empty_set() {
         let src: &'static str = r#"
 codeunit 50203 "NoTriggerCU"
 {
@@ -6226,23 +6321,77 @@ codeunit 50203 "NoTriggerCU"
             &surface,
         );
 
-        assert_eq!(shape, DispatchShape::Exact);
+        assert_eq!(shape, DispatchShape::Multicast);
         assert_eq!(
             completeness,
             SetCompleteness::Complete,
-            "object exists; trigger-not-found is a known boundary (Complete)"
+            "a codeunit has no extensions: the empty set is closed"
+        );
+        assert_eq!(routes, vec![]);
+    }
+
+    /// S9.0d: a SYMBOL-ONLY run target keeps the Opaque entry-trigger
+    /// boundary: the ABI does not list triggers, so `OnRun` may exist.
+    #[test]
+    fn object_run_symbol_only_target_keeps_the_opaque_trigger_boundary() {
+        let mut apps = AppRegistry::default();
+        let ws_ref = apps.intern(&make_app_id("Ws"));
+        let dep_ref = apps.intern(&make_app_id("Dep"));
+        let dep_cu = ObjectNodeId {
+            app: dep_ref,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(60000),
+        };
+        let objects = vec![ObjectNode {
+            id: dep_cu.clone(),
+            name: "DepCu".into(),
+            declared_id: Some(60000),
+            extends_target: None,
+            implements: vec![],
+            tier: TrustTier::SymbolOnly,
+            source_table: None,
+            table_no: None,
+            source_table_temporary: false,
+            page_controls: vec![],
+            fields: vec![],
+            dataitems: vec![],
+            query_columns: Vec::new(),
+            protected_vars: Vec::new(),
+            parse_incomplete: false,
+        }];
+        let mut topology = DependencyGraph::default();
+        topology.add_dependency(ws_ref, dep_ref);
+        let obj_index = ObjectIndex::build(&objects);
+        let graph = ProgramGraph {
+            apps,
+            topology,
+            objects: objects.into(),
+            obj_index,
+            ..Default::default()
+        };
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &[]);
+
+        let (shape, completeness, routes) = resolve_object_run(
+            ws_ref,
+            ObjectKind::Codeunit,
+            Some("DepCu"),
+            true,
+            &graph,
+            &index,
+            &surface,
+        );
+        assert_eq!(
+            (shape, completeness),
+            (DispatchShape::Exact, SetCompleteness::Complete)
         );
         assert_eq!(routes.len(), 1);
-        let r = &routes[0];
+        assert_eq!(routes[0].evidence, Evidence::Opaque);
         assert!(
-            matches!(r.target, RouteTarget::AbiSymbol { .. }),
-            "target must be AbiSymbol; got {:?}",
-            r.target
-        );
-        assert_eq!(r.evidence, Evidence::Opaque);
-        assert!(
-            matches!(r.witness, Witness::AbiSymbol { .. }),
-            "AbiSymbol target must pair with AbiSymbol witness"
+            matches!(&routes[0].target, RouteTarget::AbiSymbol { key }
+                if key.routine_name_lc == "onrun" && key.object_number == 60000),
+            "got {:?}",
+            routes[0].target
         );
     }
 
@@ -8838,7 +8987,8 @@ codeunit 50611 "PageCaller"
         let (shape, routes) =
             resolve_member(&receiver, "runmodal", 0, from_obj, &graph, &index, &surface);
 
-        assert_eq!(shape, DispatchShape::Exact);
+        // A page run is a `Multicast` open to page extensions (S9.0d).
+        assert_eq!(shape, DispatchShape::Multicast);
         assert_eq!(routes.len(), 1);
         assert_eq!(
             routes[0].evidence,
@@ -9641,9 +9791,9 @@ codeunit 50617 "ShadowCaller"
     /// bypass `resolve_in_page_scope` (and therefore any declared same-named
     /// procedure) entirely, exactly mirroring `resolve_member_object_run_
     /// arm_resolves_unmarked_entry_trigger_normally`'s pre-existing Codeunit
-    /// precedent. `PageWithRunModal` declares no `OnOpenPage` trigger, so
-    /// this also proves the Opaque-boundary-when-absent fallback fires for
-    /// the declared-variable population, not just a Source hit.
+    /// precedent. `PageWithRunModal` declares no `OnOpenPage` trigger, so the
+    /// run reaches no routine at all (S9.0d: it used to reach an invented
+    /// Opaque `onopenpage` boundary).
     #[test]
     fn resolve_member_page_declared_runmodal_proc_does_not_shadow_entry_trigger() {
         use crate::program::resolve::receiver::ReceiverType;
@@ -9681,21 +9831,12 @@ codeunit 50617 "ShadowCaller"
         let (shape, routes) =
             resolve_member(&receiver, "runmodal", 0, from_obj, &graph, &index, &surface);
 
-        assert_eq!(shape, DispatchShape::Exact);
-        assert_eq!(routes.len(), 1);
+        assert_eq!(shape, DispatchShape::Multicast);
         assert_eq!(
-            routes[0].evidence,
-            Evidence::Opaque,
+            routes,
+            vec![],
             "the declared RunModal PROCEDURE must never be selected — RunModal \
-             dispatches to OnOpenPage unconditionally, which is absent here; \
-             got {:?}",
-            routes[0]
-        );
-        assert!(
-            matches!(routes[0].target, RouteTarget::AbiSymbol { .. }),
-            "expected an Opaque AbiSymbol boundary (OnOpenPage not indexed); \
-             got {:?}",
-            routes[0].target
+             dispatches to OnOpenPage unconditionally, which is absent here"
         );
     }
 
@@ -14164,11 +14305,12 @@ codeunit 54031 "RunNCaller"
     // --- Run/ObjectRun exemption control: bypasses resolve_in_object -------
 
     // (Run-control) `Codeunit.Run()` on a codeunit with NO `OnRun` trigger —
-    // must emit an Opaque AbiSymbol boundary route, never a synthesized
-    // Source. This path (`resolve_member`'s inline Codeunit.Run special
-    // case) bypasses `resolve_in_object` entirely and is untouched by Task 1.
+    // never a synthesized Source route. This path (`resolve_member`'s inline
+    // Codeunit.Run special case) bypasses `resolve_in_object` entirely and is
+    // untouched by Task 1. Rebaselined S9.0d: the codeunit is source, so the
+    // run reaches no trigger (an empty set), not an Opaque `onrun` boundary.
     #[test]
-    fn resolve_member_codeunit_run_no_onrun_trigger_emits_opaque_not_source() {
+    fn resolve_member_codeunit_run_no_onrun_trigger_emits_no_route_not_source() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let src_target: &'static str = r#"
@@ -14204,21 +14346,12 @@ codeunit 54041 "NoOnRunCaller"
         let (shape, routes) =
             resolve_member(&receiver, "run", 0, from_obj, &graph, &index, &surface);
 
-        assert_eq!(shape, DispatchShape::Exact);
-        assert_eq!(routes.len(), 1);
-        assert!(
-            !matches!(routes[0].target, RouteTarget::Routine(_)),
-            "Codeunit.Run() on a codeunit with NO OnRun trigger must never \
-             synthesize a Source route; got {:?}",
-            routes[0].target
+        assert_eq!(shape, DispatchShape::Multicast);
+        assert_eq!(
+            routes,
+            vec![],
+            "Codeunit.Run() on a source codeunit with NO OnRun trigger reaches \
+             no routine (and never synthesizes a Source route)"
         );
-        assert!(
-            matches!(routes[0].target, RouteTarget::AbiSymbol { .. }),
-            "must be an Opaque AbiSymbol boundary route (object exists, \
-             OnRun trigger absent — unaffected by the access filter since \
-             Codeunit.Run bypasses resolve_in_object entirely); got {:?}",
-            routes[0].target
-        );
-        assert_eq!(routes[0].evidence, Evidence::Opaque);
     }
 }

@@ -608,11 +608,11 @@ fn coverage_policy_native_oracle() {
 
 #[test]
 fn cycle_native_oracle() {
-    use al_sem::engine::l3::event_graph::{EventEdge, EventGraph, EventSymbol, Evidence};
     use al_sem::engine::l5::event_flow::{
         ChainNode, ChainWalkOptions, Scope, build_event_flow_indexes, compute_chain_report,
         walk_event_chain,
     };
+    use al_sem::program::model::events::{EventEdge, EventGraph, EventSymbol, Evidence};
     use std::collections::BTreeSet;
 
     // Graph: P publishes E1 → S1 subscribes. S1 publishes E2 → P subscribes.

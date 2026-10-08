@@ -25,11 +25,11 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::digest::{
     DigestEntryResult, ProjectedEvidence, compute_digest_effects_for_ordering_with,
 };
 use crate::engine::l5::ordering_engine::ScopedGuarantee;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 /// External-IO effect types — the only types a resolved `io_occurrence_id` may have
 /// for IO labels.
@@ -166,7 +166,7 @@ pub struct OrderingFacts {
 /// facade, the role check MUST be restored: without it, dep routines (which have
 /// `body_available = false` already, so this path is currently safe) could in theory
 /// be treated as reportable roots if that invariant ever changes.
-pub fn is_reportable_routine(routine: &L3Routine) -> bool {
+pub fn is_reportable_routine(routine: &ModelRoutine) -> bool {
     routine.body_available && !routine.parse_incomplete
 }
 
@@ -174,7 +174,7 @@ pub fn is_reportable_routine(routine: &L3Routine) -> bool {
 /// match. The L3 routine already carries its `stable_routine_id` (empty when the
 /// object id is malformed or the signature hash is missing — those never appear as
 /// digest roots).
-pub fn stable_routine_id_for_routine(routine: &L3Routine) -> String {
+pub fn stable_routine_id_for_routine(routine: &ModelRoutine) -> String {
     routine.stable_routine_id.clone()
 }
 
@@ -215,7 +215,7 @@ pub fn to_source_anchor(
 /// witness paths — is never held at once. On CDO with the B3 calls that set is
 /// 67 k effects over 1359 roots, while only roots with an ordering fact keep
 /// anything.
-pub fn compute_ordering_facts(resolved: &L3Resolved) -> HashMap<String, OrderingFacts> {
+pub fn compute_ordering_facts(resolved: &Model) -> HashMap<String, OrderingFacts> {
     compute_digest_effects_for_ordering_with(resolved, |entry| ordering_facts_of_entry(&entry))
         .into_iter()
         .flatten()
@@ -625,7 +625,7 @@ impl Serialize for ProjectionSer<'_> {
 
 /// Project the M5 ordering-facts differential document, PRETTY-serialized with a
 /// trailing newline (the exact on-disk golden form). Entries sorted by routineId.
-pub fn project_r4f_ordering_facts(resolved: &L3Resolved, fixture_name: &str) -> String {
+pub fn project_r4f_ordering_facts(resolved: &Model, fixture_name: &str) -> String {
     let facts_map = compute_ordering_facts(resolved);
     // Sort entries by routineId (deterministic; the map iteration is not).
     let mut keys: Vec<&String> = facts_map.keys().collect();
@@ -1044,7 +1044,7 @@ mod tests {
     // Oracle D: ioId fallback — io_occurrence_id resolution.
     //
     // In compute_ordering_facts: `io_id = g.io_occurrence_id.unwrap_or(eff.fact_id)`.
-    // We cannot exercise the full pipeline here without a real L3Resolved, but we
+    // We cannot exercise the full pipeline here without a real Model, but we
     // document the two branches via assertions on the ScopedGuarantee field shape
     // since compute_ordering_facts is a pipeline function tested end-to-end by the
     // r4f_ordering_facts golden test.
@@ -1094,7 +1094,7 @@ mod tests {
         // IO_BEFORE_ESCAPING_ERROR + vFR + proven_effective → medium.
         // to_severity(Medium) = Some("medium").
         // The finding builder appends the extra rootCause sentence at sev=="medium"
-        // (d51.rs:118-123 — verified by inspection; not testable without a full L3Resolved).
+        // (d51.rs:118-123 — verified by inspection; not testable without a full Model).
         let g = guarantee("IO_BEFORE_ESCAPING_ERROR", true, Some("proven_effective"));
         let result = grade_guarantee(&g, "HTTP", &detail("method", "POST"));
         assert_eq!(result.grade, HazardGrade::Medium);

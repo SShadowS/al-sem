@@ -7,7 +7,7 @@
 //! corpus before the fix: `ws-d59` 6, `ws-d38` 3, `ws-d12-dead-event` 1 — all
 //! false positives — against `ws-d19`'s 2 genuine ones.
 //!
-//! Every test here drives REAL workspace assembly (`assemble_and_resolve_default`)
+//! Every test here drives REAL workspace assembly (`assemble_and_resolve_inline_program_default`)
 //! and the REGISTERED detector (`registered_detectors` + `run_detectors`), never a
 //! helper function — and asserts the assembly actually produced the routines, with
 //! the kind and parameters the case depends on, so a case can never pass by having
@@ -15,10 +15,11 @@
 
 use std::collections::BTreeMap;
 
-use al_sem::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_default};
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::workspace::Model;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000d19abcd";
 const DETECTOR: &str = "d19-unused-parameter";
@@ -29,7 +30,7 @@ struct D19Run {
     /// d19's own `DetectorStats.skipped` map (present-iff-nonzero, see
     /// `registry::DetectorStats::add_skip`).
     skipped: BTreeMap<String, u64>,
-    resolved: L3Resolved,
+    resolved: Model,
 }
 
 impl D19Run {
@@ -90,7 +91,7 @@ impl D19Run {
 /// REGISTERED d19 detector over it.
 fn run_d19(src: &str) -> D19Run {
     let files = vec![("src/Issue25.al".to_string(), src.to_string())];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let d19: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == DETECTOR)

@@ -49,15 +49,15 @@
 //! special case into one all-routines map.
 
 use crate::engine::ids::{is_lower_hex, sha256_hex};
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
 use crate::engine::l5::finding::Finding;
+use crate::program::model::workspace::{ModelObject, ModelRoutine};
 use std::collections::HashMap;
 
 /// Per-model id indexes for the fingerprint (routine-by-internal-id +
 /// object-by-internal-id + all-routines stabilization map). Built once per run.
 pub struct FingerprintIndex<'a> {
-    routines_by_id: HashMap<&'a str, &'a L3Routine>,
-    objects_by_id: HashMap<&'a str, &'a L3Object>,
+    routines_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    objects_by_id: HashMap<&'a str, &'a ModelObject>,
     /// EVERY routine's internal id → stable routine id (source AND dep). Used to
     /// substitute internal routine-id occurrences in the `rootCauseKey` before
     /// hashing, making the fingerprint edit-/cache-independent. EMPTY only for an
@@ -78,10 +78,10 @@ impl<'a> FingerprintIndex<'a> {
     /// `rootCauseKey` are stabilized before hashing. Routines whose
     /// `normalized_signature_hash` is empty are skipped (no stable form). This is
     /// the single, unified path — there is no longer a dep-only variant.
-    pub fn build(routines: &'a [L3Routine], objects: &'a [L3Object]) -> Self {
-        let routines_by_id: HashMap<&str, &L3Routine> =
+    pub fn build(routines: &'a [ModelRoutine], objects: &'a [ModelObject]) -> Self {
+        let routines_by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
-        let objects_by_id: HashMap<&str, &L3Object> =
+        let objects_by_id: HashMap<&str, &ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
 
         // Map every routine's INTERNAL id → its modelInstanceId-/cache-independent
@@ -238,8 +238,8 @@ fn substitute_stable_ids(
 mod tests {
     use super::*;
     use crate::engine::ids::sha256_hex;
-    use crate::engine::l3::l3_workspace::{L3Routine, RoutineVariables};
     use crate::engine::l5::finding::{Evidence, FindingConfidence, SourceAnchor};
+    use crate::program::model::workspace::{ModelRoutine, RoutineVariables};
 
     fn dummy_anchor(enclosing: &str) -> SourceAnchor {
         SourceAnchor {
@@ -287,8 +287,8 @@ mod tests {
         }
     }
 
-    fn minimal_routine(id: &str, object_id: &str, name: &str) -> L3Routine {
-        L3Routine {
+    fn minimal_routine(id: &str, object_id: &str, name: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: object_id.to_string(),
@@ -314,7 +314,7 @@ mod tests {
             operation_sites: Vec::new(),
             statement_tree: None,
             loops: Vec::new(),
-            source_anchor: crate::engine::l2::features::PAnchor {
+            source_anchor: crate::program::body::features::PAnchor {
                 source_unit_id: "ws:test.al".to_string(),
                 start_line: 0,
                 start_column: 0,
@@ -334,8 +334,8 @@ mod tests {
         }
     }
 
-    fn minimal_object(id: &str, object_type: &str, object_number: i64) -> L3Object {
-        L3Object {
+    fn minimal_object(id: &str, object_type: &str, object_number: i64) -> ModelObject {
+        ModelObject {
             id: id.to_string(),
             app_guid: "app".to_string(),
             object_type: object_type.to_string(),

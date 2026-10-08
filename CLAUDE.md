@@ -182,11 +182,12 @@ Driven via `aldump --program-call-graph-stats <workspace>` (the north-star metri
 or consumed by `src/engine/gate` (the `analyze` CLI).
 **`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
 resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
-§7): `src/engine/l3/program_calls.rs` (`attach_program_calls`) converts the resolved
-edges into L3's call shape and sets `L3Resolved.precomputed_calls`, and since
-engine-switch S4 also the event graph (`L3Resolved.precomputed_events`, from the program
-engine's subscription inventory, `program::model::events`). Consumers read them through
-`call_resolver::calls_for` / `event_graph::events_for`. The model (body facts, objects,
+§7): `src/program/model/program_calls.rs` (`attach_program_calls`) converts the resolved
+edges into the model's call shape and returns the model (`Model`) with them in
+`calls`, and since engine-switch S4 also the event graph in `events` (from the program
+engine's subscription inventory, `program::model::events`). Since S9.6 both are
+mandatory: the assembly entries return `ModelRows`, which only `attach_program_calls`
+turns into a model, so no consumer can see a model without calls. The model (body facts, objects,
 routines) is assembled from the program engine's parse (S2a/S2b). The r4/r4f detector
 goldens use the same path (`assemble_and_resolve_workspace_with_program_calls`).
 **Since engine-switch S6 every single-app consumer builds the same program-backed model**
@@ -206,10 +207,11 @@ workspace-only model). The cross-app model holds only the dependency code the
 workspace demands (`program::resolve::demand`), one detector-context builder serves
 both modes, and the cone follows every resolved call that dependency code makes
 (object runs and calls between dependency apps included). The combined graph (solver,
-detector traversals) still takes workspace callers only. Still on L3's own resolver: `project_coverage_cross_app`, the legacy merged model
-`cross_app_l3` behind the `--l3-*` cross-app modes, `aldump --l3-*` and the
-gap/temp_state tests, which measure L3 itself and go with it (S9). Spec:
-`docs/superpowers/specs/2026-10-06-engine-switch-design.md`.
+detector traversals) still takes workspace callers only. **S9 deletes L3**: S9.6
+removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
+`--b3`, `--r2-5a-merged-index`, the `tests/l3` suite), then the engine. Spec:
+`docs/superpowers/specs/2026-10-06-engine-switch-design.md`; plan:
+`docs/superpowers/plans/2026-10-07-engine-switch-s9.md`.
 
 **Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
 - `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`
@@ -264,13 +266,17 @@ gap/temp_state tests, which measure L3 itself and go with it (S9). Spec:
   (dispatch), `builtins.rs`/`member_catalog.rs` (platform intrinsic catalogs), `edge.rs`
   (the `Histogram` taxonomy + `ObligationOutcome`)
 - `src/program/abi_ingest.rs` - Dependency ABI ingestion (sibling of `resolve/`, not inside it)
-- `src/engine/l2/` - Structural body-walk + feature projection over the owned IR
-- `src/engine/l3/` - Legacy workspace symbol table + call resolver (the RETIRED al-sem
-  port; `--l3-call-graph-stats` and siblings are advisory-only — see Project Direction)
+- `src/program/body/` - Structural body-walk + feature projection over the owned IR
+  (was `src/engine/l2`, moved in engine-switch S2b.1)
+- `src/program/model/` - The detector model: `Model` (rows + the program engine's calls
+  and event graph), `ModelRoutine`/`ModelObject`/`ModelTable`/…, built only by
+  `program_calls::attach_program_calls`. Renamed from the `L3*` types in engine-switch
+  S9.7; the legacy L3 engine (`src/engine/l3`, the RETIRED al-sem port) was deleted in
+  S9.6
 - `src/engine/l4/` - Per-routine effect summaries over the call graph's SCC condensation.
   Its db-effect QUERY surface is `effect_query.rs` (`DbEffectQuery`: down / up-global /
   the ancestor-scoped up-query) over `reverse_index.rs`'s transpose, with
-  `effect_query_cli.rs` as the `alsem query` transport + the `RoutineIx`→`L3Routine`
+  `effect_query_cli.rs` as the `alsem query` transport + the `RoutineIx`→`ModelRoutine`
   join. Read `effect_query.rs`'s module doc BEFORE building anything on it — it states
   which question this substrate answers and which one `cone_derived.rs` already answers
   better (physical-table WRITES), so a second answer to the same question is not built.
@@ -279,7 +285,7 @@ gap/temp_state tests, which measure L3 itself and go with it (S9). Spec:
   baseline diffing, inline suppression, policy)
 - `src/engine/deps/` - `.app` symbol-reference ingestion (manifest + SymbolReference.json → ABI)
 - `src/bin/aldump.rs` - Multi-mode dump CLI: `--program-call-graph-stats` (north-star),
-  `--l2`/`--l3-*` (legacy engine layers), `--graphify-export`, etc. — see its `usage()`
+  `--l2`, `--r3a*`/`--r4*` projections, `--graphify-export`, etc. — see its `usage()`
 - `src/bin/alsem.rs` - The production `analyze`/diagnostics CLI (installed binary name);
   also hosts `alsem query touches|effects` (the db-effect query surface above)
 - `src/bin/mint-goldens.rs` - Mints/regenerates committed golden fixtures
@@ -290,7 +296,7 @@ the CST→IR lowerer (`lower/mod.rs`), and the owned AL syntax IR (`ir/`) every 
 above builds on. See the Grammar section below.
 
 **Testing:** Integration tests are consolidated into **umbrella crates** — one
-`tests/<dir>/main.rs` per domain (`tests/{gap,cli,l3,l2_ir,temp_state,r25_abi,r3,r4,lsp}/`),
+`tests/<dir>/main.rs` per domain (`tests/{gap,cli,l2_ir,temp_state,r25_abi,r3,r4,lsp}/`),
 each a single link target whose `main.rs` lists its members as `mod` items;
 `program_resolve_harness`, `perf_bounds`, and `differential` remain standalone
 top-level `tests/*.rs` crates. Run one member module with
@@ -440,7 +446,7 @@ Nothing pins the grammar commit: local builds and CI (`.github/workflows/ci.yml`
 `SShadowS/tree-sitter-al` `main`, so a grammar change surfaces on the next build rather than
 silently drifting. `crates/al-syntax` is the **only** crate
 that links tree-sitter or walks its raw CST — every other consumer (`src/lsp/snapshot.rs`,
-`src/engine/l2` and everything layered on it, `src/program/resolve`) reads the owned
+`src/program/body` and everything layered on it, `src/program/resolve`) reads the owned
 AL syntax IR that `al-syntax`'s lowerer (`crates/al-syntax/src/lower/mod.rs`) produces.
 Practical effect: the "flat vs. recursive walk" hazard that mattered under the old
 tree-sitter-query architecture (see History below) no longer applies to engine code at
@@ -558,8 +564,8 @@ written against V2's flat shape; the fix at the time was recursive walks or expl
      prepare/incoming/outgoing/codeLens/diagnostics with no LSP-specific step.
    - Program engine (the moat): `src/program/resolve/extract.rs` (obligation extraction)
      and/or `src/program/resolve/resolver.rs` (dispatch) if it's a new call/edge shape
-   - Legacy L3 engine (advisory-only; rarely needs touching for new work):
-     `src/engine/l2/ir_walk.rs`, `src/engine/l3/`
+   - Detector model (body facts the detectors read): the body walk under
+     `src/program/body/` and the projection in `src/program/model/workspace.rs`
 4. **Add a fixture** under `tests/fixtures/` (or the plan/task-specific golden family) and
    **regenerate goldens**: `REGEN_TEMP_GOLDENS=1 cargo test` rewrites Rust-owned goldens —
    inspect the diff before committing; it is a measurement, never an auto-bless (see
@@ -590,7 +596,7 @@ JSON keys shown):
 | Ambiguous, resolved | `ambiguousResolved` | Closed same-object overload-ambiguity candidate set — NOT counted as `unknown` |
 
 Both `wholeProgram` (every edge, including dependency-internal ones) and `primaryScoped`
-(workspace-only edges — mirrors `--l3-call-graph-stats-cross-app`'s scoping) variants are
+(workspace-only edges) variants are
 emitted, each with `realUnknownRate = unknown / total`. **Last measured** (CDO,
 Continia's real BC workspace — requires `CDO_WS`; not reproducible in this sandbox, see
 `scripts/cdo-gate`), immediately after the Tier-1 deep-review-remediation merge (commit
@@ -618,20 +624,15 @@ Coverage above for the full honest taxonomy (`resolved`/`builtin`/`dynamic`/`ext
 `unknown`) and the current CDO numbers, and the call-graph resolution redesign spec
 under `docs/superpowers/specs/`.
 
-**Two distinct "legacy" axes exist — do not conflate them:**
-1. **Engine axis** (which resolver produced the number): `aldump
-   --program-call-graph-stats` (the fresh resolver, above — **authoritative**) vs.
-   `aldump --l3-call-graph-stats` and its `-cross-app`/`-unknown-breakdown` siblings (the
-   legacy L3 engine, a al-sem-era port — **advisory only**, reported under a DIFFERENT
-   key, `legacyL3UnknownRate`; L3 excludes `MemberNotFound`/ambiguous cases the fresh
-   engine counts as `Unknown`, so the two numbers are not directly comparable even when
-   both are non-zero).
-2. **Definition axis** (within the fresh resolver only): `realUnknownRate` (current
-   authoritative definition — `ambiguousResolved` is a closed candidate set, not a hole,
-   so it is excluded from `unknown`) vs. `realUnknownRateLegacyIncludingAmbiguous`
-   (the PRE-reclassification definition, which counted `ambiguousResolved` as `unknown`
-   too — reported side-by-side, additively, so a metric-definition change is never
-   stat-juked).
+**The unknown rate has two definitions — do not conflate them.** (There used to be a
+second, engine axis: `aldump --l3-call-graph-stats` reported the legacy L3 engine's
+advisory `legacyL3UnknownRate`. Engine-switch S9.6 removed it with L3; only the fresh
+resolver's numbers exist now.)
+`realUnknownRate` is the current, authoritative definition: `ambiguousResolved` is a
+closed candidate set, not a hole, so it is excluded from `unknown`.
+`realUnknownRateLegacyIncludingAmbiguous` is the PRE-reclassification definition, which
+counted `ambiguousResolved` as `unknown` too. Both are reported side by side, so a
+metric-definition change is never stat-juked.
 
 ## Testing Philosophy & Goldens
 
@@ -687,27 +688,24 @@ under `docs/superpowers/specs/`.
 - **One change moves SEVERAL golden families — regen and run them together, never
   one at a time.** A change anywhere under `src/engine/`, `crates/al-syntax/src/`,
   `tests/r0-corpus/` (fixtures), `tests/fixtures/`, or any golden/vector dir can
-  move any of the **30 golden directories**, which map to **9 test targets**:
+  move any of the **23 golden directories**, which map to **8 test targets**:
 
   | Golden dir(s) | Test target |
   |------------|-------------|
   | `tests/r4-goldens/`, `tests/r4f-goldens/` | `--test r4` |
-  | `docs/b3-triage/r0-corpus.md` (B3 detector-diff triage table; verdict cells ignored, kept on regen) | `--test r4` |
-  | `docs/b3-triage/r0-corpus-deps.md` (B3 dependency-binding diff table; verdict cells ignored, kept on regen) | `--test r4` |
   | `tests/ir-l2-goldens/` (the `l2_features.snapshot`) | `--test l2_ir` |
-  | `tests/cli-{a,b,c,c-events,c-policy,query}-goldens/`, `tests/gate-goldens/`, `tests/{al2,al}dump-smoke-goldens/` | `--test cli` |
-  | `tests/r{0,1a,2a,2b,2c,2d}-goldens/` (r2c is the `l3eg` family, byte-compared only by `tests/differential.rs` — `--test l3`'s own `l3eg_oracles` is a *different*, non-golden check) | `--test differential` |
+  | `tests/cli-{a,b,c,c-events,c-policy,query}-goldens/`, `tests/gate-goldens/`, `tests/al2dump-smoke-goldens/` | `--test cli` |
+  | `tests/r{0,1a,2a,2c,2d}-goldens/` (r2c is the event-graph family, projected from the program engine's event graph) | `--test differential` |
   | `tests/r3a{1,2,3,4,5}-goldens/` | `--test r3` |
-  | `tests/r2-5a-goldens/`, `tests/r2-5b-{cg,cov,eg,rt}-goldens/` | `--test r25_abi` |
   | `tests/l4-summary-baseline/` | `--test l4_summary_differential` |
   | `tests/goldens/semantic-edges/` | `--test program_resolve_harness` |
 
-  The ninth target, `--test l3` (l3cg/l3cov/l3eg/l3rt oracle + vectors), owns no
-  byte-compared golden directory of its own — despite the name, `l3eg_oracles.rs`
-  is explicitly NOT a golden diff. `scripts/check-goldens` still runs it
-  `--no-fail-fast` alongside the eight golden-bearing targets above.
+  The eighth target, `--test r25_abi`, owns no golden directory: it runs the
+  `tests/r2-5a-vectors/` ABI ingestion oracles. Engine-switch S9.6 deleted the
+  goldens that measured the legacy L3 engine (`r2b`, `r2-5a`, `r2-5b-*`,
+  `aldump-smoke`, the `docs/b3-triage/` tables) and the `--test l3` suite with it.
 
-  Canonical loop: **`scripts/check-goldens --regen`** (regens all nine targets),
+  Canonical loop: **`scripts/check-goldens --regen`** (regens all eight targets),
   inspect the diff, then **`scripts/check-goldens`** (no regen) to confirm green.
   The script is the source of truth for this table — keep the two in sync.
   Regenerating only the family you were looking at is the trap that shipped two red
@@ -738,13 +736,13 @@ under `docs/superpowers/specs/`.
   d56's residual key-remap shape kept it opt-in). Measure the population before
   building taxonomy for it.
 - **Detector substrate gotcha — "is there a branch in this loop?" uses
-  `statement_tree`, NOT `condition_references`.** `L3Routine.condition_references`
+  `statement_tree`, NOT `condition_references`.** `ModelRoutine.condition_references`
   (built by `ir_walk::collect_cond_idents`) records unquoted IDENTIFIER names only: a
   bare `X` or a member's `.Name`, looking through parentheses, calls and operators.
   It never records a QUOTED name, bare (`if "My Var"`) or as a member
   (`case Rec."E-Mail" of`), and real BC code quotes field names constantly. It also
   carries identifiers, not structure: it cannot tell you a branch exists. Walk the
-  control-flow tree `L3Routine.statement_tree` (`PCFNNode`; `if`/`case` kind nodes
+  control-flow tree `ModelRoutine.statement_tree` (`PCFNNode`; `if`/`case` kind nodes
   carry `source_range`) for a STRUCTURAL, shape-independent branch check — see d60's
   `tree_has_branch_within`. This bit d60 (a quoted-field scrutinee survived the
   identifier-only guard) before the switch. `ir_walk`'s `condition_references_shapes`

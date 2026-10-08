@@ -1,5 +1,5 @@
 //! #34: the temp-record suppression rule lives ONCE, in
-//! `al_sem::engine::l2::features::known_temp_suppresses`. Every other site
+//! `al_sem::program::body::features::known_temp_suppresses`. Every other site
 //! projects its own carrier to `Option<bool>` and calls it.
 //!
 //! This scans non-test source for the rule's own spellings and fails on any:

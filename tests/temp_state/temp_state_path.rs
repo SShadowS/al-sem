@@ -9,7 +9,7 @@
 //!   - caller B passes a PHYSICAL var → `Known(false)` (would fire).
 //!
 //! These tests drive the resolver against HAND-BUILT `EvidenceStep` paths +
-//! `L3Routine` structures rather than the full L5 pipeline. RATIONALE: the net-new
+//! `ModelRoutine` structures rather than the full L5 pipeline. RATIONALE: the net-new
 //! logic in this task is the per-PATH FRAME-STEPPING (walking hop callsites toward
 //! the root and applying the substitution table at each frame). The end-to-end L4
 //! substitution semantics are already locked by `tests/temp_state_substitution.rs`;
@@ -22,11 +22,13 @@
 
 use std::collections::HashMap;
 
-use al_sem::engine::l2::features::{PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState};
-use al_sem::engine::l3::l3_workspace::{L3Routine, RoutineVariables};
 use al_sem::engine::l4::effect_lattice::TempStateKind;
 use al_sem::engine::l5::finding::{EvidenceStep, SourceAnchor};
 use al_sem::engine::l5::path_temp_resolve::resolve_temp_along_path;
+use al_sem::program::body::features::{
+    PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
+};
+use al_sem::program::model::workspace::{ModelRoutine, RoutineVariables};
 
 // --- builders ---------------------------------------------------------------
 
@@ -56,9 +58,9 @@ fn anchor(routine_id: &str) -> SourceAnchor {
     }
 }
 
-/// A bare `L3Routine` with just an id; callers push call_sites onto it.
-fn routine(id: &str) -> L3Routine {
-    L3Routine {
+/// A bare `ModelRoutine` with just an id; callers push call_sites onto it.
+fn routine(id: &str) -> ModelRoutine {
+    ModelRoutine {
         id: id.to_string(),
         stable_routine_id: format!("stable::{id}"),
         object_id: "app/Codeunit/1".to_string(),
@@ -162,14 +164,14 @@ fn terminal(routine_id: &str, op_id: &str) -> EvidenceStep {
     }
 }
 
-fn routine_map(routines: &[L3Routine]) -> HashMap<&str, &L3Routine> {
+fn routine_map(routines: &[ModelRoutine]) -> HashMap<&str, &ModelRoutine> {
     routines.iter().map(|r| (r.id.as_str(), r)).collect()
 }
 
 /// An edge-kind lookup mapping every callsite in `routines` to a binding-carrying
 /// `"direct"` edge — the common case for these stepping tests. Case (c) builds its
 /// own map with a non-allowlisted kind to exercise the guard.
-fn direct_edge_kinds(routines: &[L3Routine]) -> HashMap<&str, &str> {
+fn direct_edge_kinds(routines: &[ModelRoutine]) -> HashMap<&str, &str> {
     routines
         .iter()
         .flat_map(|r| r.call_sites.iter().map(|cs| (cs.id.as_str(), "direct")))
@@ -417,7 +419,7 @@ fn uncertainty_sources_resolve_unknown() {
     // (iv) parent routine not in the map at all → Unknown. The callsite IS in the
     // edge-kind map as an allowlisted `direct` edge, so the guard passes and the
     // Unknown comes from the missing parent routine (not the guard).
-    let empty: Vec<L3Routine> = Vec::new();
+    let empty: Vec<ModelRoutine> = Vec::new();
     let empty_map = routine_map(&empty);
     let mut missing_edge_kinds: HashMap<&str, &str> = HashMap::new();
     missing_edge_kinds.insert("MISSING/cs0", "direct");

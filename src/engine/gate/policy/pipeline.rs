@@ -28,11 +28,11 @@ use crate::engine::gate::policy::policy_loader::{
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::root_classification::classify_roots;
+use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 /// How the effective policy was resolved.
 enum ResolvedPolicy {
@@ -295,7 +295,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 /// `analyzeWorkspace`-equivalent diagnostic lines (mirrors events.rs).
 fn analyze_workspace_diagnostic_lines(
     workspace: &Path,
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
 ) -> Vec<String> {
     let default_detectors: Vec<_> = registered_detectors()
         .into_iter()

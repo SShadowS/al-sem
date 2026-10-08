@@ -14,7 +14,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -25,6 +24,7 @@ use crate::engine::l5::ordering_facts::{
     stable_routine_id_for_routine, to_severity,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d47-io-unsafe-txn";
 
@@ -38,7 +38,7 @@ fn detail_method(detail: &[(String, String)]) -> Option<&str> {
 
 fn build_d47_finding(
     fp: &FingerprintIndex,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     of: &OrderingFacts,
     fact: &OrderingFact,
     sev: &str,
@@ -226,7 +226,7 @@ fn routine_name_by_id(ctx: &DetectorContext, id: &str) -> String {
 fn build_d47_event_advisory_finding(
     fp: &FingerprintIndex,
     ctx: &DetectorContext,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     of: &OrderingFacts,
     fact: &OrderingFact,
     sev: &str,
@@ -353,14 +353,14 @@ fn build_d47_event_advisory_finding(
 }
 
 /// `toSourceAnchor(fact.ioAnchor, routine.id)` — resolve the IO contract anchor.
-fn io_source_anchor(fact: &OrderingFact, routine: &L3Routine) -> Option<SourceAnchor> {
+fn io_source_anchor(fact: &OrderingFact, routine: &ModelRoutine) -> Option<SourceAnchor> {
     crate::engine::l5::ordering_facts::to_source_anchor(Some(&fact.io_anchor), &routine.id)
 }
 
 /// `toSourceAnchor(opt, routine.id)` for write/commit contracts.
 fn to_src(
     contract: Option<&crate::engine::l5::digest::ProjectedEvidence>,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
 ) -> Option<SourceAnchor> {
     crate::engine::l5::ordering_facts::to_source_anchor(contract, &routine.id)
 }
@@ -371,7 +371,7 @@ fn io_id_from_key(key: &str) -> &str {
 }
 
 pub fn detect_d47(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

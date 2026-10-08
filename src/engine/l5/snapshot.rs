@@ -37,14 +37,14 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::engine::ids::to_stable_object_id;
-use crate::engine::l2::features::{PAnchor, PCallSite, PCallee, POperationSite};
-use crate::engine::l2::operation_order::{OperationOrder, ScopeFrame, apply_operation_order};
-use crate::engine::l3::event_graph::EventSymbol;
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
-use crate::engine::l3::taxonomy::DispatchKind;
 use crate::engine::l4::capability_cone::{
     CapabilityExtra, CapabilityFact, R3a3SourceBase, ValueSource, build_r3a3_source_only_base,
 };
+use crate::program::body::features::{PAnchor, PCallSite, PCallee, POperationSite};
+use crate::program::body::operation_order::{OperationOrder, ScopeFrame, apply_operation_order};
+use crate::program::model::events::EventSymbol;
+use crate::program::model::taxonomy::DispatchKind;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 // ===========================================================================
 // ORDERED serde projections of ValueSource / CapabilityExtra.
@@ -205,7 +205,7 @@ impl SnapTempState {
     }
 }
 
-fn snap_temp_state(ts: &crate::engine::l2::features::PTempState) -> SnapTempState {
+fn snap_temp_state(ts: &crate::program::body::features::PTempState) -> SnapTempState {
     match ts.kind.as_str() {
         "known" => SnapTempState::Known {
             value: ts.value.unwrap_or(false),
@@ -362,7 +362,7 @@ impl SnapshotCapabilityFact {
     pub fn is_known_temp(&self) -> bool {
         match &self.extra {
             Some(SnapCapabilityExtra::Table { temp_state, .. }) => {
-                crate::engine::l2::features::known_temp_suppresses(
+                crate::program::body::features::known_temp_suppresses(
                     temp_state.as_ref().and_then(SnapTempState::known_value),
                 )
             }
@@ -985,7 +985,7 @@ fn display_of_callee(callee: &PCallee) -> String {
 // Lowercased attribute names for the operation-order TryFunction guard.
 // ===========================================================================
 
-fn routine_attr_names_lc(r: &L3Routine) -> Vec<String> {
+fn routine_attr_names_lc(r: &ModelRoutine) -> Vec<String> {
     r.attributes_parsed
         .iter()
         .map(|a| a.name.to_lowercase())
@@ -1003,8 +1003,8 @@ struct RoutineOrder {
     scope_frames: Vec<ScopeFrame>,
 }
 
-fn compute_routine_order(r: &L3Routine) -> RoutineOrder {
-    use crate::engine::l2::features::PFeatures;
+fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
+    use crate::program::body::features::PFeatures;
     // Build a minimal PFeatures carrying ONLY what apply_operation_order reads:
     // statement_tree (the CFN skeleton) + call_sites + operation_sites. The walker
     // stamps `order` onto each site and sets scope_frames.
@@ -1041,7 +1041,7 @@ fn compute_routine_order(r: &L3Routine) -> RoutineOrder {
 
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
-pub fn compose_snapshot(resolved: &L3Resolved) -> CapabilitySnapshot {
+pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     use crate::engine::perf_trace as pt;
     let base = {
         let _s = pt::span("snapshot", "snapshot.r3a3_base");
@@ -1084,7 +1084,7 @@ pub fn compose_snapshot(resolved: &L3Resolved) -> CapabilitySnapshot {
 // guid/hex, uniform-case object-type segment), so ordinal cmp == localeCompare.
 // ---------------------------------------------------------------------------
 
-fn derive_identity_table(resolved: &L3Resolved) -> SnapshotIdentityTable {
+fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
     let ws = &resolved.workspace;
     // id → display name, deduped. BTreeMap keeps deterministic key order (M1) and
     // gives the sorted-by-id pairing al-sem produces (its `Map` + `.sort()`).
@@ -1643,7 +1643,7 @@ fn derive_callsite_resolutions(
 
     // Group callGraph edges by callsiteId (skip implicit-trigger). Preserve first.
     // BTreeMap for deterministic group iteration (M1).
-    let mut groups: BTreeMap<String, Vec<&crate::engine::l3::call_resolver::CallEdge>> =
+    let mut groups: BTreeMap<String, Vec<&crate::program::model::calls::CallEdge>> =
         BTreeMap::new();
     let mut group_order: Vec<String> = Vec::new();
     for ce in &base.calls.edges {
@@ -1787,7 +1787,7 @@ fn derive_callsite_resolutions(
 
 #[allow(clippy::too_many_arguments)]
 fn classify_resolution(
-    ce: &crate::engine::l3::call_resolver::CallEdge,
+    ce: &crate::program::model::calls::CallEdge,
     from: &str,
     callee_display: &str,
     dispatch_kind: &str,
@@ -1952,7 +1952,7 @@ fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
 
 /// Source-only workspaces have no dependency routines; this is always false here
 /// but kept for faithfulness with al-sem's `roleOf(r) === "dependency"`.
-fn is_dependency_role(_r: &L3Routine) -> bool {
+fn is_dependency_role(_r: &ModelRoutine) -> bool {
     false
 }
 
@@ -2079,13 +2079,13 @@ fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclarat
 // ---------------------------------------------------------------------------
 
 fn derive_root_classifications(
-    resolved: &L3Resolved,
+    resolved: &Model,
     base: &R3a3SourceBase,
 ) -> Vec<SnapshotRootClassificationSlot> {
     let map = &base.routine_to_stable;
 
     // internal routine id → (&PAnchor, internal id) for the sourceAnchor.
-    let mut routine_by_id: HashMap<&str, &L3Routine> = HashMap::new();
+    let mut routine_by_id: HashMap<&str, &ModelRoutine> = HashMap::new();
     for r in &base.ws_routines {
         routine_by_id.insert(r.id.as_str(), r);
     }
@@ -2218,7 +2218,7 @@ struct R4FSnapshotProjection<'a> {
 /// `preserve_order` is OFF for this target, so re-materializing through a
 /// `Value` would alphabetize keys. Serializing the ordered struct directly emits
 /// fields in declaration order. The differential test byte-compares this string.
-pub fn project_r4f_snapshot(resolved: &L3Resolved, fixture_name: &str) -> String {
+pub fn project_r4f_snapshot(resolved: &Model, fixture_name: &str) -> String {
     let snap = compose_snapshot(resolved);
 
     let doc = R4FSnapshotProjection {
@@ -2255,7 +2255,7 @@ pub fn project_r4f_snapshot(resolved: &L3Resolved, fixture_name: &str) -> String
 #[cfg(test)]
 mod temp_rule_tests {
     use super::SnapTempState;
-    use crate::engine::l2::features::known_temp_suppresses;
+    use crate::program::body::features::known_temp_suppresses;
 
     /// #34: every SnapTempState variant reaches the one decision through its
     /// projection; only `Known { value: true }` suppresses.

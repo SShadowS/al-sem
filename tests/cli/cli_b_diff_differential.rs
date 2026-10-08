@@ -186,10 +186,10 @@ fn diff_rename_variant_from_overlay_byte_match() {
 
 fn compose_ws(dir: &std::path::Path) -> CborValue {
     use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
-    use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace;
     use al_sem::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
     let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
-    let resolved = assemble_and_resolve_workspace(dir, &model_id, false).expect("resolve");
+    let resolved = assemble_and_resolve_workspace_program(dir, &model_id, false).expect("resolve");
     let opts = FullSnapshotOptions {
         workspace_dir: dir,
         driver_version: VERSION_OVERRIDE,

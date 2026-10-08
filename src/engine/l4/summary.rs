@@ -15,10 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use super::effect_lattice::{EffectPresence, TempStateKind, effect_key_of};
 use super::summary_runner::compute_summaries_v2_with_leaves_core;
-use crate::engine::l3::l3_workspace::L3Resolved;
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::combined_graph::build_combined_graph;
 use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
+use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
 // Internal summary core types (NOT the serde projection shape). Internal ids.
@@ -34,7 +33,7 @@ pub enum TempState {
 }
 
 impl TempState {
-    pub fn from_p(ts: &crate::engine::l2::features::PTempState) -> Self {
+    pub fn from_p(ts: &crate::program::body::features::PTempState) -> Self {
         match ts.kind.as_str() {
             "known" => TempState::Known(ts.value.unwrap_or(false)),
             "parameter-dependent" => TempState::ParameterDependent(ts.parameter_index.unwrap_or(0)),
@@ -439,7 +438,7 @@ pub struct R3a2Projection {
 
 /// Build internal-RoutineId → StableRoutineId from the workspace routines.
 pub(crate) fn build_routine_stable_map(
-    routines: &[crate::engine::l3::l3_workspace::L3Routine],
+    routines: &[crate::program::model::workspace::ModelRoutine],
 ) -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();
     for r in routines {
@@ -605,7 +604,7 @@ fn project_record_role(r: &RecordRoleSummary) -> PRecordRoleSummary {
 /// Public projector for one internal RoutineSummary CORE → the stable R3a-2 shape.
 /// Used by the R3a-5 cross-app full-summary projection (which composes the R3a-2
 /// core with the R3a-3 cone over the MERGED model). The `map` covers BOTH primary
-/// and dep routine ids (every merged L3Routine carries `stable_routine_id`).
+/// and dep routine ids (every merged ModelRoutine carries `stable_routine_id`).
 pub fn project_routine_summary_core_pub(
     s: &RoutineSummary,
     map: &std::collections::HashMap<String, String>,
@@ -821,7 +820,7 @@ pub fn summary_change_key(s: &PRoutineSummaryCore) -> SummaryChangeKey {
 /// Run the full pipeline (assemble + call-resolve + combined-graph + the v2
 /// closed-form `EffectStore` solver) and project the post-computeSummaries model
 /// to the R3a-2 stable comparison surface.
-pub fn project_r3a2(resolved: &L3Resolved) -> R3a2Projection {
+pub fn project_r3a2(resolved: &Model) -> R3a2Projection {
     R3a2Projection {
         summaries: run_and_project(resolved),
     }
@@ -831,14 +830,11 @@ pub fn project_r3a2(resolved: &L3Resolved) -> R3a2Projection {
 // Internal: run the pipeline and collect the projection.
 // ---------------------------------------------------------------------------
 
-fn run_and_project(resolved: &L3Resolved) -> Vec<PRoutineSummaryCore> {
+fn run_and_project(resolved: &Model) -> Vec<PRoutineSummaryCore> {
     let ws = &resolved.workspace;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    // Engine-switch S6.8: the model's own calls and events (L3's when nothing is
-    // attached, as for this projection's golden callers).
-    let calls = crate::engine::l3::call_resolver::calls_for(resolved, &symbols);
-    let event_graph = crate::engine::l3::event_graph::events_for(resolved, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
 
     // Tarjan SCC over the combined graph.
     let mut adjacency: std::collections::HashMap<String, Vec<String>> =

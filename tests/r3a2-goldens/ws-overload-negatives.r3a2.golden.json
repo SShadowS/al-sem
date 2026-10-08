@@ -72,15 +72,10 @@
     {
       "routineId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Codeunit:50111#e32bf3968403e18c91e66dfba278fd2967d5b2ebfa4fab4f053f6911ec197f45",
       "dbEffects": [],
-      "uncertainties": [
-        {
-          "kind": "ambiguous-overload",
-          "callsiteId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Codeunit:50111#e32bf3968403e18c91e66dfba278fd2967d5b2ebfa4fab4f053f6911ec197f45/cs0"
-        }
-      ],
+      "uncertainties": [],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": true
+      "hasUnresolvedCalls": false
     }
   ]
 }

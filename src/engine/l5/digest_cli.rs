@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l3::l3_workspace::L3Resolved;
-use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
@@ -31,6 +29,8 @@ use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::{
     UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
+use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
 // DEFAULT_DETECTOR_NAMES — same as cli_b_snapshot_differential (the 34-detector set).
@@ -84,7 +84,7 @@ pub const DEFAULT_DETECTOR_NAMES: &[&str] = &[
 /// so they cannot desync. Each entry is `{code: "DIAG-<stage>", message, severity}`.
 pub fn build_envelope_diagnostics_json(
     workspace: &std::path::Path,
-    resolved: &L3Resolved,
+    resolved: &Model,
 ) -> serde_json::Value {
     let default_detectors: Vec<_> = registered_detectors()
         .into_iter()
@@ -400,7 +400,7 @@ const TX_UNKNOWN: TransactionContext = "unknown";
 /// Compute the transaction-context map: `commit_operation_id → TransactionContext`.
 /// Uses the full detector-context substrate (combined graph → summaries → spans).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
-fn compute_tx_context_map(resolved: &L3Resolved) -> HashMap<String, TransactionContext> {
+fn compute_tx_context_map(resolved: &Model) -> HashMap<String, TransactionContext> {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
     // `RAW_INHERITED_FACTS`. This path reads ONLY `ctx.transaction_spans`, and
     // `compute_transaction_spans` sources its `writes_tables` / `publishes_events`

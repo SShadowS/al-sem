@@ -1,5 +1,7 @@
 //! 1B.3b Task 1: domain-separated, versioned, stable anonymization for the
-//! committed CDO-derived goldens (`tests/goldens/semantic-edges/cdo-*.json`).
+//! committed CDO-derived golden (`tests/goldens/semantic-edges/cdo-compiler-anon.json`
+//! since engine-switch S9.0d; the L3-minted `cdo-anon.json` family it replaced
+//! used the same scheme).
 //!
 //! # Why anonymize
 //!
@@ -21,7 +23,7 @@
 //! secret was SESSION-LOCAL: it was never persisted anywhere, so the FIRST
 //! committed `cdo-anon.json`/`cdo-trigger-anon.json`/`cdo-event-anon.json` were
 //! minted with a key nobody could reproduce. Every subsequent mint or audit
-//! either used a DIFFERENT key (every `AnonSiteKey` lookup misses,
+//! either used a DIFFERENT key (every anonymized site lookup misses,
 //! `checked_sites == 0`, and `ENFORCE_CDO_WS=1` PANICS) or fell back to
 //! [`ANON_SALT`] (silently auditing nothing on the default dev path, since
 //! `checked_sites == 0` was previously gated behind `ENFORCE_CDO_WS=1` — see
@@ -73,20 +75,12 @@
 //! supposed to remove. Each domain is `:v1`-suffixed so a future scheme change
 //! is reviewable as a version bump, not a silent reinterpretation of old ids.
 //!
-//! Fixed domains (shared by the dev-mint tool and every runtime audit):
-//! - [`SITE_DOMAIN_V1`] — regular call-site identity fields (the Member/
-//!   Interface semantic golden, `cdo-anon.json`).
-//! - [`TARGET_DOMAIN_V1`] — resolved target identity fields, shared by every
-//!   golden (a "target" means the same thing — a resolved object+routine —
-//!   regardless of which golden it appears in).
-//! - [`TRIGGER_OP_DOMAIN_V1`] — `ImplicitTrigger` site identity fields
-//!   (`cdo-trigger-anon.json`). Kept separate from `site:v1` even though the
-//!   site SHAPE is identical, because the underlying identity is a synthesized
-//!   `PRecordOperation` site, not a real call site — collapsing the two
-//!   domains would let an attacker correlate "this record-op text equals that
-//!   call-site text" across categories that are not actually comparable.
-//! - [`EVENT_PAIR_DOMAIN_V1`] — `EventFlow` publisher/event-name/subscriber
-//!   identity fields (`cdo-event-anon.json`).
+//! The one live domain is [`PAIR_DOMAIN_V1`] (the compiler-minted pair golden).
+//! Within it, caller and target strings carry their own `caller`/`target`
+//! prefix, so the same routine as caller and as target hashes to two
+//! uncorrelated ids. The `site:v1`, `target:v1`, `trigger-op:v1` and
+//! `event-pair:v1` domains of the retired L3-minted goldens are gone; never
+//! reuse those tags.
 //!
 //! # The re-hash-don't-decrypt principle
 //!
@@ -94,10 +88,9 @@
 //! Every consumer that needs to test "does this committed opaque id correspond
 //! to plaintext value X?" must hold a CANDIDATE plaintext X (e.g. from a live,
 //! local re-resolution against the real CDO source) and re-hash it with
-//! [`anon`] under the same domain, then compare ids for equality. This is how
-//! the genuine-wrong manifest membership check and the interface-implements
-//! adjudication both work post-anonymization (see `semantic_golden.rs`) — they
-//! never need to invert a committed id, only confirm a guess.
+//! [`anon`] under the same domain, then compare ids for equality. The compiler
+//! audit (`compiler_golden.rs`) works this way: it anonymizes the program
+//! resolver's pairs and compares ids, never inverting a committed one.
 
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -112,21 +105,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// golden minted with it set. See the module docs' "Governance" section.
 pub const ANON_KEY_ENV: &str = "CDO_ANON_KEY";
 
-/// Domain for regular call-site identity fields — the Member/Interface
-/// semantic golden (`cdo-anon.json`). See the module docs' "Domain
-/// separation" section.
-pub const SITE_DOMAIN_V1: &str = "site:v1";
-
-/// Domain for resolved-target identity fields, shared across every golden.
-pub const TARGET_DOMAIN_V1: &str = "target:v1";
-
-/// Domain for `ImplicitTrigger` (native `PRecordOperation`-keyed) site
-/// identity fields (`cdo-trigger-anon.json`).
-pub const TRIGGER_OP_DOMAIN_V1: &str = "trigger-op:v1";
-
-/// Domain for `EventFlow` publisher/event-name/subscriber identity fields
-/// (`cdo-event-anon.json`).
-pub const EVENT_PAIR_DOMAIN_V1: &str = "event-pair:v1";
+/// Domain for the caller and target routine identities of the compiler-minted
+/// pair golden (`cdo-compiler-anon.json`, engine-switch S9.0d).
+pub const PAIR_DOMAIN_V1: &str = "pair:v1";
 
 /// The FIXED, COMMITTED HMAC key (1B.3b Task 1 fix). This is the DEFAULT key
 /// for every call to [`anon`] — used by the dev-mint tool when minting the
@@ -212,12 +193,12 @@ mod tests {
     /// the entire point: the dev-mint tool and the runtime audit must agree.
     #[test]
     fn same_domain_and_input_yields_same_id() {
-        let a = anon(SITE_DOMAIN_V1, "Codeunit 50100 PostInvoice");
-        let b = anon(SITE_DOMAIN_V1, "Codeunit 50100 PostInvoice");
+        let a = anon(PAIR_DOMAIN_V1, "Codeunit 50100 PostInvoice");
+        let b = anon(PAIR_DOMAIN_V1, "Codeunit 50100 PostInvoice");
         assert_eq!(a, b);
         // And a third call, well after the first two, to rule out any
         // process-local mutable state leaking into the result.
-        let c = anon(SITE_DOMAIN_V1, "Codeunit 50100 PostInvoice");
+        let c = anon(PAIR_DOMAIN_V1, "Codeunit 50100 PostInvoice");
         assert_eq!(a, c);
     }
 
@@ -226,12 +207,7 @@ mod tests {
     #[test]
     fn same_input_under_different_domains_yields_different_ids() {
         let s = "Codeunit 50100";
-        let domains = [
-            SITE_DOMAIN_V1,
-            TARGET_DOMAIN_V1,
-            TRIGGER_OP_DOMAIN_V1,
-            EVENT_PAIR_DOMAIN_V1,
-        ];
+        let domains = [PAIR_DOMAIN_V1, "other:v1", "pair:v2"];
         let ids: Vec<AnonId> = domains.iter().map(|d| anon(d, s)).collect();
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
@@ -249,8 +225,8 @@ mod tests {
     /// not just `domain`.
     #[test]
     fn different_inputs_under_same_domain_yield_different_ids() {
-        let a = anon(SITE_DOMAIN_V1, "ProcA");
-        let b = anon(SITE_DOMAIN_V1, "ProcB");
+        let a = anon(PAIR_DOMAIN_V1, "ProcA");
+        let b = anon(PAIR_DOMAIN_V1, "ProcB");
         assert_ne!(a, b);
     }
 
@@ -270,7 +246,7 @@ mod tests {
     /// the input — i.e. not a no-op/identity stand-in).
     #[test]
     fn id_shape_is_fixed_length_lowercase_hex() {
-        let id = anon(SITE_DOMAIN_V1, "anything");
+        let id = anon(PAIR_DOMAIN_V1, "anything");
         assert_eq!(id.0.len(), ID_BYTES * 2);
         assert!(
             id.0.chars()
@@ -320,9 +296,9 @@ mod tests {
             let mut entries: Vec<SyntheticEntry> = sites
                 .iter()
                 .map(|(site, kind, targets)| SyntheticEntry {
-                    site: anon(SITE_DOMAIN_V1, site),
+                    site: anon(PAIR_DOMAIN_V1, site),
                     edge_kind: *kind,
-                    targets: targets.iter().map(|t| anon(TARGET_DOMAIN_V1, t)).collect(),
+                    targets: targets.iter().map(|t| anon(PAIR_DOMAIN_V1, t)).collect(),
                 })
                 .collect();
             entries.sort_by(|a, b| a.site.cmp(&b.site));
@@ -343,7 +319,7 @@ mod tests {
     /// natural JSON object key string.
     #[test]
     fn anon_id_serializes_as_bare_json_string() {
-        let id = anon(SITE_DOMAIN_V1, "x");
+        let id = anon(PAIR_DOMAIN_V1, "x");
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, format!("\"{}\"", id.0));
         let back: AnonId = serde_json::from_str(&json).unwrap();
@@ -371,10 +347,10 @@ mod tests {
     /// re-mint relies on: anyone with CDO source + this crate can re-mint and
     /// byte-match the committed goldens, with no secret required. If this
     /// test ever needs to change, [`ANON_SALT`] (or the HMAC scheme) changed,
-    /// which means EVERY committed golden (`cdo-anon.json`,
-    /// `cdo-trigger-anon.json`, `cdo-event-anon.json`) is now keyed
-    /// differently and MUST be re-minted via `cargo run --bin mint-goldens`
-    /// before the change can be committed.
+    /// which means EVERY committed golden (`cdo-compiler-anon.json`,
+    /// `fixture-compiler-anon.json`) is now keyed differently and MUST be
+    /// re-minted via `cargo run --bin mint-goldens` before the change can be
+    /// committed. (Pinned under `site:v1` until S9.0d retired that domain.)
     #[test]
     fn fixed_salt_pins_known_id_for_known_input() {
         // Best-effort: only meaningful under the default (no override) key —
@@ -383,9 +359,15 @@ mod tests {
         if std::env::var(ANON_KEY_ENV).is_ok() {
             return;
         }
-        let id = anon(SITE_DOMAIN_V1, "Codeunit 50100 PostInvoice");
+        // Unchanged scheme: the retired "site:v1" domain still gives the id
+        // every L3-minted golden was keyed with.
         assert_eq!(
-            id.0, "dbeef6ec4e976b1c0abb5c59db894de8",
+            anon("site:v1", "Codeunit 50100 PostInvoice").0,
+            "dbeef6ec4e976b1c0abb5c59db894de8"
+        );
+        let id = anon(PAIR_DOMAIN_V1, "Codeunit 50100 PostInvoice");
+        assert_eq!(
+            id.0, "4e254f2fd04c75a97872ed11ff79775d",
             "anon()'s output for a known (domain, input) pair under the committed \
              fixed salt changed. If this is an intentional salt/scheme bump, \
              update this pin AND re-mint every committed golden under \

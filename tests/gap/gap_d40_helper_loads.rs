@@ -8,10 +8,10 @@
 //! requirement into the forwarder's parameter role, so d40 judges the forwarder's
 //! callers instead. Drives the REGISTERED d40 over inline workspaces.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000d40aa";
 const DETECTOR: &str = "d40-transitive-load-missing";
@@ -29,7 +29,7 @@ table 50401 "D40 Cust"
 fn blamed(codeunit_body: &str) -> Vec<String> {
     let src = format!("{TABLE}\ncodeunit 50400 \"D40 Chain\"\n{{\n{codeunit_body}\n}}\n");
     let files = vec![("src/D40Chain.al".to_string(), src)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let selected: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == DETECTOR)
@@ -343,7 +343,7 @@ codeunit 50402 "D40 Opaque"
 "#
     );
     let files = vec![("src/D40Opaque.al".to_string(), src)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let ctx = build_detector_context(&resolved, substrate::ALL);
     let forward = resolved
         .workspace

@@ -12,22 +12,21 @@
 //!      the STABLE id form the R3a-1 vectors carry. SourceAnchors are DROPPED from
 //!      typed edges (redundant by-reference copies already gated at R1a).
 //!
-//! The combined graph is built FROM the at-parity R2b call graph (`resolve_calls`,
-//! incl. implicit-trigger edges) + R2c event graph (`build_event_graph`). al-sem's
+//! The combined graph is built FROM the model's calls (incl. implicit-trigger
+//! edges) + its event graph, both the program engine's. al-sem's
 //! `model.callGraph` is the flat resolver edge list (event-dispatch dispatchKind
-//! entries skipped here); the Rust `resolve_calls` produces no event-dispatch
-//! CallEdges, so event hops come SOLELY from the event graph — no double counting.
+//! entries skipped here); the model's calls hold no event-dispatch CallEdges, so
+//! event hops come SOLELY from the event graph — no double counting.
 
 use std::collections::{HashMap, HashSet};
 
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
-use crate::engine::l2::features::PCallee;
-use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
-use crate::engine::l3::symbol_table::SymbolTable;
-use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
+use crate::program::body::features::PCallee;
+use crate::program::model::calls::{CallEdge, ResolvedCalls};
+use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::taxonomy::{DispatchKind, Resolution};
+use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // Internal combined-graph model (NOT the serde projection shape). Ids INTERNAL.
@@ -213,7 +212,7 @@ fn dispatch_kind_to_object_type(kind: &str) -> Option<&'static str> {
 /// list) + `model.eventGraph`; we pass the equivalent `resolved.edges` +
 /// `event_graph` + `routines` (for the node list).
 pub fn build_combined_graph(
-    workspace: &L3Workspace,
+    workspace: &ModelEntities,
     resolved: &ResolvedCalls,
     event_graph: &EventGraph,
 ) -> CombinedGraph {
@@ -226,9 +225,9 @@ pub fn build_combined_graph(
 
     // --- call-derived edges + uncertainty records ---
     for ce in &resolved.edges {
-        // event-dispatch dispatchKind never appears in resolve_calls output; al-sem
-        // skips it here regardless (event hops come from the event graph).
-        // (resolve_calls does not produce event-dispatch edges, so no check needed.)
+        // event-dispatch dispatchKind never appears in the model's calls; al-sem
+        // skips it here regardless (event hops come from the event graph), so no
+        // check is needed.
         if let Some(to) = &ce.to {
             if is_edge_kind_enum(ce.dispatch_kind) {
                 edges.push(CombinedEdge {
@@ -317,7 +316,7 @@ pub fn build_combined_graph(
     }
 
     // --- event-dispatch edges: publisher routine → subscriber routine ---
-    let mut subs_by_event: HashMap<String, Vec<&crate::engine::l3::event_graph::EventEdge>> =
+    let mut subs_by_event: HashMap<String, Vec<&crate::program::model::events::EventEdge>> =
         HashMap::new();
     for ee in &event_graph.edges {
         subs_by_event
@@ -464,12 +463,12 @@ fn object_run_target_object(
 }
 
 fn build_typed_edges(
-    workspace: &L3Workspace,
+    workspace: &ModelEntities,
     resolved: &ResolvedCalls,
     event_graph: &EventGraph,
 ) -> Vec<TypedEdge> {
     // callsite id → &PCallSite (for callee details).
-    let mut call_site_by_id: HashMap<&str, &crate::engine::l2::features::PCallSite> =
+    let mut call_site_by_id: HashMap<&str, &crate::program::body::features::PCallSite> =
         HashMap::new();
     for routine in &workspace.routines {
         for cs in &routine.call_sites {
@@ -523,7 +522,7 @@ fn build_typed_edges(
 
     for ce in &resolved.edges {
         if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
-            continue; // implicit-trigger edges not typed; event-dispatch never in resolve_calls
+            continue; // implicit-trigger edges not typed; event-dispatch never in the calls
         }
         let Some(call_site) = call_site_by_id.get(ce.callsite_id.as_str()) else {
             continue; // opaque (dependency-only) callsite — skip
@@ -681,7 +680,7 @@ fn build_typed_edges(
     }
 
     // --- event-dispatch typed edges: bipartite publisher → subscriber ---
-    let mut subs_by_event: HashMap<String, Vec<&crate::engine::l3::event_graph::EventEdge>> =
+    let mut subs_by_event: HashMap<String, Vec<&crate::program::model::events::EventEdge>> =
         HashMap::new();
     for ee in &event_graph.edges {
         subs_by_event
@@ -977,7 +976,7 @@ fn project_scc(scc: &Scc, map: &HashMap<String, String>) -> PScc {
 /// Project the combined graph + SCC result to the R3a-1 comparison surface. The
 /// `routines` provide the internal→stable id map + event symbols.
 pub fn project_r3a1(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     event_graph: &EventGraph,
     graph: &CombinedGraph,
     scc: &SccResult,
@@ -1028,23 +1027,17 @@ pub fn project_r3a1(
 }
 
 // ---------------------------------------------------------------------------
-// L3Resolved entry point — assemble combined graph + SCC + project (read-once).
+// Model entry point — assemble combined graph + SCC + project (read-once).
 // ---------------------------------------------------------------------------
 
-impl L3Resolved {
+impl Model {
     /// Build the combined graph + Tarjan SCC over the resolved SOURCE-ONLY workspace
     /// and project to the R3a-1 stable shape. Mirrors al-sem's
     /// `indexWorkspace → resolveModel → buildCombinedGraph → tarjanScc → projectR3a1`
     /// (READ-once, no dep hooks, no `computeSummaries`).
     pub fn project_r3a1_combined_graph(&self) -> R3a1Projection {
         let ws = &self.workspace;
-        let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-        // Engine-switch S6.8: the model's own calls and events (L3's when nothing
-        // is attached, as for this projection's golden callers).
-        let resolved = crate::engine::l3::call_resolver::calls_for(self, &symbols);
-        let event_graph = crate::engine::l3::event_graph::events_for(self, &symbols);
-
-        let graph = build_combined_graph(ws, &resolved, &event_graph);
+        let graph = build_combined_graph(ws, &self.calls, &self.events.graph);
 
         // Tarjan over the combined graph's adjacency (internal ids, pre-sorted).
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -1056,6 +1049,6 @@ impl L3Resolved {
             edges_by_from: &adjacency,
         });
 
-        project_r3a1(&ws.routines, &event_graph, &graph, &scc)
+        project_r3a1(&ws.routines, &self.events.graph, &graph, &scc)
     }
 }

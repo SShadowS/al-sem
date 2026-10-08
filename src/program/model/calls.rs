@@ -1,11 +1,10 @@
 //! The call-resolution SHAPE the detector model carries: edges, upgraded argument
 //! bindings, diagnostics, declared dependencies.
 //!
-//! Moved verbatim out of `engine::l3::call_resolver` in engine-switch S2b.2: the
-//! model ([`super::workspace::L3Resolved::precomputed_calls`]) holds a
-//! [`ResolvedCalls`], and the program engine fills it (the B3 adapter). The legacy
-//! resolver that also produces this shape stays in `engine::l3::call_resolver`,
-//! which re-exports these types, until it is deleted (spec S9).
+//! Moved verbatim out of `program::model::calls` in engine-switch S2b.2: the
+//! model ([`super::workspace::Model::calls`]) holds a [`ResolvedCalls`], and
+//! the program engine fills it (`program_calls`, the B3 adapter). The legacy L3
+//! resolver that also produced this shape was deleted in S9.6.
 
 use super::taxonomy::{DispatchKind, Resolution};
 use std::collections::HashMap;
@@ -189,7 +188,7 @@ pub struct ExternalTargetRef {
 
 /// The full call-resolution result: every edge + the per-callsite upgraded
 /// bindings (keyed by internal callsite id) + diagnostics.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ResolvedCalls {
     pub edges: Vec<CallEdge>,
     /// internal callsite id → upgraded argument bindings (in argument order).
@@ -198,4 +197,114 @@ pub struct ResolvedCalls {
     /// The dependency routines this resolution's to-less dependency edges reach
     /// (S3.3), in edge order. Empty from the legacy resolver.
     pub external_targets: Vec<ExternalTargetRef>,
+}
+
+/// Map an object-run objectKind to its dispatch kind.
+pub(crate) fn object_run_dispatch_kind(object_kind: &str) -> DispatchKind {
+    match object_kind {
+        "Page" => DispatchKind::PageRun,
+        "Report" => DispatchKind::ReportRun,
+        _ => DispatchKind::CodeunitRun,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Upgraded-binding side table (the `upgradeBindings` mutation, captured out of
+// band because the model's PCallArgumentBinding does not carry the upgrade
+// fields). Moved from `program::model::calls` in engine-switch S9.4.
+// ---------------------------------------------------------------------------
+
+/// Per-callsite upgraded bindings. `upgraded` guards `upgrade_bindings` so it
+/// runs EXACTLY once per callsite (reproducing al-sem's double-upgrade guard).
+pub(crate) struct BindingState {
+    pub(crate) bindings: Vec<UpgradedBinding>,
+}
+
+/// Derive the INITIAL bindingResolution for a callsite's bindings, matching
+/// al-sem's `intraprocedural-body.ts` construction:
+///   - non-identifier arg (sourceKind "expression") → "non-record-arg"
+///   - identifier bound to a record variable → "unresolved-callee" (upgradable)
+///   - any other identifier (param / implicit-rec / unknown) → "non-record-arg"
+///
+/// `calleeParameterIsVar` starts `false` (upgraded later).
+pub(crate) fn initial_binding_state(
+    call_site: &crate::program::body::features::PCallSite,
+) -> BindingState {
+    let bindings = call_site
+        .argument_bindings
+        .iter()
+        .map(|b| {
+            let resolution = if b.source_kind == "expression" {
+                "non-record-arg"
+            } else if b.source_record_variable_id.is_some() {
+                "unresolved-callee"
+            } else {
+                "non-record-arg"
+            };
+            UpgradedBinding {
+                parameter_index: b.parameter_index,
+                callee_parameter_is_var: false,
+                binding_resolution: resolution.to_string(),
+            }
+        })
+        .collect();
+    BindingState { bindings }
+}
+
+/// Upgrade a callsite's bindings with callee-side var-ness once the callee is
+/// known. Sets `bindingResolution = "resolved"` + `calleeParameterIsVar` for any
+/// binding not already "non-record-arg". Returns a diagnostic on double-upgrade
+/// (and skips), reproducing al-sem's non-idempotence guard.
+pub(crate) fn upgrade_bindings(
+    state: &mut BindingState,
+    callee: &super::workspace::ModelRoutine,
+    callsite_id: &str,
+) -> Option<Diagnostic> {
+    upgrade_bindings_with(
+        state,
+        |i| callee.parameters.get(i).map(|p| p.is_var),
+        callsite_id,
+    )
+}
+
+/// [`upgrade_bindings`] from the callee's per-parameter `var` flags alone
+/// (`None` past its last parameter), for a callee with no model routine (a
+/// dependency routine, B3 adapter).
+pub(crate) fn upgrade_bindings_with(
+    state: &mut BindingState,
+    param_is_var: impl Fn(usize) -> Option<bool>,
+    callsite_id: &str,
+) -> Option<Diagnostic> {
+    for b in &state.bindings {
+        if b.binding_resolution == "resolved" || b.binding_resolution == "ambiguous" {
+            return Some(Diagnostic {
+                severity: "warning".to_string(),
+                stage: "resolve".to_string(),
+                message: format!(
+                    "call-resolver: argumentBindings for callsite {callsite_id} already upgraded (double-upgrade); skipping re-entrant resolution"
+                ),
+            });
+        }
+    }
+    for (i, b) in state.bindings.iter_mut().enumerate() {
+        if b.binding_resolution == "non-record-arg" {
+            continue;
+        }
+        let Some(is_var) = param_is_var(i) else {
+            continue; // arity mismatch — leave defaults
+        };
+        b.callee_parameter_is_var = is_var;
+        b.binding_resolution = "resolved".to_string();
+    }
+    None
+}
+
+/// Mark all record-arg bindings "ambiguous" (leave "non-record-arg" untouched).
+pub(crate) fn mark_bindings_ambiguous(state: &mut BindingState) {
+    for b in &mut state.bindings {
+        if b.binding_resolution == "non-record-arg" {
+            continue;
+        }
+        b.binding_resolution = "ambiguous".to_string();
+    }
 }

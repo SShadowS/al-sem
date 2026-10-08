@@ -12,8 +12,6 @@ use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::PCallee;
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, is_known_temp};
@@ -22,6 +20,8 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PCallee;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d57-singleinstance-growing-state";
 
@@ -36,7 +36,7 @@ const CLEAR_METHODS: &[&str] = &[
 ];
 
 pub fn detect_d57(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -201,7 +201,7 @@ pub fn detect_d57(
 
 fn build_finding(
     fp_index: &FingerprintIndex,
-    routine: &crate::engine::l3::l3_workspace::L3Routine,
+    routine: &crate::program::model::workspace::ModelRoutine,
     site_id: &str,
     anchor: SourceAnchor,
     root_cause: &str,

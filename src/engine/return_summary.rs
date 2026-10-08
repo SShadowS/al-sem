@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
 use crate::program::attributes::{find_attribute, has_attribute, qualified_arg};
+use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -91,7 +91,7 @@ struct SubtreeReach {
 /// Walk a `PCFNNode` subtree and return its reachability.
 ///
 /// EXACTLY mirrors al-sem's `walkSubtree` function, case by case.
-fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
+fn walk_subtree(node: &crate::program::body::features::PCFNNode) -> SubtreeReach {
     match node.kind.as_str() {
         "error" => SubtreeReach {
             has_normal: false,
@@ -253,7 +253,7 @@ fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
 }
 
 /// Walk a list of siblings as a sequential block. Mirrors `walkSubtreeList`.
-fn walk_subtree_list(nodes: &[crate::engine::l2::features::PCFNNode]) -> SubtreeReach {
+fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> SubtreeReach {
     if nodes.is_empty() {
         return SubtreeReach {
             has_normal: true,
@@ -359,7 +359,7 @@ pub fn merge_inherent_commit_behavior(
 
 /// Compute the `RoutineReturnSummary` for one routine. Mirrors
 /// `computeRoutineReturnSummary`.
-pub fn compute_routine_return_summary(routine: &L3Routine) -> RoutineReturnSummary {
+pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSummary {
     let attrs = &routine.attributes_parsed;
     let has_try_function_boundary = has_attribute(attrs, "TryFunction");
     let has_error_behavior_collect = parse_has_error_behavior_collect(attrs);
@@ -429,8 +429,8 @@ pub fn compute_routine_return_summary(routine: &L3Routine) -> RoutineReturnSumma
 /// stable key when the sig hash is missing. Use for LOOKUP only — never iterate
 /// into output (determinism requires the sorted stable projection below).
 pub fn compute_return_summaries(
-    routines: &[L3Routine],
-    objects: Option<&[L3Object]>,
+    routines: &[ModelRoutine],
+    objects: Option<&[ModelObject]>,
 ) -> HashMap<String, RoutineReturnSummary> {
     // Build objectId → inherentCommitBehavior lookup when objects are supplied.
     let mut object_icb_map: HashMap<String, Option<String>> = HashMap::new();
@@ -484,7 +484,7 @@ pub fn compute_return_summaries(
 /// emitted — matches al-sem's `computeReturnSummaries` semantics (skip stable key
 /// when sig hash missing). Sorted by stable routineId ascending.
 pub fn project_r4f_return_summaries(
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
     fixture_name: &str,
 ) -> R4FReturnSummaryProjection {
     let summaries_map = compute_return_summaries(
@@ -533,9 +533,9 @@ pub fn project_r4f_return_summaries(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l2::features::PCFNNode;
-    use crate::engine::l3::l3_workspace::RoutineVariables;
     use crate::program::attributes::{AttributeArg, AttributeInfo};
+    use crate::program::body::features::PCFNNode;
+    use crate::program::model::workspace::RoutineVariables;
 
     // Helper: build a minimal AttributeInfo for a given name + one qualified arg.
     fn attr_qualified(name: &str, qualifier: &str, member: &str) -> AttributeInfo {
@@ -882,16 +882,16 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Helper to build a minimal L3Routine for testing.
+    // Helper to build a minimal ModelRoutine for testing.
     // -----------------------------------------------------------------------
 
     fn make_routine_with_attrs(
         attrs: Vec<AttributeInfo>,
         body_available: bool,
         statement_tree: Option<PCFNNode>,
-    ) -> L3Routine {
-        use crate::engine::l2::features::PAnchor;
-        L3Routine {
+    ) -> ModelRoutine {
+        use crate::program::body::features::PAnchor;
+        ModelRoutine {
             id: "test-guid/Codeunit/50000/test-hash".to_string(),
             stable_routine_id: "test-guid:Codeunit:50000#test-hash".to_string(),
             object_id: "test-guid/Codeunit/50000".to_string(),
@@ -935,9 +935,9 @@ mod tests {
         }
     }
 
-    // Minimal L3Object matching make_routine_with_attrs's object_id, with a given ICB.
-    fn make_object_with_icb(inherent_commit_behavior: Option<&str>) -> L3Object {
-        L3Object {
+    // Minimal ModelObject matching make_routine_with_attrs's object_id, with a given ICB.
+    fn make_object_with_icb(inherent_commit_behavior: Option<&str>) -> ModelObject {
+        ModelObject {
             id: "test-guid/Codeunit/50000".to_string(),
             app_guid: "test-guid".to_string(),
             object_type: "Codeunit".to_string(),

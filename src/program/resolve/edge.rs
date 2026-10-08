@@ -625,6 +625,11 @@ pub fn classify_obligation(e: &Edge) -> ObligationOutcome {
     if e.routes.is_empty() && is_fanout && is_open {
         return ObligationOutcome::HonestEmpty;
     }
+    // A CLOSED empty multicast is provably no callee too: a run of a codeunit
+    // whose source declares no `OnRun` (`resolver::dispatch_entry_trigger`).
+    if e.routes.is_empty() && e.shape == DispatchShape::Multicast {
+        return ObligationOutcome::HonestEmpty;
+    }
     ObligationOutcome::Unknown
 }
 

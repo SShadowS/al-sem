@@ -19,9 +19,10 @@
 
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::registry::{run_detectors, serialize_detector_stats};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 
 use crate::regen;
 
@@ -157,7 +158,7 @@ fn run_stats(fixture: &str, names: &[&str]) -> String {
         .filter(|d| name_set.contains(d.name.as_str()))
         .collect();
 
-    match assemble_and_resolve_workspace_default(&fixture_dir) {
+    match assemble_and_resolve_workspace_program(&fixture_dir, MODEL_INSTANCE_ID_DEFAULT, false) {
         Some(resolved) => {
             let output = run_detectors(&resolved, &selected);
             serialize_detector_stats(&output.detector_stats)

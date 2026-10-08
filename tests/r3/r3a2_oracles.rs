@@ -29,9 +29,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::effect_lattice::via_for_edge_kind;
 use al_sem::engine::l4::summary::{PRoutineSummaryCore, R3a2Projection, project_r3a2};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -126,7 +126,7 @@ struct OracleInput {
 }
 
 fn build(fixture: &str) -> Option<OracleInput> {
-    let resolved = assemble_and_resolve_workspace_default(&corpus_dir().join(fixture))?;
+    let resolved = assemble_and_resolve_workspace_with_program_calls(&corpus_dir().join(fixture))?;
 
     let R3a2Projection { summaries } = project_r3a2(&resolved);
     let summaries: HashMap<String, PRoutineSummaryCore> = summaries

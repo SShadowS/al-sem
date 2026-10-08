@@ -65,14 +65,14 @@
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::l3::l3_workspace::{
-    L3Resolved, L3Routine, assemble_and_resolve_workspace_default,
-};
 use al_sem::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::{run_detectors, substrate};
 use al_sem::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
+use al_sem::program::model::workspace::{Model, ModelRoutine};
 
 const FIXTURE: &str = "ws-d50-medium";
 const DETECTOR: &str = "d50-checked-run-implicit-commit";
@@ -91,14 +91,14 @@ fn fixture_dir() -> PathBuf {
         .join(FIXTURE)
 }
 
-fn resolve_fixture() -> L3Resolved {
+fn resolve_fixture() -> Model {
     let dir = fixture_dir();
     assert!(
         dir.is_dir(),
         "fixture workspace {} is missing",
         dir.display()
     );
-    assemble_and_resolve_workspace_default(&dir)
+    assemble_and_resolve_workspace_program(&dir, MODEL_INSTANCE_ID_DEFAULT, false)
         .unwrap_or_else(|| panic!("workspace assembly returned None for {}", dir.display()))
 }
 
@@ -107,8 +107,8 @@ fn resolve_fixture() -> L3Resolved {
 /// Object-qualified on purpose: see the module header. Also the anti-degenerate
 /// guard — a fixture that failed to parse assembles zero routines, and every
 /// assertion below would then be vacuous rather than red.
-fn routine_id(resolved: &L3Resolved, object_number: i64, name: &str) -> String {
-    let matches: Vec<&L3Routine> = resolved
+fn routine_id(resolved: &Model, object_number: i64, name: &str) -> String {
+    let matches: Vec<&ModelRoutine> = resolved
         .workspace
         .routines
         .iter()
@@ -136,7 +136,7 @@ fn routine_id(resolved: &L3Resolved, object_number: i64, name: &str) -> String {
 }
 
 /// `object_number::name` for a routine id, for failure messages.
-fn label_of(resolved: &L3Resolved, routine_id: &str) -> String {
+fn label_of(resolved: &Model, routine_id: &str) -> String {
     resolved
         .workspace
         .routines
@@ -165,7 +165,7 @@ fn checked_span_of<'c>(ctx: &'c DetectorContext<'_>, seed_routine_id: &str) -> &
 }
 
 /// Run the REGISTERED d50 over the fixture.
-fn d50_findings(resolved: &L3Resolved) -> Vec<Finding> {
+fn d50_findings(resolved: &Model) -> Vec<Finding> {
     let selected: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == DETECTOR)
@@ -180,11 +180,7 @@ fn d50_findings(resolved: &L3Resolved) -> Vec<Finding> {
 
 /// The single d50 finding whose primary checked-callsite anchor is enclosed by
 /// `seed_routine_id` — the finding's subject (`d50.rs:264-272`).
-fn finding_at<'f>(
-    resolved: &L3Resolved,
-    findings: &'f [Finding],
-    seed_routine_id: &str,
-) -> &'f Finding {
+fn finding_at<'f>(resolved: &Model, findings: &'f [Finding], seed_routine_id: &str) -> &'f Finding {
     let at: Vec<&Finding> = findings
         .iter()
         .filter(|f| f.primary_location.enclosing_routine_id == seed_routine_id)

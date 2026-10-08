@@ -49,7 +49,7 @@ fn app_label(app: Option<&App>) -> String {
 /// al-sem's `process.stdout.write(`${formatPrSummary(...)}\n`)`).
 pub fn format_pr_summary(
     pairs: &[(FindingSummary, &Finding)],
-    routines: &[crate::engine::l3::l3_workspace::L3Routine],
+    routines: &[crate::program::model::workspace::ModelRoutine],
     apps: &[App],
 ) -> String {
     let idx = AttributionIndex::build(routines, apps);
@@ -205,8 +205,8 @@ pub fn format_pr_summary(
 mod tests {
     use super::*;
     use crate::engine::gate::projection::{FindingLocation, FindingSummary};
-    use crate::engine::l3::l3_workspace::{L3Routine, RoutineVariables};
     use crate::engine::l5::finding::{EvidenceStep, Finding, FindingConfidence, SourceAnchor};
+    use crate::program::model::workspace::{ModelRoutine, RoutineVariables};
 
     /// Build a minimal `SourceAnchor` keyed on `enclosing_routine_id`.
     fn anchor(routine_id: &str) -> SourceAnchor {
@@ -305,10 +305,10 @@ mod tests {
         }
     }
 
-    /// Build a minimal `L3Routine` mapping `routine_id` → `object_id`.
-    fn make_routine(routine_id: &str, object_id: &str) -> L3Routine {
-        use crate::engine::l2::features::PAnchor;
-        L3Routine {
+    /// Build a minimal `ModelRoutine` mapping `routine_id` → `object_id`.
+    fn make_routine(routine_id: &str, object_id: &str) -> ModelRoutine {
+        use crate::program::body::features::PAnchor;
+        ModelRoutine {
             id: routine_id.to_string(),
             stable_routine_id: routine_id.to_string(),
             object_id: object_id.to_string(),

@@ -1,4 +1,4 @@
-//! `RoutineInterner` — interns a routine's internal id (`L3Routine.id` /
+//! `RoutineInterner` — interns a routine's internal id (`ModelRoutine.id` /
 //! `RoutineSummary.routine_id`) as a compact `RoutineIx(u32)`.
 //!
 //! Unlike [`crate::engine::l4::effect_universe::EffectUniverse`] (which grows

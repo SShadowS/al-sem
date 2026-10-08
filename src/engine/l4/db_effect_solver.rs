@@ -19,8 +19,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::engine::l3::call_resolver::UpgradedBinding;
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
 use crate::engine::l4::effect_lattice::{TempStateKind, via_for_edge_kind};
 use crate::engine::l4::effect_store::{
@@ -36,6 +34,8 @@ use crate::engine::l4::summary_runner::summaries_census;
 use crate::engine::l4::summary_runner::{
     FieldIndex, base_intraprocedural_summary, substitute_pd_temp_state,
 };
+use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::workspace::ModelRoutine;
 
 /// Re-decompose one Tarjan `Scc` into its *effective* SCCs: the strongly-connected
 /// components of the subgraph induced by keeping only members for which
@@ -220,7 +220,7 @@ fn apply_pd_transition(
 pub fn solve_pd_reachability(
     eff: &Scc,
     graph: &CombinedGraph,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     settled_db: &SummaryBundleBuilder,
     _upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     universe: &GrowingEffectUniverse,
@@ -501,7 +501,7 @@ fn intern_terminal_db_effect(
 pub fn closed_form_union(
     eff: &Scc,
     graph: &CombinedGraph,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     settled_db: &SummaryBundleBuilder,
     base_summaries: &HashMap<String, RoutineSummary>,
     pd_facts: &[PdFact],
@@ -669,7 +669,7 @@ fn merge_via_into(
 ///     arose from an out-edge SUBSTITUTION (re-symbolizing through the
 ///     caller's own argument binding, `substitute_pd_temp_state`) rather
 ///     than from `m`'s own base. `T_e` for a PD-typed callee fact IS that
-///     substitution table, which needs the CALLER'S OWN `L3Routine`
+///     substitution table, which needs the CALLER'S OWN `ModelRoutine`
 ///     (specifically the call site matching `edge.callsite_id`) to resolve —
 ///     data this function's signature (per the plan/brief, verbatim) does
 ///     not carry. Task 8's `solve_scc_db_effects` DOES have `routines_by_id`
@@ -950,7 +950,7 @@ fn fold_shared(
 pub fn solve_side_facts(
     eff: &Scc,
     graph: &CombinedGraph,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
     uncertainty_edges_by_from: &HashMap<String, Vec<usize>>,
@@ -972,7 +972,7 @@ pub fn solve_side_facts(
     // the second O(N²) cost found alongside `build_rvid_by_opid`'s (see that
     // fn's doc). `routines_by_id` is still threaded through for the
     // `base_intraprocedural_summary` fallback below (a missing `base_summaries`
-    // entry), which needs the actual `&L3Routine`, not just its `body_available`
+    // entry), which needs the actual `&ModelRoutine`, not just its `body_available`
     // flag.
 
     // Per-member entries PRODUCED AT that member (base + its own opaque-callee
@@ -1257,7 +1257,7 @@ fn attribute_pd_substituted_via(
     graph: &CombinedGraph,
     presence: &SccPresence,
     settled_db: &SummaryBundleBuilder,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     universe: &GrowingEffectUniverse,
     interner: &RoutineInterner,
     via_map: &mut HashMap<(RoutineIx, EffectId), ViaRank>,
@@ -1395,7 +1395,7 @@ fn materialize_member_row(
 fn solve_one_effective_scc(
     eff: &Scc,
     graph: &CombinedGraph,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1547,7 +1547,7 @@ fn solve_one_effective_scc(
 pub fn solve_scc_db_effects(
     scc_entry: &Scc,
     graph: &CombinedGraph,
-    routines_by_id: &HashMap<String, &L3Routine>,
+    routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1774,17 +1774,17 @@ mod tests {
     // `minimal_routine` helper).
     // -----------------------------------------------------------------------
 
-    use crate::engine::l2::features::{
-        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
-    };
-    use crate::engine::l3::call_resolver::UpgradedBinding;
-    use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, RoutineVariables};
     use crate::engine::l4::combined_graph::Uncertainty as CgUncertainty;
     use crate::engine::l4::combined_graph::UncertaintyEdge;
     use crate::engine::l4::effect_lattice::effect_key_of;
     use crate::engine::l4::scc::SccResult;
     use crate::engine::l4::summary::{DbEffect, RoutineSummary, TempState};
     use crate::engine::l4::summary_runner::compute_summaries_v2_with_leaves_core;
+    use crate::program::body::features::{
+        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
+    };
+    use crate::program::model::calls::UpgradedBinding;
+    use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, RoutineVariables};
     use std::collections::HashSet;
 
     fn pd_anchor() -> PAnchor {
@@ -1798,13 +1798,13 @@ mod tests {
         }
     }
 
-    /// A minimal, body-available `L3Routine` with just an id; callers push
+    /// A minimal, body-available `ModelRoutine` with just an id; callers push
     /// `record_operations`/`call_sites` onto it (mirrors
     /// `cfg_walker::tests::minimal_routine` / the differential harness's own
     /// `routine` ctor — the SAME from-scratch pattern, unavoidable here since
     /// `l5::test_support` is private to `l5`).
-    fn pd_routine(id: &str) -> L3Routine {
-        L3Routine {
+    fn pd_routine(id: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: "app/Codeunit/1".to_string(),
@@ -1865,8 +1865,8 @@ mod tests {
         op: &str,
         table_id: &str,
         temp_state: PTempState,
-    ) -> L3RecordOperation {
-        L3RecordOperation {
+    ) -> ModelRecordOperation {
+        ModelRecordOperation {
             id: id.to_string(),
             op: op.to_string(),
             record_variable_name: "Rec".to_string(),
@@ -1965,14 +1965,14 @@ mod tests {
         }
     }
 
-    fn pd_routines_by_id(routines: &[L3Routine]) -> HashMap<String, &L3Routine> {
+    fn pd_routines_by_id(routines: &[ModelRoutine]) -> HashMap<String, &ModelRoutine> {
         routines.iter().map(|r| (r.id.clone(), r)).collect()
     }
 
     /// A `RoutineInterner` covering every fixture routine, built the SAME way
     /// `compute_summaries_v2_with_leaves_core` builds the workspace-wide one
     /// (canonical `stable_routine_id` order — Task A1).
-    fn pd_interner(routines: &[L3Routine]) -> RoutineInterner {
+    fn pd_interner(routines: &[ModelRoutine]) -> RoutineInterner {
         RoutineInterner::build_canonical(
             routines
                 .iter()
@@ -1984,7 +1984,7 @@ mod tests {
     /// `compute_summaries_v2_with_leaves_core` builds it once for the whole
     /// run and threads down to [`solve_side_facts`] — see that fn's doc for
     /// why it is no longer built internally per call.
-    fn pd_body_avail(routines_by_id: &HashMap<String, &L3Routine>) -> HashMap<String, bool> {
+    fn pd_body_avail(routines_by_id: &HashMap<String, &ModelRoutine>) -> HashMap<String, bool> {
         routines_by_id
             .iter()
             .map(|(id, r)| (id.clone(), r.body_available))

@@ -44,7 +44,7 @@ use crate::engine::l4::capability_cone::{CapabilityFact, CoverageRecord};
 /// [`inherited_raw`](Self::inherited_raw)'s absence check.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FullRoutineSummary {
-    /// The routine's INTERNAL id (matches `L3Routine::id`).
+    /// The routine's INTERNAL id (matches `ModelRoutine::id`).
     pub routine_id: String,
     /// Direct capability facts emitted by this routine's body. Always present
     /// (this half was never the memory problem — it is one routine's OWN facts,

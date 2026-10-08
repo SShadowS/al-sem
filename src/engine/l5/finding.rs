@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::d1_cohort::{LoopSetId, LoopSetRegistry, StableLoopSetRegistry};
 use crate::engine::l5::d1_witness::WitnessSummary;
 use crate::engine::l5::registry::{Detector, RunOutput, run_detectors, run_detectors_cross_app};
+use crate::program::model::workspace::Model;
 
 // ===========================================================================
 // INTERNAL model (model/finding.ts). Not serialized — the detector populates it
@@ -940,7 +940,7 @@ fn stable_primary_location_key(f: &StableFinding) -> String {
 /// fingerprint and role-scope are per-finding, and the final stable re-sort is applied
 /// post-filter; the filter is not a single-detector-only crutch.)
 pub fn project_r4_findings(
-    resolved: &L3Resolved,
+    resolved: &Model,
     detectors: &[Detector],
     fixture_name: &str,
     detector_names: &[String],

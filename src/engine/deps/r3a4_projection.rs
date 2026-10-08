@@ -417,7 +417,7 @@ fn project_consumed_effect(model: &ConsumerModel, stab: &DepIdStabilizer) -> PCo
 /// internal -> stable id map (the model's own rows; it re-parsed each `.app` before).
 /// Engine-never-throws: a fail-closed workspace yields an empty projection.
 pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4Projection {
-    let model = crate::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+    let model = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         workspace,
         R3A4_MODEL_INSTANCE_ID,
         false,

@@ -20,9 +20,11 @@
 //! Reproduction context (from the vector doc header):
 //!   - appGuid          = "3a100000-0000-0000-0000-00000000003a"
 //!   - modelInstanceId  = "r0"
-//!   - files            = [[name, source], ...]  →  sourceUnitId = "ws:<name>"
+//!   - files            = [[name, source], ...]  →  sourceUnitId = "ws:<name>.al"
+//!     (engine-switch S9.5c: the program-backed builder reads `.al` files only;
+//!     no expected value depends on the unit id)
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program as assemble_and_resolve;
 use serde_json::{Value, json};
 
 const MODEL_INSTANCE_ID: &str = "r0";
@@ -60,12 +62,19 @@ fn load_vectors() -> VectorsDoc {
     serde_json::from_str(raw).expect("r3a1-vectors.json parses into VectorsDoc")
 }
 
+/// The vector's files for the program-backed builder (engine-switch S9.5c),
+/// which reads only `.al` files: a fixture name without the extension gets it.
 fn files_of(files: &[Vec<String>]) -> Vec<(String, String)> {
     files
         .iter()
         .map(|pair| {
             assert_eq!(pair.len(), 2, "each file entry is [name, source]");
-            (pair[0].clone(), pair[1].clone())
+            let name = if pair[0].ends_with(".al") {
+                pair[0].clone()
+            } else {
+                format!("{}.al", pair[0])
+            };
+            (name, pair[1].clone())
         })
         .collect()
 }

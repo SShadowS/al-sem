@@ -1,6 +1,7 @@
-//! Fresh-side canonical edge projection ([`project_fresh`]), the
-//! L3-INDEPENDENT span-based site matcher ([`match_sites`]), and the shared
-//! evidence/witness contract check ([`witness_contract_holds`]).
+//! Fresh-side canonical edge projection ([`project_fresh`]) and the shared
+//! evidence/witness contract check ([`witness_contract_holds`]). (The span-based
+//! site matcher `match_sites`, which paired fresh edges with the L3 oracle's, was
+//! deleted in engine-switch S9.8.)
 //!
 //! # 1B.3b Task 3: the L3 oracle is gone from this module
 //!
@@ -10,17 +11,13 @@
 //! `run_member_resolution_harness` / `run_implicit_trigger_harness` /
 //! `run_event_flow_gate`) that validated the fresh resolver against a LIVE L3
 //! build on every CDO-gated test run. 1B.3b Task 3 retired all of that: the
-//! fresh resolver is now validated against the COMMITTED, FROZEN, ANONYMIZED
-//! goldens in `semantic_golden.rs` (`run_cdo_semantic_audit_on` /
-//! `run_cdo_trigger_audit` / `run_cdo_event_audit`) plus the ported fan-out
-//! applicability teeth (`semantic_golden::route_applicability`) — both
-//! L3-INDEPENDENT at gate time. The three L3-touching projections needed
-//! only to MINT those frozen goldens (`project_l3` /
-//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) moved to
-//! `engine::l3::l3_mint` (since engine-switch S1), the lone surviving L3-oracle access point in
-//! the library (used by the dev-mint tool, `src/bin/mint-goldens.rs`, and by
-//! the in-repo `REGEN_TEMP_GOLDENS` fixture-regen paths in
-//! `tests/program_resolve_harness.rs`).
+//! fresh resolver is now validated against the AL compiler's own call graph
+//! (`compiler_golden.rs`, engine-switch S9.0d: a committed, anonymized
+//! golden minted from `altool graph`) plus the ported fan-out applicability
+//! teeth (`semantic_golden::route_applicability`). The three L3-touching
+//! projections that minted the earlier L3 goldens (`project_l3` /
+//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) lived in
+//! `engine::l3::l3_mint`, deleted with L3 in engine-switch S9.6.
 //!
 //! This module and `semantic_golden.rs` import NEITHER `engine::l3` NOR
 //! `engine::l2` — the gate path is fully L3-INDEPENDENT.
@@ -28,24 +25,20 @@
 //! # `object_lc` encoding for `ObjKey::Id`
 //! When an object's key is numeric (`ObjKey::Id(n)`), `object_lc` is written
 //! as `format!("{n}")` — the decimal representation of the signed integer.
-//! `engine::l3::l3_mint`'s L3-side projections mirror this choice
-//! exactly so the two stay comparable.
 //!
 //! # `Unresolved`/`Unknown` routes
 //! A route whose `target` is `RouteTarget::Unresolved` projects to **no**
 //! entry in `targets`.  The stub resolver emits only `Unresolved` routes, so
 //! every stub edge projects to an empty `targets` set.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::node::{AppRef, AppRegistry, ObjKey, RoutineNodeId};
-use crate::program::resolve::edge::{
-    BuiltinId, CanonicalSpan, Edge, EdgeKind, RouteTarget, SourcePos,
-};
+use crate::program::resolve::edge::{BuiltinId, CanonicalSpan, Edge, EdgeKind, RouteTarget};
 
 // ---------------------------------------------------------------------------
 // Canonical types
@@ -96,27 +89,9 @@ pub struct CanonicalEdge {
     pub targets: BTreeSet<CanonicalTarget>,
 }
 
-/// Outcome of aligning one call site between the fresh resolver and the L3 oracle.
-///
-/// Indices refer to positions in the `fresh` / `l3` slices passed to
-/// [`match_sites`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SiteMatch {
-    /// Both sides agree: `fresh[fi]` ↔ `l3[li]` share the same strong key.
-    Paired(usize, usize),
-    /// A fresh site that has no L3 peer in its `(from, kind)` partition.
-    FreshOnly(usize),
-    /// An L3 site that has no fresh peer in its `(from, kind)` partition.
-    L3Only(usize),
-    /// Genuinely ambiguous duplicate leftovers — multiple sites on both sides
-    /// share the same strong key and the counts are unequal after positional
-    /// pairing.  The vecs carry the excess `fresh` and `l3` indices respectively.
-    Unaligned(Vec<usize>, Vec<usize>),
-}
-
 // ---------------------------------------------------------------------------
-// Shared helpers — BOTH project_fresh and project_l3 call these so the two
-// projections cannot silently diverge in encoding.
+// Shared encoding helpers (the L3-side `project_l3` used them too, until
+// engine-switch S9.6 deleted it).
 // ---------------------------------------------------------------------------
 
 /// Map an already-lowercased object-kind string to the stable `u8` discriminant
@@ -150,9 +125,8 @@ pub(crate) fn object_kind_str_to_tag(lc: &str) -> u8 {
 
 /// Build a [`CanonicalKey`] from pre-resolved, already-lowercased components.
 ///
-/// Both `project_fresh` (via [`routine_to_key`]) and
-/// `engine::l3::l3_mint::project_l3` funnel through this so the key
-/// layout is identical on both sides.
+/// `project_fresh` (via [`routine_to_key`]) funnels through this, so every
+/// key has one layout.
 pub(crate) fn make_canonical_key(
     app_guid: String,
     object_kind: String,
@@ -207,7 +181,7 @@ fn app_guid(apps: &AppRegistry, r: AppRef) -> String {
 }
 
 /// Project a `RoutineNodeId` to a `CanonicalKey` (fresh-side only).
-fn routine_to_key(id: &RoutineNodeId, apps: &AppRegistry) -> CanonicalKey {
+pub(crate) fn routine_to_key(id: &RoutineNodeId, apps: &AppRegistry) -> CanonicalKey {
     make_canonical_key(
         app_guid(apps, id.object.app),
         object_kind_str(id.object.kind),
@@ -284,130 +258,6 @@ pub fn project_fresh(edges: &[Edge], apps: &AppRegistry) -> Vec<CanonicalEdge> {
 }
 
 // ---------------------------------------------------------------------------
-// Span-based site matcher (spec §6.1)
-// ---------------------------------------------------------------------------
-
-/// Align fresh and L3 call sites WITHOUT relying on positional ordinals.
-///
-/// ## Algorithm (spec §6.1)
-///
-/// 1. **Partition** both slices into groups keyed by `(from, kind)`.  Sites
-///    only ever match within the same group.
-/// 2. **Within each group**, bucket sites by the *strong key*
-///    `(span.unit, span.start.line, callee_fp)`.  Column offsets are ignored
-///    because L3 uses UTF-16 columns while the fresh side uses byte columns —
-///    they agree on ASCII-only source, and may differ by a small delta on
-///    non-ASCII identifiers.
-/// 3. **Pair positionally** within each strong-key bucket:
-///    - Equal counts → all [`SiteMatch::Paired`].
-///    - One side absent → [`SiteMatch::FreshOnly`] / [`SiteMatch::L3Only`]
-///      for every site in that bucket.
-///    - Both sides present, unequal counts → pair the `min` count, then emit
-///      a single [`SiteMatch::Unaligned`] with the leftover indices.
-///
-/// **Cascade-resistance guarantee:** removing one L3 site changes at most ONE
-/// bucket (→ the corresponding fresh site becomes [`SiteMatch::FreshOnly`])
-/// and NEVER shifts the pairing of any other site.
-#[must_use]
-pub fn match_sites(fresh: &[CanonicalEdge], l3: &[CanonicalEdge]) -> Vec<SiteMatch> {
-    type GroupKey = (CanonicalKey, EdgeKind);
-    // Strong key: (unit, start_line, callee_fp) — col intentionally omitted.
-    type StrongKey = (String, u32, u64);
-
-    // Step 1: partition both slices into (from, kind) groups.
-    let mut fresh_groups: HashMap<GroupKey, Vec<usize>> = HashMap::new();
-    let mut l3_groups: HashMap<GroupKey, Vec<usize>> = HashMap::new();
-
-    for (i, e) in fresh.iter().enumerate() {
-        fresh_groups
-            .entry((e.from.clone(), e.kind))
-            .or_default()
-            .push(i);
-    }
-    for (i, e) in l3.iter().enumerate() {
-        l3_groups
-            .entry((e.from.clone(), e.kind))
-            .or_default()
-            .push(i);
-    }
-
-    let mut all_group_keys: Vec<GroupKey> = fresh_groups
-        .keys()
-        .chain(l3_groups.keys())
-        .cloned()
-        .collect();
-    all_group_keys.sort_unstable();
-    all_group_keys.dedup();
-
-    let mut result: Vec<SiteMatch> = Vec::new();
-    let empty: Vec<usize> = Vec::new();
-
-    for gk in all_group_keys {
-        let fresh_idxs = fresh_groups.get(&gk).unwrap_or(&empty);
-        let l3_idxs = l3_groups.get(&gk).unwrap_or(&empty);
-
-        // Step 2: bucket by strong key within this group.
-        let mut fresh_by_sk: HashMap<StrongKey, Vec<usize>> = HashMap::new();
-        let mut l3_by_sk: HashMap<StrongKey, Vec<usize>> = HashMap::new();
-
-        for &fi in fresh_idxs {
-            let e = &fresh[fi];
-            let sk = (
-                e.site.span.unit.clone(),
-                e.site.span.start.line,
-                e.site.callee_fp,
-            );
-            fresh_by_sk.entry(sk).or_default().push(fi);
-        }
-        for &li in l3_idxs {
-            let e = &l3[li];
-            let sk = (
-                e.site.span.unit.clone(),
-                e.site.span.start.line,
-                e.site.callee_fp,
-            );
-            l3_by_sk.entry(sk).or_default().push(li);
-        }
-
-        let mut all_sks: Vec<StrongKey> =
-            fresh_by_sk.keys().chain(l3_by_sk.keys()).cloned().collect();
-        all_sks.sort_unstable();
-        all_sks.dedup();
-
-        // Step 3: pair within each strong-key bucket.
-        for sk in all_sks {
-            let fis = fresh_by_sk.get(&sk).map(Vec::as_slice).unwrap_or(&[]);
-            let lis = l3_by_sk.get(&sk).map(Vec::as_slice).unwrap_or(&[]);
-
-            let pair_count = fis.len().min(lis.len());
-            for i in 0..pair_count {
-                result.push(SiteMatch::Paired(fis[i], lis[i]));
-            }
-
-            let extra_f = &fis[pair_count..];
-            let extra_l = &lis[pair_count..];
-
-            if pair_count == 0 {
-                // One side is entirely absent → unambiguous.
-                for &fi in extra_f {
-                    result.push(SiteMatch::FreshOnly(fi));
-                }
-                for &li in extra_l {
-                    result.push(SiteMatch::L3Only(li));
-                }
-            } else {
-                // Some pairings happened; leftovers are genuinely ambiguous duplicates.
-                if !extra_f.is_empty() || !extra_l.is_empty() {
-                    result.push(SiteMatch::Unaligned(extra_f.to_vec(), extra_l.to_vec()));
-                }
-            }
-        }
-    }
-
-    result
-}
-
-// ---------------------------------------------------------------------------
 // Shared evidence/witness contract check
 // ---------------------------------------------------------------------------
 
@@ -451,11 +301,8 @@ pub(crate) fn witness_contract_holds(route: &crate::program::resolve::edge::Rout
 // side must re-derive from scratch at audit time.
 //
 // [`CanonicalEventRow`] instead keys publisher/subscriber by the SAME
-// `CanonicalKey` (app_guid + object_kind + object_lc + routine_lc) shared
-// with `project_fresh` and `engine::l3::l3_mint`'s L3-side projections.
-// `L3Routine` exposes `app_guid`/`object_type`/`object_number`/`name` directly,
-// so the L3 side builds the identical `CanonicalKey` shape WITHOUT going
-// through L3's stable-id hash at all. `publisher_arity` carries the resolved
+// `CanonicalKey` (app_guid + object_kind + object_lc + routine_lc) that
+// `project_fresh` uses, never a stable-id hash. `publisher_arity` carries the resolved
 // overload's parameter count (event pairs are intentionally arity-agnostic —
 // the same event name can have multiple `[IntegrationEvent]` overloads).
 
@@ -482,8 +329,7 @@ pub struct CanonicalEventRow {
 /// [`project_target`]).
 ///
 /// Used by the always-run synthetic EventFlow fixture test (1B.3b Task 1
-/// Step 4) and by [`crate::program::resolve::semantic_golden::run_cdo_event_audit`]'s
-/// fresh side — neither touches `engine::l3`.
+/// Step 4); it does not touch `engine::l3`.
 #[must_use]
 pub fn project_fresh_event_rows(workspace_root: &Path) -> Vec<CanonicalEventRow> {
     use crate::program::resolve::full::build_context;
@@ -647,50 +493,6 @@ pub fn verify_event_subscriber_route(
 
     // Routine not found in any parsed file of this app → fail-open.
     true
-}
-
-// ---------------------------------------------------------------------------
-// Test helper
-// ---------------------------------------------------------------------------
-
-/// Build a synthetic [`CanonicalEdge`] for use in matcher fixture tests.
-///
-/// * `caller` — colon-separated `"object_kind:object_lc:routine_lc"`,
-///   e.g. `"cu:c:run"`.  `app_guid` is left empty.
-/// * `span_start` — 0-based start line stored in the span.
-/// * `fp` — callee fingerprint.
-///
-/// `from` is set equal to the caller key, `kind` is [`EdgeKind::Call`], and
-/// `targets` is empty.  Column offsets default to 0 / 10.
-#[doc(hidden)]
-pub fn canonical_call_edge_for_test(caller: &str, span_start: u32, fp: u64) -> CanonicalEdge {
-    let parts: Vec<&str> = caller.splitn(4, ':').collect();
-    let caller_key = CanonicalKey {
-        app_guid: String::new(),
-        object_kind: parts.first().copied().unwrap_or("").to_string(),
-        object_lc: parts.get(1).copied().unwrap_or("").to_string(),
-        routine_lc: parts.get(2).copied().unwrap_or("").to_string(),
-    };
-    CanonicalEdge {
-        from: caller_key.clone(),
-        site: CanonicalSiteKey {
-            caller: caller_key,
-            span: CanonicalSpan {
-                unit: "test_unit".to_string(),
-                start: SourcePos {
-                    line: span_start,
-                    col: 0,
-                },
-                end: SourcePos {
-                    line: span_start,
-                    col: 10,
-                },
-            },
-            callee_fp: fp,
-        },
-        kind: EdgeKind::Call,
-        targets: BTreeSet::new(),
-    }
 }
 
 // ---------------------------------------------------------------------------

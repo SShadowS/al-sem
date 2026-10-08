@@ -56,7 +56,7 @@
 //!    answers the less useful half of the user's question ("does THIS routine do
 //!    it, or something twelve frames down?").
 //! 2. **This facade returns [`RoutineIx`] + effect facts, never rendered
-//!    names.** The join to `L3Routine`'s `name` / `object_type` /
+//!    names.** The join to `ModelRoutine`'s `name` / `object_type` /
 //!    `stable_routine_id` / `source_anchor` belongs to the CONSUMER (see
 //!    `effect_query_cli.rs`), because `l4` should not own presentation and the
 //!    two eventual consumers want different shapes (a JSON row vs. an LSP

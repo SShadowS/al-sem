@@ -29,8 +29,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::features::{PCallSite, PLoop};
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, L3Table, L3Workspace};
 use crate::engine::l4::cone_derived::ConeDerivedStore;
 use crate::engine::l5::capability_query::{EffectPresence, touches_db_derived};
 use crate::engine::l5::detector_context::DetectorContext;
@@ -38,6 +36,10 @@ use crate::engine::l5::detectors::d1::edge_target_matches_callsite_callee;
 use crate::engine::l5::detectors::{is_terminator_next, op_targets_virtual_system_table};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::op_classification::{classify_op, is_db_touching_class};
+use crate::program::body::features::{PCallSite, PLoop};
+use crate::program::model::workspace::{
+    ModelEntities, ModelRecordOperation, ModelRoutine, ModelTable,
+};
 
 /// A dense index into [`D1Graph::node_ids`]/`edges`/`terminals` — one per
 /// distinct routine id reachable in the closure.
@@ -61,8 +63,8 @@ pub(crate) struct D1Edge<'a> {
 /// One filtered db-touching terminal op in the compact graph. Mirrors
 /// `D1Policy::terminals_at`'s per-op `Terminal` (d1.rs:632-655).
 pub(crate) struct D1Terminal<'a> {
-    pub op: &'a L3RecordOperation,
-    pub owner: &'a L3Routine,
+    pub op: &'a ModelRecordOperation,
+    pub owner: &'a ModelRoutine,
     /// `op.loop_stack.len()` — the op's own local loop depth.
     pub local_depth: i64,
 }
@@ -81,7 +83,7 @@ pub(crate) struct D1Graph<'a> {
 /// One in-loop call-site seed surviving `detect_d1` branch (b)'s ladder
 /// (d1.rs:1094-1139).
 pub(crate) struct D1Seed<'a> {
-    pub loop_routine: &'a L3Routine,
+    pub loop_routine: &'a ModelRoutine,
     /// Representative (innermost) loop id — `cs.loop_stack.last()`.
     pub loop_id: &'a str,
     pub loop_info: &'a PLoop,
@@ -140,8 +142,8 @@ fn memoized_touches_db<'a>(
 /// `terminalsAt` is DEAD in the source-only pipeline — see d1.rs's module doc
 /// — so it is not reproduced here either.)
 fn terminals_of<'a>(
-    routine: &'a L3Routine,
-    table_by_id: &HashMap<&str, &L3Table>,
+    routine: &'a ModelRoutine,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> Vec<D1Terminal<'a>> {
     routine
         .record_operations
@@ -182,7 +184,7 @@ fn terminals_of<'a>(
 /// trivially index-aligned.
 pub(crate) fn build_d1_graph<'a>(
     ctx: &'a DetectorContext,
-    ws: &'a L3Workspace,
+    ws: &'a ModelEntities,
     touches_db_memo: &mut HashMap<&'a str, EffectPresence>,
 ) -> (D1Graph<'a>, Vec<D1Seed<'a>>) {
     let mut seeds: Vec<D1Seed<'a>> = Vec::new();
@@ -414,7 +416,7 @@ mod tests {
         .collect();
 
         let ctx = minimal_ctx(&routines, graph_edges, summaries);
-        let ws = L3Workspace {
+        let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.clone(),
@@ -455,14 +457,14 @@ mod tests {
         let mut b = routine("B", "procedure");
         // A record variable "F" declared against the virtual/system table
         // "Field" — op_targets_virtual_system_table's G-6 exclusion signal.
-        b.record_variables = vec![crate::engine::l3::l3_workspace::L3RecordVariable {
+        b.record_variables = vec![crate::program::model::workspace::ModelRecordVariable {
             id: "B/rv0".to_string(),
             name: "F".to_string(),
             table_name: Some("Field".to_string()),
             table_id: None,
             is_parameter: false,
             parameter_index: None,
-            temp_state: crate::engine::l2::features::PTempState {
+            temp_state: crate::program::body::features::PTempState {
                 kind: "unknown".to_string(),
                 value: None,
                 parameter_index: None,
@@ -495,7 +497,7 @@ mod tests {
         .collect();
 
         let ctx = minimal_ctx(&routines, graph_edges, summaries);
-        let ws = L3Workspace {
+        let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.clone(),
@@ -561,7 +563,7 @@ mod tests {
         .collect();
 
         let ctx = minimal_ctx(&routines, graph_edges, summaries);
-        let ws = L3Workspace {
+        let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.clone(),
@@ -633,7 +635,7 @@ mod tests {
         })
         .collect();
 
-        let ws = L3Workspace {
+        let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.clone(),

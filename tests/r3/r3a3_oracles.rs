@@ -34,10 +34,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::capability_cone::{
     PCapabilityFact, PRoutineConeCoverage, compute_r3a3_real_matrix, project_r3a3,
 };
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -129,7 +129,7 @@ fn projected_fact_is_known_temp(f: &PCapabilityFact) -> bool {
 /// Load the Rust R3a-3 projection for one fixture (source-only).
 fn rust_projection(fixture: &str) -> Vec<PRoutineConeCoverage> {
     let dir = corpus_dir().join(fixture);
-    match assemble_and_resolve_workspace_default(&dir) {
+    match assemble_and_resolve_workspace_with_program_calls(&dir) {
         Some(resolved) => project_r3a3(&resolved).summaries,
         None => vec![],
     }
@@ -357,7 +357,7 @@ fn oracle_r3a3_real_bfs_consistency() {
     let mut total_ties = 0usize;
     for fx in &fixtures {
         let dir = corpus_dir().join(fx);
-        let Some(resolved) = assemble_and_resolve_workspace_default(&dir) else {
+        let Some(resolved) = assemble_and_resolve_workspace_with_program_calls(&dir) else {
             continue;
         };
         let real = compute_r3a3_real_matrix(&resolved);

@@ -13,8 +13,8 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Table};
 use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
+use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
 
 /// Field scope. al-sem `FieldScope`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,16 +61,16 @@ pub enum FieldValue {
 /// field evaluation. `root_kinds_by_routine_id` maps a routine id → its root kinds
 /// (absent ⇒ `[]`, NOT unknown — classification is exhaustive).
 pub struct FieldIndexes<'a> {
-    pub objects_by_id: HashMap<&'a str, &'a L3Object>,
+    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
     pub root_kinds_by_routine_id: HashMap<&'a str, &'a [String]>,
-    pub tables_by_id: HashMap<&'a str, &'a L3Table>,
+    pub tables_by_id: HashMap<&'a str, &'a ModelTable>,
     pub events_by_id: HashMap<&'a str, &'a str>, // event id → event name
 }
 
 /// Evaluation context. al-sem `FieldEvalContext`. `fact` is `None` in applicability
 /// mode (fact-scope fields short-circuit to unknown before reading it).
 pub struct FieldEvalContext<'a> {
-    pub routine: &'a L3Routine,
+    pub routine: &'a ModelRoutine,
     pub fact: Option<&'a CapabilityFact>,
     pub indexes: &'a FieldIndexes<'a>,
 }
@@ -406,7 +406,7 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
 }
 
 /// The containing object for a routine, when present. al-sem `objectOf`.
-fn object_of<'a>(ctx: &'a FieldEvalContext<'a>) -> Option<&'a L3Object> {
+fn object_of<'a>(ctx: &'a FieldEvalContext<'a>) -> Option<&'a ModelObject> {
     ctx.indexes
         .objects_by_id
         .get(ctx.routine.object_id.as_str())

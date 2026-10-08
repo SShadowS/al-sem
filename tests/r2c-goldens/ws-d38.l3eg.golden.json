@@ -67,11 +67,11 @@
       "publisherRoutineId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400#ef7acd964c2b00ebbbab85e58e47f1c3d4336039ebb80edba46d82640cf12c90"
     },
     {
-      "id": "unknown:Codeunit:0:D38 NonExistent::OnSomethingUnknown::1ae2147da318c0ee89ad1a407ebd68d1a1d0fab22c6d2c3aa3fc8c8c4d5a6245",
-      "publisherObjectId": "unknown:Codeunit:0:D38 NonExistent",
-      "eventName": "OnSomethingUnknown",
+      "id": "unknown:codeunit:0:d38 nonexistent::onsomethingunknown::e4e0297db8fab92c2c6d58be2aa1ccbb8d301a9bb420d8190d0165c3e0f1a6a0",
+      "publisherObjectId": "unknown:codeunit:0:d38 nonexistent",
+      "eventName": "onsomethingunknown",
       "eventKind": "unknown",
-      "signatureHash": "1ae2147da318c0ee89ad1a407ebd68d1a1d0fab22c6d2c3aa3fc8c8c4d5a6245",
+      "signatureHash": "e4e0297db8fab92c2c6d58be2aa1ccbb8d301a9bb420d8190d0165c3e0f1a6a0",
       "parameters": [],
       "provenance": [
         {
@@ -116,7 +116,7 @@
       ]
     },
     {
-      "eventId": "unknown:Codeunit:0:D38 NonExistent::OnSomethingUnknown::1ae2147da318c0ee89ad1a407ebd68d1a1d0fab22c6d2c3aa3fc8c8c4d5a6245",
+      "eventId": "unknown:codeunit:0:d38 nonexistent::onsomethingunknown::e4e0297db8fab92c2c6d58be2aa1ccbb8d301a9bb420d8190d0165c3e0f1a6a0",
       "subscriberRoutineId": "11111111-0000-0000-0000-00000000d380:Codeunit:51401#59d7af5c2715cb165574a78a34cb471711a9b30325001327757c39a2b8957494",
       "subscriberAppId": "11111111-0000-0000-0000-00000000d380",
       "resolution": "unknown",

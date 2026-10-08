@@ -17,25 +17,25 @@
 //! Two tests:
 //!
 //! 1. `pass_2b_first_wins_on_name_collision` — a LOW-LEVEL UNIT TEST that
-//!    directly constructs an `L3Routine` with a manually-injected collision in
+//!    directly constructs an `ModelRoutine` with a manually-injected collision in
 //!    `variables` (local "Baz" first, global "Bar" second, `record_variables`
 //!    empty so passes 1/2a do NOT resolve the op — only pass 2b fires). This
 //!    test FAILS before the fix (last-wins picks "Bar") and PASSES after
 //!    (first-wins picks "Baz").
 //!
 //! 2. `integration_local_shadows_global_end_to_end` — an end-to-end test
-//!    through `assemble_and_resolve_default`. This passes both before AND after
+//!    through `assemble_and_resolve_inline_program_default`. This passes both before AND after
 //!    the fix because `extract_variables` already deduplicates the global
 //!    variable when a local has the same name. It serves as a regression guard
 //!    confirming the full-pipeline behavior is correct.
 
-use al_sem::engine::l2::features::PAnchor;
-use al_sem::engine::l3::l3_workspace::{
-    L3RecordOperation, L3Routine, L3Table, L3Variable, RoutineVariables,
-    assemble_and_resolve_default,
+use al_sem::program::body::features::PAnchor;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::record_types::resolve_routine_record_types;
+use al_sem::program::model::symbol_table::SymbolTable;
+use al_sem::program::model::workspace::{
+    ModelRecordOperation, ModelRoutine, ModelTable, ModelVariable, RoutineVariables,
 };
-use al_sem::engine::l3::record_types::resolve_routine_record_types;
-use al_sem::engine::l3::symbol_table::SymbolTable;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
@@ -63,9 +63,9 @@ fn dummy_anchor() -> PAnchor {
     }
 }
 
-/// Build a minimal L3Table in-workspace (app_guid/table/{number}).
-fn make_table(name: &str, number: i64) -> L3Table {
-    L3Table {
+/// Build a minimal ModelTable in-workspace (app_guid/table/{number}).
+fn make_table(name: &str, number: i64) -> ModelTable {
+    ModelTable {
         id: format!("{APP_GUID}/table/{number}"),
         app_guid: APP_GUID.to_string(),
         table_number: number,
@@ -77,12 +77,12 @@ fn make_table(name: &str, number: i64) -> L3Table {
     }
 }
 
-/// Build a bare-minimum L3Routine suitable for directly exercising pass 2b.
+/// Build a bare-minimum ModelRoutine suitable for directly exercising pass 2b.
 /// `record_variables` is intentionally empty so that passes 1 and 2a do NOT
 /// set the op's tableId — only pass 2b is in play.
-fn make_routine_for_pass2b(variables: Vec<L3Variable>) -> L3Routine {
+fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
     // One record op on "Foo" with no tableId pre-set.
-    let op = L3RecordOperation {
+    let op = ModelRecordOperation {
         id: "op0".to_string(),
         op: "FindSet".to_string(),
         record_variable_name: "Foo".to_string(),
@@ -97,7 +97,7 @@ fn make_routine_for_pass2b(variables: Vec<L3Variable>) -> L3Routine {
         run_trigger: None,
     };
 
-    L3Routine {
+    ModelRoutine {
         id: "r0/test-routine".to_string(),
         stable_routine_id: "test-stable-id".to_string(),
         object_id: "test-obj".to_string(),
@@ -151,12 +151,12 @@ fn pass_2b_first_wins_on_name_collision() {
     let baz_table = make_table("Baz", 50901);
     // `SymbolTable` borrows its slices, so the array must outlive the table.
     let tables = [bar_table, baz_table];
-    let symbols = SymbolTable::build(&[], &tables, &[]);
+    let symbols = SymbolTable::build(&[], &tables);
 
     // `variables` carries the COLLISION: local "Baz" first, then global "Bar".
     // (params → locals → globals order; Task 3 will add globals AFTER locals.)
     let variables = vec![
-        L3Variable {
+        ModelVariable {
             name: "foo".to_string(),
             declared_type: "Record Baz".to_string(), // LOCAL — should win
             is_parameter: false,
@@ -164,7 +164,7 @@ fn pass_2b_first_wins_on_name_collision() {
             initializer: None,
             scope: Some("local".to_string()),
         },
-        L3Variable {
+        ModelVariable {
             name: "foo".to_string(),
             declared_type: "Record Bar".to_string(), // GLOBAL — must NOT win
             is_parameter: false,
@@ -201,7 +201,7 @@ fn pass_2b_first_wins_on_name_collision() {
 
 // ============================================================================
 // Test 2 — END-TO-END integration test: verifies that the full pipeline
-//          (assemble_and_resolve_default) correctly resolves the LOCAL var.
+//          (assemble_and_resolve_inline_program_default) correctly resolves the LOCAL var.
 //          This passes both before AND after the fix because `extract_variables`
 //          already deduplicates globals when a same-named local exists.
 //          Kept as a regression guard for the full-pipeline shape.
@@ -234,8 +234,10 @@ codeunit 50902 "ShadowProbe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     let routine = resolved
         .routine_by_name("DoWork")

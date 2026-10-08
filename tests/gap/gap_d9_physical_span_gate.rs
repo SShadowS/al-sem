@@ -7,10 +7,10 @@
 //! a d9 at `CDOeSealServiceMgt.Codeunit.al:18` alive after the cone fix removed
 //! the matching d8. Drives the REGISTERED d9 over inline workspaces.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000000d9a1";
 const DETECTOR: &str = "d9-transaction-span-summary";
@@ -73,7 +73,7 @@ codeunit 50130 "D9 Spans"
 
 fn d9_findings() -> Vec<Finding> {
     let files = vec![("src/D9.al".to_string(), SRC.to_string())];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     assert!(
         resolved
             .workspace

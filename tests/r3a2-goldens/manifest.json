@@ -23,25 +23,25 @@
   "fixtureCount": 158,
   "matrix": {
     "routineCount": 584,
-    "routinesWithInheritedEffects": 56,
+    "routinesWithInheritedEffects": 55,
     "viaKinds": {
       "direct": 326,
       "event-subscriber": 12,
-      "implicit-trigger": 3,
+      "implicit-trigger": 1,
       "inherited": 55
     },
     "recursiveCycleRoutines": 13,
-    "unresolvedCallRoutines": 29,
+    "unresolvedCallRoutines": 30,
     "opaqueCalleeUncertainties": 2,
     "uncertaintyKinds": {
-      "ambiguous-overload": 4,
+      "ambiguous-overload": 3,
       "dynamic-dispatch": 6,
       "external-target": 4,
       "interface-open-world": 4,
-      "member-not-found": 1,
+      "member-not-found": 2,
       "opaque-callee": 2,
       "parse-incomplete": 1,
-      "unresolved-call": 12
+      "unresolved-call": 13
     },
     "parameterRolesWithCrossCallExitEffect": 44,
     "recursiveSccCount": 3,

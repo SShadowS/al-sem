@@ -188,7 +188,7 @@ pub fn decode_op_mask(mask: u8) -> Vec<&'static str> {
 pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
     match &f.extra {
         Some(CapabilityExtra::Table { temp_state, .. }) => {
-            crate::engine::l2::features::temp_state_suppresses(temp_state.as_ref())
+            crate::program::body::features::temp_state_suppresses(temp_state.as_ref())
         }
         _ => false,
     }
@@ -821,9 +821,9 @@ fn freeze_masked(scratch: &mut [(ResId, u8)], pool: &mut Vec<(ResId, u8)>) -> Ra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l2::features::PTempState;
     use crate::engine::l4::capability_cone::compose_cone_over_graph;
     use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::program::body::features::PTempState;
     use std::collections::HashMap;
 
     // -- fixture constructors -------------------------------------------------

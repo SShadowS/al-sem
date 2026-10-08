@@ -35,13 +35,13 @@ use std::path::{Path, PathBuf};
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::gate::run::compute_analyzer_diagnostics;
-use al_sem::engine::l3::l3_workspace::L3Resolved;
-use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, compose_full_snapshot, serialize_cbor,
     serialize_cbor_gz, serialize_envelope, serialize_json, serialize_sharded,
 };
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::Model;
 
 use crate::regen;
 
@@ -88,10 +88,7 @@ const DEFAULT_DETECTOR_NAMES: &[&str] = &[
 /// Compute the analyzer diagnostics for the envelope, projected to the contract
 /// shape (`code = "DIAG-<stage>"`). versionDiagnostic() is None under the version
 /// override, so it is not prepended.
-fn envelope_diagnostics(
-    ws_path: &std::path::Path,
-    resolved: &L3Resolved,
-) -> Vec<EnvelopeDiagnostic> {
+fn envelope_diagnostics(ws_path: &std::path::Path, resolved: &Model) -> Vec<EnvelopeDiagnostic> {
     let default_detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
@@ -184,7 +181,7 @@ fn check_or_regen(golden_path: &Path, got: &[u8], label: &str) {
 
 /// Compose the full snapshot tree for one fixture. Returns the tree, the resolved
 /// model (for envelope diagnostics), and the workspace dir.
-fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, L3Resolved, PathBuf) {
+fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, PathBuf) {
     let fixture_dir = fixtures_dir().join(fixture);
     assert!(
         fixture_dir.is_dir(),

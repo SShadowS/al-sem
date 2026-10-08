@@ -233,11 +233,7 @@ fn a_friend_dependency_sees_the_workspaces_internal_members() {
     );
 }
 
-/// Every cross-app fixture: the program-built cross-app model's rows equal the
-/// legacy merged model's (`build_cross_app_l3_r4`, the source-parsing variant) —
-/// the same rows in the same order (the symbol table is last-wins and the
-/// extension-field merge first-wins, so order is part of the contract), each row's
-/// whole content equal.
+/// The cross-app fixtures: each has dependency code in the model.
 fn cross_app_fixtures() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     [
@@ -254,51 +250,25 @@ fn cross_app_fixtures() -> Vec<std::path::PathBuf> {
     .collect()
 }
 
-/// Each row's whole `Debug` text. `decode` percent-decodes every `dep:` source-unit
-/// id: the legacy path keeps a zip entry name raw, the program engine decodes it
-/// once (plan decision 7; ids do not depend on it).
-fn model_rows(
-    ws: &al_sem::engine::l3::l3_workspace::L3Workspace,
-    decode: bool,
-) -> [Vec<String>; 3] {
-    let fix = |row: String| {
-        if !decode {
-            return row;
-        }
-        let mut out = String::with_capacity(row.len());
-        let mut rest = row.as_str();
-        while let Some(i) = rest.find("\"dep:") {
-            let (head, tail) = rest.split_at(i + 1);
-            out.push_str(head);
-            let end = tail.find('"').unwrap_or(tail.len());
-            out.push_str(&percent_encoding::percent_decode_str(&tail[..end]).decode_utf8_lossy());
-            rest = &tail[end..];
-        }
-        out.push_str(rest);
-        out
-    };
-    [
-        ws.objects.iter().map(|o| fix(format!("{o:?}"))).collect(),
-        ws.tables.iter().map(|t| fix(format!("{t:?}"))).collect(),
-        ws.routines.iter().map(|r| fix(format!("{r:?}"))).collect(),
-    ]
-}
-
+/// The cross-app model's row ORDER is a contract: the symbol table is last-wins and
+/// the extension-field merge first-wins, so a dependency's parsed source must come
+/// after the symbol-only (ABI) rows it may shadow. Every routine row is, in order:
+/// the workspace's (`ws:` units), then every symbol-only dependency's ABI rows
+/// (no source unit), then every source-bearing dependency's parsed rows (`dep:`
+/// units). Until engine-switch S9.6 this was pinned by comparing with the legacy
+/// merged model (`cross_app_l3`), deleted with L3; the order is now stated directly.
 ///
-/// Discrimination (2026-10-06): appending the symbol-only (ABI) rows AFTER the
-/// parsed dependency rows in `append_dependency_rows` fails the order assertion on
-/// `r3a5-fixtures/ws`; restored, it passes. Measured once on CDO (all rows equal,
-/// same order, after decoding) and DO (571 extra objects, all from apps in an
-/// ancestor `.alpackages` that the legacy scan never read: plan decision 3).
+/// Discrimination (2026-10-08): appending the ABI rows AFTER the parsed dependency
+/// rows in `append_dependency_rows` fails this test on `r3a5-fixtures/ws` (ranks
+/// `[0, 0, 2, 2, 1]`); restored, it passes.
 #[test]
-fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
-    use al_sem::engine::deps::cross_app_l3::build_cross_app_l3_r4;
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::program::model::workspace::assemble_and_resolve_cross_app_from_program;
+fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
+    use al_sem::program::model::workspace::{
+        MODEL_INSTANCE_ID_DEFAULT as MI, assemble_and_resolve_cross_app_from_program,
+    };
     for ws in cross_app_fixtures() {
-        let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let (new, _) = assemble_and_resolve_cross_app_from_program(
+        let (model, _) = assemble_and_resolve_cross_app_from_program(
             &ws,
             MI,
             false,
@@ -307,41 +277,44 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
             &Default::default(),
         )
         .expect("program model");
-        // Not degenerate: dependency rows are present, ABI and parsed alike on the
-        // fixture that has both kinds.
-        let primary = new.primary_app.clone().expect("primary app");
-        let dep: Vec<_> = new
+        // Rank of each routine's block: 0 workspace, 1 ABI, 2 parsed dependency.
+        let ranks: Vec<u8> = model
             .workspace
             .routines
             .iter()
-            .filter(|r| !r.app_guid.eq_ignore_ascii_case(&primary.app_guid))
+            .map(|r| {
+                let unit = r.source_anchor.source_unit_id.as_str();
+                if unit.starts_with("ws:") {
+                    0
+                } else if unit.is_empty() {
+                    1
+                } else {
+                    assert!(unit.starts_with("dep:"), "{}: unit {unit:?}", ws.display());
+                    2
+                }
+            })
             .collect();
-        assert!(!dep.is_empty(), "{}: no dependency routines", ws.display());
-        if ws.ends_with("r3a5-fixtures/ws") {
-            assert!(dep.iter().any(|r| r.body_available) && dep.iter().any(|r| !r.body_available));
-        }
-        let (old_rows, new_rows) = (
-            model_rows(&legacy.resolved.workspace, true),
-            model_rows(&new.workspace, false),
+        assert!(
+            ranks.contains(&0) && ranks.iter().any(|&k| k > 0),
+            "{}: workspace and dependency rows must both be present",
+            ws.display()
         );
-        for (kind, (o, n)) in ["objects", "tables", "routines"]
-            .iter()
-            .zip(old_rows.iter().zip(new_rows.iter()))
-        {
-            let only_old: Vec<_> = o.iter().filter(|r| !n.contains(r)).collect();
-            let only_new: Vec<_> = n.iter().filter(|r| !o.contains(r)).collect();
+        if ws.ends_with("r3a5-fixtures/ws") {
             assert!(
-                only_old.is_empty() && only_new.is_empty(),
-                "{}: {kind} differ\nonly legacy: {only_old:#?}\nonly program: {only_new:#?}",
-                ws.display()
+                ranks.contains(&1) && ranks.contains(&2),
+                "r3a5-fixtures/ws has both ABI and parsed dependency rows"
             );
-            assert_eq!(o, n, "{}: {kind} order differs", ws.display());
         }
+        assert!(
+            ranks.windows(2).all(|w| w[0] <= w[1]),
+            "{}: rows must be workspace, then ABI, then parsed dependencies: {ranks:?}",
+            ws.display()
+        );
     }
 }
 
 /// `"<object number>.<routine name>"` of a model routine id.
-fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> String {
+fn routine_label(m: &al_sem::program::model::workspace::Model, id: &str) -> String {
     let r = m
         .workspace
         .routines
@@ -365,14 +338,14 @@ fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> 
 /// the test; restored, it passes.
 #[test]
 fn the_cross_app_model_resolves_dependency_bodies_and_events() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
     let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
         .expect("model")
         .resolved;
-    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let calls = m.calls.clone();
     let mut resolved: Vec<String> = calls
         .edges
         .iter()
@@ -397,7 +370,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
         ]
     );
 
-    let events = m.precomputed_events.clone().expect("events attached");
+    let events = m.events.clone();
     let handle = events
         .graph
         .edges
@@ -427,13 +400,13 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
 /// test fails; restored, it passes.
 #[test]
 fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
     let m = assemble_and_resolve_cross_app_program(&ws, MI, false)
         .expect("model")
         .resolved;
-    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let calls = m.calls.clone();
     let bodyless: Vec<&str> = m
         .workspace
         .routines
@@ -662,8 +635,8 @@ fn d43_does_not_call_a_setter_after_an_early_exit_certain() {
 /// fails the test; restored, it passes.
 #[test]
 fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     friend_workspace(dir.path(), true);
     let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
@@ -759,9 +732,9 @@ fn d44_anchors_on_the_workspace_subscriber() {
 /// `build_detector_context_cross_app` makes fixtures differ; restored, it passes.
 #[test]
 fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::{project_r4_findings, project_r4_findings_cross_app};
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
     let detectors = registered_detectors();
     let names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
@@ -951,8 +924,8 @@ fn demand_workspace(dir: &Path) {
 /// passes.
 #[test]
 fn the_cross_app_model_holds_the_demanded_dependency_routines() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     demand_workspace(dir.path());
     let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
@@ -1605,4 +1578,70 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
         }
     }
     assert!(wrong.is_empty(), "cases {wrong:?}");
+}
+
+/// S9.0d: a run of a DEPENDENCY page whose source declares no `OnOpenPage`
+/// reaches no routine (the resolver no longer invents an Opaque trigger), and
+/// the model still sees the dependency callee it saw before: an external
+/// callee naming that page, `PageRun` for `Page.Run(..)` and a method call for
+/// `PageVar.RunModal()`. Without the run target the adapter would turn both
+/// into the workspace shape (`PageRun`, no external type).
+#[test]
+fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.path().join("src/Main.al"),
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        P: Page \"Dep Page\";\n    begin\n        Page.Run(Page::\"Dep Page\");\n        P.RunModal();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Pages":[{{"Id":50110,"Name":"Dep Page"}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.path().join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/DepPage.al",
+            "page 50110 \"Dep Page\"\n{\n    PageType = ConfirmationDialog;\n}\n",
+        )],
+        "",
+    );
+    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+        .expect("model")
+        .resolved;
+    let calls = m.calls.clone();
+    let mut got: Vec<String> = calls
+        .edges
+        .iter()
+        .filter(|e| routine_label(&m, &e.from) == "50201.Go")
+        .map(|e| {
+            format!(
+                "{:?} {:?} to={} ext={:?}",
+                e.dispatch_kind,
+                e.resolution,
+                e.to.is_some(),
+                e.external_type_ref
+                    .as_ref()
+                    .map(|t| (t.kind.as_str(), t.name.as_str()))
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            r#"Method ExternalTarget to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+            r#"PageRun Opaque to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+        ]
+    );
 }

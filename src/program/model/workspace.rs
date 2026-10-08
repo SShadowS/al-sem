@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 /// A workspace object (the L3-relevant subset of al-sem's `ObjectDecl`).
 #[derive(Debug, Clone)]
-pub struct L3Object {
+pub struct ModelObject {
     /// Internal object id: `${appGuid}/${objectType}/${objectNumber}`.
     pub id: String,
     pub app_guid: String,
@@ -50,7 +50,7 @@ pub struct L3Object {
     /// `Some([...])` listed, `None` unknown. Other object types: `None`.
     pub implements_interfaces: Option<Vec<String>>,
     /// Object `Subtype` property (Codeunit only; e.g. "Install" / "Upgrade" /
-    /// "Test"), else `None`. Additive L2→L3 forward — L3Object is NOT
+    /// "Test"), else `None`. Additive L2→L3 forward — ModelObject is NOT
     /// Serialize-derived into any gate surface (R0–R3 goldens are field-allowlisted
     /// projections), so adding this never touches a golden. Populated at L3 assembly
     /// (native path) from the `Subtype` property; dep objects forward the ABI
@@ -58,7 +58,7 @@ pub struct L3Object {
     /// agree on shape). Consumed by d46 to classify lifecycle objects.
     pub object_subtype: Option<String>,
     /// Object `PageType` property (Page / PageExtension only; e.g. "API" /
-    /// "Card" / "List"), else `None`. Additive L2→L3 forward — L3Object is NOT
+    /// "Card" / "List"), else `None`. Additive L2→L3 forward — ModelObject is NOT
     /// Serialize-derived into any gate surface (R0–R3 goldens are
     /// field-allowlisted projections), so adding this never touches a golden.
     /// Populated at L3 assembly (native path) from the `PageType` property; dep
@@ -69,7 +69,7 @@ pub struct L3Object {
     /// Object `InherentCommitBehavior` property (Codeunit / Table /
     /// TableExtension only). Canonical lower-case member: "ignore" | "error" |
     /// "allow". `None` when absent or an unrecognised value. Additive L2→L3
-    /// forward — L3Object is NOT Serialize-derived into any gate surface, so
+    /// forward — ModelObject is NOT Serialize-derived into any gate surface, so
     /// adding this never touches a golden. Populated at L3 assembly (native
     /// path) from the `InherentCommitBehavior` property; dep objects forward the
     /// ABI projection's `inherent_commit_behavior` (it carries the same canonical
@@ -78,15 +78,15 @@ pub struct L3Object {
     pub inherent_commit_behavior: Option<String>,
     /// Page / PageExtension `SourceTable` temporary flag — `Some(true)` when the
     /// SourceTable object is marked `TableType = Temporary`, `Some(false)` when
-    /// confirmed non-temporary, `None` when not yet resolved. Additive — L3Object
+    /// confirmed non-temporary, `None` when not yet resolved. Additive — ModelObject
     /// is NOT Serialize-derived into any gate surface, so this never touches a
     /// golden. Populated by later tasks (Task 5).
     pub source_table_temporary: Option<bool>,
     /// Page / PageExtension layout controls (`part`/`systempart`/`usercontrol`) — used
     /// to resolve `CurrPage.<control>…` member calls. Empty for non-page objects.
-    pub page_controls: Vec<L3PageControl>,
+    pub page_controls: Vec<ModelPageControl>,
     /// Object `SingleInstance` property (Codeunit only): `Some(true)`/`Some(false)`
-    /// when the property is written, `None` when absent. Additive — L3Object is NOT
+    /// when the property is written, `None` when absent. Additive — ModelObject is NOT
     /// Serialize-derived into any gate surface. Consumed by d57.
     pub single_instance: Option<bool>,
     /// Page `Editable` / `InsertAllowed` / `ModifyAllowed` / `DeleteAllowed`
@@ -107,7 +107,7 @@ pub struct L3Object {
 /// NUMBER string from dep symbols) for `Part`/`SystemPart`, or the control-add-in name
 /// for `UserControl`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct L3PageControl {
+pub struct ModelPageControl {
     pub name: String,
     pub kind: PageControlKind,
     pub target: String,
@@ -122,7 +122,7 @@ pub enum PageControlKind {
 
 /// A workspace field (the L3-relevant subset of al-sem's `Field`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct L3Field {
+pub struct ModelField {
     pub id: String,
     pub physical_table_id: String,
     pub declaring_object_id: String,
@@ -136,10 +136,10 @@ pub struct L3Field {
 
 /// A workspace table key (the L3-relevant subset of al-sem's `Key`). Only the
 /// fields the cli-b snapshot `deriveSchema` reads are kept (`id` + resolved
-/// member field-ids). Additive — `L3Table` is NOT serialized into any R0–R3
+/// member field-ids). Additive — `ModelTable` is NOT serialized into any R0–R3
 /// golden surface, so adding keys never moves an existing golden.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct L3Key {
+pub struct ModelKey {
     /// Internal key id: `${tableId}/key/${index}` (mirrors al-sem `encodeKeyId`).
     pub id: String,
     /// Resolved member field internal ids (`${tableId}/${fieldNumber}`), in
@@ -152,17 +152,17 @@ pub struct L3Key {
 /// and `TableExtension` declarations produce one of these (matching al-sem's
 /// `index.tables`).
 #[derive(Debug, Clone)]
-pub struct L3Table {
+pub struct ModelTable {
     /// Internal table id: `${appGuid}/table/${tableNumber}`.
     pub id: String,
     pub app_guid: String,
     pub table_number: i64,
     pub name: String,
-    pub fields: Vec<L3Field>,
+    pub fields: Vec<ModelField>,
     /// Table keys (cli-b snapshot `deriveSchema` reads these). Additive.
-    pub keys: Vec<L3Key>,
+    pub keys: Vec<ModelKey>,
     /// True when the table is declared with `TableType = Temporary`. Additive —
-    /// L3Table is NOT Serialize-derived into any gate surface, so this never
+    /// ModelTable is NOT Serialize-derived into any gate surface, so this never
     /// touches a golden. Populated by later tasks (Task 4).
     pub is_temporary: bool,
     /// G-5 (docs/engine-gaps.md): true when this entry was indexed from a
@@ -172,18 +172,18 @@ pub struct L3Table {
     /// real table sharing that number in the same app — every id/name lookup
     /// must prefer a REAL table over a stub (`table_by_id_preferring_real`,
     /// `SymbolTable`), otherwise ops on the real table render the EXTENSION's
-    /// name in rootCause text. Additive — L3Table is not golden-serialized.
+    /// name in rootCause text. Additive — ModelTable is not golden-serialized.
     pub is_extension_stub: bool,
 }
 
 /// G-5: build an id → table map over `tables` where a REAL table always wins an
-/// id collision with a `tableextension` stub (see `L3Table::is_extension_stub`).
+/// id collision with a `tableextension` stub (see `ModelTable::is_extension_stub`).
 /// Within the same kind (real/real or stub/stub) LAST-wins is preserved —
 /// matching the al-sem `tableById` semantics every consumer had before.
 pub fn table_by_id_preferring_real(
-    tables: &[L3Table],
-) -> std::collections::HashMap<&str, &L3Table> {
-    let mut map: std::collections::HashMap<&str, &L3Table> = std::collections::HashMap::new();
+    tables: &[ModelTable],
+) -> std::collections::HashMap<&str, &ModelTable> {
+    let mut map: std::collections::HashMap<&str, &ModelTable> = std::collections::HashMap::new();
     for t in tables {
         if let Some(prev) = map.get(t.id.as_str()) {
             // Never let a stub clobber a real table.
@@ -198,7 +198,7 @@ pub fn table_by_id_preferring_real(
 
 /// A record variable with its (post-resolve) resolved internal table id.
 #[derive(Debug, Clone)]
-pub struct L3RecordVariable {
+pub struct ModelRecordVariable {
     pub id: String,
     pub name: String,
     /// Declared table name (unquoted), or None for a non-record / unparsed type.
@@ -225,7 +225,7 @@ pub struct L3RecordVariable {
     pub scope: Option<String>,
 }
 
-impl L3RecordVariable {
+impl ModelRecordVariable {
     /// `recVar.tempState.kind === "known" ? recVar.tempState.value : None`.
     /// Returns `Some(value)` only when the temp state is concretely known.
     pub fn temp_state_known_value(&self) -> Option<bool> {
@@ -239,7 +239,7 @@ impl L3RecordVariable {
 
 /// A record operation with its (post-resolve) resolved internal table id.
 #[derive(Debug, Clone)]
-pub struct L3RecordOperation {
+pub struct ModelRecordOperation {
     pub id: String,
     pub op: String,
     pub record_variable_name: String,
@@ -280,7 +280,7 @@ pub struct L3RecordOperation {
 /// A lexical variable (params → locals → globals) carrying its declared type, for
 /// the record-op lexical-scope fallback.
 #[derive(Debug, Clone)]
-pub struct L3Variable {
+pub struct ModelVariable {
     pub name: String,
     pub declared_type: String,
     /// True when this variable is a routine parameter. Required by the R3a-3 L4
@@ -296,7 +296,7 @@ pub struct L3Variable {
     pub initializer: Option<serde_json::Value>,
     /// Variable scope forwarded from the L2 `PVariableSymbol.scope`:
     /// `"local" | "parameter" | "global"`. `None` only for construction paths
-    /// that lack the L2 symbol (defensive). Additive — L3Variable is not
+    /// that lack the L2 symbol (defensive). Additive — ModelVariable is not
     /// Serialize-derived. Consumed by d57 (global-collection growth).
     pub scope: Option<String>,
 }
@@ -306,7 +306,7 @@ pub struct L3Variable {
 ///
 /// An object's globals are byte-identical for each of its routines (lowercased name,
 /// canonicalized declared type, `scope: Some("global")`, never a parameter, never an
-/// initializer), so one `Arc<[L3Variable]>` per object is shared by all of them. On
+/// initializer), so one `Arc<[ModelVariable]>` per object is shared by all of them. On
 /// the 8020 corpus that removed 2,997,353 copies of 53,186 distinct globals — a 56.4×
 /// replication costing ~443 MB of payload (see `.superpowers/sdd/scope-l3-substrate.md`
 /// §3.3). This is L4 pattern (a) recurring in L3.
@@ -331,9 +331,9 @@ pub struct L3Variable {
 pub struct RoutineVariables {
     /// The routine's OWN variables: parameters in declaration order, then locals —
     /// exactly the `scope != "global"` prefix of the L2 list.
-    own: Vec<L3Variable>,
+    own: Vec<ModelVariable>,
     /// The owning object's globals, shared with every sibling routine.
-    globals: Arc<[L3Variable]>,
+    globals: Arc<[ModelVariable]>,
     /// Ascending indices into `globals` this routine SHADOWS (it declares a param or
     /// local of the same lowercased name). Empty for almost every routine, and an
     /// empty `Box<[u32]>` does not allocate — precomputed so [`Self::iter`] never
@@ -346,7 +346,7 @@ pub struct RoutineVariables {
 impl RoutineVariables {
     /// A routine with no object globals in scope — dependency/ABI routines (whose
     /// globals are not modelled at all) and test fixtures.
-    pub fn from_own(own: Vec<L3Variable>) -> Self {
+    pub fn from_own(own: Vec<ModelVariable>) -> Self {
         Self {
             own,
             globals: Arc::default(),
@@ -361,7 +361,7 @@ impl RoutineVariables {
     /// (`ir_variables`/`ir_object_globals` both apply `to_ascii_lowercase`), so the
     /// shadow test is exact string equality — the same test the inlined
     /// `HashSet<String>` in `ir_variables` performs.
-    pub fn new(own: Vec<L3Variable>, globals: Arc<[L3Variable]>) -> Self {
+    pub fn new(own: Vec<ModelVariable>, globals: Arc<[ModelVariable]>) -> Self {
         let shadowed: Box<[u32]> = if own.is_empty() || globals.is_empty() {
             Box::default()
         } else {
@@ -381,7 +381,7 @@ impl RoutineVariables {
 
     /// The routine's full lexical scope, in the L2 order: params → locals → the
     /// object's globals it does not shadow.
-    pub fn iter(&self) -> impl Iterator<Item = &L3Variable> {
+    pub fn iter(&self) -> impl Iterator<Item = &ModelVariable> {
         let shadowed = &self.shadowed;
         self.own.iter().chain(
             self.globals
@@ -397,7 +397,7 @@ impl RoutineVariables {
 /// drives arity matching, `calleeParameterIsVar` upgrades, and overload arg-type
 /// disambiguation (`typeText`).
 #[derive(Debug, Clone)]
-pub struct L3Parameter {
+pub struct ModelParameter {
     /// Positional index (0-based) — the EventSymbol parameter shape.
     pub index: u32,
     pub name: String,
@@ -411,7 +411,7 @@ pub struct L3Parameter {
 
 /// A workspace routine (the L3-relevant subset).
 #[derive(Debug, Clone)]
-pub struct L3Routine {
+pub struct ModelRoutine {
     /// Internal routine id: `${modelInstanceId}/${canonicalRoutineKeyHash}`.
     pub id: String,
     /// StableRoutineId: `${stableObjectId}#${64 lowercase hex}` — the
@@ -446,8 +446,8 @@ pub struct L3Routine {
     /// L2 `parseIncomplete` — the routine's subtree has a tree-sitter ERROR node.
     /// R2d projects parse-incomplete routines' StableRoutineIds.
     pub parse_incomplete: bool,
-    pub record_variables: Vec<L3RecordVariable>,
-    pub record_operations: Vec<L3RecordOperation>,
+    pub record_variables: Vec<ModelRecordVariable>,
+    pub record_operations: Vec<ModelRecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
     pub field_accesses: Vec<crate::program::body::features::PFieldAccess>,
@@ -457,9 +457,9 @@ pub struct L3Routine {
     pub variables: RoutineVariables,
     /// Declared parameters (in order) — drives arity + var-ness + arg-type
     /// disambiguation. Empty for trigger routines with no parameter list.
-    pub parameters: Vec<L3Parameter>,
+    pub parameters: Vec<ModelParameter>,
     /// Access modifier from the L2 projection (`local`/`internal`/`protected`; None
-    /// = default/public). Additive field — L3Routine is NOT Serialize-derived into
+    /// = default/public). Additive field — ModelRoutine is NOT Serialize-derived into
     /// any gate surface (R0–R3 goldens are field-allowlisted projections), so adding
     /// this never touches a golden. Populated by the native assembly path from
     /// `classify_access_modifier`; dep routines use `None` (ABI does not expose it).
@@ -516,7 +516,7 @@ pub struct L3Routine {
     /// unescaped logical identifier (inner `""` collapsed to `"`) of the enclosing
     /// member wrapper (field_declaration / page_field / action_declaration /
     /// report_dataitem / query_dataitem). `None` for procedures and object-level
-    /// triggers (OnRun / OnOpenPage). Additive — `L3Routine` is NOT `Serialize`-derived
+    /// triggers (OnRun / OnOpenPage). Additive — `ModelRoutine` is NOT `Serialize`-derived
     /// (it has only `#[derive(Debug, Clone)]`), so this never reaches an R0–R3 golden.
     /// (RE-3 / RE-4)
     pub enclosing_member: Option<String>,
@@ -539,16 +539,16 @@ pub struct L3Routine {
     /// `<X>` is temporary for the entire body (the routine errors at runtime
     /// otherwise); `record_types.rs` upgrades `<X>`'s ops to `Known(true)`.
     /// `None` for any other shape (conservative — detectors keep firing).
-    /// Additive — `L3Routine` is NOT Serialize-derived, never reaches a golden.
+    /// Additive — `ModelRoutine` is NOT Serialize-derived, never reaches a golden.
     pub entry_temp_guard_receiver: Option<String>,
 }
 
 /// The assembled workspace L3 model (pre-resolve until `resolve` runs).
 #[derive(Debug, Clone)]
-pub struct L3Workspace {
-    pub objects: Vec<L3Object>,
-    pub tables: Vec<L3Table>,
-    pub routines: Vec<L3Routine>,
+pub struct ModelEntities {
+    pub objects: Vec<ModelObject>,
+    pub tables: Vec<ModelTable>,
+    pub routines: Vec<ModelRoutine>,
 }
 
 // ---------------------------------------------------------------------------
@@ -568,12 +568,12 @@ fn index_table_ir(
     table_number: i64,
     table_name: &str,
     is_extension_stub: bool,
-) -> L3Table {
+) -> ModelTable {
     let table_id = format!("{app_guid}/table/{table_number}");
-    let fields: Vec<L3Field> = o
+    let fields: Vec<ModelField> = o
         .fields
         .iter()
-        .map(|f| L3Field {
+        .map(|f| ModelField {
             id: format!("{table_id}/{}", f.number),
             physical_table_id: table_id.clone(),
             declaring_object_id: object_id.to_string(),
@@ -589,11 +589,11 @@ fn index_table_ir(
         .iter()
         .map(|f| (f.name.to_lowercase(), f.id.clone()))
         .collect();
-    let keys: Vec<L3Key> = o
+    let keys: Vec<ModelKey> = o
         .keys
         .iter()
         .enumerate()
-        .map(|(index, members)| L3Key {
+        .map(|(index, members)| ModelKey {
             id: format!("{table_id}/key/{index}"),
             // `members` are already unquoted + lowercased by the lowerer.
             fields: members
@@ -609,7 +609,7 @@ fn index_table_ir(
         .map(|p| p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
-    L3Table {
+    ModelTable {
         id: table_id,
         app_guid: app_guid.to_string(),
         table_number,
@@ -649,50 +649,6 @@ fn anchor_from_origin(
 // ---------------------------------------------------------------------------
 
 pub const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
-
-/// Build the L3 workspace contribution for one source file, driven entirely by the
-/// owned AL syntax IR (`al_syntax::parse`) — no tree-sitter CST walk.
-fn project_file(
-    source: &str,
-    app_guid: &str,
-    model_instance_id: &str,
-    source_unit_id: &str,
-    cols: &Utf16Cols,
-    workspace: &mut L3Workspace,
-) {
-    // Stages-tier parse-vs-projection split (spec 2026-07-18-tracing-infra.md).
-    // `project_file` is the per-file unit of work inside the parallel rayon `.map`
-    // closure in `assemble_workspace`/`assemble_workspace_units` — one call here IS
-    // one rayon closure invocation, so a `LocalCounters` built and flushed entirely
-    // within this function (no threading through the call sites) already satisfies
-    // "one LocalCounters per rayon closure, flush each" without a signature change
-    // at either caller. Cheapest-on-disabled shape: a single `enabled()` bool read
-    // gates every `Instant::now()` call, so tracing-off pays zero clock reads and
-    // zero allocation.
-    let hot = pt::enabled(pt::Detail::Stages);
-    let t_start = hot.then(std::time::Instant::now);
-    let ir_file = al_syntax::parse(source);
-    let t_parsed = hot.then(std::time::Instant::now);
-
-    project_ir(
-        &ir_file,
-        &whole_file_population(&ir_file),
-        source,
-        app_guid,
-        model_instance_id,
-        source_unit_id,
-        cols,
-        &std::collections::HashSet::new(),
-        workspace,
-    );
-
-    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
-        let mut lc = pt::LocalCounters::new();
-        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
-        lc.add("projection_us", t1.elapsed().as_micros() as u64);
-        lc.flush("l3.parse_project");
-    }
-}
 
 /// The declarations of one file to project, by position: each object's index in
 /// `AlFile::objects` with the indices of its routines, document order.
@@ -749,7 +705,7 @@ fn project_ir(
     source_unit_id: &str,
     cols: &Utf16Cols,
     parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
-    workspace: &mut L3Workspace,
+    workspace: &mut ModelEntities,
 ) {
     for (oi, routine_ixs) in population {
         let oi = *oi;
@@ -861,7 +817,7 @@ fn project_ir(
         let page_controls = if object_type == "Page" || object_type == "PageExtension" {
             o.page_controls
                 .iter()
-                .map(|pc| L3PageControl {
+                .map(|pc| ModelPageControl {
                     name: pc.name.clone(),
                     kind: match pc.kind.as_str() {
                         "systempart" => PageControlKind::SystemPart,
@@ -880,7 +836,7 @@ fn project_ir(
         // the object header instead of borrowing a routine anchor.
         let source_anchor = Some(anchor_from_origin(&o.origin, source_unit_id, cols));
 
-        workspace.objects.push(L3Object {
+        workspace.objects.push(ModelObject {
             id: object_id.clone(),
             app_guid: app_guid.to_string(),
             object_type: object_type.to_string(),
@@ -922,7 +878,7 @@ fn project_ir(
         let object_global_record_vars =
             crate::program::body::ir_walk::ir_object_global_record_vars(o, &object_id);
 
-        // Interface / ControlAddIn: al-sem's L3Workspace never modeled these objects'
+        // Interface / ControlAddIn: al-sem's ModelEntities never modeled these objects'
         // signature-only members as routines — this frozen legacy pipeline (L2/L3/L4,
         // still differential-gated against the al-sem TS reference) must keep matching
         // that historical behavior byte-for-byte (see `tests/r3a1_vectors.rs`'s "the
@@ -951,11 +907,11 @@ fn project_ir(
         // with every routine of the object instead of copied into each one's
         // `variables`. Identical to the tail `ir_variables` appends per routine —
         // same source, same first-wins dedup, same lowercasing — minus the anchor,
-        // which `L3Variable` does not carry. See [`RoutineVariables`].
-        let object_globals: Arc<[L3Variable]> = Arc::from(
+        // which `ModelVariable` does not carry. See [`RoutineVariables`].
+        let object_globals: Arc<[ModelVariable]> = Arc::from(
             crate::program::body::ir_walk::ir_object_globals(ir_file, oi, cols, source_unit_id)
                 .into_iter()
-                .map(|g| L3Variable {
+                .map(|g| ModelVariable {
                     name: g.name,
                     declared_type: g.declared_type,
                     is_parameter: g.is_parameter,
@@ -976,7 +932,7 @@ fn project_ir(
             // identifier of the field / control / action / dataitem wrapper, `None`
             // for procedures and object-level triggers. Computed ONCE here because
             // it is both the routine id's discriminator (below) and the
-            // `L3Routine.enclosing_member` field (further down): the two MUST be the
+            // `ModelRoutine.enclosing_member` field (further down): the two MUST be the
             // same string, and `ir_enclosing_member` is the single place that
             // unescapes it.
             let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
@@ -1032,10 +988,10 @@ fn project_ir(
 
             // The routine's OWN record vars (params + locals), built first so they
             // take precedence over any same-named promoted global.
-            let mut record_variables: Vec<L3RecordVariable> = features
+            let mut record_variables: Vec<ModelRecordVariable> = features
                 .record_variables
                 .iter()
-                .map(|rv| L3RecordVariable {
+                .map(|rv| ModelRecordVariable {
                     id: rv.id.clone(),
                     name: rv.name.clone(),
                     table_name: rv.table_name.clone(),
@@ -1070,7 +1026,7 @@ fn project_ir(
                     if own_names.contains(&lc) {
                         continue; // shadowed by the routine's own param/local
                     }
-                    record_variables.push(L3RecordVariable {
+                    record_variables.push(ModelRecordVariable {
                         id: format!("{}/rv/{}", routine_id, lc),
                         name: g.name.clone(),
                         table_name: g.table_name.clone(),
@@ -1100,7 +1056,7 @@ fn project_ir(
             let record_operations = features
                 .record_operations
                 .iter()
-                .map(|op| L3RecordOperation {
+                .map(|op| ModelRecordOperation {
                     id: op.id.clone(),
                     op: op.op.clone(),
                     record_variable_name: op.record_variable_name.clone(),
@@ -1119,11 +1075,11 @@ fn project_ir(
             // L-3: keep only the routine's OWN variables (the `scope != "global"`
             // prefix — params then locals); the globals tail is the object's shared
             // table, re-derived per routine by `RoutineVariables::iter`.
-            let own_variables: Vec<L3Variable> = features
+            let own_variables: Vec<ModelVariable> = features
                 .variables
                 .iter()
                 .filter(|v| v.scope != "global")
-                .map(|v| L3Variable {
+                .map(|v| ModelVariable {
                     name: v.name.clone(),
                     declared_type: v.declared_type.clone(),
                     is_parameter: v.is_parameter,
@@ -1163,9 +1119,9 @@ fn project_ir(
             // ParameterSymbol shape the routine-id/signature-hash path uses so
             // arity/var-ness/type-text cannot drift.
             let param_syms = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
-            let parameters: Vec<L3Parameter> = param_syms
+            let parameters: Vec<ModelParameter> = param_syms
                 .iter()
-                .map(|p| L3Parameter {
+                .map(|p| ModelParameter {
                     index: p.index,
                     name: p.name.clone(),
                     type_text: p.type_text.clone(),
@@ -1208,7 +1164,7 @@ fn project_ir(
             // so Known(true) is only ever introduced from that signal.
             {
                 // Promoted-global record vars, keyed by lowercased name.
-                let global_rv_by_lc: std::collections::HashMap<String, &L3RecordVariable> =
+                let global_rv_by_lc: std::collections::HashMap<String, &ModelRecordVariable> =
                     record_variables
                         .iter()
                         .filter(|rv| rv.scope.as_deref() == Some("global"))
@@ -1361,7 +1317,7 @@ fn project_ir(
                 None => (None, None),
             };
 
-            workspace.routines.push(L3Routine {
+            workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
                 object_id: object_id.clone(),
@@ -1404,192 +1360,15 @@ fn project_ir(
 // Public assembly + resolution entry points.
 // ---------------------------------------------------------------------------
 
-/// Assemble the workspace L3 model from inline `(name, source)` files, in al-sem's
-/// deterministic ingestion order (files sorted by name → per-file document order),
-/// then run `resolve_record_types` + `merge_extension_fields`.
+/// The workspace model over the program engine's parse (engine-switch S2a): each
+/// file is projected from `ctx`'s already-parsed tree.
 ///
-/// This is the offline entry point the vector test drives. Disk-backed workspaces
-/// (the differential / dump in Task 3) sort discovered `.al` files by their
-/// workspace-relative POSIX path — the same total order this reproduces.
-pub fn assemble_and_resolve(
-    files: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Resolved {
-    let mut workspace = assemble_workspace(files, app_guid, model_instance_id);
-    resolve(&mut workspace);
-    // Inline path: no disk `roots.config.json` ⇒ AST-only classifications, no infra diagnostics.
-    // No disk `app.json` ⇒ primary_app = None.
-    let (root_classifications, infra_diagnostics) =
-        crate::engine::root_classification::compute_root_classifications(&workspace, None);
-    L3Resolved {
-        workspace,
-        root_classifications,
-        primary_app: None,
-        infra_diagnostics,
-        precomputed_calls: None,
-        precomputed_events: None,
-    }
-}
-
-/// Assemble the workspace L3 model from inline `(name, source)` files WITHOUT
-/// resolving — the parse/project half of [`assemble_and_resolve`]. The R2.5b
-/// cross-app wiring appends dep entities to the result before calling `resolve`.
-pub fn assemble_workspace(
-    files: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Workspace {
-    let _s = pt::span("l3", "l3.parse_project_parallel");
-    // Deterministic ingestion order: sort files by name (the `ws:<name>` unit id
-    // total order), then walk each file's objects in document order.
-    let mut sorted: Vec<&(String, String)> = files.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Parallel per-file parse+project into PRIVATE fragments on the big-stack
-    // pool (the same generous stack the fresh engine parses on), then fold the
-    // fragments in the SAME sorted order the old sequential loop appended in —
-    // byte-identical Vec order. Object/routine ids are content-derived (no
-    // ordinals) and `project_file` only APPENDS into its own `workspace` arg
-    // (no cross-file reads), so per-file fragments are independent; the sorted
-    // fold reproduces today's exact order. The per-file `ws:<name>` unit id and
-    // `Utf16Cols` move inside the closure.
-    use rayon::prelude::*;
-    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
-        sorted
-            .par_iter()
-            .map(|(fname, source)| {
-                let source_unit_id = format!("ws:{fname}");
-                let cols = Utf16Cols::new(source);
-                let mut ws = L3Workspace {
-                    objects: Vec::new(),
-                    tables: Vec::new(),
-                    routines: Vec::new(),
-                };
-                project_file(
-                    source,
-                    app_guid,
-                    model_instance_id,
-                    &source_unit_id,
-                    &cols,
-                    &mut ws,
-                );
-                ws
-            })
-            .collect()
-    });
-
-    let mut workspace = L3Workspace {
-        objects: Vec::new(),
-        tables: Vec::new(),
-        routines: Vec::new(),
-    };
-    for mut frag in fragments {
-        workspace.objects.append(&mut frag.objects);
-        workspace.tables.append(&mut frag.tables);
-        workspace.routines.append(&mut frag.routines);
-    }
-    workspace
-}
-
-/// Assemble the workspace L3 model from inline `(source_unit_id, source)` units,
-/// using the GIVEN `source_unit_id` verbatim for each file's anchors (instead of
-/// the `ws:<name>` form `assemble_workspace` hardcodes). The R3a-4 dependency
-/// producer needs this so each embedded `.al` file's op/callsite anchors carry the
-/// al-sem `dep:<appGuid>:<relativePath>` source-unit id (the cited-evidence
-/// `sourceFile` field), matching `ingestDependencyApp`'s embedded-source path.
-///
-/// Units are sorted by `source_unit_id` (the same total order
-/// `iterateEmbeddedSource` yields: sorted-by-relative-path → here the unit ids are
-/// `dep:<appGuid>:<sorted relativePath>`), then walked in document order. NOT
-/// resolved — the caller runs `resolve`.
-pub fn assemble_workspace_units(
-    units: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Workspace {
-    let _s = pt::span("l3", "l3.parse_project_parallel");
-    let mut sorted: Vec<&(String, String)> = units.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Parallel per-file parse+project into PRIVATE fragments on the big-stack
-    // pool, then fold in the SAME sorted order — byte-identical Vec order (see
-    // the sibling `assemble_workspace` for the full rationale). Uses each unit's
-    // `source_unit_id` verbatim for anchors (no `ws:<name>` synthesis here).
-    use rayon::prelude::*;
-    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
-        sorted
-            .par_iter()
-            .map(|(source_unit_id, source)| {
-                let cols = Utf16Cols::new(source);
-                let mut ws = L3Workspace {
-                    objects: Vec::new(),
-                    tables: Vec::new(),
-                    routines: Vec::new(),
-                };
-                project_file(
-                    source,
-                    app_guid,
-                    model_instance_id,
-                    source_unit_id,
-                    &cols,
-                    &mut ws,
-                );
-                ws
-            })
-            .collect()
-    });
-
-    let mut workspace = L3Workspace {
-        objects: Vec::new(),
-        tables: Vec::new(),
-        routines: Vec::new(),
-    };
-    for mut frag in fragments {
-        workspace.objects.append(&mut frag.objects);
-        workspace.tables.append(&mut frag.tables);
-        workspace.routines.append(&mut frag.routines);
-    }
-    workspace
-}
-
-/// Convenience: assemble + resolve with the default model-instance id (`r0`).
-pub fn assemble_and_resolve_default(files: &[(String, String)], app_guid: &str) -> L3Resolved {
-    assemble_and_resolve(files, app_guid, MODEL_INSTANCE_ID_DEFAULT)
-}
-
-/// Disk-backed assemble + resolve over a workspace directory (the emitter +
-/// differential entry point). Reuses L2's discovery so the file order, BOM
-/// strip, app-guid read, and fail-closed layout detection match al-sem EXACTLY:
-/// a sound workspace is ONE AL app (readable root `app.json` `id`, single
-/// `app.json` excl. node_modules/.alpackages). The inline `ws:<relPosix>` unit
-/// ids match `project_workspace`.
-///
-/// `skip_roots_config`: when true, skip loading/overlaying `roots.config.json`
-/// even if present — AST-only root classification (`--no-roots-config` on the
-/// `alsem fingerprint` CLI; `compute_root_classifications` already supports
-/// this via `workspace_root: None`, so this just threads the caller's choice
-/// through instead of hardcoding `Some(workspace)`).
-///
-/// Returns `None` on an unsound / empty layout (fail-closed) — never throws.
-pub fn assemble_and_resolve_workspace(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-    skip_roots_config: bool,
-) -> Option<L3Resolved> {
-    let ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
-    finish_resolved(ws, workspace, skip_roots_config)
-}
-
-/// [`assemble_and_resolve_workspace`] over the program engine's parse (engine-switch
-/// S2a): the same file set, text, order and passes, but each file is projected from
-/// `ctx`'s already-parsed tree instead of being parsed a second time.
-///
-/// The file set is L3's own: app-scoped discovery (nested apps skipped), while the
-/// program engine's workspace unit includes nested apps (`provider.rs`), so the
-/// program files are FILTERED to the app-scoped set. If any app-scoped file is
-/// missing from the program's parse (the two walks disagreeing, e.g. a file created
-/// between them), the model is built from disk exactly as before.
+/// The file set is app-scoped discovery (nested apps skipped; `roots.config.json`
+/// read unless `skip_roots_config`), while the program engine's workspace unit
+/// includes nested apps (`provider.rs`), so the program files are FILTERED to the
+/// app-scoped set. If any app-scoped file is missing from the program's parse (the
+/// two walks disagreeing, e.g. a file created between them), the model fails closed
+/// (`None`, engine-switch S9.1).
 ///
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
@@ -1599,7 +1378,7 @@ pub fn assemble_and_resolve_workspace_from_program(
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<L3Resolved> {
+) -> Option<ModelRows> {
     let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
     finish_resolved(ws, workspace, skip_roots_config)
 }
@@ -1626,7 +1405,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<(L3Resolved, AbiRowIds)> {
+) -> Option<(ModelRows, AbiRowIds)> {
     let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
     let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand, parenless);
     Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
@@ -1660,7 +1439,7 @@ pub struct DeclaredDependencyDecl {
 pub type AbiRowIds = HashMap<crate::program::node::RoutineNodeId, String>;
 
 fn append_dependency_rows(
-    ws: &mut L3Workspace,
+    ws: &mut ModelEntities,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
@@ -1830,7 +1609,7 @@ fn assemble_l3_workspace_from_program(
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<L3Workspace> {
+) -> Option<ModelEntities> {
     let selected = {
         let _s = pt::span("l3", "l3.select_program_parse");
         select_program_files(workspace, ctx)?
@@ -1855,17 +1634,18 @@ fn assemble_l3_workspace_from_program(
     let population = rows_population(&ctx.graph().workspace_rows);
     let no_decls = FilePopulation::new();
     let no_calls = std::collections::HashSet::new();
-    // Same deterministic order and fold as `assemble_workspace`.
+    // Deterministic order: files sorted by name (the `ws:<name>` unit id order),
+    // projected in parallel into private fragments, folded back in that order.
     let mut sorted = files;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     use rayon::prelude::*;
-    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
+    let fragments: Vec<ModelEntities> = crate::big_stack::big_stack_pool().install(|| {
         sorted
             .par_iter()
             .map(|(fname, pf)| {
                 let source_unit_id = format!("ws:{fname}");
                 let cols = Utf16Cols::new(&pf.text);
-                let mut ws = L3Workspace {
+                let mut ws = ModelEntities {
                     objects: Vec::new(),
                     tables: Vec::new(),
                     routines: Vec::new(),
@@ -1897,7 +1677,7 @@ fn assemble_l3_workspace_from_program(
             })
             .collect()
     });
-    let mut workspace = L3Workspace {
+    let mut workspace = ModelEntities {
         objects: Vec::new(),
         tables: Vec::new(),
         routines: Vec::new(),
@@ -1910,13 +1690,13 @@ fn assemble_l3_workspace_from_program(
     Some(workspace)
 }
 
-/// The finishing half shared by the disk-backed and program-backed entries:
-/// resolve, classify roots, read the primary app, and refuse an empty model.
+/// The finishing half shared by the single-app and cross-app entries: resolve,
+/// classify roots, read the primary app, and refuse an empty model.
 fn finish_resolved(
-    mut ws: L3Workspace,
+    mut ws: ModelEntities,
     workspace: &std::path::Path,
     skip_roots_config: bool,
-) -> Option<L3Resolved> {
+) -> Option<ModelRows> {
     let resolved = {
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`.
@@ -1936,13 +1716,11 @@ fn finish_resolved(
         // Mirrors al-sem `model.identity.primaryApp`. Never throws — returns None
         // on unreadable / malformed app.json (fail-closed / engine-never-throws).
         let primary_app = read_primary_app_from_disk(workspace);
-        L3Resolved {
+        ModelRows {
             workspace: ws,
             root_classifications,
             primary_app,
             infra_diagnostics,
-            precomputed_calls: None,
-            precomputed_events: None,
         }
     };
     // Empty fail-closed model (no objects/routines) → treat as not-analyzable.
@@ -1950,57 +1728,6 @@ fn finish_resolved(
         return None;
     }
     Some(resolved)
-}
-
-/// Assemble the workspace L3 model from disk WITHOUT resolving — the pre-resolve
-/// assembly half of [`assemble_and_resolve_workspace`], exposed so the R2.5b
-/// cross-app wiring can append dep entities BEFORE running `resolve` over the
-/// merged whole. Fail-closed: an unsound/empty native layout yields `None`
-/// (readable root `app.json` `id`, single `app.json`, ≥1 readable `.al`).
-pub fn assemble_l3_workspace_from_disk(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-) -> Option<L3Workspace> {
-    use crate::program::body::l2_workspace::{
-        discover_al_files_app_scoped, read_al_source, read_root_app_guid,
-    };
-
-    let (app_guid, files): (String, Vec<(String, String)>) = {
-        let _s = pt::span("l3", "l3.discover_read");
-        // Fail-closed: need a readable root app.json with a string `id`. The single-app
-        // guard is gone — a nested `app.json` is a SEPARATE project, so discovery is
-        // scoped to THIS app (nested sub-apps are excluded). A monorepo / `Modules/`
-        // layout (root app + nested apps) thus analyzes the root app; each nested app is
-        // analyzed by pointing the workspace at its own root. (The gate keeps its own
-        // multi-app provider check in `workspace_diagnostics` — this only relaxes the L3
-        // analysis path that `aldump` / cross-app stats use.)
-        let app_guid = read_root_app_guid(workspace)?;
-        let discovered = discover_al_files_app_scoped(workspace).ok()?;
-
-        // Build (relPosix, source) pairs in discovery (rel-posix-sorted) order; the
-        // inline assembler re-sorts by name, which is the same total order.
-        let mut files: Vec<(String, String)> = Vec::new();
-        for f in &discovered {
-            match read_al_source(&f.abs_path) {
-                Ok(src) => files.push((f.rel_posix.clone(), src)),
-                Err(e) => {
-                    eprintln!("warning: skipping {} (read error: {e})", f.rel_posix);
-                }
-            }
-        }
-        (app_guid, files)
-    };
-
-    if files.is_empty() {
-        return None;
-    }
-
-    Some(assemble_workspace(&files, &app_guid, model_instance_id))
-}
-
-/// Disk-backed convenience with the default model-instance id (`r0`).
-pub fn assemble_and_resolve_workspace_default(workspace: &std::path::Path) -> Option<L3Resolved> {
-    assemble_and_resolve_workspace(workspace, MODEL_INSTANCE_ID_DEFAULT, false)
 }
 
 /// Read the primary app's identity from the workspace root `app.json`.
@@ -2042,31 +1769,26 @@ fn read_primary_app_from_disk(
 /// `build_symbol_table → resolve_record_types → merge_extension_fields`.
 /// `tableId` is set by record-types and never re-touched by the merge.
 ///
-/// L3-ONLY BOUNDARY (R2.5b Rev 2 #5): the input `L3Workspace`
+/// L3-ONLY BOUNDARY (R2.5b Rev 2 #5): the input `ModelEntities`
 /// (objects/tables/routines) is an L3-only merged index. Its entity structs carry
 /// NO L4/cone/summary field — there is no `summary`, `intraAppCallEdges`,
 /// `citedOperationEvidence`, `depOrderIndex`, capability-cone, or typed-edge field
-/// anywhere on `L3Object`/`L3Table`/`L3Routine`. So L4 state CANNOT influence L3:
-/// the boundary is enforced by the TYPE, not a runtime strip. When R2.5b feeds the
-/// merged (workspace + `.app`-dep) index here (`deps::cross_app_l3`), the dep side
-/// likewise comes from `project_abi_to_index`, which emits only these L3 structs.
-/// DO NOT add an L4 field to these entity structs (it would breach the boundary the
-/// `cross_app_l3_poison` test guards). NOTHING in `resolve` reads beyond them.
-pub fn resolve(workspace: &mut L3Workspace) {
+/// anywhere on `ModelObject`/`ModelTable`/`ModelRoutine`. So L4 state CANNOT influence L3:
+/// the boundary is enforced by the TYPE, not a runtime strip. In a cross-app model
+/// the symbol-only dependency rows likewise come from `project_abi_to_index`, which
+/// emits only these structs. DO NOT add an L4 field to these entity structs.
+/// NOTHING in `resolve` reads beyond them.
+pub fn resolve(workspace: &mut ModelEntities) {
     let _s = pt::span("l3", "l3.resolve");
-    // ROUTINE-FREE index (see `SymbolTable::build_without_routines`): the loop
-    // below takes `&mut workspace.routines`, so the table — which borrows the
-    // workspace rather than cloning it — must not hold `&workspace.routines`.
-    // It never needed to: `resolve_routine_record_types` only ever asks the
-    // table about objects and tables. `objects`/`tables` are disjoint fields, so
-    // borrowing them immutably alongside the mutable routine walk is fine.
-    let symbols = SymbolTable::build_without_routines(&workspace.objects, &workspace.tables);
+    // The loop below takes `&mut workspace.routines`; the table borrows only
+    // `objects`/`tables`, disjoint fields, so that is fine.
+    let symbols = SymbolTable::build(&workspace.objects, &workspace.tables);
 
     // objectId → object, so a routine maps back to its owning object. Borrowed,
-    // not cloned — `resolve_routine_record_types` takes `Option<&L3Object>`, and
+    // not cloned — `resolve_routine_record_types` takes `Option<&ModelObject>`, and
     // `HashMap::insert` is LAST-wins on a duplicate id either way.
     use std::collections::HashMap;
-    let object_by_id: HashMap<&str, &L3Object> = workspace
+    let object_by_id: HashMap<&str, &ModelObject> = workspace
         .objects
         .iter()
         .map(|o| (o.id.as_str(), o))
@@ -2096,51 +1818,41 @@ pub fn to_stable_table_id(internal: &str) -> String {
     }
 }
 
-/// A resolved workspace, exposing the StableTableId-projected lookups the parity
-/// surface compares.
-pub struct L3Resolved {
-    pub workspace: L3Workspace,
+/// The model's rows before its calls exist: what the assembly entries build, and
+/// what `program_calls::attach_program_calls` turns into an [`Model`]. A
+/// separate type so a model without calls cannot reach a consumer (engine-switch
+/// S9.6: until then the calls were optional and a missing one fell back to L3's
+/// own resolver).
+pub struct ModelRows {
+    pub workspace: ModelEntities,
+    pub root_classifications: Vec<crate::engine::root_classification::RootClassification>,
+    pub primary_app: Option<crate::engine::gate::app_attribution::App>,
+    pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+}
+
+/// The detector model: the rows, with the program engine's calls and event graph.
+pub struct Model {
+    pub workspace: ModelEntities,
     /// R4-F root classifications (`model.rootClassifications`): the AST root
-    /// classifier overlaid with any `<workspace>/roots.config.json`. Computed at
-    /// the disk-backed resolve entry (`assemble_and_resolve_workspace`, where the
-    /// workspace root is known); the inline / cross-app constructors that have no
-    /// disk config populate the AST-only set (empty config). Consumed by the L5
-    /// `DetectorContext` (d50/d51) and the R4-F stable projection.
+    /// classifier overlaid with any `<workspace>/roots.config.json` (unless the
+    /// caller skips it). Consumed by the L5 `DetectorContext` (d50/d51) and the
+    /// R4-F stable projection.
     pub root_classifications: Vec<crate::engine::root_classification::RootClassification>,
     /// The primary app's identity (`model.identity.primaryApp`): name / publisher /
-    /// version read from the workspace `app.json`. Populated by the disk-backed
-    /// assembly path (`assemble_and_resolve_workspace`); `None` in the inline /
-    /// cross-app constructors (no disk `app.json` to read). Consumed by the html
-    /// formatter's masthead/title (Stage A3) and any future envelope that needs the
-    /// primary app description. Additive — `L3Resolved` is NOT serialized into any
-    /// golden surface, so adding this field never moves a golden.
+    /// version read from the workspace `app.json`; `None` if it is unreadable.
+    /// Consumed by the html formatter's masthead/title (Stage A3), coverage and
+    /// the cross-app base. `Model` is NOT serialized into any golden surface.
     pub primary_app: Option<crate::engine::gate::app_attribution::App>,
     /// Infrastructure diagnostics from the root-classification overlay (e.g.
-    /// `kinds-mismatch` warnings from `roots.config.json`). Empty for inline /
-    /// cross-app paths that have no disk config. Propagated to the JSON envelope.
+    /// `kinds-mismatch` warnings from `roots.config.json`). Propagated to the JSON
+    /// envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
-    /// An externally supplied call resolution. `Some` on the `alsem analyze` path
-    /// and in the r4/r4f test helper (both set by
-    /// `program_calls::attach_program_calls`: the program engine's calls); `None`
-    /// for every other consumer, which runs `resolve_calls` itself (CLAUDE.md lists
-    /// them). When `Some`, these sites read it via `call_resolver::calls_for`:
-    /// - on the `alsem analyze` path: the detector context
-    ///   (`build_detector_context`), the ordering-facts base
-    ///   (`build_r3a3_source_only_base`) and coverage (`project_coverage`);
-    /// - switched but NOT on the analyze path: `project_r3a3` and
-    ///   `compute_r3a3_real_matrix`;
-    /// - the cross-app base (`capability_cone::build_cross_app_base`, engine-switch
-    ///   S7.4) reads the cross-app model's, set by
-    ///   `program_calls::assemble_and_resolve_cross_app_program`;
-    /// - still L3's own resolver: `project_coverage_cross_app` and the `--l3-*`
-    ///   cross-app modes, which measure L3 (S9).
-    pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
+    /// The program engine's calls, adapted to the model's call shape
+    /// (`program_calls::attach_program_calls`).
+    pub calls: std::sync::Arc<super::calls::ResolvedCalls>,
     /// The detector event graph built from the program engine's subscription
-    /// inventory (engine-switch S4.2). Set together with `precomputed_calls`, by
-    /// the same function, for the same consumers; they read it through
-    /// `event_graph::events_for`. `None` everywhere else, which builds L3's
-    /// source-only event graph.
-    pub precomputed_events: Option<std::sync::Arc<super::events::ProgramEvents>>,
+    /// inventory (engine-switch S4.2), by the same function.
+    pub events: std::sync::Arc<super::events::ProgramEvents>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2213,17 +1925,17 @@ pub struct PTableRecordTypes {
 
 /// The full L3 record-type projection — the golden document shape.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct L3RecordTypeProjection {
+pub struct RecordTypeProjection {
     pub tables: Vec<PTableRecordTypes>,
     pub routines: Vec<PRoutineRecordTypes>,
 }
 
-impl L3Resolved {
+impl Model {
     /// Project the resolved workspace to the golden-shaped L3 record-type
     /// projection. Tables sorted by StableTableId; routines by StableRoutineId;
     /// record vars by (name, tableId); record ops by operationId; fields by
     /// (fieldNumber, name) — matching `scripts/r2a-l3-projection.ts`.
-    pub fn project(&self) -> L3RecordTypeProjection {
+    pub fn project(&self) -> RecordTypeProjection {
         let mut tables: Vec<PTableRecordTypes> = self
             .workspace
             .tables
@@ -2299,7 +2011,7 @@ impl L3Resolved {
             .collect();
         routines.sort_by(|a, b| a.stable_routine_id.cmp(&b.stable_routine_id));
 
-        L3RecordTypeProjection { tables, routines }
+        RecordTypeProjection { tables, routines }
     }
 }
 
@@ -2315,10 +2027,10 @@ pub struct ProjectedField {
 
 /// A routine view exposing resolved record var / op StableTableIds by name.
 pub struct RoutineView<'a> {
-    routine: &'a L3Routine,
+    routine: &'a ModelRoutine,
 }
 
-impl L3Resolved {
+impl Model {
     /// Find a routine by name (first match in assembled order).
     pub fn routine_by_name(&self, name: &str) -> Option<RoutineView<'_>> {
         self.workspace
@@ -2413,7 +2125,7 @@ impl RoutineView<'_> {
 
 /// A table view exposing the merged fields (StableObjectId provenance).
 pub struct TableView<'a> {
-    table: &'a L3Table,
+    table: &'a ModelTable,
 }
 
 impl TableView<'_> {
@@ -2446,8 +2158,8 @@ impl TableView<'_> {
 mod tests {
     use super::*;
 
-    fn var(name: &str, ty: &str, scope: &str) -> L3Variable {
-        L3Variable {
+    fn var(name: &str, ty: &str, scope: &str) -> ModelVariable {
+        ModelVariable {
             name: name.to_string(),
             declared_type: ty.to_string(),
             is_parameter: scope == "parameter",
@@ -2466,7 +2178,7 @@ mod tests {
     /// used to materialize per routine.
     #[test]
     fn routine_variables_yields_own_then_unshadowed_globals() {
-        let globals: Arc<[L3Variable]> = Arc::from(vec![
+        let globals: Arc<[ModelVariable]> = Arc::from(vec![
             var("ga", "Integer", "global"),
             var("shadowed", "Integer", "global"),
             var("gb", "Text", "global"),
@@ -2517,7 +2229,7 @@ mod tests {
     /// same allocation. This is the whole point of the representation.
     #[test]
     fn routine_variables_share_one_global_allocation() {
-        let globals: Arc<[L3Variable]> = Arc::from(vec![var("g", "Integer", "global")]);
+        let globals: Arc<[ModelVariable]> = Arc::from(vec![var("g", "Integer", "global")]);
         let a = RoutineVariables::new(vec![var("x", "Integer", "local")], Arc::clone(&globals));
         let b = RoutineVariables::new(vec![var("y", "Integer", "local")], Arc::clone(&globals));
         assert!(
@@ -2564,7 +2276,11 @@ codeunit 50816 "T5 F3 Dedup"
 }
 "#;
         let files = vec![("src/T5F3Dedup.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "66666666-0000-0000-0000-0000000cp5f3");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "66666666-0000-0000-0000-0000000cp5f3",
+            );
         let routine = resolved
             .workspace
             .routines
@@ -2572,7 +2288,7 @@ codeunit 50816 "T5 F3 Dedup"
             .find(|r| r.name.eq_ignore_ascii_case("DoIt"))
             .expect("fixture precondition: the DoIt procedure");
 
-        let globals: Vec<&L3Variable> = routine
+        let globals: Vec<&ModelVariable> = routine
             .variables
             .iter()
             .filter(|v| v.name == "myglobal")
@@ -2592,12 +2308,12 @@ codeunit 50816 "T5 F3 Dedup"
 
     // Task 2 (BCQuality wave): `SingleInstance` (Codeunit) + the Page write-surface
     // booleans (`Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`) forward
-    // onto `L3Object`, plus the object decl's own `source_anchor` — substrate for
+    // onto `ModelObject`, plus the object decl's own `source_anchor` — substrate for
     // d57/d64. Fixture: `tests/fixtures/props/`.
     #[test]
     fn object_property_forwards_single_instance_and_page_write_surface() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/props");
-        let resolved = assemble_and_resolve_workspace_default(&dir).expect("assemble");
+        let resolved = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&dir).expect("assemble");
         let cu = resolved
             .workspace
             .objects
@@ -2621,12 +2337,12 @@ codeunit 50816 "T5 F3 Dedup"
         );
     }
 
-    // Task 3 (BCQuality wave): `PVariableSymbol.scope` forwards onto `L3Variable` —
+    // Task 3 (BCQuality wave): `PVariableSymbol.scope` forwards onto `ModelVariable` —
     // substrate for d57. Fixture: `tests/fixtures/props/` (adds `src/b.al`).
     #[test]
     fn variable_scope_forwarded_to_l3() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/props");
-        let resolved = assemble_and_resolve_workspace_default(&dir).expect("assemble");
+        let resolved = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&dir).expect("assemble");
         let r = resolved
             .workspace
             .routines
@@ -2685,7 +2401,11 @@ page 50813 "CP3 Wizard"
 }
 "#;
         let files = vec![("src/CP3Wizard.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "33333333-0000-0000-0000-0000000cp003");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "33333333-0000-0000-0000-0000000cp003",
+            );
         let routines = &resolved.workspace.routines;
 
         let ids_named = |n: &str| -> Vec<String> {
@@ -2804,10 +2524,14 @@ page 50815 "CP5 Wizard"
 }
 "#;
         let files = vec![("src/CP5Wizard.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "55555555-0000-0000-0000-0000000cp005");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "55555555-0000-0000-0000-0000000cp005",
+            );
         let routines = &resolved.workspace.routines;
 
-        let named = |n: &str| -> Vec<&L3Routine> {
+        let named = |n: &str| -> Vec<&ModelRoutine> {
             routines
                 .iter()
                 .filter(|r| r.name.eq_ignore_ascii_case(n))
@@ -2889,8 +2613,8 @@ page 50815 "CP5 Wizard"
     /// `stableRoutineId`), but it IS observable: `build_proutine` feeds it to
     /// `project_routine_features_ir`, which mints every op/callsite id as
     /// `{routine_id}/op{n}` / `{routine_id}/cs{n}`. Stripping the last `/`-segment
-    /// recovers exactly the id the L2 path computed — the same recovery
-    /// `call_graph_projection::StableMap::stable_site` performs in production.
+    /// recovers exactly the id the L2 path computed — the same recovery coverage's
+    /// `stable_site` performs in production.
     #[test]
     fn l2_and_l3_agree_on_the_id_of_an_escaped_enclosing_member() {
         // ONE `OnValidate`, under a member whose logical name contains a literal `"`
@@ -2931,8 +2655,11 @@ page 50814 "CP4 Wizard"
 
         // --- L3 path -------------------------------------------------------
         let files = vec![(UNIT.trim_start_matches("ws:").to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, APP_GUID);
-        let l3: Vec<&L3Routine> = resolved
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files, APP_GUID,
+            );
+        let l3: Vec<&ModelRoutine> = resolved
             .workspace
             .routines
             .iter()
@@ -3068,7 +2795,7 @@ mod population_tests {
             fewer.workspace.routines.len() + 1,
             full.workspace.routines.len()
         );
-        let at = |r: &L3Routine| {
+        let at = |r: &ModelRoutine| {
             (
                 r.source_anchor.source_unit_id.clone(),
                 r.source_anchor.start_line,

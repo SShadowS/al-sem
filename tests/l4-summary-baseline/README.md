@@ -123,9 +123,10 @@ it is honestly labelled `cdo-`, not a mislabelled DO capture).
 
 - **Corpus:** `CDO_WS=U:/Git/DO.Support-SlowDOSetup/DocumentOutput/Cloud` (this
   repo's only `CDO_WS`), assembled the same way as
-  `cdo_whole_program_v2_matches_frozen_digest` (`assemble_and_resolve_workspace_default`
-  → `SymbolTable::build` → `resolve_calls` → `build_event_graph` →
-  `build_combined_graph` → `tarjan_scc`), then
+  `cdo_whole_program_v2_matches_frozen_digest` (at capture: L3's
+  `assemble_and_resolve_workspace_default` → `SymbolTable::build` → `resolve_calls`
+  → `build_event_graph` → `build_combined_graph` → `tarjan_scc`; since engine-switch
+  S9.5d the production model's own calls and events, re-frozen then), then
   `compute_summaries_v2_bundle_with_leaves` to get the compact `SummaryBundle`
   `ReverseEffectIndex::build` reads. At capture: 4842 routines-with-rows, 61
   tables, 2787 effects in the frozen universe.

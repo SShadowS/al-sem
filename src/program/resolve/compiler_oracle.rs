@@ -46,7 +46,7 @@ struct CNode {
 }
 
 /// The edge classes both engines share.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EdgeClass {
     /// Direct calls, method calls, interface dispatch, object runs.
     Call,
@@ -258,6 +258,54 @@ pub fn reclassify_entry_runs(
             e.kind = EdgeKind::Run;
         }
     }
+}
+
+/// A program routine as the compiler graph names a caller.
+#[must_use]
+pub fn routine_of_node(
+    id: &crate::program::node::RoutineNodeId,
+    apps: &crate::program::node::AppRegistry,
+) -> Routine {
+    key_routine(&crate::program::resolve::differential::routine_to_key(
+        id, apps,
+    ))
+}
+
+/// A program routine as the compiler graph names a callee.
+#[must_use]
+pub fn target_of_node(
+    id: &crate::program::node::RoutineNodeId,
+    apps: &crate::program::node::AppRegistry,
+) -> Target {
+    let r = routine_of_node(id, apps);
+    Target {
+        app: r.app,
+        object_key: r.object_key,
+        routine: r.routine,
+    }
+}
+
+/// Every (caller, class, callee) pair with the first line it occurs on, the
+/// granularity of the compiler graph (see [`pairs`]); self-recursion is left
+/// out, as there.
+#[must_use]
+pub fn pair_lines(
+    sites: &BTreeMap<Site, BTreeSet<Target>>,
+) -> BTreeMap<(Routine, EdgeClass, Target), u32> {
+    let mut out: BTreeMap<(Routine, EdgeClass, Target), u32> = BTreeMap::new();
+    for (site, targets) in sites {
+        let c = &site.caller;
+        for t in targets {
+            if t.app == c.app && t.object_key == c.object_key && t.routine == c.routine {
+                continue;
+            }
+            let line = out
+                .entry((c.clone(), site.class, t.clone()))
+                .or_insert(site.line);
+            *line = (*line).min(site.line);
+        }
+    }
+    out
 }
 
 fn key_routine(k: &CanonicalKey) -> Routine {

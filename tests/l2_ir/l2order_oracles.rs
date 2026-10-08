@@ -91,7 +91,7 @@
 //! AND al-sem). As of this gate every case passes with no `src/engine/l2/**`
 //! change required.
 
-use al_sem::engine::l2::operation_order::{
+use al_sem::program::body::operation_order::{
     OperationOrder, RoutineOperationOrder, ScopeFrame, analyze_named_routine_order,
 };
 use std::collections::HashMap;

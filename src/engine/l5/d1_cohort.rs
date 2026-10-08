@@ -40,7 +40,6 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
 #[cfg(test)]
 use crate::engine::l4::summary::{Uncertainty, uncertainty_key};
 use crate::engine::l5::d1_liveness::Liveness;
@@ -48,6 +47,7 @@ use crate::engine::l5::d1_witness::WitnessSummary;
 pub(crate) use crate::engine::l5::detector_context::UncertaintyId;
 use crate::engine::l5::detector_context::{UncertaintyIndex, UncertaintySetId};
 use crate::engine::l5::detectors::d1::TempVerdict;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// A loop-group index — dense over the sorted loop-group universe
 /// (`search_loops`'s `groups` vector; up to ~6178 groups on Base App 8020).
@@ -511,7 +511,7 @@ impl PathUncertaintyCache {
 /// representative), and the per-verdict reachable-loop bitmaps
 /// (`verdict_sets[verdict as usize]`).
 pub(crate) struct TerminalCohorts<'a> {
-    pub key: (&'a L3Routine, &'a L3RecordOperation),
+    pub key: (&'a ModelRoutine, &'a ModelRecordOperation),
     pub cohorts: Vec<(ContextKey, GroupBitmap, CohortRep)>,
     pub verdict_sets: [GroupBitmap; 4],
 }
@@ -533,7 +533,7 @@ pub(crate) struct TerminalSink<'a> {
     /// identity (`terminals`) is the first-seen routine+op REFERENCE, so the
     /// finding builder never re-derives the op from a colliding-id sibling.
     ix_of: HashMap<(&'a str, &'a str), TerminalIx>,
-    terminals: Vec<(&'a L3Routine, &'a L3RecordOperation)>,
+    terminals: Vec<(&'a ModelRoutine, &'a ModelRecordOperation)>,
     /// Per terminal: `ContextKey -> (loop cohort, first-seen representative)`.
     cohorts: Vec<HashMap<ContextKey, (GroupBitmap, CohortRep)>>,
     /// Per terminal: per-verdict (indexed `verdict as usize`) reaching loops.
@@ -574,8 +574,8 @@ impl<'a> TerminalSink<'a> {
     /// `ix_of`/`terminals` doc for why the reference, not the id, is kept.
     pub(crate) fn terminal_ix(
         &mut self,
-        owner: &'a L3Routine,
-        op: &'a L3RecordOperation,
+        owner: &'a ModelRoutine,
+        op: &'a ModelRecordOperation,
     ) -> TerminalIx {
         let key = (owner.id.as_str(), op.id.as_str());
         if let Some(&ix) = self.ix_of.get(&key) {

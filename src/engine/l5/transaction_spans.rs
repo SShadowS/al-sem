@@ -33,8 +33,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::engine::l2::features::PCallee;
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ResBitset};
 use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, frame_guards_over};
 use crate::engine::l5::capability_query::reachable_coverage;
@@ -43,6 +41,8 @@ use crate::engine::l5::pending_writes::{
     ForwardSites, Pending, forward_sites, is_checked_run, pending_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
+use crate::program::body::features::PCallee;
+use crate::program::model::workspace::ModelRoutine;
 
 const MAX_DEPTH: usize = 50;
 
@@ -94,7 +94,7 @@ pub struct TransactionSpan {
 }
 
 /// `roleOf(r) === "primary"` — true when NOT in the dependency universe.
-fn is_primary(routine: &L3Routine, dep_routine_ids: &BTreeSet<String>) -> bool {
+fn is_primary(routine: &ModelRoutine, dep_routine_ids: &BTreeSet<String>) -> bool {
     !dep_routine_ids.contains(&routine.id)
 }
 
@@ -353,7 +353,7 @@ struct SpanInputs<'a> {
     reverse: &'a ReverseCallGraph,
     summaries: &'a HashMap<String, FullRoutineSummary>,
     cone_derived: &'a ConeDerivedStore,
-    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
+    routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
     fwd: &'a ForwardSites<'a>,
 }
 
@@ -372,7 +372,7 @@ struct SpanScratch {
 /// What the seed routine's parameters must be for `site` (a Commit, or a
 /// checked run) to run.
 fn seed_reqs(
-    r: &L3Routine,
+    r: &ModelRoutine,
     site: &str,
     inputs: &SpanInputs<'_>,
     scratch: &mut SpanScratch,
@@ -472,7 +472,7 @@ fn span_template<'c>(
 /// `writes_tables` / `publishes_events` unions read; must be the store built
 /// from the SAME cone walk that produced `summaries`.
 pub fn compute_transaction_spans(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
     reverse: &ReverseCallGraph,
     summaries: &HashMap<String, FullRoutineSummary>,
@@ -503,7 +503,7 @@ pub fn compute_transaction_spans(
     // Everything about a span that depends only on the seed ROUTINE — cached
     // per distinct seed routine id (see `span_template` above `compute_transaction_spans`).
     let mut template_cache: HashMap<String, SpanTemplate> = HashMap::new();
-    let routine_by_id: HashMap<&str, &L3Routine> =
+    let routine_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let fwd = forward_sites(reverse);
     let inputs = SpanInputs {
@@ -516,32 +516,33 @@ pub fn compute_transaction_spans(
     };
     // The seed routine's own pending part, up to ONE Commit (or checked run),
     // joined with the template's.
-    let pending_at = |t: &SpanTemplate, seed: &L3Routine, at: &str| -> (Vec<String>, Vec<String>) {
-        let own = pending_before(
-            seed,
-            &[at],
-            false,
-            &fwd,
-            &routine_by_id,
-            summaries,
-            cone_derived,
-        );
-        let tables: BTreeSet<String> = t
-            .pending_others
-            .tables
-            .iter()
-            .cloned()
-            .chain(own.tables)
-            .collect();
-        let events: BTreeSet<String> = t
-            .pending_others
-            .events
-            .iter()
-            .cloned()
-            .chain(own.events)
-            .collect();
-        (tables.into_iter().collect(), events.into_iter().collect())
-    };
+    let pending_at =
+        |t: &SpanTemplate, seed: &ModelRoutine, at: &str| -> (Vec<String>, Vec<String>) {
+            let own = pending_before(
+                seed,
+                &[at],
+                false,
+                &fwd,
+                &routine_by_id,
+                summaries,
+                cone_derived,
+            );
+            let tables: BTreeSet<String> = t
+                .pending_others
+                .tables
+                .iter()
+                .cloned()
+                .chain(own.tables)
+                .collect();
+            let events: BTreeSet<String> = t
+                .pending_others
+                .events
+                .iter()
+                .cloned()
+                .chain(own.events)
+                .collect();
+            (tables.into_iter().collect(), events.into_iter().collect())
+        };
     // ONE bitset pair for the whole run: `aggregate_span` clears and refills them
     // per template, so the union never allocates per routine or per element.
     let mut scratch = SpanScratch {

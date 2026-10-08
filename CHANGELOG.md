@@ -7,7 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Overload selection follows the compiler where it is proven** (engine-switch
+  S9.5c). Probed with alc 18.0.41.45789 and the altool graph (~90 calls):
+  - **An exact match beats a conversion.** `I(Integer; Text)` and
+    `I(Integer; Code[20])` called with `(Integer, Text)` bind the Text overload;
+    an enum value binds `EI(Enum)` over `EI(Integer)`. Until now any rival that
+    could take the argument by conversion blocked the pick.
+  - **Exact includes the length.** A by-value `Text`/`Code` match is exact only
+    when the argument fits: unbounded `Text` or `Text[60]` into
+    `TL(Text[50] | Code[20])` is AL0196 in the compiler and stays ambiguous;
+    `Text[30]` binds `Text[50]`.
+  - **A sole applicable overload binds.** When every other candidate is proven
+    unable to take the arguments, the one left binds, `Variant` included:
+    `V(Variant | Integer)` with an InStream binds `Variant` (this retires
+    Round-1 addendum I5, "never pick the Variant survivor"); `InitNew(...;
+    Integer; ...)`/`(...; Code[20]; ...)` with a Text binds Code[20], with a
+    Decimal binds Integer.
+  - **"Incompatible" is now sound.** It claimed six convertible pairs (Option,
+    Char, Byte, an enum into Integer; Guid and Text into each other) were
+    impossible. The relation is now built from single-overload calls (AL0133 =
+    inconvertible), not from `(Variant | T)` preferences, which mislead: a
+    Decimal binds `Variant` over `Integer` yet converts to Integer. The numeric-
+    like types (Integer, Decimal, BigInteger, Duration, Char, Byte, Option)
+    convert into each other; an enum with Integer/BigInteger/Option.
+  - Not attempted: ranking two needed conversions (the compiler binds
+    `Code[30]` into `TC(Text | Code[20])` to Text). Those calls stay ambiguous,
+    never guessed.
+  - L3 had resolved `ws-overload-negatives`' `CallVariant`; the switch had lost
+    it. CDO: dependency `ambiguousResolved` 679 -> 459; all 220 sites checked
+    against the compiler graph (178 at the exact line, 42 repeat calls on an
+    overload the compiler binds from that file), 0 wrong. Workspace unchanged
+    (0 unknown / 23).
+
+- **An enum value argument binds its enum overload** (engine-switch S9.5c).
+  `T.P("Probe Kind"::Open)` over `P(Enum "Probe Kind")`/`P(InStream)` stayed
+  an ambiguous overload: the argument was untyped. It now types as its enum,
+  as the compiler binds it (alc 18.0.41.45789 and the altool graph:
+  `EN(Enum|InStream)` and `EI(Enum|Integer)` both bind the Enum overload).
+  Only a bare qualifier that names an enum: an option value (`R.Opt::A`,
+  `K::A`, and a local option variable named like the enum, which the
+  compiler lets shadow it) binds `Integer`, so it stays untyped. L3 had
+  resolved `ws-overload-enum-discriminator`; the switch to the program model
+  had lost it. CDO: dependency `ambiguousResolved` 710 -> 679 (20 of the 31
+  sites checked against the compiler graph, all on the Enum overload; the
+  other 11 repeat a call the graph records once). Workspace unchanged (0
+  unknown / 23).
+
 ### Added
+
+- **An inline builder for the program-backed model** (engine-switch S9.2).
+  `program_calls::assemble_and_resolve_inline_program(files, app_guid,
+  model_instance_id)` (and `_default`) takes `(relative path, source)` pairs,
+  writes them with an `app.json` to a temporary directory and builds the model
+  exactly as `alsem analyze` does. Unit ids are `ws:<relative path>`, as in the
+  L3 inline builder it will replace in tests (S9.5). A test checks that every
+  single-app r0-corpus fixture passed inline gives the same model as built from
+  disk.
 
 - **A `cdo` cargo profile for correctness loops.** Optimized, but no LTO, 16
   codegen units and incremental builds. `scripts/cdo-gate` now uses it: after a
@@ -364,6 +421,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
 
 ### Changed
+
+- **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
+  rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
+  `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/
+  `L3RecordVariable`/`L3RecordOperation`/`L3Parameter`/`L3PageControl` →
+  `Model…`, `L3RecordTypeProjection` → `RecordTypeProjection`,
+  `L3EventGraphProjection` → `EventGraphProjection`. The `engine::l3::…` and
+  `engine::l2::…` alias paths are gone: every use names its real home
+  (`program::model::{workspace, calls, events, coverage, …}`, `program::body::…`),
+  and `src/engine/l3` no longer exists. Done by a one-off word-boundary script (the
+  owner allowed it for this rename only), checked by the compiler. No type name is
+  serialized; no golden moves.
+- **The r2c event-graph goldens project the program engine's event graph**
+  (engine-switch S9.5e), the one `alsem analyze` has read since S4. The stable
+  projection moved from `engine::l3::event_graph` to `program::model::events`;
+  r2c now stays after L3 is deleted. Six goldens move and two are minted, for
+  three causes (receipt): a table's platform events are `trigger` events whose
+  subscribers resolve (L3: unindexed, `maybe`); a subscriber naming its
+  publisher by number is kept as `unknown` (L3 dropped it); and a synthesized
+  symbol's names are case-folded.
+
+- **The r2a record-type and r2d coverage differentials build the production
+  model** (engine-switch S9.5e). No r2a golden moves. Two r2d goldens move,
+  for causes already triaged in S9.5c: the call to another object's `local`
+  procedure is unresolved (`ws-member-call-resolution`), and `CallIndistinct`
+  binds (`ws-overload-negatives`). The r2d manifest total is unchanged.
+
+- **The L4 summary differential and `perf_bounds` solve over the production
+  model** (engine-switch S9.5d). The two CDO tests of `l4_summary_differential`
+  and `perf_bounds`' L4 substrate read the program engine's calls and events
+  (`calls_for` / `events_for`) instead of L3's `resolve_calls` /
+  `build_event_graph`. The two CDO digests are re-frozen (5,479 routines; the
+  reverse index over 66 tables is checked against its slow oracle in the same
+  run before its digest is minted). The 19 synthetic fixture parities do not
+  involve L3 and are unchanged.
+
+- **The r3a1/2/3 differentials and oracles build the production model**
+  (engine-switch S9.5c; `r3a2_branch_aware` too). 11 goldens over 4 fixtures
+  move, each traced to its call-graph change (receipt): a call to a `local`
+  procedure of another object is no longer resolved (`member-not-found`, as L3
+  ignored access); `CallIndistinct` binds `I(Integer; Text)` (L3 left it
+  ambiguous); an argument-less `Insert()` raises no trigger; and the run of a
+  page that does not exist is unresolved. The manifest matrices follow. Two
+  regressions the census exposed were fixed first (enum value arguments, the
+  Variant fallback; see `### Fixed`), so `ws-overload-enum-discriminator` and
+  `CallVariant` now agree with L3. The r3a1/2/3 vector tests build the
+  program model too (their fixture names get `.al`, which the program engine
+  needs); every vector passes unchanged.
+
+- **The cli stats, diff and fingerprint differentials build the production
+  model** (engine-switch S9.5b). Four goldens move, each triaged against its
+  decoded content:
+  - `ws-d35` (stats both slots, fingerprint CBOR + gz): its three subscribers
+    name the publisher by number (`ObjectType::Codeunit, 50`, absent). L3 read
+    only `Codeunit::"Name"` and dropped them; the program engine keeps them as
+    `unknown` edges. d38's `skipped` gains `unresolved: 3`; the snapshot gains
+    the three subscriber declarations. Findings unchanged.
+  - `ws-txn-d49-pos-modify-runmodal` (fingerprint CBOR + gz): it runs a page
+    that does not exist. L3 filed the call as a `builtin`; the program engine
+    records a `page-run` to an unresolved object, so that routine's inherited
+    coverage and its permission facts become `partial`.
+
+- **Detector, gap and temp-state tests build the production model**
+  (engine-switch S9.5a). 50 test files (the `engine::l5` unit tests,
+  `tests/gap`, `tests/temp_state`, `d1_downgraded_to_info_oracle`) now use
+  `assemble_and_resolve_inline_program[_default]` /
+  `assemble_and_resolve_workspace_program` instead of L3's builders. Every
+  test passes unchanged except three that state a routine-id collision by
+  assignment:
+  - The program model's calls and events are resolved once, at build time, so
+    re-keying only the routines left their edges on ids no routine carried.
+    `force_shared_id` (detector context) and `force_id_collision` (G-18) now
+    re-key the precomputed call and event edges too.
+  - `colliding_ids_keep_the_full_summary_union_not_just_the_edges` needed a new
+    inheritable uncertainty: its `MissingDeeper()` was `unknown` under L3 but is
+    `member-not-found` under the program engine, a callsite-local kind that is
+    never inherited. `Touch` now runs a codeunit chosen at run time
+    (`dynamic-dispatch`, inherited).
+  - Discrimination: removing the drain's `processed` guard fails the union
+    test; removing the later-occurrence `continue` fails the summary test;
+    removing `edge_target_matches_callsite_callee` in `d1_graph` fails both
+    stated G-18 collision tests.
+  - The inline builder now refuses a file name without `.al` with a clear
+    message (the engine reads no other file; the L3 vector tests use `"a"`).
+
+- **The program-call adapter leaves `engine/l3`** (engine-switch S9.4, a pure
+  move). `program_calls` and `event_param_temp` are now under `program::model`,
+  with the binding helpers (in `calls`) and `isolated_event_ids` (in `events`).
+  The old `engine::l3` paths re-export them until S9.7. `calls_for`,
+  `events_for` and coverage stay in L3 until S9.6: their fallback is L3's own
+  resolver, and the program engine must never import L3. The adapter tests,
+  which compare with that resolver, live in
+  `engine/l3/program_calls_adapter_tests.rs` for the same reason.
+
+- **The r4/r4f test helper builds the production model** (engine-switch S9.3).
+  `assemble_and_resolve_workspace_with_program_calls` built L3's disk model and
+  attached the program calls to it; it now calls
+  `assemble_and_resolve_workspace_program`, the builder `alsem analyze` uses.
+  No golden moved (all nine `check-goldens` targets green), as S2b.4's census
+  predicted.
+
+- **The semantic-edges golden is minted from the AL compiler, not from L3**
+  (engine-switch S9.0d, owner decision R1).
+  - `scripts/compiler-graph <workspace> <out>` extracts the dependency sources
+    and runs the newest installed AL extension's `altool graph extract-whole`
+    (about a minute on CDO). `mint-goldens --compiler-graph <graph.jsonl>
+    --compiler <extension>` writes `tests/goldens/semantic-edges/cdo-compiler-anon.json`:
+    every (caller, class, callee) pair whose caller is in the workspace,
+    anonymized (`anon::PAIR_DOMAIN_V1`), stamped with the workspace's git sha,
+    dirty flag, dependency closure and the AL extension. CDO: 7,045 pairs,
+    `ms-dynamics-smb.al-18.0.2732683`. `--fixture` mints
+    `fixture-compiler-anon.json` for the in-repo fixture.
+  - `cdo_compiler_audit_explains_every_disagreement` compares the program
+    resolver with it pair by pair: 6,878 agree. Every disagreeing pair must
+    match a rule over the program's own facts (`compiler_golden::Verdict`), and
+    the count per (side, class, rule) is pinned: subscriber attributes the
+    compiler records as calls (22), `RunTrigger` false (145), object runs (147),
+    field `OnValidate` triggers (40), receiver-less record operations (8),
+    platform page events (5), calls under an `#if` arm the workspace does not
+    build (2). Zero unexplained.
+  - `fixture_agrees_with_the_compiler_graph` replaces the L3-minted fixture
+    check; `committed_goldens_metadata_is_valid` now checks the compiler goldens.
+  - A `#if` around `case` branches (`preproc_conditional_case`,
+    `preproc_split_case_extended`) now records each arm's build context and
+    prunes a decided-false arm, like other `#if` shapes. The `#if` rule above
+    needed it for two calls.
+  - Removed: the L3-minted `cdo-anon.json`, `cdo-trigger-anon.json`,
+    `cdo-event-anon.json`, `fixture.json`, the adjudication overlay
+    (`adjudicated-overrides.json`, `known-genuine-divergences.json`), their
+    audits in `semantic_golden.rs` and the tests that ran them. `l3_mint` has
+    no caller left; it goes with L3 in S9.6. The anonymization domains of
+    those goldens (`site:v1`, `target:v1`, `trigger-op:v1`, `event-pair:v1`)
+    are retired; the salt and scheme are unchanged.
+  - A pair's `line` is for reading only. It is 0 for the 30 CDO pairs that
+    come only from the compiler's `Interface` and `Event` edges, which carry
+    no line.
 
 - **d45 moves from DEFAULT to OPT-IN** (engine-switch S8, 2026-10-07; the owner
   asked for the best solution).
@@ -1059,6 +1252,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Every test, golden and `aldump` mode that measured the legacy L3 engine**
+  (engine-switch S9.6a). They pinned L3's own output, so they go with L3:
+  - `aldump --l3-record-types`, `--l3-call-graph`, `--l3-call-graph-stats[-cross-app]`,
+    `--l3-unknown-breakdown[-cross-app]`, `--l3-event-graph`, `--l3-coverage`,
+    `--l3-cross-app`, `--r2-5a-merged-index` (decision R6) and `--b3`
+    (`--b3-triage`, `--b3-deps`).
+  - The `tests/l3` suite; the r2b call-graph differential and its goldens and
+    vectors; the r2.5a merged-index and r2.5b cross-app goldens and suites
+    (`tests/r25_abi` keeps the three ABI ingestion vector suites);
+    `r3a0_unfetched_dep_opaque`; `b3_triage_r0` and the `docs/b3-triage/` tables;
+    `aldump_smoke`'s L3 event-graph test and its golden.
+  - Four tests that used L3 as a reference now state their contract directly:
+    the cross-app model's row order (workspace, then symbol-only dependency rows,
+    then parsed dependency rows; discrimination: appending the symbol-only rows
+    last fails it), `alsem analyze` against the detectors run over the program
+    model, and the r3a2 opaque-callee and ABI temp-state tests over the
+    production cross-app model.
+  - `scripts/check-goldens` drops `--test l3` and seven golden directories
+    (23 remain).
+- **L3 modules with no consumer left** (engine-switch S9.6b, step 1):
+  `engine::l3::{b3_diff, call_graph_projection, l3_mint, resolution_class}` and
+  `engine::deps::{cross_app_l3, merged_index}`, with coverage's cross-app capture
+  (`project_coverage_cross_app`). Nothing outside them changes behaviour.
+- **L3's own parse of the workspace** (engine-switch S9.6b, step 2):
+  `assemble_and_resolve[_default]`, `assemble_workspace[_units]`,
+  `assemble_and_resolve_workspace[_default]` and `assemble_l3_workspace_from_disk`.
+  The model is built from the program engine's parse only. The tests that used
+  them (six `workspace.rs` unit tests, `cli_p1_enclosing_member`) build through
+  the program builders; they read rows, which both paths projected with the same
+  `project_ir`, and all pass unchanged.
+- **The legacy L3 engine** (engine-switch S9.6b, step 3): its call resolver
+  (`call_resolver`, `implicit_edges`, `receiver`, `receiver_type`, `static_arg`,
+  `type_ref`, `type_rel`, `al_type`, `al_builtins`, `member_builtins`), its
+  event-graph builder, the routine and interface half of `SymbolTable`, and the
+  adapter's per-site notes (they served only the deleted B3 harness). The model's
+  calls and events are now **mandatory**: `L3Resolved.calls` / `.events` (were
+  `precomputed_calls` / `precomputed_events`, optional, with a fallback to L3's own
+  resolver). The assembly entries return the new `ModelRows`, which only
+  `attach_program_calls` turns into a model, so the compiler rules out a model
+  without calls. `calls_for` / `events_for` are gone (consumers read the fields),
+  coverage moved to `program::model::coverage`, and `engine::l3` holds only path
+  aliases until S9.7. No golden moved. The adapter tests that compared with L3 now
+  state their expectations directly; `edge_order_is_call_sites_then_triggers`
+  (discrimination: prepending call-site edges fails it) replaces the L3 order
+  comparison, and the two r0-corpus L3-parity tests are deleted.
+- **The L3 oracle's site matcher** (engine-switch S9.8): `match_sites`, `SiteMatch`
+  and `canonical_call_edge_for_test` in `program::resolve::differential`, with the
+  three harness tests that were their only callers. They paired the fresh
+  resolver's edges with L3's. The S9.8 acceptance inventory (plan
+  `2026-10-07-engine-switch-s9.md`) found no other surviving L3 entry point.
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's
@@ -1078,6 +1321,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An object run reaches the entry triggers the source declares, and every
+  page/report extension's** (engine-switch S9.0d, found by the compiler-oracle
+  triage). CDO: `resolvedAbiExternal` 62 -> 0 in the workspace and 1,294 -> 0
+  in dependency bodies; still 0 unknown and 23 `ambiguousResolved`; oracle
+  program-only pairs 258 -> 202.
+  - A run of an object whose source declares no entry trigger (a workspace
+    `ConfirmationDialog` page with no triggers, run by `WarningPage.RunModal()`)
+    got an Opaque `onopenpage` boundary route: a callee that does not exist,
+    counted as resolved. It now reaches no routine (honest empty). The Opaque
+    boundary stays for a symbol-only object, whose triggers the ABI does not
+    list.
+  - A page or report run now also reaches the entry trigger of each page or
+    report extension of it (an extension's triggers run after the base
+    object's): a `Multicast` over base + extensions, `Partial` like implicit
+    triggers. A codeunit or XmlPort run stays one trigger or a closed empty
+    set; `classify_obligation` reads an empty `Multicast` as honest-empty
+    whether open or closed.
+  - The analyze adapter keeps the L3 shape detectors saw. An empty run keeps
+    the run shape (a workspace object) or the external callee naming the
+    object (a dependency object; the resolver now records it as
+    `SiteFacts::run_target`), and a run reaching several triggers becomes one
+    resolved edge per trigger, never an ambiguous candidate set. CDO
+    `alsem analyze` (both scopes) is unchanged except 3 `d9` transaction spans
+    that now count one more published event (an extension `OnOpenPage` raises
+    it). The adapter no longer records the invented dependency `onopenpage`
+    routine as a call target.
+  - Tests `object_runs_reach_the_declared_entry_triggers_only`,
+    `object_run_symbol_only_target_keeps_the_opaque_trigger_boundary`,
+    `page_run_reaches_the_base_and_extension_entry_triggers` and
+    `a_run_of_a_dependency_page_without_entry_trigger_names_the_page`; five
+    resolver tests that pinned the invented boundary or the `Exact` page
+    shape are rebaselined. Re-inventing the boundary, skipping extensions,
+    dropping the closed-empty rule, converting a multi-route run as its first
+    route, or ignoring the run target each fails one of them.
 - **Overload selection sees the call's build** (engine-switch S9.0e). CDO's
   dependency `ambiguousResolved` 716 -> 710 and `resolvedSource` +6; unknown
   edges stay 0; workspace metrics unchanged (0 unknown, 23 ambiguous).

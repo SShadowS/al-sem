@@ -272,9 +272,9 @@ pub(crate) const MS_PLATFORM_TIER: &[(&str, &str)] = &[
 /// systematically absent from every app's dependency closure and every
 /// cross-Microsoft-layer call resolved `OutOfClosure` → `Unknown`.
 ///
-/// Mirrors `engine::deps::cross_app_l3::read_workspace_declared_dependencies`
-/// (the existing, already-correct implicit-dep template used by the isolated
-/// `engine::l4` subsystem) and, transitively, al-sem `parseWorkspaceDependencies`:
+/// Mirrors al-sem `parseWorkspaceDependencies` (the template was
+/// `engine::deps::cross_app_l3::read_workspace_declared_dependencies`, deleted with
+/// L3 in engine-switch S9.6):
 /// a non-empty `application` appends [`MS_APPLICATION_TIER`]
 /// (using the `application` string as each row's `version`); a non-empty
 /// `platform` appends [`MS_PLATFORM_TIER`]

@@ -24,12 +24,13 @@
 //! A detector whose findings are empty on ALL inputs for both contexts contributes only
 //! weak coverage — acceptable for this wave (noted in the Task 10 commit message).
 
-use al_sem::engine::l3::l3_workspace::{
-    assemble_and_resolve_default, assemble_and_resolve_workspace_default,
-};
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::registry::{Detector, substrate};
+use al_sem::program::model::program_calls::{
+    assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
+};
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use std::path::PathBuf;
 
 const PARITY_FIXTURES: &[&str] = &[
@@ -104,7 +105,7 @@ fn corpus_dir(fixture: &str) -> PathBuf {
 
 /// Assert full-vs-minimal parity for every detector over one resolved workspace.
 fn assert_parity(
-    resolved: &al_sem::engine::l3::l3_workspace::L3Resolved,
+    resolved: &al_sem::program::model::workspace::Model,
     detectors: &[Detector],
     label: &str,
 ) {
@@ -132,14 +133,15 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
 
     for fixture in PARITY_FIXTURES {
         let dir = corpus_dir(fixture);
-        let resolved = assemble_and_resolve_workspace_default(&dir)
-            .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
+        let resolved =
+            assemble_and_resolve_workspace_program(&dir, MODEL_INSTANCE_ID_DEFAULT, false)
+                .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
         assert_parity(&resolved, &detectors, fixture);
     }
 
     // Closed-world-temp teeth: an inline workspace whose proven-temp param populates
     // `closed_world_temp_params` (corpus fixtures never do).
-    let cwt = assemble_and_resolve_default(
+    let cwt = assemble_and_resolve_inline_program_default(
         &[
             ("src/CwtLine.al".to_string(), CWT_TABLE.to_string()),
             ("src/CwtPrune.al".to_string(), CWT_CODEUNIT.to_string()),

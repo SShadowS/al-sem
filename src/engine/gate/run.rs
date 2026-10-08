@@ -38,10 +38,10 @@ use crate::engine::gate::preflight::evaluate_preflight;
 use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::gate::version::driver_version;
-use crate::engine::l3::coverage::AnalysisCoverage;
-use crate::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_workspace_from_program};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
+use crate::program::model::coverage::AnalysisCoverage;
+use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
 
 /// Output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,14 +171,14 @@ pub enum ModelFailure {
 /// What the detectors run over: the workspace's own model, or the cross-app base
 /// (engine-switch S8.3, the default).
 pub enum AnalysisTarget {
-    SingleApp(Box<L3Resolved>),
+    SingleApp(Box<Model>),
     CrossApp(Box<crate::engine::l4::capability_cone::R3a5CrossAppBase>),
 }
 
 impl AnalysisTarget {
     /// The model the projections, diagnostics and formats read.
     #[must_use]
-    pub fn resolved(&self) -> &L3Resolved {
+    pub fn resolved(&self) -> &Model {
         match self {
             AnalysisTarget::SingleApp(r) => r.as_ref(),
             AnalysisTarget::CrossApp(b) => &b.resolved,
@@ -274,7 +274,7 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
             &report.parenless_calls,
         )
     };
-    let Some(mut resolved) = resolved else {
+    let Some(rows) = resolved else {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
@@ -285,10 +285,10 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     // Taken before the adapter consumes (and drops) the program context.
     let physical = Some(ctx.graph().workspace_rows.clone());
     let object_facts = Some(crate::program::model::census::object_fact_census(
-        &resolved.workspace,
+        &rows.workspace,
         ctx.graph(),
     ));
-    crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
+    let resolved = crate::program::model::program_calls::attach_program_calls(rows, ctx, report);
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
@@ -342,7 +342,7 @@ fn build_cross_app_analysis_model(ws_path: &Path) -> AnalysisModel {
 /// rule those steps rely on. With no primary app identity (no `app.json` id) nothing
 /// is treated as a dependency.
 pub fn dependency_object_predicate<'a>(
-    resolved: &'a L3Resolved,
+    resolved: &'a Model,
     idx: &'a ProjectionIndex<'a>,
 ) -> impl Fn(&str) -> bool + 'a {
     let primary = resolved.primary_app.as_ref().map(|a| a.app_guid.as_str());
@@ -402,7 +402,7 @@ pub fn dependency_diagnostics(
 /// (src/engine/l3/coverage.rs:239) — its opaque list is structurally empty, and
 /// leaving it would let stderr say "N symbol-only apps" while JSON says [].
 pub fn analysis_coverage(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ws_path: &Path,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> AnalysisCoverage {
@@ -812,7 +812,7 @@ pub(crate) fn empty_output_result(
         OutputFormat::Json => {
             // Empty envelope: zero findings, zero stats, zero coverage — but the
             // real provider/index diagnostics (fail-closed reasons) are threaded.
-            let empty_coverage = crate::engine::l3::coverage::AnalysisCoverage {
+            let empty_coverage = crate::program::model::coverage::AnalysisCoverage {
                 source_units_total: 0,
                 source_units_parsed: 0,
                 routines_total: 0,
@@ -842,7 +842,7 @@ pub(crate) fn empty_output_result(
         }
         OutputFormat::Terminal => {
             // Empty workspace → "No findings." terminal output.
-            let empty_coverage = crate::engine::l3::coverage::AnalysisCoverage {
+            let empty_coverage = crate::program::model::coverage::AnalysisCoverage {
                 source_units_total: 0,
                 source_units_parsed: 0,
                 routines_total: 0,
@@ -856,7 +856,7 @@ pub(crate) fn empty_output_result(
         }
         OutputFormat::Html => {
             // Empty workspace → zero findings + zero coverage HTML report.
-            let empty_coverage = crate::engine::l3::coverage::AnalysisCoverage {
+            let empty_coverage = crate::program::model::coverage::AnalysisCoverage {
                 source_units_total: 0,
                 source_units_parsed: 0,
                 routines_total: 0,
@@ -869,9 +869,9 @@ pub(crate) fn empty_output_result(
             // For fail-closed HTML, we need an empty resolved model.
             // The assemble_and_resolve_workspace failed, so build a minimal one.
             let primary_app = read_workspace_apps(ws_path).into_iter().next();
-            // Build an empty L3Resolved for the HTML formatter.
-            let empty_resolved = crate::engine::l3::l3_workspace::L3Resolved {
-                workspace: crate::engine::l3::l3_workspace::L3Workspace {
+            // Build an empty Model for the HTML formatter.
+            let empty_resolved = crate::program::model::workspace::Model {
+                workspace: crate::program::model::workspace::ModelEntities {
                     objects: vec![],
                     tables: vec![],
                     routines: vec![],
@@ -879,8 +879,8 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
-                precomputed_calls: None,
-                precomputed_events: None,
+                calls: Default::default(),
+                events: Default::default(),
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],
@@ -941,9 +941,9 @@ fn build_finding_evidence(
         crate::engine::gate::projection::FindingSummary,
         &crate::engine::l5::finding::Finding,
     )],
-    routines: &[crate::engine::l3::l3_workspace::L3Routine],
+    routines: &[crate::program::model::workspace::ModelRoutine],
 ) -> Vec<FindingEvidence> {
-    use crate::engine::l2::features::PAnchor;
+    use crate::program::body::features::PAnchor;
 
     let stable_map = crate::engine::l4::summary::build_routine_stable_map(routines);
 
@@ -1000,7 +1000,7 @@ fn build_finding_evidence(
 }
 
 /// 0-based containment: is `(line, column)` within `[start, end]` of `range` (inclusive)?
-fn range_contains(range: &crate::engine::l2::features::PAnchor, line: u32, column: u32) -> bool {
+fn range_contains(range: &crate::program::body::features::PAnchor, line: u32, column: u32) -> bool {
     let after_start = (line, column) >= (range.start_line, range.start_column);
     let before_end = (line, column) <= (range.end_line, range.end_column);
     after_start && before_end
@@ -1010,8 +1010,8 @@ fn range_contains(range: &crate::engine::l2::features::PAnchor, line: u32, colum
 /// secondary by spanned columns on the start line. Deterministic for the smallest-range
 /// selection (two disjoint field triggers never tie because only one contains the point).
 fn range_extent_cmp(
-    a: &crate::engine::l2::features::PAnchor,
-    b: &crate::engine::l2::features::PAnchor,
+    a: &crate::program::body::features::PAnchor,
+    b: &crate::program::body::features::PAnchor,
 ) -> std::cmp::Ordering {
     let a_lines = a.end_line.saturating_sub(a.start_line);
     let b_lines = b.end_line.saturating_sub(b.start_line);
@@ -1041,7 +1041,7 @@ fn range_extent_cmp(
 /// and detector (6) diagnostics agree with `run_analyze`'s.
 pub fn compute_analyzer_diagnostics(
     ws_path: &Path,
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
     detectors: &[crate::engine::l5::registry::Detector],
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = run_detectors(resolved, detectors);

@@ -23,9 +23,9 @@ use std::collections::HashMap;
 use super::combined_graph::CombinedGraph;
 use super::effect_lattice::{EffectPresence, join_presence};
 use super::summary::{FieldList, RoutineSummary};
-use crate::engine::l2::features::{PAnchor, PCFNNode, PCallSite, PFieldAccess};
-use crate::engine::l3::call_resolver::UpgradedBinding;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
+use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PFieldAccess};
+use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 use super::summary_runner::record_flow_role;
 
@@ -201,7 +201,7 @@ struct ParamCtx<'a> {
 
 /// Indexes for O(1) op/call/fa lookup during the walk.
 pub struct WalkIndexes<'a> {
-    op_by_id: HashMap<&'a str, &'a L3RecordOperation>,
+    op_by_id: HashMap<&'a str, &'a ModelRecordOperation>,
     call_by_id: HashMap<&'a str, &'a PCallSite>,
     /// Field accesses keyed by `(startLine, startColumn)` — al-sem `indexFieldAccesses`.
     fa_by_pos: HashMap<(u32, u32), Vec<&'a PFieldAccess>>,
@@ -229,7 +229,7 @@ pub struct PathAwareFacts {
 /// change).
 #[allow(clippy::too_many_arguments)]
 pub fn walk_param(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     rec_var_name_lc: &str,
     rec_var_id: Option<&str>,
     snapshot: &HashMap<String, RoutineSummary>,
@@ -314,8 +314,8 @@ pub fn walk_param(
     }
 }
 
-pub fn build_indexes(routine: &L3Routine) -> WalkIndexes<'_> {
-    let mut op_by_id: HashMap<&str, &L3RecordOperation> = HashMap::new();
+pub fn build_indexes(routine: &ModelRoutine) -> WalkIndexes<'_> {
+    let mut op_by_id: HashMap<&str, &ModelRecordOperation> = HashMap::new();
     for op in &routine.record_operations {
         op_by_id.insert(op.id.as_str(), op);
     }
@@ -401,7 +401,7 @@ fn walk_cfg(
     node: &PCFNNode,
     pre: PerParamState,
     param: &ParamCtx,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1046,7 +1046,7 @@ fn apply_condition_leaves(
     pre: PerParamState,
     leaves: Option<&[PCFNNode]>,
     param: &ParamCtx,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1086,7 +1086,7 @@ fn apply_condition_leaves(
 // Op + call + field-read application.
 // ---------------------------------------------------------------------------
 
-fn op_affects_param(op: &L3RecordOperation, param: &ParamCtx) -> bool {
+fn op_affects_param(op: &ModelRecordOperation, param: &ParamCtx) -> bool {
     if let (Some(pid), Some(oid)) = (param.rec_var_id, op.record_variable_id.as_deref())
         && pid == oid
     {
@@ -1095,7 +1095,7 @@ fn op_affects_param(op: &L3RecordOperation, param: &ParamCtx) -> bool {
     op.record_variable_name.to_lowercase() == param.name_lc
 }
 
-fn apply_op(state: PerParamState, op: &L3RecordOperation, param: &ParamCtx) -> PerParamState {
+fn apply_op(state: PerParamState, op: &ModelRecordOperation, param: &ParamCtx) -> PerParamState {
     if !op_affects_param(op, param) {
         return state;
     }
@@ -1194,7 +1194,7 @@ fn apply_call(
     state: PerParamState,
     cs: &PCallSite,
     param: &ParamCtx,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1635,7 +1635,7 @@ fn loaded_to_field_list(lf: &LoadedFields) -> FieldList {
 // ---------------------------------------------------------------------------
 
 enum FlatEvent<'a> {
-    Op(&'a L3RecordOperation, u32, u32),
+    Op(&'a ModelRecordOperation, u32, u32),
     Field(&'a PFieldAccess, u32, u32),
     Call(&'a PCallSite, u32, u32),
 }
@@ -1644,7 +1644,7 @@ enum FlatEvent<'a> {
 fn walk_flat(
     pre: PerParamState,
     param: &ParamCtx,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1747,7 +1747,7 @@ fn walk_flat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::l3_workspace::RoutineVariables;
+    use crate::program::model::workspace::RoutineVariables;
 
     /// A throwaway anchor (positions are irrelevant to this depth-budget test).
     fn dummy_anchor() -> PAnchor {
@@ -1761,11 +1761,11 @@ mod tests {
         }
     }
 
-    /// A minimal `L3Routine` — only `statement_tree` matters for the `walk_cfg`
+    /// A minimal `ModelRoutine` — only `statement_tree` matters for the `walk_cfg`
     /// depth-budget test; everything else is empty/defaulted (mirrors
     /// `engine::l5::test_support::routine`, which is private to `l5`).
-    fn minimal_routine(statement_tree: Option<PCFNNode>) -> L3Routine {
-        L3Routine {
+    fn minimal_routine(statement_tree: Option<PCFNNode>) -> ModelRoutine {
+        ModelRoutine {
             id: "r".to_string(),
             stable_routine_id: "stable::r".to_string(),
             object_id: "app/Codeunit/1".to_string(),

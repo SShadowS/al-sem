@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::L3Routine;
+use crate::program::model::workspace::ModelRoutine;
 
 /// The owning `App` identity (port of al-sem `model/entities.ts` `App` — the subset the
 /// PR-summary attribution line reads). Sourced from the workspace root `app.json`'s
@@ -32,12 +32,12 @@ pub struct App {
 
 /// Per-model index — mirrors al-sem's `indexFor` (`routinesById`).
 pub struct AttributionIndex<'a> {
-    routines_by_id: HashMap<&'a str, &'a L3Routine>,
+    routines_by_id: HashMap<&'a str, &'a ModelRoutine>,
     apps_by_guid: HashMap<&'a str, &'a App>,
 }
 
 impl<'a> AttributionIndex<'a> {
-    pub fn build(routines: &'a [L3Routine], apps: &'a [App]) -> Self {
+    pub fn build(routines: &'a [ModelRoutine], apps: &'a [App]) -> Self {
         AttributionIndex {
             routines_by_id: routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             apps_by_guid: apps.iter().map(|a| (a.app_guid.as_str(), a)).collect(),

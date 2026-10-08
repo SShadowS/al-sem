@@ -15,8 +15,8 @@
 //!
 //! **What it measures is production, not a copy.** The model comes from
 //! [`build_analysis_model`] and coverage from [`analysis_coverage`] — the functions
-//! `run_analyze_with_exit` itself calls — the calls from `calls_for` and the event
-//! graph from `build_detector_context`, the functions the detectors read through.
+//! `run_analyze_with_exit` itself calls — the model's own calls, and the event
+//! graph from `build_detector_context`, which the detectors read through.
 //! Each switch step changes what those build; this module does not change.
 //!
 //! Rows are `{:?}`. Every model type derives `Debug` and holds no hash map or set,
@@ -28,8 +28,6 @@ use std::path::Path;
 
 use crate::engine::gate::run::{analysis_coverage, build_analysis_model};
 use crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics;
-use crate::engine::l3::call_resolver::calls_for;
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::registry::run_detectors;
@@ -101,8 +99,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
     );
 
     {
-        let symbols = SymbolTable::build(&ws_model.objects, &ws_model.tables, &ws_model.routines);
-        let calls = calls_for(&resolved, &symbols);
+        let calls = &resolved.calls;
         d.insert("calls.edges".into(), rows(&calls.edges));
         let bindings: BTreeMap<_, _> = calls.upgraded_bindings.iter().collect();
         d.insert(
@@ -124,9 +121,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
         d.insert("events.symbols".into(), rows(&ctx.event_graph.events));
         d.insert("events.edges".into(), rows(&ctx.event_graph.edges));
     }
-    if let Some(events) = &resolved.precomputed_events {
-        d.insert("events.census".into(), events.census.lines());
-    }
+    d.insert("events.census".into(), resolved.events.census.lines());
 
     let run = run_detectors(&resolved, &registered_detectors());
     d.insert("findings".into(), rows(&run.findings));
@@ -389,7 +384,7 @@ mod tests {
     /// root one.
     #[test]
     fn analyze_model_selects_app_scoped_files_from_the_program_parse() {
-        use crate::engine::l3::l3_workspace::{ProgramFiles, select_program_files};
+        use crate::program::model::workspace::{ProgramFiles, select_program_files};
         let root = std::env::temp_dir().join(format!("switch-s2a-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let app = |dir: &Path, id: &str| {

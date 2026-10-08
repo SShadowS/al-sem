@@ -5,13 +5,18 @@
 //! Moved out of `engine::l3` in engine-switch S2b.2 (spec
 //! `docs/superpowers/specs/2026-10-06-engine-switch-design.md`). The types keep
 //! their `L3*` names until the rename in S9; `engine::l3` re-exports these modules
-//! under their old names meanwhile.
+//! under their old names meanwhile. S9.4 moved the program-call adapter and model
+//! builders (`program_calls`) and the event-parameter temp proof here; S9.6 moved
+//! coverage, deleted L3, and made the model's calls and events mandatory.
 
 pub mod abi_rows;
 pub mod calls;
 pub mod census;
+pub mod coverage;
+pub mod event_param_temp;
 pub mod events;
 pub mod extension_fields;
+pub mod program_calls;
 pub mod record_types;
 pub mod site_links;
 pub mod symbol_table;

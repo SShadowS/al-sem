@@ -11,7 +11,7 @@
 //! ALL ordering decisions compare integer `orderId` / `frameId` — no string
 //! compares (determinism, BINDING).
 
-use crate::engine::l2::operation_order::ScopeFrame;
+use crate::program::body::operation_order::ScopeFrame;
 
 // ---------------------------------------------------------------------------
 // Public types

@@ -299,7 +299,7 @@ fn project_file(
         // Interface / ControlAddIn: al-sem's L2 feature projection never modeled
         // these objects' signature-only members as routines (frozen, differential-
         // gated — `tests/differential.rs`'s R1a harness). See the matching, more
-        // detailed comment in `engine::l3::l3_workspace.rs` and `engine::snapshot.rs`
+        // detailed comment in `program::model::workspace.rs` and `engine::snapshot.rs`
         // (the same shared `al_syntax::lower::collect_routines` fix, receiver-closure
         // plan Task 1, surfaces in every independent IR-consumer that iterates
         // `obj.routines` unconditionally).

@@ -28,9 +28,9 @@ use crate::engine::ids::{
     ParamSpec, canonical_routine_signature, locale_compare, object_signature_fingerprint,
     sha256_hex,
 };
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
 use crate::engine::l5::snapshot::compose_snapshot;
+use crate::program::model::workspace::Model;
 
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
@@ -63,7 +63,7 @@ pub fn workspace_fingerprint_of(workspace_dir: &std::path::Path, driver_version:
     compute_workspace_fingerprint(&inputs, driver_version)
 }
 
-pub fn compose_full_snapshot(resolved: &L3Resolved, opts: &FullSnapshotOptions) -> CborValue {
+pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).
     let core = compose_snapshot(resolved);
@@ -351,7 +351,7 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 // Per-app field order: appGuid, publisher, name, version. Sorted by appGuid.
 // ===========================================================================
 
-fn project_apps(resolved: &L3Resolved) -> CborValue {
+fn project_apps(resolved: &Model) -> CborValue {
     let mut apps: Vec<(String, String, String, String)> = Vec::new();
     if let Some(app) = &resolved.primary_app
         && !app.app_guid.is_empty()
@@ -387,7 +387,7 @@ fn project_apps(resolved: &L3Resolved) -> CborValue {
 // Sorted by stableId.
 // ===========================================================================
 
-fn derive_contracts(resolved: &L3Resolved) -> CborValue {
+fn derive_contracts(resolved: &Model) -> CborValue {
     let ws = &resolved.workspace;
     // (sort_key, CborValue) pairs.
     let mut rows: Vec<(String, CborValue)> = Vec::new();
@@ -517,7 +517,7 @@ fn canonical_one_attr_arg(a: &crate::program::attributes::AttributeArg) -> Strin
 // schemaFacts (derive/schema.ts). table + field + key facts. Sorted by stableId.
 // ===========================================================================
 
-fn derive_schema(resolved: &L3Resolved) -> CborValue {
+fn derive_schema(resolved: &Model) -> CborValue {
     let ws = &resolved.workspace;
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
@@ -622,7 +622,7 @@ fn internal_field_to_stable(internal: &str, app_guid: &str) -> String {
 // ===========================================================================
 
 fn derive_permissions(
-    resolved: &L3Resolved,
+    resolved: &Model,
     base: &crate::engine::l4::capability_cone::R3a3SourceBase,
 ) -> CborValue {
     let mut rows: Vec<(String, CborValue)> = Vec::new();
@@ -1021,7 +1021,7 @@ fn build_envelope(
 // `resolved.workspace.routines` — every routine's (objectType, objectNumber,
 // routineName, stableRoutineId). The source is the same workspace the full
 // snapshot's contractFacts and identities derive from, so there is no risk of
-// drift; the stableRoutineId is the same field `L3Routine::stable_routine_id`
+// drift; the stableRoutineId is the same field `ModelRoutine::stable_routine_id`
 // that the identity table indexes.
 //
 // Serialized sorted-key JSON (the same `write_sorted_json_inner` the full
@@ -1033,7 +1033,7 @@ fn build_envelope(
 /// the shared sub-values, so they are byte-identical to those in the full snapshot.
 pub fn build_inventory_envelope(
     tree: &CborValue,
-    resolved: &L3Resolved,
+    resolved: &Model,
     driver_version: &str,
     deterministic: bool,
 ) -> String {
@@ -1101,7 +1101,7 @@ fn inventory_row_cmp(
 
 fn build_inventory_doc(
     tree: &CborValue,
-    resolved: &L3Resolved,
+    resolved: &Model,
     driver_version: &str,
     deterministic: bool,
 ) -> CborValue {
@@ -1624,7 +1624,7 @@ mod tests {
     /// `build_inventory_doc` end to end and asserts on its actual output order.
     #[test]
     fn hand_stated_collision_discriminates_by_member_case_insensitively() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 page 50816 "T4 I-2 Wizard"
@@ -1651,7 +1651,7 @@ page 50816 "T4 I-2 Wizard"
     }
 }
 "#;
-        let mut resolved = assemble_and_resolve_default(
+        let mut resolved = assemble_and_resolve_inline_program_default(
             &[("T4I2Wizard.Page.al".to_string(), src.to_string())],
             "66666666-0000-0000-0000-0000000cp006",
         );
@@ -1756,7 +1756,7 @@ page 50816 "T4 I-2 Wizard"
     /// test (verified by removal, not asserted).
     #[test]
     fn hand_stated_collision_discriminates_by_originating_object_when_member_also_ties() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let files = vec![
             (
@@ -1806,8 +1806,10 @@ page 50818 "T5 I-3 Wizard Alpha"
                 .to_string(),
             ),
         ];
-        let mut resolved =
-            assemble_and_resolve_default(&files, "66666666-0000-0000-0000-0000000cp007");
+        let mut resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "66666666-0000-0000-0000-0000000cp007",
+        );
         assert_eq!(
             resolved.workspace.routines.len(),
             2,

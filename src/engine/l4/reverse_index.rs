@@ -99,7 +99,7 @@
 //! - **[`RoutineIx`] is not a user-facing identity.**
 //!   [`SummaryBundle::routine_id`] yields the INTERNAL id
 //!   (`<appGuid>:Codeunit:6175271#<bodyhash>`). Rendering needs a join to
-//!   `L3Routine` (`name` / `object_type` / `stable_routine_id` /
+//!   `ModelRoutine` (`name` / `object_type` / `stable_routine_id` /
 //!   `source_anchor`); that join belongs to the CONSUMER, not here — see
 //!   `effect_query_cli.rs`.
 

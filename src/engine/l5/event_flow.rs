@@ -46,10 +46,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::engine::l3::event_graph::EventGraph;
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
 use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::program::model::events::EventGraph;
+use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // IS_HANDLED_RE — al-sem `/^is.?handled$/i`.
@@ -175,7 +175,7 @@ pub struct EventFlowIndexes {
 ///   (al-sem `roleOf(r) != "dependency"`).
 pub fn build_event_flow_indexes(
     event_graph: &EventGraph,
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
 ) -> EventFlowIndexes {
     let mut publisher_by_event: BTreeMap<String, String> = BTreeMap::new();
@@ -819,7 +819,7 @@ pub fn collect_relay_subscribers(
 /// `EventSymbol.publisher_object_id` — NOT from `EventEdge.subscriber_app_id`.
 pub fn build_cross_extension_subscribers(
     event_graph: &EventGraph,
-    objects: &[L3Object],
+    objects: &[ModelObject],
 ) -> BTreeMap<String, Vec<String>> {
     // objectAppById: object id → app guid.
     let mut object_app_by_id: BTreeMap<&str, &str> = BTreeMap::new();
@@ -895,7 +895,7 @@ pub struct PublisherBranchFacts {
 /// `routine.summary?.capabilityFactsDirect ?? []`).
 pub fn publisher_branch_facts(
     publisher: &str,
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     summaries: &std::collections::HashMap<String, FullRoutineSummary>,
 ) -> Option<PublisherBranchFacts> {
     let routine = routines.iter().find(|r| r.id == publisher)?;

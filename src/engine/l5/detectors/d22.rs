@@ -15,7 +15,6 @@
 //!
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order).
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor, unquoted_field_name};
@@ -23,11 +22,12 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d22-flowfield-without-calcfields";
 
 pub fn detect_d22(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -203,10 +203,10 @@ pub fn detect_d22(
 /// Returns true if there is a `CalcFields` op on `record_var_key` strictly
 /// BEFORE `access_anchor` that lists `field_name_lc` in its fieldArgumentInfos.
 fn is_covered(
-    ops: &[crate::engine::l3::l3_workspace::L3RecordOperation],
+    ops: &[crate::program::model::workspace::ModelRecordOperation],
     record_var_key: &str,
     field_name_lc: &str,
-    access_anchor: &crate::engine::l2::features::PAnchor,
+    access_anchor: &crate::program::body::features::PAnchor,
 ) -> bool {
     for op in ops {
         if op.op != "CalcFields" {

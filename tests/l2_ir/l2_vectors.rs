@@ -21,8 +21,8 @@
 //!   - single file  = src/vec.al  →  sourceUnitId = "ws:src/vec.al"
 //!   - modelInstanceId = "r0"
 
-use al_sem::engine::l2::features::PFeatures;
-use al_sem::engine::l2::features_for_named_routine;
+use al_sem::program::body::features::PFeatures;
+use al_sem::program::body::features_for_named_routine;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const MODEL_INSTANCE_ID: &str = "r0";

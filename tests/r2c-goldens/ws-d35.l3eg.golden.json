@@ -1,0 +1,81 @@
+{
+  "events": [
+    {
+      "id": "unknown:codeunit:0:50::onafterpost::65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "publisherObjectId": "unknown:codeunit:0:50",
+      "eventName": "onafterpost",
+      "eventKind": "unknown",
+      "signatureHash": "65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter",
+          "note": "target object not in indexed source"
+        }
+      ]
+    },
+    {
+      "id": "unknown:codeunit:0:50::onaftervalidate::b291d202b0480a07fe776a01bd7eee7ced9b9e5cdd709b9ef16428c5c04b24c3",
+      "publisherObjectId": "unknown:codeunit:0:50",
+      "eventName": "onaftervalidate",
+      "eventKind": "unknown",
+      "signatureHash": "b291d202b0480a07fe776a01bd7eee7ced9b9e5cdd709b9ef16428c5c04b24c3",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter",
+          "note": "target object not in indexed source"
+        }
+      ]
+    },
+    {
+      "id": "unknown:codeunit:0:50::onbeforeprint::8b2aa33a2d2ffd699d1d1eb35bee95ad5f2be578a5e1dd32ba841345e0e95b6b",
+      "publisherObjectId": "unknown:codeunit:0:50",
+      "eventName": "onbeforeprint",
+      "eventKind": "unknown",
+      "signatureHash": "8b2aa33a2d2ffd699d1d1eb35bee95ad5f2be578a5e1dd32ba841345e0e95b6b",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter",
+          "note": "target object not in indexed source"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "eventId": "unknown:codeunit:0:50::onafterpost::65120829e01aea14c0cccef7439acb694ae0b818bc1603da6c1ba6dc7d0c85a3",
+      "subscriberRoutineId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f",
+      "subscriberAppId": "11111111-0000-0000-0000-00000000d350",
+      "resolution": "unknown",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    },
+    {
+      "eventId": "unknown:codeunit:0:50::onaftervalidate::b291d202b0480a07fe776a01bd7eee7ced9b9e5cdd709b9ef16428c5c04b24c3",
+      "subscriberRoutineId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050",
+      "subscriberAppId": "11111111-0000-0000-0000-00000000d350",
+      "resolution": "unknown",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    },
+    {
+      "eventId": "unknown:codeunit:0:50::onbeforeprint::8b2aa33a2d2ffd699d1d1eb35bee95ad5f2be578a5e1dd32ba841345e0e95b6b",
+      "subscriberRoutineId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93",
+      "subscriberAppId": "11111111-0000-0000-0000-00000000d350",
+      "resolution": "unknown",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    }
+  ]
+}

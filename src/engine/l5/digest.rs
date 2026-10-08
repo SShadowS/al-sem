@@ -40,11 +40,11 @@ use std::rc::Rc;
 use serde::Serialize;
 
 use crate::engine::ids::sha256_hex;
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, SnapValueSource,
     SnapshotCallsiteEvidence, SnapshotGraphEdge, compose_snapshot,
 };
+use crate::program::model::workspace::Model;
 
 // ===========================================================================
 // effect-taxonomy.ts — effectTypeOf / effectDetailOf / resourceDisplayOf
@@ -2574,7 +2574,7 @@ fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
 /// read as NOT known-temp, exactly as the L4 predicate treats them — so the
 /// class is TOTAL, never undefined.
 fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
-    crate::engine::l2::features::known_temp_suppresses(ts.and_then(SnapTempState::known_value))
+    crate::program::body::features::known_temp_suppresses(ts.and_then(SnapTempState::known_value))
 }
 
 /// `is_known_temp_state` over a whole snapshot fact.
@@ -3158,7 +3158,7 @@ fn digest_one_root<'i>(
 /// Roots = stable ids of reportable workspace routines, deduped + sorted.
 /// `isReportableRoutine` = primary && body_available && !parse_incomplete. In the
 /// source-only corpus every workspace routine is "primary" (no dependency role).
-fn reportable_roots(resolved: &L3Resolved) -> Vec<String> {
+fn reportable_roots(resolved: &Model) -> Vec<String> {
     let primary = resolved
         .primary_app
         .as_ref()
@@ -3428,7 +3428,7 @@ impl Serialize for ProjectionSer<'_> {
 
 /// Compute the per-root digest effects for a resolved source-only workspace
 /// (S3 path — NO ordering engine; scopedGuarantees stay empty).
-pub fn compute_digest_effects(resolved: &L3Resolved) -> Vec<DigestEntryResult> {
+pub fn compute_digest_effects(resolved: &Model) -> Vec<DigestEntryResult> {
     let snap = compose_snapshot(resolved);
     let roots = reportable_roots(resolved);
     digest_query(&snap, &roots, None, None, false)
@@ -3441,14 +3441,14 @@ pub fn compute_digest_effects(resolved: &L3Resolved) -> Vec<DigestEntryResult> {
 /// Used by R4-F tests and any caller that needs summaries. For the CLI-B digest pipeline
 /// use `compute_digest_effects_cli` instead (matches TS `runDigestPipeline` which does
 /// NOT pass routineReturnSummaries to digestQuery).
-pub fn compute_digest_effects_with_ordering(resolved: &L3Resolved) -> Vec<DigestEntryResult> {
+pub fn compute_digest_effects_with_ordering(resolved: &Model) -> Vec<DigestEntryResult> {
     let snap = compose_snapshot(resolved);
     let roots = reportable_roots(resolved);
     let summaries = crate::engine::return_summary::compute_return_summaries(
         &resolved.workspace.routines,
         Some(&resolved.workspace.objects),
     );
-    let isolated = crate::engine::l3::event_graph::isolated_event_ids(&resolved.workspace.routines);
+    let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
         None
     } else {
@@ -3472,7 +3472,7 @@ pub fn compute_digest_effects_with_ordering(resolved: &L3Resolved) -> Vec<Digest
 /// Each root's entry goes through `reduce` on the worker that built it (see
 /// [`digest_query_with`]); results are in sorted-root order.
 pub fn compute_digest_effects_for_ordering_with<T: Send>(
-    resolved: &L3Resolved,
+    resolved: &Model,
     reduce: impl Fn(DigestEntryResult) -> T + Sync,
 ) -> Vec<T> {
     use crate::engine::perf_trace as pt;
@@ -3534,7 +3534,7 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
             Some(&resolved.workspace.objects),
         )
     };
-    let isolated = crate::engine::l3::event_graph::isolated_event_ids(&resolved.workspace.routines);
+    let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
         None
     } else {
@@ -3552,10 +3552,10 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
 /// / any error-escape-based labels never fire from this path).
 pub fn compute_digest_effects_cli(
     snap: &CapabilitySnapshot,
-    resolved: &L3Resolved,
+    resolved: &Model,
 ) -> Vec<DigestEntryResult> {
     let roots = reportable_roots(resolved);
-    let isolated = crate::engine::l3::event_graph::isolated_event_ids(&resolved.workspace.routines);
+    let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
         None
     } else {
@@ -3567,7 +3567,7 @@ pub fn compute_digest_effects_cli(
 
 /// Project the R4-F digest-effects differential document, PRETTY-serialized with a
 /// trailing newline (the exact on-disk golden form).
-pub fn project_r4f_digest_effects(resolved: &L3Resolved, fixture_name: &str) -> String {
+pub fn project_r4f_digest_effects(resolved: &Model, fixture_name: &str) -> String {
     let entries = compute_digest_effects(resolved);
     let doc = ProjectionSer {
         fixture_name,
@@ -3681,7 +3681,7 @@ impl Serialize for ScopedProjectionSer<'_> {
 
 /// Project the R4-F scoped-guarantees differential document, PRETTY-serialized with
 /// a trailing newline (the exact on-disk golden form).
-pub fn project_r4f_scoped_guarantees(resolved: &L3Resolved, fixture_name: &str) -> String {
+pub fn project_r4f_scoped_guarantees(resolved: &Model, fixture_name: &str) -> String {
     let entries = compute_digest_effects_with_ordering(resolved);
 
     // Drop effects with no relevant scopedGuarantees; drop entries with no effects.
@@ -4874,7 +4874,7 @@ mod tests {
     }
 
     /// The checks of the two tests below, for every inherited fact of every root.
-    fn check_witness_bfs(resolved: &L3Resolved, label: &str, stats: &mut BfsStats) {
+    fn check_witness_bfs(resolved: &Model, label: &str, stats: &mut BfsStats) {
         let outcome_key = |o: &WitnessOutcomeExt| {
             (
                 o.paths
@@ -4987,7 +4987,11 @@ mod tests {
         let mut stats = BfsStats::default();
         for dir in &dirs {
             if let Some(resolved) =
-                crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(dir)
+                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                    dir,
+                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                    false,
+                )
             {
                 check_witness_bfs(&resolved, &dir.display().to_string(), &mut stats);
             }
@@ -5034,10 +5038,11 @@ codeunit 50100 "T7b Diamond"
     end;
 }
 "#;
-        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
-            &[("Diamond.al".to_string(), src.to_string())],
-            "00000000-0000-0000-0000-00000000d1a0",
-        );
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("Diamond.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a0",
+            );
         let mut stats = BfsStats::default();
         check_witness_bfs(&resolved, "diamond", &mut stats);
         // The stated precondition: the diamond's two Leaf edges are walked.
@@ -5098,10 +5103,11 @@ codeunit 50101 "T7b Temp Classes"
     end;
 }
 "#;
-        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
-            &[("TempClasses.al".to_string(), src.to_string())],
-            "00000000-0000-0000-0000-00000000d1a1",
-        );
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("TempClasses.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a1",
+            );
         // The stated precondition: one known-temp and one physical inherited
         // insert whose keys differ ONLY in the temp class.
         let snap = compose_snapshot(&resolved);

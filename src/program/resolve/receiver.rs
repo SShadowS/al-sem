@@ -3668,7 +3668,7 @@ pub(crate) fn caller_scope_symbol<'a>(
 /// `resolve_module_has_no_stray_engine_l3_l2_imports` guard; the module's own
 /// doc names `builtins.rs::global_builtins` as the ONE sanctioned exception).
 /// Both copies shared the same char-boundary panic/mis-parse bug (T2.4); if
-/// this logic changes again, update `engine::l3::record_types`'s copy too.
+/// this logic changes again, update `program::model::record_types`'s copy too.
 ///
 /// Char-boundary safe by construction: never computes a byte offset from a
 /// RE-CASED copy of the string and slices the ORIGINAL with it — that old

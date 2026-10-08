@@ -528,8 +528,8 @@ fn literal_canonical(lit: &Literal) -> Option<(CanonicalArgType, LiteralKind)> {
 #[derive(Debug)]
 pub(crate) struct ArgDispatchInfo {
     /// The argument's canonical semantic type, when this increment can
-    /// positively type it — `None` (untyped) for any expression shape this
-    /// increment defers (call-result / `Rec.Field` / `Enum::Value` / …) OR a
+    /// positively type it — `None` (untyped) for any expression shape the
+    /// typer does not cover (an option value `R.Opt::A`, arithmetic, …) OR a
     /// declared var whose type failed canonicalization. An untyped position
     /// degrades the WHOLE call (module doc) — it never eliminates a
     /// candidate.
@@ -913,8 +913,46 @@ fn type_one_arg(
             surface,
             with_state,
         ),
-        // Deferred (increment-1 scope, module doc): `Enum::Value` / any
-        // other expression shape stays untyped.
+        // S9.5c: an enum value `"Probe Kind"::Open` types as its enum, so it
+        // binds an `Enum "Probe Kind"` parameter over `Integer`/`InStream`
+        // overloads (alc 18.0.41.45789 + altool graph: `EN(Enum)`/`EN(InStream)`
+        // and `EI(Enum)`/`EI(Integer)` both bind the Enum overload). Only a
+        // bare qualifier that names an enum: `R.Kind::A` (an option field's
+        // value) and `K::A` with `K` a caller-scope variable are option values,
+        // which bind `Integer` (`EI(R.Kind::A)` binds `EI(Integer)`), so they
+        // stay untyped. Gated on `with` like the bare-identifier arm: a field
+        // of the `with` record could take the name.
+        ExprKind::QualifiedEnum { enum_type, .. } => {
+            if with_state != WithState::NoWithProven {
+                return ArgDispatchInfo::untyped();
+            }
+            let name = match &file.ir.expr(*enum_type).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
+                _ => return ArgDispatchInfo::untyped(),
+            };
+            if !matches!(
+                caller_scope_symbol(name, routine, object_globals),
+                CallerScopeSymbol::NotFound
+            ) {
+                return ArgDispatchInfo::untyped();
+            }
+            let oref = ObjectRef::Name {
+                raw: name.clone(),
+                normalized_lc: name.fold_identifier(),
+            };
+            match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
+                ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                    canonical: Some(CanonicalArgType::Object(id)),
+                    exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
+                    literal_kind: None,
+                    var_passable: false,
+                },
+                ObjectRefResolution::Ambiguous
+                | ObjectRefResolution::OutOfClosure
+                | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+            }
+        }
+        // Any other expression shape stays untyped.
         _ => ArgDispatchInfo::untyped(),
     }
 }
@@ -1504,12 +1542,19 @@ fn literal_forbidden_families(kind: LiteralKind) -> &'static [&'static str] {
 /// Whether `arg` EXACTLY matches `param` at one position — canonical-
 /// identity EQUALITY (the ONLY basis for a pick — see the module doc's
 /// cardinal rule), plus the `var`-mode ByRef-EXACT tightening (Round-2
-/// closer C5).
+/// closer C5), plus (S9.5c) the length fit of a by-value `Text`/`Code`
+/// parameter ([`length_fits`]).
 fn position_exact_match(arg: &ArgDispatchInfo, param: &ParamDispatchInfo) -> bool {
     let Some(arg_canonical) = &arg.canonical else {
         return false;
     };
     if arg_canonical != &param.canonical {
+        return false;
+    }
+    if !param.by_ref
+        && matches!(&param.canonical, CanonicalArgType::Base(b) if b == "text" || b == "code")
+        && !length_fits(arg.exact_text.as_deref(), &param.exact_text)
+    {
         return false;
     }
     if param.by_ref {
@@ -1532,6 +1577,26 @@ fn position_exact_match(arg: &ArgDispatchInfo, param: &ParamDispatchInfo) -> boo
     true
 }
 
+/// Whether a `Text`/`Code` argument of normalized type text `arg` reaches a
+/// same-base parameter `param` without truncation, so the match is exact: an
+/// unbounded parameter takes any argument; a bounded one only a bounded
+/// argument no longer than it. Compiler-proven (S9.5c, alc 18.0.41.45789 +
+/// altool graph): `Text[30]` binds `TL(Text[50])` over `TL(Code[20])`, while an
+/// unbounded `Text` or a `Text[60]` there is AL0196 (ambiguous); `Code[10]`
+/// binds `TC(Code[20])` but `Code[30]` binds `TC(Text)`. An argument whose
+/// length is not known (`None`) is not exact against a bounded parameter.
+fn length_fits(arg: Option<&str>, param: &str) -> bool {
+    let len = |t: &str| {
+        let first = t.split_whitespace().next().unwrap_or(t);
+        extract_length_suffix(first).and_then(|n| n.parse::<u64>().ok())
+    };
+    let Some(param_len) = len(param) else {
+        return true;
+    };
+    arg.and_then(len)
+        .is_some_and(|arg_len| arg_len <= param_len)
+}
+
 /// Whether `param` is PROVEN incompatible with `arg` at one position — the
 /// ELIMINATION test a non-picked candidate must satisfy at some position for
 /// its presence to NOT block the pick (see [`pick_candidate`]). Distinct from
@@ -1543,11 +1608,16 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
     let Some(arg_canonical) = &arg.canonical else {
         return false;
     };
+    // A by-value `Variant` parameter takes any argument (S9.5c probe: InStream,
+    // Text, Date, Integer, Duration, Boolean, RecordId all bind one).
+    if param.canonical.is_variant() && !param.by_ref {
+        return false;
+    }
     if arg_canonical != &param.canonical {
         return !matches!(
             (arg_canonical, &param.canonical),
             (CanonicalArgType::Base(a), CanonicalArgType::Base(b)) if same_soft_family(a, b)
-        );
+        ) && !implicitly_converts(arg_canonical, &param.canonical);
     }
     // Canonical types match — still provably incompatible when `var` mode
     // requires exact length (or var-passability) and it doesn't hold (C5):
@@ -1567,6 +1637,60 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
     false
 }
 
+/// Implicit conversions AL performs from `arg` to `param` outside the soft
+/// families ([`same_soft_family`]): such a pair is never PROVEN incompatible.
+///
+/// Proven per pair by a single-overload call (S9.5c, alc 18.0.41.45789): a
+/// convertible argument compiles (sometimes with warning AL0603, "implicit
+/// conversion ... data loss"), an inconvertible one fails with AL0133. (A
+/// `(Variant | T)` pair is NO evidence: `Variant` can outrank a lossy
+/// conversion — `Decimal` binds `(Variant | Integer)`'s `Variant` overload yet
+/// converts to `Integer`.)
+/// - Numeric-like types convert into each other, every pair probed so far:
+///   `Integer`, `Decimal`, `BigInteger`, `Duration`, `Char`, `Byte`, `Option`.
+/// - An enum converts with `Integer`, `BigInteger` and `Option` both ways
+///   (AL0603), but NOT into `Decimal` (AL0133).
+/// - `Guid` converts with `Text` and `Code` both ways; `Label` into `Guid`.
+///
+/// Proven NOT convertible (AL0133), so still incompatible: `Text`/`Code`/
+/// `Boolean`/`Date`/`Time`/`InStream`/`Guid` into `Integer`; `Integer`/
+/// `Decimal`/`Boolean`/`Date`/`Time`/`RecordId`/`Option`/enum into `Text`;
+/// `Integer` into `Code` or `Guid`; `Text`/`Boolean`/enum into `Decimal`;
+/// `Text`/`Code` into `Char` (a soft-family pair, never eliminated anyway);
+/// `Date` and `DateTime` into each other, `Text` into either; `Text`/`Integer`
+/// into `Boolean`; `Text` into `RecordId` or `InStream`; `Integer` into `Time`.
+///
+/// An unprobed pair inside these groups (`Byte` into an enum, …) is listed as
+/// convertible: calling a pair convertible can only leave a call undecided,
+/// never pick wrongly.
+fn implicitly_converts(arg: &CanonicalArgType, param: &CanonicalArgType) -> bool {
+    const NUMERIC_LIKE: &[&str] = &[
+        "integer",
+        "decimal",
+        "biginteger",
+        "duration",
+        "char",
+        "byte",
+        "option",
+    ];
+    fn kind(t: &CanonicalArgType) -> Option<&str> {
+        match t {
+            CanonicalArgType::Base(b) => Some(b.as_str()),
+            CanonicalArgType::Object(id) if id.kind == ObjectKind::Enum => Some("enum"),
+            _ => None,
+        }
+    }
+    let (Some(arg), Some(param)) = (kind(arg), kind(param)) else {
+        return false;
+    };
+    let numeric = |t: &str| NUMERIC_LIKE.contains(&t);
+    (numeric(arg) && numeric(param))
+        || (arg == "enum" && numeric(param) && param != "decimal")
+        || (numeric(arg) && param == "enum")
+        || (arg == "guid" && matches!(param, "text" | "code"))
+        || (matches!(arg, "text" | "code" | "label") && param == "guid")
+}
+
 /// Attempt the Task 2 fail-closed pick over a prevalidated, same-name/
 /// same-arity, all-CONCRETE candidate set (every entry of `candidates` is
 /// parallel — by index — to the caller's own candidate `RoutineNodeId` list).
@@ -1575,16 +1699,17 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
 /// skipped (see the module doc), so an untyped argument matters only at a
 /// differing position.
 ///
-/// Returns `Some(index)` iff EXACTLY ONE candidate EXACTLY matches `args`
-/// AND every OTHER candidate is PROVABLY INCOMPATIBLE with `args` at some
-/// position — an "undecided" (same-soft-family, non-exact) competitor blocks
-/// the pick just like a second exact match would, since its presence means
-/// the closed candidate set is not provably narrowed to one. `None` for
-/// every other outcome (an untyped arg at a differing position, a Variant/Any param at a
-/// discriminating position, a literal-forbidden-family candidate present, 0
-/// or >1 exact matches, an undecided non-picked candidate) — the caller's
-/// existing `AmbiguousOverload` construction is UNCHANGED whenever this
-/// returns `None`.
+/// Returns `Some(index)` when (A) EXACTLY ONE non-`Variant` candidate exactly
+/// matches `args` at every discriminating position, or else (B) every
+/// candidate but one is PROVABLY INCOMPATIBLE with `args` — both compiler-
+/// proven (S9.5c; see the rules in the body). Until S9.5c rule (A) also
+/// required every other candidate to be proven incompatible, which left an
+/// exact match ambiguous next to any convertible rival. `None` for every other
+/// outcome (an untyped arg at a differing position, an `Any` param at a
+/// discriminating position, a literal-forbidden-family candidate present, a
+/// mix of `Variant` and other arguments, 0 or >1 exact matches with no sole
+/// applicable candidate) — the caller's existing `AmbiguousOverload`
+/// construction is UNCHANGED whenever this returns `None`.
 pub(crate) fn pick_candidate(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],
@@ -1646,7 +1771,7 @@ pub(crate) fn pick_candidate(
     //   and Text literals);
     // - a `Variant` argument binds the `Variant` overload.
     // So a candidate with `Variant` at a discriminating position competes
-    // only for `Variant` arguments; otherwise the pick runs over the rest.
+    // for `Variant` arguments here, and otherwise only through rule (B) below.
     let has_variant =
         |c: &Vec<ParamDispatchInfo>| discriminating.iter().any(|&p| c[p].canonical.is_variant());
     if candidates.iter().any(&has_variant) {
@@ -1668,54 +1793,64 @@ pub(crate) fn pick_candidate(
         if variant_args > 0 {
             return None;
         }
-        let pool: Vec<usize> = (0..candidates.len())
-            .filter(|&i| !has_variant(&candidates[i]))
-            .collect();
-        return pick_exact(args, candidates, &discriminating, &pool);
     }
-    let all: Vec<usize> = (0..candidates.len()).collect();
-    pick_exact(args, candidates, &discriminating, &all)
+    // (A) An exact match at every discriminating position wins, against any
+    // candidate that needs a conversion somewhere (S9.5c, alc 18.0.41.45789 +
+    // altool graph: `TC(Text|Code[20])` with a Text, `CL(Text|Code[50])` with a
+    // Code[20], `EI(Enum|Integer)` with an enum, `I(Integer;Text|Integer;Code[20])`
+    // with (Integer, Text), `G1(Text;Integer|Code[20];Decimal)` with
+    // (Text[10], Integer) each bind the exact one). Exact includes the length
+    // fit of a by-value Text/Code parameter ([`length_fits`]). A `Variant`
+    // candidate never takes part: an exact non-`Variant` match beats it (S9.0e).
+    let rest: Vec<usize> = (0..candidates.len())
+        .filter(|&i| !has_variant(&candidates[i]))
+        .collect();
+    if let Some(picked) = pick_exact(args, candidates, &discriminating, &rest) {
+        return Some(picked);
+    }
+    // (B) Otherwise, when every candidate but one is PROVEN unable to take the
+    // arguments, that one binds — the compiler has nothing else to bind. With
+    // a `Variant` parameter never incompatible, this is also the `Variant`
+    // fallback (S9.5c: `VI(Variant|Integer)` with an InStream, Text or Date
+    // argument, `VT(Variant|Text)` with an Integer or InStream one, bind the
+    // `Variant` overload). No ranking among conversions is attempted: where the
+    // compiler picks between two needed conversions (`Code[30]` into
+    // `TC(Text|Code[20])` binds Text; `Integer` into `IB(Decimal|BigInteger)`
+    // binds BigInteger) the call stays ambiguous here, never a guess.
+    pick_sole_applicable(args, candidates, &discriminating)
 }
 
-/// The exact-match-and-eliminate core of [`pick_candidate`], over the
-/// candidate indices in `pool`.
+/// Rule (A) of [`pick_candidate`]: the one candidate in `pool` that exactly
+/// matches at every discriminating position; `None` for zero or several.
 fn pick_exact(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],
     discriminating: &[usize],
     pool: &[usize],
 ) -> Option<usize> {
-    let mut exact_idx: Option<usize> = None;
-    for &i in pool {
-        let params = &candidates[i];
-        if discriminating
+    let mut exact = pool.iter().copied().filter(|&i| {
+        discriminating
             .iter()
-            .all(|&p| position_exact_match(&args[p], &params[p]))
-        {
-            if exact_idx.is_some() {
-                // A second exact match: ordinary ambiguity, never pick.
-                return None;
-            }
-            exact_idx = Some(i);
-        }
-    }
-    let picked = exact_idx?;
+            .all(|&p| position_exact_match(&args[p], &candidates[i][p]))
+    });
+    let picked = exact.next()?;
+    exact.next().is_none().then_some(picked)
+}
 
-    // Every OTHER candidate in the pool must be PROVEN incompatible at some
-    // position — an undecided competitor blocks the pick (doc above).
-    for &i in pool {
-        if i == picked {
-            continue;
-        }
-        let params = &candidates[i];
-        let eliminated = discriminating
+/// Rule (B) of [`pick_candidate`]: the one candidate not proven incompatible
+/// at some discriminating position; `None` for zero or several.
+fn pick_sole_applicable(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    discriminating: &[usize],
+) -> Option<usize> {
+    let mut applicable = (0..candidates.len()).filter(|&i| {
+        !discriminating
             .iter()
-            .any(|&p| position_provably_incompatible(&args[p], &params[p]));
-        if !eliminated {
-            return None;
-        }
-    }
-    Some(picked)
+            .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p]))
+    });
+    let picked = applicable.next()?;
+    applicable.next().is_none().then_some(picked)
 }
 
 // ---------------------------------------------------------------------------
@@ -2050,18 +2185,77 @@ mod tests {
         assert_eq!(pick_candidate(&args, &candidates), None);
     }
 
-    /// Variant wildcard: when no non-Variant candidate exactly matches, the
-    /// Variant candidate is not picked as the "survivor" of eliminating the
-    /// others — that survivor-by-elimination is not picked (Round-1 addendum
-    /// I5); only the proven precedences below pick.
+    /// The implicit-conversion relation, pair by pair as the compiler proved
+    /// it (S9.5c, single-overload calls with alc 18.0.41.45789: a convertible
+    /// argument compiles, an inconvertible one is AL0133).
     #[test]
-    fn pick_candidate_degrades_on_variant_at_discriminating_position() {
-        let args = vec![base_arg("instream")];
+    fn implicit_conversions_follow_the_compiler() {
+        let enum_ty = CanonicalArgType::Object(ObjectNodeId {
+            app: AppRef(0),
+            kind: ObjectKind::Enum,
+            key: ObjKey::Id(50951),
+        });
+        let b = |s: &str| CanonicalArgType::Base(s.to_string());
+        let converts = [
+            (b("decimal"), b("integer")),
+            (b("biginteger"), b("integer")),
+            (b("duration"), b("integer")),
+            (b("option"), b("integer")),
+            (b("char"), b("biginteger")),
+            (b("byte"), b("decimal")),
+            (b("integer"), b("char")),
+            (b("integer"), b("option")),
+            (enum_ty.clone(), b("integer")),
+            (enum_ty.clone(), b("option")),
+            (b("integer"), enum_ty.clone()),
+            (b("guid"), b("text")),
+            (b("guid"), b("code")),
+            (b("code"), b("guid")),
+            (b("label"), b("guid")),
+        ];
+        for (a, p) in &converts {
+            assert!(implicitly_converts(a, p), "{a:?} -> {p:?} converts");
+        }
+        let inconvertible = [
+            (b("text"), b("integer")),
+            (b("boolean"), b("integer")),
+            (b("instream"), b("integer")),
+            (b("guid"), b("integer")),
+            (b("integer"), b("text")),
+            (b("option"), b("text")),
+            (enum_ty.clone(), b("text")),
+            (enum_ty.clone(), b("decimal")),
+            (b("decimal"), b("code")),
+            (b("integer"), b("guid")),
+            (b("date"), b("datetime")),
+            (b("text"), b("date")),
+        ];
+        for (a, p) in &inconvertible {
+            assert!(
+                !implicitly_converts(a, p),
+                "{a:?} -> {p:?} does not convert"
+            );
+        }
+    }
+
+    /// Renamed from `..._degrades_on_variant_at_discriminating_position`
+    /// (S9.5c; it pinned Round-1 addendum I5, "never pick the Variant
+    /// survivor"): when every other candidate is proven unable to take the
+    /// argument, the `Variant` one binds, as the compiler does (an InStream
+    /// cannot become an Integer, AL0133; altool graph binds `V(Variant)`). An
+    /// argument that CONVERTS into the other candidate (an Option into
+    /// Integer) leaves two applicable candidates: no pick.
+    #[test]
+    fn pick_candidate_variant_binds_when_every_other_is_inconvertible() {
         let candidates = vec![
             vec![base_param("variant", false)],
             vec![base_param("integer", false)],
         ];
-        assert_eq!(pick_candidate(&args, &candidates), None);
+        assert_eq!(
+            pick_candidate(&[base_arg("instream")], &candidates),
+            Some(0)
+        );
+        assert_eq!(pick_candidate(&[base_arg("option")], &candidates), None);
     }
 
     /// S9.0e, alc-proven: an argument that exactly matches a non-Variant
@@ -2138,20 +2332,43 @@ mod tests {
         assert_eq!(pick_candidate(&args, &candidates), None);
     }
 
-    /// Mandatory negative ("same-family scalars -> no pick", `ws-overload-
-    /// negatives`' `CallIndistinct`): a DECLARED-VAR `Text` argument exactly
-    /// matches an `(Integer, Text)` candidate, but a sibling `(Integer,
-    /// Code[20])` candidate is UNDECIDED (Text/Code same soft family, module
-    /// doc) rather than eliminated — the undecided competitor blocks the
-    /// pick even though it is not itself an exact match.
+    /// Renamed from `..._text_vs_code_stays_undecided` (S9.5c): a declared-var
+    /// `Text` argument exactly matches `(Integer, Text)`, and the `(Integer,
+    /// Code[20])` sibling, which needs a conversion, no longer blocks it — the
+    /// compiler binds the exact overload (`ws-overload-negatives`'
+    /// `CallIndistinct`, altool graph; probe `TC(Text|Code[20])`).
     #[test]
-    fn pick_candidate_declared_var_text_vs_code_stays_undecided() {
+    fn pick_candidate_exact_text_beats_a_code_conversion() {
         let args = vec![base_arg("integer"), base_arg("text")];
         let candidates = vec![
             vec![base_param("integer", false), base_param("text", false)],
             vec![base_param("integer", false), base_param("code", false)],
         ];
-        assert_eq!(pick_candidate(&args, &candidates), None);
+        assert_eq!(pick_candidate(&args, &candidates), Some(0));
+    }
+
+    /// S9.5c: a Text/Code match is exact only when the length fits. An
+    /// unbounded `Text` (or a `Text[60]`) into `TL(Text[50] | Code[20])` is
+    /// ambiguous in the compiler (AL0196), a `Text[30]` binds `Text[50]`.
+    #[test]
+    fn pick_candidate_text_exactness_needs_the_length_to_fit() {
+        let arg = |t: &str| ArgDispatchInfo {
+            exact_text: Some(t.to_string()),
+            ..base_arg("text")
+        };
+        let candidates = vec![
+            vec![ParamDispatchInfo {
+                exact_text: "text[50]".into(),
+                ..base_param("text", false)
+            }],
+            vec![ParamDispatchInfo {
+                exact_text: "code[20]".into(),
+                ..base_param("code", false)
+            }],
+        ];
+        assert_eq!(pick_candidate(&[arg("text")], &candidates), None);
+        assert_eq!(pick_candidate(&[arg("text[60]")], &candidates), None);
+        assert_eq!(pick_candidate(&[arg("text[30]")], &candidates), Some(0));
     }
 
     /// C6, stated verbatim: a STRING literal degrades the call whenever the

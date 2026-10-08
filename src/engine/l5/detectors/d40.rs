@@ -29,18 +29,18 @@
 //! on the L3 binding directly; the post-upgrade `bindingResolution` lives on
 //! `ctx.upgraded_bindings_by_callsite` joined POSITIONALLY by index.
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor, owner_is_judged, record_load_points};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d40-transitive-load-missing";
 
 pub fn detect_d40(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -99,7 +99,7 @@ pub fn detect_d40(
                     continue;
                 }
                 // sourceTempState known/true → temp record, no DB load concept.
-                if crate::engine::l2::features::temp_state_suppresses(
+                if crate::program::body::features::temp_state_suppresses(
                     binding.source_temp_state.as_ref(),
                 ) {
                     skipped_temp_record += 1;
