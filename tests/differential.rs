@@ -61,6 +61,7 @@ use al_sem::engine::l3::l3_workspace::{
 use al_sem::engine::snapshot::{
     IdentitySnapshot, ObjectIdentity, RoutineIdentity, snapshot_workspace,
 };
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 #[path = "common/regen.rs"]
 mod regen;
@@ -778,8 +779,9 @@ fn differential_l2_features_match_goldens() {
 // R2a L3 record-types differential pass + COVERAGE MATRIX (anti-degenerate)
 // =============================================================================
 //
-// For each `tests/r2a-goldens/<name>.l3rt.golden.json`, run the disk-backed L3
-// assemble+resolve (`assemble_and_resolve_workspace_default`) on
+// For each `tests/r2a-goldens/<name>.l3rt.golden.json`, build the production
+// model (`assemble_and_resolve_workspace_with_program_calls`; L3's disk builder
+// until engine-switch S9.5e, which moved no r2a golden) on
 // `tests/r0-corpus/<name>` (the SAME source fixtures the R0/R1a passes use),
 // project to the golden-shaped record-type projection, and compare structurally:
 // resolved record-var/op StableTableId (OMITTED when unresolved) + per-Table
@@ -988,9 +990,9 @@ fn differential_l3_record_types_match_goldens() {
                 )
             });
 
-        // Rust side: disk-backed assemble+resolve → project → JSON. Fail-closed
-        // (empty) layouts yield an empty projection (never throws).
-        let projection = match assemble_and_resolve_workspace_default(&fixture_dir) {
+        // Rust side: the production model (engine-switch S9.5e) → project → JSON.
+        // Fail-closed (empty) layouts yield an empty projection (never throws).
+        let projection = match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
             Some(resolved) => resolved.project(),
             None => L3RecordTypeProjection {
                 tables: vec![],
@@ -2477,9 +2479,10 @@ fn discover_l3cov_goldens() -> Vec<(String, PathBuf)> {
     out
 }
 
-/// Rust-side L3 coverage projection for a fixture dir (fail-closed → all-empty).
+/// Coverage projection of the production model for a fixture dir (engine-switch
+/// S9.5e: the program engine's calls; fail-closed → all-empty).
 fn rust_coverage_projection(fixture_dir: &Path) -> AnalysisCoverage {
-    match assemble_and_resolve_workspace_default(fixture_dir) {
+    match assemble_and_resolve_workspace_with_program_calls(fixture_dir) {
         Some(resolved) => resolved.project_coverage_disk(fixture_dir),
         None => AnalysisCoverage {
             source_units_total: 0,

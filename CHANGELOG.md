@@ -422,6 +422,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The r2a record-type and r2d coverage differentials build the production
+  model** (engine-switch S9.5e). No r2a golden moves. Two r2d goldens move,
+  for causes already triaged in S9.5c: the call to another object's `local`
+  procedure is unresolved (`ws-member-call-resolution`), and `CallIndistinct`
+  binds (`ws-overload-negatives`). The r2d manifest total is unchanged.
+
 - **The L4 summary differential and `perf_bounds` solve over the production
   model** (engine-switch S9.5d). The two CDO tests of `l4_summary_differential`
   and `perf_bounds`' L4 substrate read the program engine's calls and events
