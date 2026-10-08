@@ -1,0 +1,43 @@
+==== Q6: alsem analyze pipeline on U:/Git/DO-cdo-baseline/Cloud ====
+  fresh_coverage                                       peak     424.0 MiB  live after       0.3 MiB (     +176 allocs)  3.4s
+    fresh_coverage ok: true
+  compute_gate_model_instance_id                       peak       0.2 MiB  live after       0.0 MiB (       +1 allocs)  0.0s
+  assemble_and_resolve_workspace_program               peak     521.0 MiB  live after     105.4 MiB ( +1005966 allocs)  4.0s
+    model: 584 objects, 98 tables, 5479 routines; call_sites 15539, statement_tree Some 5479
+    detector context retained (freed on drop): 58.7 MiB in 454515 allocs
+  build_detector_context(ALL) incl. drop               peak      68.9 MiB  live after       0.0 MiB (       +0 allocs)  0.6s
+  (a) Model retained: 105.41 MiB in 1005967 allocs; routines 5479 = 88.94 MiB in 852998 allocs (Vec<ModelRoutine> backing 9.92 MiB, 1016 B each)
+  top-level (besides routines):
+    calls (program engine)                 13.69 MiB   13.0%     113731 allocs
+    root_classifications                    1.35 MiB    1.3%      20526 allocs
+    tables                                  0.53 MiB    0.5%       8464 allocs
+    objects                                 0.47 MiB    0.4%       4594 allocs
+    events (program engine)                 0.43 MiB    0.4%       5651 allocs
+    primary_app                             0.00 MiB    0.0%          4 allocs
+    infra_diagnostics                       0.00 MiB    0.0%          0 allocs
+  ModelRoutine fields (owned heap freed per field, summed; share of all Model):
+    call_sites                             28.12 MiB   26.7%     337206 allocs
+    statement_tree                         22.92 MiB   21.7%     101790 allocs
+    variables                               4.27 MiB    4.0%      54759 allocs
+    record_operations                       4.10 MiB    3.9%      67082 allocs
+    record_variables                        3.88 MiB    3.7%      51543 allocs
+    condition_references                    3.32 MiB    3.2%      49017 allocs
+    operation_sites                         3.22 MiB    3.1%      31161 allocs
+    var_assignments                         2.43 MiB    2.3%      27206 allocs
+    field_accesses                          1.61 MiB    1.5%      23594 allocs
+    stable_routine_id                       1.08 MiB    1.0%       5479 allocs
+    identifier_references                   0.74 MiB    0.7%      22298 allocs
+    parameters                              0.56 MiB    0.5%      14082 allocs
+    id                                      0.42 MiB    0.4%       5479 allocs
+    loops                                   0.40 MiB    0.4%       3172 allocs
+    source_anchor                           0.38 MiB    0.4%      10958 allocs
+    attributes_parsed                       0.36 MiB    0.3%       5646 allocs
+    normalized_signature_hash               0.33 MiB    0.3%       5479 allocs
+    object_id                               0.27 MiB    0.3%       5479 allocs
+    enclosing/originating/range/guard       0.23 MiB    0.2%       6684 allocs
+    app_guid                                0.19 MiB    0.2%       5479 allocs
+    name                                    0.08 MiB    0.1%       5479 allocs
+    kind                                    0.04 MiB    0.0%       5479 allocs
+    object_type                             0.03 MiB    0.0%       5479 allocs
+    access_modifier+return_type             0.02 MiB    0.0%       2961 allocs
+    unreachable_statements                  0.00 MiB    0.0%          7 allocs

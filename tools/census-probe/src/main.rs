@@ -187,8 +187,10 @@ fn drop_root_by_field(r: Root) {
                 obj_index,
                 friends,
                 abi_ingest_errors,
+                workspace_rows,
             } = g;
             step("graph.objects (own part + own_pos)", objects);
+            step("graph.workspace_rows", workspace_rows);
             step("graph.routines (own part + own_pos)", routines);
             step("graph.obj_index", obj_index);
             step("graph.apps", apps);
@@ -859,9 +861,8 @@ impl Acc {
 }
 
 fn q6(ws: PathBuf) {
-    use al_sem::engine::l3::l3_workspace::{
-        L3Resolved, L3Workspace, assemble_and_resolve_workspace,
-    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+    use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
         al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
@@ -872,13 +873,15 @@ fn q6(ws: PathBuf) {
         al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
     })
     .expect("model instance id");
-    let resolved = phase("assemble_and_resolve_workspace", || {
-        assemble_and_resolve_workspace(&ws, &id, false)
+    // The production model (engine-switch S6/S9): one program build, the model
+    // projected from its parse, the program engine's calls and events attached.
+    let resolved = phase("assemble_and_resolve_workspace_program", || {
+        assemble_and_resolve_workspace_program(&ws, &id, false)
     })
     .expect("assemble");
     settle();
     println!(
-        "    L3: {} objects, {} tables, {} routines; call_sites {}, statement_tree Some {}",
+        "    model: {} objects, {} tables, {} routines; call_sites {}, statement_tree Some {}",
         resolved.workspace.objects.len(),
         resolved.workspace.tables.len(),
         resolved.workspace.routines.len(),
@@ -913,14 +916,15 @@ fn q6(ws: PathBuf) {
     // (a) drop deltas
     settle();
     let (t0, ta0) = live();
-    let L3Resolved {
+    let Model {
         workspace,
         root_classifications,
         primary_app,
         infra_diagnostics,
-        precomputed_calls: _,
+        calls,
+        events,
     } = resolved;
-    let L3Workspace {
+    let ModelEntities {
         objects,
         tables,
         routines,
@@ -928,9 +932,9 @@ fn q6(ws: PathBuf) {
     let mut top = Acc::default();
     let mut rf = Acc::default();
     let nroutines = routines.len();
-    let rcap = routines.capacity() * size_of::<al_sem::engine::l3::l3_workspace::L3Routine>();
+    let rcap = routines.capacity() * size_of::<ModelRoutine>();
     for r in routines {
-        let al_sem::engine::l3::l3_workspace::L3Routine {
+        let ModelRoutine {
             id,
             stable_routine_id,
             object_id,
@@ -1007,21 +1011,23 @@ fn q6(ws: PathBuf) {
     top.drop_as("root_classifications", root_classifications);
     top.drop_as("primary_app", primary_app);
     top.drop_as("infra_diagnostics", infra_diagnostics);
+    top.drop_as("calls (program engine)", calls);
+    top.drop_as("events (program engine)", events);
     let (t2, ta2) = live();
     let total = t0 - t2;
     println!(
-        "  (a) L3Resolved retained: {:.2} MiB in {} allocs; routines {} = {:.2} MiB in {} allocs (Vec<L3Routine> backing {:.2} MiB, {} B each)",
+        "  (a) Model retained: {:.2} MiB in {} allocs; routines {} = {:.2} MiB in {} allocs (Vec<ModelRoutine> backing {:.2} MiB, {} B each)",
         mib(total),
         ta0 - ta2,
         nroutines,
         mib(routines_total),
         ta0 - ta1,
         mib(rcap as isize),
-        size_of::<al_sem::engine::l3::l3_workspace::L3Routine>()
+        size_of::<ModelRoutine>()
     );
     println!("  top-level (besides routines):");
     top.print(total);
-    println!("  L3Routine fields (owned heap freed per field, summed; share of all L3Resolved):");
+    println!("  ModelRoutine fields (owned heap freed per field, summed; share of all Model):");
     rf.print(total);
 }
 
@@ -1133,7 +1139,7 @@ fn updaters_mode(
 /// `Rung1Context::build`, not taken from a running updater.
 fn index_split_mode(built: Vec<Root>) {
     use al_sem::program::resolve::decl_surface::DeclSurface;
-    use al_sem::program::resolve::full::workspace_object_map;
+    use al_sem::program::resolve::full::app_object_map;
     use al_sem::program::resolve::index::ResolveIndex;
     println!("\n==== --index-split: Rung1Context pieces per root ====");
     let mut sums: Vec<(String, f64, isize)> = Vec::new();
@@ -1166,7 +1172,7 @@ fn index_split_mode(built: Vec<Root>) {
         let idx = ResolveIndex::build(graph);
         settle();
         let (b1, a1) = live();
-        let map = workspace_object_map(graph, primary);
+        let map = app_object_map(graph, primary);
         settle();
         let (b2, a2) = live();
         let surf = DeclSurface::build(graph, std::slice::from_ref(&r.ws))
@@ -1232,7 +1238,8 @@ fn main() {
     let source = match args.next().as_deref() {
         Some("embedded") => DependencySource::Embedded,
         Some("symbols") => DependencySource::Symbols,
-        Some("l3") => {
+        // Q6, the analyze model's cost (was `l3` before engine-switch S9).
+        Some("model") => {
             q6(PathBuf::from(args.next().expect("workspace")));
             return;
         }
