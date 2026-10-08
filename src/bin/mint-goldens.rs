@@ -38,7 +38,7 @@ use std::process::ExitCode;
 use al_sem::program::resolve::anon::ANON_KEY_ENV;
 use al_sem::program::resolve::compiler_golden::{
     CompilerGolden, CompilerStamp, cdo_compiler_golden_path, fixture_compiler_golden_path,
-    load_compiler_golden, mint_compiler_golden,
+    fixture_workspace_root, load_compiler_golden, mint_compiler_golden,
 };
 use al_sem::program::resolve::compiler_oracle::CompilerGraph;
 use al_sem::program::resolve::semantic_golden::{
@@ -76,6 +76,29 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// The workspace to mint from. `--fixture` always mints from the fixture
+/// workspace and never reads `$CDO_WS` (which once made it mint the fixture graph
+/// against CDO's app id: 0 pairs); otherwise the positional argument, else
+/// `$CDO_WS`.
+fn select_workspace(
+    fixture: bool,
+    positional: Option<&str>,
+    cdo_ws: Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    match (fixture, positional) {
+        (true, None) => Ok(fixture_workspace_root()),
+        (true, Some(p)) => Err(format!(
+            "--fixture mints from {} and takes no workspace (got {p})",
+            fixture_workspace_root().display()
+        )),
+        (false, Some(p)) => Ok(PathBuf::from(p)),
+        (false, None) => match cdo_ws {
+            Some(v) if !v.is_empty() => Ok(PathBuf::from(v)),
+            _ => Err("no workspace given and CDO_WS is unset".to_string()),
+        },
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let graph_path = flag_value(&args, "--compiler-graph");
@@ -85,15 +108,20 @@ fn main() -> ExitCode {
         .iter()
         .find(|a| !a.starts_with("--") && !values.contains(&a.as_str()));
 
-    let workspace_root: PathBuf = match positional {
-        Some(p) => PathBuf::from(p),
-        None => match std::env::var_os("CDO_WS") {
-            Some(v) if !v.is_empty() => PathBuf::from(v),
-            _ => {
-                eprintln!("error: no workspace given and CDO_WS is unset");
-                return usage();
-            }
-        },
+    // `--fixture`: the in-repo fixture golden. Its workspace is this repository,
+    // so git and closure stamps mean nothing: none are written, and the fixture
+    // test checks no drift.
+    let fixture = args.iter().any(|a| a == "--fixture");
+    let workspace_root = match select_workspace(
+        fixture,
+        positional.map(String::as_str),
+        std::env::var_os("CDO_WS"),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return usage();
+        }
     };
     if !workspace_root.exists() {
         eprintln!(
@@ -108,11 +136,6 @@ fn main() -> ExitCode {
              the committed fixed salt. Do NOT commit goldens minted this way."
         );
     }
-
-    // `--fixture`: the in-repo fixture golden (`tests/fixtures/semantic-golden`).
-    // Its workspace is this repository, so git and closure stamps mean nothing:
-    // none are written, and the fixture test checks no drift.
-    let fixture = args.iter().any(|a| a == "--fixture");
 
     // Stamp the workspace: git covers tracked files only, so the gitignored
     // `.alpackages` closure is stamped separately (#29). A probe failure aborts.
@@ -221,4 +244,31 @@ fn write_minified<T: serde::Serialize>(path: &Path, value: &T) {
         std::fs::create_dir_all(parent).expect("create tests/goldens/semantic-edges dir");
     }
     std::fs::write(path, json).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--fixture` ignores a set `$CDO_WS` (stated directly: some other workspace)
+    /// and refuses an explicit workspace; without `--fixture` the positional wins,
+    /// then `$CDO_WS`.
+    #[test]
+    fn fixture_mints_from_the_fixture_workspace_whatever_cdo_ws_says() {
+        let cdo = || Some(std::ffi::OsString::from("U:/somewhere/else"));
+        assert_eq!(
+            select_workspace(true, None, cdo()),
+            Ok(fixture_workspace_root())
+        );
+        assert!(select_workspace(true, Some("ws"), cdo()).is_err());
+        assert_eq!(
+            select_workspace(false, Some("ws"), cdo()),
+            Ok(PathBuf::from("ws"))
+        );
+        assert_eq!(
+            select_workspace(false, None, cdo()),
+            Ok(PathBuf::from("U:/somewhere/else"))
+        );
+        assert!(select_workspace(false, None, None).is_err());
+    }
 }
