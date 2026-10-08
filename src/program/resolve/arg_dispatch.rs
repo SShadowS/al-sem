@@ -528,8 +528,8 @@ fn literal_canonical(lit: &Literal) -> Option<(CanonicalArgType, LiteralKind)> {
 #[derive(Debug)]
 pub(crate) struct ArgDispatchInfo {
     /// The argument's canonical semantic type, when this increment can
-    /// positively type it — `None` (untyped) for any expression shape this
-    /// increment defers (call-result / `Rec.Field` / `Enum::Value` / …) OR a
+    /// positively type it — `None` (untyped) for any expression shape the
+    /// typer does not cover (an option value `R.Opt::A`, arithmetic, …) OR a
     /// declared var whose type failed canonicalization. An untyped position
     /// degrades the WHOLE call (module doc) — it never eliminates a
     /// candidate.
@@ -913,8 +913,46 @@ fn type_one_arg(
             surface,
             with_state,
         ),
-        // Deferred (increment-1 scope, module doc): `Enum::Value` / any
-        // other expression shape stays untyped.
+        // S9.5c: an enum value `"Probe Kind"::Open` types as its enum, so it
+        // binds an `Enum "Probe Kind"` parameter over `Integer`/`InStream`
+        // overloads (alc 18.0.41.45789 + altool graph: `EN(Enum)`/`EN(InStream)`
+        // and `EI(Enum)`/`EI(Integer)` both bind the Enum overload). Only a
+        // bare qualifier that names an enum: `R.Kind::A` (an option field's
+        // value) and `K::A` with `K` a caller-scope variable are option values,
+        // which bind `Integer` (`EI(R.Kind::A)` binds `EI(Integer)`), so they
+        // stay untyped. Gated on `with` like the bare-identifier arm: a field
+        // of the `with` record could take the name.
+        ExprKind::QualifiedEnum { enum_type, .. } => {
+            if with_state != WithState::NoWithProven {
+                return ArgDispatchInfo::untyped();
+            }
+            let name = match &file.ir.expr(*enum_type).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
+                _ => return ArgDispatchInfo::untyped(),
+            };
+            if !matches!(
+                caller_scope_symbol(name, routine, object_globals),
+                CallerScopeSymbol::NotFound
+            ) {
+                return ArgDispatchInfo::untyped();
+            }
+            let oref = ObjectRef::Name {
+                raw: name.clone(),
+                normalized_lc: name.fold_identifier(),
+            };
+            match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
+                ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                    canonical: Some(CanonicalArgType::Object(id)),
+                    exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
+                    literal_kind: None,
+                    var_passable: false,
+                },
+                ObjectRefResolution::Ambiguous
+                | ObjectRefResolution::OutOfClosure
+                | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+            }
+        }
+        // Any other expression shape stays untyped.
         _ => ArgDispatchInfo::untyped(),
     }
 }

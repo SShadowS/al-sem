@@ -4958,20 +4958,138 @@ fn ws_overload_negatives_call_object_stays_ambiguous_resolved() {
     assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callobject");
 }
 
-/// Test 23m (deferred-increment guard): `ws-overload-enum-discriminator`'s
-/// `Run()` calls `T.P("Probe Kind"::Open)` — a qualified-enum-value
-/// argument (`ExprKind::QualifiedEnum`) is NOT a bare identifier/param/local/
-/// global reference NOR a literal; this increment's `type_one_arg` leaves it
-/// untyped (deferred — Enum::Value arg typing is a documented future
-/// increment). Must stay `AmbiguousResolved`, proving the deferral is
-/// honored rather than silently mistyped.
+/// Test 23m, renamed from `..._stays_ambiguous_resolved` (engine-switch S9.5c):
+/// `ws-overload-enum-discriminator`'s `Run()` calls `T.P("Probe Kind"::Open)`
+/// over `P(Enum "Probe Kind")`/`P(InStream)`. An enum value now types as its
+/// enum, so the call binds the Enum overload, as the compiler does (altool graph
+/// on this fixture: `Run -> EN Target.P` at the Enum declaration). Until S9.5c
+/// the argument was untyped and the call stayed ambiguous.
 #[test]
-fn ws_overload_enum_discriminator_stays_ambiguous_resolved() {
+fn ws_overload_enum_discriminator_binds_the_enum_overload() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r0-corpus/ws-overload-enum-discriminator");
     let report = resolve_full_program(&fixture)
         .expect("resolve_full_program must succeed on ws-overload-enum-discriminator");
-    assert_stays_ambiguous_resolved(&report, "run");
+    assert_binds_param(&report, &fixture, "run", "enum");
+}
+
+/// The one routine the OUTER call of `caller_name_lc` binds must declare a
+/// parameter whose type text contains `param_type_lc`. `root` is the workspace
+/// the report was built from (the witness file is relative to it).
+fn assert_binds_param(
+    report: &ProgramReport,
+    root: &std::path::Path,
+    caller_name_lc: &str,
+    param_type_lc: &str,
+) {
+    let edge = &outer_call_edge(report, caller_name_lc).edge;
+    assert_eq!(
+        edge.shape,
+        DispatchShape::Exact,
+        "{caller_name_lc}: {edge:?}"
+    );
+    let [route] = edge.routes.as_slice() else {
+        panic!(
+            "{caller_name_lc}: expected one route, got {:?}",
+            edge.routes
+        );
+    };
+    let Witness::SourceSpan { ref file, span } = route.witness else {
+        panic!("{caller_name_lc}: expected a source witness, got {route:?}");
+    };
+    let src = std::fs::read_to_string(root.join(file)).expect("read witness file");
+    let decl = src[span.0 as usize..span.1 as usize].to_ascii_lowercase();
+    assert!(
+        decl.contains(param_type_lc),
+        "{caller_name_lc}: bound `{decl}`, expected a `{param_type_lc}` parameter"
+    );
+}
+
+/// Engine-switch S9.5c: enum-value arguments, stated inline. `EI` overloads on
+/// `(Enum "SV Kind")`/`(Integer)`. The compiler (alc 18.0.41.45789, altool
+/// graph) binds `EI("SV Kind"::Open)` to the Enum overload and an option
+/// value (`R.Opt::A`, an option variable's `K::A`, also when the variable is
+/// named like the enum) to the Integer one. Only the
+/// enum value is typed; the option values stay untyped, so those calls stay
+/// ambiguous (never mistyped as the enum).
+#[test]
+fn enum_value_arguments_type_as_their_enum_and_option_values_do_not() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-5e5e5e5e5e5e", "name": "ProbeSV", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50170, "to": 50179 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"enum 50170 "SV Kind"
+{
+    Extensible = true;
+    value(0; Open) { }
+    value(1; Closed) { }
+}
+
+table 50171 "SV Rec"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Opt; Option) { OptionMembers = A,B; }
+    }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50172 "SV Target"
+{
+    procedure EI(K: Enum "SV Kind"): Integer begin exit(0); end;
+    procedure EI(I: Integer): Integer begin exit(1); end;
+}
+
+codeunit 50173 "SV Caller"
+{
+    procedure EnumValue()
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI("SV Kind"::Open);
+    end;
+
+    procedure OptionField(R: Record "SV Rec")
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI(R.Opt::A);
+    end;
+
+    procedure OptionVar()
+    var
+        T: Codeunit "SV Target";
+        K: Option A,B;
+    begin
+        T.EI(K::A);
+    end;
+
+    procedure ShadowingVar()
+    var
+        T: Codeunit "SV Target";
+        "SV Kind": Option Open,Closed;
+    begin
+        T.EI("SV Kind"::Open);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "enumvalue", "enum");
+    assert_stays_ambiguous_resolved(&report, "optionfield");
+    assert_stays_ambiguous_resolved(&report, "optionvar");
+    // A local option variable named like the enum shadows it: the compiler binds
+    // `EI(Integer)` (probe `ShadowVarToEI`), so the value must not type as the enum.
+    assert_stays_ambiguous_resolved(&report, "shadowingvar");
 }
 
 /// Test 23n (deferred-increment guard): `ws-overload-field-discriminator`'s
@@ -10419,9 +10537,12 @@ fn dependency_body_unknown_ceiling_on_cdo() {
     // Dependency `ambiguousResolved` (closed overload candidate sets): 863 at
     // the start of S9.0e, 710 before the `#if` split-header fix, 716 after it
     // (calls seeing both arms of one routine), 710 again once overload
-    // selection narrows candidates to the call's build. A rise is lost
-    // precision; list the sites with `--sites` (`ambiguousSites`).
-    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 710;
+    // selection narrows candidates to the call's build, 679 once an enum
+    // value argument types as its enum (S9.5c; 20 of the 31 sites checked
+    // against the compiler graph, all on the Enum overload, the other 11 are
+    // repeat calls the graph keeps one edge for). A rise is lost precision;
+    // list the sites with `--sites` (`ambiguousSites`).
+    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 679;
     assert!(
         h.ambiguous_resolved <= CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
         "dependency-body ambiguousResolved edges {} exceed the ceiling {}; list them \

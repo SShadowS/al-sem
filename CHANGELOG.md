@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An enum value argument binds its enum overload** (engine-switch S9.5c).
+  `T.P("Probe Kind"::Open)` over `P(Enum "Probe Kind")`/`P(InStream)` stayed
+  an ambiguous overload: the argument was untyped. It now types as its enum,
+  as the compiler binds it (alc 18.0.41.45789 and the altool graph:
+  `EN(Enum|InStream)` and `EI(Enum|Integer)` both bind the Enum overload).
+  Only a bare qualifier that names an enum: an option value (`R.Opt::A`,
+  `K::A`, and a local option variable named like the enum, which the
+  compiler lets shadow it) binds `Integer`, so it stays untyped. L3 had
+  resolved `ws-overload-enum-discriminator`; the switch to the program model
+  had lost it. CDO: dependency `ambiguousResolved` 710 -> 679 (20 of the 31
+  sites checked against the compiler graph, all on the Enum overload; the
+  other 11 repeat a call the graph records once). Workspace unchanged (0
+  unknown / 23).
+
 ### Added
 
 - **An inline builder for the program-backed model** (engine-switch S9.2).
