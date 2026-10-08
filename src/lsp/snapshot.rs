@@ -60,7 +60,7 @@ use crate::program::dep_cache::DepLspTier;
 use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::BuildProfile;
-use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
+use crate::program::resolve::decl_surface::{DeclSurface, DepMeta};
 use crate::program::resolve::edge::{Edge, RouteTarget};
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::{
@@ -338,7 +338,7 @@ pub struct LspSnapshot {
     /// never neither. Served (as a borrowed [`DeclView`]) via
     /// [`Self::decl_and_line_table`] rather than a dedicated owned map — the
     /// old `dep_decl_by_id` duplicated this exact data.
-    pub dep_meta: Arc<DepMetaMap>,
+    pub dep_meta: Arc<DepMeta>,
     /// The workspace root every `virtual_path` in this snapshot is relative
     /// to, normalized via [`crate::protocol::normalize_path`] (T3 Task 11) —
     /// so a handler can turn an inbound `textDocument` URI into the SAME
@@ -498,7 +498,7 @@ impl LspSnapshot {
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
         let event_edges: Arc<Vec<ClassifiedEdge>>;
         let dep_lines: Arc<DepLines>;
-        let dep_meta: Arc<DepMetaMap>;
+        let dep_meta: Arc<DepMeta>;
 
         {
             let obj_node_map = app_object_map(&graph, primary_app_ref);

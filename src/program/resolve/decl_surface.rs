@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node_extract::RoutineNode;
 use crate::program::sig_fp::source_routine_node_id;
 use crate::program::str_pool::{ShareStrings, SharedStr, StrPool};
 use crate::snapshot::ParsedUnit;
@@ -136,11 +137,151 @@ pub(crate) fn file_routine_meta(
     out
 }
 
-pub type DepMetaMap = HashMap<RoutineNodeId, RoutineMeta>;
+/// The dependency tier's `RoutineMeta`, one per source routine, held as a column
+/// beside the tier's own routine rows (engine-switch S10.3) rather than a map
+/// keyed by a second copy of each id. Answers exactly what a
+/// `HashMap<RoutineNodeId, RoutineMeta>` built from the same entries in the
+/// same order would (a same-id collision keeps the LAST entry).
+pub struct DepMeta {
+    /// The tier's routine rows, sorted by id (shared with the tier, not copied).
+    routines: Arc<Vec<RoutineNode>>,
+    /// In id order, one per distinct id.
+    metas: Vec<RoutineMeta>,
+    /// Per meta, the first row carrying its id: `routines[key_row[i]].id` is
+    /// meta `i`'s key.
+    key_row: Vec<u32>,
+    /// A meta whose id matches no row. Expected empty; kept so nothing is
+    /// dropped.
+    orphans: HashMap<RoutineNodeId, RoutineMeta>,
+}
+
+impl DepMeta {
+    /// `entries` in parse order; `routines` sorted by id.
+    pub fn build(
+        routines: Arc<Vec<RoutineNode>>,
+        entries: Vec<(RoutineNodeId, RoutineMeta)>,
+    ) -> Self {
+        debug_assert!(routines.is_sorted_by(|a, b| a.id <= b.id));
+        let mut entries = entries;
+        // Stable: within one id, parse order survives, so the last is the
+        // last parsed (what `HashMap::extend` keeps).
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut metas = Vec::new();
+        let mut key_row = Vec::new();
+        let mut orphans = HashMap::new();
+        let mut it = entries.into_iter().peekable();
+        while let Some((id, meta)) = it.next() {
+            if it.peek().is_some_and(|(next, _)| *next == id) {
+                continue;
+            }
+            let row = routines.partition_point(|r| r.id < id);
+            if routines.get(row).is_some_and(|r| r.id == id) {
+                metas.push(meta);
+                key_row.push(u32::try_from(row).expect("routine rows fit in u32"));
+            } else {
+                orphans.insert(id, meta);
+            }
+        }
+        metas.shrink_to_fit();
+        key_row.shrink_to_fit();
+        DepMeta {
+            routines,
+            metas,
+            key_row,
+            orphans,
+        }
+    }
+
+    /// No metadata (a tier without source routines, or a test).
+    pub fn empty() -> Self {
+        DepMeta::build(Arc::new(Vec::new()), Vec::new())
+    }
+
+    fn key(&self, i: usize) -> &RoutineNodeId {
+        &self.routines[self.key_row[i] as usize].id
+    }
+
+    pub fn get_key_value(&self, id: &RoutineNodeId) -> Option<(&RoutineNodeId, &RoutineMeta)> {
+        let at = partition_point_by(self.metas.len(), |i| self.key(i) < id);
+        if at < self.metas.len() && self.key(at) == id {
+            return Some((self.key(at), &self.metas[at]));
+        }
+        self.orphans.get_key_value(id)
+    }
+
+    pub fn get(&self, id: &RoutineNodeId) -> Option<&RoutineMeta> {
+        self.get_key_value(id).map(|(_, m)| m)
+    }
+
+    pub fn contains_key(&self, id: &RoutineNodeId) -> bool {
+        self.get_key_value(id).is_some()
+    }
+
+    /// Every entry: the column in id order, then the orphans (unordered).
+    pub fn iter(&self) -> impl Iterator<Item = (&RoutineNodeId, &RoutineMeta)> {
+        (0..self.metas.len())
+            .map(|i| (self.key(i), &self.metas[i]))
+            .chain(self.orphans.iter())
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &RoutineNodeId> {
+        self.iter().map(|(k, _)| k)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &RoutineMeta> {
+        self.iter().map(|(_, v)| v)
+    }
+
+    pub fn len(&self) -> usize {
+        self.metas.len() + self.orphans.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Metas whose id matches no tier row (expected 0).
+    pub fn orphan_count(&self) -> usize {
+        self.orphans.len()
+    }
+
+    /// The entries as the map this replaces (tests compare the two).
+    #[cfg(test)]
+    pub(crate) fn to_map(&self) -> HashMap<RoutineNodeId, RoutineMeta> {
+        self.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+}
+
+/// Same entries, whatever the layout.
+impl PartialEq for DepMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().all(|(k, v)| other.get(k) == Some(v))
+    }
+}
+
+impl std::fmt::Debug for DepMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+/// The first index in `0..len` for which `pred` is false (`pred` true then false).
+fn partition_point_by(len: usize, pred: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, len);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
 
 pub struct DeclSurface {
     local: HashMap<RoutineNodeId, RoutineMeta>,
-    frozen: Option<Arc<DepMetaMap>>,
+    frozen: Option<Arc<DepMeta>>,
 }
 
 impl DeclSurface {
@@ -168,7 +309,7 @@ impl DeclSurface {
 
     /// Attach the frozen dependency tier (the dependency layer's `dep_meta`).
     #[must_use]
-    pub fn with_frozen(mut self, frozen: Arc<DepMetaMap>) -> Self {
+    pub fn with_frozen(mut self, frozen: Arc<DepMeta>) -> Self {
         self.frozen = Some(frozen);
         self
     }
@@ -196,6 +337,15 @@ mod tests {
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::{AppId, ParsedFile, ParsedUnit, Provenance, TrustTier};
     use al_syntax::ir::ObjectKind;
+
+    /// A frozen tier from a map, with no routine rows (so every entry sits in
+    /// `orphans`; `DepMeta`'s own tests cover the column).
+    fn frozen_of(map: HashMap<RoutineNodeId, RoutineMeta>) -> Arc<DepMeta> {
+        Arc::new(DepMeta::build(
+            Arc::new(Vec::new()),
+            map.into_iter().collect(),
+        ))
+    }
 
     fn make_app_id(name: &str) -> AppId {
         AppId {
@@ -253,6 +403,62 @@ mod tests {
                 text: src.into(),
             }],
         }
+    }
+
+    /// S10.3: `DepMeta` answers exactly as the `HashMap` it replaces, built
+    /// from the same entries in the same order: a same-id collision keeps the
+    /// last entry, an id carried by two rows (an aliased overload) is found
+    /// once, and an entry whose id matches no row is kept, not dropped.
+    #[test]
+    fn dep_meta_answers_as_the_map_it_replaces() {
+        let app = AppRef(1);
+        let entries_of =
+            |src: &str, path: &str| file_routine_meta(app, &al_syntax::parse(src), path);
+        let mut entries = entries_of(
+            "codeunit 1 C { procedure P() begin end; procedure Q() begin end; }",
+            "A.al",
+        );
+        entries.extend(entries_of(
+            "codeunit 1 C { procedure P() begin end; }",
+            "B.al",
+        ));
+        entries.extend(entries_of(
+            "codeunit 2 D { procedure R() begin end; }",
+            "C.al",
+        ));
+        let id = |name: &str| {
+            entries
+                .iter()
+                .find(|(k, _)| k.name_lc == name)
+                .unwrap()
+                .0
+                .clone()
+        };
+        let (p, q, r) = (id("p"), id("q"), id("r"));
+        let row = |id: &RoutineNodeId| {
+            let mut n = crate::program::node_extract::test_fixtures::fully_populated_routine_node();
+            n.id = id.clone();
+            n
+        };
+        // R has no row; P has two (an aliased overload pair).
+        let mut rows = vec![row(&q), row(&p), row(&p)];
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let dep = DepMeta::build(Arc::new(rows), entries.clone());
+        let mut map = HashMap::new();
+        map.extend(entries);
+
+        assert_eq!(dep.to_map(), map);
+        assert_eq!(dep.len(), 3);
+        assert_eq!(
+            dep.get(&p).unwrap().virtual_path,
+            "B.al",
+            "the last entry wins"
+        );
+        assert_eq!(dep.get_key_value(&q).unwrap().0, &q);
+        assert_eq!(dep.orphan_count(), 1);
+        assert!(dep.contains_key(&r), "an unmatched entry is kept");
+        assert_eq!(dep.keys().filter(|k| **k == p).count(), 1);
     }
 
     #[test]
@@ -488,7 +694,7 @@ tableextension 50100 "Cust Ext" extends Customer
         let dep_ref = AppRef(1);
 
         // The dependency tier: the dependency unit's decls, frozen.
-        let frozen = Arc::new(DeclSurface::build(&graph, &[dep_unit]).local);
+        let frozen = frozen_of(DeclSurface::build(&graph, &[dep_unit]).local);
 
         // Now simulate a rung: build from the WORKSPACE unit only, attach
         // the prior frozen dep tier.
@@ -546,9 +752,9 @@ tableextension 50100 "Cust Ext" extends Customer
         let stale_unit = make_unit(primary_id.clone(), stale_src);
         let stale_units = [stale_unit];
         // Put the stale primary entry into a frozen map.
-        let frozen = Arc::new(DeclSurface::build(&graph, &stale_units).local);
+        let frozen = frozen_of(DeclSurface::build(&graph, &stale_units).local);
         assert!(
-            frozen.contains_key(&rid),
+            frozen.get(&rid).is_some(),
             "fixture sanity: stale entry present"
         );
 

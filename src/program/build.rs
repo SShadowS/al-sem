@@ -11,7 +11,7 @@ use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
-use crate::program::resolve::decl_surface::DepMetaMap;
+use crate::program::resolve::decl_surface::{DepMeta, RoutineMeta};
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
@@ -197,12 +197,13 @@ fn build_dep_nodes(
     // recovered flag into `recovered`. Nothing summary-shaped survives.
     //
     // Equal strings become one allocation as they arrive (engine-switch
-    // S10.2), so every later clone of a tier value shares it; `dep_meta`'s
-    // keys are shared before insertion, since a map key cannot be changed.
+    // S10.2), so every later clone of a tier value shares it. `dep_meta`'s
+    // entries are kept in parse order and become a column beside the sorted
+    // rows below (S10.3), keeping the map's last-wins rule.
     let mut pool = StrPool::default();
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
-    let mut dep_meta = DepMetaMap::new();
+    let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::new();
     let mut recovered: Vec<String> = Vec::new();
     for unit in summaries {
         for mut file in unit.files {
@@ -262,12 +263,13 @@ fn build_dep_nodes(
     objects.dedup_by(|a, b| a.id == b.id);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
+    let routines = Arc::new(routines);
 
     DepNodes {
         objects: Arc::new(objects),
-        routines: Arc::new(routines),
+        dep_meta: Arc::new(DepMeta::build(Arc::clone(&routines), dep_meta)),
+        routines,
         abi_ingest_errors,
-        dep_meta: Arc::new(dep_meta),
         recovered,
         bodies,
         lsp: Default::default(),
@@ -1764,7 +1766,7 @@ codeunit 50301 "Preproc Dup Sig"
 
         let mut objects = Vec::new();
         let mut routines = Vec::new();
-        let mut dep_meta = DepMetaMap::new();
+        let mut dep_meta = HashMap::new();
         for f in units.iter().flat_map(|u| &u.files) {
             objects.extend(f.objects.iter().cloned());
             routines.extend(f.routines.iter().cloned());

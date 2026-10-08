@@ -161,10 +161,11 @@ pub(crate) mod tests {
     use super::*;
     use crate::program::abi_ingest::AbiCache;
     use crate::program::build::build_dep_layer;
-    use crate::program::resolve::decl_surface::{DeclSurface, DepMetaMap};
+    use crate::program::resolve::decl_surface::{DeclSurface, RoutineMeta};
     use crate::snapshot::compilation::CompilationContext;
     use crate::snapshot::provider::SourceRoot;
     use crate::snapshot::{AppSetSnapshot, AppUnit, Provenance, World, parse_snapshot};
+    use std::collections::HashMap;
 
     pub(crate) fn app_id(name: &str) -> AppId {
         AppId {
@@ -293,8 +294,8 @@ codeunit 60002 "Plain Cu"
         graph: &crate::program::graph::ProgramGraph,
         parsed: &[ParsedUnit],
         primary: AppRef,
-    ) -> DepMetaMap {
-        let mut dep = DepMetaMap::new();
+    ) -> HashMap<crate::program::node::RoutineNodeId, RoutineMeta> {
+        let mut dep = HashMap::new();
         for unit in parsed {
             let Some(app) = graph.apps.find(&unit.app) else {
                 continue;
@@ -331,9 +332,11 @@ codeunit 60002 "Plain Cu"
         let primary = ctx.primary_app_ref;
         let old_dep_meta = old_frozen_tier(&ctx.graph, &fresh, primary);
         assert_eq!(
-            *ctx.dep_layer.dep_nodes.dep_meta, old_dep_meta,
+            ctx.dep_layer.dep_nodes.dep_meta.to_map(),
+            old_dep_meta,
             "the tier's dep_meta is the old frozen tier, key for key"
         );
+        assert_eq!(ctx.dep_layer.dep_nodes.dep_meta.orphan_count(), 0);
         let other_ref = ctx.graph.apps.find(&app_id("Other")).unwrap();
         let mut dep_ids = 0;
         for r in ctx.graph.routines.iter() {

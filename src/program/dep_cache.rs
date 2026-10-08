@@ -14,7 +14,7 @@ use crate::program::graph::AbiIngestError;
 use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
 use crate::program::profile::{BuildProfile, DependencyBodies};
-use crate::program::resolve::decl_surface::DepMetaMap;
+use crate::program::resolve::decl_surface::DepMeta;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::provider::SourceRoot;
 use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
@@ -84,7 +84,7 @@ pub struct DepNodes {
     /// The frozen `DeclSurface` tier: every dependency routine's
     /// `RoutineMeta`, built with the nodes. Every consumer reads dependency
     /// metadata from here, never from dependency `ParsedUnit`s.
-    pub dep_meta: Arc<DepMetaMap>,
+    pub dep_meta: Arc<DepMeta>,
     /// `"<app name>::<virtual path>"` of every dependency file whose parse
     /// was `Recovered`, sorted. Held here so a shared-tier hit (which does
     /// not parse the dependencies) still reports them.

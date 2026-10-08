@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use crate::program::graph::ProgramGraph;
 use crate::program::node::RoutineNodeId;
 use crate::program::node_extract::{AbiParams, RoutineNode};
-use crate::program::resolve::decl_surface::DepMetaMap;
+use crate::program::resolve::decl_surface::DepMeta;
 use crate::snapshot::identity::TrustTier;
 
 /// The state of a dependency routine's body.
@@ -76,7 +76,7 @@ pub struct DepTarget<'g> {
 /// The registry over one built program (see the module doc).
 pub struct DependencyRegistry<'g> {
     graph: &'g ProgramGraph,
-    dep_meta: &'g DepMetaMap,
+    dep_meta: &'g DepMeta,
     /// Dependency routines whose bodies the model analysed. Empty until S7/S8.
     analyzed: HashSet<RoutineNodeId>,
     /// Every graph routine by id (first wins on a shared id, graph order).
@@ -85,7 +85,7 @@ pub struct DependencyRegistry<'g> {
 
 impl<'g> DependencyRegistry<'g> {
     #[must_use]
-    pub fn new(graph: &'g ProgramGraph, dep_meta: &'g DepMetaMap) -> Self {
+    pub fn new(graph: &'g ProgramGraph, dep_meta: &'g DepMeta) -> Self {
         let mut by_id = std::collections::HashMap::new();
         for n in graph.routines.iter() {
             by_id.entry(&n.id).or_insert(n);
