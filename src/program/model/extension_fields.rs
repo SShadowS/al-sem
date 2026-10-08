@@ -22,10 +22,9 @@ use std::collections::HashSet;
 /// target / base table / extension's own table are absent; dedup by fieldNumber,
 /// FIRST-wins).
 ///
-/// TWIN of `crate::engine::deps::merged_index::merge_extension_fields_projected`
-/// (the R2.5a projected-entity copy of this SAME algorithm) and the al-sem original
-/// `src/resolve/extension-fields.ts`. The three copies MUST stay in lockstep —
-/// change one, change all (no extra guards / no behavioral drift).
+/// Port of the al-sem original `src/resolve/extension-fields.ts`. (Its R2.5a
+/// projected-entity twin in `deps::merged_index` was deleted in engine-switch S9.6;
+/// this is the only copy.)
 pub fn merge_extension_fields(workspace: &mut L3Workspace) {
     // Resolve table-name → index and table-id → index up front (LAST-wins, to
     // mirror the symbol table the TS pass queries). We must mutate tables in
@@ -81,8 +80,7 @@ pub fn merge_extension_fields(workspace: &mut L3Workspace) {
     }
 }
 
-/// `tableByName` semantics: case-insensitive, LAST-wins on collision. TWIN of
-/// `deps::merged_index::table_index_by_name` — keep in lockstep.
+/// `tableByName` semantics: case-insensitive, LAST-wins on collision.
 fn table_index_by_name(tables: &[L3Table], name: &str) -> Option<usize> {
     let want = name.to_lowercase();
     let mut found = None;
@@ -94,8 +92,7 @@ fn table_index_by_name(tables: &[L3Table], name: &str) -> Option<usize> {
     found
 }
 
-/// `tableById` semantics: LAST-wins on collision. TWIN of
-/// `deps::merged_index::table_index_by_id` — keep in lockstep.
+/// `tableById` semantics: LAST-wins on collision.
 fn table_index_by_id(tables: &[L3Table], id: &str) -> Option<usize> {
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {

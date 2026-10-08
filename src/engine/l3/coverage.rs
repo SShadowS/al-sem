@@ -44,8 +44,7 @@
 
 use std::collections::HashMap;
 
-use super::call_graph_projection::cmp_stable;
-use super::call_resolver::{CallEdge, DeclaredDependency, calls_for, resolve_calls};
+use super::call_resolver::{CallEdge, calls_for};
 use super::l3_workspace::{L3Resolved, L3Routine};
 use super::symbol_table::SymbolTable;
 use super::taxonomy::{DispatchKind, Resolution};
@@ -123,8 +122,7 @@ fn is_unresolved_resolution(resolution: Resolution) -> bool {
 // ---------------------------------------------------------------------------
 // Stable-id projection for callsite / operation ids. The internal RoutineId is
 // `${modelInstanceId}/${hash}` (two `/`-parts) and the callsite / operation ids
-// embed it as a prefix; rewrite the prefix to the StableRoutineId. Mirrors the
-// `StableMap::stable_site` in call_graph_projection.rs.
+// embed it as a prefix; rewrite the prefix to the StableRoutineId.
 // ---------------------------------------------------------------------------
 
 fn stable_site(site_id: &str, by_internal: &HashMap<String, String>) -> String {
@@ -191,7 +189,7 @@ pub fn build_coverage(
         .filter(|r| r.parse_incomplete)
         .map(|r| r.stable_routine_id.clone())
         .collect();
-    routines_parse_incomplete.sort_by(|a, b| cmp_stable(a, b));
+    routines_parse_incomplete.sort();
 
     // --- unresolved callsites MULTISET (4 resolutions; dups PRESERVED). ---
     let mut unresolved_callsites: Vec<String> = call_graph
@@ -199,7 +197,7 @@ pub fn build_coverage(
         .filter(|e| is_unresolved_resolution(e.resolution))
         .map(|e| stable_site(&e.callsite_id, by_internal))
         .collect();
-    unresolved_callsites.sort_by(|a, b| cmp_stable(a, b));
+    unresolved_callsites.sort();
 
     // --- dynamic dispatch sites MULTISET (dispatchKind == "dynamic"; dups PRESERVED). ---
     let mut dynamic_dispatch_sites: Vec<String> = call_graph
@@ -207,7 +205,7 @@ pub fn build_coverage(
         .filter(|e| e.dispatch_kind == DispatchKind::Dynamic)
         .map(|e| stable_site(&e.operation_id, by_internal))
         .collect();
-    dynamic_dispatch_sites.sort_by(|a, b| cmp_stable(a, b));
+    dynamic_dispatch_sites.sort();
 
     AnalysisCoverage {
         source_units_total: source_units.len(),
@@ -306,65 +304,6 @@ impl L3Resolved {
         let units = coverage_source_units_for_workspace(workspace);
         let diagnostics: Vec<CoverageDiagnostic> = Vec::new();
         self.project_coverage(&units, &diagnostics)
-    }
-
-    /// CROSS-APP (R2.5b) coverage capture: the merged workspace+dep model with the
-    /// real dep ledger. `apps` is `(appGuid, sourceKind)` for the workspace ("source")
-    /// plus each dep ("symbol-only" | "app-source").
-    ///
-    /// FIXED (R3a-0 semantic-oracle epoch, al-sem `81d538a`+`f1650ba`+`93e360d`):
-    ///   - `opaqueApps` = the `sourceKind == "symbol-only"` dep app guids. al-sem's Fix 2
-    ///     stamps the dep `AppIdentity`s (with `sourceKind`, derived from the artifact
-    ///     header) into `index.identity.apps` via `withDependencyArtifacts`, and
-    ///     `buildCoverage` reads `identity.apps.filter(sourceKind=="symbol-only")`. So we
-    ///     pass ALL apps (workspace + deps) to `build_coverage` and let its `symbol-only`
-    ///     filter populate `opaqueApps`.
-    ///   - The call resolution INSIDE coverage threads the REAL declared/fetched ledger
-    ///     (Fix 1: al-sem now reads `identity.primaryDependencies` DURING resolve, in both
-    ///     production AND the capture harness as of `93e360d`). The `unresolvedCallsites`
-    ///     multiset matches al-sem's resolved `model.callGraph`.
-    ///
-    /// On the ALL-FETCHED R2.5b corpus (the prior `Lib Absent` unfetched dep was removed in
-    /// al-sem `93e360d`) threading the real ledger is BYTE-INVARIANT vs the empty ledger:
-    /// `has_unfetched_declared_dependency` is false, so the `gone.M()` member miss stays
-    /// `external-target` and remains IN `unresolvedCallsites`.
-    pub fn project_coverage_cross_app(
-        &self,
-        units: &[CoverageUnit],
-        index_diagnostics: &[CoverageDiagnostic],
-        apps: &[(String, String)],
-        declared_dep_app_guids: &[String],
-        fetched_app_guids: &[String],
-    ) -> AnalysisCoverage {
-        let ws = &self.workspace;
-        let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-        // Thread the REAL declared/fetched ledger — mirrors fixed production + capture al-sem
-        // (reads primaryDependencies DURING resolve). Byte-invariant on the all-fetched corpus.
-        let declared: Vec<DeclaredDependency> = declared_dep_app_guids
-            .iter()
-            .map(|app_guid| DeclaredDependency {
-                app_guid: app_guid.clone(),
-            })
-            .collect();
-        let resolved = resolve_calls(ws, &symbols, &declared, fetched_app_guids);
-
-        let by_internal: HashMap<String, String> = ws
-            .routines
-            .iter()
-            .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
-            .collect();
-
-        // FIXED (R3a-0, Fix 2): pass ALL apps (workspace "source" + each dep). The
-        // `symbol-only` filter in build_coverage now populates opaqueApps with the
-        // symbol-only dep app guids (al-sem's identity.apps now carries them).
-        build_coverage(
-            &ws.routines,
-            apps,
-            &resolved.edges,
-            units,
-            index_diagnostics,
-            &by_internal,
-        )
     }
 }
 

@@ -15,8 +15,8 @@
 //! golden minted from `altool graph`) plus the ported fan-out applicability
 //! teeth (`semantic_golden::route_applicability`). The three L3-touching
 //! projections that minted the earlier L3 goldens (`project_l3` /
-//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) live in
-//! `engine::l3::l3_mint`, which nothing calls any more; it goes with L3 in S9.6.
+//! `project_l3_implicit_trigger_in_scope` / `project_l3_event_rows`) lived in
+//! `engine::l3::l3_mint`, deleted with L3 in engine-switch S9.6.
 //!
 //! This module and `semantic_golden.rs` import NEITHER `engine::l3` NOR
 //! `engine::l2` — the gate path is fully L3-INDEPENDENT.
@@ -24,8 +24,6 @@
 //! # `object_lc` encoding for `ObjKey::Id`
 //! When an object's key is numeric (`ObjKey::Id(n)`), `object_lc` is written
 //! as `format!("{n}")` — the decimal representation of the signed integer.
-//! `engine::l3::l3_mint`'s L3-side projections mirror this choice
-//! exactly so the two stay comparable.
 //!
 //! # `Unresolved`/`Unknown` routes
 //! A route whose `target` is `RouteTarget::Unresolved` projects to **no**
@@ -146,9 +144,8 @@ pub(crate) fn object_kind_str_to_tag(lc: &str) -> u8 {
 
 /// Build a [`CanonicalKey`] from pre-resolved, already-lowercased components.
 ///
-/// Both `project_fresh` (via [`routine_to_key`]) and
-/// `engine::l3::l3_mint::project_l3` funnel through this so the key
-/// layout is identical on both sides.
+/// `project_fresh` (via [`routine_to_key`]) funnels through this, so every
+/// key has one layout.
 pub(crate) fn make_canonical_key(
     app_guid: String,
     object_kind: String,
@@ -447,11 +444,8 @@ pub(crate) fn witness_contract_holds(route: &crate::program::resolve::edge::Rout
 // side must re-derive from scratch at audit time.
 //
 // [`CanonicalEventRow`] instead keys publisher/subscriber by the SAME
-// `CanonicalKey` (app_guid + object_kind + object_lc + routine_lc) shared
-// with `project_fresh` and `engine::l3::l3_mint`'s L3-side projections.
-// `L3Routine` exposes `app_guid`/`object_type`/`object_number`/`name` directly,
-// so the L3 side builds the identical `CanonicalKey` shape WITHOUT going
-// through L3's stable-id hash at all. `publisher_arity` carries the resolved
+// `CanonicalKey` (app_guid + object_kind + object_lc + routine_lc) that
+// `project_fresh` uses, never a stable-id hash. `publisher_arity` carries the resolved
 // overload's parameter count (event pairs are intentionally arity-agnostic —
 // the same event name can have multiple `[IntegrationEvent]` overloads).
 

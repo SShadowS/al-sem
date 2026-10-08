@@ -610,9 +610,8 @@ fn canonical_targets_to_golden(targets: &BTreeSet<CanonicalTarget>) -> BTreeSet<
 // ---------------------------------------------------------------------------
 
 /// Build a [`SemanticGolden`] from a batch of canonical edges. Oracle-
-/// agnostic — the caller decides whether `edges` came from L3 or from the
-/// fresh resolver. Shared by `engine::l3::l3_mint`'s `mint_l3_validated_golden`
-/// and `mint_l3_trigger_golden`, and by [`mint_fresh_golden_for_kind`].
+/// agnostic — the caller decides where `edges` came from. Used by
+/// [`mint_fresh_golden_for_kind`].
 pub fn build_golden_from_canonical(edges: &[CanonicalEdge]) -> SemanticGolden {
     let mut map: BTreeMap<GoldenSiteKey, BTreeSet<GoldenTarget>> = BTreeMap::new();
     for edge in edges {

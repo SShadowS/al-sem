@@ -2047,11 +2047,10 @@ fn read_primary_app_from_disk(
 /// NO L4/cone/summary field — there is no `summary`, `intraAppCallEdges`,
 /// `citedOperationEvidence`, `depOrderIndex`, capability-cone, or typed-edge field
 /// anywhere on `L3Object`/`L3Table`/`L3Routine`. So L4 state CANNOT influence L3:
-/// the boundary is enforced by the TYPE, not a runtime strip. When R2.5b feeds the
-/// merged (workspace + `.app`-dep) index here (`deps::cross_app_l3`), the dep side
-/// likewise comes from `project_abi_to_index`, which emits only these L3 structs.
-/// DO NOT add an L4 field to these entity structs (it would breach the boundary the
-/// `cross_app_l3_poison` test guards). NOTHING in `resolve` reads beyond them.
+/// the boundary is enforced by the TYPE, not a runtime strip. In a cross-app model
+/// the symbol-only dependency rows likewise come from `project_abi_to_index`, which
+/// emits only these structs. DO NOT add an L4 field to these entity structs.
+/// NOTHING in `resolve` reads beyond them.
 pub fn resolve(workspace: &mut L3Workspace) {
     let _s = pt::span("l3", "l3.resolve");
     // ROUTINE-FREE index (see `SymbolTable::build_without_routines`): the loop
@@ -2889,8 +2888,8 @@ page 50815 "CP5 Wizard"
     /// `stableRoutineId`), but it IS observable: `build_proutine` feeds it to
     /// `project_routine_features_ir`, which mints every op/callsite id as
     /// `{routine_id}/op{n}` / `{routine_id}/cs{n}`. Stripping the last `/`-segment
-    /// recovers exactly the id the L2 path computed — the same recovery
-    /// `call_graph_projection::StableMap::stable_site` performs in production.
+    /// recovers exactly the id the L2 path computed — the same recovery coverage's
+    /// `stable_site` performs in production.
     #[test]
     fn l2_and_l3_agree_on_the_id_of_an_escaped_enclosing_member() {
         // ONE `OnValidate`, under a member whose logical name contains a literal `"`

@@ -24,17 +24,13 @@ pub use crate::program::model::workspace as l3_workspace;
 
 pub mod al_builtins;
 pub mod al_type;
-pub mod b3_diff;
-pub mod call_graph_projection;
 pub mod call_resolver;
 pub mod coverage;
 pub mod event_graph;
 pub mod implicit_edges;
-pub mod l3_mint;
 pub mod member_builtins;
 pub mod receiver;
 pub mod receiver_type;
-pub mod resolution_class;
 pub mod static_arg;
 pub mod type_ref;
 pub mod type_rel;

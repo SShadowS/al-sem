@@ -1260,6 +1260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     production cross-app model.
   - `scripts/check-goldens` drops `--test l3` and seven golden directories
     (23 remain).
+- **L3 modules with no consumer left** (engine-switch S9.6b, step 1):
+  `engine::l3::{b3_diff, call_graph_projection, l3_mint, resolution_class}` and
+  `engine::deps::{cross_app_l3, merged_index}`, with coverage's cross-app capture
+  (`project_coverage_cross_app`). Nothing outside them changes behaviour.
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's

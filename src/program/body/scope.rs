@@ -30,8 +30,8 @@ pub struct RecordVariable {
 }
 
 /// `{ kind: "known", value }` — the single shared PTempState "known" constructor.
-/// `pub(crate)` so the L3 record-type override (`record_types.rs`) and the ABI→L3
-/// projection (`deps/cross_app_l3.rs`) reuse ONE definition (compiler-enforced on
+/// `pub(crate)` so the record-type override (`record_types.rs`) and the ABI row
+/// projection (`program/model/abi_rows.rs`) reuse ONE definition (compiler-enforced on
 /// any future `PTempState` shape change), instead of duplicating the literal.
 pub(crate) fn ts_known(value: bool) -> PTempState {
     PTempState {
