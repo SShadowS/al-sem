@@ -1241,6 +1241,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Every test, golden and `aldump` mode that measured the legacy L3 engine**
+  (engine-switch S9.6a). They pinned L3's own output, so they go with L3:
+  - `aldump --l3-record-types`, `--l3-call-graph`, `--l3-call-graph-stats[-cross-app]`,
+    `--l3-unknown-breakdown[-cross-app]`, `--l3-event-graph`, `--l3-coverage`,
+    `--l3-cross-app`, `--r2-5a-merged-index` (decision R6) and `--b3`
+    (`--b3-triage`, `--b3-deps`).
+  - The `tests/l3` suite; the r2b call-graph differential and its goldens and
+    vectors; the r2.5a merged-index and r2.5b cross-app goldens and suites
+    (`tests/r25_abi` keeps the three ABI ingestion vector suites);
+    `r3a0_unfetched_dep_opaque`; `b3_triage_r0` and the `docs/b3-triage/` tables;
+    `aldump_smoke`'s L3 event-graph test and its golden.
+  - Four tests that used L3 as a reference now state their contract directly:
+    the cross-app model's row order (workspace, then symbol-only dependency rows,
+    then parsed dependency rows; discrimination: appending the symbol-only rows
+    last fails it), `alsem analyze` against the detectors run over the program
+    model, and the r3a2 opaque-callee and ABI temp-state tests over the
+    production cross-app model.
+  - `scripts/check-goldens` drops `--test l3` and seven golden directories
+    (23 remain).
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's

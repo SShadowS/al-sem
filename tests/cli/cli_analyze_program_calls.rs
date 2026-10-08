@@ -1,26 +1,25 @@
-//! B3 Phase A, Task 8: `alsem analyze` runs the detectors on the B3 adapter's
-//! call resolution (there is no flag any more). Pinned against the B3
-//! harness (`b3_diff::detector_diff_for_workspace`), which is the reference:
-//! analyze's findings equal the harness's "new" side and differ from its
-//! "old" side (L3's own calls).
+//! B3 Phase A, Task 8: `alsem analyze` runs the detectors on the program
+//! engine's call resolution (there is no flag any more). Pinned against the
+//! detectors run directly over the program-built model
+//! (`assemble_and_resolve_workspace_program`): analyze's findings equal them.
+//! Until engine-switch S9.6 the reference was the B3 harness
+//! (`b3_diff::detector_diff_for_workspace`), which also proved the fixtures'
+//! findings differ under L3's own calls; L3 is deleted, so that half is gone.
 //!
 //! The comparison is structural (detector, file, 1-based line and column,
-//! severity, title): analyze assembles L3 under the gate model-instance id
-//! and the harness under the default one, so routine ids and root-cause keys
-//! differ in their id parts by construction.
-//!
-//! Each fixture is one the committed r0 triage table
-//! (`docs/b3-triage/r0-corpus.md`) lists with a finding difference, and the
-//! test asserts old != new first, so an analyze that ignored the adapter
-//! would fail it.
+//! severity, title): analyze builds under the gate model-instance id and the
+//! reference under the default one, so routine ids and root-cause keys differ
+//! in their id parts by construction.
 
 use std::path::Path;
 
 use al_sem::engine::gate::filter::Scope;
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
-use al_sem::engine::l3::b3_diff::detector_diff_for_workspace;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
+use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 
 type Key = (String, String, u64, u64, String, String);
 
@@ -92,19 +91,22 @@ fn analyze_keys(ws: &Path) -> Vec<Key> {
 }
 
 #[test]
-fn analyze_matches_the_harness_new_side_on_r0_fixtures() {
+fn analyze_matches_the_detectors_over_the_program_model_on_r0_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
     for name in ["ws-member-call-resolution", "ws-overload-callresult-guards"] {
         let ws = root.join(name);
-        let d = detector_diff_for_workspace(&ws, false).expect("harness runs");
-        let (old, new) = (harness_keys(&d.old), harness_keys(&d.new));
-        assert_ne!(
-            old, new,
-            "{name}: precondition: the harness sees a difference"
+        let model = assemble_and_resolve_workspace_program(&ws, MODEL_INSTANCE_ID_DEFAULT, false)
+            .expect("program model");
+        let want = harness_keys(&run_detectors(&model, &registered_detectors()).findings);
+        assert!(
+            !want.is_empty(),
+            "{name}: precondition: the fixture has findings"
         );
-        let got = analyze_keys(&ws);
-        assert_eq!(got, new, "{name}: analyze != harness new");
-        assert_ne!(got, old, "{name}: analyze equals harness old");
+        assert_eq!(
+            analyze_keys(&ws),
+            want,
+            "{name}: analyze != detectors over the model"
+        );
     }
 }
 

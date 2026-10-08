@@ -300,11 +300,11 @@ fn repeat_with_conditional_break_is_sound() {
 /// ≥1 resolved-to-dep edge produces an `opaque-callee` uncertainty.
 #[test]
 fn resolved_edge_to_bodyless_dep_callee_yields_opaque_uncertainty() {
-    use al_sem::engine::deps::cross_app_l3::build_cross_app_l3_from_workspace;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r2-5b-fixtures/cross-app-resolution");
-    let cross = build_cross_app_l3_from_workspace(&fixture, "r2.5b")
-        .expect("cross-app L3 builds over the `.app`-bearing workspace");
+    let cross = assemble_and_resolve_cross_app_program(&fixture, "r2.5b", false)
+        .expect("the cross-app model builds over the `.app`-bearing workspace");
 
     let proj = project_r3a2(&cross.resolved);
     let summaries = serde_json::to_value(&proj.summaries).unwrap();

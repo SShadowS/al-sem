@@ -165,6 +165,14 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   `SymbolTable`, the L3 aldump modes, `tests/l3`, r2b, r2-5b-*, `b3_triage_r0`,
   `r3a0`, `docs/b3-triage/*.md`. `precomputed_calls/_events` become mandatory.
   `scripts/check-goldens`, the pre-commit hook and CLAUDE.md change with it.
+  - **S9.6a DONE:** the L3-measuring tests, goldens, triage tables and aldump modes
+    are gone. Four tests that compared with L3 now state their contract directly
+    (cross-app row order, analyze == detectors over the program model, r3a2
+    opaque-callee and ABI temp state over the production cross-app model). The
+    pre-commit hook needed no edit (its path pattern is generic).
+  - **S9.6b:** the engine itself (the module list above), mandatory
+    `precomputed_calls/_events`, and `calls_for`/`events_for`/coverage into
+    `program::model`.
 - **S9.7 Rename** the `L3*` model types and `l3_workspace`; remove `engine/l3/mod.rs`
   and the `engine::l2` alias. Mechanical; zero goldens move (no type name is
   serialized).

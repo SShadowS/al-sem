@@ -233,11 +233,7 @@ fn a_friend_dependency_sees_the_workspaces_internal_members() {
     );
 }
 
-/// Every cross-app fixture: the program-built cross-app model's rows equal the
-/// legacy merged model's (`build_cross_app_l3_r4`, the source-parsing variant) —
-/// the same rows in the same order (the symbol table is last-wins and the
-/// extension-field merge first-wins, so order is part of the contract), each row's
-/// whole content equal.
+/// The cross-app fixtures: each has dependency code in the model.
 fn cross_app_fixtures() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     [
@@ -254,51 +250,25 @@ fn cross_app_fixtures() -> Vec<std::path::PathBuf> {
     .collect()
 }
 
-/// Each row's whole `Debug` text. `decode` percent-decodes every `dep:` source-unit
-/// id: the legacy path keeps a zip entry name raw, the program engine decodes it
-/// once (plan decision 7; ids do not depend on it).
-fn model_rows(
-    ws: &al_sem::engine::l3::l3_workspace::L3Workspace,
-    decode: bool,
-) -> [Vec<String>; 3] {
-    let fix = |row: String| {
-        if !decode {
-            return row;
-        }
-        let mut out = String::with_capacity(row.len());
-        let mut rest = row.as_str();
-        while let Some(i) = rest.find("\"dep:") {
-            let (head, tail) = rest.split_at(i + 1);
-            out.push_str(head);
-            let end = tail.find('"').unwrap_or(tail.len());
-            out.push_str(&percent_encoding::percent_decode_str(&tail[..end]).decode_utf8_lossy());
-            rest = &tail[end..];
-        }
-        out.push_str(rest);
-        out
-    };
-    [
-        ws.objects.iter().map(|o| fix(format!("{o:?}"))).collect(),
-        ws.tables.iter().map(|t| fix(format!("{t:?}"))).collect(),
-        ws.routines.iter().map(|r| fix(format!("{r:?}"))).collect(),
-    ]
-}
-
+/// The cross-app model's row ORDER is a contract: the symbol table is last-wins and
+/// the extension-field merge first-wins, so a dependency's parsed source must come
+/// after the symbol-only (ABI) rows it may shadow. Every routine row is, in order:
+/// the workspace's (`ws:` units), then every symbol-only dependency's ABI rows
+/// (no source unit), then every source-bearing dependency's parsed rows (`dep:`
+/// units). Until engine-switch S9.6 this was pinned by comparing with the legacy
+/// merged model (`cross_app_l3`), deleted with L3; the order is now stated directly.
 ///
-/// Discrimination (2026-10-06): appending the symbol-only (ABI) rows AFTER the
-/// parsed dependency rows in `append_dependency_rows` fails the order assertion on
-/// `r3a5-fixtures/ws`; restored, it passes. Measured once on CDO (all rows equal,
-/// same order, after decoding) and DO (571 extra objects, all from apps in an
-/// ancestor `.alpackages` that the legacy scan never read: plan decision 3).
+/// Discrimination (2026-10-08): appending the ABI rows AFTER the parsed dependency
+/// rows in `append_dependency_rows` fails this test on `r3a5-fixtures/ws` (ranks
+/// `[0, 0, 2, 2, 1]`); restored, it passes.
 #[test]
-fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
-    use al_sem::engine::deps::cross_app_l3::build_cross_app_l3_r4;
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::program::model::workspace::assemble_and_resolve_cross_app_from_program;
+fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
+    use al_sem::program::model::workspace::{
+        MODEL_INSTANCE_ID_DEFAULT as MI, assemble_and_resolve_cross_app_from_program,
+    };
     for ws in cross_app_fixtures() {
-        let legacy = build_cross_app_l3_r4(&ws, MI).expect("legacy model");
         let ctx = build_context(&ws).expect("context");
-        let (new, _) = assemble_and_resolve_cross_app_from_program(
+        let (model, _) = assemble_and_resolve_cross_app_from_program(
             &ws,
             MI,
             false,
@@ -307,36 +277,39 @@ fn the_cross_app_model_rows_equal_the_legacy_merged_model() {
             &Default::default(),
         )
         .expect("program model");
-        // Not degenerate: dependency rows are present, ABI and parsed alike on the
-        // fixture that has both kinds.
-        let primary = new.primary_app.clone().expect("primary app");
-        let dep: Vec<_> = new
+        // Rank of each routine's block: 0 workspace, 1 ABI, 2 parsed dependency.
+        let ranks: Vec<u8> = model
             .workspace
             .routines
             .iter()
-            .filter(|r| !r.app_guid.eq_ignore_ascii_case(&primary.app_guid))
+            .map(|r| {
+                let unit = r.source_anchor.source_unit_id.as_str();
+                if unit.starts_with("ws:") {
+                    0
+                } else if unit.is_empty() {
+                    1
+                } else {
+                    assert!(unit.starts_with("dep:"), "{}: unit {unit:?}", ws.display());
+                    2
+                }
+            })
             .collect();
-        assert!(!dep.is_empty(), "{}: no dependency routines", ws.display());
-        if ws.ends_with("r3a5-fixtures/ws") {
-            assert!(dep.iter().any(|r| r.body_available) && dep.iter().any(|r| !r.body_available));
-        }
-        let (old_rows, new_rows) = (
-            model_rows(&legacy.resolved.workspace, true),
-            model_rows(&new.workspace, false),
+        assert!(
+            ranks.contains(&0) && ranks.iter().any(|&k| k > 0),
+            "{}: workspace and dependency rows must both be present",
+            ws.display()
         );
-        for (kind, (o, n)) in ["objects", "tables", "routines"]
-            .iter()
-            .zip(old_rows.iter().zip(new_rows.iter()))
-        {
-            let only_old: Vec<_> = o.iter().filter(|r| !n.contains(r)).collect();
-            let only_new: Vec<_> = n.iter().filter(|r| !o.contains(r)).collect();
+        if ws.ends_with("r3a5-fixtures/ws") {
             assert!(
-                only_old.is_empty() && only_new.is_empty(),
-                "{}: {kind} differ\nonly legacy: {only_old:#?}\nonly program: {only_new:#?}",
-                ws.display()
+                ranks.contains(&1) && ranks.contains(&2),
+                "r3a5-fixtures/ws has both ABI and parsed dependency rows"
             );
-            assert_eq!(o, n, "{}: {kind} order differs", ws.display());
         }
+        assert!(
+            ranks.windows(2).all(|w| w[0] <= w[1]),
+            "{}: rows must be workspace, then ABI, then parsed dependencies: {ranks:?}",
+            ws.display()
+        );
     }
 }
 
