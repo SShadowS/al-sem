@@ -26,7 +26,9 @@ Spec: `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md` §8 item 
    (out-of-range line → empty line; `byte_col` past the end → line end; a `byte_col` inside a
    multi-byte character counts that character whole). It stores each line's byte length
    (`\r` stripped) and, only for characters outside ASCII, their position in the line, UTF-8
-   length and UTF-16 length. AL source is nearly all ASCII, so this is about 4 bytes per line.
+   length and UTF-16 length. AL source is nearly all ASCII, so this is mostly 4 bytes per
+   line (measured afterwards: 11.69 MiB for CG's 9,919 dependency files, against 109.45 MiB
+   of source roots).
    UTF-16 column = `b - Σ min(len8, b - start) + Σ len16` over the line's non-ASCII
    characters starting before `b = min(byte_col, line_len)`.
 2. **Tier**: `DepLspTier.dep_texts: Arc<DepTexts>` becomes `dep_lines: Arc<DepLines>`
@@ -84,31 +86,45 @@ the text is still on disk and in `DepCache`'s source path for any build that nee
 
 ## Result (T5, 2026-10-08; `tools/census-probe/runs-s10-1/` vs `runs-s10-base/`)
 
-Counted heap, one run per cell:
+Counted heap, MiB. Each mode ran twice per side (the `-base` and `-updaters` runs build the
+same roots); counted figures repeat to ±0.1 MiB between them. Audited by the
+measurement-auditor agent (2026-10-08); its corrections are folded in.
 
-| Cell | before | after | change |
+| Cell (file) | before | after | change |
 |---|---:|---:|---:|
-| CG `embedded`, root 1 retained | 251.2 | 152.2 | −99.0 |
-| CG `embedded`, 7 roots live | 292.9 | 193.8 | −99.1 |
-| CG `embedded`, 7 roots idle with updaters | 327.5 | 228.4 | −99.1 |
-| CDO `embedded`, retained | 381.4 | 275.7 | −105.7 |
-| CDO `embedded`, idle with updater | 393.7 | 287.9 | −105.8 |
+| CG `embedded`, root 1 retained (`cg-embedded-base`) | 251.2 | 152.2 | −99.0 |
+| CG `embedded`, 7 roots live (`cg-embedded-updaters`) | 292.9 | 193.8 | −99.1 |
+| CG `embedded`, 7 roots idle with updaters (`cg-embedded-updaters`) | 327.5 | 228.4 | −99.1 |
+| CDO `embedded`, retained (`cdo-embedded-base`) | 381.4 | 275.7 | −105.7 |
+| CDO `embedded`, idle with updater (`cdo-embedded-updaters`) | 393.7 | 287.9 | −105.8 |
 | CG and CDO `symbols` (no dependency text: the control) | — | — | ±0.1 |
-| CG root 1 build peak | 297.2 | 297.2 | 0 |
-| CDO build peak | 408.1 | 410.5 | +2.4 |
-| CG roots 2-7 build peak (relative to the live heap before each) | 24.8-25.2 | 134.2-134.6 | +109.4 |
-| CG roots 2-7 build time (one run, noise not measured) | 0.9-1.0 s | 1.2-1.3 s | +0.3 s |
+| CG root 1 build peak (`cg-embedded-base`) | 297.2 | 297.2 | 0 |
+| CDO build peak (`cdo-embedded-base`) | 408.1 | 410.5 | +2.4 |
+| CG roots 2-7 build peak, relative to the live heap before each (`cg-embedded-base`) | 24.8-25.2 | 134.2-134.6 | +109.4 |
+| CG build time, roots 1-7 alike (0.1 s resolution) | 0.9-1.0 s (root 1: 2.8-3.0 s) | 1.2-1.3 s (root 1: 3.1-3.3 s) | +0.3 s |
 
-The dependency text was 108.33 MiB; the line indexes therefore cost about 9.3 MiB (by
-subtraction, not measured on their own).
+Where the −99.0 comes from (drop deltas, measured, `cg-embedded-base`): the dependency source
+roots freed 109.45 MiB (108.33 MiB of it text bytes), the old `dep_texts` map 1.29 MiB, and the
+new `dep_lines` costs **11.69 MiB** (CDO 12.44 MiB): −109.45 − 1.29 + 11.69 = −99.05.
 
-**The cost, as predicted in Design item 5:** with no root holding the extracted text,
-`DepCache::source` cannot share it, so each later root (and each rung-3 rebuild) extracts it
-again while it builds and drops it after: roots 2-7 peak 109 MiB higher and take about 0.3 s
-longer. The process heap peak therefore moves from root 1's build (297.2 MiB) to root 7's:
-about 186.6 + 134.6 ≈ 321 MiB by arithmetic (live heap before root 7 plus its build peak), not
-measured. Removing it needs the build to skip source extraction when the dependency tier is
-already live with its line index (S10.1b, owner's call).
+**The cost:** with no root holding the extracted text, `DepCache::source` (which keeps it only
+weakly) cannot share it, so each later root extracts it again while it builds and drops it at
+publish. The phase trace shows it: root 2's `1.snapshot` phase ends 0.0 MiB above its start
+before and 109.5 MiB after, and stays there until `9.publish_snapshot` (`cg-embedded-base`
+lines 21-30). A rung-3 rebuild does the same by the code; no run measures it. The +0.3 s is
+indicative only: root 1, which re-extracts nothing, slowed by 0.3 s too, and identical CDO
+builds swung by 0.9 s between runs.
+
+**Process heap peak** (by arithmetic, never measured: the probe reports relative build peaks
+and settled live heaps): live heap before root 7 plus its build peak, 285.6 + 25.2 ≈ **311 MiB
+before** and 186.6 + 134.6 ≈ **321 MiB after** (+10 MiB, root 7 both times). In the server's
+shape (updaters running) the before run already held 327.5 MiB live while idle, so the process
+peak did not rise there; it fell by at least 6 MiB, assuming updater start-up adds less than
+about 93 MiB of transient heap (not measured). RSS context (one run, not a result): peak
+working set 435.4 → 508.4 MiB in the `cg-embedded-updaters` runs.
+
+Removing the re-extraction needs the build to skip source extraction when the dependency tier
+is already live with its line index (S10.1b, owner's call).
 
 ## Held throughout
 

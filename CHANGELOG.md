@@ -436,11 +436,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now has a text-free `LineIndex` (each line's length plus its non-ASCII characters; it
   answers `LineTable::col_out` exactly, both encodings). The shared tier holds `dep_lines`
   instead of `dep_texts`, and the retained snapshot drops dependency `SourceRoot.files`
-  (`source` stays `Some`). Counted heap (`tools/census-probe/runs-s10-1/`): CG, 7 roots idle
-  with updaters, 327.5 → 228.4 MiB; CDO 393.7 → 287.9 MiB; `symbols` mode unchanged. Cost:
-  later roots and rung-3 rebuilds re-extract the text while they build (CG roots 2-7: build
-  peak +109 MiB, +0.3 s each), so the process heap peak moves from root 1 (297 MiB) to about
-  321 MiB at root 7 (arithmetic, not measured). Every LSP position is unchanged: pinned by
+  (`source` stays `Some`). Counted heap (`tools/census-probe/runs-s10-base/` →
+  `runs-s10-1/`): CG, 7 roots idle with updaters, 327.5 → 228.4 MiB; CDO 393.7 → 287.9 MiB;
+  `symbols` mode unchanged. The text freed was 109.45 MiB; the line indexes cost 11.69 MiB
+  (CDO 12.44). Cost: each later root re-extracts the text while it builds, because
+  `DepCache::source` keeps it only weakly (CG roots 2-7: build peak +109 MiB; a rung-3 rebuild
+  likewise by the code, not measured). By arithmetic the build-time heap peak at root 7 goes
+  from about 311 to about 321 MiB; with updaters running the idle heap was already 327.5 MiB
+  before, so the server's peak does not rise. RSS peak working set 435 → 508 MiB (one run,
+  context only). Every LSP position is unchanged: pinned by
   `dependency_decl_columns_equal_the_line_table_over_the_text` and
   `line_index_answers_col_out_exactly_as_line_table`; `the_lsp_keeps_no_dependency_text`
   pins the drop (each with a discrimination proof).

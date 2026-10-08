@@ -167,7 +167,9 @@ impl ColOut for LineIndex {
 /// The LSP keeps one per DEPENDENCY file instead of the file's text (engine-
 /// switch S10.1): dependency positions are only ever converted outward (a
 /// declaration's `origin` / `name_origin`), never inward, so `col_in` is not
-/// offered. AL source is nearly all ASCII, so this is about 4 bytes per line.
+/// offered. AL source is nearly all ASCII, so this is mostly 4 bytes per line
+/// (11.69 MiB for a 7-root CG corpus's 9,919 dependency files, against 109.45
+/// MiB of source; `tools/census-probe/runs-s10-1/`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct LineIndex {
     line_lens: Vec<u32>,
