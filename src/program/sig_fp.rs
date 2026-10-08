@@ -155,11 +155,11 @@ pub(crate) fn source_param_sig_fp(params: &[Param]) -> u64 {
 pub fn source_routine_node_id(object: ObjectNodeId, decl: &RoutineDecl) -> RoutineNodeId {
     RoutineNodeId {
         object,
-        name_lc: decl.name.fold_identifier(),
+        name_lc: decl.name.fold_identifier().into(),
         enclosing_member_lc: decl
             .enclosing_member
             .as_ref()
-            .map(|(n, _)| n.fold_identifier()),
+            .map(|(n, _)| n.fold_identifier().into()),
         params_count: decl.params.len(),
         sig_fp: source_param_sig_fp(&decl.params),
     }

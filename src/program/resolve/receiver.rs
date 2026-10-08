@@ -3319,7 +3319,7 @@ fn resolve_control_addin_receiver(
                 .routines
                 .iter()
                 .filter(|r| r.id.object == oid)
-                .map(|r| (r.id.name_lc.clone(), r.id.params_count))
+                .map(|r| (r.id.name_lc.to_string(), r.id.params_count))
                 .collect();
             ReceiverType::ControlAddIn {
                 name_lc,
@@ -3756,7 +3756,7 @@ mod tests {
                     kind,
                     key: match declared_id {
                         Some(n) => ObjKey::Id(n),
-                        None => ObjKey::Name(name.to_ascii_lowercase()),
+                        None => ObjKey::Name(name.to_ascii_lowercase().into()),
                     },
                 },
                 name: name.to_string(),
@@ -3882,7 +3882,7 @@ mod tests {
                 kind,
                 key: match declared_id {
                     Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(name.to_ascii_lowercase()),
+                    None => ObjKey::Name(name.to_ascii_lowercase().into()),
                 },
             },
             name: name.to_string(),
@@ -6974,7 +6974,7 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp: 0,
@@ -8818,7 +8818,7 @@ codeunit 50100 "C"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,

@@ -49,7 +49,7 @@ pub fn resolve_program(graph: &ProgramGraph, parsed: &[ParsedUnit]) -> Vec<Edge>
             for obj in &pf.file.objects {
                 let key = match obj.id {
                     Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(obj.name.fold_identifier()),
+                    None => ObjKey::Name(obj.name.fold_identifier().into()),
                 };
                 let obj_id = ObjectNodeId {
                     app: app_ref,
@@ -110,7 +110,7 @@ pub fn synthetic_unknown_edge_for_test() -> Vec<Edge> {
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(99_999),
         },
-        name_lc: "test_routine".to_string(),
+        name_lc: "test_routine".into(),
         enclosing_member_lc: None,
         params_count: 0,
         sig_fp: 0,

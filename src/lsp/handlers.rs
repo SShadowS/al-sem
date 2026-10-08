@@ -919,7 +919,7 @@ mod tests {
             .find(|d| d.name == "DoWork")
             .unwrap();
         let mut bogus_id = dowork.id.clone();
-        bogus_id.name_lc = "does_not_exist_xyz".to_string();
+        bogus_id.name_lc = "does_not_exist_xyz".into();
         let data = ItemData { node: bogus_id };
 
         assert!(incoming(&snap, PositionEncoding::Utf16, &data).is_empty());

@@ -26,7 +26,7 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::{FieldNode, ObjectNode, ObjectRef};
 use crate::program::resolve::edge::Condition;
 use crate::program::resolve::event::{ParsedSubscriberArgs, subscriber_arity_bound};
@@ -240,7 +240,7 @@ impl SubscriberIndex {
         // on the second `insert` — corrupting the subscriber-candidate
         // filter below into either double-counting or dropping a legitimate
         // publisher (beyond-1B.3b Task 2 review fix).
-        let mut routine_indices_by_obj_name: HashMap<(ObjectNodeId, String), Vec<usize>> =
+        let mut routine_indices_by_obj_name: HashMap<(ObjectNodeId, SharedStr), Vec<usize>> =
             HashMap::new();
         for (i, r) in graph.routines.iter().enumerate() {
             let key = (r.id.object.clone(), r.id.name_lc.clone());
@@ -288,7 +288,7 @@ impl SubscriberIndex {
                 //     params_count >= sub_params. Counts every matching
                 //     routine even when two share a `RoutineNodeId`.
                 let candidates: Vec<RoutineNodeId> = routine_indices_by_obj_name
-                    .get(&(pub_obj_id.clone(), event_name_lc.clone()))
+                    .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
                     .map(Vec::as_slice)
                     .unwrap_or(&[])
                     .iter()
@@ -1185,7 +1185,7 @@ mod tests {
     ) -> ObjectNode {
         let key = match declared_id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(name.to_ascii_lowercase()),
+            None => ObjKey::Name(name.to_ascii_lowercase().into()),
         };
         ObjectNode {
             id: ObjectNodeId { app, kind, key },
@@ -1210,7 +1210,7 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
@@ -1245,7 +1245,7 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
@@ -1280,7 +1280,7 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id,
-                name_lc: name.to_ascii_lowercase(),
+                name_lc: name.to_ascii_lowercase().into(),
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
@@ -2392,7 +2392,7 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2439,14 +2439,14 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
         };
         let pub_onbeforex_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onbeforex".to_string(),
+            name_lc: "onbeforex".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2500,7 +2500,7 @@ mod tests {
         };
         let pub_onafterx_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2548,14 +2548,14 @@ mod tests {
         };
         let pub_onafterx_1param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
         };
         let pub_onafterx_2param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 2,
             sig_fp: 0,
@@ -2620,7 +2620,7 @@ mod tests {
         };
         let pub_arity0 = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2670,7 +2670,7 @@ mod tests {
         };
         let pub_arity0 = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2933,14 +2933,14 @@ mod tests {
         };
         let pub_onafterx_0param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
         };
         let pub_onafterx_1param_id = RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: "onafterx".to_string(),
+            name_lc: "onafterx".into(),
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
@@ -3056,7 +3056,7 @@ mod tests {
         );
         let publisher = |name: &str, params: usize| RoutineNodeId {
             object: pub_id.clone(),
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,

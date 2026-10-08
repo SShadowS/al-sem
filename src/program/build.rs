@@ -15,6 +15,7 @@ use crate::program::resolve::decl_surface::DepMetaMap;
 use crate::program::resolve::event::{
     PublisherKind, is_platform_page_event, is_platform_table_event, platform_event_display_name,
 };
+use crate::program::str_pool::{ShareStrings, StrPool};
 use crate::program::topology::DependencyGraph;
 use crate::snapshot::{AppSetSnapshot, ParsedUnit, TrustTier, parse_snapshot};
 
@@ -194,15 +195,25 @@ fn build_dep_nodes(
     // `RoutineMeta` into `dep_meta` (in parse order, so a true same-key
     // collision keeps the last one, as `DeclSurface::build` does), and its
     // recovered flag into `recovered`. Nothing summary-shaped survives.
+    //
+    // Equal strings become one allocation as they arrive (engine-switch
+    // S10.2), so every later clone of a tier value shares it; `dep_meta`'s
+    // keys are shared before insertion, since a map key cannot be changed.
+    let mut pool = StrPool::default();
     let mut objects: Vec<ObjectNode> = Vec::new();
     let mut routines: Vec<RoutineNode> = Vec::new();
     let mut dep_meta = DepMetaMap::new();
     let mut recovered: Vec<String> = Vec::new();
     for unit in summaries {
-        for file in unit.files {
+        for mut file in unit.files {
+            file.objects.share_strings(&mut pool);
+            file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
             routines.extend(file.routines);
-            dep_meta.extend(file.routine_meta);
+            dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, meta)| {
+                id.share_strings(&mut pool);
+                (id, meta)
+            }));
             if file.parse_status_recovered {
                 recovered.push(crate::snapshot::parse::recovered_path(
                     &unit.app.name,
@@ -231,8 +242,11 @@ fn build_dep_nodes(
                 message,
             });
         }
-        objects.extend(result.objects);
-        routines.extend(result.routines);
+        let (mut abi_objects, mut abi_routines) = (result.objects, result.routines);
+        abi_objects.share_strings(&mut pool);
+        abi_routines.share_strings(&mut pool);
+        objects.extend(abi_objects);
+        routines.extend(abi_routines);
     }
 
     // ── Step 4: sort for determinism, then dedup this (non-primary) population ──
@@ -542,7 +556,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             };
             let synth_id = RoutineNodeId {
                 object: pub_obj.id.clone(),
-                name_lc: args.event_name.clone(),
+                name_lc: args.event_name.as_str().into(),
                 enclosing_member_lc: None,
                 params_count: PLATFORM_EVENT_PUBLISHER_ARITY,
                 sig_fp: 0,
@@ -1296,7 +1310,7 @@ codeunit 50100 "Ws2 Cu"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
@@ -1338,7 +1352,7 @@ codeunit 50100 "Ws2 Cu"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,

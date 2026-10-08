@@ -211,7 +211,7 @@ impl TriggerSiteRule {
         self.run_trigger != Some(false)
             && (!self.is_validate
                 || (self.validate_field.is_some()
-                    && target.enclosing_member_lc == self.validate_field))
+                    && target.enclosing_member_lc.as_deref() == self.validate_field.as_deref()))
     }
 }
 
@@ -284,7 +284,7 @@ pub fn implicit_trigger_route_applicable(
 
     // Look up the base table's lowercased name for the extension index.
     let table_name_lc: String = match &ctx.table.key {
-        ObjKey::Name(s) => s.clone(),
+        ObjKey::Name(s) => s.to_string(),
         ObjKey::Id(_) => {
             // Resolve the name from the graph (needed when the table is id-keyed).
             graph
@@ -386,7 +386,7 @@ mod tests {
             id: ObjectNodeId {
                 app,
                 kind,
-                key: ObjKey::Name(name.fold_identifier()),
+                key: ObjKey::Name(name.fold_identifier().into()),
             },
             name: name.to_string(),
             declared_id: None,
@@ -414,8 +414,8 @@ mod tests {
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id.clone(),
-                name_lc: name.fold_identifier(),
-                enclosing_member_lc: enclosing.map(|s| s.fold_identifier()),
+                name_lc: name.fold_identifier().into(),
+                enclosing_member_lc: enclosing.map(|s| s.fold_identifier().into()),
                 params_count: params,
                 sig_fp: 0,
             },

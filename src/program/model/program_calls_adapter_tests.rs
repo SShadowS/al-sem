@@ -967,7 +967,7 @@ fn name_keyed_symbol_callee_and_no_routine_run() {
         true,
         |ctx| {
             let named = ctx.graph.routines.iter().any(|n| {
-                n.id.name_lc == "nm" && n.id.object.key == ObjKey::Name("nameddep".to_string())
+                n.id.name_lc == "nm" && n.id.object.key == ObjKey::Name("nameddep".into())
             });
             assert!(named, "precondition: the codeunit is keyed by name");
         },

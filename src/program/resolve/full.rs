@@ -831,7 +831,7 @@ pub(crate) fn resolve_file_obligations(
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = match obj.id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier()),
+            None => ObjKey::Name(obj.name.fold_identifier().into()),
         };
         let obj_node_id = ObjectNodeId {
             app: caller_app,
@@ -2206,7 +2206,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -2411,7 +2411,7 @@ mod tests {
                 .flat_map(|ce| {
                     ce.edge.routes.iter().map(move |r| match &r.target {
                         RouteTarget::Routine(id) => {
-                            (ce.edge.site.span.start.line, id.name_lc.clone())
+                            (ce.edge.site.span.start.line, id.name_lc.to_string())
                         }
                         other => (ce.edge.site.span.start.line, format!("{other:?}")),
                     })
@@ -2482,7 +2482,9 @@ mod tests {
             .filter(|ce| ce.edge.from.name_lc == "caller" && ce.edge.kind == EdgeKind::Call)
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| match &r.target {
-                    RouteTarget::Routine(id) => (ce.edge.site.span.start.line, id.name_lc.clone()),
+                    RouteTarget::Routine(id) => {
+                        (ce.edge.site.span.start.line, id.name_lc.to_string())
+                    }
                     other => (ce.edge.site.span.start.line, format!("{other:?}")),
                 })
             })
@@ -2567,7 +2569,7 @@ mod tests {
                 .filter(|ce| ce.edge.from.name_lc == caller)
                 .flat_map(|ce| ce.edge.routes.iter())
                 .map(|r| match &r.target {
-                    RouteTarget::Routine(id) => id.name_lc.clone(),
+                    RouteTarget::Routine(id) => id.name_lc.to_string(),
                     _ => format!("{:?}", r.evidence),
                 })
                 .collect()
@@ -2701,10 +2703,10 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
-                    (ce.edge.from.name_lc.clone(), ce.edge.kind, to)
+                    (ce.edge.from.name_lc.to_string(), ce.edge.kind, to)
                 })
             })
             .collect();
@@ -2777,11 +2779,11 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
-                    (ce.edge.from.name_lc.clone(), to)
+                    (ce.edge.from.name_lc.to_string(), to)
                 })
             })
             .collect();
@@ -2836,7 +2838,7 @@ mod tests {
             .filter(|ce| ce.edge.from.name_lc == "p")
             .flat_map(|ce| ce.edge.routes.iter())
             .map(|r| match &r.target {
-                RouteTarget::Routine(id) => id.name_lc.clone(),
+                RouteTarget::Routine(id) => id.name_lc.to_string(),
                 RouteTarget::Builtin(b) => b.0.clone(),
                 _ => format!("{:?}", r.evidence.kind()),
             })
@@ -2894,7 +2896,7 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };
@@ -2983,7 +2985,7 @@ mod tests {
             .flat_map(|ce| {
                 ce.edge.routes.iter().map(move |r| {
                     let to = match &r.target {
-                        RouteTarget::Routine(id) => id.name_lc.clone(),
+                        RouteTarget::Routine(id) => id.name_lc.to_string(),
                         RouteTarget::Builtin(b) => b.0.clone(),
                         _ => format!("{:?}", r.evidence.kind()),
                     };

@@ -166,7 +166,7 @@ fn object_kind_str(k: ObjectKind) -> String {
 fn obj_key_lc(key: &ObjKey) -> String {
     match key {
         ObjKey::Id(n) => format!("{n}"),
-        ObjKey::Name(s) => s.clone(),
+        ObjKey::Name(s) => s.to_string(),
     }
 }
 
@@ -186,7 +186,7 @@ pub(crate) fn routine_to_key(id: &RoutineNodeId, apps: &AppRegistry) -> Canonica
         app_guid(apps, id.object.app),
         object_kind_str(id.object.kind),
         obj_key_lc(&id.object.key),
-        id.name_lc.clone(),
+        id.name_lc.to_string(),
     )
 }
 
@@ -200,7 +200,7 @@ fn project_target(target: &RouteTarget, apps: &AppRegistry) -> Option<CanonicalT
             kind: object_kind_tag(id.object.kind),
             app: Some(app_guid(apps, id.object.app)),
             object_lc: obj_key_lc(&id.object.key),
-            routine_lc: Some(id.name_lc.clone()),
+            routine_lc: Some(id.name_lc.to_string()),
         }),
         RouteTarget::Builtin(BuiltinId(bid)) => Some(CanonicalTarget {
             kind: 255,
@@ -367,7 +367,7 @@ pub fn project_fresh_event_rows_on(
             if let RouteTarget::Routine(sub_rid) = &route.target {
                 rows.push(CanonicalEventRow {
                     publisher: publisher.clone(),
-                    event_name_lc: event_name_lc.clone(),
+                    event_name_lc: event_name_lc.to_string(),
                     subscriber: routine_to_key(sub_rid, apps),
                     publisher_arity,
                 });

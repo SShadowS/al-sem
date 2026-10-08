@@ -421,7 +421,7 @@ pub(crate) fn abi_object_node_id(
         key: if abi_obj.object_number != 0 {
             ObjKey::Id(abi_obj.object_number)
         } else {
-            ObjKey::Name(abi_obj.name.fold_identifier())
+            ObjKey::Name(abi_obj.name.fold_identifier().into())
         },
     }
 }
@@ -433,7 +433,7 @@ pub(crate) fn abi_object_node_id(
 pub(crate) fn abi_routine_node_id(obj_id: &ObjectNodeId, routine: &AbiRoutine) -> RoutineNodeId {
     RoutineNodeId {
         object: obj_id.clone(),
-        name_lc: routine.name.fold_identifier(),
+        name_lc: routine.name.fold_identifier().into(),
         enclosing_member_lc: None,
         params_count: if routine.parameters_known {
             routine.parameters.len()

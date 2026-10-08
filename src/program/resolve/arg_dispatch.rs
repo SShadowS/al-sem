@@ -4200,7 +4200,7 @@ codeunit 50700 "Caller"
         RoutineNode {
             id: RoutineNodeId {
                 object: obj_id.clone(),
-                name_lc: name_lc.to_string(),
+                name_lc: name_lc.into(),
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,

@@ -861,7 +861,7 @@ pub(crate) fn recompute_file(
     for obj in &pf.file.objects {
         let obj_key = match obj.id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier()),
+            None => ObjKey::Name(obj.name.fold_identifier().into()),
         };
         let obj_node_id = ObjectNodeId {
             app: primary_app_ref,
@@ -1426,7 +1426,7 @@ mod tests {
                     kind: ObjectKind::Codeunit,
                     key: ObjKey::Id(1),
                 },
-                name_lc: name.to_string(),
+                name_lc: name.into(),
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
@@ -1509,7 +1509,7 @@ mod tests {
                     kind: ObjectKind::Codeunit,
                     key: ObjKey::Id(1),
                 },
-                name_lc: name.to_string(),
+                name_lc: name.into(),
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,

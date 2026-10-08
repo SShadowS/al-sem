@@ -228,7 +228,7 @@ fn make_sub_rid(
             kind: ObjectKind::Codeunit,
             key: ObjKey::Id(obj_num),
         },
-        name_lc: routine_name_lc.to_string(),
+        name_lc: routine_name_lc.into(),
         enclosing_member_lc: None,
         params_count: params,
         sig_fp: 0,
@@ -419,7 +419,7 @@ fn test_rid(app: u32, obj_kind: ObjectKind, obj_num: i64, name: &str) -> Routine
             kind: obj_kind,
             key: ObjKey::Id(obj_num),
         },
-        name_lc: name.to_string(),
+        name_lc: name.into(),
         enclosing_member_lc: None,
         params_count: 0,
         sig_fp: 0,
@@ -1195,7 +1195,7 @@ fn dropped_obligation_is_caught_by_coverage_contract() {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
@@ -10094,7 +10094,7 @@ type OldRoutineMap = std::collections::HashMap<(ObjectNodeId, String), Vec<Routi
 fn old_routines_by_obj_name(graph: &al_sem::program::ProgramGraph) -> OldRoutineMap {
     let mut map = OldRoutineMap::new();
     for r in graph.routines.iter() {
-        map.entry((r.id.object.clone(), r.id.name_lc.clone()))
+        map.entry((r.id.object.clone(), r.id.name_lc.to_string()))
             .or_default()
             .push(r.id.clone());
     }
@@ -10271,7 +10271,7 @@ codeunit 50990 "Table Event Sub"
         .clone();
     let row = |name: &str, sig_fp: u64| {
         let mut r = base.clone();
-        r.id.name_lc = name.to_string();
+        r.id.name_lc = name.into();
         r.id.sig_fp = sig_fp;
         r
     };

@@ -101,7 +101,7 @@ pub(crate) fn file_routine_meta(
     for obj in &file.objects {
         let key = match obj.id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier()),
+            None => ObjKey::Name(obj.name.fold_identifier().into()),
         };
         let obj_id = ObjectNodeId {
             app,

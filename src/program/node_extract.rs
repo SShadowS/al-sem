@@ -13,6 +13,7 @@ use crate::program::resolve::event::{
 };
 use crate::program::resolve::receiver::unquote_identifier;
 use crate::program::sig_fp::source_routine_node_id;
+use crate::program::str_pool::{ShareStrings, StrPool};
 use crate::snapshot::TrustTier;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,6 +404,18 @@ pub struct RoutineNode {
     pub abi_params: AbiParams,
 }
 
+impl ShareStrings for ObjectNode {
+    fn share_strings(&mut self, pool: &mut StrPool) {
+        self.id.share_strings(pool);
+    }
+}
+
+impl ShareStrings for RoutineNode {
+    fn share_strings(&mut self, pool: &mut StrPool) {
+        self.id.share_strings(pool);
+    }
+}
+
 /// Lowercased, `|`-joined parameter TYPE-TEXT sequence for a SOURCE routine's
 /// params — the content key [`RoutineNode::param_sig_key`] stores. Mirrors
 /// the normalization in `abi_ingest::param_type_fp` (lowercase + `|`-join),
@@ -585,7 +598,7 @@ pub fn extract_nodes(
     for obj in &file.objects {
         let key = match obj.id {
             Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier()),
+            None => ObjKey::Name(obj.name.fold_identifier().into()),
         };
         let obj_id = ObjectNodeId {
             app,
@@ -781,8 +794,8 @@ pub(crate) mod test_fixtures {
                     kind: al_syntax::ir::ObjectKind::Codeunit,
                     key: crate::program::node::ObjKey::Id(50100),
                 },
-                name_lc: "doThing".to_ascii_lowercase(),
-                enclosing_member_lc: Some("no.".to_string()),
+                name_lc: "dothing".into(),
+                enclosing_member_lc: Some("no.".into()),
                 params_count: 2,
                 sig_fp: 0xDEAD_BEEF_CAFE_F00D,
             },

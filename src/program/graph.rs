@@ -226,7 +226,7 @@ mod tests {
             id: ObjectNodeId {
                 app,
                 kind: ObjectKind::Codeunit,
-                key: ObjKey::Name(name.to_ascii_lowercase()),
+                key: ObjKey::Name(name.to_ascii_lowercase().into()),
             },
             name: name.to_string(),
             declared_id: None,
@@ -315,7 +315,7 @@ mod tests {
                 kind: ObjectKind::Table,
                 key: match declared_id {
                     Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(name.to_ascii_lowercase()),
+                    None => ObjKey::Name(name.to_ascii_lowercase().into()),
                 },
             },
             name: name.to_string(),

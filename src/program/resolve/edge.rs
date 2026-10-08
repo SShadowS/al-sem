@@ -853,7 +853,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(1),
             },
-            name_lc: name.to_string(),
+            name_lc: name.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,

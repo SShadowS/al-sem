@@ -163,7 +163,7 @@ pub fn build_report(
                 object: object_name(&sub_id.object, &obj_by_id),
                 procedure: rtn_by_id
                     .get(sub_id)
-                    .map_or_else(|| sub_id.name_lc.clone(), |r| r.name.clone()),
+                    .map_or_else(|| sub_id.name_lc.to_string(), |r| r.name.clone()),
                 conditions: conditions(&r.conditions),
                 cross_app,
             });
@@ -192,7 +192,7 @@ pub fn build_report(
                 object: object_name(&ce.edge.from.object, &obj_by_id),
                 event: rtn_by_id
                     .get(&ce.edge.from)
-                    .map_or_else(|| ce.edge.from.name_lc.clone(), |r| r.name.clone()),
+                    .map_or_else(|| ce.edge.from.name_lc.to_string(), |r| r.name.clone()),
                 kind: pub_kind.to_string(),
             },
             subscribers,
@@ -380,7 +380,7 @@ mod tests {
                 kind: ObjectKind::Codeunit,
                 key: ObjKey::Id(obj_id),
             },
-            name_lc: name.to_ascii_lowercase(),
+            name_lc: name.to_ascii_lowercase().into(),
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,

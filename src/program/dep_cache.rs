@@ -942,6 +942,43 @@ mod tests {
         );
     }
 
+    /// S10.2: every id text in the shared tier is one allocation per distinct
+    /// text (routine ids and `dep_meta` keys alike), and a second root's
+    /// event links name tier routines with that same allocation.
+    #[test]
+    fn equal_id_texts_are_one_allocation_across_the_tier_and_roots() {
+        use crate::program::str_pool::SharedStr;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        let tier = &a.dep_layer.dep_nodes;
+        let mut first: HashMap<String, SharedStr> = HashMap::new();
+        let mut same_text = 0;
+        let mut seen = |s: &SharedStr| {
+            let f = first.entry(s.to_string()).or_insert_with(|| s.clone());
+            if !std::ptr::eq(f, s) {
+                same_text += 1;
+                assert!(SharedStr::ptr_eq(f, s), "{s:?} is a second allocation");
+            }
+        };
+        for r in tier.routines.iter() {
+            seen(&r.id.name_lc);
+        }
+        for id in tier.dep_meta.keys() {
+            seen(&id.name_lc);
+        }
+        assert!(same_text > 0, "precondition: equal texts to share");
+        let mut links = 0;
+        for e in b.event_edges.iter() {
+            if let Some(r) = tier.routines.iter().find(|r| r.id == e.edge.from) {
+                assert!(SharedStr::ptr_eq(&r.id.name_lc, &e.edge.from.name_lc));
+                links += 1;
+            }
+        }
+        assert!(links > 0, "precondition: root B links a tier publisher");
+    }
+
     /// A source remembered at one stamp is never served, with or without its
     /// text, for another stamp of the same path.
     #[test]

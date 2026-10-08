@@ -20,6 +20,7 @@ pub mod profile;
 pub mod registry;
 pub mod resolve;
 pub mod sig_fp;
+pub mod str_pool;
 pub mod topology;
 
 pub use build::{
