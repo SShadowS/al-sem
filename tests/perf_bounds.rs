@@ -510,8 +510,8 @@ mod release_checks {
     /// measure the same entry point over the same assembly, differing ONLY in
     /// the corpus they are pointed at.
     struct L4Substrate {
-        resolved: al_sem::engine::l3::l3_workspace::L3Resolved,
-        calls: al_sem::engine::l3::call_resolver::ResolvedCalls,
+        resolved: al_sem::program::model::workspace::Model,
+        calls: al_sem::program::model::calls::ResolvedCalls,
         graph: al_sem::engine::l4::combined_graph::CombinedGraph,
         scc: al_sem::engine::l4::scc::SccResult,
         field_index: al_sem::engine::l4::summary_runner::FieldIndex,

@@ -40,7 +40,6 @@
 
 use std::sync::Arc;
 
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
 use crate::engine::l5::d1_dataflow::{
     BatchSolver, collect_reach_chain_b_bounded, collect_value_chain_b_bounded,
 };
@@ -49,6 +48,7 @@ use crate::engine::l5::d1_reach::{call_step_ev, loop_step_ev};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::d1::{hop_step, terminal_step};
 use crate::engine::l5::finding::EvidenceStep;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// A bounded representative witness for one `(terminal, ContextKey)` cohort:
 /// `[loop_step, call_step]` (ALWAYS exactly these two — Task C8 dropped the
@@ -152,9 +152,9 @@ impl StepInterner {
 /// [`WitnessSummary`] (`first_steps ++ last_steps ++ terminal_step`) reproduces
 /// that exact two-step path.
 pub(crate) fn direct_witness(
-    routine: &L3Routine,
-    loop_info: &crate::engine::l2::features::PLoop,
-    op: &L3RecordOperation,
+    routine: &ModelRoutine,
+    loop_info: &crate::program::body::features::PLoop,
+    op: &ModelRecordOperation,
     ctx: &DetectorContext,
 ) -> WitnessSummary {
     let loop_step = loop_step_ev(routine, loop_info);
@@ -251,8 +251,8 @@ pub(crate) fn representative_witness<'a>(
     fact_ix: usize,
     is_value_fact: bool,
     terminal_node: NodeIx,
-    terminal_owner: &'a L3Routine,
-    terminal_op: &'a L3RecordOperation,
+    terminal_owner: &'a ModelRoutine,
+    terminal_op: &'a ModelRecordOperation,
     m_last: usize,
 ) -> WitnessSummary {
     // The seed: O(1) via Task C2's origin array — never a chain walk to find it.
@@ -372,7 +372,6 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::engine::l3::l3_workspace::{L3Routine, L3Workspace};
     use crate::engine::l4::combined_graph::CombinedEdge;
     use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
     use crate::engine::l5::d1_dataflow::{GroupSpec, condense, run_batch_fixpoint_for_test};
@@ -383,9 +382,10 @@ mod tests {
         arg_binding, call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op,
         routine, summary, ts_known, ts_pd,
     };
+    use crate::program::model::workspace::{ModelEntities, ModelRoutine};
 
     type Fixture = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         HashMap<String, Vec<CombinedEdge>>,
         HashMap<String, FullRoutineSummary>,
     );
@@ -399,11 +399,11 @@ mod tests {
         )
     }
 
-    /// A throwaway `L3Workspace` wrapping a CLONE of `routines` — `build_d1_graph`
-    /// needs an owned `&L3Workspace` sharing `ctx`'s own lifetime; mirrors
+    /// A throwaway `ModelEntities` wrapping a CLONE of `routines` — `build_d1_graph`
+    /// needs an owned `&ModelEntities` sharing `ctx`'s own lifetime; mirrors
     /// `d1_dataflow::tests::ws`.
-    fn ws(routines: &[L3Routine]) -> L3Workspace {
-        L3Workspace {
+    fn ws(routines: &[ModelRoutine]) -> ModelEntities {
+        ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.to_vec(),

@@ -16,8 +16,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l2::features::PLoop;
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::capability_query::{EffectPresence, may_commit_derived};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -26,11 +24,13 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PLoop;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d34-commit-in-loop";
 
 pub fn detect_d34(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -162,12 +162,12 @@ fn emit_direct(
     routine_name: &str,
     object_id: &str,
     loop_info: &PLoop,
-    site: &crate::engine::l2::features::POperationSite,
+    site: &crate::program::body::features::POperationSite,
     fp_index: &crate::engine::l5::fingerprint::FingerprintIndex,
     findings: &mut Vec<Finding>,
 ) {
     // We need the enclosing_routine_id for anchors — build from scratch using routine_id.
-    // The anchor_of helper needs an L3Routine; since we have the ids, build the anchors manually.
+    // The anchor_of helper needs an ModelRoutine; since we have the ids, build the anchors manually.
     // Use the routine's id as the enclosing_routine_id for both anchors.
     let loop_anchor = SourceAnchor {
         source_unit_id: loop_info.source_anchor.source_unit_id.clone(),
@@ -278,7 +278,7 @@ fn emit_transitive(
     callee_name: &str,
     fp_index: &crate::engine::l5::fingerprint::FingerprintIndex,
     findings: &mut Vec<Finding>,
-    _resolved: &L3Resolved,
+    _resolved: &Model,
 ) {
     let loop_anchor = SourceAnchor {
         source_unit_id: loop_info.source_anchor.source_unit_id.clone(),

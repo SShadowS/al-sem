@@ -15,10 +15,10 @@
 //! Every case reads the cone of the CALLER (the callee's own physical set is
 //! unchanged: its param could be physical from another caller).
 
-use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::registry::substrate;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::workspace::Model;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000000c0e1";
 
@@ -197,7 +197,7 @@ page 50121 "CT Temp Source Page"
 }
 "#;
 
-fn resolve() -> L3Resolved {
+fn resolve() -> Model {
     let files = vec![
         ("src/Tables.al".to_string(), TABLES.to_string()),
         ("src/Writer.al".to_string(), WRITER.to_string()),
@@ -208,7 +208,7 @@ fn resolve() -> L3Resolved {
 }
 
 /// The unique routine id for `object_name` + `routine_name`.
-fn rid(resolved: &L3Resolved, object_name: &str, routine_name: &str) -> String {
+fn rid(resolved: &Model, object_name: &str, routine_name: &str) -> String {
     let ws = &resolved.workspace;
     let hits: Vec<&str> = ws
         .routines
@@ -231,7 +231,7 @@ fn rid(resolved: &L3Resolved, object_name: &str, routine_name: &str) -> String {
 }
 
 /// Table names (not ids) of `routine`'s physical write set.
-fn physical_writes(resolved: &L3Resolved, object_name: &str, routine_name: &str) -> Vec<String> {
+fn physical_writes(resolved: &Model, object_name: &str, routine_name: &str) -> Vec<String> {
     let ctx = build_detector_context(resolved, substrate::ALL);
     let id = rid(resolved, object_name, routine_name);
     let names = |set: Vec<String>| -> Vec<String> {

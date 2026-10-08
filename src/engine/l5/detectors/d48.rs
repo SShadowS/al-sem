@@ -26,7 +26,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l4::capability_cone::CapabilityExtra;
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, io_kind_bit};
@@ -41,6 +40,7 @@ use crate::engine::l5::path_walker::{
     PathCtx, Terminal, WalkBounds, WalkOpts, WalkPolicy, WalkStop, walk_evidence,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d48-io-in-loop";
 
@@ -82,11 +82,14 @@ struct IoTerminal {
 /// `capability_facts_direct` only (`provenance == "direct"`), filtered to http/file
 /// with a witness callsite. Anchored via the witness callsite (loop_stack →
 /// localLoopDepth).
-fn direct_io_terminals_for(routine: &L3Routine, summary: &FullRoutineSummary) -> Vec<IoTerminal> {
+fn direct_io_terminals_for(
+    routine: &ModelRoutine,
+    summary: &FullRoutineSummary,
+) -> Vec<IoTerminal> {
     if summary.capability_facts_direct.is_empty() {
         return Vec::new();
     }
-    let cs_by_id: HashMap<&str, &crate::engine::l2::features::PCallSite> = routine
+    let cs_by_id: HashMap<&str, &crate::program::body::features::PCallSite> = routine
         .call_sites
         .iter()
         .map(|c| (c.id.as_str(), c))
@@ -151,12 +154,12 @@ fn io_method_note(io_kind: &str, method_name: Option<&str>) -> String {
 /// (NOT inherited). `terminals_at` returns one PW-0 `Terminal` per IO fact, with the
 /// witness callsite id stashed in `op_id`.
 struct D48Policy<'a> {
-    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
+    routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
     /// ⟨C1 Task 2⟩ The derived cone substrate `expand`'s IO pruning gate reads.
     cone_derived: &'a ConeDerivedStore,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
     io_terminals_by_routine: &'a HashMap<String, Vec<IoTerminal>>,
-    call_site_by_id: &'a HashMap<&'a str, &'a crate::engine::l2::features::PCallSite>,
+    call_site_by_id: &'a HashMap<&'a str, &'a crate::program::body::features::PCallSite>,
 }
 
 impl<'a> WalkPolicy for D48Policy<'a> {
@@ -277,7 +280,7 @@ impl<'a> WalkPolicy for D48Policy<'a> {
 }
 
 pub fn detect_d48(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -319,7 +322,7 @@ pub fn detect_d48(
         }
         candidates_considered += 1;
 
-        let loop_by_id: HashMap<&str, &crate::engine::l2::features::PLoop> =
+        let loop_by_id: HashMap<&str, &crate::program::body::features::PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
 
         // (a) Direct in-loop IO ops within this routine.

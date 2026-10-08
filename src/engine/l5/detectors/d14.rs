@@ -21,11 +21,11 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, SourceAnchor};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d14-dead-routine";
 
@@ -94,7 +94,7 @@ enum D14Class {
 }
 
 fn classify_routine(
-    r: &crate::engine::l3::l3_workspace::L3Routine,
+    r: &crate::program::model::workspace::ModelRoutine,
     reachable: &HashSet<String>,
     ctx: &DetectorContext,
 ) -> D14Class {
@@ -139,7 +139,7 @@ fn classify_routine(
 /// surface), is `local`/app-scoped-`internal`, and sits on an object whose call
 /// graph the resolver fully models.
 pub(crate) fn provably_dead_routine_ids(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> HashSet<String> {
     let reachable = compute_reachable_set(ctx);
@@ -153,7 +153,7 @@ pub(crate) fn provably_dead_routine_ids(
 }
 
 pub fn detect_d14(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -267,7 +267,7 @@ pub fn detect_d14(
 
 /// Build a `SourceAnchor` from a `PAnchor` with the routine's own id as the
 /// enclosing routine. Hash fields default to `None`.
-fn anchor_from(a: &crate::engine::l2::features::PAnchor, routine_id: &str) -> SourceAnchor {
+fn anchor_from(a: &crate::program::body::features::PAnchor, routine_id: &str) -> SourceAnchor {
     SourceAnchor {
         source_unit_id: a.source_unit_id.clone(),
         start_line: a.start_line,

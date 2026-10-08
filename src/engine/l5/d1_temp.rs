@@ -64,9 +64,9 @@
 
 use smallvec::SmallVec;
 
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// Concrete resolved temp-ness of one callee parameter, forward-composed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -125,7 +125,7 @@ pub(crate) fn root_state(routine_id: &str, cw: &ClosedWorldTempParams) -> TempVe
 /// proven. See module docs for the exact check order this reproduces.
 pub(crate) fn cross_hop(
     caller_state: &TempVec,
-    caller: &L3Routine,
+    caller: &ModelRoutine,
     callsite_id: &str,
     callee_id: &str,
     binding_ok: bool,
@@ -186,7 +186,7 @@ pub(crate) fn cross_hop(
 /// before any hop is popped — see module docs); only a non-proven
 /// `ParameterDependent(i)` falls back to `frame_state[i]`.
 pub(crate) fn resolve_terminal(
-    op: &L3RecordOperation,
+    op: &ModelRecordOperation,
     frame_state: &TempVec,
     owner_id: &str,
     cw: &ClosedWorldTempParams,
@@ -213,12 +213,12 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::*;
-    use crate::engine::l2::features::{
-        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
-    };
-    use crate::engine::l3::l3_workspace::RoutineVariables;
     use crate::engine::l5::finding::{EvidenceStep, SourceAnchor};
     use crate::engine::l5::path_temp_resolve::resolve_temp_along_path_closed_world;
+    use crate::program::body::features::{
+        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
+    };
+    use crate::program::model::workspace::RoutineVariables;
 
     // --- fixture builders (mirrors tests/temp_state/temp_state_path.rs) -----
 
@@ -248,9 +248,9 @@ mod tests {
         }
     }
 
-    /// A bare `L3Routine` with just an id; callers push call_sites/record_operations.
-    fn routine(id: &str) -> L3Routine {
-        L3Routine {
+    /// A bare `ModelRoutine` with just an id; callers push call_sites/record_operations.
+    fn routine(id: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: "app/Codeunit/1".to_string(),
@@ -347,8 +347,8 @@ mod tests {
         cs
     }
 
-    fn record_op(id: &str, temp_state: Option<PTempState>) -> L3RecordOperation {
-        L3RecordOperation {
+    fn record_op(id: &str, temp_state: Option<PTempState>) -> ModelRecordOperation {
+        ModelRecordOperation {
             id: id.to_string(),
             op: "Modify".to_string(),
             record_variable_name: "Rec".to_string(),
@@ -455,7 +455,7 @@ mod tests {
     /// Build `from -> [edges]` adjacency + the set of root ids (ids that never
     /// appear as an edge target) for [`enumerate_paths`] to fan out from.
     fn adjacency_and_roots<'a>(
-        routines: &'a [L3Routine],
+        routines: &'a [ModelRoutine],
         edges: &'a [FixtureEdge],
     ) -> (HashMap<&'a str, Vec<&'a FixtureEdge>>, Vec<&'a str>) {
         let mut adj: HashMap<&str, Vec<&FixtureEdge>> = HashMap::new();
@@ -478,13 +478,13 @@ mod tests {
     /// Panics if the fixture yields zero paths (a silently-empty fixture would
     /// otherwise pass vacuously).
     fn assert_all_paths_agree(
-        routines: &[L3Routine],
+        routines: &[ModelRoutine],
         edges: &[FixtureEdge],
         terminal_owner: &str,
         op_id: &str,
         cw: &ClosedWorldTempParams,
     ) {
-        let routine_by_id: HashMap<&str, &L3Routine> =
+        let routine_by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
         let edge_kind_by_callsite: HashMap<&str, &str> =
             edges.iter().map(|e| (e.callsite_id, e.kind)).collect();

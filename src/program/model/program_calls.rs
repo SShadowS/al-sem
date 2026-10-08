@@ -29,7 +29,7 @@
 //! Per program workspace call-site edge that no L3 call site took:
 //! - a record op (`EdgeKind::ImplicitTrigger`) whose operation can fire a
 //!   table trigger (insert/modify/delete/validate/rename):
-//!   `implicit_trigger_matched` when an `L3RecordOperation` sits at the same
+//!   `implicit_trigger_matched` when an `ModelRecordOperation` sits at the same
 //!   span, else `implicit_trigger_unmatched`;
 //! - any other record op, or a `Commit`: `operation_site` (no L3 call
 //!   analogue; L3 keeps these as operation sites, code map A6);
@@ -90,7 +90,7 @@
 //!   to the L3 fallback.
 //! - **Ambiguous overload**: to-less `Ambiguous`, `candidates` = workspace L3
 //!   ids. **Dynamic**: to-less `Dynamic`. **Other unknowns**: [`map_unknown`].
-//! - **Implicit triggers**, keyed by `L3RecordOperation.id`: one edge per
+//! - **Implicit triggers**, keyed by `ModelRecordOperation.id`: one edge per
 //!   workspace trigger route. The program's fan-out lists every trigger of
 //!   the name on the table and its extensions, without the site rules, so
 //!   the adapter applies them (`RunTrigger = false` fires nothing; a
@@ -114,11 +114,11 @@ use serde::Serialize;
 
 use super::calls::{
     BindingState, CallEdge, DispatchMeta, ExternalTypeRef, ResolvedCalls,
-    UnknownReason as L3Reason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
+    UnknownReason as ModelReason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
     object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
 use super::taxonomy::{DispatchKind, Resolution};
-use super::workspace::{L3RecordOperation, L3Routine, L3Workspace};
+use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
 use crate::program::abi_ingest::object_kind_from_abi_type;
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::graph::ProgramGraph;
@@ -151,7 +151,7 @@ pub struct UnmatchedSite {
 /// Matched and unmatched site counts by reason (see the module doc).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SiteCensus {
-    /// L3 call sites (`L3Routine::call_sites`) over the workspace.
+    /// L3 call sites (`ModelRoutine::call_sites`) over the workspace.
     pub l3_call_sites: usize,
     /// Program workspace call-site edges (`ObligationId::CallSite`, primary app).
     pub program_sites: usize,
@@ -172,7 +172,7 @@ pub struct SiteCensus {
     /// L3 call sites sharing a span with an earlier L3 call site. Each is still
     /// classified (so two can count `matched` against one program edge).
     pub duplicate_l3_span: usize,
-    /// L3 record operations (`L3Routine::record_operations`).
+    /// L3 record operations (`ModelRoutine::record_operations`).
     pub l3_record_operations: usize,
     /// L3 operation sites other than `error-call` (record ops, locks, commits).
     /// `error-call` sites are also call sites and are counted there.
@@ -355,7 +355,7 @@ fn model_unit(graph: &ProgramGraph, primary: AppRef, app: AppRef, path: &str) ->
 
 /// The apps whose routines the model holds: the primary app, and in a cross-app
 /// model (S7.2) every dependency.
-fn model_apps(graph: &ProgramGraph, primary: AppRef, ws: &L3Workspace) -> HashSet<AppRef> {
+fn model_apps(graph: &ProgramGraph, primary: AppRef, ws: &ModelEntities) -> HashSet<AppRef> {
     let guids: HashSet<String> = ws
         .routines
         .iter()
@@ -376,7 +376,7 @@ fn model_apps(graph: &ProgramGraph, primary: AppRef, ws: &L3Workspace) -> HashSe
 /// `resolve_full_program_with(ctx)`; `ws` is the L3 model of the same
 /// workspace.
 #[must_use]
-pub fn site_census(report: &ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -> SiteCensus {
+pub fn site_census(report: &ProgramReport, ctx: &ProgramContext, ws: &ModelEntities) -> SiteCensus {
     join(report, ctx, ws).census
 }
 
@@ -391,7 +391,7 @@ struct Join<'a> {
     ops: HashMap<(usize, usize), &'a ClassifiedEdge>,
 }
 
-fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -> Join<'a> {
+fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &ModelEntities) -> Join<'a> {
     let mut c = SiteCensus::default();
     let mut matched_calls: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
     let mut matched_ops: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
@@ -615,7 +615,7 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -
 pub fn resolved_calls_from_program(
     report: &ProgramReport,
     ctx: &ProgramContext,
-    ws: &L3Workspace,
+    ws: &ModelEntities,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
     adapter(report, ctx, ws, upgrade_dependency_bindings, None)
@@ -631,7 +631,7 @@ pub fn attach_program_calls(
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
-) -> crate::program::model::workspace::L3Resolved {
+) -> crate::program::model::workspace::Model {
     attach_program_calls_with(rows, ctx, report, None)
 }
 
@@ -642,7 +642,7 @@ fn attach_program_calls_with(
     ctx: ProgramContext,
     report: ProgramReport,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) -> crate::program::model::workspace::L3Resolved {
+) -> crate::program::model::workspace::Model {
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
@@ -661,7 +661,7 @@ fn attach_program_calls_with(
         let _s = pt::span("b3", "b3.ctx_drop");
         drop(ctx);
     }
-    let mut resolved = crate::program::model::workspace::L3Resolved {
+    let mut resolved = crate::program::model::workspace::Model {
         workspace: rows.workspace,
         root_classifications: rows.root_classifications,
         primary_app: rows.primary_app,
@@ -683,7 +683,7 @@ fn attach_program_calls_with(
 #[must_use]
 pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
-) -> Option<crate::program::model::workspace::L3Resolved> {
+) -> Option<crate::program::model::workspace::Model> {
     assemble_and_resolve_workspace_program(
         workspace,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
@@ -700,7 +700,7 @@ pub fn assemble_and_resolve_workspace_program(
     workspace: &std::path::Path,
     model_instance_id: &str,
     skip_roots_config: bool,
-) -> Option<crate::program::model::workspace::L3Resolved> {
+) -> Option<crate::program::model::workspace::Model> {
     let (ctx, report, _) =
         crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
@@ -728,7 +728,7 @@ pub fn assemble_and_resolve_inline_program(
     files: &[(String, String)],
     app_guid: &str,
     model_instance_id: &str,
-) -> crate::program::model::workspace::L3Resolved {
+) -> crate::program::model::workspace::Model {
     let dir = tempfile::tempdir().expect("temp workspace");
     let app = serde_json::json!({
         "id": app_guid,
@@ -764,7 +764,7 @@ pub fn assemble_and_resolve_inline_program(
 pub fn assemble_and_resolve_inline_program_default(
     files: &[(String, String)],
     app_guid: &str,
-) -> crate::program::model::workspace::L3Resolved {
+) -> crate::program::model::workspace::Model {
     assemble_and_resolve_inline_program(
         files,
         app_guid,
@@ -775,7 +775,7 @@ pub fn assemble_and_resolve_inline_program_default(
 /// The CROSS-APP detector model and what the cross-app base reads besides it.
 pub struct CrossAppProgram {
     /// The model, with calls and events attached for every body in it.
-    pub resolved: crate::program::model::workspace::L3Resolved,
+    pub resolved: crate::program::model::workspace::Model,
     /// The workspace's declared dependencies: app.json's, plus the implicit
     /// Microsoft tier the snapshot adds (d17's MinVersion side).
     pub declared_dependencies: Vec<crate::program::model::workspace::DeclaredDependencyDecl>,
@@ -905,9 +905,9 @@ pub fn assemble_and_resolve_cross_app_program(
 /// to-less `Unknown(NoProgramSite)` edge, bindings in their initial state (a
 /// record argument stays `"unresolved-callee"`). Engine-switch S3.1 — this used to
 /// be the legacy resolver's answer.
-fn no_program_edge(r: &L3Routine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
+fn no_program_edge(r: &ModelRoutine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
     let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
-    e.resolution = Resolution::Unknown(L3Reason::NoProgramSite);
+    e.resolution = Resolution::Unknown(ModelReason::NoProgramSite);
     (vec![e], initial_binding_state(cs).bindings)
 }
 
@@ -916,7 +916,7 @@ fn no_program_edge(r: &L3Routine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<Upgrade
 fn adapter(
     report: &ProgramReport,
     ctx: &ProgramContext,
-    ws: &L3Workspace,
+    ws: &ModelEntities,
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> (ResolvedCalls, SiteCensus) {
@@ -924,7 +924,7 @@ fn adapter(
     let mut c = j.census;
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
-    let mut by_decl: HashMap<(&str, u32, u32), &L3Routine> = HashMap::new();
+    let mut by_decl: HashMap<(&str, u32, u32), &ModelRoutine> = HashMap::new();
     for r in &ws.routines {
         let a = &r.source_anchor;
         let unit = a
@@ -1024,7 +1024,7 @@ fn adapter(
 /// Where a route's target lives relative to the model (engine-switch S7.3).
 enum Target<'a> {
     /// A routine the model holds: an edge to it.
-    Model(&'a L3Routine),
+    Model(&'a ModelRoutine),
     /// A primary-app routine the model lacks: the site fails (S3.1).
     MissingFromModel,
     /// Anything else: a dependency target, a builtin, an unresolved route.
@@ -1050,12 +1050,12 @@ struct Converter<'a> {
     model_apps: HashSet<AppRef>,
     /// The cross-app model's symbol-only rows by program id (S7.3); empty otherwise.
     abi_rows: &'a crate::program::model::workspace::AbiRowIds,
-    routine_by_id: HashMap<&'a str, &'a L3Routine>,
+    routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
     surface: &'a DeclSurface,
     /// L3 routines by declaration anchor `(unit, line, column)`.
-    by_decl: HashMap<(&'a str, u32, u32), &'a L3Routine>,
+    by_decl: HashMap<(&'a str, u32, u32), &'a ModelRoutine>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
     /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
     /// receiver object ours?".
@@ -1072,7 +1072,7 @@ struct Converter<'a> {
 impl<'a> Converter<'a> {
     /// The model routine for a program source routine, by declaration anchor: a
     /// primary-app routine, or a dependency routine of a cross-app model (S7.3).
-    fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a L3Routine> {
+    fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a ModelRoutine> {
         if !self.model_apps.contains(&id.object.app) {
             return None;
         }
@@ -1153,7 +1153,7 @@ impl<'a> Converter<'a> {
     /// workspace callee has no L3 routine: the caller falls back to L3.
     fn call(
         &self,
-        r: &L3Routine,
+        r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
         c: &mut SiteCensus,
@@ -1283,15 +1283,15 @@ impl<'a> Converter<'a> {
             DispatchShape::DynamicOpen => {
                 e.dispatch_kind = DispatchKind::Dynamic;
                 e.resolution = Resolution::Unknown(if is_run {
-                    L3Reason::DynamicObjectRunTarget
+                    ModelReason::DynamicObjectRunTarget
                 } else {
-                    L3Reason::DynamicReceiver
+                    ModelReason::DynamicReceiver
                 });
             }
             DispatchShape::Exact | DispatchShape::Multicast => match edge.routes.first() {
                 None => {
                     c.adapter_empty_route_sites += 1;
-                    e.resolution = Resolution::Unknown(L3Reason::CalleeUnknown);
+                    e.resolution = Resolution::Unknown(ModelReason::CalleeUnknown);
                 }
                 Some(route) => {
                     self.route_into(&mut e, route, cs, ce, external, is_run, &mut state, c)?
@@ -1590,14 +1590,14 @@ impl<'a> Converter<'a> {
     /// ambiguous.
     fn interface(
         &self,
-        r: &L3Routine,
+        r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
         state: &mut BindingState,
         c: &mut SiteCensus,
     ) -> Option<Vec<CallEdge>> {
         mark_bindings_ambiguous(state);
-        let mut callees: Vec<&L3Routine> = Vec::new();
+        let mut callees: Vec<&ModelRoutine> = Vec::new();
         let mut dependency: Vec<ObjectNodeId> = Vec::new();
         for route in &ce.edge.routes {
             match (self.target(route), &route.target) {
@@ -1687,7 +1687,7 @@ impl<'a> Converter<'a> {
         };
         if callees.is_empty() && dependency.is_empty() {
             let mut e = base();
-            e.resolution = Resolution::Unknown(L3Reason::InterfaceNoImpl);
+            e.resolution = Resolution::Unknown(ModelReason::InterfaceNoImpl);
             e.dispatch_meta = Some(meta);
             return Some(vec![e]);
         }
@@ -1719,8 +1719,8 @@ impl<'a> Converter<'a> {
     /// (`implicit_edges::trigger_mapping`).
     fn triggers(
         &self,
-        r: &L3Routine,
-        op: &L3RecordOperation,
+        r: &ModelRoutine,
+        op: &ModelRecordOperation,
         ce: &ClassifiedEdge,
         c: &mut SiteCensus,
     ) -> Vec<CallEdge> {
@@ -1832,19 +1832,19 @@ fn map_unknown(reason: PReason) -> Resolution {
         | P::ProtectedNotVisible
         | P::LocalNotVisible
         | P::InternalNotVisible => Resolution::MemberNotFound,
-        P::CompoundReceiver => Resolution::Unknown(L3Reason::CompoundReceiver),
+        P::CompoundReceiver => Resolution::Unknown(ModelReason::CompoundReceiver),
         P::UntrackedReceiver | P::ReceiverOutOfClosure => {
-            Resolution::Unknown(L3Reason::UntrackedReceiver)
+            Resolution::Unknown(ModelReason::UntrackedReceiver)
         }
-        P::CatalogMiss => Resolution::Unknown(L3Reason::FrameworkMethodNotInCatalog),
+        P::CatalogMiss => Resolution::Unknown(ModelReason::FrameworkMethodNotInCatalog),
         P::BuiltinPrecedenceCollision
         | P::WithScopeGuard
         | P::CodeunitTableNoExcluded
-        | P::ReportRecExcluded => Resolution::Unknown(L3Reason::BareUnresolved),
+        | P::ReportRecExcluded => Resolution::Unknown(ModelReason::BareUnresolved),
         P::UnclassifiedCallee
         | P::IndexIntegrationGap
         | P::ObjectNotInGraph
-        | P::AbiCollapsedOverload => Resolution::Unknown(L3Reason::CalleeUnknown),
+        | P::AbiCollapsedOverload => Resolution::Unknown(ModelReason::CalleeUnknown),
     }
 }
 
@@ -1898,7 +1898,7 @@ mod tests {
     /// Everything a consumer reads from a model, as `Debug` text, minus
     /// `primary_app` (its name/publisher/version come from `app.json`, which the
     /// inline builder writes itself; the guid is compared).
-    fn model_text(m: &crate::program::model::workspace::L3Resolved) -> Vec<String> {
+    fn model_text(m: &crate::program::model::workspace::Model) -> Vec<String> {
         let mut out = vec![
             format!("{:?}", m.primary_app.as_ref().map(|a| &a.app_guid)),
             format!("{:?}", m.root_classifications),
@@ -1993,7 +1993,7 @@ mod tests {
 
     /// [`census`], with `mutate` applied to the L3 model before the census:
     /// the way a test states a mismatch precondition by assignment.
-    fn census_with(files: &[(&str, &[u8])], mutate: impl FnOnce(&mut L3Workspace)) -> SiteCensus {
+    fn census_with(files: &[(&str, &[u8])], mutate: impl FnOnce(&mut ModelEntities)) -> SiteCensus {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("app.json"), APP_JSON).unwrap();
         for (rel, bytes) in files {
@@ -2009,9 +2009,9 @@ mod tests {
     const TWO_CALLS: &str = "codeunit 50100 \"M\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Bar()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n        Bar();\n    end;\n}\n";
 
     fn routine<'a>(
-        ws: &'a mut L3Workspace,
+        ws: &'a mut ModelEntities,
         name: &str,
-    ) -> &'a mut super::super::workspace::L3Routine {
+    ) -> &'a mut super::super::workspace::ModelRoutine {
         ws.routines.iter_mut().find(|r| r.name == name).unwrap()
     }
 
@@ -2412,7 +2412,7 @@ mod no_fallback_tests {
         assert_eq!(site[0].to, None);
         assert_eq!(
             site[0].resolution,
-            Resolution::Unknown(L3Reason::NoProgramSite)
+            Resolution::Unknown(ModelReason::NoProgramSite)
         );
         assert_eq!(census.adapter_l3_fallback_sites, 1);
     }

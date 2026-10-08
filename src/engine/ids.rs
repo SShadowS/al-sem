@@ -51,7 +51,7 @@ pub struct CanonicalRoutineKey {
     ///
     /// 1. **The string must be the UNESCAPED logical identifier** (inner `""`
     ///    collapsed to `"`), which is exactly what
-    ///    [`crate::engine::l2::ir_walk::ir_enclosing_member`] produces — the
+    ///    [`crate::program::body::ir_walk::ir_enclosing_member`] produces — the
     ///    single source every call site uses. The raw IR value is only
     ///    outer-quote-stripped, so feeding it here directly would mint a
     ///    different id for the same routine from a different code path.
@@ -303,7 +303,7 @@ pub fn encode_routine_id(key: &CanonicalRoutineKey, model_instance_id: &str) -> 
 /// construction.
 ///
 /// The member string must be the UNESCAPED logical identifier — the ONE canonical
-/// normalization, [`crate::engine::l2::ir_walk::ir_enclosing_member`], exactly as
+/// normalization, [`crate::program::body::ir_walk::ir_enclosing_member`], exactly as
 /// for [`CanonicalRoutineKey::enclosing_member`]. Lowercased here (AL identifiers
 /// are case-insensitive), never unescaped here (normalizing twice is not
 /// idempotent).

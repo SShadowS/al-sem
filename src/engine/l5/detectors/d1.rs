@@ -46,9 +46,9 @@ use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::engine::l3::l3_workspace::L3Table;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved, L3Routine, L3Workspace};
 use crate::engine::l4::combined_graph::CombinedEdge;
+use crate::program::model::workspace::ModelTable;
+use crate::program::model::workspace::{Model, ModelEntities, ModelRecordOperation, ModelRoutine};
 // Only the `search_loops`/`WalkResult` shadow oracle still handles OWNED
 // uncertainties; the production cohort path carries `UncertaintyId`s and resolves
 // them through the run-level `UncertaintyTable`.
@@ -141,7 +141,7 @@ const CURSOR_OPENER_OPS: [&str; 4] = ["FindSet", "FindFirst", "FindLast", "Find"
 /// untracked ops, so the absence maps the same way). Test-only: the production
 /// path resolves temp-ness via `d1_temp`'s forward vector, not this.
 #[cfg(test)]
-fn op_temp_state_kind(op: &L3RecordOperation) -> TempStateKind {
+fn op_temp_state_kind(op: &ModelRecordOperation) -> TempStateKind {
     match &op.temp_state {
         Some(ts) => TempStateKind::from_p_temp_state(ts),
         None => TempStateKind::Unknown,
@@ -165,8 +165,8 @@ fn op_temp_state_kind(op: &L3RecordOperation) -> TempStateKind {
 /// SOUNDNESS: this only ever PREVENTS a downgrade (keeps firing) when uncertain; it
 /// never suppresses a finding that would otherwise fire.
 pub(crate) fn flowfield_gate_blocks_downgrade(
-    op: &L3RecordOperation,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> bool {
     // Resolve the op's table; an unresolved table is conservative → block.
     let Some(table_id) = op.table_id.as_deref() else {
@@ -276,11 +276,11 @@ pub(crate) struct FindingRec {
 }
 
 /// `describeTable(op, routine, tableById)`. Builds the `DescribeOp` view from an
-/// `L3RecordOperation`.
+/// `ModelRecordOperation`.
 fn describe_op_table(
-    op: &L3RecordOperation,
-    routine: Option<&L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    routine: Option<&ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> String {
     let describe = DescribeOp {
         table_id: op.table_id.as_deref(),
@@ -291,9 +291,9 @@ fn describe_op_table(
 
 /// `tableNote(op, routine, tableById)` → `"<Op> on <table>"`.
 fn table_note(
-    op: &L3RecordOperation,
-    routine: Option<&L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    routine: Option<&ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> String {
     format!(
         "{} on {}",
@@ -306,9 +306,9 @@ fn table_note(
 /// `(type not loaded)` suffix) ends in `Setup` (case-insensitive) AND is not a
 /// `var ` / `unknown table` / empty placeholder.
 pub(crate) fn is_setup_singleton_get(
-    op: &L3RecordOperation,
-    routine: Option<&L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    op: &ModelRecordOperation,
+    routine: Option<&ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
 ) -> bool {
     if op.op != "Get" {
         return false;
@@ -377,7 +377,7 @@ fn representative_loop_id(loop_stack: &[String]) -> Option<&str> {
 /// stepping), so this is BEHAVIOUR-PRESERVING for non-PD ops; only PD-terminal
 /// (by-var param) ops gain per-path precision.
 pub(crate) fn severity_for(
-    op: &L3RecordOperation,
+    op: &ModelRecordOperation,
     verdict: TempVerdict,
     effective_loop_depth: i64,
     is_setup_singleton: bool,
@@ -445,20 +445,20 @@ fn uncertainty_lites_of_ids(
 /// `LoopTerminalAgg`s in [`assemble_findings`], not from a single `WalkResult`.
 ///
 /// `terminal_routine_id` is al-sem's `terminalOp.routineId` (a separate field on
-/// `RecordOperation`; the Rust `L3RecordOperation` carries no routine id, so the
+/// `RecordOperation`; the Rust `ModelRecordOperation` carries no routine id, so the
 /// caller threads the owning routine's internal id). `terminal_op_anchor` is the
 /// op's INTERNAL `SourceAnchor` (built by the caller via `anchor_of`).
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn build_finding(
-    loop_routine: &L3Routine,
+    loop_routine: &ModelRoutine,
     representative_loop: &str,
     result: &WalkResult,
-    terminal_op: &L3RecordOperation,
+    terminal_op: &ModelRecordOperation,
     terminal_routine_id: &str,
     terminal_op_anchor: SourceAnchor,
-    routine_by_id: &HashMap<&str, &L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
     role_by_routine: &HashMap<&str, &str>,
     edge_kind_by_callsite: &HashMap<&str, &str>,
     closed_world_temp_params: &ClosedWorldTempParams,
@@ -645,10 +645,10 @@ fn build_finding(
 /// record-op id `{rid}/op{n}`, which can never equal a call site's `{rid}/cs{n}`.)
 pub(crate) fn edge_target_matches_callsite_callee(
     edge: &CombinedEdge,
-    cs: &crate::engine::l2::features::PCallSite,
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    cs: &crate::program::body::features::PCallSite,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> bool {
-    use crate::engine::l2::features::PCallee;
+    use crate::program::body::features::PCallee;
     let callee_name = match &cs.callee {
         PCallee::Bare { name } => name,
         PCallee::Member { method, .. } => method,
@@ -659,7 +659,7 @@ pub(crate) fn edge_target_matches_callsite_callee(
     let Some(target) = routine_by_id.get(edge.to.as_str()) else {
         return true; // out-of-source target — accept (pre-G-18 behavior)
     };
-    crate::engine::l2::node_util::strip_quotes(callee_name).to_lowercase()
+    crate::program::body::node_util::strip_quotes(callee_name).to_lowercase()
         == target.name.to_lowercase()
 }
 
@@ -668,11 +668,11 @@ pub(crate) fn edge_target_matches_callsite_callee(
 /// the `#[cfg(test)]` shadow oracle.
 #[cfg(test)]
 struct D1Policy<'a> {
-    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
-    table_by_id: &'a HashMap<&'a str, &'a L3Table>,
+    routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    table_by_id: &'a HashMap<&'a str, &'a ModelTable>,
     summaries: &'a HashMap<String, crate::engine::l5::full_summary::FullRoutineSummary>,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
-    call_site_by_id: &'a HashMap<&'a str, &'a crate::engine::l2::features::PCallSite>,
+    call_site_by_id: &'a HashMap<&'a str, &'a crate::program::body::features::PCallSite>,
     /// ⟨C1 Task 2⟩ The derived cone substrate the `touches_db` probe reads. Held
     /// as a borrow off the same `DetectorContext` that owns `summaries`, so the
     /// two can never describe different cone walks.
@@ -731,7 +731,7 @@ impl<'a> D1Policy<'a> {
 /// `D1Policy`. `build_hop_step` now delegates here — behaviour-preserving (the
 /// full suite proves the old walk path is byte-identical).
 pub(crate) fn hop_step(
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
     from: &str,
     to: &str,
     kind: &str,
@@ -785,8 +785,8 @@ pub(crate) fn hop_step(
 /// compact [`crate::engine::l5::d1_graph::D1Terminal`]. `build_terminal_step` now
 /// delegates here — behaviour-preserving.
 pub(crate) fn terminal_step(
-    routine_by_id: &HashMap<&str, &L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
     terminal_routine_id: &str,
     op_id: Option<&str>,
 ) -> EvidenceStep {
@@ -951,7 +951,7 @@ fn apply_seed_transform(
 /// is `d1.reach`); the `walk_memo` canonical-walk optimization is kept (the
 /// `memo_tests` prove it byte-identical).
 #[cfg(test)]
-pub(crate) fn detect_d1_premerge(resolved: &L3Resolved, ctx: &DetectorContext) -> Vec<FindingRec> {
+pub(crate) fn detect_d1_premerge(resolved: &Model, ctx: &DetectorContext) -> Vec<FindingRec> {
     let ws = &resolved.workspace;
 
     // Source-only role map (every routine primary) — used by pick_actionable_anchor.
@@ -997,7 +997,7 @@ pub(crate) fn detect_d1_premerge(resolved: &L3Resolved, ctx: &DetectorContext) -
             continue;
         }
 
-        let loop_by_id: HashMap<&str, &crate::engine::l2::features::PLoop> =
+        let loop_by_id: HashMap<&str, &crate::program::body::features::PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
 
         // Record-vars that had a cursor opened before any loop.
@@ -1262,7 +1262,7 @@ struct DirectOpStats {
 /// ladder EXACTLY so the reported stats are byte-identical (pinned by
 /// `tests/cli/d1_downgraded_to_info_oracle.rs` + the cli-a stats goldens).
 fn enumerate_direct_ops<'a>(
-    ws: &'a L3Workspace,
+    ws: &'a ModelEntities,
     ctx: &DetectorContext,
 ) -> (Vec<DirectOp<'a>>, DirectOpStats) {
     let mut out: Vec<DirectOp<'a>> = Vec::new();
@@ -1279,7 +1279,7 @@ fn enumerate_direct_ops<'a>(
         }
         s.candidates_considered += 1;
 
-        let loop_by_id: HashMap<&str, &crate::engine::l2::features::PLoop> =
+        let loop_by_id: HashMap<&str, &crate::program::body::features::PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
 
         // Record-vars with a cursor opened before any loop (the in-loop `Next`
@@ -1986,10 +1986,7 @@ fn assemble_cohort_findings(
 /// module doc): enumerate direct ops + stats, build the compact filtered graph +
 /// seeds, run the reachability search emitting per-terminal bitmap cohorts, and
 /// assemble one compressed terminal-centric finding per `(terminal routine, op)`.
-pub fn detect_d1(
-    resolved: &L3Resolved,
-    ctx: &DetectorContext,
-) -> Result<DetectorOutput, DetectorError> {
+pub fn detect_d1(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;
     let ws = &resolved.workspace;
 
@@ -2170,13 +2167,13 @@ fn insert_temp_note(root_cause: &str, note: &str) -> String {
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn build_finding_internal(
-    loop_routine: &L3Routine,
+    loop_routine: &ModelRoutine,
     representative_loop: &str,
     result: &WalkResult,
-    terminal_op: &L3RecordOperation,
-    terminal_routine: &L3Routine,
-    routine_by_id: &HashMap<&str, &L3Routine>,
-    table_by_id: &HashMap<&str, &L3Table>,
+    terminal_op: &ModelRecordOperation,
+    terminal_routine: &ModelRoutine,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
+    table_by_id: &HashMap<&str, &ModelTable>,
     role_by_routine: &HashMap<&str, &str>,
     edge_kind_by_callsite: &HashMap<&str, &str>,
     closed_world_temp_params: &ClosedWorldTempParams,
@@ -2258,10 +2255,10 @@ mod memo_tests {
 
         // Otherwise-empty indexes — the memo path reads only `summaries` and the
         // derived cone folded from them.
-        let routine_by_id: HashMap<&str, &L3Routine> = HashMap::new();
-        let table_by_id: HashMap<&str, &L3Table> = HashMap::new();
+        let routine_by_id: HashMap<&str, &ModelRoutine> = HashMap::new();
+        let table_by_id: HashMap<&str, &ModelTable> = HashMap::new();
         let edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
-        let call_site_by_id: HashMap<&str, &crate::engine::l2::features::PCallSite> =
+        let call_site_by_id: HashMap<&str, &crate::program::body::features::PCallSite> =
             HashMap::new();
         let cone_derived = crate::engine::l5::test_support::cone_store_of(&summaries);
 
@@ -2344,7 +2341,7 @@ mod memo_tests {
     fn memoized_walk_matches_fresh_walk_for_two_callsites() {
         // D's in-loop `Modify` op (db-write; not a terminator-Next; table_id None
         // and no matching record var ⇒ never a virtual-system-table op).
-        let modify_op = L3RecordOperation {
+        let modify_op = ModelRecordOperation {
             id: "D/op0".to_string(),
             op: "Modify".to_string(),
             record_variable_name: "Rec".to_string(),
@@ -2352,7 +2349,7 @@ mod memo_tests {
             table_id: None,
             temp_state: None,
             field_arguments: None,
-            source_anchor: crate::engine::l2::features::PAnchor {
+            source_anchor: crate::program::body::features::PAnchor {
                 source_unit_id: "ws:test".to_string(),
                 start_line: 0,
                 start_column: 0,
@@ -2370,8 +2367,9 @@ mod memo_tests {
         let mut d = routine("D", "procedure");
         d.record_operations = vec![modify_op];
 
-        let routine_by_id: HashMap<&str, &L3Routine> = [("C", &c), ("D", &d)].into_iter().collect();
-        let table_by_id: HashMap<&str, &L3Table> = HashMap::new();
+        let routine_by_id: HashMap<&str, &ModelRoutine> =
+            [("C", &c), ("D", &d)].into_iter().collect();
+        let table_by_id: HashMap<&str, &ModelTable> = HashMap::new();
         // Only D's summary is probed by `expand("C")`; a `table` fact makes
         // `touches_db_of(D) == Yes`, so the C→D edge is followed.
         let summaries: HashMap<String, FullRoutineSummary> = [(
@@ -2388,7 +2386,7 @@ mod memo_tests {
         let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
         edges_by_from.insert("C".to_string(), vec![edge("C", "D", "C/cs0")]);
         // Empty ⇒ `loop_depth_of_edge` returns 0 for the C→D edge (deterministic).
-        let call_site_by_id: HashMap<&str, &crate::engine::l2::features::PCallSite> =
+        let call_site_by_id: HashMap<&str, &crate::program::body::features::PCallSite> =
             HashMap::new();
 
         // A per-node uncertainty on D so the transform's uncertainty passthrough
@@ -2483,7 +2481,7 @@ mod memo_tests {
 /// exhaustive path walker) as a LOWER-BOUND oracle for the NEW
 /// `build_d1_graph` and `search_loops` reachability pipeline (Tasks 1-3).
 /// Nothing here changes `detect_d1`'s own output — this is a read-only
-/// differential over the SAME `DetectorContext`/`L3Workspace` input, run
+/// differential over the SAME `DetectorContext`/`ModelEntities` input, run
 /// through both pipelines side by side.
 ///
 /// Three oracles (every one a REAL assertion, not vacuous — each is proven to
@@ -2533,7 +2531,6 @@ mod memo_tests {
 #[cfg(test)]
 mod shadow_tests {
     use super::*;
-    use crate::engine::l3::l3_workspace::L3Workspace;
     use crate::engine::l5::d1_graph::build_d1_graph;
     use crate::engine::l5::d1_reach::LoopTerminalAgg;
     use crate::engine::l5::full_summary::FullRoutineSummary;
@@ -2541,13 +2538,14 @@ mod shadow_tests {
         arg_binding, call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op,
         routine, summary, ts_known, ts_pd,
     };
+    use crate::program::model::workspace::ModelEntities;
 
     /// A built fixture: the owned routines + the `edges_by_from` map + the
     /// per-routine summaries `minimal_ctx`/`build_d1_graph`/`detect_d1_premerge`
     /// all consume — the SAME shape `d1_graph`'s and `d1_reach`'s own test
     /// modules use.
     type Fixture = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         HashMap<String, Vec<CombinedEdge>>,
         HashMap<String, FullRoutineSummary>,
     );
@@ -2870,14 +2868,14 @@ mod shadow_tests {
         l.call_sites = vec![call_site("L/cs0", "B", vec!["L/loop0".to_string()])];
 
         let mut b = routine("B", "procedure");
-        b.record_variables = vec![crate::engine::l3::l3_workspace::L3RecordVariable {
+        b.record_variables = vec![crate::program::model::workspace::ModelRecordVariable {
             id: "B/rv0".to_string(),
             name: "F".to_string(),
             table_name: Some("Field".to_string()),
             table_id: None,
             is_parameter: false,
             parameter_index: None,
-            temp_state: crate::engine::l2::features::PTempState {
+            temp_state: crate::program::body::features::PTempState {
                 kind: "unknown".to_string(),
                 value: None,
                 parameter_index: None,
@@ -3023,8 +3021,8 @@ mod shadow_tests {
     /// The OWNED result of running both pipelines over one fixture: every
     /// field is a plain `String`/`i32` (no borrowed lifetimes), so the three
     /// oracle tests below can each call this once per fixture without any
-    /// lifetime entanglement between the OLD (`L3Resolved`-based) and NEW
-    /// (`L3Workspace`-based) call paths.
+    /// lifetime entanglement between the OLD (`Model`-based) and NEW
+    /// (`ModelEntities`-based) call paths.
     struct ShadowCase {
         /// Every `(loop, terminal routine, terminal op)` key ANY pre-merge OLD
         /// finding carries.
@@ -3171,21 +3169,21 @@ mod shadow_tests {
 
     /// Run BOTH pipelines over one fixture and extract the oracle keys.
     fn compute_shadow_case(
-        routines: &[L3Routine],
+        routines: &[ModelRoutine],
         graph_edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> ShadowCase {
         let ctx = minimal_ctx(routines, graph_edges, summaries);
 
         // OLD: the still-live PW-0 premerge walk, over its OWN (separately
-        // owned) `L3Resolved`/`L3Workspace` clone — `detect_d1_premerge`
+        // owned) `Model`/`ModelEntities` clone — `detect_d1_premerge`
         // returns fully OWNED data (no lifetime tie to `resolved` or `ctx`),
         // so this is safe even though `resolved.workspace.routines` and
         // `ctx`'s backing store are different (content-identical) allocations,
         // exactly like `ctx`/`workspace` already are in `d1_graph`'s and
         // `d1_reach`'s own test modules.
-        let resolved = L3Resolved {
-            workspace: L3Workspace {
+        let resolved = Model {
+            workspace: ModelEntities {
                 objects: vec![],
                 tables: vec![],
                 routines: routines.to_vec(),
@@ -3201,9 +3199,9 @@ mod shadow_tests {
 
         // NEW: build_d1_graph + direct-op enumeration + search_loops, over the
         // SAME `ctx` (borrowing the original `routines` slice) plus a second,
-        // separately-owned `L3Workspace` clone (mirrors `d1_graph`'s/
+        // separately-owned `ModelEntities` clone (mirrors `d1_graph`'s/
         // `d1_reach`'s own `ws(&routines)` helper).
-        let ws = L3Workspace {
+        let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.to_vec(),
@@ -3543,16 +3541,16 @@ mod shadow_tests {
 #[cfg(test)]
 mod assembly_tests {
     use super::*;
-    use crate::engine::l3::l3_workspace::{L3Resolved, L3Workspace};
     use crate::engine::l5::d1_graph::build_d1_graph;
     use crate::engine::l5::d1_reach::search_loops;
     use crate::engine::l5::full_summary::FullRoutineSummary;
     use crate::engine::l5::test_support::{
         call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op, routine, summary,
     };
+    use crate::program::model::workspace::{Model, ModelEntities};
 
     type Fixture = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         HashMap<String, Vec<CombinedEdge>>,
         HashMap<String, FullRoutineSummary>,
     );
@@ -3566,15 +3564,15 @@ mod assembly_tests {
         )
     }
 
-    fn ws(routines: &[L3Routine]) -> L3Workspace {
-        L3Workspace {
+    fn ws(routines: &[ModelRoutine]) -> ModelEntities {
+        ModelEntities {
             objects: vec![],
             tables: vec![],
             routines: routines.to_vec(),
         }
     }
 
-    fn role_map(routines: &[L3Routine]) -> HashMap<&str, &str> {
+    fn role_map(routines: &[ModelRoutine]) -> HashMap<&str, &str> {
         routines
             .iter()
             .map(|r| (r.id.as_str(), "primary"))
@@ -3622,7 +3620,7 @@ mod assembly_tests {
     /// each finding with its per-loop `LoopContext`s beside it — `Finding` no
     /// longer carries them.
     fn assemble(
-        routines: &[L3Routine],
+        routines: &[ModelRoutine],
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> Vec<(Finding, Vec<LoopContext>)> {
@@ -3760,7 +3758,7 @@ mod assembly_tests {
     /// (which resolves the winner's ids back through it). Distinct from
     /// [`assemble`] above, which drives the `#[cfg(test)]` `search_loops` oracle.
     fn assemble_cohorts(
-        routines: &[L3Routine],
+        routines: &[ModelRoutine],
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> Vec<Finding> {
@@ -3771,7 +3769,7 @@ mod assembly_tests {
     /// [`minimal_ctx`] plus an injected `uncertainties_by_node` map (the substrate
     /// `path_uncertainty_ids` unions along a cohort's representative path).
     fn minimal_ctx_with_uncertainties<'a>(
-        routines: &'a [L3Routine],
+        routines: &'a [ModelRoutine],
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
         uncertainties: Vec<(String, Vec<Uncertainty>)>,
@@ -3784,7 +3782,7 @@ mod assembly_tests {
     }
 
     /// The production cohort path over an already-built context.
-    fn cohort_findings(ctx: &DetectorContext, routines: &[L3Routine]) -> Vec<Finding> {
+    fn cohort_findings(ctx: &DetectorContext, routines: &[ModelRoutine]) -> Vec<Finding> {
         let workspace = ws(routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(ctx, &workspace, &mut memo);
@@ -4270,7 +4268,7 @@ mod assembly_tests {
         let mut new_findings = assemble_findings(&aggs, &ctx, &role_map(&routines));
 
         // OLD pipeline (shadow oracle) over the SAME content, separate owned clone.
-        let resolved = L3Resolved {
+        let resolved = Model {
             workspace: ws(&routines),
             root_classifications: vec![],
             primary_app: None,

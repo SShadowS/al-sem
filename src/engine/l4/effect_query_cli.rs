@@ -1,6 +1,6 @@
 //! `alsem query` — the shipped transport over
 //! [`crate::engine::l4::effect_query::DbEffectQuery`], and the home of the
-//! `RoutineIx -> L3Routine` join that turns an index answer into a user-facing
+//! `RoutineIx -> ModelRoutine` join that turns an index answer into a user-facing
 //! one.
 //!
 //! ## Why this exists at all
@@ -41,9 +41,6 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
-use crate::engine::l3::l3_workspace::{
-    L3RecordOperation, L3Resolved, L3Routine, table_by_id_preferring_real,
-};
 use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
@@ -53,6 +50,9 @@ use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::scc::{SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::l4::summary::RoutineSummary;
 use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2_bundle_with_leaves};
+use crate::program::model::workspace::{
+    Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
+};
 
 /// The JSON envelope's `schemaVersion` for both `query` subcommands.
 const QUERY_SCHEMA_VERSION: &str = "1.0.0";
@@ -111,7 +111,7 @@ pub struct QueryRunResult {
 /// query surface borrows the bundle AND the Tarjan result, and both must
 /// outlive it.
 pub struct QuerySubstrate {
-    pub resolved: L3Resolved,
+    pub resolved: Model,
     pub graph: CombinedGraph,
     pub scc: SccResult,
     pub bundle: SummaryBundle,
@@ -124,19 +124,20 @@ impl QuerySubstrate {
     /// materializing `_core` shim would expand and then discard them).
     pub fn build(workspace: &Path, model_instance_id: &str) -> Result<Self, String> {
         // Engine-switch S6.7: the program-backed model (program calls and events).
-        let resolved = crate::engine::l3::program_calls::assemble_and_resolve_workspace_program(
-            workspace,
-            model_instance_id,
-            false,
-        )
-        .ok_or_else(|| "query: workspace did not resolve".to_string())?;
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                workspace,
+                model_instance_id,
+                false,
+            )
+            .ok_or_else(|| "query: workspace did not resolve".to_string())?;
         Ok(Self::from_resolved(resolved))
     }
 
     /// The substrate steps alone, over an already-assembled workspace — the
     /// seam the differential reuses so it exercises this exact assembly rather
     /// than a parallel copy of it.
-    pub fn from_resolved(resolved: L3Resolved) -> Self {
+    pub fn from_resolved(resolved: Model) -> Self {
         let (graph, scc, bundle) = {
             let ws = &resolved.workspace;
             // The model's own calls and event graph (the program engine's).
@@ -223,7 +224,7 @@ impl<T> Resolution<T> {
 /// determined") and on DO it is the largest one. It is never produced by NAME
 /// resolution — only by typing it exactly — so a workspace containing a table
 /// literally named `unknown` cannot silently shadow the bucket, nor vice versa.
-pub fn resolve_table_selector(resolved: &L3Resolved, selector: &str) -> Resolution<TableRef> {
+pub fn resolve_table_selector(resolved: &Model, selector: &str) -> Resolution<TableRef> {
     if selector == UNKNOWN_TABLE_ID {
         return Resolution::Resolved(TableRef {
             id: UNKNOWN_TABLE_ID.to_string(),
@@ -241,7 +242,7 @@ pub fn resolve_table_selector(resolved: &L3Resolved, selector: &str) -> Resoluti
     }
 
     let want = selector.to_lowercase();
-    let mut hits: Vec<&&crate::engine::l3::l3_workspace::L3Table> = real_by_id
+    let mut hits: Vec<&&crate::program::model::workspace::ModelTable> = real_by_id
         .values()
         .filter(|t| t.name.to_lowercase() == want)
         .collect();
@@ -273,9 +274,9 @@ pub struct TableRef {
 /// (case-insensitive), bare routine name (case-insensitive). Candidates are
 /// sorted by internal id so an ambiguity report is deterministic.
 pub fn resolve_routine_selector<'a>(
-    resolved: &'a L3Resolved,
+    resolved: &'a Model,
     selector: &str,
-) -> Resolution<&'a L3Routine> {
+) -> Resolution<&'a ModelRoutine> {
     let ws = &resolved.workspace;
     let object_name_by_id: HashMap<&str, &str> = ws
         .objects
@@ -291,7 +292,7 @@ pub fn resolve_routine_selector<'a>(
     }
 
     let want = selector.to_lowercase();
-    let qualified: Vec<&L3Routine> = ws
+    let qualified: Vec<&ModelRoutine> = ws
         .routines
         .iter()
         .filter(|r| {
@@ -299,7 +300,7 @@ pub fn resolve_routine_selector<'a>(
             format!("{obj}.{}", r.name).to_lowercase() == want
         })
         .collect();
-    let bare: Vec<&L3Routine> = ws
+    let bare: Vec<&ModelRoutine> = ws
         .routines
         .iter()
         .filter(|r| r.name.to_lowercase() == want)
@@ -329,7 +330,7 @@ pub fn resolve_routine_selector<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// The RoutineIx -> L3Routine join (scope §1.5: RoutineIx is not an identity).
+// The RoutineIx -> ModelRoutine join (scope §1.5: RoutineIx is not an identity).
 // ---------------------------------------------------------------------------
 
 /// The user-facing identity of a routine. `RoutineIx` is an internal dense
@@ -346,14 +347,14 @@ pub struct RoutineRef {
     pub column: u32,
 }
 
-/// The join table: internal routine id -> its `L3Routine`, plus object names.
+/// The join table: internal routine id -> its `ModelRoutine`, plus object names.
 pub struct RoutineJoin<'a> {
-    by_id: HashMap<&'a str, &'a L3Routine>,
+    by_id: HashMap<&'a str, &'a ModelRoutine>,
     object_name_by_id: HashMap<&'a str, &'a str>,
 }
 
 impl<'a> RoutineJoin<'a> {
-    pub fn build(resolved: &'a L3Resolved) -> Self {
+    pub fn build(resolved: &'a Model) -> Self {
         let ws = &resolved.workspace;
         RoutineJoin {
             by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
@@ -373,7 +374,7 @@ impl<'a> RoutineJoin<'a> {
         Some(self.of(r))
     }
 
-    pub fn of(&self, r: &L3Routine) -> RoutineRef {
+    pub fn of(&self, r: &ModelRoutine) -> RoutineRef {
         let object_name = self
             .object_name_by_id
             .get(r.object_id.as_str())
@@ -410,12 +411,13 @@ pub struct OperationRef {
 
 /// `operation_id` -> the routine + record operation that produced it.
 pub struct OperationJoin<'a> {
-    by_id: HashMap<&'a str, (&'a L3Routine, &'a L3RecordOperation)>,
+    by_id: HashMap<&'a str, (&'a ModelRoutine, &'a ModelRecordOperation)>,
 }
 
 impl<'a> OperationJoin<'a> {
-    pub fn build(resolved: &'a L3Resolved) -> Self {
-        let mut by_id: HashMap<&'a str, (&'a L3Routine, &'a L3RecordOperation)> = HashMap::new();
+    pub fn build(resolved: &'a Model) -> Self {
+        let mut by_id: HashMap<&'a str, (&'a ModelRoutine, &'a ModelRecordOperation)> =
+            HashMap::new();
         for r in &resolved.workspace.routines {
             for op in &r.record_operations {
                 // First writer wins: operation ids are unique per workspace by
@@ -487,7 +489,7 @@ fn temp_state_str(t: &TempStateKind) -> String {
 struct TableNames<'a>(HashMap<&'a str, &'a str>);
 
 impl<'a> TableNames<'a> {
-    fn build(resolved: &'a L3Resolved) -> Self {
+    fn build(resolved: &'a Model) -> Self {
         TableNames(
             table_by_id_preferring_real(&resolved.workspace.tables)
                 .into_iter()

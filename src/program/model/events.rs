@@ -1,12 +1,12 @@
 //! The detector event graph's model: event symbols (one per published event),
 //! subscription edges, and how a publisher routine becomes a symbol.
 //!
-//! Moved out of `engine::l3::event_graph` in engine-switch S4.2a (spec
+//! Moved out of `program::model::events` in engine-switch S4.2a (spec
 //! `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, G7). The program
 //! engine fills it ([`program_event_graph`]); L3's own `build_event_graph` was
 //! deleted in S9.6.
 
-use super::workspace::{L3Parameter, L3Routine};
+use super::workspace::{ModelParameter, ModelRoutine};
 use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
 
 /// One evidence record. The R2c surface only ever carries `{source}` (+ an optional
@@ -55,7 +55,7 @@ pub struct EventSymbol {
     pub event_kind: String,
     pub element_name: Option<String>,
     pub signature_hash: String,
-    pub parameters: Vec<L3Parameter>,
+    pub parameters: Vec<ModelParameter>,
     pub isolated: Option<bool>,
     pub provenance: Vec<Evidence>,
     /// The publisher when it is not a model routine (engine-switch S4.2): then
@@ -145,7 +145,7 @@ pub fn encode_event_id(publisher_object_id: &str, event_name: &str) -> String {
 }
 
 /// Build the EventSymbol for a real publisher routine.
-pub fn build_event_symbol(routine: &L3Routine) -> EventSymbol {
+pub fn build_event_symbol(routine: &ModelRoutine) -> EventSymbol {
     let isolated = parse_isolated(&routine.attributes_parsed);
     EventSymbol {
         id: encode_event_id(&routine.object_id, &routine.name),
@@ -230,7 +230,7 @@ pub struct ProgramEvents {
 /// R4-F ordering engine (Rule 5 §0.5) to promote isolated event-dispatch links
 /// to barriers. EventId form matches the witness hop's `event_id`
 /// (`${publisherObjectId}/event/${eventName_lc}`).
-pub fn isolated_event_ids(routines: &[L3Routine]) -> std::collections::HashSet<String> {
+pub fn isolated_event_ids(routines: &[ModelRoutine]) -> std::collections::HashSet<String> {
     let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for routine in routines {
         if routine.kind != "event-publisher" {
@@ -264,7 +264,7 @@ pub fn isolated_event_ids(routines: &[L3Routine]) -> std::collections::HashSet<S
 ///   change; `subscribers_by_event` gains the workspace subscribers of such events.
 pub fn program_event_graph(
     ctx: &crate::program::resolve::full::ProgramContext,
-    ws: &super::workspace::L3Workspace,
+    ws: &super::workspace::ModelEntities,
 ) -> ProgramEvents {
     use crate::engine::ids::sha256_hex;
     use crate::program::node::RoutineNodeId;
@@ -423,7 +423,7 @@ pub fn program_event_graph(
                                     .enumerate()
                                     .map(|(i, p)| {
                                         let ty = p.ty.clone().unwrap_or_default();
-                                        L3Parameter {
+                                        ModelParameter {
                                             index: i as u32,
                                             name: p.name.clone(),
                                             is_var: p.by_ref,
@@ -548,7 +548,7 @@ pub fn program_event_graph(
 // ---------------------------------------------------------------------------
 // Stable projection — the golden / vector comparison surface (`tests/r2c-goldens`).
 // Mirrors scripts/r2c-l3eg-projection.ts EXACTLY. Moved from
-// `engine::l3::event_graph` in engine-switch S9.5e: the r2c goldens now project
+// `program::model::events` in engine-switch S9.5e: the r2c goldens now project
 // the program engine's event graph (`program_event_graph`).
 // ---------------------------------------------------------------------------
 
@@ -613,7 +613,7 @@ pub struct PEventEdge {
 
 /// The full event-graph projection — the golden / vector document shape.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct L3EventGraphProjection {
+pub struct EventGraphProjection {
     pub events: Vec<PEventSymbol>,
     pub edges: Vec<PEventEdge>,
 }
@@ -634,7 +634,7 @@ fn stable_event_id_from_symbol(sym: &EventSymbol) -> String {
     )
 }
 
-fn project_parameter(p: &L3Parameter) -> PParameter {
+fn project_parameter(p: &ModelParameter) -> PParameter {
     PParameter {
         index: p.index,
         name: p.name.clone(),
@@ -676,7 +676,7 @@ fn project_event_symbol(sym: &EventSymbol) -> PEventSymbol {
 /// eventId, subscriberRoutineId). The edge eventId is mapped THROUGH the
 /// rawEventId→stableEventId map (LAST-wins on raw-id collision); a missing
 /// mapping keeps the raw id so a divergence is VISIBLE.
-pub fn project_event_graph(graph: &EventGraph) -> L3EventGraphProjection {
+pub fn project_event_graph(graph: &EventGraph) -> EventGraphProjection {
     // rawEventId → stableEventId (walk events[] in emitted order, LAST-wins).
     let mut raw_to_stable: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -710,5 +710,5 @@ pub fn project_event_graph(graph: &EventGraph) -> L3EventGraphProjection {
             .then_with(|| a.subscriber_routine_id.cmp(&b.subscriber_routine_id))
     });
 
-    L3EventGraphProjection { events, edges }
+    EventGraphProjection { events, edges }
 }

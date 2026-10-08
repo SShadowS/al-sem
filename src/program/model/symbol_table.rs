@@ -13,7 +13,7 @@
 //! (POSIX-path-sorted files → per-file document order) or collisions resolve
 //! differently.
 
-use super::workspace::{L3Object, L3Table};
+use super::workspace::{ModelObject, ModelTable};
 use std::collections::HashMap;
 
 /// A read-only lookup index over a workspace model's objects and tables.
@@ -27,20 +27,20 @@ pub struct SymbolTable<'a> {
     by_type_number: HashMap<String, usize>,
     /// `${objectType_lc}/${name_lc}` → object index.
     by_type_name: HashMap<String, usize>,
-    objects: &'a [L3Object],
+    objects: &'a [ModelObject],
 
     /// `${name_lc}` → table index.
     tables_by_name: HashMap<String, usize>,
     /// `${tableId}` → table index.
     tables_by_id: HashMap<String, usize>,
-    tables: &'a [L3Table],
+    tables: &'a [ModelTable],
 }
 
 impl<'a> SymbolTable<'a> {
     /// Build the symbol table over an assembled workspace's objects and tables.
     /// The slices MUST be in the deterministic ingestion order (collision
     /// resolution depends on it).
-    pub fn build(objects: &'a [L3Object], tables: &'a [L3Table]) -> SymbolTable<'a> {
+    pub fn build(objects: &'a [ModelObject], tables: &'a [ModelTable]) -> SymbolTable<'a> {
         // --- object indexes (LAST-wins) -------------------------------------
         let mut by_type_number = HashMap::new();
         let mut by_type_name = HashMap::new();
@@ -92,23 +92,23 @@ impl<'a> SymbolTable<'a> {
         &self,
         object_type: &str,
         object_number: i64,
-    ) -> Option<&L3Object> {
+    ) -> Option<&ModelObject> {
         let key = format!("{}/{}", object_type.to_lowercase(), object_number);
         self.by_type_number.get(&key).map(|&i| &self.objects[i])
     }
 
-    pub fn object_by_type_name(&self, object_type: &str, name: &str) -> Option<&L3Object> {
+    pub fn object_by_type_name(&self, object_type: &str, name: &str) -> Option<&ModelObject> {
         let key = format!("{}/{}", object_type.to_lowercase(), name.to_lowercase());
         self.by_type_name.get(&key).map(|&i| &self.objects[i])
     }
 
-    pub fn table_by_name(&self, name: &str) -> Option<&L3Table> {
+    pub fn table_by_name(&self, name: &str) -> Option<&ModelTable> {
         self.tables_by_name
             .get(&name.to_lowercase())
             .map(|&i| &self.tables[i])
     }
 
-    pub fn table_by_id(&self, id: &str) -> Option<&L3Table> {
+    pub fn table_by_id(&self, id: &str) -> Option<&ModelTable> {
         self.tables_by_id.get(id).map(|&i| &self.tables[i])
     }
 }

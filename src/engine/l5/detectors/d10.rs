@@ -13,7 +13,6 @@
 //! physical SQL cursors). Mirrors the d33 temp gate. Physical/Unknown keep
 //! firing (suppression-direction safe).
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -21,6 +20,7 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d10-self-modifying-loop";
 
@@ -35,7 +35,7 @@ const MUTATING_OPS: &[&str] = &[
 ];
 
 pub fn detect_d10(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

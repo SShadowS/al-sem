@@ -46,12 +46,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Routine};
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
 use crate::engine::l5::d1_graph::{D1Edge, D1Graph};
 use crate::engine::l5::d1_temp::ParamTemp;
 use crate::engine::l5::detector_context::DetectorContext;
+use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// The single-parameter transfer an edge applies to ONE needed callee
 /// parameter. Exhaustive per `d1_temp::cross_hop`'s per-param outcomes
@@ -106,7 +106,7 @@ enum EdgeParamOutcome {
 /// 4. `Known(true)` -> `Temp`; `Known(false)` -> `Physical`;
 ///    `ParameterDependent(j)` -> `Copy(j)`; `Unknown` source -> `Unknown`.
 fn classify_edge_param(
-    caller: &L3Routine,
+    caller: &ModelRoutine,
     edge: &D1Edge,
     callee_id: &str,
     p: u32,
@@ -138,7 +138,7 @@ fn classify_edge_param(
 /// The param index a terminal op's `temp_state` reads, if any
 /// (`resolve_terminal` reads <=1 index): `ParameterDependent(i)` reads `i`;
 /// `Known`/`Unknown`/absent `temp_state` reads nothing.
-fn terminal_read_index(op: &L3RecordOperation) -> Option<u32> {
+fn terminal_read_index(op: &ModelRecordOperation) -> Option<u32> {
     let ts = op.temp_state.as_ref()?;
     match TempStateKind::from_p_temp_state(ts) {
         TempStateKind::ParameterDependent(i) => Some(i),

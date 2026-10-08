@@ -84,8 +84,8 @@ fn load_snapshot_from_workspace(
     deterministic: bool,
 ) -> Result<CborValue, String> {
     use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-    use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
+    use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
     let ws = Path::new(dir);
     let model_id = compute_gate_model_instance_id(ws)

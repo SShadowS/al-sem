@@ -17,10 +17,10 @@
 
 use std::path::PathBuf;
 
-use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::root_classification::{
     R4FRootClassProjection, project_r4f_root_classifications,
 };
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 use crate::regen;
 

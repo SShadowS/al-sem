@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::l2::ir_walk::project_routine_features_ir;
+use al_sem::program::body::ir_walk::project_routine_features_ir;
 
 use crate::regen;
 
@@ -199,7 +199,7 @@ fn drift_report_separates_added_from_changed() {
 /// 4 load-bearing fields during the migration; keep the snapshot digest on `Debug`.
 #[test]
 fn debug_digest_catches_serde_skip_drift() {
-    use al_sem::engine::l2::features::{PAnchor, PRecordOperation, PTempState};
+    use al_sem::program::body::features::{PAnchor, PRecordOperation, PTempState};
     let base = PRecordOperation {
         id: "r/op0".to_string(),
         op: "modify".to_string(),

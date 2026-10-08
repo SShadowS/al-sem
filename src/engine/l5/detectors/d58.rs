@@ -9,18 +9,18 @@
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::PCallee;
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PCallee;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d58-query-filter-after-open";
 
 pub fn detect_d58(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -51,7 +51,7 @@ pub fn detect_d58(
 
         for qv in &query_vars {
             // (anchor-ordered) events on this receiver: Open / Close / SetFilter/SetRange.
-            let mut events: Vec<(&crate::engine::l2::features::PCallSite, &'static str)> =
+            let mut events: Vec<(&crate::program::body::features::PCallSite, &'static str)> =
                 Vec::new();
             for cs in &routine.call_sites {
                 let PCallee::Member { receiver, method } = &cs.callee else {

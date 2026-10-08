@@ -26,8 +26,8 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::program::body::features::{PCFNNode, PCallSite};
+use crate::program::model::workspace::ModelRoutine;
 
 /// `(parameter index, required value)` in one routine's frame.
 pub(crate) type Req = (u32, bool);
@@ -68,7 +68,7 @@ pub(crate) fn conjoin(a: &[Req], b: &[Req]) -> Option<Vec<Req>> {
 /// whether the call passes that argument to a by-value parameter of a known
 /// callee. `None` when the routine has no usable guard parameter.
 pub(crate) fn frame_guards(
-    r: &L3Routine,
+    r: &ModelRoutine,
     passes_by_value: impl Fn(&str, u32) -> bool,
 ) -> Option<FrameGuards> {
     let mut usable: Vec<(String, u32)> = Vec::new();
@@ -116,9 +116,9 @@ pub(crate) fn frame_guards(
 /// platform method) other than `Evaluate` and `Clear`, which write their
 /// argument.
 pub(crate) fn frame_guards_over<'a>(
-    r: &L3Routine,
+    r: &ModelRoutine,
     callees_at: impl Fn(&str) -> Vec<&'a str>,
-    routines_by_id: &HashMap<&str, &L3Routine>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> Option<FrameGuards> {
     use crate::program::body::features::PCallee;
     let passes_by_value = |cs_id: &str, arg: u32| -> bool {

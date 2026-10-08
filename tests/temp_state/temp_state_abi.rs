@@ -132,7 +132,7 @@ fn abi_param_reads_typedefinition_temporary() {
 /// synthetic symbol-only `.app`, and return its rows (the dependency's ABI rows
 /// after `resolve()` over the merged whole, so the table-level override has run).
 /// The workspace calls every dependency procedure, so each is in the model.
-fn project_and_resolve() -> al_sem::engine::l3::l3_workspace::L3Workspace {
+fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dep = "11111111-2222-3333-4444-555555555555";
@@ -164,7 +164,7 @@ fn project_and_resolve() -> al_sem::engine::l3::l3_workspace::L3Workspace {
 }
 
 fn temp_kind(
-    ws: &al_sem::engine::l3::l3_workspace::L3Workspace,
+    ws: &al_sem::program::model::workspace::ModelEntities,
     routine_name: &str,
 ) -> (String, Option<bool>, Option<u32>) {
     let r = ws

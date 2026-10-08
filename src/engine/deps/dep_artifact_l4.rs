@@ -47,12 +47,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 
 use crate::engine::deps::app_package_zip::app_zip_bytes;
-use crate::engine::l2::operation_order::apply_operation_order;
-use crate::engine::l3::event_graph::EventSymbol;
-use crate::engine::l3::l3_workspace::L3Routine;
-use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
 use crate::engine::l4::capability_cone::direct_facts_for_routine;
 use crate::program::attributes::{AttributeInfo, find_attribute, has_attribute};
+use crate::program::body::operation_order::apply_operation_order;
+use crate::program::model::events::EventSymbol;
+use crate::program::model::taxonomy::{DispatchKind, Resolution};
+use crate::program::model::workspace::ModelRoutine;
 
 /// Schema version for the dep order index. Mirrors al-sem
 /// `DEP_ORDER_INDEX_SCHEMA_VERSION` (`src/deps/dep-order-types.ts`).
@@ -290,7 +290,7 @@ pub struct DependencyArtifactL4 {
 /// resolver, once per product (this producer, `recover_dep_retained`, the R3a-4
 /// id stabilizer). A symbol-only dependency's artifact has no routines, as before.
 pub fn dep_artifacts_from_model(
-    x: &crate::engine::l3::program_calls::CrossAppProgram,
+    x: &crate::program::model::program_calls::CrossAppProgram,
 ) -> Vec<DependencyArtifactL4> {
     let calls = x.resolved.calls.edges.as_slice();
     let events = &x.resolved.events.graph;
@@ -302,12 +302,12 @@ pub fn dep_artifacts_from_model(
 
 fn artifact_from_model(
     app: &crate::program::model::workspace::DependencyApp,
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     calls: &[crate::program::model::calls::CallEdge],
     events: &crate::program::model::events::EventGraph,
 ) -> DependencyArtifactL4 {
     let app_guid = &app.guid;
-    let mut own: Vec<L3Routine> = if app.has_source {
+    let mut own: Vec<ModelRoutine> = if app.has_source {
         routines
             .iter()
             .filter(|r| &r.app_guid == app_guid)
@@ -477,11 +477,11 @@ pub fn admitted_intra_app_edge(ce: &crate::program::model::calls::CallEdge) -> b
 /// so the producer runs it here over the routine's L3-carried features.
 ///
 /// Returns the `DepScopeFrame` projection of the routine's frame table.
-fn apply_dep_operation_order(r: &mut L3Routine) -> Vec<DepScopeFrame> {
+fn apply_dep_operation_order(r: &mut ModelRoutine) -> Vec<DepScopeFrame> {
     // Reconstruct a minimal PFeatures the order walker reads: statement_tree +
     // op/callsite records. The walker mutates `order` on each op/callsite and
     // returns the scope-frame table.
-    use crate::engine::l2::features::PFeatures;
+    use crate::program::body::features::PFeatures;
 
     let mut features = PFeatures {
         loops: Vec::new(),
@@ -532,7 +532,7 @@ fn apply_dep_operation_order(r: &mut L3Routine) -> Vec<DepScopeFrame> {
 /// dependency-pipeline.ts:508-616). Returns `None` when not "full" mode, when no
 /// own routine has a parsed body, or when there is no useful order data.
 fn build_dep_order_index(
-    own: &[L3Routine],
+    own: &[ModelRoutine],
     app_guid: &str,
     version: &str,
     summary_mode: &str,
@@ -638,7 +638,7 @@ fn build_dep_order_index(
 /// Compute a dep routine's returnability summary (port of al-sem
 /// `computeRoutineReturnSummary`, `src/engine/return-summary.ts`). Structural walk
 /// over the CFN statement tree, with the TryFunction / no-body / no-tree barriers.
-pub fn compute_dep_return_summary(r: &L3Routine) -> DepReturnSummaryRecord {
+pub fn compute_dep_return_summary(r: &ModelRoutine) -> DepReturnSummaryRecord {
     let has_try_function = has_attribute(&r.attributes_parsed, "TryFunction");
     let commit_behavior = parse_commit_behavior(&r.attributes_parsed);
 
@@ -702,7 +702,7 @@ struct SubtreeReach {
 
 /// Walk a CFN subtree for normal-return reachability / all-paths-error (port of
 /// al-sem `walkSubtree`, `return-summary.ts`).
-fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
+fn walk_subtree(node: &crate::program::body::features::PCFNNode) -> SubtreeReach {
     match node.kind.as_str() {
         "error" => SubtreeReach {
             has_normal: false,
@@ -828,7 +828,7 @@ fn walk_subtree(node: &crate::engine::l2::features::PCFNNode) -> SubtreeReach {
     }
 }
 
-fn walk_subtree_list(nodes: &[crate::engine::l2::features::PCFNNode]) -> SubtreeReach {
+fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> SubtreeReach {
     if nodes.is_empty() {
         return SubtreeReach {
             has_normal: true,

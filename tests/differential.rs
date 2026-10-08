@@ -50,15 +50,15 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::l2::features::L2Projection;
-use al_sem::engine::l2::l2_workspace::project_workspace;
-use al_sem::engine::l3::coverage::AnalysisCoverage;
-use al_sem::engine::l3::event_graph::L3EventGraphProjection;
-use al_sem::engine::l3::l3_workspace::L3RecordTypeProjection;
 use al_sem::engine::snapshot::{
     IdentitySnapshot, ObjectIdentity, RoutineIdentity, snapshot_workspace,
 };
+use al_sem::program::body::features::L2Projection;
+use al_sem::program::body::l2_workspace::project_workspace;
+use al_sem::program::model::coverage::AnalysisCoverage;
+use al_sem::program::model::events::EventGraphProjection;
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
+use al_sem::program::model::workspace::RecordTypeProjection;
 
 #[path = "common/regen.rs"]
 mod regen;
@@ -795,7 +795,7 @@ fn differential_l2_features_match_goldens() {
 //
 // ## Comparison rules
 //
-//   - Both sides validated to parse as the `L3RecordTypeProjection` serde type
+//   - Both sides validated to parse as the `RecordTypeProjection` serde type
 //     (shape guard — structurally omits everything but the record-type surface),
 //     then compared as raw `serde_json::Value` POSITIONALLY (the projection is
 //     already canonically sorted: tables by stableTableId, routines by
@@ -972,17 +972,17 @@ fn differential_l3_record_types_match_goldens() {
         );
 
         // Golden side: parse as JSON (for the diff) AND validate it parses as the
-        // allowlisted L3RecordTypeProjection serde type (shape guard).
+        // allowlisted RecordTypeProjection serde type (shape guard).
         let golden_text = std::fs::read_to_string(golden_path)
             .unwrap_or_else(|e| panic!("read L3 golden {}: {e}", golden_path.display()));
         let golden_json: serde_json::Value =
             serde_json::from_str(&golden_text).unwrap_or_else(|e| {
                 panic!("L3 golden {} is not valid JSON: {e}", golden_path.display())
             });
-        let _: L3RecordTypeProjection =
+        let _: RecordTypeProjection =
             serde_json::from_value(golden_json.clone()).unwrap_or_else(|e| {
                 panic!(
-                    "L3 golden {} does not parse as L3RecordTypeProjection: {e}",
+                    "L3 golden {} does not parse as RecordTypeProjection: {e}",
                     golden_path.display()
                 )
             });
@@ -991,7 +991,7 @@ fn differential_l3_record_types_match_goldens() {
         // Fail-closed (empty) layouts yield an empty projection (never throws).
         let projection = match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
             Some(resolved) => resolved.project(),
-            None => L3RecordTypeProjection {
+            None => RecordTypeProjection {
                 tables: vec![],
                 routines: vec![],
             },
@@ -1281,11 +1281,11 @@ fn discover_l3eg_goldens() -> Vec<(String, PathBuf)> {
 /// The event-graph projection of the production model for a fixture dir: the
 /// program engine's graph (engine-switch S9.5e — until then L3's own
 /// `build_event_graph`). Fail-closed → empty.
-fn rust_event_graph_projection(fixture_dir: &Path) -> L3EventGraphProjection {
+fn rust_event_graph_projection(fixture_dir: &Path) -> EventGraphProjection {
     use al_sem::program::model::events::project_event_graph;
     match assemble_and_resolve_workspace_with_program_calls(fixture_dir) {
         Some(resolved) => project_event_graph(&resolved.events.graph),
-        None => L3EventGraphProjection {
+        None => EventGraphProjection {
             events: vec![],
             edges: vec![],
         },
@@ -1450,7 +1450,7 @@ fn differential_l3_event_graph_match_goldens() {
         );
 
         // Golden side: parse as JSON (for the diff) AND validate it parses as the
-        // allowlisted L3EventGraphProjection serde type (shape guard).
+        // allowlisted EventGraphProjection serde type (shape guard).
         let golden_text = std::fs::read_to_string(golden_path)
             .unwrap_or_else(|e| panic!("read L3eg golden {}: {e}", golden_path.display()));
         let golden_json: serde_json::Value =
@@ -1460,10 +1460,10 @@ fn differential_l3_event_graph_match_goldens() {
                     golden_path.display()
                 )
             });
-        let _: L3EventGraphProjection =
+        let _: EventGraphProjection =
             serde_json::from_value(golden_json.clone()).unwrap_or_else(|e| {
                 panic!(
-                    "L3eg golden {} does not parse as L3EventGraphProjection: {e}",
+                    "L3eg golden {} does not parse as EventGraphProjection: {e}",
                     golden_path.display()
                 )
             });

@@ -183,7 +183,7 @@ or consumed by `src/engine/gate` (the `analyze` CLI).
 **`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
 resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
 §7): `src/program/model/program_calls.rs` (`attach_program_calls`) converts the resolved
-edges into the model's call shape and returns the model (`L3Resolved`) with them in
+edges into the model's call shape and returns the model (`Model`) with them in
 `calls`, and since engine-switch S4 also the event graph in `events` (from the program
 engine's subscription inventory, `program::model::events`). Since S9.6 both are
 mandatory: the assembly entries return `ModelRows`, which only `attach_program_calls`
@@ -266,14 +266,17 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
   (dispatch), `builtins.rs`/`member_catalog.rs` (platform intrinsic catalogs), `edge.rs`
   (the `Histogram` taxonomy + `ObligationOutcome`)
 - `src/program/abi_ingest.rs` - Dependency ABI ingestion (sibling of `resolve/`, not inside it)
-- `src/engine/l2/` - Structural body-walk + feature projection over the owned IR
-- `src/engine/l3/` - Aliases only: the old `engine::l3::…` paths of the detector model
-  in `src/program/model/`. The legacy L3 engine (the RETIRED al-sem port) was deleted
-  in engine-switch S9.6; the aliases go in S9.7
+- `src/program/body/` - Structural body-walk + feature projection over the owned IR
+  (was `src/engine/l2`, moved in engine-switch S2b.1)
+- `src/program/model/` - The detector model: `Model` (rows + the program engine's calls
+  and event graph), `ModelRoutine`/`ModelObject`/`ModelTable`/…, built only by
+  `program_calls::attach_program_calls`. Renamed from the `L3*` types in engine-switch
+  S9.7; the legacy L3 engine (`src/engine/l3`, the RETIRED al-sem port) was deleted in
+  S9.6
 - `src/engine/l4/` - Per-routine effect summaries over the call graph's SCC condensation.
   Its db-effect QUERY surface is `effect_query.rs` (`DbEffectQuery`: down / up-global /
   the ancestor-scoped up-query) over `reverse_index.rs`'s transpose, with
-  `effect_query_cli.rs` as the `alsem query` transport + the `RoutineIx`→`L3Routine`
+  `effect_query_cli.rs` as the `alsem query` transport + the `RoutineIx`→`ModelRoutine`
   join. Read `effect_query.rs`'s module doc BEFORE building anything on it — it states
   which question this substrate answers and which one `cone_derived.rs` already answers
   better (physical-table WRITES), so a second answer to the same question is not built.
@@ -443,7 +446,7 @@ Nothing pins the grammar commit: local builds and CI (`.github/workflows/ci.yml`
 `SShadowS/tree-sitter-al` `main`, so a grammar change surfaces on the next build rather than
 silently drifting. `crates/al-syntax` is the **only** crate
 that links tree-sitter or walks its raw CST — every other consumer (`src/lsp/snapshot.rs`,
-`src/engine/l2` and everything layered on it, `src/program/resolve`) reads the owned
+`src/program/body` and everything layered on it, `src/program/resolve`) reads the owned
 AL syntax IR that `al-syntax`'s lowerer (`crates/al-syntax/src/lower/mod.rs`) produces.
 Practical effect: the "flat vs. recursive walk" hazard that mattered under the old
 tree-sitter-query architecture (see History below) no longer applies to engine code at
@@ -733,13 +736,13 @@ metric-definition change is never stat-juked.
   d56's residual key-remap shape kept it opt-in). Measure the population before
   building taxonomy for it.
 - **Detector substrate gotcha — "is there a branch in this loop?" uses
-  `statement_tree`, NOT `condition_references`.** `L3Routine.condition_references`
+  `statement_tree`, NOT `condition_references`.** `ModelRoutine.condition_references`
   (built by `ir_walk::collect_cond_idents`) records unquoted IDENTIFIER names only: a
   bare `X` or a member's `.Name`, looking through parentheses, calls and operators.
   It never records a QUOTED name, bare (`if "My Var"`) or as a member
   (`case Rec."E-Mail" of`), and real BC code quotes field names constantly. It also
   carries identifiers, not structure: it cannot tell you a branch exists. Walk the
-  control-flow tree `L3Routine.statement_tree` (`PCFNNode`; `if`/`case` kind nodes
+  control-flow tree `ModelRoutine.statement_tree` (`PCFNNode`; `if`/`case` kind nodes
   carry `source_range`) for a STRUCTURAL, shape-independent branch check — see d60's
   `tree_has_branch_within`. This bit d60 (a quoted-field scrutinee survived the
   identifier-only guard) before the switch. `ir_walk`'s `condition_references_shapes`

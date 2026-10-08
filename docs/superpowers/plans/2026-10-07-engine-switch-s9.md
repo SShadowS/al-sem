@@ -181,7 +181,11 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     moved.
 - **S9.7 Rename** the `L3*` model types and `l3_workspace`; remove `engine/l3/mod.rs`
   and the `engine::l2` alias. Mechanical; zero goldens move (no type name is
-  serialized).
+  serialized). **DONE.** Owner chose the `Model*` names (`L3Resolved` → `Model`,
+  `L3Workspace` → `ModelEntities`, `L3Routine` → `ModelRoutine`, …) and allowed a
+  one-off word-boundary script for this rename. `L3Only` (in
+  `program::resolve::differential`'s `match_sites`) is L3-oracle tooling with no
+  caller but its own tests: S9.8 deletes it.
 - **S9.8 Acceptance inventory:** `rg` finds no `resolve_calls`, `build_event_graph`,
   `implicit_trigger_edge_for_op`, `assemble_l3_workspace_from_disk`, `cross_app_l3`;
   `src/engine/l3` is gone; every cross-app context field mapped (G14 includes

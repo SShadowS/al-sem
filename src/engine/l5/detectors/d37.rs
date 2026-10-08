@@ -23,15 +23,15 @@
 //! `ctx.upgraded_bindings_by_callsite` joined positionally with
 //! `call_site.argument_bindings`.
 
-use crate::engine::l2::features::PAnchor;
-use crate::engine::l3::call_resolver::UpgradedBinding;
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor, is_platform_loaded_trigger_rec};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PAnchor;
+use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
 const DETECTOR: &str = "d37-validate-without-persist";
 
@@ -52,7 +52,7 @@ const RESET_LIKE_OPS: &[&str] = &[
 ];
 
 pub fn detect_d37(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -151,11 +151,11 @@ pub fn detect_d37(
 /// Iterate ops in source order on the same record var, after the Validate; the first
 /// persist OR reset wins. Default "unpersisted".
 fn later_persisted(
-    ops: &[L3RecordOperation],
+    ops: &[ModelRecordOperation],
     var_key: &str,
-    validate_op: &L3RecordOperation,
+    validate_op: &ModelRecordOperation,
 ) -> &'static str {
-    let mut sorted: Vec<&L3RecordOperation> = ops
+    let mut sorted: Vec<&ModelRecordOperation> = ops
         .iter()
         .filter(|o| o.record_variable_name.to_lowercase() == var_key)
         .filter(|o| before_anchor(&validate_op.source_anchor, &o.source_anchor))
@@ -182,7 +182,7 @@ fn later_persisted(
 /// might persist (yes or unknown) the Validate is suppressed; only when EVERY
 /// forwarding helper provably doesn't persist do we fall through to emit.
 fn post_validate_helper_verdict(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     source_record_variable_id: Option<&str>,
     source_variable_name_lc: &str,
     validate_anchor: &PAnchor,
@@ -267,8 +267,8 @@ fn post_validate_helper_verdict(
 }
 
 fn emit(
-    routine: &L3Routine,
-    op: &L3RecordOperation,
+    routine: &ModelRoutine,
+    op: &ModelRecordOperation,
     findings: &mut Vec<Finding>,
     fp_index: &FingerprintIndex,
 ) {

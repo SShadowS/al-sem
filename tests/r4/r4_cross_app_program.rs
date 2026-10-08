@@ -314,7 +314,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
 }
 
 /// `"<object number>.<routine name>"` of a model routine id.
-fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> String {
+fn routine_label(m: &al_sem::program::model::workspace::Model, id: &str) -> String {
     let r = m
         .workspace
         .routines
@@ -338,8 +338,8 @@ fn routine_label(m: &al_sem::engine::l3::l3_workspace::L3Resolved, id: &str) -> 
 /// the test; restored, it passes.
 #[test]
 fn the_cross_app_model_resolves_dependency_bodies_and_events() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
     let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
@@ -400,8 +400,8 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
 /// test fails; restored, it passes.
 #[test]
 fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
     let m = assemble_and_resolve_cross_app_program(&ws, MI, false)
         .expect("model")
@@ -635,8 +635,8 @@ fn d43_does_not_call_a_setter_after_an_early_exit_certain() {
 /// fails the test; restored, it passes.
 #[test]
 fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     friend_workspace(dir.path(), true);
     let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
@@ -732,9 +732,9 @@ fn d44_anchors_on_the_workspace_subscriber() {
 /// `build_detector_context_cross_app` makes fixtures differ; restored, it passes.
 #[test]
 fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::{project_r4_findings, project_r4_findings_cross_app};
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
     let detectors = registered_detectors();
     let names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
@@ -924,8 +924,8 @@ fn demand_workspace(dir: &Path) {
 /// passes.
 #[test]
 fn the_cross_app_model_holds_the_demanded_dependency_routines() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     demand_workspace(dir.path());
     let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
@@ -1588,8 +1588,8 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
 /// into the workspace shape (`PageRun`, no external type).
 #[test]
 fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
-    use al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
-    use al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     write(
         &dir.path().join("app.json"),

@@ -24,8 +24,6 @@
 use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l3::l3_workspace::L3Resolved;
-use crate::engine::l3::program_calls::assemble_and_resolve_workspace_program;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
@@ -36,6 +34,8 @@ use crate::engine::l5::digest_cli::{
 use crate::engine::l5::snapshot::compose_snapshot;
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::unresolved_cone;
+use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+use crate::program::model::workspace::Model;
 
 const TX_SPAN_KNOWN_WRITES: &str = "span-has-known-writes";
 const TX_SPAN_NO_WRITES: &str = "span-has-no-known-writes";
@@ -831,7 +831,7 @@ pub fn format_prove_human(
 // Transaction context (mirrors digest_cli's compute_tx_context_map)
 // ---------------------------------------------------------------------------
 
-fn compute_tx_context_map(resolved: &L3Resolved) -> HashMap<String, &'static str> {
+fn compute_tx_context_map(resolved: &Model) -> HashMap<String, &'static str> {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
     // `RAW_INHERITED_FACTS`. Same shape as `digest_cli::compute_tx_context_map` —
     // only `ctx.transaction_spans` is read, and spans are derived-substrate-backed

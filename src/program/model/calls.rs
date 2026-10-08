@@ -1,8 +1,8 @@
 //! The call-resolution SHAPE the detector model carries: edges, upgraded argument
 //! bindings, diagnostics, declared dependencies.
 //!
-//! Moved verbatim out of `engine::l3::call_resolver` in engine-switch S2b.2: the
-//! model ([`super::workspace::L3Resolved::calls`]) holds a [`ResolvedCalls`], and
+//! Moved verbatim out of `program::model::calls` in engine-switch S2b.2: the
+//! model ([`super::workspace::Model::calls`]) holds a [`ResolvedCalls`], and
 //! the program engine fills it (`program_calls`, the B3 adapter). The legacy L3
 //! resolver that also produced this shape was deleted in S9.6.
 
@@ -211,7 +211,7 @@ pub(crate) fn object_run_dispatch_kind(object_kind: &str) -> DispatchKind {
 // ---------------------------------------------------------------------------
 // Upgraded-binding side table (the `upgradeBindings` mutation, captured out of
 // band because the model's PCallArgumentBinding does not carry the upgrade
-// fields). Moved from `engine::l3::call_resolver` in engine-switch S9.4.
+// fields). Moved from `program::model::calls` in engine-switch S9.4.
 // ---------------------------------------------------------------------------
 
 /// Per-callsite upgraded bindings. `upgraded` guards `upgrade_bindings` so it
@@ -257,7 +257,7 @@ pub(crate) fn initial_binding_state(
 /// (and skips), reproducing al-sem's non-idempotence guard.
 pub(crate) fn upgrade_bindings(
     state: &mut BindingState,
-    callee: &super::workspace::L3Routine,
+    callee: &super::workspace::ModelRoutine,
     callsite_id: &str,
 ) -> Option<Diagnostic> {
     upgrade_bindings_with(

@@ -8,9 +8,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::*;
-use crate::engine::l3::event_graph::{EventEdge, EventGraph, EventSymbol, Evidence};
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l5::test_support::{coverage, routine, summary};
+use crate::program::model::events::{EventEdge, EventGraph, EventSymbol, Evidence};
 
 fn ev(id: &str, publisher_routine: Option<&str>, name: &str, kind: &str) -> EventSymbol {
     EventSymbol {

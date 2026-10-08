@@ -15,7 +15,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -25,6 +24,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::program::attributes::has_attribute;
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
 
 const DETECTOR: &str = "d50-checked-run-implicit-commit";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
@@ -132,7 +132,7 @@ fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
 fn is_explicit_commit_proven_effective(
     routine_id: &str,
     ctx: &DetectorContext,
-    objects_by_id: &HashMap<&str, &L3Object>,
+    objects_by_id: &HashMap<&str, &ModelObject>,
 ) -> bool {
     let Some(r) = ctx.routine_by_id.get(routine_id) else {
         return false;
@@ -204,19 +204,19 @@ fn is_explicit_commit_proven_effective(
 }
 
 /// Build a `SourceAnchor` from a routine's `PAnchor`.
-fn routine_anchor(r: &L3Routine) -> SourceAnchor {
+fn routine_anchor(r: &ModelRoutine) -> SourceAnchor {
     anchor_of(&r.source_anchor, r)
 }
 
 pub fn detect_d50(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
 
     // Build objects_by_id for CommitBehavior lookup (cap 4).
-    let objects_by_id: HashMap<&str, &L3Object> =
+    let objects_by_id: HashMap<&str, &ModelObject> =
         ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
 
     // Build routinesWithExplicitCommit from ExplicitCommit spans — O(1) membership.
@@ -442,8 +442,6 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use super::*;
-    use crate::engine::l3::event_graph::EventGraph;
-    use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Workspace};
     use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
     use crate::engine::l4::combined_graph::CombinedGraph;
     use crate::engine::l5::detector_context::DetectorContext;
@@ -452,6 +450,8 @@ mod tests {
     use crate::engine::l5::test_support::{cone_store_of, fact, routine, summary, ts_known};
     use crate::engine::root_classification::RootClassification;
     use crate::program::attributes::{AttributeArg, AttributeInfo};
+    use crate::program::model::events::EventGraph;
+    use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
     // -----------------------------------------------------------------------
     // Attribute / object constructors
@@ -520,9 +520,9 @@ mod tests {
         }
     }
 
-    /// A minimal `L3Object` with the given id + optional InherentCommitBehavior.
-    fn mk_object(id: &str, icb: Option<&str>) -> L3Object {
-        L3Object {
+    /// A minimal `ModelObject` with the given id + optional InherentCommitBehavior.
+    fn mk_object(id: &str, icb: Option<&str>) -> ModelObject {
+        ModelObject {
             id: id.to_string(),
             app_guid: "app".to_string(),
             object_type: "Codeunit".to_string(),
@@ -565,10 +565,10 @@ mod tests {
     ///
     /// Lifetimes: `routines` and `objects` must outlive the returned ctx.
     fn minimal_ctx<'a>(
-        routines: &'a [crate::engine::l3::l3_workspace::L3Routine],
+        routines: &'a [crate::program::model::workspace::ModelRoutine],
         root_classes: Vec<RootClassification>,
     ) -> DetectorContext<'a> {
-        let routine_by_id: HashMap<&'a str, &'a crate::engine::l3::l3_workspace::L3Routine> =
+        let routine_by_id: HashMap<&'a str, &'a crate::program::model::workspace::ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
 
         let root_classifications_by_routine: HashMap<String, RootClassification> = root_classes
@@ -649,8 +649,8 @@ mod tests {
     // -----------------------------------------------------------------------
     #[test]
     fn all_caps_pass_medium_severity_at_detector_level() {
-        use crate::engine::l2::features::PAnchor;
         use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
+        use crate::program::body::features::PAnchor;
 
         let dummy_anchor = PAnchor {
             source_unit_id: "ws:src/T.al".to_string(),
@@ -694,7 +694,7 @@ mod tests {
         //   - root_classifications_by_routine (empty → all caps pass for r_committer)
         //   - call_site_by_id (empty → fallback to routine header anchor)
         //   - summaries (empty → is_transaction_managing falls back to name match)
-        let routine_by_id: HashMap<&str, &crate::engine::l3::l3_workspace::L3Routine> = [
+        let routine_by_id: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = [
             (r_seed.id.as_str(), &r_seed),
             (r_manager.id.as_str(), &r_manager),
             (r_committer.id.as_str(), &r_committer),
@@ -795,11 +795,11 @@ mod tests {
             cross_extension_subscribers: std::collections::BTreeMap::new(),
         };
 
-        // Build a minimal L3Resolved for detect_d50 (it uses ws.routines and ws.objects
+        // Build a minimal Model for detect_d50 (it uses ws.routines and ws.objects
         // to build its objects_by_id map internally). Clones of routines_slice/ws_objects
         // — the originals stay borrowed by ctx.fingerprint_index above.
-        let resolved = L3Resolved {
-            workspace: L3Workspace {
+        let resolved = Model {
+            workspace: ModelEntities {
                 objects: ws_objects.clone(),
                 tables: vec![],
                 routines: routines_slice.clone(),
@@ -844,7 +844,7 @@ mod tests {
         r.body_available = false;
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r1", &ctx, &objects));
     }
 
@@ -859,7 +859,7 @@ mod tests {
         let routines = vec![r];
         let rc = mk_root_class("r2a", &["public-procedure"]);
         let ctx = minimal_ctx(&routines, vec![rc]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2a", &ctx, &objects));
     }
 
@@ -869,7 +869,7 @@ mod tests {
         let routines = vec![r];
         let rc = mk_root_class("r2b", &["event-subscriber"]);
         let ctx = minimal_ctx(&routines, vec![rc]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2b", &ctx, &objects));
     }
 
@@ -885,7 +885,7 @@ mod tests {
         let routines = vec![r];
         let rc = mk_root_class("r2c", &["onrun-codeunit"]);
         let ctx = minimal_ctx(&routines, vec![rc]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2c", &ctx, &objects));
     }
 
@@ -898,7 +898,7 @@ mod tests {
         let routines = vec![r];
         let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
         let ctx = minimal_ctx(&routines, vec![rc]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2d", &ctx, &objects));
     }
 
@@ -910,7 +910,7 @@ mod tests {
         let routines = vec![r];
         let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
         let ctx = minimal_ctx(&routines, vec![rc]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(is_explicit_commit_proven_effective("r2e", &ctx, &objects));
     }
 
@@ -923,7 +923,7 @@ mod tests {
         r.attributes_parsed = vec![try_fn_attr()];
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
-        let objects: HashMap<&str, &L3Object> = HashMap::new();
+        let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r3", &ctx, &objects));
     }
 
@@ -939,7 +939,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-4a", None);
-        let objects: HashMap<&str, &L3Object> = [("obj-4a", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-4a", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4a", &ctx, &objects));
     }
 
@@ -951,7 +951,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-4b", None);
-        let objects: HashMap<&str, &L3Object> = [("obj-4b", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-4b", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4b", &ctx, &objects));
     }
 
@@ -966,7 +966,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-4c", None);
-        let objects: HashMap<&str, &L3Object> = [("obj-4c", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-4c", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4c", &ctx, &objects));
     }
 
@@ -981,7 +981,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-4d", Some("ignore"));
-        let objects: HashMap<&str, &L3Object> = [("obj-4d", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-4d", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4d", &ctx, &objects));
     }
 
@@ -992,7 +992,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-4e", Some("error"));
-        let objects: HashMap<&str, &L3Object> = [("obj-4e", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-4e", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4e", &ctx, &objects));
     }
 
@@ -1012,7 +1012,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-fix1a", Some("ignore")); // ICB = ignore, but irrelevant
-        let objects: HashMap<&str, &L3Object> = [("obj-fix1a", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-fix1a", &obj)].into();
         // FIX 1b: routine attr present → object ICB NOT consulted → TRUE.
         assert!(
             is_explicit_commit_proven_effective("r_fix1a", &ctx, &objects),
@@ -1036,7 +1036,7 @@ mod tests {
         let routines = vec![r];
         let ctx = minimal_ctx(&routines, vec![]);
         let obj = mk_object("obj-fix1b", None); // no object ICB
-        let objects: HashMap<&str, &L3Object> = [("obj-fix1b", &obj)].into();
+        let objects: HashMap<&str, &ModelObject> = [("obj-fix1b", &obj)].into();
         // FIX 1a: case-sensitive match misses → no object ICB → TRUE.
         assert!(
             is_explicit_commit_proven_effective("r_fix1b", &ctx, &objects),
@@ -1084,7 +1084,7 @@ mod tests {
     /// populated for `routine_id` — `cone_store_of` folds the store FROM the
     /// summary, so the two can never silently disagree.
     fn ctx_with_write_summary<'a>(
-        routines: &'a [L3Routine],
+        routines: &'a [ModelRoutine],
         routine_id: &str,
         facts: Vec<CapabilityFact>,
     ) -> DetectorContext<'a> {

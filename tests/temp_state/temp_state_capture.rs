@@ -14,8 +14,8 @@
 //! The test invokes the function DIRECTLY on a tree-sitter-parsed object node so
 //! it is independent of the L3 wiring (Task 3).
 
-use al_sem::engine::l2::features::PRecordVariable;
-use al_sem::engine::l2::ir_walk::ir_object_global_record_vars;
+use al_sem::program::body::features::PRecordVariable;
+use al_sem::program::body::ir_walk::ir_object_global_record_vars;
 
 const OBJECT_ID: &str = "test-app-guid/codeunit/50001";
 

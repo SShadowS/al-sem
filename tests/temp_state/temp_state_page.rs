@@ -7,7 +7,7 @@
 //! `xRec` that are structurally known to be temporary — the SourceTable is always
 //! loaded as a temporary copy in such pages. After L3 resolution:
 //!
-//! - `L3Object.source_table_temporary == Some(true)` (Part A: property capture)
+//! - `ModelObject.source_table_temporary == Some(true)` (Part A: property capture)
 //! - The page trigger's `Rec.DeleteAll()` resolves `Known(true)` (Part B)
 //! - The page trigger's `xRec.Get(...)` resolves `Known(true)` (Part B: RV-8)
 //!
@@ -20,7 +20,7 @@ use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_d
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000005aa";
 
 /// (a) A page with `SourceTableTemporary = true` has:
-///   - `L3Object.source_table_temporary == Some(true)`
+///   - `ModelObject.source_table_temporary == Some(true)`
 ///   - implicit `Rec` op resolves `Known(true)`
 ///   - implicit `xRec` op resolves `Known(true)` (RV-8)
 #[test]
@@ -67,7 +67,7 @@ page 50700 "TmpPage"
     assert_eq!(
         obj.source_table_temporary,
         Some(true),
-        "SourceTableTemporary = true must set L3Object.source_table_temporary == Some(true)",
+        "SourceTableTemporary = true must set ModelObject.source_table_temporary == Some(true)",
     );
 
     // Part B: OnOpenPage's implicit Rec.DeleteAll() must resolve Known(true).
@@ -194,7 +194,7 @@ page 50720 "FalseTmpPage"
     assert_eq!(
         obj.source_table_temporary,
         Some(false),
-        "SourceTableTemporary = false must set L3Object.source_table_temporary == Some(false)",
+        "SourceTableTemporary = false must set ModelObject.source_table_temporary == Some(false)",
     );
 
     // Rec op must NOT be upgraded to Known(true).

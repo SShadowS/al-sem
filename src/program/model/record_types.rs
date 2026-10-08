@@ -19,7 +19,7 @@
 //!     passed RAW to `table_by_name` / `object_by_type_name` (which lower-case).
 
 use super::symbol_table::SymbolTable;
-use super::workspace::{L3Object, L3Routine};
+use super::workspace::{ModelObject, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
@@ -103,12 +103,12 @@ fn strip_trailing_temporary(s: &str) -> String {
 /// Resolve a source-table / extends-target reference — which may be a table NAME
 /// (native AL source: `SourceTable = "Service Invoice Header"`) OR a table NUMBER
 /// (dependency `.app` symbols emit `SourceTable` / extends targets as the table's
-/// object number, e.g. `"5992"`) — to its internal `L3Table.id`. A numeric ref is
+/// object number, e.g. `"5992"`) — to its internal `ModelTable.id`. A numeric ref is
 /// routed through the `Table` object-number index to recover the table name, then
-/// to the `L3Table`. Returns `None` when nothing resolves (out-of-source table).
+/// to the `ModelTable`. Returns `None` when nothing resolves (out-of-source table).
 fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: &str) -> Option<String> {
     if let Ok(number) = table_ref.trim().parse::<i64>() {
-        // Numeric (dep-symbol) form: object-number → table object → name → L3Table.
+        // Numeric (dep-symbol) form: object-number → table object → name → ModelTable.
         let obj = symbols.object_by_type_number("Table", number)?;
         return symbols.table_by_name(&obj.name).map(|t| t.id.clone());
     }
@@ -119,8 +119,8 @@ fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: &str) -> Option<Str
 /// var / op's resolved `table_id` (internal TableId; the L3 dump projects it as a
 /// StableTableId). Mirrors `resolveRecordTypes`'s per-routine body EXACTLY.
 pub fn resolve_routine_record_types(
-    routine: &mut L3Routine,
-    object: Option<&L3Object>,
+    routine: &mut ModelRoutine,
+    object: Option<&ModelObject>,
     symbols: &SymbolTable,
 ) {
     // --- pass 1: resolve declared record variables ---------------------------

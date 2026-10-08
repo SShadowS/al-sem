@@ -384,7 +384,7 @@ mod tests {
     /// root one.
     #[test]
     fn analyze_model_selects_app_scoped_files_from_the_program_parse() {
-        use crate::engine::l3::l3_workspace::{ProgramFiles, select_program_files};
+        use crate::program::model::workspace::{ProgramFiles, select_program_files};
         let root = std::env::temp_dir().join(format!("switch-s2a-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let app = |dir: &Path, id: &str| {

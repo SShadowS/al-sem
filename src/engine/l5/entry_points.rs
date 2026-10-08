@@ -12,13 +12,13 @@
 //! ## Role / access-modifier threading (read this)
 //!
 //! al-sem reads `roleOf(r)` and `r.accessModifier` off the model. The Rust
-//! `L3Routine` has NEITHER:
+//! `ModelRoutine` has NEITHER:
 //!   - **Role** is `is_dep = dep_routine_ids.contains(&r.id)` (see
 //!     `capability_cone.rs` dep universe). For source-only this set is EMPTY (all
 //!     routines primary). We thread it as an explicit `&BTreeSet<String>` so the
 //!     function is correct for both source-only (empty set ⇒ all primary) and
 //!     cross-app.
-//!   - **Access modifier** has NO field on `L3Routine` yet. al-sem's
+//!   - **Access modifier** has NO field on `ModelRoutine` yet. al-sem's
 //!     `findReachableRoots` needs it ("local"/"internal"/public) plus
 //!     `internalReachableExternally` (al-sem `model.identity.
 //!     primaryInternalsVisibleTo`). For Task 2a we take BOTH as EXPLICIT INPUTS:
@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::engine::l3::l3_workspace::L3Routine;
+use crate::program::model::workspace::ModelRoutine;
 
 /// Routine access modifier (al-sem `accessModifier`). `Public` is the default
 /// when the model carries no entry (al-sem default-access procedures).
@@ -46,7 +46,7 @@ pub enum AccessModifier {
 
 /// `roleOf(r) === "primary"` — true when the routine is NOT in the dependency
 /// universe. Source-only: `dep_routine_ids` is empty ⇒ always primary.
-fn is_primary(routine: &L3Routine, dep_routine_ids: &BTreeSet<String>) -> bool {
+fn is_primary(routine: &ModelRoutine, dep_routine_ids: &BTreeSet<String>) -> bool {
     !dep_routine_ids.contains(&routine.id)
 }
 
@@ -57,7 +57,7 @@ fn is_primary(routine: &L3Routine, dep_routine_ids: &BTreeSet<String>) -> bool {
 /// `dep_routine_ids` is the role oracle (empty ⇒ all primary). Mirrors al-sem
 /// `findEntryPoints(model)`.
 pub fn find_entry_points(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -88,7 +88,7 @@ pub fn find_entry_points(
 ///
 /// Mirrors al-sem `findReachableRoots(model, { internalReachableExternally })`.
 pub fn find_reachable_roots(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
     access_modifiers: &HashMap<String, AccessModifier>,
     internal_reachable_externally: bool,

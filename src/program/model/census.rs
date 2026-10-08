@@ -1,7 +1,7 @@
 //! Population census: does every detector-model row correspond to exactly one
 //! program-graph physical row? (Engine-switch S2b.3; spec G5/G6.)
 //!
-//! The model ([`L3Workspace`]) and the program graph's physical rows
+//! The model ([`ModelEntities`]) and the program graph's physical rows
 //! ([`PhysicalIndex`]) are both built from the same syntax trees, by two different
 //! walks. S2b.4 will mint the model FROM the rows; that is only safe once this
 //! census shows the walks agree. The join key is the declaration's file and span:
@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use super::workspace::L3Workspace;
+use super::workspace::ModelEntities;
 use crate::program::physical::{PhysicalIndex, Pos};
 
 /// The census result. `model_*` lists name model ids; `rows_unmatched` names
@@ -108,7 +108,7 @@ pub(crate) fn anchor_key(a: &crate::program::body::features::PAnchor) -> Key {
 }
 
 /// Join `model` against `rows` (see the module doc).
-pub fn physical_census(model: &L3Workspace, rows: &PhysicalIndex) -> PhysicalCensus {
+pub fn physical_census(model: &ModelEntities, rows: &PhysicalIndex) -> PhysicalCensus {
     let mut c = PhysicalCensus {
         model_objects: model.objects.len(),
         object_rows: rows.objects.len(),
@@ -205,11 +205,11 @@ impl PhysicalCensus {
 
 /// Engine-switch S5.4 (spec G3/G4): the object facts derived twice from the same
 /// IR — by `node_extract` for the resolver's `ObjectNode` and by the model
-/// assembly for `L3Object` — compared object by object. Joined through the
+/// assembly for `ModelObject` — compared object by object. Joined through the
 /// physical object rows. One row per disagreement
 /// (`{field}\t{model id}\tmodel={…}\tprogram={…}`), then a `compared\t{n}` row.
 pub fn object_fact_census(
-    model: &L3Workspace,
+    model: &ModelEntities,
     graph: &crate::program::graph::ProgramGraph,
 ) -> Vec<String> {
     use crate::program::node_extract::ObjectRef;

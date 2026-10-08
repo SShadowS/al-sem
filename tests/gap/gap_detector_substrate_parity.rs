@@ -105,7 +105,7 @@ fn corpus_dir(fixture: &str) -> PathBuf {
 
 /// Assert full-vs-minimal parity for every detector over one resolved workspace.
 fn assert_parity(
-    resolved: &al_sem::engine::l3::l3_workspace::L3Resolved,
+    resolved: &al_sem::program::model::workspace::Model,
     detectors: &[Detector],
     label: &str,
 ) {

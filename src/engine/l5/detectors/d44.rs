@@ -15,13 +15,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::event_flow::event_kind_of;
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 use super::{anchor_of, group_and_cap};
 
@@ -38,7 +38,7 @@ struct SubWrite {
 }
 
 pub fn detect_d44(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;

@@ -28,10 +28,10 @@
 //!
 //! Same harness as `tests/temp_state_substitution.rs` (Task 7).
 
-use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l4::summary::{PDbEffect, PDbEffectTempState, R3a2Projection, project_r3a2};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
+use al_sem::program::model::workspace::Model;
 use tempfile::TempDir;
 
 const APP_JSON: &str = r#"{
@@ -56,7 +56,7 @@ fn project(al_src: &str) -> R3a2Projection {
 
 /// Like [`project`] but returns the resolved L3 workspace (for binding-level
 /// assertions — the RV-8 sourceKind case).
-fn resolve(al_src: &str) -> L3Resolved {
+fn resolve(al_src: &str) -> Model {
     let dir = TempDir::new().expect("tempdir");
     std::fs::write(dir.path().join("app.json"), APP_JSON).expect("write app.json");
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir src");

@@ -13,10 +13,10 @@
 //! (digit-runs numeric, letter-runs lexicographic; "d2" < "d10"). `compareStrings`
 //! is plain `str::cmp` (byte order), used inline.
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use crate::engine::l5::finding::{D1CohortIndex, Finding};
 use crate::engine::perf_trace as pt;
+use crate::program::model::workspace::Model;
 use rayon::prelude::*;
 
 /// Substrate demand bits (W1.0 demand-driven detector substrate).
@@ -314,7 +314,7 @@ impl std::error::Error for DetectorError {}
 /// (`[profile.release]`, Cargo.toml), the profile every shipped binary uses.
 pub struct Detector {
     pub name: String,
-    pub run: fn(&L3Resolved, &DetectorContext) -> Result<DetectorOutput, DetectorError>,
+    pub run: fn(&Model, &DetectorContext) -> Result<DetectorOutput, DetectorError>,
     /// The substrate bits (see `substrate`) this detector reads from the context.
     /// `run_detectors` folds every selected detector's `requires` into the union it
     /// hands to `build_detector_context`, so a substrate is built iff some selected
@@ -375,7 +375,7 @@ fn primary_location_key(f: &Finding) -> String {
 /// panic=unwind); that wrapper is INERT in an abort release binary — `catch_unwind`
 /// never catches anything there — so it must never be relied on as the real
 /// guarantee.
-pub fn run_detectors(resolved: &L3Resolved, detectors: &[Detector]) -> RunOutput {
+pub fn run_detectors(resolved: &Model, detectors: &[Detector]) -> RunOutput {
     // W1.0 demand-driven substrate: build only the expensive substrates some selected
     // detector actually reads. A full/preset/all-detector selection unions to
     // `substrate::ALL`, so the context — and the whole report — stays byte-identical.
@@ -417,7 +417,7 @@ pub fn run_detectors(resolved: &L3Resolved, detectors: &[Detector]) -> RunOutput
             .workspace
             .routines
             .iter()
-            // analysisRole is not modeled on L3Routine (source-only ⇒ always primary).
+            // analysisRole is not modeled on ModelRoutine (source-only ⇒ always primary).
             .map(|r| (r.id.as_str(), "primary"))
             .collect();
         role_scope_and_sort(findings, &role_by_routine)
@@ -570,7 +570,7 @@ pub(crate) fn in_detector_loop() -> bool {
 /// doc comment for the full guarantee), collecting findings + stats.
 #[allow(clippy::type_complexity)]
 fn run_each(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
     detectors: &[Detector],
 ) -> (
@@ -583,7 +583,7 @@ fn run_each(
 
     // ── Run every detector IN PARALLEL, then fold sequentially ───────────────
     //
-    // `detector.run` is a plain `fn(&L3Resolved, &DetectorContext)` — both
+    // `detector.run` is a plain `fn(&Model, &DetectorContext)` — both
     // arguments are immutable shared borrows and no detector writes through
     // them, so the run phase has no shared mutable state at all. What DOES have
     // to stay ordered is the accumulation below: `findings` order survives into
@@ -816,10 +816,7 @@ mod tests {
 
     static DEP_LOCATED: std::sync::OnceLock<Finding> = std::sync::OnceLock::new();
 
-    fn dep_located_probe(
-        _: &L3Resolved,
-        _: &DetectorContext,
-    ) -> Result<DetectorOutput, DetectorError> {
+    fn dep_located_probe(_: &Model, _: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
         let f = DEP_LOCATED.get().expect("template set").clone();
         Ok(DetectorOutput::no_diag(
             vec![f],
@@ -880,25 +877,19 @@ mod tests {
 
     /// Sleeps, so it CANNOT complete before `ordering_fast` — this is the
     /// hand-stated precondition that makes the test discriminate.
-    fn ordering_slow(
-        _r: &L3Resolved,
-        _c: &DetectorContext,
-    ) -> Result<DetectorOutput, DetectorError> {
+    fn ordering_slow(_r: &Model, _c: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
         std::thread::sleep(std::time::Duration::from_millis(200));
         Ok(ordering_output("slow"))
     }
 
-    fn ordering_fast(
-        _r: &L3Resolved,
-        _c: &DetectorContext,
-    ) -> Result<DetectorOutput, DetectorError> {
+    fn ordering_fast(_r: &Model, _c: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
         Ok(ordering_output("fast"))
     }
 
     /// Stands in for d47/d49/d51: reports, from INSIDE the parallel loop, whether
     /// the ordering facts were already filled when it ran.
     fn ordering_facts_probe(
-        _r: &L3Resolved,
+        _r: &Model,
         c: &DetectorContext,
     ) -> Result<DetectorOutput, DetectorError> {
         let state = if c.ordering_facts.get().is_some() {
@@ -913,7 +904,7 @@ mod tests {
     /// uses it, so it is debug-only too (CI lints in release).
     #[cfg(debug_assertions)]
     fn ordering_facts_reader(
-        _r: &L3Resolved,
+        _r: &Model,
         c: &DetectorContext,
     ) -> Result<DetectorOutput, DetectorError> {
         c.get_ordering_facts();
@@ -1081,13 +1072,13 @@ mod tests {
         );
     }
 
-    use crate::engine::l3::l3_workspace::L3Workspace;
     use crate::engine::l5::finding::{Finding, FindingConfidence, SourceAnchor};
+    use crate::program::model::workspace::ModelEntities;
     use std::cmp::Ordering;
 
-    fn empty_resolved() -> L3Resolved {
-        L3Resolved {
-            workspace: L3Workspace {
+    fn empty_resolved() -> Model {
+        Model {
+            workspace: ModelEntities {
                 objects: vec![],
                 tables: vec![],
                 routines: vec![],
@@ -1140,7 +1131,7 @@ mod tests {
     }
 
     fn ok_detector(
-        _resolved: &L3Resolved,
+        _resolved: &Model,
         _ctx: &DetectorContext,
     ) -> Result<DetectorOutput, DetectorError> {
         Ok(DetectorOutput::no_diag(
@@ -1153,7 +1144,7 @@ mod tests {
     /// isolation path — degrades to the exact warning-diagnostic format while every
     /// other registered detector still runs to completion.
     fn err_detector(
-        _resolved: &L3Resolved,
+        _resolved: &Model,
         _ctx: &DetectorContext,
     ) -> Result<DetectorOutput, DetectorError> {
         Err(DetectorError::new("boom"))
@@ -1164,7 +1155,7 @@ mod tests {
     /// under `cargo test`, which unwinds (unlike the shipped `panic = "abort"`
     /// release profile), so it exercises that backstop specifically.
     fn panic_detector(
-        _resolved: &L3Resolved,
+        _resolved: &Model,
         _ctx: &DetectorContext,
     ) -> Result<DetectorOutput, DetectorError> {
         panic!("boom-panic");

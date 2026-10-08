@@ -68,10 +68,10 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
 use crate::engine::l5::finding::EvidenceStep;
+use crate::program::model::workspace::ModelRoutine;
 
 /// Resolve a terminal op's `temp_state` ALONG ONE WALK PATH to a concrete
 /// `Known(_)` / `Unknown` (Component 3, RV-6).
@@ -81,7 +81,7 @@ use crate::engine::l5::finding::EvidenceStep;
 /// - `terminal_state` is the terminal op's `temp_state` as a [`TempStateKind`]
 ///   (the caller maps `op.temp_state` via `TempStateKind::from_p_temp_state`, with
 ///   a `None` temp_state → `Unknown`).
-/// - `routine_by_id` maps each routine's INTERNAL id to its `L3Routine` (so a hop's
+/// - `routine_by_id` maps each routine's INTERNAL id to its `ModelRoutine` (so a hop's
 ///   `callsite_id` can be resolved against the parent routine's call sites). This is
 ///   the same `ctx.routine_by_id` index d1 already builds.
 /// - `edge_kind_by_callsite` maps a hop's `callsite_id` to the edge KIND of the
@@ -101,7 +101,7 @@ use crate::engine::l5::finding::EvidenceStep;
 pub fn resolve_temp_along_path(
     path: &[EvidenceStep],
     terminal_state: TempStateKind,
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
     edge_kind_by_callsite: &HashMap<&str, &str>,
 ) -> TempStateKind {
     resolve_temp_along_path_closed_world(
@@ -128,7 +128,7 @@ pub fn resolve_temp_along_path(
 pub fn resolve_temp_along_path_closed_world(
     path: &[EvidenceStep],
     terminal_state: TempStateKind,
-    routine_by_id: &HashMap<&str, &L3Routine>,
+    routine_by_id: &HashMap<&str, &ModelRoutine>,
     edge_kind_by_callsite: &HashMap<&str, &str>,
     closed_world_temp_params: &ClosedWorldTempParams,
 ) -> TempStateKind {
@@ -211,7 +211,7 @@ pub fn resolve_temp_along_path_closed_world(
 /// to the PARENT frame at L2 — the same UPWARD re-symbolization Task 8 does — which
 /// the next loop turn then chases through the parent's own caller hop).
 fn step_one_frame(
-    parent: Option<&L3Routine>,
+    parent: Option<&ModelRoutine>,
     callsite_id: Option<&str>,
     callee_param_index: u32,
 ) -> TempStateKind {

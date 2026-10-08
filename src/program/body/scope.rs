@@ -83,7 +83,7 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// Unescape an AL quoted identifier's inner text: a doubled `""` inside the
 /// quotes is one literal `"`.
 ///
-/// THE single definition — the L3 workspace stores `L3Routine.enclosing_member`
+/// THE single definition — the L3 workspace stores `ModelRoutine.enclosing_member`
 /// through it and [`super::ir_walk::ir_enclosing_member`] feeds the routine-id
 /// discriminator through it, and those two strings MUST be the same string.
 /// (The raw IR value is only outer-quote-stripped.)

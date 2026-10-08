@@ -28,7 +28,7 @@ const MODEL_INSTANCE_ID: &str = "r0";
 /// it, `tests/r3a4-fixtures/ws`.
 fn chain_dep_artifact() -> al_sem::engine::deps::dep_artifact_l4::DependencyArtifactL4 {
     let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r3a4-fixtures/ws");
-    let x = al_sem::engine::l3::program_calls::assemble_and_resolve_cross_app_program(
+    let x = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &ws,
         MODEL_INSTANCE_ID,
         false,

@@ -213,7 +213,7 @@ codeunit 50171 "G5 Merge Tables"
 
 /// The ACTUAL G-5 shape (CDO batch 2/3): a `tableextension` whose OWN object
 /// number equals a REAL table's number in the same app. Both were indexed as
-/// `L3Table` under the SAME internal id `{appGuid}/table/{number}`, so the
+/// `ModelTable` under the SAME internal id `{appGuid}/table/{number}`, so the
 /// last-wins `table_by_id` maps rendered ops on the REAL table with the
 /// EXTENSION's name (e.g. real op on "CDO Merge Table Top/Bottom" reported as
 /// "CDOReturnShipmentHeader"). Each sub-loop's finding must name the REAL table.

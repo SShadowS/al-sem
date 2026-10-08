@@ -151,7 +151,7 @@ mod tests {
         let mut f = fact("insert", "table", Some(resource_id));
         f.extra = Some(CapabilityExtra::Table {
             record_variable_id: None,
-            temp_state: Some(crate::engine::l2::features::PTempState {
+            temp_state: Some(crate::program::body::features::PTempState {
                 kind: kind.to_string(),
                 value,
                 parameter_index: None,

@@ -32,10 +32,10 @@ use indexmap::IndexMap;
 
 use crate::engine::gate::app_attribution::App;
 use crate::engine::gate::projection::FindingSummary;
-use crate::engine::l3::coverage::AnalysisCoverage;
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
-use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
 use crate::engine::l5::finding::Finding;
+use crate::program::model::coverage::AnalysisCoverage;
+use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 
 // ---------------------------------------------------------------------------
 // Severity / confidence colour palettes (mirrors format-html.ts)
@@ -144,18 +144,22 @@ fn trunc(s: &str, n: usize) -> String {
 // ---------------------------------------------------------------------------
 
 struct Maps<'a> {
-    routines: std::collections::HashMap<&'a str, &'a L3Routine>,
-    objects: std::collections::HashMap<&'a str, &'a L3Object>,
-    tables: std::collections::HashMap<&'a str, &'a L3Table>,
+    routines: std::collections::HashMap<&'a str, &'a ModelRoutine>,
+    objects: std::collections::HashMap<&'a str, &'a ModelObject>,
+    tables: std::collections::HashMap<&'a str, &'a ModelTable>,
 }
 
 impl<'a> Maps<'a> {
-    fn build(routines: &'a [L3Routine], objects: &'a [L3Object], tables: &'a [L3Table]) -> Self {
+    fn build(
+        routines: &'a [ModelRoutine],
+        objects: &'a [ModelObject],
+        tables: &'a [ModelTable],
+    ) -> Self {
         Maps {
             routines: routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             objects: objects.iter().map(|o| (o.id.as_str(), o)).collect(),
             // G-5: REAL table wins an id collision with a tableextension stub.
-            tables: crate::engine::l3::l3_workspace::table_by_id_preferring_real(tables),
+            tables: crate::program::model::workspace::table_by_id_preferring_real(tables),
         }
     }
 }
@@ -470,7 +474,7 @@ fn render_event_graph(graph: &EventGraph, m: &Maps) -> String {
 
     let event_id_set: std::collections::HashSet<&str> =
         events.iter().map(|e| e.id.as_str()).collect();
-    let graph_edges: Vec<&crate::engine::l3::event_graph::EventEdge> = graph
+    let graph_edges: Vec<&crate::program::model::events::EventEdge> = graph
         .edges
         .iter()
         .filter(|e| event_id_set.contains(e.event_id.as_str()))
@@ -775,7 +779,7 @@ pub struct HtmlFormatInputs<'a> {
     /// Post-filter, post-scope, post-limit findings (pre-sorted).
     pub findings: &'a [(FindingSummary, &'a Finding)],
     /// The resolved workspace model.
-    pub resolved: &'a L3Resolved,
+    pub resolved: &'a Model,
     /// Coverage statistics.
     pub coverage: &'a AnalysisCoverage,
     /// Primary app identity (from workspace `app.json`).
@@ -945,9 +949,9 @@ pub fn format_html(inputs: &HtmlFormatInputs<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l3::event_graph::{EventEdge, EventGraph, EventSymbol};
-    use crate::engine::l3::l3_workspace::{L3Object, L3Routine};
     use crate::engine::l5::finding::{FindingConfidence, SourceAnchor};
+    use crate::program::model::events::{EventEdge, EventGraph, EventSymbol};
+    use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
     fn empty_maps() -> Maps<'static> {
         // Using leaked empty slices for 'static lifetime in tests
@@ -1176,8 +1180,8 @@ mod tests {
     #[test]
     fn co_location_keys_off_raw_not_projected_primary() {
         use crate::engine::gate::projection::{ProjectionIndex, project_finding};
-        use crate::engine::l3::coverage::AnalysisCoverage;
-        use crate::engine::l3::l3_workspace::{L3Resolved, L3Workspace};
+        use crate::program::model::coverage::AnalysisCoverage;
+        use crate::program::model::workspace::{Model, ModelEntities};
 
         // Both findings sit at the SAME raw primary anchor (ws:Foo.al, line 9, col 4).
         let raw_primary_a = anchor("ws:Foo.al", 9, 4, "rA");
@@ -1190,8 +1194,8 @@ mod tests {
         let f_b = minimal_finding("fB", "d4-repeated-lookup-in-loop", raw_primary_b, None);
 
         // Project (empty model — display names resolve to None, irrelevant to the key).
-        let objects: Vec<L3Object> = vec![];
-        let routines: Vec<L3Routine> = vec![];
+        let objects: Vec<ModelObject> = vec![];
+        let routines: Vec<ModelRoutine> = vec![];
         let idx = ProjectionIndex::build(&objects, &routines);
         let sum_a = project_finding(&f_a, &idx);
         let sum_b = project_finding(&f_b, &idx);
@@ -1202,8 +1206,8 @@ mod tests {
             "precondition: actionable_anchor must make A's projected primary differ from B's"
         );
 
-        let resolved = L3Resolved {
-            workspace: L3Workspace {
+        let resolved = Model {
+            workspace: ModelEntities {
                 objects: vec![],
                 tables: vec![],
                 routines: vec![],
@@ -1255,11 +1259,11 @@ mod tests {
     // ---------------------------------------------------------------------------
     #[test]
     fn missing_primary_app_renders_empty_masthead_and_bare_title() {
-        use crate::engine::l3::coverage::AnalysisCoverage;
-        use crate::engine::l3::l3_workspace::{L3Resolved, L3Workspace};
+        use crate::program::model::coverage::AnalysisCoverage;
+        use crate::program::model::workspace::{Model, ModelEntities};
 
-        let resolved = L3Resolved {
-            workspace: L3Workspace {
+        let resolved = Model {
+            workspace: ModelEntities {
                 objects: vec![],
                 tables: vec![],
                 routines: vec![],

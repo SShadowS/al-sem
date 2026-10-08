@@ -21,8 +21,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::features::PAnchor;
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -30,6 +28,8 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PAnchor;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d7-recursive-event-expansion";
 
@@ -130,12 +130,12 @@ fn fallback_anchor(id: &str) -> SourceAnchor {
 }
 
 /// Build a routine's own `SourceAnchor` (`routine.sourceAnchor`) in internal form.
-fn routine_anchor(a: &PAnchor, routine: &L3Routine) -> SourceAnchor {
+fn routine_anchor(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
     super::anchor_of(a, routine)
 }
 
 pub fn detect_d7(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;

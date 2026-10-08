@@ -61,7 +61,6 @@
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use al_sem::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
@@ -69,6 +68,7 @@ use al_sem::engine::l5::registry::{run_detectors, substrate};
 use al_sem::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
+use al_sem::program::model::workspace::{Model, ModelRoutine};
 
 const FIXTURE: &str = "ws-d50-temp-gate";
 const DETECTOR: &str = "d50-checked-run-implicit-commit";
@@ -95,7 +95,7 @@ fn fixture_dir() -> PathBuf {
         .join(FIXTURE)
 }
 
-fn resolve_fixture() -> L3Resolved {
+fn resolve_fixture() -> Model {
     let dir = fixture_dir();
     assert!(
         dir.is_dir(),
@@ -111,8 +111,8 @@ fn resolve_fixture() -> L3Resolved {
 /// anti-degenerate guard: a fixture that failed to parse would assemble zero
 /// routines and every "expects no finding" case would pass while analysing
 /// nothing.
-fn routine_id(resolved: &L3Resolved, name: &str) -> String {
-    let matches: Vec<&L3Routine> = resolved
+fn routine_id(resolved: &Model, name: &str) -> String {
+    let matches: Vec<&ModelRoutine> = resolved
         .workspace
         .routines
         .iter()
@@ -139,7 +139,7 @@ fn routine_id(resolved: &L3Resolved, name: &str) -> String {
 }
 
 /// The assembled name for a routine id, for failure messages.
-fn name_of(resolved: &L3Resolved, routine_id: &str) -> String {
+fn name_of(resolved: &Model, routine_id: &str) -> String {
     resolved
         .workspace
         .routines
@@ -150,7 +150,7 @@ fn name_of(resolved: &L3Resolved, routine_id: &str) -> String {
 }
 
 /// Run the REGISTERED d50 over the fixture.
-fn d50_findings(resolved: &L3Resolved) -> Vec<Finding> {
+fn d50_findings(resolved: &Model) -> Vec<Finding> {
     let selected: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == DETECTOR)
@@ -173,7 +173,7 @@ fn findings_at<'f>(findings: &'f [Finding], routine_id: &str) -> Vec<&'f Finding
 }
 
 /// A compact rendering of every finding's subject, for failure messages.
-fn subjects(resolved: &L3Resolved, findings: &[Finding]) -> Vec<String> {
+fn subjects(resolved: &Model, findings: &[Finding]) -> Vec<String> {
     findings
         .iter()
         .map(|f| {

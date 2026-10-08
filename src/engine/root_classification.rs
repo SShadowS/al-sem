@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Workspace};
+use crate::program::model::workspace::{ModelEntities, ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // RootKind — the 13-value union, declaration order is ROOT_KIND_VALUES.
@@ -199,7 +199,7 @@ fn is_page_action_wrapper(syntax_kind: &str) -> bool {
 
 /// Compute the set of RootKinds a routine qualifies for, purely from its
 /// structural shape + the host object's declared metadata. Mirrors `kindsFor`.
-fn kinds_for(routine: &L3Routine, object: &L3Object) -> Vec<String> {
+fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
     let mut set: BTreeSet<String> = BTreeSet::new();
 
     // Trigger kinds — gated on routine.kind === "trigger".
@@ -288,8 +288,8 @@ fn kinds_for(routine: &L3Routine, object: &L3Object) -> Vec<String> {
 /// AST-only root classifier (al-sem `classifyRoots`). Produces a
 /// `RootClassification` for every routine that qualifies as >=1 RootKind, sorted
 /// by internal RoutineId ascending. Routines whose object is missing are skipped.
-pub fn classify_roots(workspace: &L3Workspace) -> Vec<RootClassification> {
-    let objects_by_id: BTreeMap<&str, &L3Object> = workspace
+pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
+    let objects_by_id: BTreeMap<&str, &ModelObject> = workspace
         .objects
         .iter()
         .map(|o| (o.id.as_str(), o))
@@ -471,8 +471,8 @@ fn load_roots_config(workspace_root: &Path) -> Option<RootsConfig> {
 /// case-insensitive name match within the object (may be multiple).
 fn resolve_target<'a>(
     target: &RootsConfigTarget,
-    workspace: &'a L3Workspace,
-) -> Vec<&'a L3Routine> {
+    workspace: &'a ModelEntities,
+) -> Vec<&'a ModelRoutine> {
     match target {
         RootsConfigTarget::RoutineId(rid) => workspace
             .routines
@@ -514,7 +514,7 @@ pub struct InfraDiagnostic {
 fn overlay_config_roots(
     ast_roots: Vec<RootClassification>,
     config: Option<&RootsConfig>,
-    workspace: &L3Workspace,
+    workspace: &ModelEntities,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let Some(config) = config else {
         return (ast_roots, vec![]);
@@ -647,7 +647,7 @@ fn overlay_config_roots(
 /// (e.g. `kinds-mismatch` warnings) are threaded up to the caller for inclusion
 /// in the JSON envelope.
 pub fn compute_root_classifications(
-    workspace: &L3Workspace,
+    workspace: &ModelEntities,
     workspace_root: Option<&Path>,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let ast_roots = classify_roots(workspace);
@@ -700,7 +700,7 @@ pub struct R4FRootClassProjection {
 /// StableRoutineId via the routine stable-map; drop entries with no stable id;
 /// sort by stable routineId ascending.
 pub fn project_r4f_root_classifications(
-    resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    resolved: &crate::program::model::workspace::Model,
     fixture_name: &str,
 ) -> R4FRootClassProjection {
     let map = crate::engine::l4::summary::build_routine_stable_map(&resolved.workspace.routines);
@@ -755,9 +755,9 @@ pub fn project_r4f_root_classifications(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l2::features::PAnchor;
-    use crate::engine::l3::l3_workspace::RoutineVariables;
     use crate::program::attributes::AttributeInfo;
+    use crate::program::body::features::PAnchor;
+    use crate::program::model::workspace::RoutineVariables;
 
     /// The eleven kinds the AST pass derives. A8 asserts the union of `classify_roots`
     /// over the witness workspace EQUALS this; A9 asserts `ROOT_KIND_VALUES` minus
@@ -781,8 +781,8 @@ mod tests {
     // Every field these default is one the test does NOT depend on. Each test
     // below states its OWN discriminating field explicitly at the call site.
 
-    fn object(id: &str, object_type: &str) -> L3Object {
-        L3Object {
+    fn object(id: &str, object_type: &str) -> ModelObject {
+        ModelObject {
             id: id.to_string(),
             app_guid: "app".to_string(),
             object_type: object_type.to_string(),
@@ -816,13 +816,13 @@ mod tests {
         }
     }
 
-    fn routine(id: &str, object_id: &str, kind: &str) -> L3Routine {
-        L3Routine {
+    fn routine(id: &str, object_id: &str, kind: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: object_id.to_string(),
-            // NOTE: `L3Routine` carries its own `object_type`, which `kinds_for`
-            // does NOT read — it branches on the OWNING `L3Object`'s field. See
+            // NOTE: `ModelRoutine` carries its own `object_type`, which `kinds_for`
+            // does NOT read — it branches on the OWNING `ModelObject`'s field. See
             // `page_extension_action_trigger_is_page_action` (A3).
             object_type: "Page".to_string(),
             name: "R".to_string(),
@@ -857,8 +857,8 @@ mod tests {
         }
     }
 
-    fn workspace(objects: Vec<L3Object>, routines: Vec<L3Routine>) -> L3Workspace {
-        L3Workspace {
+    fn workspace(objects: Vec<ModelObject>, routines: Vec<ModelRoutine>) -> ModelEntities {
+        ModelEntities {
             objects,
             tables: Vec::new(),
             routines,
@@ -1042,7 +1042,7 @@ mod tests {
     /// LISTS `page-action`, omitting the action witness makes A8 fail
     /// immediately, not silently pass after a deletion. The witness is required
     /// for A8 to pass at all; it is not what makes the deletion detectable.
-    fn eleven_kind_witness_workspace() -> L3Workspace {
+    fn eleven_kind_witness_workspace() -> ModelEntities {
         let mut objects = Vec::new();
         let mut routines = Vec::new();
 

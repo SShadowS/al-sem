@@ -12,7 +12,7 @@
 //! inputs (no skip-gate). If ws-d2's L2 features diverge from the golden, that
 //! is a real walker/emitter bug; the fix belongs in `src/engine/l2/**`, not here.
 
-use al_sem::engine::l2::l2_workspace::project_workspace;
+use al_sem::program::body::l2_workspace::project_workspace;
 use std::path::PathBuf;
 
 use crate::regen;

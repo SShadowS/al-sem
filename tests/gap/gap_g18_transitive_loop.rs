@@ -53,15 +53,15 @@
 //! hand_stated_id_collision_keeps_a_real_summary_and_derived_row`, which took the
 //! same remedy for the sibling defect one module over.
 
-use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::workspace::Model;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g18ab";
 
-fn resolve(files: &[(String, String)]) -> L3Resolved {
+fn resolve(files: &[(String, String)]) -> Model {
     assemble_and_resolve_inline_program_default(files, APP_GUID)
 }
 
@@ -69,7 +69,7 @@ fn resolve(files: &[(String, String)]) -> L3Resolved {
 /// `run_detectors` rebuilds the symbol table and combined graph from
 /// `resolved.workspace.routines` on every call, reading whatever ids are on those
 /// routines AT CALL TIME; [`force_id_collision`] rebases the precomputed calls too.
-fn run_d1_on(resolved: &L3Resolved) -> Vec<Finding> {
+fn run_d1_on(resolved: &Model) -> Vec<Finding> {
     let d1: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == "d1-db-op-in-loop")
@@ -92,7 +92,7 @@ fn root_causes(findings: &[Finding]) -> Vec<&str> {
 }
 
 /// The internal routine ids of every routine named `name`, sorted.
-fn ids_named(resolved: &L3Resolved, name: &str) -> Vec<String> {
+fn ids_named(resolved: &Model, name: &str) -> Vec<String> {
     let mut v: Vec<String> = resolved
         .workspace
         .routines
@@ -133,7 +133,7 @@ fn ids_named(resolved: &L3Resolved, name: &str) -> Vec<String> {
 /// from the routines on every read). So the precomputed edges are rebased the same
 /// way: an edge end equal to an old id becomes the shared id, and an edge's call-site
 /// and operation ids get the same prefix rewrite as the routine's own call sites.
-fn force_id_collision(resolved: &mut L3Resolved, routine_name: &str, shared_id: &str) -> usize {
+fn force_id_collision(resolved: &mut Model, routine_name: &str, shared_id: &str) -> usize {
     let mut old_ids: Vec<String> = Vec::new();
     for r in resolved.workspace.routines.iter_mut() {
         if !r.name.eq_ignore_ascii_case(routine_name) {

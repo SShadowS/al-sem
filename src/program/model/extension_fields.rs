@@ -13,7 +13,7 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::workspace::{L3Field, L3Table, L3Workspace};
+use super::workspace::{ModelEntities, ModelField, ModelTable};
 use crate::engine::ids::{encode_field_id, encode_table_id};
 use std::collections::HashSet;
 
@@ -25,7 +25,7 @@ use std::collections::HashSet;
 /// Port of the al-sem original `src/resolve/extension-fields.ts`. (Its R2.5a
 /// projected-entity twin in `deps::merged_index` was deleted in engine-switch S9.6;
 /// this is the only copy.)
-pub fn merge_extension_fields(workspace: &mut L3Workspace) {
+pub fn merge_extension_fields(workspace: &mut ModelEntities) {
     // Resolve table-name → index and table-id → index up front (LAST-wins, to
     // mirror the symbol table the TS pass queries). We must mutate tables in
     // place, so we resolve indices, then apply.
@@ -63,7 +63,7 @@ pub fn merge_extension_fields(workspace: &mut L3Workspace) {
             if existing.contains(&field.field_number) {
                 continue;
             }
-            let merged = L3Field {
+            let merged = ModelField {
                 id: encode_field_id(&base_table_id, field.field_number),
                 physical_table_id: base_table_id.clone(),
                 declaring_object_id: object.id.clone(),
@@ -81,7 +81,7 @@ pub fn merge_extension_fields(workspace: &mut L3Workspace) {
 }
 
 /// `tableByName` semantics: case-insensitive, LAST-wins on collision.
-fn table_index_by_name(tables: &[L3Table], name: &str) -> Option<usize> {
+fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
     let want = name.to_lowercase();
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {
@@ -93,7 +93,7 @@ fn table_index_by_name(tables: &[L3Table], name: &str) -> Option<usize> {
 }
 
 /// `tableById` semantics: LAST-wins on collision.
-fn table_index_by_id(tables: &[L3Table], id: &str) -> Option<usize> {
+fn table_index_by_id(tables: &[ModelTable], id: &str) -> Option<usize> {
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {
         if t.id == id {

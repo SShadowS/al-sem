@@ -15,7 +15,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, group_and_cap};
@@ -24,12 +23,13 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d54-publish-in-tryfunction-cone";
 const MAX_PER_TRY_ROUTINE: usize = 5;
 
 pub fn detect_d54(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -52,7 +52,7 @@ pub fn detect_d54(
         let mut queue: VecDeque<&str> = VecDeque::new();
         seen.insert(routine.id.as_str());
         queue.push_back(routine.id.as_str());
-        let mut reached: Vec<&crate::engine::l3::l3_workspace::L3Routine> = Vec::new();
+        let mut reached: Vec<&crate::program::model::workspace::ModelRoutine> = Vec::new();
 
         while let Some(cur) = queue.pop_front() {
             let Some(edges) = ctx.graph.edges_by_from.get(cur) else {

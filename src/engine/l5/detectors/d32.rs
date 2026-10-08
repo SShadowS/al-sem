@@ -25,13 +25,13 @@
 
 use std::collections::BTreeSet;
 
-use crate::engine::l3::l3_workspace::{L3Parameter, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::{Model, ModelParameter, ModelRoutine};
 
 const DETECTOR: &str = "d32-constant-boolean-parameter";
 
@@ -85,7 +85,7 @@ fn has_boolean_word(type_text: &str) -> bool {
 }
 
 pub fn detect_d32(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -115,7 +115,7 @@ pub fn detect_d32(
         }
 
         // Boolean parameters.
-        let bool_params: Vec<&L3Parameter> = callee
+        let bool_params: Vec<&ModelParameter> = callee
             .parameters
             .iter()
             .filter(|p| has_boolean_word(&p.type_text))
@@ -241,8 +241,8 @@ pub fn detect_d32(
 }
 
 fn emit(
-    callee: &L3Routine,
-    param: &L3Parameter,
+    callee: &ModelRoutine,
+    param: &ModelParameter,
     constant_value: &str,
     caller_count: usize,
     findings: &mut Vec<Finding>,

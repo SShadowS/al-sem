@@ -35,9 +35,9 @@ use super::summary::{
     DbEffect, FieldList, PRoutineSummaryCore, RecordRoleSummary, RoutineSummary, TempState,
     Uncertainty, project_routine_summary_core_internal, summary_change_key,
 };
-use crate::engine::l3::call_resolver::UpgradedBinding;
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::perf_trace as pt;
+use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::workspace::ModelRoutine;
 use serde_json::json;
 
 const MAX_FIXED_POINT_ITERATIONS: usize = 1000;
@@ -351,8 +351,8 @@ pub(crate) fn record_flow_role(op: &str) -> &'static str {
 /// Build a routine's summary from its OWN intraprocedural features only — no
 /// callee composition. Mirrors al-sem `baseIntraproceduralSummaryCtx`.
 pub fn base_intraprocedural_summary(
-    routine: &L3Routine,
-    _routines_by_id: &HashMap<String, &L3Routine>,
+    routine: &ModelRoutine,
+    _routines_by_id: &HashMap<String, &ModelRoutine>,
     fields: &FieldIndex,
 ) -> RoutineSummary {
     let parameter_roles = compute_record_roles(routine, fields);
@@ -439,7 +439,7 @@ pub fn base_intraprocedural_summary(
 /// populated as "unknown" here; [`compose_roles_only`] overwrites them with the
 /// flat-walker facts (which need the current fixpoint `lookup`) — the role the
 /// retired `compose_routine` played in the pre-`b4181d8` tree.
-fn compute_record_roles(routine: &L3Routine, fields: &FieldIndex) -> Vec<RecordRoleSummary> {
+fn compute_record_roles(routine: &ModelRoutine, fields: &FieldIndex) -> Vec<RecordRoleSummary> {
     let mut out: Vec<RecordRoleSummary> = Vec::new();
     for param in &routine.parameters {
         if !param.is_record {
@@ -614,7 +614,7 @@ fn resolve_field(table_id: &str, field_name: &str, fields: &FieldIndex) -> Optio
 /// read via `snapshot.get(id).or_else(|| final_map.get(id))`.
 #[allow(clippy::too_many_arguments)]
 fn compose_roles_only(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     base_roles: &[RecordRoleSummary],
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
@@ -818,8 +818,8 @@ fn compose_roles_only(
 pub(crate) fn substitute_pd_temp_state(
     edge: &super::combined_graph::CombinedEdge,
     callee_param_index: u32,
-    routine: &L3Routine,
-    callee: Option<&L3Routine>,
+    routine: &ModelRoutine,
+    callee: Option<&ModelRoutine>,
 ) -> TempState {
     if edge.kind == "event-dispatch" {
         return match callee {
@@ -850,8 +850,8 @@ pub(crate) fn substitute_pd_temp_state(
 /// `Known(true)`, keyword-less `var` -> `ParameterDependent(i)`, resolved further
 /// at the raiser's call site). No same-named record parameter -> `Unknown`.
 pub(crate) fn event_param_temp_state(
-    publisher: &L3Routine,
-    subscriber: &L3Routine,
+    publisher: &ModelRoutine,
+    subscriber: &ModelRoutine,
     sub_param: u32,
 ) -> TempState {
     let Some(name) = subscriber
@@ -882,7 +882,7 @@ pub(crate) fn event_param_temp_state(
 /// (`capability_cone.rs`) applies the same substitution at its own call edges,
 /// behind its own edge-kind allowlist.
 pub(crate) fn pd_temp_state_at_callsite(
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     cs_id: &str,
     callee_param_index: u32,
 ) -> TempState {
@@ -1006,7 +1006,7 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// module doc for why materialized `Vec<DbEffect>` feed-forward survives
 /// through A2).
 pub fn compute_summaries_v2_bundle_with_leaves(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     graph: &CombinedGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1023,7 +1023,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     summaries_census::add(&summaries_census::SCCS, scc.sccs.len() as u64);
 
     let _t = summaries_census::start();
-    let routines_by_id: HashMap<String, &L3Routine> =
+    let routines_by_id: HashMap<String, &ModelRoutine> =
         routines.iter().map(|r| (r.id.clone(), r)).collect();
     summaries_census::add_since(&summaries_census::ROUTINES_BY_ID_NANOS, _t);
 
@@ -1307,7 +1307,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
 /// set — never interned, so no row) keeps its already-assembled `db_effects`
 /// untouched (see `SummaryBundle::has_row`'s doc).
 pub fn compute_summaries_v2_with_leaves_core(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     graph: &CombinedGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1343,7 +1343,7 @@ pub fn compute_summaries_v2_with_leaves_core(
 /// db_effects path is closed-form and never caps). Callers that already have a
 /// fixed-leaf map call [`compute_summaries_v2_with_leaves_core`] directly.
 pub fn compute_summaries_v2(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     graph: &CombinedGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1375,7 +1375,7 @@ pub fn compute_summaries_v2(
 /// `RoutineSummary.db_effects` (the R3a-5 projection, the differential harness) keep
 /// using the materializing [`compute_summaries_v2`] / `_with_leaves_core` shims.
 pub fn compute_summaries_v2_bundle(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     graph: &CombinedGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1402,7 +1402,7 @@ pub fn compute_summaries_v2_bundle(
 /// [`compute_summaries_v2_bundle_with_leaves`] and passed to
 /// [`run_one_scc_roles`].
 pub struct SccComputeCtx<'a> {
-    pub routines_by_id: &'a HashMap<String, &'a L3Routine>,
+    pub routines_by_id: &'a HashMap<String, &'a ModelRoutine>,
     pub base_summaries: &'a HashMap<String, RoutineSummary>,
     pub upgraded_bindings: &'a HashMap<String, Vec<UpgradedBinding>>,
     pub graph: &'a CombinedGraph,

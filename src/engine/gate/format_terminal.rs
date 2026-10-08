@@ -28,8 +28,8 @@
 use indexmap::IndexMap;
 
 use crate::engine::gate::projection::{FindingLocation, FindingSummary};
-use crate::engine::l3::coverage::AnalysisCoverage;
 use crate::engine::l5::registry::Diagnostic;
+use crate::program::model::coverage::AnalysisCoverage;
 
 // ---------------------------------------------------------------------------
 // SEV_RANK — mirrors `rollup-findings.ts`

@@ -21,8 +21,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l2::features::PAnchor;
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor};
@@ -30,6 +28,8 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PAnchor;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d61-ishandled-bypasses-critical-write";
 
@@ -62,11 +62,11 @@ fn anchor_within(inner: &PAnchor, outer: &PAnchor) -> bool {
 /// write rather than bypassing it. A compound condition (`if A and not X`) has no
 /// `conditionGuard`, and its structure is not recorded, so it stays a candidate.
 fn write_skipped_when_flag_set(
-    caller: &L3Routine,
-    guard: &crate::engine::l2::features::PConditionReference,
+    caller: &ModelRoutine,
+    guard: &crate::program::body::features::PConditionReference,
     write: &PAnchor,
 ) -> bool {
-    use crate::engine::l2::features::PCFNNode;
+    use crate::program::body::features::PCFNNode;
     fn find(n: &PCFNNode, at: (u32, u32)) -> Option<&PCFNNode> {
         if n.kind == "if" && n.source_range.map(|r| (r.0, r.1)) == Some(at) {
             return Some(n);
@@ -110,7 +110,7 @@ fn write_skipped_when_flag_set(
 }
 
 pub fn detect_d61(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -153,7 +153,7 @@ pub fn detect_d61(
     // Leg 3: subscribers that assign literal true to their ishandled param,
     // keyed by event id.
     let routine_by_id = &ctx.routine_by_id;
-    let mut flippers_by_event: HashMap<&str, Vec<(&L3Routine, &PAnchor)>> = HashMap::new();
+    let mut flippers_by_event: HashMap<&str, Vec<(&ModelRoutine, &PAnchor)>> = HashMap::new();
     for edge in &ctx.event_graph.edges {
         let Some(sub) = routine_by_id.get(edge.subscriber_routine_id.as_str()) else {
             continue;

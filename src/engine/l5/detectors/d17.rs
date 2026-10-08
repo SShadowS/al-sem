@@ -12,13 +12,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FixOption, SourceAnchor, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 use super::anchor_of;
 
@@ -75,7 +75,7 @@ struct Sample {
 }
 
 pub fn detect_d17(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;
@@ -256,14 +256,14 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use super::{cmp_version, detect_d17};
-    use crate::engine::l2::features::PAnchor;
-    use crate::engine::l3::event_graph::EventGraph;
-    use crate::engine::l3::l3_workspace::{
-        L3Object, L3Resolved, L3Routine, L3Workspace, RoutineVariables,
-    };
     use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
     use crate::engine::l5::detector_context::{DeclaredDep, DetectorContext};
     use crate::engine::l5::event_flow::EventFlowIndexes;
+    use crate::program::body::features::PAnchor;
+    use crate::program::model::events::EventGraph;
+    use crate::program::model::workspace::{
+        Model, ModelEntities, ModelObject, ModelRoutine, RoutineVariables,
+    };
 
     // -----------------------------------------------------------------------
     // Oracle 1 — cmpVersion semantics (Fix 3)
@@ -357,8 +357,8 @@ mod tests {
         }
     }
 
-    fn make_object(id: &str, app_guid: &str, object_number: i64) -> L3Object {
-        L3Object {
+    fn make_object(id: &str, app_guid: &str, object_number: i64) -> ModelObject {
+        ModelObject {
             id: id.to_string(),
             app_guid: app_guid.to_string(),
             object_type: "Codeunit".to_string(),
@@ -381,8 +381,8 @@ mod tests {
         }
     }
 
-    fn make_routine(id: &str, name: &str, object_id: &str, app_guid: &str) -> L3Routine {
-        L3Routine {
+    fn make_routine(id: &str, name: &str, object_id: &str, app_guid: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: object_id.to_string(),
@@ -433,16 +433,16 @@ mod tests {
     }
 
     fn make_ctx<'a>(
-        routines: &'a [L3Routine],
-        objects: &'a [L3Object],
+        routines: &'a [ModelRoutine],
+        objects: &'a [ModelObject],
         edges: Vec<CombinedEdge>,
         dep_routine_ids: BTreeSet<String>,
         declared: Vec<DeclaredDep>,
         app_versions: HashMap<String, String>,
     ) -> DetectorContext<'a> {
-        let routine_by_id: HashMap<&'a str, &'a L3Routine> =
+        let routine_by_id: HashMap<&'a str, &'a ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
-        let objects_by_id: HashMap<&'a str, &'a L3Object> =
+        let objects_by_id: HashMap<&'a str, &'a ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
 
         // Build edges_by_from + edges_from_order in edge-slice order (mirrors
@@ -511,9 +511,9 @@ mod tests {
         }
     }
 
-    fn empty_resolved_for(routines: &[L3Routine], objects: &[L3Object]) -> L3Resolved {
-        L3Resolved {
-            workspace: L3Workspace {
+    fn empty_resolved_for(routines: &[ModelRoutine], objects: &[ModelObject]) -> Model {
+        Model {
+            workspace: ModelEntities {
                 routines: routines.to_vec(),
                 objects: objects.to_vec(),
                 tables: Vec::new(),

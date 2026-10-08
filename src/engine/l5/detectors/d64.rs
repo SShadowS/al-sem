@@ -11,7 +11,7 @@
 //!
 //! Object-level findings: the page may have NO routines, so the evidence
 //! step's routine_id carries the OBJECT id and the anchor is the object's own
-//! decl anchor (Task-2 `L3Object.source_anchor`), falling back to a 1:1 anchor
+//! decl anchor (Task-2 `ModelObject.source_anchor`), falling back to a 1:1 anchor
 //! in the object's first source unit when absent.
 //!
 //! `enclosing_routine_id`/`routine_id` carrying an OBJECT id (rather than a
@@ -41,17 +41,17 @@
 //! checked before the write-surface shape classification so it wins over
 //! shape A/B either way.
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::Model;
 
 const DETECTOR: &str = "d64-api-page-write-surface";
 
-fn object_anchor(o: &crate::engine::l3::l3_workspace::L3Object) -> SourceAnchor {
+fn object_anchor(o: &crate::program::model::workspace::ModelObject) -> SourceAnchor {
     match &o.source_anchor {
         Some(a) => SourceAnchor {
             source_unit_id: a.source_unit_id.clone(),
@@ -81,7 +81,7 @@ fn object_anchor(o: &crate::engine::l3::l3_workspace::L3Object) -> SourceAnchor 
 }
 
 pub fn detect_d64(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

@@ -422,6 +422,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
+  rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
+  `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/
+  `L3RecordVariable`/`L3RecordOperation`/`L3Parameter`/`L3PageControl` →
+  `Model…`, `L3RecordTypeProjection` → `RecordTypeProjection`,
+  `L3EventGraphProjection` → `EventGraphProjection`. The `engine::l3::…` and
+  `engine::l2::…` alias paths are gone: every use names its real home
+  (`program::model::{workspace, calls, events, coverage, …}`, `program::body::…`),
+  and `src/engine/l3` no longer exists. Done by a one-off word-boundary script (the
+  owner allowed it for this rename only), checked by the compiler. No type name is
+  serialized; no golden moves.
 - **The r2c event-graph goldens project the program engine's event graph**
   (engine-switch S9.5e), the one `alsem analyze` has read since S4. The stable
   projection moved from `engine::l3::event_graph` to `program::model::events`;

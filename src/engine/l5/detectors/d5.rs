@@ -7,8 +7,6 @@
 //!
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order).
 
-use crate::engine::l2::features::PLoop;
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -17,6 +15,8 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PLoop;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d5-set-based-opportunity";
 
@@ -30,15 +30,12 @@ const ALLOWED_OTHER_OPS: &[&str] = &[
     "Next",
 ];
 
-fn anchor_of_loop(l: &PLoop, routine: &L3Routine) -> crate::engine::l5::finding::SourceAnchor {
+fn anchor_of_loop(l: &PLoop, routine: &ModelRoutine) -> crate::engine::l5::finding::SourceAnchor {
     // Delegate to the shared helper — PLoop.source_anchor is a PAnchor.
     anchor_of(&l.source_anchor, routine)
 }
 
-pub fn detect_d5(
-    resolved: &L3Resolved,
-    ctx: &DetectorContext,
-) -> Result<DetectorOutput, DetectorError> {
+pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
     let mut findings: Vec<Finding> = Vec::new();

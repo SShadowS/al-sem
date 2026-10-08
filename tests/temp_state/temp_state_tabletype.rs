@@ -20,7 +20,7 @@ const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 /// (a) A `table 50800 "ThatTable" { TableType = Temporary; ... }` plus a codeunit
 /// with a LOCAL `Rec: Record "ThatTable";` (NO `temporary` keyword) doing
 /// `Rec.DeleteAll();`. The op must resolve `Known(true)` — the table-level
-/// override beats the ABSENT keyword — and `L3Table.is_temporary == true`.
+/// override beats the ABSENT keyword — and `ModelTable.is_temporary == true`.
 #[test]
 fn tabletype_temporary_table_is_marked_and_local_var_op_upgraded() {
     let source = r#"
@@ -52,7 +52,7 @@ codeunit 50801 "Probe"
         .expect("ThatTable must be indexed");
     assert!(
         table.is_temporary(),
-        "TableType = Temporary must set L3Table.is_temporary == true",
+        "TableType = Temporary must set ModelTable.is_temporary == true",
     );
 
     // Part B: the op on a NO-keyword local var of that table is force-upgraded.

@@ -15,7 +15,7 @@
 //!   - single file    = src/vec.al  →  sourceUnitId = "ws:src/vec.al"
 //!   - modelInstanceId = "r0"
 
-use al_sem::engine::l2::operation_order::{OperationOrder, analyze_named_routine_order};
+use al_sem::program::body::operation_order::{OperationOrder, analyze_named_routine_order};
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const MODEL_INSTANCE_ID: &str = "r0";

@@ -26,12 +26,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::engine::l2::features::{PCFNNode, PCallee};
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, fact_is_known_temp, write_op_bit};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::control_flow::{branch_termination, terminates};
+use crate::program::body::features::{PCFNNode, PCallee};
+use crate::program::model::workspace::ModelRoutine;
 
 /// Every caller's out-edges as `(site, callee)`: the site is the edge's call site,
 /// or its operation for an implicit trigger; `None` for an edge with neither (an
@@ -83,11 +83,11 @@ pub(crate) fn toward_sites<'a>(
 /// target the tree does not hold, or `whole_body`, every site of `r` counts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pending_before(
-    r: &L3Routine,
+    r: &ModelRoutine,
     targets: &[&str],
     whole_body: bool,
     fwd: &ForwardSites<'_>,
-    routines: &HashMap<&str, &L3Routine>,
+    routines: &HashMap<&str, &ModelRoutine>,
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
 ) -> Pending {
@@ -137,11 +137,11 @@ pub(crate) fn pending_before(
 /// subscriber that commits runs, while the callee's own writes are that span
 /// member's to count.
 fn effects(
-    r: &L3Routine,
+    r: &ModelRoutine,
     sites: &BTreeSet<String>,
     targets: &BTreeSet<&str>,
     fwd: &ForwardSites<'_>,
-    routines: &HashMap<&str, &L3Routine>,
+    routines: &HashMap<&str, &ModelRoutine>,
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
 ) -> Pending {
@@ -203,8 +203,8 @@ fn effects(
 /// codeunit variable's `.Run`, the target must be the `OnRun` trigger (a user
 /// procedure named `Run` is an ordinary call).
 pub(crate) fn is_checked_run(
-    cs: &crate::engine::l2::features::PCallSite,
-    callee: Option<&L3Routine>,
+    cs: &crate::program::body::features::PCallSite,
+    callee: Option<&ModelRoutine>,
 ) -> bool {
     match &cs.callee {
         PCallee::ObjectRun { object_kind, .. } => {

@@ -59,10 +59,10 @@
 //! `src/engine/l2/{control_context,control_flow}.rs`. As of this gate every case
 //! passes with no `src/engine/l2/**` change required.
 
-use al_sem::engine::l2::control_context::{
+use al_sem::program::body::control_context::{
     ControlContext, RoutineControlContexts, analyze_named_routine,
 };
-use al_sem::engine::l2::features::PCallee;
+use al_sem::program::body::features::PCallee;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const MODEL_INSTANCE_ID: &str = "r0";

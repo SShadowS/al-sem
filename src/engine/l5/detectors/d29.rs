@@ -13,7 +13,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, is_known_temp};
@@ -23,6 +22,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::{AttributeInfo, find_attribute, string_arg};
+use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
 const DETECTOR: &str = "d29-subscriber-modify-on-event-record";
 
@@ -73,7 +73,7 @@ fn is_modify_event(name: Option<&str>) -> bool {
 }
 
 pub fn detect_d29(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -159,8 +159,8 @@ pub fn detect_d29(
 }
 
 fn emit(
-    routine: &L3Routine,
-    op: &L3RecordOperation,
+    routine: &ModelRoutine,
+    op: &ModelRecordOperation,
     event_name_lc: &str,
     findings: &mut Vec<Finding>,
     fp_index: &FingerprintIndex,

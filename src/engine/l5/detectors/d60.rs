@@ -15,8 +15,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::features::{PAnchor, PCFNNode, PLoop};
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -25,6 +23,8 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::{PAnchor, PCFNNode, PLoop};
+use crate::program::model::workspace::{Model, ModelRecordOperation};
 
 const DETECTOR: &str = "d60-upgrade-loop-should-be-datatransfer";
 
@@ -70,7 +70,7 @@ fn tree_has_branch_within(node: &PCFNNode, loop_anchor: &PAnchor) -> bool {
 }
 
 pub fn detect_d60(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
@@ -177,7 +177,7 @@ pub fn detect_d60(
             // DataTransfer candidates. Pinned by `tests/r0-corpus/ws-d60`:
             // remove this pass and all SIX unsound shapes there return, while
             // OnUpgradePerCompany and UpgradeUnitStepAdvance stay reported.
-            let driver_ops_in_loop: Vec<&L3RecordOperation> = routine
+            let driver_ops_in_loop: Vec<&ModelRecordOperation> = routine
                 .record_operations
                 .iter()
                 .filter(|o| {

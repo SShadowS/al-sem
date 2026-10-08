@@ -70,9 +70,9 @@
 //! `src/engine/l2/capability/**`. As of this gate every case passes with no
 //! `src/engine/l2/capability/**` change required.
 
-use al_sem::engine::l2::capability::{CapabilityFact, extract_capabilities};
-use al_sem::engine::l2::features::PRoutine;
-use al_sem::engine::l2::l2_workspace::project_named_routine;
+use al_sem::program::body::capability::{CapabilityFact, extract_capabilities};
+use al_sem::program::body::features::PRoutine;
+use al_sem::program::body::l2_workspace::project_named_routine;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const SOURCE_UNIT_ID: &str = "ws:src/vec.al";

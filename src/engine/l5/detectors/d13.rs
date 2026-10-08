@@ -12,7 +12,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::L3Resolved;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
@@ -20,13 +19,14 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::parse_routine_attributes;
+use crate::program::model::workspace::Model;
 
 use super::anchor_of;
 
 const DETECTOR: &str = "d13-cross-app-internal-call";
 
 pub fn detect_d13(
-    _resolved: &L3Resolved,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;

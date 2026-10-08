@@ -170,11 +170,11 @@ fn extract_from_ir(file: &al_syntax::ir::AlFile, app_guid: &str, out: &mut Ident
         // Interface / ControlAddIn: al-sem's R0 identity snapshot never modeled
         // these objects' signature-only members as routines (a frozen, differential-
         // gated historical baseline — `tests/differential.rs`'s R0 harness). See the
-        // identical, more-detailed comment in `engine::l3::l3_workspace.rs`'s routine
+        // identical, more-detailed comment in `program::model::workspace.rs`'s routine
         // loop (the same shared `al_syntax::lower::collect_routines` fix — receiver-
         // closure plan, Task 1 — surfaces here too, since this module independently
         // re-derives its own identity snapshot from the raw IR rather than reusing
-        // `L3Workspace`).
+        // `ModelEntities`).
         if object_type == "Interface" || object_type == "ControlAddIn" {
             continue;
         }
@@ -196,7 +196,7 @@ fn extract_from_ir(file: &al_syntax::ir::AlFile, app_guid: &str, out: &mut Ident
             // must take the enclosing-member discriminator from the SAME single source
             // (`ir_enclosing_member`) the L2/L3 paths use — otherwise the two would mint
             // different stable ids for the same member trigger.
-            let enclosing_member = crate::engine::l2::ir_walk::ir_enclosing_member(r);
+            let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(r);
             let stable_routine_id = to_stable_routine_id_from_parts(
                 &stable_object_id,
                 &norm_hash,

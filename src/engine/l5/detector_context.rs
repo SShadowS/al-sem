@@ -15,15 +15,11 @@
 //!
 //! The R4-G wave wired `reachable_roots` + `internal_reachable_externally` (D14):
 //! `reachable_roots` is built via `entry_points::find_reachable_roots` over the
-//! `access_modifiers` map harvested from `L3Routine.access_modifier`;
+//! `access_modifiers` map harvested from `ModelRoutine.access_modifier`;
 //! `internal_reachable_externally` DEFAULTS to `false` (see field doc).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::engine::l2::features::PCallSite;
-use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding};
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
-use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
@@ -45,6 +41,10 @@ use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::{ReverseCallGraph, build_reverse_call_graph};
 use crate::engine::l5::transaction_spans::{TransactionSpan, compute_transaction_spans};
 use crate::engine::perf_trace as pt;
+use crate::program::body::features::PCallSite;
+use crate::program::model::calls::{CallEdge, UpgradedBinding};
+use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 use serde_json::json;
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
@@ -587,9 +587,9 @@ pub struct DetectorContext<'a> {
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
     /// captured here rather than recomputed.
     pub event_graph: EventGraph,
-    pub routine_by_id: HashMap<&'a str, &'a L3Routine>,
-    pub objects_by_id: HashMap<&'a str, &'a L3Object>,
-    pub table_by_id: HashMap<&'a str, &'a L3Table>,
+    pub routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
+    pub table_by_id: HashMap<&'a str, &'a ModelTable>,
     pub reverse_call_graph: ReverseCallGraph,
     /// Trigger + event-subscriber roots — transaction-span boundaries.
     pub entry_points: BTreeSet<String>,
@@ -673,7 +673,7 @@ pub struct DetectorContext<'a> {
     /// event-subscriber) PLUS the procedures al-sem cannot prove app-scoped
     /// (non-`local`; `internal` only when `internal_reachable_externally`). Built
     /// by `entry_points::find_reachable_roots` over the `access_modifiers` map
-    /// harvested from `L3Routine.access_modifier`. Sorted; d14 BFS-seeds from it.
+    /// harvested from `ModelRoutine.access_modifier`. Sorted; d14 BFS-seeds from it.
     pub reachable_roots: BTreeSet<String>,
     /// al-sem `(model.identity.primaryInternalsVisibleTo?.length ?? 0) > 0` — true
     /// when some other app is granted `internal` access (so `internal` procedures
@@ -721,7 +721,7 @@ pub struct DetectorContext<'a> {
     /// The resolved model `get_ordering_facts()` computes from. `None` for the
     /// cross-app context (whose ordering facts are ALWAYS empty — d13/d16/d17
     /// never read them; matches the previous eager `HashMap::new()`).
-    pub ordering_source: Option<&'a L3Resolved>,
+    pub ordering_source: Option<&'a Model>,
     /// G-19 — the closed-world proven-temp `(routineId, paramIndex)` set: a
     /// keyword-less by-var record param of a `local` procedure ALL of whose
     /// resolved callers (and the routine's complete, fully-resolved same-object
@@ -847,7 +847,7 @@ impl DetectorContext<'_> {
 /// and every summary carries `capability_facts_inherited: None`. With it the cone
 /// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
 /// byte-identical to the pre-Task-3 build.
-pub fn build_detector_context(resolved: &L3Resolved, demanded: u32) -> DetectorContext<'_> {
+pub fn build_detector_context(resolved: &Model, demanded: u32) -> DetectorContext<'_> {
     build_detector_context_with(resolved, demanded, None)
 }
 
@@ -870,7 +870,7 @@ pub(crate) struct CrossAppInputs<'b> {
 /// for both since engine-switch S8.1; the cross-app one (which built every
 /// substrate whatever the detectors asked for) is gone.
 pub(crate) fn build_detector_context_with<'a>(
-    resolved: &'a L3Resolved,
+    resolved: &'a Model,
     demanded: u32,
     cross: Option<CrossAppInputs<'_>>,
 ) -> DetectorContext<'a> {
@@ -1129,15 +1129,15 @@ pub(crate) fn build_detector_context_with<'a>(
     crate::engine::l4::cone_census::emit_full_census(&summaries, &cone_derived);
 
     // --- Eager indexes -----------------------------------------------------
-    let routine_by_id: HashMap<&str, &L3Routine> =
+    let routine_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
-    let objects_by_id: HashMap<&str, &L3Object> =
+    let objects_by_id: HashMap<&str, &ModelObject> =
         ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
     // G-5: REAL table wins an id collision with a tableextension stub (the stub's
     // id reuses the extension's own object number) — otherwise rootCause text
     // renders the EXTENSION's name for ops on the real table.
-    let table_by_id: HashMap<&str, &L3Table> =
-        crate::engine::l3::l3_workspace::table_by_id_preferring_real(&ws.tables);
+    let table_by_id: HashMap<&str, &ModelTable> =
+        crate::program::model::workspace::table_by_id_preferring_real(&ws.tables);
 
     let reverse_call_graph = build_reverse_call_graph(&graph);
 
@@ -1147,7 +1147,7 @@ pub(crate) fn build_detector_context_with<'a>(
             .collect();
 
     // D14 reachable-roots wiring. Build the RoutineId → AccessModifier map from
-    // `L3Routine.access_modifier` ("local"/"internal"/"protected"/None). al-sem maps
+    // `ModelRoutine.access_modifier` ("local"/"internal"/"protected"/None). al-sem maps
     // "local" → Local, "internal" → Internal, "protected"/None/anything-else →
     // Public (default-access). A routine with NO entry is treated as Public by
     // `find_reachable_roots`, so we only need to insert the non-Public cases — but we
@@ -1616,7 +1616,7 @@ mod tests {
     /// re-resolved them from the routines on every read), so re-keying only the
     /// routines would leave their edges pointing at ids no routine carries.
     /// Returns how many routines were re-keyed.
-    fn force_shared_id(resolved: &mut L3Resolved, name: &str, shared: &str) -> usize {
+    fn force_shared_id(resolved: &mut Model, name: &str, shared: &str) -> usize {
         let mut old = std::collections::HashSet::new();
         let mut forced = 0;
         for r in resolved.workspace.routines.iter_mut() {
@@ -1666,8 +1666,8 @@ mod tests {
     #[test]
     fn ordering_facts_are_lazy_and_parity_with_direct_compute() {
         // Empty workspace: cheap, and exercises the full lazy path end-to-end.
-        let resolved = crate::engine::l3::l3_workspace::L3Resolved {
-            workspace: crate::engine::l3::l3_workspace::L3Workspace {
+        let resolved = crate::program::model::workspace::Model {
+            workspace: crate::program::model::workspace::ModelEntities {
                 objects: Vec::new(),
                 tables: Vec::new(),
                 routines: Vec::new(),
@@ -1699,15 +1699,15 @@ mod tests {
     /// own resolver failed its assertion.)
     #[test]
     fn model_calls_reach_detector_context_and_ordering_base() {
-        use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
-        use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
+        use crate::program::model::calls::{CallEdge, ResolvedCalls};
+        use crate::program::model::taxonomy::{DispatchKind, Resolution};
         let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
         edge.to = Some("to-r".to_string());
         // Dynamic so the coverage path (`dynamic_dispatch_sites`) shows it too.
         edge.dispatch_kind = DispatchKind::Dynamic;
         edge.resolution = Resolution::Resolved;
-        let resolved = crate::engine::l3::l3_workspace::L3Resolved {
-            workspace: crate::engine::l3::l3_workspace::L3Workspace {
+        let resolved = crate::program::model::workspace::Model {
+            workspace: crate::program::model::workspace::ModelEntities {
                 objects: Vec::new(),
                 tables: Vec::new(),
                 routines: Vec::new(),
@@ -1829,7 +1829,7 @@ page 50811 "CP Wizard"
              assertions below are vacuous"
         );
 
-        let on_actions: Vec<&crate::engine::l3::l3_workspace::L3Routine> = resolved
+        let on_actions: Vec<&crate::program::model::workspace::ModelRoutine> = resolved
             .workspace
             .routines
             .iter()
@@ -1890,7 +1890,7 @@ page 50811 "CP Wizard"
     /// XMLport same-name elements at different nesting paths).
     ///
     /// This test never asks `compute_routine_id` for a collision — it STATES one:
-    /// two `L3Routine`s built from ordinary, non-colliding source are forced to carry
+    /// two `ModelRoutine`s built from ordinary, non-colliding source are forced to carry
     /// the literal same `id` by direct field assignment after assembly, before
     /// `build_detector_context` runs. That holds under ANY id schema, forever,
     /// because it does not depend on what the schema would have produced.

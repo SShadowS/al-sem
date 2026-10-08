@@ -14,12 +14,12 @@ use std::path::Path;
 
 use crate::symbol_app::write_symbol_app;
 
-use al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::event_flow::compute_fanout;
 use al_sem::engine::l5::registry::run_detectors;
 use al_sem::program::model::events::PublisherRef;
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 const WS_GUID: &str = "aaaa1111-0000-0000-0000-000000000057";
 const DEP_GUID: &str = "bbbb2222-0000-0000-0000-000000000057";

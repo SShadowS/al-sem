@@ -9,7 +9,6 @@
 
 use std::collections::HashSet;
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
@@ -20,6 +19,7 @@ use crate::engine::l5::ordering_facts::{
     stable_routine_id_for_routine, to_severity,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d51-retry-side-effect-duplication";
 
@@ -32,13 +32,13 @@ fn detail_method(detail: &[(String, String)]) -> Option<&str> {
 
 fn to_src(
     contract: Option<&crate::engine::l5::digest::ProjectedEvidence>,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
 ) -> Option<SourceAnchor> {
     crate::engine::l5::ordering_facts::to_source_anchor(contract, &routine.id)
 }
 
 /// True when the routine is asserted a `job-queue-entrypoint` root.
-fn is_retryable_entrypoint(ctx: &DetectorContext, routine: &L3Routine) -> bool {
+fn is_retryable_entrypoint(ctx: &DetectorContext, routine: &ModelRoutine) -> bool {
     ctx.root_classifications_by_routine
         .get(&routine.id)
         .map(|rc| rc.kinds.iter().any(|k| k == "job-queue-entrypoint"))
@@ -47,7 +47,7 @@ fn is_retryable_entrypoint(ctx: &DetectorContext, routine: &L3Routine) -> bool {
 
 fn build_d51_finding(
     fp: &FingerprintIndex,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     of: &OrderingFacts,
     fact: &OrderingFact,
     sev: &str,
@@ -159,7 +159,7 @@ fn build_d51_finding(
 }
 
 pub fn detect_d51(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

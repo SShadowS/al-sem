@@ -1,6 +1,6 @@
 //! The AL record operations both engines recognise -- ONE table.
 //!
-//! The legacy L2 walk (`engine::l2::record_op`, which re-exports this) and the
+//! The legacy L2 walk (`program::body::record_op`, which re-exports this) and the
 //! program extractor (`program::resolve::extract`) used to keep their own
 //! copies, and the extractor's was a hand copy that drifted: it lacked
 //! `rename` (#9). The table lives at the crate root because it is a fact about

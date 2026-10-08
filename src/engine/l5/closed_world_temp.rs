@@ -42,11 +42,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::{PCallee, PTempState};
-use crate::engine::l3::l3_workspace::L3Routine;
 use crate::engine::l4::combined_graph::CombinedGraph;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::reverse_call_graph::{ReverseCallGraph, callers_of};
+use crate::program::body::features::{PCallee, PTempState};
+use crate::program::model::workspace::ModelRoutine;
 
 /// The proven set: `(internal RoutineId, parameter index)` pairs whose
 /// keyword-less by-var record param is closed-world proven `Known(true)`.
@@ -83,13 +83,13 @@ fn name_matches(callee_name: &str, routine_name: &str) -> bool {
 }
 
 struct ProofEnv<'a> {
-    routine_by_id: HashMap<&'a str, &'a L3Routine>,
+    routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
     /// Internal routine ids that occur MORE THAN ONCE in the workspace (the
     /// RE-11 trigger-id collision) — proof-disqualifying on either side.
     dup_ids: HashSet<&'a str>,
     /// Callsite ids that appear on ANY resolved combined-graph edge.
     resolved_callsites: HashSet<&'a str>,
-    routines_by_object: HashMap<&'a str, Vec<&'a L3Routine>>,
+    routines_by_object: HashMap<&'a str, Vec<&'a ModelRoutine>>,
     reverse: &'a ReverseCallGraph,
     entry_points: &'a BTreeSet<String>,
 }
@@ -97,12 +97,12 @@ struct ProofEnv<'a> {
 /// Compute the full closed-world proven set for a workspace (see module docs).
 /// Pure + deterministic: a set lookup table built once in the detector context.
 pub fn prove_closed_world_temp_params(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     graph: &CombinedGraph,
     reverse: &ReverseCallGraph,
     entry_points: &BTreeSet<String>,
 ) -> ClosedWorldTempParams {
-    let mut routine_by_id: HashMap<&str, &L3Routine> = HashMap::new();
+    let mut routine_by_id: HashMap<&str, &ModelRoutine> = HashMap::new();
     let mut dup_ids: HashSet<&str> = HashSet::new();
     for r in routines {
         if routine_by_id.insert(r.id.as_str(), r).is_some() {
@@ -119,7 +119,7 @@ pub fn prove_closed_world_temp_params(
         }
     }
 
-    let mut routines_by_object: HashMap<&str, Vec<&L3Routine>> = HashMap::new();
+    let mut routines_by_object: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
     for r in routines {
         routines_by_object
             .entry(r.object_id.as_str())

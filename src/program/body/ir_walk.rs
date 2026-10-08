@@ -2514,7 +2514,7 @@ pub fn ir_variables(
 /// not shadowed by the routine's own params/locals. Split out of `ir_variables` so
 /// there is ONE definition of "the object's globals" — the L3 emitter builds this list
 /// once per object and shares it across the object's routines
-/// ([`crate::engine::l3::l3_workspace::RoutineVariables`]) instead of replicating a
+/// ([`crate::program::model::workspace::RoutineVariables`]) instead of replicating a
 /// copy into each. Sibling of [`ir_object_global_record_vars`].
 pub fn ir_object_globals(
     file: &AlFile,
@@ -2739,7 +2739,7 @@ pub fn ir_parameter_symbols(routine: &RoutineDecl) -> Vec<super::scope::Paramete
 /// declares this member trigger, `None` for procedures and object-level triggers
 /// (`OnRun`/`OnOpenPage`).
 ///
-/// THE single source for that string. It feeds BOTH `L3Routine.enclosing_member`
+/// THE single source for that string. It feeds BOTH `ModelRoutine.enclosing_member`
 /// and the internal routine id's conditional 7th key part
 /// ([`crate::engine::ids::CanonicalRoutineKey::enclosing_member`]) — those must be
 /// the same string, and the raw IR value is only outer-quote-stripped, so the

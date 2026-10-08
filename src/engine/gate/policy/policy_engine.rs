@@ -18,12 +18,12 @@ use crate::engine::gate::policy::predicate_evaluator::{
     Tristate, evaluate_applicability, evaluate_result,
 };
 use crate::engine::gate::policy::predicate_fields::{FieldEvalContext, FieldIndexes};
-use crate::engine::l3::event_graph::EventSymbol;
-use crate::engine::l3::l3_workspace::{L3Object, L3Routine, L3Table};
 use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l5::finding::{Evidence, Finding, FindingConfidence, SourceAnchor};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::program::model::events::EventSymbol;
+use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
 
 /// The full policy-run result (sans envelope). al-sem
 /// `Omit<PolicyRunResult, "policySource"|"policyVersion">` plus the version/source
@@ -128,7 +128,7 @@ fn select_facts<'a>(
 /// already-byte-parity model data. Owns the index maps + the per-routine summary
 /// lookup + the fingerprint index.
 pub struct PolicyModel<'a> {
-    pub routines: &'a [L3Routine],
+    pub routines: &'a [ModelRoutine],
     pub field_indexes: FieldIndexes<'a>,
     pub summaries: &'a HashMap<String, FullRoutineSummary>,
     pub fingerprint_index: FingerprintIndex<'a>,
@@ -139,22 +139,22 @@ impl<'a> PolicyModel<'a> {
     /// `capability.resource.event.name` field; callers derive it from the event
     /// graph.
     pub fn new(
-        routines: &'a [L3Routine],
-        objects: &'a [L3Object],
-        tables: &'a [L3Table],
+        routines: &'a [ModelRoutine],
+        objects: &'a [ModelObject],
+        tables: &'a [ModelTable],
         events: &'a [EventSymbol],
         root_classifications: &'a [crate::engine::root_classification::RootClassification],
         summaries: &'a HashMap<String, FullRoutineSummary>,
     ) -> Self {
-        let objects_by_id: HashMap<&str, &L3Object> =
+        let objects_by_id: HashMap<&str, &ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
         let root_kinds_by_routine_id: HashMap<&str, &[String]> = root_classifications
             .iter()
             .map(|rc| (rc.routine_id.as_str(), rc.kinds.as_slice()))
             .collect();
         // G-5: REAL table wins an id collision with a tableextension stub.
-        let tables_by_id: HashMap<&str, &L3Table> =
-            crate::engine::l3::l3_workspace::table_by_id_preferring_real(tables);
+        let tables_by_id: HashMap<&str, &ModelTable> =
+            crate::program::model::workspace::table_by_id_preferring_real(tables);
         let events_by_id: HashMap<&str, &str> = events
             .iter()
             .map(|e| (e.id.as_str(), e.event_name.as_str()))
@@ -191,7 +191,7 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
     sorted_rules.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Sort routines by id.
-    let mut sorted_routines: Vec<&L3Routine> = model.routines.iter().collect();
+    let mut sorted_routines: Vec<&ModelRoutine> = model.routines.iter().collect();
     sorted_routines.sort_by(|a, b| a.id.cmp(&b.id));
 
     for rule in &sorted_rules {
@@ -326,7 +326,7 @@ pub struct RunOutput {
 
 /// `buildPrimaryLocation(routine)` — `{ ...routine.sourceAnchor, enclosingRoutineId }`.
 /// The internal `SourceAnchor` carries the routine's own declaration anchor.
-fn build_primary_location(routine: &L3Routine) -> SourceAnchor {
+fn build_primary_location(routine: &ModelRoutine) -> SourceAnchor {
     let a = &routine.source_anchor;
     SourceAnchor {
         source_unit_id: a.source_unit_id.clone(),
@@ -344,7 +344,7 @@ fn build_primary_location(routine: &L3Routine) -> SourceAnchor {
 
 fn emit_match_finding(
     rule: &Rule,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     model: &PolicyModel,
     matched: &[&CapabilityFact],
 ) -> Finding {
@@ -431,7 +431,7 @@ fn emit_match_finding(
 
 fn emit_coverage_finding(
     rule: &Rule,
-    routine: &L3Routine,
+    routine: &ModelRoutine,
     model: &PolicyModel,
     status: &str,
     effective_gate: &str,
@@ -479,7 +479,7 @@ fn emit_coverage_finding(
     finding
 }
 
-fn emit_unknown_finding(rule: &Rule, routine: &L3Routine, model: &PolicyModel) -> Finding {
+fn emit_unknown_finding(rule: &Rule, routine: &ModelRoutine, model: &PolicyModel) -> Finding {
     let root_cause_key = format!("policy-{}/{}", rule.id, routine.id);
     let primary_location = build_primary_location(routine);
     let mut finding = Finding {

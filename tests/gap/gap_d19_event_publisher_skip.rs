@@ -15,11 +15,11 @@
 
 use std::collections::BTreeMap;
 
-use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::workspace::Model;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000d19abcd";
 const DETECTOR: &str = "d19-unused-parameter";
@@ -30,7 +30,7 @@ struct D19Run {
     /// d19's own `DetectorStats.skipped` map (present-iff-nonzero, see
     /// `registry::DetectorStats::add_skip`).
     skipped: BTreeMap<String, u64>,
-    resolved: L3Resolved,
+    resolved: Model,
 }
 
 impl D19Run {

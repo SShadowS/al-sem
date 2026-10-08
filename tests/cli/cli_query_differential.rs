@@ -10,7 +10,7 @@
 //! dir `tests/cli-query-goldens/` is named in `scripts/check-goldens`, which
 //! `scripts/git-hooks/pre-commit` blocks commits on. Every golden run therefore
 //! executes `ReverseEffectIndex::build`, both up-queries, the ancestor BFS, the
-//! `DbEffectQuery` facade and the `RoutineIx -> L3Routine` join — forever, with
+//! `DbEffectQuery` facade and the `RoutineIx -> ModelRoutine` join — forever, with
 //! no discipline required.
 //!
 //! ## Driven through the SHIPPED BINARY, deliberately

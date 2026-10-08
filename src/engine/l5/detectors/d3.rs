@@ -18,8 +18,6 @@ use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l2::features::{PAnchor, PCallSite, PCallee};
-use crate::engine::l3::l3_workspace::{L3RecordOperation, L3Resolved, L3Routine};
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
@@ -27,6 +25,8 @@ use crate::engine::l5::detectors::{
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::{PAnchor, PCallSite, PCallee};
+use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
 const DETECTOR: &str = "d3-missing-setloadfields";
 
@@ -75,13 +75,13 @@ enum LoadState {
 
 /// A retrieval op paired with the load state of its record variable at that site.
 struct LoadStateAtRetrieval<'a> {
-    retrieval_op: &'a L3RecordOperation,
+    retrieval_op: &'a ModelRecordOperation,
     record_variable_name: String,
     load_state: LoadState,
 }
 
 /// Source order: line then column. Mirrors d3-load-state.ts `inSourceOrder`.
-fn in_source_order(a: &L3RecordOperation, b: &L3RecordOperation) -> std::cmp::Ordering {
+fn in_source_order(a: &ModelRecordOperation, b: &ModelRecordOperation) -> std::cmp::Ordering {
     let ra = &a.source_anchor;
     let rb = &b.source_anchor;
     ra.start_line
@@ -91,8 +91,8 @@ fn in_source_order(a: &L3RecordOperation, b: &L3RecordOperation) -> std::cmp::Or
 
 /// Reconstruct per-record-variable load-field state by walking the routine's record
 /// operations in source order. Port of `deriveLoadStates`.
-fn derive_load_states(routine: &L3Routine) -> Vec<LoadStateAtRetrieval<'_>> {
-    let mut ops: Vec<&L3RecordOperation> = routine.record_operations.iter().collect();
+fn derive_load_states(routine: &ModelRoutine) -> Vec<LoadStateAtRetrieval<'_>> {
+    let mut ops: Vec<&ModelRecordOperation> = routine.record_operations.iter().collect();
     ops.sort_by(|a, b| in_source_order(a, b));
 
     let mut state_by_var: HashMap<String, LoadState> = HashMap::new();
@@ -149,10 +149,7 @@ fn derive_load_states(routine: &L3Routine) -> Vec<LoadStateAtRetrieval<'_>> {
     out
 }
 
-pub fn detect_d3(
-    resolved: &L3Resolved,
-    ctx: &DetectorContext,
-) -> Result<DetectorOutput, DetectorError> {
+pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
     let mut findings: Vec<Finding> = Vec::new();
@@ -215,12 +212,13 @@ pub fn detect_d3(
             // CLOSED-WORLD PROVEN temp (`local` routine, all resolved callers
             // pass Known(true) temp) is treated exactly like Known(true).
             if let Some(rv) = rec_var
-                && (crate::engine::l2::features::known_temp_suppresses(rv.temp_state_known_value())
-                    || crate::engine::l5::closed_world_temp::pd_state_proven_temp(
-                        Some(&rv.temp_state),
-                        &routine.id,
-                        &ctx.closed_world_temp_params,
-                    ))
+                && (crate::program::body::features::known_temp_suppresses(
+                    rv.temp_state_known_value(),
+                ) || crate::engine::l5::closed_world_temp::pd_state_proven_temp(
+                    Some(&rv.temp_state),
+                    &routine.id,
+                    &ctx.closed_world_temp_params,
+                ))
             {
                 skipped_temporary_record += 1;
                 continue;

@@ -46,7 +46,7 @@ use std::collections::HashMap;
 
 use super::calls::CallEdge;
 use super::taxonomy::{DispatchKind, Resolution};
-use super::workspace::{L3Resolved, L3Routine};
+use super::workspace::{Model, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // Inputs the source-unit accounting needs (the L3 `buildCoverage` reads these
@@ -155,7 +155,7 @@ fn stable_site(site_id: &str, by_internal: &HashMap<String, String>) -> String {
 /// byte-order comparator at the end. The 4-resolution filter + the dynamic filter
 /// match al-sem exactly.
 pub fn build_coverage(
-    routines: &[L3Routine],
+    routines: &[ModelRoutine],
     apps: &[(String, String)],
     call_graph: &[CallEdge],
     units: &[CoverageUnit],
@@ -219,10 +219,10 @@ pub fn build_coverage(
 }
 
 // ---------------------------------------------------------------------------
-// L3Resolved entry point — the post-resolve / pre-summary capture the dump reads.
+// Model entry point — the post-resolve / pre-summary capture the dump reads.
 // ---------------------------------------------------------------------------
 
-impl L3Resolved {
+impl Model {
     /// Build the `AnalysisCoverage` for the resolved workspace (R2d), over the
     /// model's calls. The primary app's apps are all `"source"` (→ `opaqueApps`
     /// empty), and the workspace carries no index-stage warning (→
@@ -248,7 +248,7 @@ impl L3Resolved {
                 .as_deref()
                 .is_none_or(|p| guid.eq_ignore_ascii_case(p))
         };
-        let routines: Vec<L3Routine> = ws
+        let routines: Vec<ModelRoutine> = ws
             .routines
             .iter()
             .filter(|r| in_primary(&r.app_guid))

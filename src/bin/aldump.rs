@@ -8,7 +8,7 @@
 //! precisely so the diff can pass.
 //!
 //! `--l2`: parses the workspace and emits the ALLOWLISTED L2 FEATURES PROJECTION
-//! (`engine::l2::l2_workspace`) — objects + routines with metadata + per-routine
+//! (`program::body::l2_workspace`) — objects + routines with metadata + per-routine
 //! `features` (loops/operations/call-sites/record-ops/CFN skeleton/…), matching
 //! the R1a goldens (`scripts/r1a-goldens/<fixture>.l2.golden.json`). Forbidden
 //! later-gate / L3-resolved fields are structurally absent from the projection
@@ -24,18 +24,16 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use al_sem::engine::l2::l2_workspace::project_workspace;
 use al_sem::engine::snapshot::snapshot_workspace;
+use al_sem::program::body::l2_workspace::project_workspace;
 
 /// The model the detector-output modes (`--r3a1/2/3`, `--r4-findings`, `--r4f-*`)
 /// project (engine-switch S6.9): program-backed, as `alsem analyze` builds it,
 /// under the default model-instance id.
-fn program_model(
-    workspace: &std::path::Path,
-) -> Option<al_sem::engine::l3::l3_workspace::L3Resolved> {
-    al_sem::engine::l3::program_calls::assemble_and_resolve_workspace_program(
+fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::workspace::Model> {
+    al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         workspace,
-        al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
 }
@@ -674,7 +672,7 @@ fn main() -> ExitCode {
         let detector_names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
         let projection = al_sem::engine::l5::finding::project_r4_findings_cross_app(
             &workspace,
-            al_sem::engine::l3::l3_workspace::MODEL_INSTANCE_ID_DEFAULT,
+            al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             &detectors,
             &fixture_name,
             &detector_names,

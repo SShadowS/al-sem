@@ -1187,12 +1187,12 @@ fn cdo_reverse_index_matches_slow_oracle() {
 }
 
 /// Fixture builders for the differential harness above. Each named fixture
-/// builds real `L3Routine` / `CombinedGraph` / `SccResult` / `FieldIndex` /
+/// builds real `ModelRoutine` / `CombinedGraph` / `SccResult` / `FieldIndex` /
 /// `upgraded_bindings` inputs the OLD solver can process without panicking; the
 /// differential itself is the oracle, so these are structurally-valid inputs
 /// exercising a specific solver code path rather than hand-verified outputs.
 ///
-/// NOTE: `src/engine/l5/test_support.rs` has similar `L3Routine`/`CombinedGraph`
+/// NOTE: `src/engine/l5/test_support.rs` has similar `ModelRoutine`/`CombinedGraph`
 /// constructors, but that module is `#![cfg(test)]`-gated (unit-test-only) so it
 /// is not linkable from this integration-test binary — every builder below is a
 /// local, from-scratch copy of that same pattern (mirroring how
@@ -1200,19 +1200,19 @@ fn cdo_reverse_index_matches_slow_oracle() {
 mod fixtures {
     use std::collections::HashMap;
 
-    use al_sem::engine::l2::features::{
-        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
-    };
-    use al_sem::engine::l3::call_resolver::UpgradedBinding;
-    use al_sem::engine::l3::l3_workspace::{L3RecordOperation, L3Routine, RoutineVariables};
     use al_sem::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
     use al_sem::engine::l4::effect_lattice::{TempStateKind, effect_key_of};
     use al_sem::engine::l4::scc::{Scc, SccResult};
     use al_sem::engine::l4::summary::{DbEffect, RoutineSummary, TempState};
     use al_sem::engine::l4::summary_runner::FieldIndex;
+    use al_sem::program::body::features::{
+        PAnchor, PCallArgumentBinding, PCallSite, PCallee, PTempState,
+    };
+    use al_sem::program::model::calls::UpgradedBinding;
+    use al_sem::program::model::workspace::{ModelRecordOperation, ModelRoutine, RoutineVariables};
 
     type FixtureOut = (
-        Vec<L3Routine>,
+        Vec<ModelRoutine>,
         CombinedGraph,
         SccResult,
         FieldIndex,
@@ -1261,10 +1261,10 @@ mod fixtures {
         }
     }
 
-    /// A bare, body-available `L3Routine` with just an id; callers push
+    /// A bare, body-available `ModelRoutine` with just an id; callers push
     /// `record_operations`/`call_sites` onto it.
-    fn routine(id: &str) -> L3Routine {
-        L3Routine {
+    fn routine(id: &str) -> ModelRoutine {
+        ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
             object_id: "app/Codeunit/1".to_string(),
@@ -1324,8 +1324,8 @@ mod fixtures {
         op: &str,
         table_id: &str,
         temp_state: Option<PTempState>,
-    ) -> L3RecordOperation {
-        L3RecordOperation {
+    ) -> ModelRecordOperation {
+        ModelRecordOperation {
             id: id.to_string(),
             op: op.to_string(),
             record_variable_name: "Rec".to_string(),

@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::workspace::{L3Resolved, L3Routine};
+use super::workspace::{Model, ModelRoutine};
 use crate::program::body::features::{PCallee, PTempState};
 
 fn unq(s: &str) -> &str {
@@ -44,7 +44,7 @@ fn known_temp() -> PTempState {
 }
 
 /// Prove and write the temporary subscriber parameters (see the module docs).
-pub fn prove_event_param_temps(resolved: &mut L3Resolved) {
+pub fn prove_event_param_temps(resolved: &mut Model) {
     let (calls, events) = (resolved.calls.clone(), resolved.events.clone());
     let rewrites: Vec<(usize, u32)> = {
         let routines = &resolved.workspace.routines;
@@ -69,7 +69,7 @@ pub fn prove_event_param_temps(resolved: &mut L3Resolved) {
             }
         }
         let routine = |id: &str| index.get(id).map(|&i| &routines[i]);
-        let complete = |p: &L3Routine| {
+        let complete = |p: &ModelRoutine| {
             routines
                 .iter()
                 .filter(|q| q.object_id == p.object_id)

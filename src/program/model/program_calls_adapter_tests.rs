@@ -11,18 +11,18 @@ const DEP_GUID: &str = "dddddddd-b3b3-0000-0000-000000000003";
 struct Adapted {
     calls: ResolvedCalls,
     census: SiteCensus,
-    ws: L3Workspace,
+    ws: ModelEntities,
 }
 
 impl Adapted {
-    fn routine(&self, name: &str) -> &L3Routine {
+    fn routine(&self, name: &str) -> &ModelRoutine {
         let mut it = self.ws.routines.iter().filter(|r| r.name == name);
         let r = it.next().unwrap_or_else(|| panic!("no routine {name}"));
         assert!(it.next().is_none(), "routine name {name} not unique");
         r
     }
     /// The routines named `name` in the object named `object_name`.
-    fn routines_in(&self, object_name: &str, name: &str) -> Vec<&L3Routine> {
+    fn routines_in(&self, object_name: &str, name: &str) -> Vec<&ModelRoutine> {
         let ids: Vec<&str> = self
             .ws
             .objects
@@ -70,9 +70,9 @@ fn b(i: u32, is_var: bool, res: &str) -> UpgradedBinding {
 
 /// An expected edge: `CallEdge::base` with the given fields.
 fn edge(
-    from: &L3Routine,
+    from: &ModelRoutine,
     cs: &PCallSite,
-    to: Option<&L3Routine>,
+    to: Option<&ModelRoutine>,
     kind: DispatchKind,
     res: Resolution,
 ) -> CallEdge {
@@ -89,7 +89,7 @@ fn edge(
 fn adapt_with(
     files: &[(&str, &str)],
     dep_symbols: Option<&str>,
-    mutate: impl FnOnce(&mut L3Workspace),
+    mutate: impl FnOnce(&mut ModelEntities),
 ) -> Adapted {
     adapt_full(
         files,
@@ -109,7 +109,7 @@ fn adapt_full(
     dep: Option<(&str, &[(&str, &str)])>,
     upgrade_dependency_bindings: bool,
     mutate_graph: impl FnOnce(&mut ProgramContext),
-    mutate: impl FnOnce(&mut L3Workspace),
+    mutate: impl FnOnce(&mut ModelEntities),
 ) -> Adapted {
     let dir = tempfile::tempdir().unwrap();
     let deps = if dep.is_some() {
@@ -306,7 +306,7 @@ fn other_unknown_bare_call() {
             cs,
             None,
             DispatchKind::Unresolved,
-            Resolution::Unknown(L3Reason::BareUnresolved)
+            Resolution::Unknown(ModelReason::BareUnresolved)
         )]
     );
     assert_eq!(a.bindings(&cs.id), vec![b(0, false, "unresolved-callee")]);
@@ -405,7 +405,7 @@ fn interface_implementer_outside_l3_is_unknown() {
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!(
         got[0].resolution,
-        Resolution::Unknown(L3Reason::NoProgramSite)
+        Resolution::Unknown(ModelReason::NoProgramSite)
     );
     let c = &a.census;
     assert_eq!(
@@ -605,7 +605,7 @@ fn dynamic_run_target() {
             cs,
             None,
             DispatchKind::Dynamic,
-            Resolution::Unknown(L3Reason::DynamicObjectRunTarget)
+            Resolution::Unknown(ModelReason::DynamicObjectRunTarget)
         )]
     );
     assert_eq!(a.bindings(&cs.id), vec![b(0, false, "non-record-arg")]);
@@ -1052,7 +1052,7 @@ fn implicit_trigger_to_workspace() {
         .into_iter()
         .find(|r| r.enclosing_member.as_deref() == Some("A"))
         .unwrap();
-    let trig = |o: &L3RecordOperation, to: &L3Routine, res: Resolution| {
+    let trig = |o: &ModelRecordOperation, to: &ModelRoutine, res: Resolution| {
         let mut e = CallEdge::base(&caller.id, &o.id, &o.id);
         e.to = Some(to.id.clone());
         e.dispatch_kind = DispatchKind::ImplicitTrigger;
@@ -1081,7 +1081,7 @@ fn implicit_trigger_to_workspace() {
 }
 
 /// A trigger edge for the op `op` of routine `caller`.
-fn trigger_edge(caller: &L3Routine, op: &L3RecordOperation, to: &L3Routine) -> CallEdge {
+fn trigger_edge(caller: &ModelRoutine, op: &ModelRecordOperation, to: &ModelRoutine) -> CallEdge {
     let mut e = CallEdge::base(&caller.id, &op.id, &op.id);
     e.to = Some(to.id.clone());
     e.dispatch_kind = DispatchKind::ImplicitTrigger;
@@ -1090,7 +1090,7 @@ fn trigger_edge(caller: &L3Routine, op: &L3RecordOperation, to: &L3Routine) -> C
 }
 
 /// `Rename` (#9): BOTH engines treat `R.Rename(..)` as a record op -- L2
-/// emits an `L3RecordOperation`, and the program extractor (which reads
+/// emits an `ModelRecordOperation`, and the program extractor (which reads
 /// the same `record_op_type` table) classifies a `RecordOp` that
 /// `resolve_implicit_trigger` routes to `OnRename`. The two pair up as a
 /// matched implicit trigger and the edge is `Resolved` (Rename takes no
@@ -1346,7 +1346,7 @@ fn unmatched_site_is_unknown_not_l3() {
     assert_eq!(got[0].to, None);
     assert_eq!(
         got[0].resolution,
-        Resolution::Unknown(L3Reason::NoProgramSite)
+        Resolution::Unknown(ModelReason::NoProgramSite)
     );
     assert_eq!(a.census.adapter_l3_fallback_sites, 1, "{:#?}", a.census);
     assert_eq!(a.census.adapter_program_sites, 0, "{:#?}", a.census);

@@ -15,8 +15,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l2::features::{PAnchor, PCallSite, POperationSite};
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l4::summary::Uncertainty;
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
@@ -26,6 +24,8 @@ use crate::engine::l5::path_walker::{
     PathCtx, Terminal, WalkBounds, WalkOpts, WalkPolicy, WalkStop, walk_evidence,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::{PAnchor, PCallSite, POperationSite};
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 const DETECTOR: &str = "d46-commit-in-lifecycle";
 
@@ -62,7 +62,7 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 /// `operation_sites` commit in the visited routine. The Terminal's `op_id` carries
 /// the commit operation id; `build_terminal_step` recovers its anchor.
 struct D46Policy<'a> {
-    routine_by_id: &'a HashMap<&'a str, &'a L3Routine>,
+    routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
     /// RoutineId → its commit operation sites (precomputed for O(1) lookup).
     commit_sites_by_routine: &'a HashMap<String, Vec<&'a POperationSite>>,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
@@ -180,7 +180,7 @@ impl<'a> WalkPolicy for D46Policy<'a> {
 }
 
 pub fn detect_d46(
-    resolved: &L3Resolved,
+    resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;

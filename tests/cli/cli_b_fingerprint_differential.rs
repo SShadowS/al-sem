@@ -130,7 +130,7 @@ fn compose_full_for(
     fixture: &str,
 ) -> (
     al_sem::engine::gate::cbor::CborValue,
-    al_sem::engine::l3::l3_workspace::L3Resolved,
+    al_sem::program::model::workspace::Model,
     PathBuf,
 ) {
     let ws = fixture_dir(fixture);

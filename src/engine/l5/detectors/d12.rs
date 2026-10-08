@@ -25,7 +25,7 @@ use super::anchor_of;
 const DETECTOR: &str = "d12-dead-integration-event";
 
 pub fn detect_d12(
-    _resolved: &crate::engine::l3::l3_workspace::L3Resolved,
+    _resolved: &crate::program::model::workspace::Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;
@@ -51,7 +51,7 @@ pub fn detect_d12(
         let Some(pub_routine) = ctx.routine_by_id.get(pub_routine_id.as_str()) else {
             continue;
         };
-        let pub_routine: &crate::engine::l3::l3_workspace::L3Routine = pub_routine;
+        let pub_routine: &crate::program::model::workspace::ModelRoutine = pub_routine;
         // roleOf(routine) !== "primary" → skip (al-sem d12 primary gate). A
         // dependency app's dead integration event is NOT the user's to fix (its
         // source isn't in the workspace), and a workspace subscriber to it would

@@ -103,7 +103,7 @@ impl TempStateKind {
 
     /// Parse from a `PTempState`-shaped JSON value (kind + optional value/parameterIndex).
     /// Used in tests for vector input parsing.
-    pub fn from_p_temp_state(ts: &crate::engine::l2::features::PTempState) -> Self {
+    pub fn from_p_temp_state(ts: &crate::program::body::features::PTempState) -> Self {
         match ts.kind.as_str() {
             "known" => TempStateKind::Known(ts.value.unwrap_or(false)),
             "parameter-dependent" => {
