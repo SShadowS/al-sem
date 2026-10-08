@@ -109,7 +109,8 @@ pub struct DepLspTier {
 /// A text-free line index of every dependency file, by `(app, virtual path)`:
 /// what the LSP needs to turn a dependency position into an editor column. The
 /// LSP keeps no dependency text (engine-switch S10.1).
-pub(crate) type DepLines = HashMap<(AppRef, String), crate::lsp::encoding::LineIndex>;
+pub(crate) type DepLines =
+    HashMap<(AppRef, crate::program::str_pool::SharedStr), crate::lsp::encoding::LineIndex>;
 
 impl DepCache {
     /// The live entry for `key`, or `build()`'s result (now cached). The lock
@@ -1030,10 +1031,17 @@ mod tests {
         // Stated directly, not through `ShareStrings` (whose field list the
         // pool check below shares with the build).
         assert!(SharedStr::ptr_eq(&runs[0].name, &runs[1].name));
+        let meta_runs: Vec<_> = tier.dep_meta.values().filter(|m| m.name == "Run").collect();
+        assert!(meta_runs.len() >= 2, "precondition: in two files");
+        assert_ne!(meta_runs[0].virtual_path, meta_runs[1].virtual_path);
+        assert!(SharedStr::ptr_eq(&meta_runs[0].name, &meta_runs[1].name));
+        assert!(SharedStr::ptr_eq(&meta_runs[0].name, &runs[0].name));
+        let mut metas: Vec<_> = tier.dep_meta.values().cloned().collect();
         let mut pool = StrPool::default();
         objects.share_strings(&mut pool);
         routines.share_strings(&mut pool);
         keys.share_strings(&mut pool);
+        metas.share_strings(&mut pool);
         let (seen, distinct, merged) = pool.counts();
         assert!(seen > distinct, "precondition: equal texts to share");
         assert_eq!(merged, 0, "a text is held in more than one allocation");

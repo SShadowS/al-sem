@@ -986,7 +986,7 @@ pub(crate) fn build_dep_lines(
         }
         for f in source.files.iter() {
             dep_lines
-                .entry((app_ref, f.virtual_path.clone()))
+                .entry((app_ref, f.virtual_path.as_str().into()))
                 .or_insert_with(|| LineIndex::new(&f.text));
         }
     }

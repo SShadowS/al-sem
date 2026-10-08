@@ -210,8 +210,9 @@ fn build_dep_nodes(
             file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
             routines.extend(file.routines);
-            dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, meta)| {
+            dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, mut meta)| {
                 id.share_strings(&mut pool);
+                meta.share_strings(&mut pool);
                 (id, meta)
             }));
             if file.parse_status_recovered {

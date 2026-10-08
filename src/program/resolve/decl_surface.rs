@@ -20,13 +20,14 @@ use serde::{Deserialize, Serialize};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::sig_fp::source_routine_node_id;
+use crate::program::str_pool::{ShareStrings, SharedStr, StrPool};
 use crate::snapshot::ParsedUnit;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParamMeta {
     /// The declared parameter name (engine-switch S2b.5, G15a).
-    pub name: String,
-    pub ty: Option<String>,
+    pub name: SharedStr,
+    pub ty: Option<SharedStr>,
     pub by_ref: bool,
 }
 
@@ -55,37 +56,52 @@ impl ParamMeta {
 /// [`crate::program::pack::PackedOrigin`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineMeta {
-    pub name: String,
+    pub name: SharedStr,
     /// Name half of `RoutineDecl::enclosing_member` (origin half unused).
-    pub enclosing_member: Option<String>,
+    pub enclosing_member: Option<SharedStr>,
     pub parse_incomplete: bool,
     pub params: Vec<ParamMeta>,
     #[serde(with = "crate::program::pack::origin_wire")]
     pub origin: Origin,
     #[serde(with = "crate::program::pack::origin_wire")]
     pub name_origin: Origin,
-    pub virtual_path: String,
+    pub virtual_path: SharedStr,
 }
 
 impl RoutineMeta {
-    pub fn from_decl(decl: &RoutineDecl, virtual_path: &str) -> Self {
+    pub fn from_decl(decl: &RoutineDecl, virtual_path: impl Into<SharedStr>) -> Self {
         RoutineMeta {
-            name: decl.name.clone(),
-            enclosing_member: decl.enclosing_member.as_ref().map(|(n, _)| n.clone()),
+            name: decl.name.as_str().into(),
+            enclosing_member: decl
+                .enclosing_member
+                .as_ref()
+                .map(|(n, _)| n.as_str().into()),
             parse_incomplete: decl.parse_incomplete,
             params: decl
                 .params
                 .iter()
                 .map(|p| ParamMeta {
-                    name: p.name.clone(),
-                    ty: p.ty.clone(),
+                    name: p.name.as_str().into(),
+                    ty: p.ty.as_deref().map(SharedStr::from),
                     by_ref: p.by_ref,
                 })
                 .collect(),
             origin: decl.origin.clone(),
             name_origin: decl.name_origin.clone(),
-            virtual_path: virtual_path.to_string(),
+            virtual_path: virtual_path.into(),
         }
+    }
+}
+
+impl ShareStrings for RoutineMeta {
+    fn share_strings(&mut self, pool: &mut StrPool) {
+        pool.share(&mut self.name);
+        pool.share_opt(&mut self.enclosing_member);
+        for p in &mut self.params {
+            pool.share(&mut p.name);
+            pool.share_opt(&mut p.ty);
+        }
+        pool.share(&mut self.virtual_path);
     }
 }
 
@@ -98,6 +114,8 @@ pub(crate) fn file_routine_meta(
     virtual_path: &str,
 ) -> Vec<(RoutineNodeId, RoutineMeta)> {
     let mut out = Vec::new();
+    // One text for the file, shared by every routine in it.
+    let virtual_path = SharedStr::from(virtual_path);
     for obj in &file.objects {
         let key = match obj.id {
             Some(n) => ObjKey::Id(n),
@@ -111,7 +129,7 @@ pub(crate) fn file_routine_meta(
         for routine in &obj.routines {
             out.push((
                 source_routine_node_id(obj_id.clone(), routine),
-                RoutineMeta::from_decl(routine, virtual_path),
+                RoutineMeta::from_decl(routine, virtual_path.clone()),
             ));
         }
     }

@@ -133,8 +133,8 @@ impl<'g> DependencyRegistry<'g> {
                     m.params
                         .iter()
                         .map(|p| TargetParam {
-                            name: p.name.clone(),
-                            ty: p.ty.clone(),
+                            name: p.name.to_string(),
+                            ty: p.ty.as_deref().map(str::to_string),
                             by_ref: p.by_ref,
                             temporary: p.is_temporary(),
                         })

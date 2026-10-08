@@ -311,7 +311,7 @@ fn canon_dep_meta(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, CanonDecl> {
                 k.clone(),
                 (
                     k.clone(),
-                    v.name.clone(),
+                    v.name.to_string(),
                     canon_origin(&v.origin),
                     canon_origin(&v.name_origin),
                 ),
