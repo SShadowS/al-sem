@@ -21,11 +21,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::engine::l2::features::PCallSite;
-use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding, calls_for};
-use crate::engine::l3::event_graph::events_for;
+use crate::engine::l3::call_resolver::{CallEdge, UpgradedBinding};
 use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Object, L3Resolved, L3Routine, L3Table};
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
@@ -823,8 +821,8 @@ impl DetectorContext<'_> {
     }
 }
 
-/// Build the shared context. Runs the SOURCE-ONLY L3→L4 substrate (symbols →
-/// resolve_calls → event_graph → combined_graph → cone) to assemble the combined
+/// Build the shared context. Runs the L4 substrate over the model's calls and
+/// event graph (combined_graph → cone) to assemble the combined
 /// graph + the always-built eager indexes, then builds ONLY the expensive substrates
 /// named in `demanded` (see `registry::substrate`).
 ///
@@ -902,21 +900,14 @@ pub(crate) fn build_detector_context_with<'a>(
          cone would silently build empty; OR in substrate::SUMMARIES alongside it"
     );
 
-    // --- L3→L4 substrate (source-only: no deps) ----------------------------
-    // `symbols` feeds BOTH spans below (`calls_for` here, `events_for` in the next
-    // stage; each reads the program engine's result when `resolved` carries one,
-    // engine-switch S3/S4), so it is built at this outer scope instead of inside either
-    // span's own block — the two spans are closed explicitly (`drop`) at their
-    // semantic stage ends rather than by a block boundary (same pattern as
-    // `gate/run.rs`'s `gate.project_filter_scope_baseline_suppress`).
+    // --- L3→L4 substrate: the model's calls and events (the program engine's) ---
     let _symbols_span = pt::span("context", "context.symbols_resolve_calls");
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
     // Owned: the body below drains `calls.edges`/`upgraded_bindings` by move.
-    let mut calls = calls_for(resolved, &symbols).into_owned();
+    let mut calls = (*resolved.calls).clone();
     drop(_symbols_span);
 
     let _graph_span = pt::span("context", "context.event_combined_graph");
-    let event_graph = events_for(resolved, &symbols).into_owned();
+    let event_graph = resolved.events.graph.clone();
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
     if let Some(c) = &cross {
         graph
@@ -1639,21 +1630,17 @@ mod tests {
                 *id = shared.to_string();
             }
         };
-        if let Some(calls) = resolved.precomputed_calls.as_mut() {
-            for e in &mut std::sync::Arc::make_mut(calls).edges {
-                rekey(&mut e.from);
-                e.to.as_mut().map(rekey);
-                e.candidates.iter_mut().flatten().for_each(rekey);
-            }
+        for e in &mut std::sync::Arc::make_mut(&mut resolved.calls).edges {
+            rekey(&mut e.from);
+            e.to.as_mut().map(rekey);
+            e.candidates.iter_mut().flatten().for_each(rekey);
         }
-        if let Some(events) = resolved.precomputed_events.as_mut() {
-            let graph = &mut std::sync::Arc::make_mut(events).graph;
-            for e in &mut graph.edges {
-                rekey(&mut e.subscriber_routine_id);
-            }
-            for s in &mut graph.events {
-                s.publisher_routine_id.as_mut().map(rekey);
-            }
+        let graph = &mut std::sync::Arc::make_mut(&mut resolved.events).graph;
+        for e in &mut graph.edges {
+            rekey(&mut e.subscriber_routine_id);
+        }
+        for s in &mut graph.events {
+            s.publisher_routine_id.as_mut().map(rekey);
         }
         forced
     }
@@ -1688,8 +1675,8 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
-            precomputed_calls: None,
-            precomputed_events: None,
+            calls: Default::default(),
+            events: Default::default(),
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
@@ -1705,13 +1692,13 @@ mod tests {
         );
     }
 
-    /// The seam is USED, not just present: a hand-made `ResolvedCalls` attached to
-    /// an empty workspace (which on its own resolves ZERO edges) must show up in
-    /// BOTH the detector context and the ordering-facts substrate
-    /// (`compose_snapshot` → `build_r3a3_source_only_base`). Reverting either site
-    /// to `resolve_calls` makes its assertion fail.
+    /// The model's calls are USED, not just present: a hand-made `ResolvedCalls` on
+    /// an empty workspace must show up in the detector context, the ordering-facts
+    /// substrate (`compose_snapshot` → `build_r3a3_source_only_base`) and coverage.
+    /// (Until engine-switch S9.6 the calls were optional; reverting a site to L3's
+    /// own resolver failed its assertion.)
     #[test]
-    fn precomputed_calls_reach_detector_context_and_ordering_base() {
+    fn model_calls_reach_detector_context_and_ordering_base() {
         use crate::engine::l3::call_resolver::{CallEdge, ResolvedCalls};
         use crate::engine::l3::taxonomy::{DispatchKind, Resolution};
         let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
@@ -1728,19 +1715,19 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
-            precomputed_calls: Some(std::sync::Arc::new(ResolvedCalls {
+            calls: std::sync::Arc::new(ResolvedCalls {
                 edges: vec![edge],
                 upgraded_bindings: HashMap::new(),
                 diagnostics: Vec::new(),
                 external_targets: Vec::new(),
-            })),
-            precomputed_events: None,
+            }),
+            events: Default::default(),
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
             ctx.resolved_call_edge_by_callsite
                 .contains_key("distinct-callsite"),
-            "build_detector_context ignored precomputed_calls"
+            "build_detector_context ignored the model's calls"
         );
         let base = crate::engine::l4::capability_cone::build_r3a3_source_only_base(&resolved);
         assert!(
@@ -1748,7 +1735,7 @@ mod tests {
                 .edges
                 .iter()
                 .any(|e| e.callsite_id == "distinct-callsite"),
-            "the ordering-facts base ignored precomputed_calls"
+            "the ordering-facts base ignored the model's calls"
         );
         let coverage = resolved.project_coverage(&[], &[]);
         assert!(
@@ -1756,7 +1743,7 @@ mod tests {
                 .dynamic_dispatch_sites
                 .iter()
                 .any(|s| s.contains("distinct-op")),
-            "project_coverage ignored precomputed_calls"
+            "project_coverage ignored the model's calls"
         );
     }
 

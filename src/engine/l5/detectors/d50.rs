@@ -807,8 +807,8 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: Vec::new(),
-            precomputed_calls: None,
-            precomputed_events: None,
+            calls: Default::default(),
+            events: Default::default(),
         };
 
         let output = detect_d50(&resolved, &ctx).unwrap();

@@ -160,23 +160,19 @@ fn force_id_collision(resolved: &mut L3Resolved, routine_name: &str, shared_id: 
             *id = new;
         }
     };
-    if let Some(calls) = resolved.precomputed_calls.as_mut() {
-        for e in &mut std::sync::Arc::make_mut(calls).edges {
-            rekey(&mut e.from);
-            e.to.as_mut().map(rekey);
-            e.candidates.iter_mut().flatten().for_each(rekey);
-            rebase_any(&mut e.callsite_id);
-            rebase_any(&mut e.operation_id);
-        }
+    for e in &mut std::sync::Arc::make_mut(&mut resolved.calls).edges {
+        rekey(&mut e.from);
+        e.to.as_mut().map(rekey);
+        e.candidates.iter_mut().flatten().for_each(rekey);
+        rebase_any(&mut e.callsite_id);
+        rebase_any(&mut e.operation_id);
     }
-    if let Some(events) = resolved.precomputed_events.as_mut() {
-        let graph = &mut std::sync::Arc::make_mut(events).graph;
-        for e in &mut graph.edges {
-            rekey(&mut e.subscriber_routine_id);
-        }
-        for s in &mut graph.events {
-            s.publisher_routine_id.as_mut().map(rekey);
-        }
+    let graph = &mut std::sync::Arc::make_mut(&mut resolved.events).graph;
+    for e in &mut graph.edges {
+        rekey(&mut e.subscriber_routine_id);
+    }
+    for s in &mut graph.events {
+        s.publisher_routine_id.as_mut().map(rekey);
     }
     old_ids.len()
 }

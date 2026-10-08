@@ -1,12 +1,11 @@
 //! B3 Phase A: the production call resolution of `alsem analyze`'s detectors.
 //! [`attach_program_calls`] converts the program engine's call-site edges into
-//! L3's `ResolvedCalls` and sets `L3Resolved.precomputed_calls`; it started
-//! (Task 1) as a read-only join census, which `aldump --b3` still prints.
+//! the model's `ResolvedCalls` and returns the model with them; it started
+//! (Task 1) as a read-only join census ([`adapter_census_for_workspace`]).
 //!
-//! The conversion needs every L3 call site paired with exactly one program
+//! The conversion needs every model call site paired with exactly one program
 //! edge. This module does the pairing and counts what does not pair, by
-//! reason. It lives under `engine::l3` because
-//! `program::resolve` must not import `engine::l3`.
+//! reason.
 //!
 //! # Join keys (code map A3, `docs/2026-10-04-b3-code-map.md`)
 //!
@@ -105,8 +104,8 @@
 //! in `adapter_l3_trigger_ops`. Since S3.5 the program engine classifies
 //! bare implicit-receiver ops as record ops too, so on CDO both counts are 0.
 //!
-//! **Order** is `resolve_calls`'s: call sites in routine order, then the
-//! trigger edges in routine/op order.
+//! **Order** is the legacy resolver's: call sites in routine order, then the
+//! trigger edges in routine/op order (`edge_order_is_call_sites_then_triggers`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -127,8 +126,7 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    DispatchShape, Edge, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason,
-    callee_fp,
+    DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason, callee_fp,
 };
 use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramContext, ProgramReport};
 use crate::snapshot::TrustTier;
@@ -611,8 +609,8 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &L3Workspace) -
 ///
 /// `upgrade_dependency_bindings` (stage 2): upgrade the bindings of a call
 /// into a dependency routine with that routine's parameter `var`-ness, as
-/// for a workspace callee. Production passes `true`; the B3 harness passes
-/// `false` to diff this effect alone (`aldump --b3 --b3-deps`).
+/// for a workspace callee. Production passes `true`; tests pass `false` to see
+/// stage 1 alone.
 #[must_use]
 pub fn resolved_calls_from_program(
     report: &ProgramReport,
@@ -620,44 +618,41 @@ pub fn resolved_calls_from_program(
     ws: &L3Workspace,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
-    let (calls, census, _) = adapter(report, ctx, ws, upgrade_dependency_bindings, false, None);
-    (calls, census)
+    adapter(report, ctx, ws, upgrade_dependency_bindings, None)
 }
 
 /// The production step that points the detectors at the program engine's
-/// calls: run the adapter (no per-site notes, dependency bindings upgraded),
-/// build the event graph from the program engine's subscriptions (S4.2), drop
-/// the program model, and set `resolved.precomputed_calls` and
-/// `resolved.precomputed_events`. `alsem
-/// analyze` and [`assemble_and_resolve_workspace_program`] both use it, so a
-/// test cannot drift from the production path.
+/// calls: run the adapter (dependency bindings upgraded), build the event graph
+/// from the program engine's subscriptions (S4.2), drop the program model, and
+/// return the model with both. `alsem analyze` and
+/// [`assemble_and_resolve_workspace_program`] both use it, so a test cannot
+/// drift from the production path.
 pub fn attach_program_calls(
-    resolved: &mut crate::program::model::workspace::L3Resolved,
+    rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
-) {
-    attach_program_calls_with(resolved, ctx, report, None);
+) -> crate::program::model::workspace::L3Resolved {
+    attach_program_calls_with(rows, ctx, report, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
 /// joins a symbol-only dependency routine to its model row.
 fn attach_program_calls_with(
-    resolved: &mut crate::program::model::workspace::L3Resolved,
+    rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) {
+) -> crate::program::model::workspace::L3Resolved {
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
-        adapter(&report, &ctx, &resolved.workspace, true, false, abi_rows).0
+        adapter(&report, &ctx, &rows.workspace, true, abi_rows).0
     };
     // Engine-switch S4.2: the detector event graph, from the same program build.
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph(&ctx, &resolved.workspace)
+        crate::program::model::events::program_event_graph(&ctx, &rows.workspace)
     };
-    resolved.precomputed_events = Some(std::sync::Arc::new(events));
     {
         let _s = pt::span("b3", "b3.report_drop");
         drop(report);
@@ -666,10 +661,18 @@ fn attach_program_calls_with(
         let _s = pt::span("b3", "b3.ctx_drop");
         drop(ctx);
     }
-    resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
+    let mut resolved = crate::program::model::workspace::L3Resolved {
+        workspace: rows.workspace,
+        root_classifications: rows.root_classifications,
+        primary_app: rows.primary_app,
+        infra_diagnostics: rows.infra_diagnostics,
+        calls: std::sync::Arc::new(calls),
+        events: std::sync::Arc::new(events),
+    };
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).
-    crate::program::model::event_param_temp::prove_event_param_temps(resolved);
+    crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
+    resolved
 }
 
 /// [`assemble_and_resolve_workspace_program`] with the default model-instance id
@@ -691,9 +694,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 /// The program-backed model every consumer moves onto in engine-switch S6: the
 /// model projected from one program build (as `alsem analyze` builds it,
 /// `gate::run::build_analysis_model`), with the program engine's calls and event
-/// graph attached. Same signature as
-/// `l3_workspace::assemble_and_resolve_workspace`, which it replaces consumer by
-/// consumer. `None` when the program build or the model assembly fails.
+/// graph attached. `None` when the program build or the model assembly fails.
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
     workspace: &std::path::Path,
@@ -702,16 +703,14 @@ pub fn assemble_and_resolve_workspace_program(
 ) -> Option<crate::program::model::workspace::L3Resolved> {
     let (ctx, report, _) =
         crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
-    let mut resolved =
-        crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-            workspace,
-            model_instance_id,
-            skip_roots_config,
-            &ctx,
-            &report.parenless_calls,
-        )?;
-    attach_program_calls(&mut resolved, ctx, report);
-    Some(resolved)
+    let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
+        workspace,
+        model_instance_id,
+        skip_roots_config,
+        &ctx,
+        &report.parenless_calls,
+    )?;
+    Some(attach_program_calls(rows, ctx, report))
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -840,7 +839,7 @@ pub fn assemble_and_resolve_cross_app_program(
             &report.edges,
         )
     };
-    let (mut resolved, abi_rows) = {
+    let (rows, abi_rows) = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
             workspace,
@@ -889,10 +888,10 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    {
+    let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(&mut resolved, ctx, report, Some(&abi_rows));
-    }
+        attach_program_calls_with(rows, ctx, report, Some(&abi_rows))
+    };
     Some(CrossAppProgram {
         resolved,
         declared_dependencies,
@@ -912,143 +911,16 @@ fn no_program_edge(r: &L3Routine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<Upgrade
     (vec![e], initial_binding_state(cs).bindings)
 }
 
-/// How the adapter produced one site's edges, for the B3 detector-diff
-/// harness's attribution (`b3_diff`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SiteNote {
-    /// The census categories this site moved, e.g.
-    /// `external-record-receiver`, `trigger-beyond-l3`,
-    /// `l3-fallback:no_program_site`. `program-site` / `program-trigger`
-    /// when the edges came from the program engine and no special counter
-    /// moved.
-    pub categories: Vec<String>,
-    /// The program edge: shape and each route's evidence (with its
-    /// `UnknownReason`). `None` when the edges came from L3's own resolver.
-    pub program: Option<String>,
-}
-
-/// [`SiteNote`]s keyed like a `CallEdge`: `(from routine id, call-site or
-/// record-op id)`.
-pub type SiteNotes = HashMap<(String, String), SiteNote>;
-
-/// The census counters a site can move, with the category name it gets.
-type Counter = fn(&SiteCensus) -> usize;
-
-const CATEGORY_COUNTERS: &[(&str, Counter)] = &[
-    ("external-record-receiver", |c| {
-        c.adapter_external_record_receiver
-    }),
-    ("external-object-receiver", |c| {
-        c.adapter_external_object_receiver
-    }),
-    ("external-other", |c| c.adapter_external_other),
-    ("external-member-decline", |c| {
-        c.adapter_external_member_decline
-    }),
-    ("workspace-run-no-entry", |c| {
-        c.adapter_workspace_run_no_entry
-    }),
-    ("dep-bindings-source", |c| c.adapter_dep_bindings_source),
-    ("dep-bindings-symbol", |c| c.adapter_dep_bindings_symbol),
-    // Not `_missing` / `_collapsed` / `_no_routine`: those sites keep their
-    // bindings, so they are no cause of a difference.
-    ("routes-dropped", |c| c.adapter_routes_dropped),
-    ("trigger-dependency-routes", |c| {
-        c.adapter_trigger_dependency_routes
-    }),
-    ("ambiguous-dependency-candidates", |c| {
-        c.adapter_ambiguous_dependency_candidates
-    }),
-    ("trigger-routes-filtered", |c| {
-        c.adapter_trigger_routes_filtered
-    }),
-    ("multi-route", |c| c.adapter_multi_route_sites),
-    ("empty-route", |c| c.adapter_empty_route_sites),
-    ("l3-fallback:callee-outside-l3", |c| {
-        c.adapter_callee_outside_l3
-    }),
-];
-
-fn counter_values(c: &SiteCensus) -> Vec<usize> {
-    CATEGORY_COUNTERS.iter().map(|(_, f)| f(c)).collect()
-}
-
-/// The categories whose counters moved since `before`, or `default`.
-fn moved_categories(before: &[usize], c: &SiteCensus, default: &str) -> Vec<String> {
-    let moved: Vec<String> = CATEGORY_COUNTERS
-        .iter()
-        .zip(before)
-        .filter(|((_, f), b)| f(c) != **b)
-        .map(|((name, _), _)| (*name).to_string())
-        .collect();
-    if moved.is_empty() {
-        vec![default.to_string()]
-    } else {
-        moved
-    }
-}
-
-fn describe_program_edge(edge: &Edge) -> String {
-    let routes: Vec<String> = edge
-        .routes
-        .iter()
-        .map(|r| format!("{:?}", r.evidence))
-        .collect();
-    format!("{:?} {:?} [{}]", edge.kind, edge.shape, routes.join(", "))
-}
-
-/// [`resolved_calls_from_program`], plus one [`SiteNote`] per call site and
-/// per record op that has edges on either path.
-#[must_use]
-pub fn resolved_calls_with_notes(
-    report: &ProgramReport,
-    ctx: &ProgramContext,
-    ws: &L3Workspace,
-    upgrade_dependency_bindings: bool,
-) -> (ResolvedCalls, SiteCensus, SiteNotes) {
-    adapter(report, ctx, ws, upgrade_dependency_bindings, true, None)
-}
-
-/// The adapter. `want_notes` is false on the production path
-/// ([`resolved_calls_from_program`]): it then builds no [`SiteNote`] and
-/// returns an empty map. The calls and census do not depend on it.
+/// The adapter: the model's calls from the program engine's edges, and the
+/// census of how each site was produced.
 fn adapter(
     report: &ProgramReport,
     ctx: &ProgramContext,
     ws: &L3Workspace,
     upgrade_dependency_bindings: bool,
-    want_notes: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) -> (ResolvedCalls, SiteCensus, SiteNotes) {
-    let mut notes = SiteNotes::new();
+) -> (ResolvedCalls, SiteCensus) {
     let j = join(report, ctx, ws);
-    // The join's reason per unmatched L3 call site, for fallback notes.
-    let unmatched_reason: HashMap<SiteKey, &'static str> = if want_notes {
-        j.census
-            .unmatched
-            .iter()
-            .filter(|u| {
-                matches!(
-                    u.reason,
-                    "no_program_site" | "shape_mismatch" | "callee_fp_mismatch" | "caller_mismatch"
-                )
-            })
-            .map(|u| {
-                (
-                    (
-                        u.unit.clone(),
-                        u.start_line,
-                        u.start_col,
-                        u.end_line,
-                        u.end_col,
-                    ),
-                    u.reason,
-                )
-            })
-            .collect()
-    } else {
-        HashMap::new()
-    };
     let mut c = j.census;
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
@@ -1096,15 +968,10 @@ fn adapter(
     // The adapter emits no resolver diagnostics (the legacy resolver's
     // double-upgrade warning had no program-engine analogue to fire).
     let diagnostics = Vec::new();
-    // Same order as `resolve_calls`: call sites in routine order, then the
-    // implicit-trigger edges in routine/op order.
+    // Call sites in routine order, then the implicit-trigger edges in
+    // routine/op order (the legacy resolver's order).
     for (ri, r) in ws.routines.iter().enumerate() {
         for (ci, cs) in r.call_sites.iter().enumerate() {
-            let before = if want_notes {
-                counter_values(&c)
-            } else {
-                Vec::new()
-            };
             let program_edge = j.calls.get(&(ri, ci));
             let converted = program_edge.and_then(|ce| {
                 let out = conv.call(r, cs, ce, &mut c);
@@ -1125,58 +992,21 @@ fn adapter(
                     no_program_edge(r, cs)
                 }
             };
-            if want_notes {
-                let fallback = match unmatched_reason.get(&l3_key(&cs.source_anchor)) {
-                    Some(reason) => format!("l3-fallback:{reason}"),
-                    None => "program-site".to_string(),
-                };
-                notes.insert(
-                    (r.id.clone(), cs.id.clone()),
-                    SiteNote {
-                        categories: moved_categories(&before, &c, &fallback),
-                        program: program_edge.map(|ce| describe_program_edge(&ce.edge)),
-                    },
-                );
-            }
             edges.extend(site_edges);
             upgraded_bindings.insert(cs.id.clone(), bindings);
         }
     }
     for (ri, r) in ws.routines.iter().enumerate() {
         for (oi, op) in r.record_operations.iter().enumerate() {
-            let before = if want_notes {
-                counter_values(&c)
-            } else {
-                Vec::new()
-            };
-            let key = || (r.id.clone(), op.id.clone());
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
                 edges.extend(conv.triggers(r, op, ce, &mut c));
-                if want_notes {
-                    notes.insert(
-                        key(),
-                        SiteNote {
-                            categories: moved_categories(&before, &c, "program-trigger"),
-                            program: Some(describe_program_edge(&ce.edge)),
-                        },
-                    );
-                }
             } else if matches!(
                 op.op.as_str(),
                 "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
             ) {
                 // S3.5: no legacy fallback.
                 c.adapter_l3_trigger_ops += 1;
-                if want_notes {
-                    notes.insert(
-                        key(),
-                        SiteNote {
-                            categories: vec!["no-program-trigger".to_string()],
-                            program: None,
-                        },
-                    );
-                }
             }
         }
     }
@@ -1188,7 +1018,6 @@ fn adapter(
             external_targets: conv.targets.into_inner(),
         },
         c,
-        notes,
     )
 }
 
@@ -2036,7 +1865,7 @@ pub(crate) fn build_models(
     (
         ProgramContext,
         ProgramReport,
-        crate::program::model::workspace::L3Resolved,
+        crate::program::model::workspace::ModelRows,
     ),
     String,
 > {
@@ -2074,13 +1903,12 @@ mod tests {
             format!("{:?}", m.primary_app.as_ref().map(|a| &a.app_guid)),
             format!("{:?}", m.root_classifications),
             format!("{:?}", m.infra_diagnostics),
-            format!("{:?}", m.precomputed_events),
+            format!("{:?}", m.events),
         ];
         out.extend(m.workspace.objects.iter().map(|o| format!("{o:?}")));
         out.extend(m.workspace.tables.iter().map(|t| format!("{t:?}")));
         out.extend(m.workspace.routines.iter().map(|r| format!("{r:?}")));
-        let calls = m.precomputed_calls.as_ref().expect("program calls");
-        out.extend(calls.edges.iter().map(|e| format!("{e:?}")));
+        out.extend(m.calls.edges.iter().map(|e| format!("{e:?}")));
         out
     }
 
@@ -2153,7 +1981,7 @@ mod tests {
                 .iter()
                 .all(|r| r.app_guid == "11111111-0000-0000-0000-0000000g1abc")
         );
-        let calls = &m.precomputed_calls.as_ref().unwrap().edges;
+        let calls = &m.calls.edges;
         assert!(calls.iter().any(|e| e.to.is_some()), "{calls:?}");
     }
 
@@ -2444,12 +2272,9 @@ mod tests {
     }
 }
 
-// The adapter tests compare the adapter with L3's own `resolve_calls`, so the
-// file lives with L3 (the program engine never imports it: the
-// `program_has_no_legacy_engine_imports` guard) and is reworked or deleted with
-// it in engine-switch S9.6. A child module still, for private access.
+// The adapter tests: a child module, for private access.
 #[cfg(test)]
-#[path = "../../engine/l3/program_calls_adapter_tests.rs"]
+#[path = "program_calls_adapter_tests.rs"]
 mod adapter_tests;
 
 #[cfg(test)]

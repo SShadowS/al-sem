@@ -1378,7 +1378,7 @@ pub fn assemble_and_resolve_workspace_from_program(
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<L3Resolved> {
+) -> Option<ModelRows> {
     let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
     finish_resolved(ws, workspace, skip_roots_config)
 }
@@ -1405,7 +1405,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<(L3Resolved, AbiRowIds)> {
+) -> Option<(ModelRows, AbiRowIds)> {
     let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
     let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand, parenless);
     Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
@@ -1696,7 +1696,7 @@ fn finish_resolved(
     mut ws: L3Workspace,
     workspace: &std::path::Path,
     skip_roots_config: bool,
-) -> Option<L3Resolved> {
+) -> Option<ModelRows> {
     let resolved = {
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`.
@@ -1716,13 +1716,11 @@ fn finish_resolved(
         // Mirrors al-sem `model.identity.primaryApp`. Never throws — returns None
         // on unreadable / malformed app.json (fail-closed / engine-never-throws).
         let primary_app = read_primary_app_from_disk(workspace);
-        L3Resolved {
+        ModelRows {
             workspace: ws,
             root_classifications,
             primary_app,
             infra_diagnostics,
-            precomputed_calls: None,
-            precomputed_events: None,
         }
     };
     // Empty fail-closed model (no objects/routines) → treat as not-analyzable.
@@ -1782,13 +1780,9 @@ fn read_primary_app_from_disk(
 /// NOTHING in `resolve` reads beyond them.
 pub fn resolve(workspace: &mut L3Workspace) {
     let _s = pt::span("l3", "l3.resolve");
-    // ROUTINE-FREE index (see `SymbolTable::build_without_routines`): the loop
-    // below takes `&mut workspace.routines`, so the table — which borrows the
-    // workspace rather than cloning it — must not hold `&workspace.routines`.
-    // It never needed to: `resolve_routine_record_types` only ever asks the
-    // table about objects and tables. `objects`/`tables` are disjoint fields, so
-    // borrowing them immutably alongside the mutable routine walk is fine.
-    let symbols = SymbolTable::build_without_routines(&workspace.objects, &workspace.tables);
+    // The loop below takes `&mut workspace.routines`; the table borrows only
+    // `objects`/`tables`, disjoint fields, so that is fine.
+    let symbols = SymbolTable::build(&workspace.objects, &workspace.tables);
 
     // objectId → object, so a routine maps back to its owning object. Borrowed,
     // not cloned — `resolve_routine_record_types` takes `Option<&L3Object>`, and
@@ -1824,51 +1818,41 @@ pub fn to_stable_table_id(internal: &str) -> String {
     }
 }
 
-/// A resolved workspace, exposing the StableTableId-projected lookups the parity
-/// surface compares.
+/// The model's rows before its calls exist: what the assembly entries build, and
+/// what `program_calls::attach_program_calls` turns into an [`L3Resolved`]. A
+/// separate type so a model without calls cannot reach a consumer (engine-switch
+/// S9.6: until then the calls were optional and a missing one fell back to L3's
+/// own resolver).
+pub struct ModelRows {
+    pub workspace: L3Workspace,
+    pub root_classifications: Vec<crate::engine::root_classification::RootClassification>,
+    pub primary_app: Option<crate::engine::gate::app_attribution::App>,
+    pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+}
+
+/// The detector model: the rows, with the program engine's calls and event graph.
 pub struct L3Resolved {
     pub workspace: L3Workspace,
     /// R4-F root classifications (`model.rootClassifications`): the AST root
-    /// classifier overlaid with any `<workspace>/roots.config.json`. Computed at
-    /// the disk-backed resolve entry (`assemble_and_resolve_workspace`, where the
-    /// workspace root is known); the inline / cross-app constructors that have no
-    /// disk config populate the AST-only set (empty config). Consumed by the L5
-    /// `DetectorContext` (d50/d51) and the R4-F stable projection.
+    /// classifier overlaid with any `<workspace>/roots.config.json` (unless the
+    /// caller skips it). Consumed by the L5 `DetectorContext` (d50/d51) and the
+    /// R4-F stable projection.
     pub root_classifications: Vec<crate::engine::root_classification::RootClassification>,
     /// The primary app's identity (`model.identity.primaryApp`): name / publisher /
-    /// version read from the workspace `app.json`. Populated by the disk-backed
-    /// assembly path (`assemble_and_resolve_workspace`); `None` in the inline /
-    /// cross-app constructors (no disk `app.json` to read). Consumed by the html
-    /// formatter's masthead/title (Stage A3) and any future envelope that needs the
-    /// primary app description. Additive — `L3Resolved` is NOT serialized into any
-    /// golden surface, so adding this field never moves a golden.
+    /// version read from the workspace `app.json`; `None` if it is unreadable.
+    /// Consumed by the html formatter's masthead/title (Stage A3), coverage and
+    /// the cross-app base. `L3Resolved` is NOT serialized into any golden surface.
     pub primary_app: Option<crate::engine::gate::app_attribution::App>,
     /// Infrastructure diagnostics from the root-classification overlay (e.g.
-    /// `kinds-mismatch` warnings from `roots.config.json`). Empty for inline /
-    /// cross-app paths that have no disk config. Propagated to the JSON envelope.
+    /// `kinds-mismatch` warnings from `roots.config.json`). Propagated to the JSON
+    /// envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
-    /// An externally supplied call resolution. `Some` on the `alsem analyze` path
-    /// and in the r4/r4f test helper (both set by
-    /// `program_calls::attach_program_calls`: the program engine's calls); `None`
-    /// for every other consumer, which runs `resolve_calls` itself (CLAUDE.md lists
-    /// them). When `Some`, these sites read it via `call_resolver::calls_for`:
-    /// - on the `alsem analyze` path: the detector context
-    ///   (`build_detector_context`), the ordering-facts base
-    ///   (`build_r3a3_source_only_base`) and coverage (`project_coverage`);
-    /// - switched but NOT on the analyze path: `project_r3a3` and
-    ///   `compute_r3a3_real_matrix`;
-    /// - the cross-app base (`capability_cone::build_cross_app_base`, engine-switch
-    ///   S7.4) reads the cross-app model's, set by
-    ///   `program_calls::assemble_and_resolve_cross_app_program`;
-    /// - still L3's own resolver: `project_coverage_cross_app` and the `--l3-*`
-    ///   cross-app modes, which measure L3 (S9).
-    pub precomputed_calls: Option<std::sync::Arc<super::calls::ResolvedCalls>>,
+    /// The program engine's calls, adapted to the model's call shape
+    /// (`program_calls::attach_program_calls`).
+    pub calls: std::sync::Arc<super::calls::ResolvedCalls>,
     /// The detector event graph built from the program engine's subscription
-    /// inventory (engine-switch S4.2). Set together with `precomputed_calls`, by
-    /// the same function, for the same consumers; they read it through
-    /// `event_graph::events_for`. `None` everywhere else, which builds L3's
-    /// source-only event graph.
-    pub precomputed_events: Option<std::sync::Arc<super::events::ProgramEvents>>,
+    /// inventory (engine-switch S4.2), by the same function.
+    pub events: std::sync::Arc<super::events::ProgramEvents>,
 }
 
 // ---------------------------------------------------------------------------

@@ -45,12 +45,7 @@ fn known_temp() -> PTempState {
 
 /// Prove and write the temporary subscriber parameters (see the module docs).
 pub fn prove_event_param_temps(resolved: &mut L3Resolved) {
-    let (Some(calls), Some(events)) = (
-        resolved.precomputed_calls.clone(),
-        resolved.precomputed_events.clone(),
-    ) else {
-        return;
-    };
+    let (calls, events) = (resolved.calls.clone(), resolved.events.clone());
     let rewrites: Vec<(usize, u32)> = {
         let routines = &resolved.workspace.routines;
         let index: HashMap<&str, usize> = routines

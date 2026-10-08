@@ -1279,18 +1279,12 @@ fn discover_l3eg_goldens() -> Vec<(String, PathBuf)> {
 }
 
 /// The event-graph projection of the production model for a fixture dir: the
-/// program engine's graph (`events_for` reads `precomputed_events`; engine-switch
-/// S9.5e — until then L3's own `build_event_graph`). Fail-closed → empty.
+/// program engine's graph (engine-switch S9.5e — until then L3's own
+/// `build_event_graph`). Fail-closed → empty.
 fn rust_event_graph_projection(fixture_dir: &Path) -> L3EventGraphProjection {
-    use al_sem::engine::l3::event_graph::events_for;
-    use al_sem::engine::l3::symbol_table::SymbolTable;
     use al_sem::program::model::events::project_event_graph;
     match assemble_and_resolve_workspace_with_program_calls(fixture_dir) {
-        Some(resolved) => {
-            let ws = &resolved.workspace;
-            let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-            project_event_graph(&events_for(&resolved, &symbols))
-        }
+        Some(resolved) => project_event_graph(&resolved.events.graph),
         None => L3EventGraphProjection {
             events: vec![],
             edges: vec![],

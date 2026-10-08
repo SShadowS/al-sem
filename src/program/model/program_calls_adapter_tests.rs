@@ -1,16 +1,16 @@
-//! Tests of `program::model::program_calls`'s adapter against L3's `resolve_calls` (engine-switch S9.4 moved them out of `src/program`; see the `#[path]` there).
+//! Tests of `program::model::program_calls`'s adapter. Until engine-switch S9.6
+//! many of them also compared the adapter with L3's own `resolve_calls`; L3 is
+//! deleted, and the expected edges are stated directly.
 
 use super::*;
 use crate::engine::deps::app_package_zip::test_apps;
-use crate::engine::l3::call_resolver::resolve_calls;
 
 const DEP_GUID: &str = "dddddddd-b3b3-0000-0000-000000000003";
 
-/// The adapter's output next to L3's own, over one workspace.
+/// The adapter's output over one workspace.
 struct Adapted {
     calls: ResolvedCalls,
     census: SiteCensus,
-    old: ResolvedCalls,
     ws: L3Workspace,
 }
 
@@ -84,8 +84,8 @@ fn edge(
 }
 
 /// Write `files` under a fresh workspace (with a dependency app built from
-/// `dep_symbols` when given), build both models, apply `mutate` to the L3
-/// model, then run the adapter and L3's own resolver.
+/// `dep_symbols` when given), build the program context and the model rows,
+/// apply `mutate` to the rows, then run the adapter.
 fn adapt_with(
     files: &[(&str, &str)],
     dep_symbols: Option<&str>,
@@ -148,20 +148,10 @@ fn adapt_full(
     mutate(&mut l3.workspace);
     let (calls, census) =
         resolved_calls_from_program(&report, &ctx, &l3.workspace, upgrade_dependency_bindings);
-    let ws = l3.workspace;
-    let old = {
-        let symbols = crate::program::model::symbol_table::SymbolTable::build(
-            &ws.objects,
-            &ws.tables,
-            &ws.routines,
-        );
-        resolve_calls(&ws, &symbols, &[], &[])
-    };
     Adapted {
         calls,
         census,
-        old,
-        ws,
+        ws: l3.workspace,
     }
 }
 
@@ -445,8 +435,7 @@ fn run_into_workspace_object_without_entry_trigger() {
         DispatchKind::CodeunitRun,
         Resolution::Opaque,
     );
-    assert_eq!(a.edges(&cs.id), vec![want.clone()]);
-    assert_eq!(at(&a.old, &cs.id), vec![want], "L3 agrees");
+    assert_eq!(a.edges(&cs.id), vec![want]);
 }
 
 /// S9.0d: a page run reaches the page's `OnOpenPage` AND each page
@@ -679,12 +668,6 @@ fn dependency_callee_is_external_target() {
         name: "Customer".to_string(),
     });
     assert_eq!(a.edges(&proc_.id), vec![want]);
-    // L3 calls the record receiver's case `Unknown(RecordTableProcedure)`:
-    // the adapter changes its uncertainty kind, and counts it apart.
-    assert_eq!(
-        at(&a.old, &proc_.id)[0].resolution,
-        Resolution::Unknown(L3Reason::RecordTableProcedure)
-    );
     // A member the dependency's ABI lacks: a member decline on a
     // dependency receiver, also a dependency callee.
     let missing = a.site("Caller", "SP.Missing");
@@ -1110,9 +1093,8 @@ fn trigger_edge(caller: &L3Routine, op: &L3RecordOperation, to: &L3Routine) -> C
 /// emits an `L3RecordOperation`, and the program extractor (which reads
 /// the same `record_op_type` table) classifies a `RecordOp` that
 /// `resolve_implicit_trigger` routes to `OnRename`. The two pair up as a
-/// matched implicit trigger, the edge is `Resolved` (Rename takes no
-/// RunTrigger and always fires OnRename, measured on BC 28), L3's own
-/// answer agrees, and nothing counts as "beyond L3". Before #9 neither
+/// matched implicit trigger and the edge is `Resolved` (Rename takes no
+/// RunTrigger and always fires OnRename, measured on BC 28). Before #9 neither
 /// engine did this, and the site was an ordinary built-in call.
 #[test]
 fn rename_fires_on_rename_on_both_sides() {
@@ -1127,8 +1109,7 @@ fn rename_fires_on_rename_on_both_sides() {
         .expect("L2: Rename is a record op");
     let mut want = trigger_edge(caller, op, a.routine("OnRename"));
     want.resolution = Resolution::Resolved;
-    assert_eq!(a.edges(&op.id), vec![want.clone()]);
-    assert_eq!(at(&a.old, &op.id), vec![want], "L3 agrees");
+    assert_eq!(a.edges(&op.id), vec![want]);
     let c = &a.census;
     assert_eq!(
         (c.implicit_trigger_matched, c.implicit_trigger_unmatched),
@@ -1137,8 +1118,8 @@ fn rename_fires_on_rename_on_both_sides() {
     );
 }
 
-/// Beyond L3: an `Insert` also fires a TableExtension's `OnInsert`. Both
-/// edges are emitted, sorted by `to`.
+/// An `Insert` also fires a TableExtension's `OnInsert` (L3 gave the base
+/// table's only). Both edges are emitted, sorted by `to`.
 #[test]
 fn table_extension_trigger_is_emitted_beyond_l3() {
     let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n\n    trigger OnInsert()\n    begin\n    end;\n}\n";
@@ -1153,8 +1134,6 @@ fn table_extension_trigger_is_emitted_beyond_l3() {
     let base = a.routines_in("T", "OnInsert");
     let extension = a.routines_in("TExt", "OnInsert");
     assert_eq!((base.len(), extension.len()), (1, 1));
-    let l3 = at(&a.old, &op.id);
-    assert_eq!(l3, vec![trigger_edge(caller, op, base[0])], "L3: base only");
     let mut want = vec![
         trigger_edge(caller, op, base[0]),
         trigger_edge(caller, op, extension[0]),
@@ -1273,20 +1252,15 @@ fn calls_inside_a_ternary_reach_the_model() {
 }
 
 /// S3.5 (was ruling 1): a bare implicit-`Rec` record op is a record op to
-/// the program engine too, and takes its trigger edge from it, the same
-/// edge L3 gives. It passes `true`: an argless write fires no trigger
-/// (measured on BC 28), so it would have no edge to compare.
+/// the program engine too, and takes its trigger edge from it. It passes
+/// `true`: an argless write fires no trigger (measured on BC 28).
 #[test]
 fn bare_record_op_takes_the_program_trigger_edge() {
     let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify(true);\n    end;\n}\n";
     let a = adapt(&[("src/t.al", table)], None);
-    let op = &a.routine("P").record_operations[0];
-    let want = at(&a.old, &op.id);
-    assert_eq!(want.len(), 1, "L3 gives the bare op its OnModify edge");
-    assert_eq!(
-        want[0].to.as_deref(),
-        Some(a.routine("OnModify").id.as_str())
-    );
+    let p = a.routine("P");
+    let op = &p.record_operations[0];
+    let want = vec![trigger_edge(p, op, a.routine("OnModify"))];
     assert_eq!(a.edges(&op.id), want);
     assert_eq!(a.census.adapter_program_trigger_ops, 1, "{:#?}", a.census);
     assert_eq!(a.census.adapter_l3_trigger_ops, 0, "{:#?}", a.census);
@@ -1350,7 +1324,6 @@ fn unmatched_record_op_gets_no_l3_trigger_edge() {
         r.record_operations[0].source_anchor.start_column += 100;
     });
     let op = &a.routine("P").record_operations[0];
-    assert_eq!(at(&a.old, &op.id).len(), 1, "precondition: L3 has an edge");
     assert_eq!(a.edges(&op.id), vec![]);
     assert_eq!(a.census.adapter_l3_trigger_ops, 1, "{:#?}", a.census);
     assert_eq!(a.census.adapter_program_trigger_ops, 0, "{:#?}", a.census);
@@ -1368,10 +1341,6 @@ fn unmatched_site_is_unknown_not_l3() {
         r.call_sites[0].source_anchor.start_column += 100;
     });
     let cs = a.site("Caller", "Foo");
-    assert!(
-        at(&a.old, &cs.id).iter().any(|e| e.to.is_some()),
-        "precondition: L3 resolves it"
-    );
     let got = a.edges(&cs.id);
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].to, None);
@@ -1383,261 +1352,45 @@ fn unmatched_site_is_unknown_not_l3() {
     assert_eq!(a.census.adapter_program_sites, 0, "{:#?}", a.census);
 }
 
-/// Ruling 5: the adapter emits edges in `resolve_calls`'s order (call
-/// sites in routine order, then trigger edges); here every edge is one
-/// both engines agree on, so the two lists are identical.
+/// Ruling 5: the adapter emits edges in the legacy resolver's order: call
+/// sites in routine order (each routine's in source order), then the trigger
+/// edges in routine/op order. Stated directly since engine-switch S9.6 (it was
+/// a comparison with L3's `resolve_calls`).
 #[test]
-fn edge_order_matches_resolve_calls() {
+fn edge_order_is_call_sites_then_triggers() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Foo(var R: Record \"T\"; I: Integer)\n    begin\n        R.Insert(true);\n    end;\n\n    procedure Caller()\n    var\n        R: Record \"T\";\n    begin\n        R.Modify(true);\n        Foo(R, 1);\n        Message('x');\n        Foo(R, 2);\n    end;\n}\n";
     let a = adapt(&[("src/t.al", TABLE), ("src/w.al", cu)], None);
-    assert_eq!(a.calls.edges.len(), 5);
-    assert_eq!(a.calls.edges, a.old.edges);
-    assert_eq!(a.calls.upgraded_bindings, a.old.upgraded_bindings);
-}
-
-/// The production path (no notes) gives the same calls as the harness
-/// path (notes) on every `tests/r0-corpus` fixture: skipping the notes
-/// changes nothing the detectors read.
-#[test]
-fn production_path_equals_the_notes_path_on_r0_corpus() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
-    let mut compared = 0;
-    for e in std::fs::read_dir(&root).unwrap() {
-        let dir = e.unwrap().path();
-        if !dir.join("app.json").is_file() {
-            continue;
-        }
-        let Ok((ctx, report, l3)) = build_models(&dir) else {
-            continue;
-        };
-        let ws = &l3.workspace;
-        let prod = resolved_calls_from_program(&report, &ctx, ws, true).0;
-        let harness = resolved_calls_with_notes(&report, &ctx, ws, true).0;
-        assert_eq!(prod.edges, harness.edges, "{}", dir.display());
-        assert_eq!(
-            prod.upgraded_bindings,
-            harness.upgraded_bindings,
-            "{}",
-            dir.display()
-        );
-        compared += 1;
-    }
-    assert!(compared > 100, "only {compared} fixtures compared");
-}
-
-/// Parity over every `tests/r0-corpus` fixture: wherever the program
-/// engine and L3 resolve a site to the same workspace routine(s), the
-/// adapter's edges equal L3's in `to`, `dispatch_kind`, `resolution`
-/// and bindings. Prints per-fixture counts (`--nocapture`).
-#[test]
-fn r0_corpus_parity_where_both_resolve_the_same_routine() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
-    let mut dirs: Vec<_> = std::fs::read_dir(&root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.join("app.json").is_file())
+    let name = |id: &str| {
+        a.ws.routines
+            .iter()
+            .find(|r| r.id == id)
+            .map_or("?", |r| r.name.as_str())
+    };
+    let got: Vec<(&str, Option<&str>)> = a
+        .calls
+        .edges
+        .iter()
+        .map(|e| (name(&e.from), e.to.as_deref().map(name)))
         .collect();
-    dirs.sort();
-    // Per-site buckets: `agree` (both resolve the same workspace
-    // routines, edges and bindings equal — asserted), `differing target`,
-    // `L3 only` / `adapter only` (one side has a `to`), and to-less on both
-    // sides with the same / a different `(dispatch kind, resolution)`.
-    let mut total: std::collections::BTreeMap<&str, usize> = Default::default();
-    let mut failures: Vec<String> = Vec::new();
-    for dir in &dirs {
-        let name = dir.file_name().unwrap().to_string_lossy().to_string();
-        let Ok((ctx, report, l3)) = build_models(dir) else {
-            *total.entry("skipped fixtures").or_default() += 1;
-            eprintln!("parity {name}: skipped (model build failed)");
-            continue;
-        };
-        let ws = &l3.workspace;
-        // Stage 1: L3 never upgrades a dependency callee's bindings, so
-        // the binding parity below holds only without stage 2.
-        let (calls, census) = resolved_calls_from_program(&report, &ctx, ws, false);
-        *total.entry("adapter: program sites").or_default() += census.adapter_program_sites;
-        *total.entry("adapter: L3 fallback sites").or_default() += census.adapter_l3_fallback_sites;
-        *total.entry("adapter: program trigger ops").or_default() +=
-            census.adapter_program_trigger_ops;
-        *total.entry("adapter: L3 trigger ops").or_default() += census.adapter_l3_trigger_ops;
-        let symbols = crate::program::model::symbol_table::SymbolTable::build(
-            &ws.objects,
-            &ws.tables,
-            &ws.routines,
-        );
-        let old = resolve_calls(ws, &symbols, &[], &[]);
-        let group = |rc: &ResolvedCalls| {
-            let mut m: HashMap<String, Vec<CallEdge>> = HashMap::new();
-            for e in &rc.edges {
-                m.entry(e.callsite_id.clone()).or_default().push(e.clone());
-            }
-            m
-        };
-        let (new_g, old_g) = (group(&calls), group(&old));
-        let mut ids: Vec<(String, bool)> = Vec::new();
-        for r in &ws.routines {
-            ids.extend(r.call_sites.iter().map(|cs| (cs.id.clone(), true)));
-            ids.extend(r.record_operations.iter().map(|o| (o.id.clone(), false)));
-        }
-        // The program edge behind each adapted site, for the printout.
-        let j = join(&report, &ctx, ws);
-        let mut program_of: HashMap<String, String> = HashMap::new();
-        for (ri, r) in ws.routines.iter().enumerate() {
-            let named = r
-                .call_sites
-                .iter()
-                .enumerate()
-                .map(|(ci, cs)| (cs.id.clone(), j.calls.get(&(ri, ci))))
-                .chain(
-                    r.record_operations
-                        .iter()
-                        .enumerate()
-                        .map(|(oi, o)| (o.id.clone(), j.ops.get(&(ri, oi)))),
-                );
-            for (id, ce) in named {
-                let text = ce.map_or("no program edge".to_string(), |ce| {
-                    let routes: Vec<_> = ce
-                        .edge
-                        .routes
-                        .iter()
-                        .map(|r| (&r.evidence, r.receiver_tier))
-                        .collect();
-                    format!("{:?} {:?} {routes:?}", ce.edge.kind, ce.edge.shape)
-                });
-                program_of.insert(id, text);
-            }
-        }
-        let tos = |v: &[CallEdge]| {
-            let mut t: Vec<String> = v.iter().filter_map(|e| e.to.clone()).collect();
-            t.sort();
-            t
-        };
-        // The whole edge, minus the diagnostic-only fields
-        // (`candidates` only feeds the projection; `unknown_method_name`
-        // and `receiver_shape` only feed `aldump` breakdowns).
-        // Engine-switch S3.2: `dispatch_meta` is now the program engine's own
-        // WHOLE-program view (L3's counts workspace implementers only), so it
-        // is not compared; the dependency-implementer edges S3.2 adds (to-less
-        // `Interface`+`ExternalTarget`) have no L3 counterpart and are dropped
-        // from the adapter side before comparing (`comparable` below).
-        // Engine-switch S6.0: `receiver_type` is the program resolver's
-        // receiver text now. For a receiver with no declaration it renders
-        // the resolved object (`Record Customer`, quoted multi-word names)
-        // where L3 synthesized its own (`Record rec`, unquoted), so it is
-        // not compared here; `receiver_type_comes_from_the_program_resolver`
-        // pins it.
-        let key = |e: &CallEdge| {
-            let mut e = e.clone();
-            e.candidates = None;
-            e.unknown_method_name = None;
-            e.receiver_shape = None;
-            e.dispatch_meta = None;
-            e.receiver_type = None;
-            e
-        };
-        let comparable = |e: &CallEdge| {
-            !(e.dispatch_kind == DispatchKind::Interface
-                && e.to.is_none()
-                && e.resolution == Resolution::ExternalTarget)
-        };
-        let same_bindings = |id: &str, is_call: bool| {
-            !is_call || calls.upgraded_bindings.get(id) == old.upgraded_bindings.get(id)
-        };
-        let mut here: std::collections::BTreeMap<&str, usize> = Default::default();
-        for (id, is_call) in &ids {
-            let mut n: Vec<CallEdge> = new_g
-                .get(id)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|e| comparable(e))
-                .collect();
-            let mut o = old_g.get(id).cloned().unwrap_or_default();
-            let (nt, ot) = (tos(&n), tos(&o));
-            let bucket = match (nt.is_empty(), ot.is_empty()) {
-                (true, true) => {
-                    let shape = |v: &[CallEdge]| {
-                        v.iter()
-                            .map(|e| (e.dispatch_kind, e.resolution))
-                            .collect::<Vec<_>>()
-                    };
-                    Some(if shape(&n) == shape(&o) {
-                        "to-less, same kind+resolution"
-                    } else {
-                        "to-less, different kind+resolution"
-                    })
-                }
-                (true, false) => Some("L3 only resolved"),
-                (false, true) => Some("adapter only resolved"),
-                (false, false) if nt != ot => Some("differing target"),
-                (false, false) => None,
-            };
-            if bucket == Some("to-less, same kind+resolution") && !same_bindings(id, *is_call) {
-                failures.push(format!(
-                    "{name} {id} [to-less, same kind+resolution] bindings: adapter {:?} vs L3 {:?}",
-                    calls.upgraded_bindings.get(id),
-                    old.upgraded_bindings.get(id),
-                ));
-            }
-            // Informational: same kind+resolution, but another field
-            // (external_type_ref, dispatch_meta, ..) differs.
-            if bucket == Some("to-less, same kind+resolution")
-                && n.iter().map(key).collect::<Vec<_>>() != o.iter().map(key).collect::<Vec<_>>()
-            {
-                *here
-                    .entry("to-less, same kind+resolution, other fields differ")
-                    .or_default() += 1;
-                eprintln!(
-                    "  {name} [to-less same, fields differ] {id}: adapter {:?} vs L3 {:?}",
-                    n.iter().map(key).collect::<Vec<_>>(),
-                    o.iter().map(key).collect::<Vec<_>>()
-                );
-            }
-            if let Some(bucket) = bucket {
-                *here.entry(bucket).or_default() += 1;
-                if bucket != "to-less, same kind+resolution" {
-                    let show = |v: &[CallEdge]| {
-                        v.iter()
-                            .map(|e| (e.dispatch_kind.as_str(), e.resolution, e.to.is_some()))
-                            .collect::<Vec<_>>()
-                    };
-                    eprintln!(
-                        "  {name} [{bucket}] {id}: adapter {:?} vs L3 {:?} (program: {})",
-                        show(&n),
-                        show(&o),
-                        program_of[id]
-                    );
-                }
-                continue;
-            }
-            n.sort_by(|a, b| a.to.cmp(&b.to));
-            o.sort_by(|a, b| a.to.cmp(&b.to));
-            let same_edges = n.len() == o.len() && n.iter().zip(&o).all(|(x, y)| key(x) == key(y));
-            if same_edges && same_bindings(id, *is_call) {
-                *here.entry("agree").or_default() += 1;
-            } else {
-                failures.push(format!(
-                    "{name} {id}: adapter {:?} / {:?} vs L3 {:?} / {:?}",
-                    n.iter().map(key).collect::<Vec<_>>(),
-                    calls.upgraded_bindings.get(id),
-                    o.iter().map(key).collect::<Vec<_>>(),
-                    old.upgraded_bindings.get(id),
-                ));
-            }
-        }
-        eprintln!("parity {name}: {here:?}");
-        for (k, v) in here {
-            *total.entry(k).or_default() += v;
-        }
-    }
-    eprintln!(
-        "parity TOTAL over {} fixtures: {total:?}, mismatched {}",
-        dirs.len(),
-        failures.len()
+    assert_eq!(
+        got,
+        vec![
+            ("Caller", Some("Foo")),
+            ("Caller", None),
+            ("Caller", Some("Foo")),
+            ("Foo", Some("OnInsert")),
+            ("Caller", Some("OnModify")),
+        ]
     );
-    assert!(
-        total.get("agree").copied().unwrap_or(0) > 0,
-        "the corpus exercised no comparable site"
-    );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let sites: Vec<&str> = a
+        .routine("Caller")
+        .call_sites
+        .iter()
+        .map(|cs| cs.id.as_str())
+        .collect();
+    let edge_sites: Vec<&str> = a.calls.edges[..3]
+        .iter()
+        .map(|e| e.callsite_id.as_str())
+        .collect();
+    assert_eq!(edge_sites, sites, "call-site edges in source order");
 }

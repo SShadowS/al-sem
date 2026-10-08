@@ -94,7 +94,7 @@ fn build(fixture: &str) -> Option<OracleInput> {
 
     // Event-graph stable projection: publishers (eventId → publisherRoutineId) +
     // resolved subscriber pairs (eventId, subscriberRoutineId).
-    let eg = resolved.project_event_graph();
+    let eg = al_sem::program::model::events::project_event_graph(&resolved.events.graph);
     let mut event_publishers: HashMap<String, String> = HashMap::new();
     for ev in &eg.events {
         if let Some(pub_rid) = &ev.publisher_routine_id {

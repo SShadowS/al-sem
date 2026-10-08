@@ -170,9 +170,15 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
     (cross-app row order, analyze == detectors over the program model, r3a2
     opaque-callee and ABI temp state over the production cross-app model). The
     pre-commit hook needed no edit (its path pattern is generic).
-  - **S9.6b:** the engine itself (the module list above), mandatory
-    `precomputed_calls/_events`, and `calls_for`/`events_for`/coverage into
-    `program::model`.
+  - **S9.6b DONE** in three commits: (1) modules with no consumer left
+    (`b3_diff`, `call_graph_projection`, `l3_mint`, `resolution_class`,
+    `cross_app_l3`, `merged_index`); (2) L3's own parse (`assemble_workspace*`,
+    `assemble_and_resolve*`, `assemble_l3_workspace_from_disk`); (3) the resolver,
+    the event-graph builder and the routine half of `SymbolTable`, with the
+    calls/events made mandatory through a `ModelRows` type that only
+    `attach_program_calls` turns into a model. `calls_for`/`events_for` are gone;
+    coverage lives in `program::model`; `engine::l3` is path aliases only. No golden
+    moved.
 - **S9.7 Rename** the `L3*` model types and `l3_workspace`; remove `engine/l3/mod.rs`
   and the `engine::l2` alias. Mechanical; zero goldens move (no type name is
   serialized).

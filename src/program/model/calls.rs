@@ -2,10 +2,9 @@
 //! bindings, diagnostics, declared dependencies.
 //!
 //! Moved verbatim out of `engine::l3::call_resolver` in engine-switch S2b.2: the
-//! model ([`super::workspace::L3Resolved::precomputed_calls`]) holds a
-//! [`ResolvedCalls`], and the program engine fills it (the B3 adapter). The legacy
-//! resolver that also produces this shape stays in `engine::l3::call_resolver`,
-//! which re-exports these types, until it is deleted (spec S9).
+//! model ([`super::workspace::L3Resolved::calls`]) holds a [`ResolvedCalls`], and
+//! the program engine fills it (`program_calls`, the B3 adapter). The legacy L3
+//! resolver that also produced this shape was deleted in S9.6.
 
 use super::taxonomy::{DispatchKind, Resolution};
 use std::collections::HashMap;
@@ -189,7 +188,7 @@ pub struct ExternalTargetRef {
 
 /// The full call-resolution result: every edge + the per-callsite upgraded
 /// bindings (keyed by internal callsite id) + diagnostics.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ResolvedCalls {
     pub edges: Vec<CallEdge>,
     /// internal callsite id → upgraded argument bindings (in argument order).

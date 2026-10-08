@@ -345,7 +345,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
     let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
         .expect("model")
         .resolved;
-    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let calls = m.calls.clone();
     let mut resolved: Vec<String> = calls
         .edges
         .iter()
@@ -370,7 +370,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
         ]
     );
 
-    let events = m.precomputed_events.clone().expect("events attached");
+    let events = m.events.clone();
     let handle = events
         .graph
         .edges
@@ -406,7 +406,7 @@ fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
     let m = assemble_and_resolve_cross_app_program(&ws, MI, false)
         .expect("model")
         .resolved;
-    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let calls = m.calls.clone();
     let bodyless: Vec<&str> = m
         .workspace
         .routines
@@ -1619,7 +1619,7 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
     let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
         .expect("model")
         .resolved;
-    let calls = m.precomputed_calls.clone().expect("calls attached");
+    let calls = m.calls.clone();
     let mut got: Vec<String> = calls
         .edges
         .iter()

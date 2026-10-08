@@ -2,9 +2,9 @@
 //! subscription edges, and how a publisher routine becomes a symbol.
 //!
 //! Moved out of `engine::l3::event_graph` in engine-switch S4.2a (spec
-//! `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, G7). The builders
-//! that fill it live with their engines: L3's `build_event_graph` (still used by
-//! every consumer but `alsem analyze` until S6) re-exports these types.
+//! `docs/superpowers/specs/2026-10-06-engine-switch-design.md`, G7). The program
+//! engine fills it ([`program_event_graph`]); L3's own `build_event_graph` was
+//! deleted in S9.6.
 
 use super::workspace::{L3Parameter, L3Routine};
 use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
@@ -92,7 +92,7 @@ pub struct EventEdge {
 }
 
 /// The internal event graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EventGraph {
     pub events: Vec<EventSymbol>,
     pub edges: Vec<EventEdge>,
@@ -219,7 +219,7 @@ impl EventCensus {
 }
 
 /// The detector event graph built from the program engine, and how.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProgramEvents {
     pub graph: EventGraph,
     pub census: EventCensus,
@@ -248,7 +248,7 @@ pub fn isolated_event_ids(routines: &[L3Routine]) -> std::collections::HashSet<S
 /// inventory (`SubscriberIndex::subscriptions`) for the model `ws`.
 ///
 /// - Symbols for the model's publisher routines come first, exactly as L3's
-///   `build_event_graph` makes them.
+///   `build_event_graph` made them.
 /// - Edges: for each model subscriber routine (model order), one edge per
 ///   subscription of its program node (attribute order). Bound -> `resolved`;
 ///   ambiguous overload -> `ambiguous`; publisher object found but no publisher

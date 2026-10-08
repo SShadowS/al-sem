@@ -182,11 +182,12 @@ Driven via `aldump --program-call-graph-stats <workspace>` (the north-star metri
 or consumed by `src/engine/gate` (the `analyze` CLI).
 **`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
 resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
-§7): `src/program/model/program_calls.rs` (`attach_program_calls`; in `engine/l3` until S9.4) converts the resolved
-edges into L3's call shape and sets `L3Resolved.precomputed_calls`, and since
-engine-switch S4 also the event graph (`L3Resolved.precomputed_events`, from the program
-engine's subscription inventory, `program::model::events`). Consumers read them through
-`call_resolver::calls_for` / `event_graph::events_for`. The model (body facts, objects,
+§7): `src/program/model/program_calls.rs` (`attach_program_calls`) converts the resolved
+edges into the model's call shape and returns the model (`L3Resolved`) with them in
+`calls`, and since engine-switch S4 also the event graph in `events` (from the program
+engine's subscription inventory, `program::model::events`). Since S9.6 both are
+mandatory: the assembly entries return `ModelRows`, which only `attach_program_calls`
+turns into a model, so no consumer can see a model without calls. The model (body facts, objects,
 routines) is assembled from the program engine's parse (S2a/S2b). The r4/r4f detector
 goldens use the same path (`assemble_and_resolve_workspace_with_program_calls`).
 **Since engine-switch S6 every single-app consumer builds the same program-backed model**
@@ -266,8 +267,9 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
   (the `Histogram` taxonomy + `ObligationOutcome`)
 - `src/program/abi_ingest.rs` - Dependency ABI ingestion (sibling of `resolve/`, not inside it)
 - `src/engine/l2/` - Structural body-walk + feature projection over the owned IR
-- `src/engine/l3/` - Legacy workspace symbol table + call resolver (the RETIRED al-sem
-  port), being deleted by engine-switch S9; it has no `aldump` mode any more
+- `src/engine/l3/` - Aliases only: the old `engine::l3::…` paths of the detector model
+  in `src/program/model/`. The legacy L3 engine (the RETIRED al-sem port) was deleted
+  in engine-switch S9.6; the aliases go in S9.7
 - `src/engine/l4/` - Per-routine effect summaries over the call graph's SCC condensation.
   Its db-effect QUERY surface is `effect_query.rs` (`DbEffectQuery`: down / up-global /
   the ancestor-scoped up-query) over `reverse_index.rs`'s transpose, with
@@ -559,8 +561,8 @@ written against V2's flat shape; the fix at the time was recursive walks or expl
      prepare/incoming/outgoing/codeLens/diagnostics with no LSP-specific step.
    - Program engine (the moat): `src/program/resolve/extract.rs` (obligation extraction)
      and/or `src/program/resolve/resolver.rs` (dispatch) if it's a new call/edge shape
-   - Legacy L3 engine (advisory-only; rarely needs touching for new work):
-     `src/engine/l2/ir_walk.rs`, `src/engine/l3/`
+   - Detector model (body facts the detectors read): the body walk under
+     `src/program/body/` and the projection in `src/program/model/workspace.rs`
 4. **Add a fixture** under `tests/fixtures/` (or the plan/task-specific golden family) and
    **regenerate goldens**: `REGEN_TEMP_GOLDENS=1 cargo test` rewrites Rust-owned goldens —
    inspect the diff before committing; it is a measurement, never an auto-bless (see

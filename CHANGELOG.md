@@ -1271,6 +1271,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them (six `workspace.rs` unit tests, `cli_p1_enclosing_member`) build through
   the program builders; they read rows, which both paths projected with the same
   `project_ir`, and all pass unchanged.
+- **The legacy L3 engine** (engine-switch S9.6b, step 3): its call resolver
+  (`call_resolver`, `implicit_edges`, `receiver`, `receiver_type`, `static_arg`,
+  `type_ref`, `type_rel`, `al_type`, `al_builtins`, `member_builtins`), its
+  event-graph builder, the routine and interface half of `SymbolTable`, and the
+  adapter's per-site notes (they served only the deleted B3 harness). The model's
+  calls and events are now **mandatory**: `L3Resolved.calls` / `.events` (were
+  `precomputed_calls` / `precomputed_events`, optional, with a fallback to L3's own
+  resolver). The assembly entries return the new `ModelRows`, which only
+  `attach_program_calls` turns into a model, so the compiler rules out a model
+  without calls. `calls_for` / `events_for` are gone (consumers read the fields),
+  coverage moved to `program::model::coverage`, and `engine::l3` holds only path
+  aliases until S9.7. No golden moved. The adapter tests that compared with L3 now
+  state their expectations directly; `edge_order_is_call_sites_then_triggers`
+  (discrimination: prepending call-site edges fails it) replaces the L3 order
+  comparison, and the two r0-corpus L3-parity tests are deleted.
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's

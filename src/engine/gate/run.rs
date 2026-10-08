@@ -274,7 +274,7 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
             &report.parenless_calls,
         )
     };
-    let Some(mut resolved) = resolved else {
+    let Some(rows) = resolved else {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::AssemblyFailed),
@@ -285,10 +285,10 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     // Taken before the adapter consumes (and drops) the program context.
     let physical = Some(ctx.graph().workspace_rows.clone());
     let object_facts = Some(crate::program::model::census::object_fact_census(
-        &resolved.workspace,
+        &rows.workspace,
         ctx.graph(),
     ));
-    crate::engine::l3::program_calls::attach_program_calls(&mut resolved, ctx, report);
+    let resolved = crate::engine::l3::program_calls::attach_program_calls(rows, ctx, report);
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
@@ -879,8 +879,8 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
-                precomputed_calls: None,
-                precomputed_events: None,
+                calls: Default::default(),
+                events: Default::default(),
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],

@@ -1,10 +1,10 @@
-//! L3 COVERAGE (R2d) — the `AnalysisCoverage` "no silent clean" accounting,
+//! COVERAGE (R2d) — the `AnalysisCoverage` "no silent clean" accounting,
 //! ported from al-sem's `src/resolve/coverage.ts` (`buildCoverage`, 67 lines).
+//! Moved from `engine::l3` in engine-switch S9.6.
 //!
-//! This is the LAST source-only L3 sub-gate (R2a record-types, R2b call graph,
-//! R2c event graph, R2d coverage). It is a pure function over the already-parity
-//! resolved call graph (R2b) + the L2 routine flags (`bodyAvailable` /
-//! `parseIncomplete`) + the workspace source units + the index-stage diagnostics.
+//! A pure function over the model's calls (the program engine's) + the routine
+//! flags (`bodyAvailable` / `parseIncomplete`) + the workspace source units + the
+//! index-stage diagnostics.
 //!
 //! === The exact `buildCoverage` contract (Rev 2 MUST-FIXes) ===
 //!
@@ -40,14 +40,13 @@
 //!
 //! The projection ids are in STABLE form (StableRoutineId / StableCallsiteId /
 //! StableOperationId), matching the golden generator byte-for-byte. Lists are
-//! sorted with the same byte-order comparator the rest of L3 uses.
+//! sorted in byte order.
 
 use std::collections::HashMap;
 
-use super::call_resolver::{CallEdge, calls_for};
-use super::l3_workspace::{L3Resolved, L3Routine};
-use super::symbol_table::SymbolTable;
+use super::calls::CallEdge;
 use super::taxonomy::{DispatchKind, Resolution};
+use super::workspace::{L3Resolved, L3Routine};
 
 // ---------------------------------------------------------------------------
 // Inputs the source-unit accounting needs (the L3 `buildCoverage` reads these
@@ -224,13 +223,10 @@ pub fn build_coverage(
 // ---------------------------------------------------------------------------
 
 impl L3Resolved {
-    /// Build the `AnalysisCoverage` for the resolved workspace (R2d).
-    ///
-    /// SOURCE-ONLY capture: the resolved call graph is built ONCE here
-    /// (`resolve_calls` with empty declared deps + empty fetched set — the same
-    /// "read-once, post-resolve" capture `project_call_graph` uses), all apps are
-    /// `"source"` (→ `opaqueApps` empty), and the workspace carries no index-stage
-    /// warning (→ `failedUnitRefs` empty → parsed == total). `units` /
+    /// Build the `AnalysisCoverage` for the resolved workspace (R2d), over the
+    /// model's calls. The primary app's apps are all `"source"` (→ `opaqueApps`
+    /// empty), and the workspace carries no index-stage warning (→
+    /// `failedUnitRefs` empty → parsed == total). `units` /
     /// `index_diagnostics` are passed in by the caller (the dump supplies the real
     /// discovered units; the offline path supplies the vector's units).
     pub fn project_coverage(
@@ -239,8 +235,7 @@ impl L3Resolved {
         index_diagnostics: &[CoverageDiagnostic],
     ) -> AnalysisCoverage {
         let ws = &self.workspace;
-        let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-        let resolved = calls_for(self, &symbols);
+        let resolved = &self.calls;
         // Coverage is the primary app's: a cross-app model (engine-switch S8.3) also
         // holds the dependency code the workspace demands, which is not the
         // workspace's to cover. A single-app model holds nothing else.
@@ -317,7 +312,7 @@ impl L3Resolved {
 /// (`select_program_files`, the disk L3 path). Counting the nested app's files here
 /// reported them as parsed although no routine of theirs was analysed.
 pub fn coverage_source_units_for_workspace(workspace: &std::path::Path) -> Vec<CoverageUnit> {
-    use crate::engine::l2::l2_workspace::discover_al_files_app_scoped;
+    use crate::program::body::l2_workspace::discover_al_files_app_scoped;
     let Ok(discovered) = discover_al_files_app_scoped(workspace) else {
         return Vec::new();
     };

@@ -19,7 +19,7 @@
 //! ## Pipeline ownership
 //!
 //! Like `digest` and `prove`, this owns its own one-shot pipeline (assemble →
-//! symbols → resolve_calls → event graph → combined graph → Tarjan →
+//! the model's calls and event graph → combined graph → Tarjan →
 //! `compute_summaries_v2_bundle_with_leaves` → `DbEffectQuery`). It never
 //! touches a `DetectorContext`, so it costs `alsem analyze` exactly nothing
 //! **by construction** — not by a flag that could be set wrong. The
@@ -41,12 +41,9 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
-use crate::engine::l3::call_resolver::calls_for;
-use crate::engine::l3::event_graph::events_for;
 use crate::engine::l3::l3_workspace::{
     L3RecordOperation, L3Resolved, L3Routine, table_by_id_preferring_real,
 };
-use crate::engine::l3::symbol_table::SymbolTable;
 use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
@@ -142,12 +139,10 @@ impl QuerySubstrate {
     pub fn from_resolved(resolved: L3Resolved) -> Self {
         let (graph, scc, bundle) = {
             let ws = &resolved.workspace;
-            let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-            // The resolved model's own calls and event graph (the program
-            // engine's when attached; L3's source-only ones otherwise).
-            let calls = calls_for(&resolved, &symbols);
-            let event_graph = events_for(&resolved, &symbols);
-            let graph = build_combined_graph(ws, &calls, &event_graph);
+            // The model's own calls and event graph (the program engine's).
+            let calls = &resolved.calls;
+            let event_graph = &resolved.events.graph;
+            let graph = build_combined_graph(ws, calls, event_graph);
 
             let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
             for (from, list) in &graph.edges_by_from {

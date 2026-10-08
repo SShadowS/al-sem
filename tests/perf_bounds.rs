@@ -519,9 +519,6 @@ mod release_checks {
 
     impl L4Substrate {
         fn assemble(workspace: &Path) -> Self {
-            use al_sem::engine::l3::call_resolver::calls_for;
-            use al_sem::engine::l3::event_graph::events_for;
-            use al_sem::engine::l3::symbol_table::SymbolTable;
             use al_sem::engine::l4::combined_graph::build_combined_graph;
             use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
             use al_sem::engine::l4::summary_runner::FieldIndex;
@@ -534,11 +531,8 @@ mod release_checks {
                 .expect("the program-backed model must build on a perf_support corpus");
             let (graph, scc, calls, field_index) = {
                 let ws = &resolved.workspace;
-                let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-                let calls = calls_for(&resolved, &symbols).into_owned();
-
-                let event_graph = events_for(&resolved, &symbols);
-                let graph = build_combined_graph(ws, &calls, &event_graph);
+                let calls = (*resolved.calls).clone();
+                let graph = build_combined_graph(ws, &calls, &resolved.events.graph);
 
                 let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
                 for (from, list) in &graph.edges_by_from {

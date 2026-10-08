@@ -36,10 +36,8 @@ use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::engine::l2::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
-use crate::engine::l3::call_resolver::calls_for;
-use crate::engine::l3::event_graph::{EventGraph, EventSymbol, events_for};
+use crate::engine::l3::event_graph::{EventGraph, EventSymbol};
 use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine, L3Workspace};
-use crate::engine::l3::symbol_table::SymbolTable;
 
 // ===========================================================================
 // Internal CapabilityFact (FULL form — internal ids). Mirrors al-sem
@@ -3313,7 +3311,7 @@ pub(crate) fn build_cross_app_base(
         .map(|r| r.id.clone())
         .collect();
 
-    let all_calls = x.resolved.precomputed_calls.as_ref()?;
+    let all_calls = &x.resolved.calls;
     let calls = crate::program::model::calls::ResolvedCalls {
         edges: all_calls
             .edges
@@ -3325,7 +3323,7 @@ pub(crate) fn build_cross_app_base(
         diagnostics: all_calls.diagnostics.clone(),
         external_targets: all_calls.external_targets.clone(),
     };
-    let event_graph: EventGraph = x.resolved.precomputed_events.as_ref()?.graph.clone();
+    let event_graph: EventGraph = x.resolved.events.graph.clone();
     let _s_graph = crate::engine::perf_trace::span("crossapp", "crossapp.base_graph");
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
@@ -3411,7 +3409,7 @@ pub(crate) fn build_cross_app_base(
         .map(|a| (a.guid.clone(), a.version.clone()))
         .collect();
     let mut resolved = x.resolved;
-    resolved.precomputed_calls = Some(std::sync::Arc::new(calls));
+    resolved.calls = std::sync::Arc::new(calls);
     Some(R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
@@ -3657,10 +3655,9 @@ pub(crate) fn project_r3a5_from_parts(
 /// post-fixed-point cone pass does over the source-only model).
 pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     let ws: &L3Workspace = &resolved.workspace;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols);
-    let event_graph = events_for(resolved, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
 
     // Typed-edge graph (cone substrate) + Tarjan SCC over it.
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
@@ -3693,7 +3690,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
     // downgraded complete→partial so the coverage cone forwards the reason (+ adds
     // the routine to unknownTargets). Source-only `interfaceImplsKnowledgePartial`
     // is false, so the `interface-impls-unknown-in-deps` add-on never fires.
-    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, &calls);
+    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, calls);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
@@ -3840,7 +3837,7 @@ pub fn project_r3a3(resolved: &L3Resolved) -> R3a3Projection {
 // helper exposes that substrate's RAW (internal-id) parts so `engine::l5::snapshot`
 // reshapes + rewrites-to-stable + sorts WITHOUT re-deriving any fact/edge/cone.
 //
-// Mirrors the inline assembly of `project_r3a3` (resolve_calls → build_event_graph
+// Mirrors the inline assembly of `project_r3a3` (the model's calls and events
 // → build_combined_graph → direct_facts_for_routine + uncertainty-folded coverage →
 // compose_cone_over_graph), but returns the parts instead of projecting them.
 // ===========================================================================
@@ -3871,9 +3868,8 @@ pub fn build_r3a3_source_only_base(resolved: &L3Resolved) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
     let ws: &L3Workspace = &resolved.workspace;
     let _s0 = pt::span("r3a3", "r3a3.calls_graph");
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols).into_owned();
-    let event_graph: EventGraph = events_for(resolved, &symbols).into_owned();
+    let calls = (*resolved.calls).clone();
+    let event_graph: EventGraph = resolved.events.graph.clone();
     let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_s0);
     let _s1 = pt::span("r3a3", "r3a3.direct_facts");
@@ -3980,10 +3976,9 @@ pub struct R3a3RealMatrix {
 /// source-only workspace. Independent of `project_r3a3`'s cone path.
 pub fn compute_r3a3_real_matrix(resolved: &L3Resolved) -> R3a3RealMatrix {
     let ws: &L3Workspace = &resolved.workspace;
-    let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let calls = calls_for(resolved, &symbols);
-    let event_graph = events_for(resolved, &symbols);
-    let graph = build_combined_graph(ws, &calls, &event_graph);
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     let g = build_typed_edge_graph(&graph, &nodes);

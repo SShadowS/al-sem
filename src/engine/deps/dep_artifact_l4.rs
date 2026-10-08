@@ -6,13 +6,14 @@
 //!
 //! ## What the producer does (the embedded-source path)
 //!
+//! Since engine-switch S7.5 it reads the cross-app model (`dep_artifacts_from_model`):
+//! the dependency's routines are the model's own rows (`dep:<appGuid>:<path>`
+//! units), its calls the program engine's. Before, each `.app`'s embedded source
+//! was parsed into an isolated L3 model and resolved with L3's resolver (both
+//! deleted in S9.6). Per dependency:
+//!
 //! ```text
-//! .app bytes
-//!   → iterate_embedded_source (.al entries inside the ZIP, sorted by name)
-//!   → assemble_workspace_units (isolated dep L3 model, analysisRole "dependency",
-//!        sourceUnitId = dep:<appGuid>:<relativePath>)
-//!   → resolve (build_symbol_table → resolve_record_types → merge_extension_fields)
-//!   → resolve_calls (the dep callGraph)         ← intraAppCallEdges
+//!   the model's calls from its routines         ← intraAppCallEdges
 //!   → apply_operation_order per routine          ← depOrderIndex order data
 //!   → direct_facts_for_routine per routine       ← citedOperationEvidence witnesses
 //!   → compute_dep_return_summary per routine     ← depOrderIndex return summaries
@@ -22,11 +23,10 @@
 //!        stamp). summaryMode gating: only "full" produces the order index.
 //! ```
 //!
-//! It reuses the engine's OWN already-ported pipeline (L0 parser → L2 body walk +
-//! operation-order + control-context → L3 resolve + call resolver → the L4 direct
-//! capability extractor `direct_facts_for_routine`) over the ISOLATED dep model —
-//! the producer is the engine running on the dep's embedded source, then a compact
-//! projection. NO new analysis algorithm lives here.
+//! It reuses the engine's OWN pipeline (the body walk + operation-order +
+//! control-context, the program engine's calls, the L4 direct capability
+//! extractor `direct_facts_for_routine`) — then a compact projection. NO new
+//! analysis algorithm lives here.
 //!
 //! ## summaryMode (parity with al-sem `buildAppModel`)
 //!
@@ -292,13 +292,8 @@ pub struct DependencyArtifactL4 {
 pub fn dep_artifacts_from_model(
     x: &crate::engine::l3::program_calls::CrossAppProgram,
 ) -> Vec<DependencyArtifactL4> {
-    let empty_calls: &[crate::program::model::calls::CallEdge] = &[];
-    let calls = x
-        .resolved
-        .precomputed_calls
-        .as_ref()
-        .map_or(empty_calls, |c| c.edges.as_slice());
-    let events = x.resolved.precomputed_events.as_ref().map(|e| &e.graph);
+    let calls = x.resolved.calls.edges.as_slice();
+    let events = &x.resolved.events.graph;
     x.dependency_apps
         .iter()
         .map(|app| artifact_from_model(app, &x.resolved.workspace.routines, calls, events))
@@ -309,7 +304,7 @@ fn artifact_from_model(
     app: &crate::program::model::workspace::DependencyApp,
     routines: &[L3Routine],
     calls: &[crate::program::model::calls::CallEdge],
-    events: Option<&crate::engine::l3::event_graph::EventGraph>,
+    events: &crate::program::model::events::EventGraph,
 ) -> DependencyArtifactL4 {
     let app_guid = &app.guid;
     let mut own: Vec<L3Routine> = if app.has_source {
@@ -367,7 +362,7 @@ fn artifact_from_model(
     // operationSites first (displayText = op.kind), recordOperations overwrite
     // (displayText = `${rv}.${op}`, controlContext from the matching operationSite).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
-    for evt in events.map_or(&[][..], |g| g.events.as_slice()) {
+    for evt in &events.events {
         if let Some(pr) = &evt.publisher_routine_id {
             publisher_events_by_routine
                 .entry(pr.clone())

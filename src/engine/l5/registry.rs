@@ -22,7 +22,7 @@ use rayon::prelude::*;
 /// Substrate demand bits (W1.0 demand-driven detector substrate).
 ///
 /// `build_detector_context` ALWAYS builds the cheap, many-consumer CORE surface —
-/// symbol table, `resolve_calls`, event graph, combined graph, reverse graph, entry
+/// the model's calls and event graph, combined graph, reverse graph, entry
 /// points, reachable roots, all borrowed indexes (routine/object/table/call-site
 /// maps), `resolved_call_edge_by_callsite`, `uncertainty_edges_by_from`,
 /// `upgraded_bindings_by_callsite`, `event_flow_indexes`, `cross_extension_subscribers`
@@ -468,8 +468,8 @@ pub(crate) fn run_detectors_cross_app(
         .collect();
     // The detectors close over `(resolved, ctx)`: the base's own cross-app model
     // (engine-switch S7.6), with its program calls and root classifications. It
-    // used to be a throwaway copy without calls, so a detector reading
-    // `calls_for(resolved)` fell back to L3's resolver.
+    // used to be a throwaway copy without calls, so a detector reading its calls
+    // fell back to L3's resolver (deleted in engine-switch S9.6).
     let resolved = &base.resolved;
     let (findings, diagnostics, detector_stats, d1_cohort_index) =
         run_each(resolved, &ctx, detectors);
@@ -1095,8 +1095,8 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
-            precomputed_calls: None,
-            precomputed_events: None,
+            calls: Default::default(),
+            events: Default::default(),
         }
     }
 
