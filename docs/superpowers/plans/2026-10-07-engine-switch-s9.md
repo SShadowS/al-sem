@@ -190,6 +190,36 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   `implicit_trigger_edge_for_op`, `assemble_l3_workspace_from_disk`, `cross_app_l3`;
   `src/engine/l3` is gone; every cross-app context field mapped (G14 includes
   `abi_ingest_errors` "gets a reader": verify).
+  - **Result (2026-10-08):**
+    - Names: `resolve_calls`, `implicit_trigger_edge_for_op`,
+      `assemble_l3_workspace_from_disk`, `cross_app_l3`, `merged_index`, `l3_mint`,
+      `b3_diff`, `project_call_graph`, `calls_for`, `events_for`,
+      `precomputed_calls` have zero code occurrences; what remains is history in
+      comments and the S1 guard's own pattern strings. `build_event_graph` survives
+      only as `semantic_golden`'s unrelated local test helper (it builds a program
+      graph).
+    - Surviving implementations: the L3 oracle's span matcher `match_sites`
+      (`SiteMatch`, `canonical_call_edge_for_test`) had no caller but its three
+      harness tests; deleted with them. The adapter (`program_calls`) contains no
+      resolver: a site the program engine gives no usable edge is
+      `Unknown(NoProgramSite)` (S3.1), a record op with none gets no edge (S3.5).
+    - `src/engine/l3` and the `engine::l2` alias are gone; `cargo check
+      --all-targets --all-features` is clean.
+    - Cross-app context (`CrossAppL3`, deleted) → `CrossAppProgram`: `resolved` →
+      `.resolved` (a `Model`); `declared_dep_app_guids` → `.declared_dependencies`
+      (guid, name, minimum version, incl. the implicit Microsoft tier);
+      `fetched_app_guids` → the ledger (`.coverage.ledger`, found vs missing);
+      `apps` (guid, sourceKind) → `.dependency_apps[].has_source` + the ledger's
+      trust tier; `dep_app_versions` → `.dependency_apps[].version`. G14:
+      `abi_ingest_errors` is read into `LedgerApp::ingest_error`, which preflight
+      (`gate/preflight.rs`) and the `dependencies` diagnostics (`gate/run.rs`) read.
+    - Regeneration paths: goldens (`check-goldens --regen`) and the fixture
+      semantic-edges mint (`mint-goldens --fixture`) are both stopped by the
+      golden-regen hook, which requires a `MOVED:` line, and none is expected; the
+      owner runs them (expect zero diff). The builtin catalog generator
+      (`tools/gen-al-builtins`) never touched L3; this machine's AL extension
+      (18.0.2732683) is newer than the catalog's (18.0.2293710), so a run here would
+      be an upgrade, not a check.
 
 ## Decisions
 

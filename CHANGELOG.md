@@ -1297,6 +1297,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state their expectations directly; `edge_order_is_call_sites_then_triggers`
   (discrimination: prepending call-site edges fails it) replaces the L3 order
   comparison, and the two r0-corpus L3-parity tests are deleted.
+- **The L3 oracle's site matcher** (engine-switch S9.8): `match_sites`, `SiteMatch`
+  and `canonical_call_edge_for_test` in `program::resolve::differential`, with the
+  three harness tests that were their only callers. They paired the fresh
+  resolver's edges with L3's. The S9.8 acceptance inventory (plan
+  `2026-10-07-engine-switch-s9.md`) found no other surviving L3 entry point.
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's

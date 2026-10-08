@@ -496,8 +496,8 @@ mod release_checks {
     /// L4 db-effect gates below solve over — assembled by the SAME public
     /// functions in the SAME order as `build_detector_context`'s CORE_SUMMARIES
     /// path (its own SCC + field-index construction, in that order):
-    /// the production model -> symbol table -> `calls_for` (the program
-    /// engine's precomputed calls) -> `events_for` ->
+    /// the production model -> its calls and event graph (the program
+    /// engine's) ->
     /// combined graph -> a Tarjan SCC over `graph.edges_by_from` -> the field
     /// index. Mirrors `tests/l4_summary_differential.rs`'s
     /// `cdo_whole_program_v2_parity` assembly, just over a synthetic

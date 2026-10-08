@@ -1140,10 +1140,11 @@ fn scan_l3_forbidden(value: &serde_json::Value, path: &str, hits: &mut Vec<Strin
 }
 
 // ===========================================================================
-// R2c — L3 EVENT-GRAPH differential pass + the anti-degenerate coverage matrix.
+// R2c — EVENT-GRAPH differential pass + the anti-degenerate coverage matrix.
 //
-// For each `tests/r2c-goldens/*.l3eg.golden.json`, run the Rust disk-backed
-// assemble→resolve→build_event_graph→project_event_graph and compare. EventSymbols
+// For each `tests/r2c-goldens/*.l3eg.golden.json`, build the production model
+// (the program engine's event graph, engine-switch S9.5e) → project_event_graph
+// and compare. EventSymbols
 // are keyed by their stable `id`; EventEdges by `(eventId, subscriberRoutineId)` —
 // both already deterministically sorted by the projection, so the compare is
 // positional/structural after keying. HARD-FAILS on any forbidden later-gate / L4
