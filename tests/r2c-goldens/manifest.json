@@ -27,12 +27,12 @@
   "coverageMatrix": {
     "integrationPublishers": 43,
     "businessPublishers": 5,
-    "unknownKindSymbols": 8,
+    "unknownKindSymbols": 9,
     "isolatedPublishers": 5,
     "symbolsWithElementName": 1,
-    "resolvedEdges": 44,
-    "maybeEdges": 7,
-    "unknownEdges": 3
+    "resolvedEdges": 48,
+    "maybeEdges": 3,
+    "unknownEdges": 4
   },
   "fixtures": [
     {

@@ -15,11 +15,11 @@
       "publisherRoutineId": "88888888-8888-8888-8888-888888888888:Codeunit:51200#476712af2598f38dc2f6d352859e11ac7681d84607ccc4af6ce6e9914c606bf6"
     },
     {
-      "id": "unknown:Codeunit:0:Sales-Post::OnAfterPostSalesDoc::c933e899a525980282c6d77615e4e4eaa4b61fc7c66471f8bd5703bc62460de3",
-      "publisherObjectId": "unknown:Codeunit:0:Sales-Post",
-      "eventName": "OnAfterPostSalesDoc",
+      "id": "unknown:codeunit:0:sales-post::onafterpostsalesdoc::1fa2db4b613fb3c9247e7784a6c0ce87d5bf1fb9f6a3fe13c94476d8c317c151",
+      "publisherObjectId": "unknown:codeunit:0:sales-post",
+      "eventName": "onafterpostsalesdoc",
       "eventKind": "unknown",
-      "signatureHash": "c933e899a525980282c6d77615e4e4eaa4b61fc7c66471f8bd5703bc62460de3",
+      "signatureHash": "1fa2db4b613fb3c9247e7784a6c0ce87d5bf1fb9f6a3fe13c94476d8c317c151",
       "parameters": [],
       "provenance": [
         {
@@ -42,7 +42,7 @@
       ]
     },
     {
-      "eventId": "unknown:Codeunit:0:Sales-Post::OnAfterPostSalesDoc::c933e899a525980282c6d77615e4e4eaa4b61fc7c66471f8bd5703bc62460de3",
+      "eventId": "unknown:codeunit:0:sales-post::onafterpostsalesdoc::1fa2db4b613fb3c9247e7784a6c0ce87d5bf1fb9f6a3fe13c94476d8c317c151",
       "subscriberRoutineId": "88888888-8888-8888-8888-888888888888:Codeunit:51201#cfd8945a4ad1fbdb2e10040effb2aff532999d8a707a507196b19d4fa9919651",
       "subscriberAppId": "88888888-8888-8888-8888-888888888888",
       "resolution": "unknown",

@@ -422,6 +422,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The r2c event-graph goldens project the program engine's event graph**
+  (engine-switch S9.5e), the one `alsem analyze` has read since S4. The stable
+  projection moved from `engine::l3::event_graph` to `program::model::events`;
+  r2c now stays after L3 is deleted. Six goldens move and two are minted, for
+  three causes (receipt): a table's platform events are `trigger` events whose
+  subscribers resolve (L3: unindexed, `maybe`); a subscriber naming its
+  publisher by number is kept as `unknown` (L3 dropped it); and a synthesized
+  symbol's names are case-folded.
+
 - **The r2a record-type and r2d coverage differentials build the production
   model** (engine-switch S9.5e). No r2a golden moves. Two r2d goldens move,
   for causes already triaged in S9.5c: the call to another object's `local`

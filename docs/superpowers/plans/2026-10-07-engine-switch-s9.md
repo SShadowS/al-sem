@@ -146,12 +146,23 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   - **S9.5a done (2026-10-08):** l5 unit tests, gap, temp_state,
     d1_downgraded (50 files); the 3 collision tests re-key the precomputed
     edges.
+  - **S9.5b-e done (2026-10-08):** cli stats/diff/fingerprint (b); r3a1/2/3
+    differentials, oracles, vectors (c, after two overload fixes the census
+    exposed: enum value arguments, exact-vs-conversion and the sole-applicable
+    rule); l4_summary_differential re-frozen and perf_bounds (d); r2a and r2d
+    on the production model, and r2c projects the program engine's event
+    graph (e). **Decision:** r2c is not deleted in S9.6 — it IS the program
+    event-graph golden now (the stable projection moved to
+    `program::model::events`); its `.l3eg` file names are legacy, like the
+    `L3*` types. Still on L3's builders, deleted with L3 in S9.6: `tests/l3`,
+    r2b (`project_call_graph`), `r3a0_unfetched_dep_opaque`, `aldump_smoke`'s
+    event-graph emitter test.
 - **S9.6 Delete the legacy engine:** resolver chain, event-graph builder and
   projections, `implicit_edges`, `receiver*`, `static_arg`, `type_ref`, `type_rel`,
   `al_type`, `al_builtins`, `member_builtins`, `resolution_class`,
   `call_graph_projection`, `b3_diff`, `l3_mint` (per decision R1),
   `deps/cross_app_l3.rs`, the L3-parse half of `workspace.rs`, the routine half of
-  `SymbolTable`, the L3 aldump modes, `tests/l3`, r2b, r2c, r2-5b-*, `b3_triage_r0`,
+  `SymbolTable`, the L3 aldump modes, `tests/l3`, r2b, r2-5b-*, `b3_triage_r0`,
   `r3a0`, `docs/b3-triage/*.md`. `precomputed_calls/_events` become mandatory.
   `scripts/check-goldens`, the pre-commit hook and CLAUDE.md change with it.
 - **S9.7 Rename** the `L3*` model types and `l3_workspace`; remove `engine/l3/mod.rs`

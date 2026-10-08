@@ -1,9 +1,9 @@
 {
   "events": [
     {
-      "id": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::OnPing::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
+      "id": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::onping::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
       "publisherObjectId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100",
-      "eventName": "OnPing",
+      "eventName": "onping",
       "eventKind": "unknown",
       "signatureHash": "ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
       "parameters": [],
@@ -17,7 +17,7 @@
   ],
   "edges": [
     {
-      "eventId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::OnPing::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
+      "eventId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::onping::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
       "subscriberRoutineId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50101#766598f78e48b70cf7ed5539472faa2ebd32e808eaff2ede74c5d34ee4225877",
       "subscriberAppId": "c2c00002-0000-0000-0000-000000000002",
       "resolution": "maybe",
@@ -28,7 +28,7 @@
       ]
     },
     {
-      "eventId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::OnPing::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
+      "eventId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50100::onping::ac37a8353819afe7416201ef7e9500297adcc7377ef2894b470dd6d2fc793004",
       "subscriberRoutineId": "c2c00002-0000-0000-0000-000000000002:Codeunit:50102#026d0afc0c6e41d6d9cc0f3cfd984d76d2473fcc3a103695f5b513b5904dd40a",
       "subscriberAppId": "c2c00002-0000-0000-0000-000000000002",
       "resolution": "maybe",

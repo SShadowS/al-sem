@@ -15,9 +15,9 @@
       "publisherRoutineId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100#a4783091e5a2ce84b875f460663fb04cafedd8ec26bc670ff1654e96f0fdce60"
     },
     {
-      "id": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::OnSomethingHappened::d3cee64db844339d15ab0e31b864095821b853b183cafd5fe93d2663bc4c4153",
+      "id": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::onsomethinghappened::d3cee64db844339d15ab0e31b864095821b853b183cafd5fe93d2663bc4c4153",
       "publisherObjectId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100",
-      "eventName": "OnSomethingHappened",
+      "eventName": "onsomethinghappened",
       "eventKind": "unknown",
       "signatureHash": "d3cee64db844339d15ab0e31b864095821b853b183cafd5fe93d2663bc4c4153",
       "parameters": [],
@@ -29,19 +29,19 @@
       ]
     },
     {
-      "id": "c2c00001-0000-0000-0000-000000000001:Table:50000::OnAfterValidateEvent::a15314943f015c4368e78c5e36151744981f1ed46233bc7dcbf1d66cc0b0201c",
+      "id": "c2c00001-0000-0000-0000-000000000001:Table:50000::OnAfterValidateEvent::ca69396e288ff50531e9bf5980f5bb9f10c7452c90c25570406caec1faa070d4",
       "publisherObjectId": "c2c00001-0000-0000-0000-000000000001:Table:50000",
       "eventName": "OnAfterValidateEvent",
-      "eventKind": "unknown",
-      "signatureHash": "a15314943f015c4368e78c5e36151744981f1ed46233bc7dcbf1d66cc0b0201c",
+      "eventKind": "trigger",
+      "signatureHash": "ca69396e288ff50531e9bf5980f5bb9f10c7452c90c25570406caec1faa070d4",
       "parameters": [],
       "provenance": [
         {
-          "source": "tree-sitter",
-          "note": "publisher not indexed"
+          "source": "program",
+          "note": "platform event"
         }
       ],
-      "elementName": "Amount"
+      "elementName": "amount"
     }
   ],
   "edges": [
@@ -57,7 +57,7 @@
       ]
     },
     {
-      "eventId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::OnSomethingHappened::d3cee64db844339d15ab0e31b864095821b853b183cafd5fe93d2663bc4c4153",
+      "eventId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::onsomethinghappened::d3cee64db844339d15ab0e31b864095821b853b183cafd5fe93d2663bc4c4153",
       "subscriberRoutineId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50101#0ed66f27b5b139f3746a1d1fd5210d9f4ad475cf835187edbc7f7853e53675b9",
       "subscriberAppId": "c2c00001-0000-0000-0000-000000000001",
       "resolution": "maybe",
@@ -68,10 +68,10 @@
       ]
     },
     {
-      "eventId": "c2c00001-0000-0000-0000-000000000001:Table:50000::OnAfterValidateEvent::a15314943f015c4368e78c5e36151744981f1ed46233bc7dcbf1d66cc0b0201c",
+      "eventId": "c2c00001-0000-0000-0000-000000000001:Table:50000::OnAfterValidateEvent::ca69396e288ff50531e9bf5980f5bb9f10c7452c90c25570406caec1faa070d4",
       "subscriberRoutineId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50101#6b13af773e90952bc7f684fbb1e7074d8caf6943dfe97c0ac4d31327cb1a0a2a",
       "subscriberAppId": "c2c00001-0000-0000-0000-000000000001",
-      "resolution": "maybe",
+      "resolution": "resolved",
       "provenance": [
         {
           "source": "tree-sitter"

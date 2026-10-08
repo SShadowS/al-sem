@@ -27,9 +27,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::l3_workspace::{L3Parameter, L3Resolved, L3Routine};
+use super::l3_workspace::{L3Resolved, L3Routine};
 use super::symbol_table::SymbolTable;
-use crate::engine::ids::{sha256_hex, to_stable_object_id};
+use crate::engine::ids::sha256_hex;
 use crate::program::attributes::{AttributeInfo, find_attribute, qualified_arg, string_arg};
 use crate::program::model::events::{build_event_symbol, encode_event_id};
 
@@ -220,173 +220,11 @@ pub fn events_for<'a>(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stable projection — the golden / vector comparison surface.
-// Mirrors scripts/r2c-l3eg-projection.ts EXACTLY.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PEvidence {
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PParameter {
-    pub index: u32,
-    pub name: String,
-    #[serde(rename = "typeText")]
-    pub type_text: String,
-    #[serde(rename = "isVar")]
-    pub is_var: bool,
-    #[serde(rename = "isRecord")]
-    pub is_record: bool,
-    #[serde(rename = "tableName", skip_serializing_if = "Option::is_none")]
-    pub table_name: Option<String>,
-}
-
-/// One projected EventSymbol (stable id form). Field ORDER mirrors al-sem's
-/// `projectEventSymbol` key order so a byte-level golden compare aligns:
-/// id, publisherObjectId, eventName, eventKind, signatureHash, parameters,
-/// provenance, then the optionals publisherRoutineId / isolated / elementName.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PEventSymbol {
-    pub id: String,
-    #[serde(rename = "publisherObjectId")]
-    pub publisher_object_id: String,
-    #[serde(rename = "eventName")]
-    pub event_name: String,
-    #[serde(rename = "eventKind")]
-    pub event_kind: String,
-    #[serde(rename = "signatureHash")]
-    pub signature_hash: String,
-    pub parameters: Vec<PParameter>,
-    pub provenance: Vec<PEvidence>,
-    #[serde(rename = "publisherRoutineId", skip_serializing_if = "Option::is_none")]
-    pub publisher_routine_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolated: Option<bool>,
-    #[serde(rename = "elementName", skip_serializing_if = "Option::is_none")]
-    pub element_name: Option<String>,
-}
-
-/// One projected EventEdge (stable id form).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PEventEdge {
-    #[serde(rename = "eventId")]
-    pub event_id: String,
-    #[serde(rename = "subscriberRoutineId")]
-    pub subscriber_routine_id: String,
-    #[serde(rename = "subscriberAppId")]
-    pub subscriber_app_id: String,
-    pub resolution: String,
-    pub provenance: Vec<PEvidence>,
-}
-
-/// The full L3 event-graph projection — the golden / vector document shape.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct L3EventGraphProjection {
-    pub events: Vec<PEventSymbol>,
-    pub edges: Vec<PEventEdge>,
-}
-
-/// Byte-order string compare (al-sem `cmpStable`).
-fn cmp_stable(a: &str, b: &str) -> std::cmp::Ordering {
-    a.cmp(b)
-}
-
-/// `toStableEventId(publisher, eventName, signatureHash)`.
-fn to_stable_event_id(publisher: &str, event_name: &str, signature_hash: &str) -> String {
-    format!("{publisher}::{event_name}::{signature_hash}")
-}
-
-/// Stable event id FROM an EventSymbol (DUMB `/`→`:` on publisherObjectId; NEVER
-/// parse the raw eventId). For the sentinel `unknown/type/0:ref` the dumb replace
-/// yields `unknown:type:0:ref` — an opaque deterministic comparison id.
-fn stable_event_id_from_symbol(sym: &EventSymbol) -> String {
-    to_stable_event_id(
-        &to_stable_object_id(&sym.publisher_object_id),
-        &sym.event_name,
-        &sym.signature_hash,
-    )
-}
-
-fn project_parameter(p: &L3Parameter) -> PParameter {
-    PParameter {
-        index: p.index,
-        name: p.name.clone(),
-        type_text: p.type_text.clone(),
-        is_var: p.is_var,
-        is_record: p.is_record,
-        table_name: p.table_name.clone(),
-    }
-}
-
-fn project_evidence(e: &Evidence) -> PEvidence {
-    PEvidence {
-        source: e.source.clone(),
-        note: e.note.clone(),
-    }
-}
-
-fn project_event_symbol(sym: &EventSymbol) -> PEventSymbol {
-    PEventSymbol {
-        id: stable_event_id_from_symbol(sym),
-        publisher_object_id: to_stable_object_id(&sym.publisher_object_id),
-        event_name: sym.event_name.clone(),
-        event_kind: sym.event_kind.clone(),
-        signature_hash: sym.signature_hash.clone(),
-        parameters: sym.parameters.iter().map(project_parameter).collect(),
-        provenance: sym.provenance.iter().map(project_evidence).collect(),
-        publisher_routine_id: sym.publisher_stable_routine_id.clone(),
-        isolated: if sym.isolated == Some(true) {
-            Some(true)
-        } else {
-            None
-        },
-        element_name: sym.element_name.clone(),
-    }
-}
-
-/// Project an internal `EventGraph` to the stable L3 event-graph projection.
-/// Events sorted by stable id; edges by (stable eventId, subscriberRoutineId). The
-/// edge eventId is mapped THROUGH the rawEventId→stableEventId map (LAST-wins on
-/// raw-id collision); a missing mapping keeps the raw id so a divergence is VISIBLE.
-pub fn project_event_graph(graph: &EventGraph) -> L3EventGraphProjection {
-    // rawEventId → stableEventId (walk events[] in emitted order, LAST-wins).
-    let mut raw_to_stable: HashMap<String, String> = HashMap::new();
-    for sym in &graph.events {
-        raw_to_stable.insert(sym.id.clone(), stable_event_id_from_symbol(sym));
-    }
-
-    let mut events: Vec<PEventSymbol> = graph.events.iter().map(project_event_symbol).collect();
-    events.sort_by(|a, b| cmp_stable(&a.id, &b.id));
-
-    let mut edges: Vec<PEventEdge> = graph
-        .edges
-        .iter()
-        .map(|edge| {
-            let stable_event_id = raw_to_stable
-                .get(&edge.event_id)
-                .cloned()
-                .unwrap_or_else(|| edge.event_id.clone());
-            PEventEdge {
-                event_id: stable_event_id,
-                subscriber_routine_id: edge.subscriber_stable_routine_id.clone(),
-                subscriber_app_id: edge.subscriber_app_id.clone(),
-                resolution: edge.resolution.clone(),
-                provenance: edge.provenance.iter().map(project_evidence).collect(),
-            }
-        })
-        .collect();
-    edges.sort_by(|a, b| {
-        cmp_stable(&a.event_id, &b.event_id)
-            .then_with(|| cmp_stable(&a.subscriber_routine_id, &b.subscriber_routine_id))
-    });
-
-    L3EventGraphProjection { events, edges }
-}
+// The stable projection (the r2c golden surface) moved to `program::model::events`
+// in engine-switch S9.5e.
+pub use crate::program::model::events::{
+    L3EventGraphProjection, PEventEdge, PEventSymbol, PEvidence, PParameter, project_event_graph,
+};
 
 impl L3Resolved {
     /// Build the workspace event graph and project it to the golden / vector stable
