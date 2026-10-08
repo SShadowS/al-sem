@@ -17,7 +17,8 @@
 //!   (d) RE-4 — an escaped-quote / mixed-case field name → the unescaped logical name.
 //!   (e) a true object-level trigger (`OnRun`) → `enclosing_member` is `None`.
 
-use al_sem::engine::l3::l3_workspace::{L3Routine, L3Workspace, assemble_workspace};
+use al_sem::engine::l3::l3_workspace::{L3Routine, L3Workspace};
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-1111-1111-1111-111111111111";
 
@@ -26,7 +27,7 @@ fn assemble(files: &[(&str, &str)]) -> L3Workspace {
         .iter()
         .map(|(n, s)| ((*n).to_string(), (*s).to_string()))
         .collect();
-    assemble_workspace(&owned, APP_GUID, "r0")
+    assemble_and_resolve_inline_program_default(&owned, APP_GUID).workspace
 }
 
 fn find<'a>(ws: &'a L3Workspace, name: &str) -> Vec<&'a L3Routine> {

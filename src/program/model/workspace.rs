@@ -650,50 +650,6 @@ fn anchor_from_origin(
 
 pub const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
 
-/// Build the L3 workspace contribution for one source file, driven entirely by the
-/// owned AL syntax IR (`al_syntax::parse`) — no tree-sitter CST walk.
-fn project_file(
-    source: &str,
-    app_guid: &str,
-    model_instance_id: &str,
-    source_unit_id: &str,
-    cols: &Utf16Cols,
-    workspace: &mut L3Workspace,
-) {
-    // Stages-tier parse-vs-projection split (spec 2026-07-18-tracing-infra.md).
-    // `project_file` is the per-file unit of work inside the parallel rayon `.map`
-    // closure in `assemble_workspace`/`assemble_workspace_units` — one call here IS
-    // one rayon closure invocation, so a `LocalCounters` built and flushed entirely
-    // within this function (no threading through the call sites) already satisfies
-    // "one LocalCounters per rayon closure, flush each" without a signature change
-    // at either caller. Cheapest-on-disabled shape: a single `enabled()` bool read
-    // gates every `Instant::now()` call, so tracing-off pays zero clock reads and
-    // zero allocation.
-    let hot = pt::enabled(pt::Detail::Stages);
-    let t_start = hot.then(std::time::Instant::now);
-    let ir_file = al_syntax::parse(source);
-    let t_parsed = hot.then(std::time::Instant::now);
-
-    project_ir(
-        &ir_file,
-        &whole_file_population(&ir_file),
-        source,
-        app_guid,
-        model_instance_id,
-        source_unit_id,
-        cols,
-        &std::collections::HashSet::new(),
-        workspace,
-    );
-
-    if let (Some(t0), Some(t1)) = (t_start, t_parsed) {
-        let mut lc = pt::LocalCounters::new();
-        lc.add("parse_us", t1.duration_since(t0).as_micros() as u64);
-        lc.add("projection_us", t1.elapsed().as_micros() as u64);
-        lc.flush("l3.parse_project");
-    }
-}
-
 /// The declarations of one file to project, by position: each object's index in
 /// `AlFile::objects` with the indices of its routines, document order.
 pub type FilePopulation = Vec<(usize, Vec<usize>)>;
@@ -1404,192 +1360,15 @@ fn project_ir(
 // Public assembly + resolution entry points.
 // ---------------------------------------------------------------------------
 
-/// Assemble the workspace L3 model from inline `(name, source)` files, in al-sem's
-/// deterministic ingestion order (files sorted by name → per-file document order),
-/// then run `resolve_record_types` + `merge_extension_fields`.
+/// The workspace model over the program engine's parse (engine-switch S2a): each
+/// file is projected from `ctx`'s already-parsed tree.
 ///
-/// This is the offline entry point the vector test drives. Disk-backed workspaces
-/// (the differential / dump in Task 3) sort discovered `.al` files by their
-/// workspace-relative POSIX path — the same total order this reproduces.
-pub fn assemble_and_resolve(
-    files: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Resolved {
-    let mut workspace = assemble_workspace(files, app_guid, model_instance_id);
-    resolve(&mut workspace);
-    // Inline path: no disk `roots.config.json` ⇒ AST-only classifications, no infra diagnostics.
-    // No disk `app.json` ⇒ primary_app = None.
-    let (root_classifications, infra_diagnostics) =
-        crate::engine::root_classification::compute_root_classifications(&workspace, None);
-    L3Resolved {
-        workspace,
-        root_classifications,
-        primary_app: None,
-        infra_diagnostics,
-        precomputed_calls: None,
-        precomputed_events: None,
-    }
-}
-
-/// Assemble the workspace L3 model from inline `(name, source)` files WITHOUT
-/// resolving — the parse/project half of [`assemble_and_resolve`]. The R2.5b
-/// cross-app wiring appends dep entities to the result before calling `resolve`.
-pub fn assemble_workspace(
-    files: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Workspace {
-    let _s = pt::span("l3", "l3.parse_project_parallel");
-    // Deterministic ingestion order: sort files by name (the `ws:<name>` unit id
-    // total order), then walk each file's objects in document order.
-    let mut sorted: Vec<&(String, String)> = files.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Parallel per-file parse+project into PRIVATE fragments on the big-stack
-    // pool (the same generous stack the fresh engine parses on), then fold the
-    // fragments in the SAME sorted order the old sequential loop appended in —
-    // byte-identical Vec order. Object/routine ids are content-derived (no
-    // ordinals) and `project_file` only APPENDS into its own `workspace` arg
-    // (no cross-file reads), so per-file fragments are independent; the sorted
-    // fold reproduces today's exact order. The per-file `ws:<name>` unit id and
-    // `Utf16Cols` move inside the closure.
-    use rayon::prelude::*;
-    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
-        sorted
-            .par_iter()
-            .map(|(fname, source)| {
-                let source_unit_id = format!("ws:{fname}");
-                let cols = Utf16Cols::new(source);
-                let mut ws = L3Workspace {
-                    objects: Vec::new(),
-                    tables: Vec::new(),
-                    routines: Vec::new(),
-                };
-                project_file(
-                    source,
-                    app_guid,
-                    model_instance_id,
-                    &source_unit_id,
-                    &cols,
-                    &mut ws,
-                );
-                ws
-            })
-            .collect()
-    });
-
-    let mut workspace = L3Workspace {
-        objects: Vec::new(),
-        tables: Vec::new(),
-        routines: Vec::new(),
-    };
-    for mut frag in fragments {
-        workspace.objects.append(&mut frag.objects);
-        workspace.tables.append(&mut frag.tables);
-        workspace.routines.append(&mut frag.routines);
-    }
-    workspace
-}
-
-/// Assemble the workspace L3 model from inline `(source_unit_id, source)` units,
-/// using the GIVEN `source_unit_id` verbatim for each file's anchors (instead of
-/// the `ws:<name>` form `assemble_workspace` hardcodes). The R3a-4 dependency
-/// producer needs this so each embedded `.al` file's op/callsite anchors carry the
-/// al-sem `dep:<appGuid>:<relativePath>` source-unit id (the cited-evidence
-/// `sourceFile` field), matching `ingestDependencyApp`'s embedded-source path.
-///
-/// Units are sorted by `source_unit_id` (the same total order
-/// `iterateEmbeddedSource` yields: sorted-by-relative-path → here the unit ids are
-/// `dep:<appGuid>:<sorted relativePath>`), then walked in document order. NOT
-/// resolved — the caller runs `resolve`.
-pub fn assemble_workspace_units(
-    units: &[(String, String)],
-    app_guid: &str,
-    model_instance_id: &str,
-) -> L3Workspace {
-    let _s = pt::span("l3", "l3.parse_project_parallel");
-    let mut sorted: Vec<&(String, String)> = units.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Parallel per-file parse+project into PRIVATE fragments on the big-stack
-    // pool, then fold in the SAME sorted order — byte-identical Vec order (see
-    // the sibling `assemble_workspace` for the full rationale). Uses each unit's
-    // `source_unit_id` verbatim for anchors (no `ws:<name>` synthesis here).
-    use rayon::prelude::*;
-    let fragments: Vec<L3Workspace> = crate::big_stack::big_stack_pool().install(|| {
-        sorted
-            .par_iter()
-            .map(|(source_unit_id, source)| {
-                let cols = Utf16Cols::new(source);
-                let mut ws = L3Workspace {
-                    objects: Vec::new(),
-                    tables: Vec::new(),
-                    routines: Vec::new(),
-                };
-                project_file(
-                    source,
-                    app_guid,
-                    model_instance_id,
-                    source_unit_id,
-                    &cols,
-                    &mut ws,
-                );
-                ws
-            })
-            .collect()
-    });
-
-    let mut workspace = L3Workspace {
-        objects: Vec::new(),
-        tables: Vec::new(),
-        routines: Vec::new(),
-    };
-    for mut frag in fragments {
-        workspace.objects.append(&mut frag.objects);
-        workspace.tables.append(&mut frag.tables);
-        workspace.routines.append(&mut frag.routines);
-    }
-    workspace
-}
-
-/// Convenience: assemble + resolve with the default model-instance id (`r0`).
-pub fn assemble_and_resolve_default(files: &[(String, String)], app_guid: &str) -> L3Resolved {
-    assemble_and_resolve(files, app_guid, MODEL_INSTANCE_ID_DEFAULT)
-}
-
-/// Disk-backed assemble + resolve over a workspace directory (the emitter +
-/// differential entry point). Reuses L2's discovery so the file order, BOM
-/// strip, app-guid read, and fail-closed layout detection match al-sem EXACTLY:
-/// a sound workspace is ONE AL app (readable root `app.json` `id`, single
-/// `app.json` excl. node_modules/.alpackages). The inline `ws:<relPosix>` unit
-/// ids match `project_workspace`.
-///
-/// `skip_roots_config`: when true, skip loading/overlaying `roots.config.json`
-/// even if present — AST-only root classification (`--no-roots-config` on the
-/// `alsem fingerprint` CLI; `compute_root_classifications` already supports
-/// this via `workspace_root: None`, so this just threads the caller's choice
-/// through instead of hardcoding `Some(workspace)`).
-///
-/// Returns `None` on an unsound / empty layout (fail-closed) — never throws.
-pub fn assemble_and_resolve_workspace(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-    skip_roots_config: bool,
-) -> Option<L3Resolved> {
-    let ws = assemble_l3_workspace_from_disk(workspace, model_instance_id)?;
-    finish_resolved(ws, workspace, skip_roots_config)
-}
-
-/// [`assemble_and_resolve_workspace`] over the program engine's parse (engine-switch
-/// S2a): the same file set, text, order and passes, but each file is projected from
-/// `ctx`'s already-parsed tree instead of being parsed a second time.
-///
-/// The file set is L3's own: app-scoped discovery (nested apps skipped), while the
-/// program engine's workspace unit includes nested apps (`provider.rs`), so the
-/// program files are FILTERED to the app-scoped set. If any app-scoped file is
-/// missing from the program's parse (the two walks disagreeing, e.g. a file created
-/// between them), the model is built from disk exactly as before.
+/// The file set is app-scoped discovery (nested apps skipped; `roots.config.json`
+/// read unless `skip_roots_config`), while the program engine's workspace unit
+/// includes nested apps (`provider.rs`), so the program files are FILTERED to the
+/// app-scoped set. If any app-scoped file is missing from the program's parse (the
+/// two walks disagreeing, e.g. a file created between them), the model fails closed
+/// (`None`, engine-switch S9.1).
 ///
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
@@ -1855,7 +1634,8 @@ fn assemble_l3_workspace_from_program(
     let population = rows_population(&ctx.graph().workspace_rows);
     let no_decls = FilePopulation::new();
     let no_calls = std::collections::HashSet::new();
-    // Same deterministic order and fold as `assemble_workspace`.
+    // Deterministic order: files sorted by name (the `ws:<name>` unit id order),
+    // projected in parallel into private fragments, folded back in that order.
     let mut sorted = files;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     use rayon::prelude::*;
@@ -1910,8 +1690,8 @@ fn assemble_l3_workspace_from_program(
     Some(workspace)
 }
 
-/// The finishing half shared by the disk-backed and program-backed entries:
-/// resolve, classify roots, read the primary app, and refuse an empty model.
+/// The finishing half shared by the single-app and cross-app entries: resolve,
+/// classify roots, read the primary app, and refuse an empty model.
 fn finish_resolved(
     mut ws: L3Workspace,
     workspace: &std::path::Path,
@@ -1950,57 +1730,6 @@ fn finish_resolved(
         return None;
     }
     Some(resolved)
-}
-
-/// Assemble the workspace L3 model from disk WITHOUT resolving — the pre-resolve
-/// assembly half of [`assemble_and_resolve_workspace`], exposed so the R2.5b
-/// cross-app wiring can append dep entities BEFORE running `resolve` over the
-/// merged whole. Fail-closed: an unsound/empty native layout yields `None`
-/// (readable root `app.json` `id`, single `app.json`, ≥1 readable `.al`).
-pub fn assemble_l3_workspace_from_disk(
-    workspace: &std::path::Path,
-    model_instance_id: &str,
-) -> Option<L3Workspace> {
-    use crate::program::body::l2_workspace::{
-        discover_al_files_app_scoped, read_al_source, read_root_app_guid,
-    };
-
-    let (app_guid, files): (String, Vec<(String, String)>) = {
-        let _s = pt::span("l3", "l3.discover_read");
-        // Fail-closed: need a readable root app.json with a string `id`. The single-app
-        // guard is gone — a nested `app.json` is a SEPARATE project, so discovery is
-        // scoped to THIS app (nested sub-apps are excluded). A monorepo / `Modules/`
-        // layout (root app + nested apps) thus analyzes the root app; each nested app is
-        // analyzed by pointing the workspace at its own root. (The gate keeps its own
-        // multi-app provider check in `workspace_diagnostics` — this only relaxes the L3
-        // analysis path that `aldump` / cross-app stats use.)
-        let app_guid = read_root_app_guid(workspace)?;
-        let discovered = discover_al_files_app_scoped(workspace).ok()?;
-
-        // Build (relPosix, source) pairs in discovery (rel-posix-sorted) order; the
-        // inline assembler re-sorts by name, which is the same total order.
-        let mut files: Vec<(String, String)> = Vec::new();
-        for f in &discovered {
-            match read_al_source(&f.abs_path) {
-                Ok(src) => files.push((f.rel_posix.clone(), src)),
-                Err(e) => {
-                    eprintln!("warning: skipping {} (read error: {e})", f.rel_posix);
-                }
-            }
-        }
-        (app_guid, files)
-    };
-
-    if files.is_empty() {
-        return None;
-    }
-
-    Some(assemble_workspace(&files, &app_guid, model_instance_id))
-}
-
-/// Disk-backed convenience with the default model-instance id (`r0`).
-pub fn assemble_and_resolve_workspace_default(workspace: &std::path::Path) -> Option<L3Resolved> {
-    assemble_and_resolve_workspace(workspace, MODEL_INSTANCE_ID_DEFAULT, false)
 }
 
 /// Read the primary app's identity from the workspace root `app.json`.
@@ -2563,7 +2292,11 @@ codeunit 50816 "T5 F3 Dedup"
 }
 "#;
         let files = vec![("src/T5F3Dedup.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "66666666-0000-0000-0000-0000000cp5f3");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "66666666-0000-0000-0000-0000000cp5f3",
+            );
         let routine = resolved
             .workspace
             .routines
@@ -2596,7 +2329,7 @@ codeunit 50816 "T5 F3 Dedup"
     #[test]
     fn object_property_forwards_single_instance_and_page_write_surface() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/props");
-        let resolved = assemble_and_resolve_workspace_default(&dir).expect("assemble");
+        let resolved = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&dir).expect("assemble");
         let cu = resolved
             .workspace
             .objects
@@ -2625,7 +2358,7 @@ codeunit 50816 "T5 F3 Dedup"
     #[test]
     fn variable_scope_forwarded_to_l3() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/props");
-        let resolved = assemble_and_resolve_workspace_default(&dir).expect("assemble");
+        let resolved = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&dir).expect("assemble");
         let r = resolved
             .workspace
             .routines
@@ -2684,7 +2417,11 @@ page 50813 "CP3 Wizard"
 }
 "#;
         let files = vec![("src/CP3Wizard.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "33333333-0000-0000-0000-0000000cp003");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "33333333-0000-0000-0000-0000000cp003",
+            );
         let routines = &resolved.workspace.routines;
 
         let ids_named = |n: &str| -> Vec<String> {
@@ -2803,7 +2540,11 @@ page 50815 "CP5 Wizard"
 }
 "#;
         let files = vec![("src/CP5Wizard.al".to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, "55555555-0000-0000-0000-0000000cp005");
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "55555555-0000-0000-0000-0000000cp005",
+            );
         let routines = &resolved.workspace.routines;
 
         let named = |n: &str| -> Vec<&L3Routine> {
@@ -2930,7 +2671,10 @@ page 50814 "CP4 Wizard"
 
         // --- L3 path -------------------------------------------------------
         let files = vec![(UNIT.trim_start_matches("ws:").to_string(), src.to_string())];
-        let resolved = assemble_and_resolve_default(&files, APP_GUID);
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files, APP_GUID,
+            );
         let l3: Vec<&L3Routine> = resolved
             .workspace
             .routines

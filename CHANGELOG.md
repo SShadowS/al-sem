@@ -1264,6 +1264,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `engine::l3::{b3_diff, call_graph_projection, l3_mint, resolution_class}` and
   `engine::deps::{cross_app_l3, merged_index}`, with coverage's cross-app capture
   (`project_coverage_cross_app`). Nothing outside them changes behaviour.
+- **L3's own parse of the workspace** (engine-switch S9.6b, step 2):
+  `assemble_and_resolve[_default]`, `assemble_workspace[_units]`,
+  `assemble_and_resolve_workspace[_default]` and `assemble_l3_workspace_from_disk`.
+  The model is built from the program engine's parse only. The tests that used
+  them (six `workspace.rs` unit tests, `cli_p1_enclosing_member`) build through
+  the program builders; they read rows, which both paths projected with the same
+  `project_ir`, and all pass unchanged.
 - **The production paths no longer touch L3** (engine-switch S9.1). Three
   things changed:
   - The `alsem analyze` adapter no longer compares its trigger edges with L3's
