@@ -1,0 +1,26 @@
+size_of: RoutineNodeId=72 ObjectNodeId=24 RoutineNode=224 ObjectNode=320 RoutineMeta=176 ClassifiedEdge=344 Route=240 LspEdge=136 LspTarget=72 DeclEntry=216 EdgeRef=24 ParsedFileEntry=128
+
+######## root 1 = U:/Git/DO-cdo-baseline/Cloud (Symbols) built in 1.6s
+Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):
+  1.snapshot                               end-live      31.2  in-phase peak      45.9  live allocs    +136853
+  2.parse                                  end-live      72.3  in-phase peak      72.4  live allocs    +319535
+  3.dep_layer                              end-live     105.1  in-phase peak     183.1  live allocs    +492203
+  4.assemble_graph                         end-live     110.9  in-phase peak     112.1  live allocs    +533907
+  5.index+surface+dep_meta+dep_lines       end-live     118.4  in-phase peak     119.0  live allocs    +596193
+  6.resolve_workspace_files                end-live     124.5  in-phase peak     126.6  live allocs    +636126
+  7.event_edges                            end-live     124.5  in-phase peak     138.4  live allocs    +636211
+  8.incoming+decl_by_id                    end-live     120.4  in-phase peak     124.5  live allocs    +588122
+  9.publish_snapshot                       end-live     120.5  in-phase peak     120.5  live allocs    +589293
+  10.returned                              end-live     120.4  in-phase peak     120.5  live allocs    +588708
+  BUILD PEAK 183.1 MiB; retained after settle 120.4 MiB in 588708 allocs
+  + diagnostics map 3.70 MiB in 7812 allocs
+  shape: objects 11188 (shared 10604 own 584), routines 64752 (shared 59220 own 5532), dep_meta 0 (orphans 0), dep_lines 0, ws files 582, edges_by_file edges 20713, event_edges 80, incoming keys 2747, decl_by_id 5512
+  event_edges classes: dep->dep only 0 | dep publisher w/ ws subscriber 73 | ws publisher 7 | routes into ws 86 | dep->dep set identical to root 1: None
+
+ALL 1 ROOTS LIVE: 124.1 MiB in 596522 allocs
+
+==== --with-updaters: starting one updater per root ====
+  root 1 U:/Git/DO-cdo-baseline/Cloud: updater adds 7.57 MiB in 62293 allocs
+RETAINED, ALL 1 UPDATERS IDLE: 131.7 MiB in 658822 allocs (all-roots-built was 124.1 MiB; updaters add 7.6 MiB in 62293 allocs)
+RSS context (OS, not used for any byte figure): 195,1 MiB working set, 239,0 MiB peak working set
+after updaters joined and snapshots dropped: live 0.2 MiB

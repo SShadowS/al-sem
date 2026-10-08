@@ -19,15 +19,15 @@ use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 use al_sem::lsp::encoding::PositionEncoding;
-use al_sem::lsp::snapshot::{DeclEntry, EdgeRef, LspSnapshot, ParsedFileEntry};
+use al_sem::lsp::snapshot::{DeclEntry, EdgeRef, LspEdge, LspSnapshot, LspTarget, ParsedFileEntry};
 use al_sem::program::build::DepLayer;
 use al_sem::program::dep_cache::{DepCache, DepNodes};
 use al_sem::program::graph::ProgramGraph;
 use al_sem::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
 use al_sem::program::node_extract::{AbiParams, ObjectNode, ObjectRef, RoutineNode};
 use al_sem::program::resolve::decl_surface::RoutineMeta;
-use al_sem::program::resolve::edge::{AbiRoutineKey, Route, RouteTarget, Witness};
-use al_sem::program::resolve::full::{ClassifiedEdge, ObligationId};
+use al_sem::program::resolve::edge::{AbiRoutineKey, Route};
+use al_sem::program::resolve::full::ClassifiedEdge;
 use al_sem::snapshot::DependencySource;
 use al_sem::snapshot::parse::ParsedUnit;
 
@@ -490,50 +490,21 @@ impl<'a> W<'a> {
         self.s((s, "abikey.object_name_lc"), &k.object_name_lc);
         self.s((s, "abikey.routine_name_lc"), &k.routine_name_lc);
     }
-    fn cedge(&mut self, s: &'static str, ce: &'a ClassifiedEdge) {
-        match &ce.obligation_id {
-            ObligationId::CallSite { caller, span, .. } => {
-                self.rid((s, "obligation.caller"), caller);
-                self.s((s, "obligation.span.unit"), &span.unit);
-            }
-            ObligationId::Publisher(r) => {
-                self.rid((s, "obligation.publisher"), r);
-            }
-        }
-        let e = &ce.edge;
+    /// S10.5: the LSP's stored edge (`LspEdge`).
+    fn cedge(&mut self, s: &'static str, e: &'a LspEdge) {
         self.rid((s, "edge.from"), &e.from);
-        self.rid((s, "edge.site.caller"), &e.site.caller);
-        self.s((s, "edge.site.span.unit"), &e.site.span.unit);
-        self.v((s, "routes[]"), &e.routes);
-        for r in &e.routes {
-            self.route(s, r);
-        }
-    }
-    fn route(&mut self, s: &'static str, r: &'a Route) {
-        match &r.target {
-            RouteTarget::Routine(id) => {
-                self.rid((s, "route.target"), id);
+        self.s((s, "edge.span.unit"), &e.span.unit);
+        self.v((s, "targets[]"), &e.targets);
+        for t in e.targets.iter() {
+            match t {
+                LspTarget::Routine(id) => {
+                    self.rid((s, "target"), id);
+                }
+                LspTarget::Abi(key) => {
+                    self.v((s, "target.abi(Box)"), std::slice::from_ref(&**key));
+                    self.abikey(s, key);
+                }
             }
-            RouteTarget::Builtin(b) => {
-                self.s((s, "route.builtin"), &b.0);
-            }
-            RouteTarget::AbiSymbol { key } => self.abikey(s, key),
-            RouteTarget::Unresolved => {}
-        }
-        self.v((s, "route.conditions[]"), &r.conditions);
-        match &r.witness {
-            Witness::SourceSpan { file, .. } => {
-                self.s((s, "witness.file"), file);
-            }
-            Witness::AbiSymbol { key } => self.abikey(s, key),
-            Witness::CatalogEntry {
-                id,
-                catalog_version,
-            } => {
-                self.s((s, "witness.catalog_id"), &id.0);
-                self.s((s, "witness.catalog_version"), catalog_version);
-            }
-            Witness::None => {}
         }
     }
     fn decl(&mut self, s: &'static str, d: &'a DeclEntry) {
@@ -591,7 +562,7 @@ impl<'a> W<'a> {
         for (k, v) in &l.edges_by_file {
             self.s(("edges_by_file", "key"), k);
             if self.first(Arc::as_ptr(v)) {
-                self.elems::<ClassifiedEdge>("edges_by_file", v.len());
+                self.elems::<LspEdge>("edges_by_file", v.len());
                 for ce in v.iter() {
                     self.cedge("edges_by_file", ce);
                 }
@@ -601,7 +572,7 @@ impl<'a> W<'a> {
         // workspace part; the shared dependency part is walked once, as
         // `dep_events.*`.
         if self.first(Arc::as_ptr(&l.ws_event_edges)) {
-            self.elems::<ClassifiedEdge>("event_edges", l.ws_event_edges.len());
+            self.elems::<LspEdge>("event_edges", l.ws_event_edges.len());
             for ce in l.ws_event_edges.iter() {
                 self.cedge("event_edges", ce);
             }
@@ -622,7 +593,7 @@ impl<'a> W<'a> {
         }
         if self.first(Arc::as_ptr(&l.dep_events)) {
             let d = &l.dep_events;
-            self.elems::<ClassifiedEdge>("dep_events.edges", d.edges.len());
+            self.elems::<LspEdge>("dep_events.edges", d.edges.len());
             for ce in &d.edges {
                 self.cedge("dep_events.edges", ce);
             }
@@ -855,9 +826,8 @@ fn event_edge_classes(l: &LspSnapshot) -> (u64, u64, u64, u64, Vec<u64>) {
     // S10.4: one edge per publisher, both parts merged (as before the split).
     for e in &l.merged_event_edges() {
         let to_ws = e
-            .routes
-            .iter()
-            .filter(|r| matches!(&r.target, RouteTarget::Routine(id) if id.object.app.0 == 0))
+            .routine_targets()
+            .filter(|id| id.object.app.0 == 0)
             .count() as u64;
         ws_routes += to_ws;
         if e.from.object.app.0 == 0 {
@@ -1322,7 +1292,7 @@ fn main() {
     al_sem::census_hook::HOOK.set(on_mark).unwrap();
 
     println!(
-        "size_of: RoutineNodeId={} ObjectNodeId={} RoutineNode={} ObjectNode={} RoutineMeta={} ClassifiedEdge={} Route={} DeclEntry={} EdgeRef={} ParsedFileEntry={}",
+        "size_of: RoutineNodeId={} ObjectNodeId={} RoutineNode={} ObjectNode={} RoutineMeta={} ClassifiedEdge={} Route={} LspEdge={} LspTarget={} DeclEntry={} EdgeRef={} ParsedFileEntry={}",
         size_of::<RoutineNodeId>(),
         size_of::<ObjectNodeId>(),
         size_of::<RoutineNode>(),
@@ -1330,6 +1300,8 @@ fn main() {
         size_of::<RoutineMeta>(),
         size_of::<ClassifiedEdge>(),
         size_of::<Route>(),
+        size_of::<LspEdge>(),
+        size_of::<LspTarget>(),
         size_of::<DeclEntry>(),
         size_of::<EdgeRef>(),
         size_of::<ParsedFileEntry>()

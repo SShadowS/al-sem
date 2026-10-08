@@ -367,7 +367,12 @@ rows (110,206 of 111,307 on CG) were in per-root event links identical in every 
 links are now shared per dependency tier (plan
 `2026-10-08-s10-4-shared-dependency-event-links.md`); the numeric ids of item 1 then re-price
 at about 1.2 MiB of copies outside the canonical rows on CG (all copies 9.13 MiB) and are not
-built. The resolver's linear object scans (item 1's speed
+built. S10.5 done (item 4, plan `2026-10-08-s10-5-lsp-edges.md`): the LSP keeps an
+`LspEdge` per call site (targets and route count, no witness, evidence, conditions or repeated
+caller copies); CDO idle with updaters 201.5 → 184.7 MiB, CG 145.3 → 142.0. The full facts stay in the
+program report, so no tool loses them. It is built as the LSP snapshot's own stored form, not
+as a `BuildProfile` field: the LSP snapshot is the only light view (as with
+`empty_event_edges` above), and classification still runs on the complete edge. The resolver's linear object scans (item 1's speed
 part) stay open.
 
 ## §9 — How the effort runs

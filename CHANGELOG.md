@@ -526,6 +526,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dependency_event_links_are_shared_and_split_from_the_workspace_ones` (with a discrimination
   proof). Numeric ids re-priced on what is left: about 1.2 MiB of id copies outside the
   canonical rows on CG (all copies 9.13 MiB), not built.
+- **The LSP stores only the edge facts it reads** (engine-switch S10.5, spec §8 item 4).
+  `LspEdge` (`src/lsp/snapshot.rs`: caller, kind, span with the file name shared per file,
+  callee fingerprint, the routine and ABI targets, the route count) replaces the resolver's
+  `ClassifiedEdge` in the LSP snapshot, for workspace edges, workspace event links and the
+  shared dependency links. Evidence, conditions, witness, dispatch shape, completeness, the
+  repeated caller copies and builtin/unresolved routes stay in the program report, which is
+  unchanged. Every call site is kept, so the CLI index report and telemetry counts do not move;
+  `LspEdge::obligation_id()` recomputes the resolver's identity (checked by a debug assertion
+  at projection). No golden moved; CDO stats JSON byte-identical to the S10.1b binary's.
+  Counted heap (`tools/census-probe/runs-s10-4/` → `runs-s10-5/`): CDO idle with updaters
+  201.5 → 184.7 MiB (`edges_by_file` 17.44 → 3.67, shared dependency links 4.92 → 1.82;
+  `symbols` mode 145.4 → 131.7); CG 7 roots idle with updaters 145.3 → 142.0 (shared links
+  4.82 → 1.80). Build peaks cannot move (they are set before the projection runs); one CG run
+  read 272.5 against 269.8, the parse phase's run-to-run noise. Pinned by
+  `project_keeps_the_routine_and_abi_targets_and_counts_every_route` and
+  `a_call_site_without_an_lsp_target_is_kept` (each with a discrimination proof). **The rung
+  tests check less:** the incremental-parity key, the rung-1 Calc test and the S10.4
+  shared-link debug check now compare only what the LSP stores (obligation, kind, targets,
+  route count). A rung drift in evidence, conditions, shape or completeness alone is invisible
+  to every LSP consumer and is no longer tested; the goldens cover the full-build resolver,
+  which the rungs call, not the rung path itself.
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

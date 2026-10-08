@@ -848,7 +848,7 @@ codeunit 50100 "Alpha"
     );
     for e in &calc_edges {
         assert!(
-            e.route_count == 1 && e.targets.len() == 1,
+            e.route_count == 1 && matches!(e.targets[..], [LspTarget::Routine(_)]),
             "each flipped call site must still cleanly resolve (one route, to a \
              routine), proving the incremental path re-ran arg-type dispatch \
              against the fresh file rather than a stale cached DeclSurface"
