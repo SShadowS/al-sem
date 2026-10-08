@@ -491,6 +491,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ClassifiedEdge` 416 → 344). Pinned by `equal_id_texts_are_one_allocation_across_the_tier_and_roots`
   and `the_tier_holds_one_allocation_per_text` (each with a discrimination proof); the census
   probe's string walk gains a "held" column (allocations counted once per data pointer).
+- **Dependency metadata is a column beside the routine rows** (engine-switch S10.3, spec §8
+  item 3). `DepMeta` (`decl_surface.rs`) replaces the tier's `HashMap<RoutineNodeId,
+  RoutineMeta>`: the metas in id order, each pointing at the first tier row with its id, so the
+  tier holds neither a second copy of each id nor a hash table. It answers exactly as the map
+  built from the same entries (a same-id collision keeps the last); an entry whose id matches no
+  row is kept in a small `orphans` map (0 on CG and CDO). No output moved: no golden, and both
+  CDO stats JSON files (`--program-call-graph-stats`, `--dependency-bodies-stats --sites`) are
+  byte-identical. Counted heap (`tools/census-probe/runs-s10-2/` → `runs-s10-3/`): idle with
+  updaters, CG 7 roots 186.0 → 174.1 MiB, CDO 243.0 → 201.5; the dependency-layer phase peak
+  (which repeats exactly between runs) CG root 1 274.8 → 269.8, CDO 363.6 → 339.9, though the
+  overall build peak can now be set by the parse phase, which varies between runs of identical
+  code (CG 268.0-275.4, CDO 333.8-349.1); `symbols` mode unchanged. CDO gains more because its
+  table was under-filled (arithmetic, matched by the drop steps to 0.01 MiB: 121,075 entries in
+  262,144 slots by hashbrown's power-of-two sizing; CG 111,637 in 131,072). Pinned by
+  `dep_meta_answers_as_the_map_it_replaces` (with a discrimination proof) and the existing
+  sibling-app test, which now also checks no orphans. Packing `RoutineMeta`'s two `Origin`s is
+  priced, not built: about 4 MiB, owner's call.
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

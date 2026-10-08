@@ -440,8 +440,11 @@ mod tests {
             n.id = id.clone();
             n
         };
+        // An ABI routine: a row with no metadata.
+        let mut abi = q.clone();
+        abi.name_lc = "abi".into();
         // R has no row; P has two (an aliased overload pair).
-        let mut rows = vec![row(&q), row(&p), row(&p)];
+        let mut rows = vec![row(&q), row(&p), row(&p), row(&abi)];
         rows.sort_by(|a, b| a.id.cmp(&b.id));
 
         let dep = DepMeta::build(Arc::new(rows), entries.clone());
@@ -458,6 +461,7 @@ mod tests {
         assert_eq!(dep.get_key_value(&q).unwrap().0, &q);
         assert_eq!(dep.orphan_count(), 1);
         assert!(dep.contains_key(&r), "an unmatched entry is kept");
+        assert!(dep.get(&abi).is_none(), "a row without metadata has none");
         assert_eq!(dep.keys().filter(|k| **k == p).count(), 1);
     }
 

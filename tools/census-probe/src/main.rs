@@ -466,8 +466,9 @@ impl<'a> W<'a> {
         e.0 += 1;
         e.1 += b + size_of::<RoutineNode>() as u64;
     }
-    fn meta(&mut self, s: &'static str, k: &'a RoutineNodeId, m: &'a RoutineMeta) {
-        self.rid((s, "key"), k);
+    /// S10.3: a `DepMeta` entry's key is the tier row's own id (counted under
+    /// `dep.routine`), so only the value is walked here.
+    fn meta(&mut self, s: &'static str, m: &'a RoutineMeta) {
         self.s((s, "name"), &m.name);
         self.os((s, "enclosing_member"), &m.enclosing_member);
         self.v((s, "params[]"), &m.params);
@@ -557,9 +558,12 @@ impl<'a> W<'a> {
             self.routine("ws.routine", r);
         }
         if self.first(Arc::as_ptr(&l.dep_meta)) {
-            self.elems::<(RoutineNodeId, RoutineMeta)>("dep_meta", l.dep_meta.len());
-            for (k, m) in l.dep_meta.iter() {
-                self.meta("dep_meta", k, m);
+            // S10.3: a column of metas plus a `u32` row per meta (orphans,
+            // expected none, are reported in the shape line).
+            self.elems::<RoutineMeta>("dep_meta", l.dep_meta.len());
+            self.elems::<u32>("dep_meta.key_row", l.dep_meta.len());
+            for m in l.dep_meta.values() {
+                self.meta("dep_meta", m);
             }
         }
         // S10.1: a text-free line index per dependency file (its own heap is
@@ -1353,7 +1357,7 @@ fn main() {
             a2 - a1
         );
         println!(
-            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {}, dep_lines {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
+            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {} (orphans {}), dep_lines {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
             snap.graph.objects.len(),
             snap.graph.objects.shared().len(),
             snap.graph.objects.own().len(),
@@ -1361,6 +1365,7 @@ fn main() {
             snap.graph.routines.shared().len(),
             snap.graph.routines.own().len(),
             snap.dep_meta.len(),
+            snap.dep_meta.orphan_count(),
             snap.dep_lines.len(),
             snap.parsed.len(),
             snap.edges_by_file.values().map(|v| v.len()).sum::<usize>(),
