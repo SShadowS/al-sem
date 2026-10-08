@@ -174,7 +174,9 @@
     "candidatesConsidered": 0,
     "detector": "d38-subscriber-to-obsolete-event",
     "findingsEmitted": 0,
-    "skipped": {}
+    "skipped": {
+      "unresolved": 3
+    }
   },
   {
     "candidatesConsidered": 0,

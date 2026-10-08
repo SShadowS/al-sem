@@ -374,6 +374,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The cli stats, diff and fingerprint differentials build the production
+  model** (engine-switch S9.5b). Four goldens move, each triaged against its
+  decoded content:
+  - `ws-d35` (stats both slots, fingerprint CBOR + gz): its three subscribers
+    name the publisher by number (`ObjectType::Codeunit, 50`, absent). L3 read
+    only `Codeunit::"Name"` and dropped them; the program engine keeps them as
+    `unknown` edges. d38's `skipped` gains `unresolved: 3`; the snapshot gains
+    the three subscriber declarations. Findings unchanged.
+  - `ws-txn-d49-pos-modify-runmodal` (fingerprint CBOR + gz): it runs a page
+    that does not exist. L3 filed the call as a `builtin`; the program engine
+    records a `page-run` to an unresolved object, so that routine's inherited
+    coverage and its permission facts become `partial`.
+
 - **Detector, gap and temp-state tests build the production model**
   (engine-switch S9.5a). 50 test files (the `engine::l5` unit tests,
   `tests/gap`, `tests/temp_state`, `d1_downgraded_to_info_oracle`) now use
