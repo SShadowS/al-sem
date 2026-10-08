@@ -273,6 +273,7 @@ fn build_dep_nodes(
         recovered,
         bodies,
         lsp: Default::default(),
+        lsp_events: Default::default(),
     }
 }
 

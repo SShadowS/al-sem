@@ -329,13 +329,13 @@ fn canon_dep_meta(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, CanonDecl> {
 /// build (see the module doc).
 fn canon_incoming(snap: &LspSnapshot) -> BTreeMap<RoutineNodeId, Vec<ObligationId>> {
     let mut out: BTreeMap<RoutineNodeId, Vec<ObligationId>> = BTreeMap::new();
-    for (target, refs) in &snap.incoming {
-        let mut obligations: Vec<ObligationId> = refs
-            .iter()
+    for target in snap.all_incoming().into_keys() {
+        let mut obligations: Vec<ObligationId> = snap
+            .incoming(&target)
             .map(|r| snap.edge(r).obligation_id.clone())
             .collect();
         obligations.sort();
-        out.insert(target.clone(), obligations);
+        out.insert(target, obligations);
     }
     out
 }
@@ -364,11 +364,18 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
         );
     }
 
-    let inc_event = canon_edges(&incremental.event_edges);
-    let fresh_event = canon_edges(&fresh.event_edges);
+    // Both parts separately (engine-switch S10.4): the workspace part, and
+    // the shared dependency-only part every rung forwards.
+    let inc_event = canon_edges(&incremental.ws_event_edges);
+    let fresh_event = canon_edges(&fresh.ws_event_edges);
     assert_eq!(
         inc_event, fresh_event,
-        "{context}: event_edges' multiset diverged (incremental vs fresh build_full)"
+        "{context}: ws_event_edges' multiset diverged (incremental vs fresh build_full)"
+    );
+    assert_eq!(
+        canon_edges(&incremental.dep_events.edges),
+        canon_edges(&fresh.dep_events.edges),
+        "{context}: the dependency event links diverged (incremental vs fresh build_full)"
     );
 
     let mut inc_decl_files: Vec<&String> = incremental.decls_by_file.keys().collect();
@@ -413,8 +420,12 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
     // (no EdgeRef/position indirection to canonicalize — every value is a
     // positionless `RoutineNodeId -> usize` count).
     assert_eq!(
-        incremental.publisher_fanout, fresh.publisher_fanout,
+        incremental.ws_publisher_fanout, fresh.ws_publisher_fanout,
         "{context}: publisher_fanout diverged (incremental vs fresh build_full)"
+    );
+    assert_eq!(
+        incremental.dep_events.publisher_fanout, fresh.dep_events.publisher_fanout,
+        "{context}: the dependency links' publisher_fanout diverged (incremental vs fresh)"
     );
 
     // T3 Task 11 review fix-wave: dep_meta/dep_lines/workspace_root —
@@ -720,12 +731,9 @@ fn delete_file_stays_equivalent() {
         .expect("Beta.Process decl")
         .id
         .clone();
-    let incoming_before = base
-        .incoming
-        .get(&beta_process)
-        .expect("Beta.Process must have incoming callers before delete");
     assert!(
-        incoming_before.iter().any(|r| &*r.file == "MyPage.al"),
+        base.incoming(&beta_process)
+            .any(|r| &*r.file == "MyPage.al"),
         "baseline: MyPage.al must be one of Beta.Process's incoming callers"
     );
 
@@ -919,7 +927,7 @@ fn event_subscriber_attribute_edit_stays_equivalent() {
     let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
 
     assert!(
-        !base.event_edges.is_empty(),
+        base.event_edges().next().is_some(),
         "baseline: Alpha.OnAfterWork -> Beta.HandleAfterWork must be wired"
     );
 
@@ -955,7 +963,7 @@ fn event_subscriber_attribute_edit_stays_equivalent() {
          event_subscribers item"
     );
 
-    let still_wired = new_snap.event_edges.iter().any(|ce| {
+    let still_wired = new_snap.event_edges().any(|ce| {
         ce.edge
             .routes
             .iter()
@@ -1776,12 +1784,10 @@ fn every_dep_routine_route_target_resolves_via_dep_meta() {
     let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
     let workspace_app = snap.graph.apps.find(&snap.snap.workspace_app);
     let mut dep_targets = 0usize;
-    for edges in snap
-        .edges_by_file
-        .values()
-        .map(|a| a.as_slice())
-        .chain(std::iter::once(snap.event_edges.as_slice()))
-    {
+    for edges in snap.edges_by_file.values().map(|a| a.as_slice()).chain([
+        snap.ws_event_edges.as_slice(),
+        snap.dep_events.edges.as_slice(),
+    ]) {
         for ce in edges {
             for route in &ce.edge.routes {
                 if let RouteTarget::Routine(rid) = &route.target
@@ -1916,14 +1922,14 @@ codeunit 50100 "Alpha"
     // ---- incoming: sorted-multiset equality against a fresh build_incoming
     // over the SAME post-edit edges_by_file/event_edges. ----
     let (fresh_incoming, fresh_publisher_fanout) =
-        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.event_edges);
+        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.ws_event_edges);
     let sort_refs = |v: &[al_sem::lsp::snapshot::EdgeRef]| {
         let mut v: Vec<(String, u32)> = v.iter().map(|r| (r.file.to_string(), r.idx)).collect();
         v.sort();
         v
     };
     let mut all_targets: Vec<RoutineNodeId> = new_snap
-        .incoming
+        .ws_incoming
         .keys()
         .cloned()
         .chain(fresh_incoming.keys().cloned())
@@ -1932,7 +1938,7 @@ codeunit 50100 "Alpha"
     all_targets.dedup();
     for target in &all_targets {
         let patched: Vec<(String, u32)> = new_snap
-            .incoming
+            .ws_incoming
             .get(target)
             .map(|v| sort_refs(v))
             .unwrap_or_default();
@@ -1950,7 +1956,7 @@ codeunit 50100 "Alpha"
     // ---- publisher_fanout: Arc-forwarded at rung 1, must be byte-identical
     // to a fresh rebuild off the unchanged event_edges. ----
     assert_eq!(
-        *new_snap.publisher_fanout, fresh_publisher_fanout,
+        *new_snap.ws_publisher_fanout, fresh_publisher_fanout,
         "rung-1 Arc-forwarded publisher_fanout must equal a fresh build_incoming's"
     );
 
@@ -2035,14 +2041,14 @@ codeunit 50100 "Alpha"
     assert_eq!(rung, Rung::One, "a body-only edit must take rung 1");
 
     let (fresh_incoming, _) =
-        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.event_edges);
+        al_sem::lsp::snapshot::build_incoming(&new_snap.edges_by_file, &new_snap.ws_event_edges);
     let sort_refs = |v: &[al_sem::lsp::snapshot::EdgeRef]| {
         let mut v: Vec<(String, u32)> = v.iter().map(|r| (r.file.to_string(), r.idx)).collect();
         v.sort();
         v
     };
     let mut all_targets: Vec<RoutineNodeId> = new_snap
-        .incoming
+        .ws_incoming
         .keys()
         .cloned()
         .chain(fresh_incoming.keys().cloned())
@@ -2055,7 +2061,7 @@ codeunit 50100 "Alpha"
     );
     for target in &all_targets {
         let patched: Vec<(String, u32)> = new_snap
-            .incoming
+            .ws_incoming
             .get(target)
             .map(|v| sort_refs(v))
             .unwrap_or_default();

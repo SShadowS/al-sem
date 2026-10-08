@@ -159,16 +159,12 @@ pub fn incoming(
     enc: PositionEncoding,
     data: &ItemData,
 ) -> Vec<CallHierarchyIncomingCall> {
-    let Some(refs) = snap.incoming.get(&data.node) else {
-        return Vec::new();
-    };
-
     // One pass: resolve every EdgeRef exactly once, grouping by caller.
     // (Previously this re-filtered ALL refs per distinct caller — O(refs²)
     // with a string-hashed map lookup per pair; see the 2026-07-14
-    // improvement-hunt F1 finding.)
+    // improvement-hunt F1 finding.) A stale node has no refs: empty result.
     let mut groups: HashMap<RoutineNodeId, (bool, Vec<&ClassifiedEdge>)> = HashMap::new();
-    for r in refs {
+    for r in snap.incoming(&data.node) {
         let ce = snap.edge(r);
         let entry = groups
             .entry(ce.edge.from.clone())
@@ -278,8 +274,11 @@ pub fn outgoing(
         }
     }
 
+    // A workspace routine's event links are all in `ws_event_edges` (a link
+    // whose publisher is in the workspace is never split; see
+    // `split_event_links`), so the shared dependency part is not scanned.
     for ce in snap
-        .event_edges
+        .ws_event_edges
         .iter()
         .filter(|ce| ce.edge.from == data.node)
     {

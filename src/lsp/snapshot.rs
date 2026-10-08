@@ -91,13 +91,119 @@ pub struct EdgeRef {
     pub idx: u32,
 }
 
-/// Reserved `EdgeRef.file` key for [`LspSnapshot::event_edges`] — a
+/// Reserved `EdgeRef.file` key for [`LspSnapshot::ws_event_edges`] — a
 /// NUL-prefixed string no real AL `virtual_path` can ever collide with (a
 /// `virtual_path` is built from real filesystem-derived path segments, none
 /// of which can embed `\0`), so `EdgeRef` stays uniform (always plainly
 /// `(file, idx)`) without needing a separate enum-tagged variant just for
 /// event-flow edges.
 pub const EVENT_EDGES_KEY: &str = "\u{0}events";
+
+/// Reserved `EdgeRef.file` key for [`DepEventLinks::edges`] (same reasoning as
+/// [`EVENT_EDGES_KEY`]).
+pub const DEP_EVENT_EDGES_KEY: &str = "\u{0}dep-events";
+
+/// The routed event links among dependency routines alone: a dependency
+/// publisher's routes to dependency subscribers (engine-switch S10.4). They do
+/// not depend on the workspace (dependency code cannot see it), so they are
+/// built once per shared dependency tier (`DepNodes::lsp_events`) and every root
+/// and every rung holds the same `Arc`. A link that touches the workspace is in
+/// the root's own [`LspSnapshot::ws_event_edges`]; a dependency publisher with
+/// subscribers on both sides is split between the two.
+#[derive(Default)]
+pub struct DepEventLinks {
+    pub edges: Vec<ClassifiedEdge>,
+    /// `incoming` over [`Self::edges`] (refs keyed [`DEP_EVENT_EDGES_KEY`]).
+    pub incoming: HashMap<RoutineNodeId, Vec<EdgeRef>>,
+    /// `publisher_fanout` over [`Self::edges`].
+    pub publisher_fanout: HashMap<RoutineNodeId, usize>,
+}
+
+impl DepEventLinks {
+    pub fn new(edges: Vec<ClassifiedEdge>) -> Self {
+        let mut incoming = HashMap::new();
+        let mut publisher_fanout = HashMap::new();
+        let key: Arc<str> = Arc::from(DEP_EVENT_EDGES_KEY);
+        for (idx, ce) in edges.iter().enumerate() {
+            push_edge_targets(&mut incoming, &ce.edge, &key, idx as u32);
+            *publisher_fanout.entry(ce.edge.from.clone()).or_insert(0) += ce.edge.routes.len();
+        }
+        incoming.shrink_to_fit();
+        publisher_fanout.shrink_to_fit();
+        DepEventLinks {
+            edges,
+            incoming,
+            publisher_fanout,
+        }
+    }
+}
+
+/// The routed event links (`emit_event_flow_edges`'s output, route-less
+/// links dropped: they have no LSP reader) split into the part touching the
+/// workspace (`primary`) and the dependency-only part (see
+/// [`DepEventLinks`]). A route is the workspace's when it targets a workspace
+/// routine; a link whose publisher is in the workspace is the workspace's whole.
+pub(crate) fn split_event_links(
+    raw: Vec<Edge>,
+    primary: AppRef,
+) -> (Vec<ClassifiedEdge>, Vec<ClassifiedEdge>) {
+    let classify = |edge: Edge| ClassifiedEdge {
+        obligation_id: ObligationId::Publisher(edge.from.clone()),
+        edge,
+    };
+    let in_ws = |r: &crate::program::resolve::edge::Route| matches!(&r.target, RouteTarget::Routine(id) if id.object.app == primary);
+    let (mut ws, mut dep) = (Vec::new(), Vec::new());
+    for edge in raw.into_iter().filter(|e| !e.routes.is_empty()) {
+        if edge.from.object.app == primary {
+            ws.push(classify(edge));
+            continue;
+        }
+        if edge.routes.iter().all(|r| !in_ws(r)) {
+            dep.push(classify(edge));
+            continue;
+        }
+        if edge.routes.iter().all(in_ws) {
+            ws.push(classify(edge));
+            continue;
+        }
+        let (ws_routes, dep_routes): (Vec<_>, Vec<_>) =
+            edge.routes.iter().cloned().partition(|r| in_ws(r));
+        let mut ws_part = edge.clone();
+        ws_part.routes = ws_routes;
+        let mut dep_part = edge;
+        dep_part.routes = dep_routes;
+        ws.push(classify(ws_part));
+        dep.push(classify(dep_part));
+    }
+    (ws, dep)
+}
+
+/// An event link with its routes sorted: the form
+/// [`LspSnapshot::merged_event_edges`] returns, for comparisons.
+#[must_use]
+pub fn canonical_event_edge(mut edge: Edge) -> Edge {
+    edge.routes.sort();
+    edge
+}
+
+/// Debug check: a freshly computed dependency part equals the shared one
+/// (order aside). Every test run thereby checks that the dependency links do
+/// not depend on the root or the rung.
+pub(crate) fn debug_assert_same_dep_links(fresh: &[ClassifiedEdge], shared: &DepEventLinks) {
+    if cfg!(debug_assertions) {
+        let key = |ce: &ClassifiedEdge| (ce.obligation_id.clone(), ce.edge.clone());
+        let mut a: Vec<_> = fresh.iter().map(key).collect();
+        let mut b: Vec<_> = shared.edges.iter().map(key).collect();
+        a.sort();
+        b.sort();
+        assert!(
+            a == b,
+            "the dependency event links differ from the shared tier's ({} vs {})",
+            a.len(),
+            b.len()
+        );
+    }
+}
 
 /// [`LspSnapshot::dep_lines`]'s map type.
 pub(crate) use crate::program::dep_cache::DepLines;
@@ -266,12 +372,23 @@ pub struct LspSnapshot {
     /// Holds only links with at least one route. This is NOT the full
     /// publisher list: a publisher nobody subscribes to has no entry here.
     /// The program report (`resolve_full_program`) keeps the route-less links.
-    pub event_edges: Arc<Vec<ClassifiedEdge>>,
+    ///
+    /// Only the links that touch the workspace (engine-switch S10.4): the
+    /// dependency-only links are in [`Self::dep_events`], shared by every root
+    /// on the same dependency tier (see [`split_event_links`]). Read both
+    /// through [`Self::incoming`] / [`Self::publisher_fanout`].
+    pub ws_event_edges: Arc<Vec<ClassifiedEdge>>,
+    /// The dependency-only event links, with their own `incoming` and fan-out
+    /// (built once per tier; forwarded by every rung).
+    pub dep_events: Arc<DepEventLinks>,
     /// DERIVED — see [`build_incoming`]'s doc. Rebuilt WHOLESALE at rung 2/3
     /// (and by [`LspSnapshot::build_full`]); PATCHED (touched-file-local) at
     /// rung 1 by `apply_rung1_core` — see this module's amended ownership-law
     /// doc above.
-    pub incoming: HashMap<RoutineNodeId, Vec<EdgeRef>>,
+    ///
+    /// Over `edges_by_file` and [`Self::ws_event_edges`] only; read it with
+    /// [`Self::incoming`], which adds [`Self::dep_events`]' part.
+    pub ws_incoming: HashMap<RoutineNodeId, Vec<EdgeRef>>,
     /// DERIVED, precomputed in the SAME O(E) pass [`build_incoming`] makes
     /// over `event_edges` (t3 whole-branch review, blocker fix): for every
     /// routine `P` that is the `from` (publisher) of at least one
@@ -292,7 +409,10 @@ pub struct LspSnapshot {
     /// `apply_rung1_core` forwards it via `Arc::clone` instead of
     /// recomputing (it used to be recomputed anyway, wastefully, alongside
     /// `incoming` — see `apply_rung1_core`'s own doc for the fix).
-    pub publisher_fanout: Arc<HashMap<RoutineNodeId, usize>>,
+    ///
+    /// Over [`Self::ws_event_edges`] only; read it with
+    /// [`Self::publisher_fanout`], which adds [`Self::dep_events`]' part.
+    pub ws_publisher_fanout: Arc<HashMap<RoutineNodeId, usize>>,
     /// Sorted by `origin.byte.start` within each file. `Arc`-wrapped per file
     /// (T3 Task 9) so an incremental rung-1/rung-2 rebuild can share every
     /// UNCHANGED file's decl list via a cheap `Arc::clone` instead of
@@ -497,6 +617,7 @@ impl LspSnapshot {
         let mut surfaces_by_file: HashMap<String, DefSurface> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
         let event_edges: Arc<Vec<ClassifiedEdge>>;
+        let dep_events: Arc<DepEventLinks>;
         let dep_lines: Arc<DepLines>;
         let dep_meta: Arc<DepMeta>;
 
@@ -560,20 +681,24 @@ impl LspSnapshot {
             }
             crate::census_hook::mark("6.resolve_workspace_files");
 
-            let raw_event_edges = emit_event_flow_edges(&graph, &surface);
             // Links without routes have no LSP reader (no incoming ref, no
             // fan-out, no outgoing item); the program report keeps them
-            // (spec §2, §6 2b).
-            event_edges = Arc::new(
-                raw_event_edges
-                    .into_iter()
-                    .filter(|edge| !edge.routes.is_empty())
-                    .map(|edge| ClassifiedEdge {
-                        obligation_id: ObligationId::Publisher(edge.from.clone()),
-                        edge,
-                    })
-                    .collect(),
-            );
+            // (spec §2, §6 2b). The dependency-only links are shared by every
+            // root on this tier: the first root to get here publishes them.
+            // ponytail: a later root still computes them, then drops them
+            // (transient CPU and heap); restrict the emission to links that
+            // touch the workspace if that ever shows in a build profile.
+            let (ws, dep) =
+                split_event_links(emit_event_flow_edges(&graph, &surface), primary_app_ref);
+            event_edges = Arc::new(ws);
+            let mut fresh = Some(dep);
+            dep_events =
+                Arc::clone(dep_layer.dep_nodes.lsp_events.get_or_init(|| {
+                    Arc::new(DepEventLinks::new(fresh.take().unwrap_or_default()))
+                }));
+            if let Some(dep) = fresh {
+                debug_assert_same_dep_links(&dep, &dep_events);
+            }
             crate::census_hook::mark("7.event_edges");
 
             // `index`/`surface`/`obj_node_map` drop here, at the end of this
@@ -617,9 +742,10 @@ impl LspSnapshot {
             snap: Arc::new(without_dependency_text(snap)),
             parsed: parsed_files,
             edges_by_file,
-            event_edges,
-            incoming,
-            publisher_fanout: Arc::new(publisher_fanout),
+            ws_event_edges: event_edges,
+            dep_events,
+            ws_incoming: incoming,
+            ws_publisher_fanout: Arc::new(publisher_fanout),
             decls_by_file,
             decl_by_id,
             dep_lines,
@@ -665,11 +791,92 @@ impl LspSnapshot {
     /// Look up one classified edge by its [`EdgeRef`].
     #[must_use]
     pub fn edge(&self, r: &EdgeRef) -> &ClassifiedEdge {
-        if &*r.file == EVENT_EDGES_KEY {
-            &self.event_edges[r.idx as usize]
-        } else {
-            &self.edges_by_file[r.file.as_ref()][r.idx as usize]
+        match &*r.file {
+            EVENT_EDGES_KEY => &self.ws_event_edges[r.idx as usize],
+            DEP_EVENT_EDGES_KEY => &self.dep_events.edges[r.idx as usize],
+            file => &self.edges_by_file[file][r.idx as usize],
         }
+    }
+
+    /// Every edge with a route to `id`: the workspace's and the shared
+    /// dependency links' (see [`DepEventLinks`]).
+    pub fn incoming(&self, id: &RoutineNodeId) -> impl Iterator<Item = &EdgeRef> {
+        self.ws_incoming
+            .get(id)
+            .into_iter()
+            .chain(self.dep_events.incoming.get(id))
+            .flatten()
+    }
+
+    /// The number of `incoming` refs of `id`.
+    #[must_use]
+    pub fn incoming_count(&self, id: &RoutineNodeId) -> usize {
+        self.ws_incoming.get(id).map_or(0, Vec::len)
+            + self.dep_events.incoming.get(id).map_or(0, Vec::len)
+    }
+
+    /// `id`'s resolved-subscriber count as an event publisher (see
+    /// [`Self::ws_publisher_fanout`]), over both parts.
+    #[must_use]
+    pub fn publisher_fanout(&self, id: &RoutineNodeId) -> usize {
+        self.ws_publisher_fanout.get(id).copied().unwrap_or(0)
+            + self
+                .dep_events
+                .publisher_fanout
+                .get(id)
+                .copied()
+                .unwrap_or(0)
+    }
+
+    /// Every routed event link, both parts (a publisher with subscribers on
+    /// both sides appears once per part; see [`split_event_links`]).
+    pub fn event_edges(&self) -> impl Iterator<Item = &ClassifiedEdge> {
+        self.ws_event_edges
+            .iter()
+            .chain(self.dep_events.edges.iter())
+    }
+
+    /// The routed event links as one edge per publisher, as the program
+    /// report holds them: the parts of a split publisher merged, every edge's
+    /// routes sorted (the order between parts is not kept), sorted. For
+    /// comparisons; pair it with [`canonical_event_edge`] on the other side.
+    #[must_use]
+    pub fn merged_event_edges(&self) -> Vec<Edge> {
+        let mut by_publisher: std::collections::BTreeMap<RoutineNodeId, Edge> =
+            std::collections::BTreeMap::new();
+        for ce in self.event_edges() {
+            match by_publisher.get_mut(&ce.edge.from) {
+                Some(e) => e.routes.extend(ce.edge.routes.iter().cloned()),
+                None => {
+                    by_publisher.insert(ce.edge.from.clone(), ce.edge.clone());
+                }
+            }
+        }
+        let mut out: Vec<Edge> = by_publisher
+            .into_values()
+            .map(canonical_event_edge)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Every target's `incoming` refs over both parts, each list sorted by
+    /// `(file, idx)`. For comparisons.
+    #[must_use]
+    pub fn all_incoming(&self) -> std::collections::BTreeMap<RoutineNodeId, Vec<(String, u32)>> {
+        let mut out: std::collections::BTreeMap<RoutineNodeId, Vec<(String, u32)>> =
+            std::collections::BTreeMap::new();
+        for map in [&self.ws_incoming, &self.dep_events.incoming] {
+            for (target, refs) in map {
+                out.entry(target.clone())
+                    .or_default()
+                    .extend(refs.iter().map(|r| (r.file.to_string(), r.idx)));
+            }
+        }
+        for refs in out.values_mut() {
+            refs.sort();
+        }
+        out
     }
 
     /// Resolve ANY `RoutineNodeId` — workspace OR dependency — to its live
@@ -1106,7 +1313,7 @@ mod tests {
             .values()
             .flat_map(|v| v.iter().map(|ce| ce.edge.clone()))
             .collect();
-        got.extend(snap.event_edges.iter().map(|ce| ce.edge.clone()));
+        got.extend(snap.merged_event_edges());
         got.sort();
 
         // The LSP keeps only event links with routes; the report keeps all.
@@ -1116,7 +1323,17 @@ mod tests {
             all.iter().any(is_empty_link),
             "the report must still hold route-less event links (not lost)"
         );
-        let mut want: Vec<Edge> = all.into_iter().filter(|e| !is_empty_link(e)).collect();
+        let mut want: Vec<Edge> = all
+            .into_iter()
+            .filter(|e| !is_empty_link(e))
+            .map(|e| {
+                if e.kind == EdgeKind::EventFlow {
+                    canonical_event_edge(e)
+                } else {
+                    e
+                }
+            })
+            .collect();
         want.sort();
 
         assert_eq!(
@@ -1126,7 +1343,7 @@ mod tests {
              (order-insensitive)"
         );
         assert!(
-            snap.event_edges.iter().all(|ce| !ce.edge.routes.is_empty()),
+            snap.event_edges().all(|ce| !ce.edge.routes.is_empty()),
             "no route-less event link is stored in the LSP snapshot"
         );
         assert!(!got.is_empty(), "fixture must produce real edges");
@@ -1170,33 +1387,17 @@ mod tests {
             assert_eq!(a, b, "file {f}: same edge set");
         }
 
-        let mut e1: Vec<Edge> = s1.event_edges.iter().map(|ce| ce.edge.clone()).collect();
-        let mut e2: Vec<Edge> = s2.event_edges.iter().map(|ce| ce.edge.clone()).collect();
+        let mut e1: Vec<Edge> = s1.event_edges().map(|ce| ce.edge.clone()).collect();
+        let mut e2: Vec<Edge> = s2.event_edges().map(|ce| ce.edge.clone()).collect();
         e1.sort();
         e2.sort();
         assert_eq!(e1, e2, "same event-edge set");
 
-        let mut inc1: Vec<_> = s1
-            .incoming
-            .iter()
-            .map(|(k, v)| {
-                let mut v = v.clone();
-                v.sort_by(|a, b| (a.file.as_ref(), a.idx).cmp(&(b.file.as_ref(), b.idx)));
-                (k.clone(), v)
-            })
-            .collect();
-        let mut inc2: Vec<_> = s2
-            .incoming
-            .iter()
-            .map(|(k, v)| {
-                let mut v = v.clone();
-                v.sort_by(|a, b| (a.file.as_ref(), a.idx).cmp(&(b.file.as_ref(), b.idx)));
-                (k.clone(), v)
-            })
-            .collect();
-        inc1.sort_by(|a, b| a.0.cmp(&b.0));
-        inc2.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(inc1, inc2, "same incoming index (generation excluded)");
+        assert_eq!(
+            s1.all_incoming(),
+            s2.all_incoming(),
+            "same incoming index (generation excluded)"
+        );
     }
 
     // ── decl_at: name hit, body-fallback hit, and none ─────────────────────
@@ -1265,10 +1466,11 @@ mod tests {
             .expect("Beta.Process decl")
             .id
             .clone();
-        let incoming_process = snap
-            .incoming
-            .get(&beta_process)
-            .expect("Beta.Process must have an incoming caller");
+        let incoming_process: Vec<&EdgeRef> = snap.incoming(&beta_process).collect();
+        assert!(
+            !incoming_process.is_empty(),
+            "Beta.Process must have an incoming caller"
+        );
         assert!(
             incoming_process.iter().any(|r| &*r.file == "Alpha.al"),
             "Alpha.DoWork's cross-file call must be indexed as incoming to \
@@ -1290,10 +1492,11 @@ mod tests {
             .expect("Gamma.HandleAfterProcess decl")
             .id
             .clone();
-        let incoming_sub = snap
-            .incoming
-            .get(&gamma_sub)
-            .expect("the subscriber must have an incoming publisher edge");
+        let incoming_sub: Vec<&EdgeRef> = snap.incoming(&gamma_sub).collect();
+        assert!(
+            !incoming_sub.is_empty(),
+            "the subscriber must have an incoming publisher edge"
+        );
         assert!(
             incoming_sub.iter().any(|r| &*r.file == EVENT_EDGES_KEY),
             "the event edge must be indexed under the reserved event-edges \
@@ -1326,7 +1529,9 @@ mod tests {
             .id
             .clone();
         assert_eq!(
-            snap.publisher_fanout.get(&beta_on_after_process).copied(),
+            snap.ws_publisher_fanout
+                .get(&beta_on_after_process)
+                .copied(),
             Some(1),
             "a publisher with exactly one real subscriber must have \
              publisher_fanout == 1"
@@ -1342,11 +1547,13 @@ mod tests {
             .expect("Beta.Process decl")
             .id
             .clone();
+        assert_eq!(snap.publisher_fanout(&beta_on_after_process), 1);
         assert_eq!(
-            snap.publisher_fanout.get(&beta_process),
+            snap.ws_publisher_fanout.get(&beta_process),
             None,
             "an ordinary (non-publisher) routine must have no publisher_fanout entry"
         );
+        assert_eq!(snap.dep_events.publisher_fanout.get(&beta_process), None);
     }
 
     #[test]
@@ -1387,22 +1594,23 @@ mod tests {
             .id
             .clone();
         assert_eq!(
-            snap.publisher_fanout.get(&publisher),
+            snap.ws_publisher_fanout.get(&publisher),
             None,
             "a publisher with ZERO real subscribers must have no \
              publisher_fanout entry — edge presence alone is never fan-out"
         );
+        assert_eq!(snap.dep_events.publisher_fanout.get(&publisher), None);
         // Its route-less link is not stored at all, and the lens count and
         // the incoming index are unchanged (zero).
         assert!(
-            snap.event_edges.iter().all(|ce| ce.edge.from != publisher),
+            snap.event_edges().all(|ce| ce.edge.from != publisher),
             "a route-less event link must not be stored in the LSP snapshot"
         );
         assert_eq!(
             crate::lsp::lens::effective_incoming_count(&snap, &publisher),
             0
         );
-        assert!(!snap.incoming.contains_key(&publisher));
+        assert_eq!(snap.incoming(&publisher).count(), 0);
     }
 
     // ── build_incoming: one edge, 2 routes to the SAME target → 1 EdgeRef ──

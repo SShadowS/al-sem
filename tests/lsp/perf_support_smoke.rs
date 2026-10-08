@@ -143,18 +143,18 @@ fn indexes_with_expected_definitions_and_hub_fan_in() {
     // NOT the accidental zero that let the O(decls * event_edges) quadratic
     // in `compute_all` go undetected before this fix.
     assert_eq!(
-        snap.event_edges.len(),
+        snap.ws_event_edges.len(),
         file_count * perf_support::PUBLISHERS_PER_FILE,
         "PUBLISHERS_PER_FILE publisher declarations per file, unconditionally emitted"
     );
     assert_eq!(
-        snap.publisher_fanout.len(),
+        snap.ws_publisher_fanout.len(),
         file_count * perf_support::PUBLISHERS_PER_FILE,
         "every publisher has exactly one real subscriber, so every publisher \
          gets a publisher_fanout entry"
     );
     assert!(
-        snap.publisher_fanout.values().all(|&n| n == 1),
+        snap.ws_publisher_fanout.values().all(|&n| n == 1),
         "every publisher in this corpus has EXACTLY one real subscriber"
     );
 }

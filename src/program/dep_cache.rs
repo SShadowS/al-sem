@@ -99,6 +99,10 @@ pub struct DepNodes {
     /// that builds them). Keyed by this tier's AppRefs, so they are valid
     /// exactly where the tier itself is shared.
     pub lsp: OnceLock<Arc<DepLspTier>>,
+    /// The dependency-only event links of this tier (engine-switch S10.4),
+    /// set by the first snapshot that computes them. Separate from `lsp`: they
+    /// read no dependency text, so S10.1b's deferral does not wait for them.
+    pub lsp_events: OnceLock<Arc<crate::lsp::snapshot::DepEventLinks>>,
 }
 
 /// Dependency-derived LSP data, shared with [`DepNodes`].
@@ -786,18 +790,23 @@ mod tests {
             .map(|(f, e)| (f.clone(), sorted(e)))
             .collect();
         let incoming: BTreeMap<_, _> = s
-            .incoming
-            .iter()
-            .map(|(t, refs)| {
-                let mut o: Vec<_> = refs
-                    .iter()
+            .all_incoming()
+            .into_keys()
+            .map(|t| {
+                let mut o: Vec<_> = s
+                    .incoming(&t)
                     .map(|r| s.edge(r).obligation_id.clone())
                     .collect();
                 o.sort();
-                (t.clone(), o)
+                (t, o)
             })
             .collect();
-        let fanout: BTreeMap<_, _> = s.publisher_fanout.iter().collect();
+        let fanout: BTreeMap<_, _> = s
+            .ws_publisher_fanout
+            .keys()
+            .chain(s.dep_events.publisher_fanout.keys())
+            .map(|p| (p.clone(), s.publisher_fanout(p)))
+            .collect();
         let by_id: BTreeMap<_, _> = s
             .decl_by_id
             .iter()
@@ -807,7 +816,7 @@ mod tests {
         let dep_lines: BTreeMap<_, _> = s.dep_lines.iter().collect();
         format!(
             "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_lines:#?}",
-            sorted(&s.event_edges)
+            s.merged_event_edges()
         )
     }
 
@@ -816,21 +825,24 @@ mod tests {
     fn assert_non_trivial(s: &LspSnapshot) {
         assert!(!s.dep_meta.is_empty(), "precondition: dependency decls");
         assert!(!s.dep_lines.is_empty(), "precondition: dependency files");
-        assert!(!s.event_edges.is_empty(), "precondition: event edges");
         assert!(
-            s.event_edges.iter().any(|e| !e.edge.routes.is_empty()),
-            "precondition: the workspace subscriber is wired {:#?}",
-            s.event_edges.iter().map(|e| &e.edge).collect::<Vec<_>>()
+            s.event_edges().next().is_some(),
+            "precondition: event edges"
         );
         assert!(
-            !s.publisher_fanout.is_empty(),
+            s.ws_event_edges.iter().any(|e| !e.edge.routes.is_empty()),
+            "precondition: the workspace subscriber is wired {:#?}",
+            s.event_edges().map(|e| &e.edge).collect::<Vec<_>>()
+        );
+        assert!(
+            !s.ws_publisher_fanout.is_empty(),
             "precondition: publisher fan-out"
         );
         // The call must hit the dependency routine `Post` (declared only in
         // its embedded source, not in the symbols) and resolve from source,
         // not through the ABI or a builtin.
         assert!(
-            s.incoming.iter().any(|(t, refs)| {
+            s.ws_incoming.iter().any(|(t, refs)| {
                 t.object.app != AppRef(0)
                     && t.object.key == crate::program::node::ObjKey::Id(80) // "Sales-Post"
                     && t.name_lc == "post"
@@ -971,7 +983,7 @@ mod tests {
         }
         assert!(same_text > 0, "precondition: equal texts to share");
         let mut links = 0;
-        for e in b.event_edges.iter() {
+        for e in b.event_edges() {
             if let Some(r) = tier.routines.iter().find(|r| r.id == e.edge.from) {
                 assert!(SharedStr::ptr_eq(&r.id.name_lc, &e.edge.from.name_lc));
                 links += 1;
@@ -1050,8 +1062,7 @@ mod tests {
             .event_name
             .clone();
         let synth = a
-            .event_edges
-            .iter()
+            .event_edges()
             .find(|e| e.edge.from.name_lc == "onafterinsertevent")
             .expect("precondition: the platform publisher is linked");
         assert!(SharedStr::ptr_eq(&synth.edge.from.name_lc, &sub_event));
@@ -1064,6 +1075,82 @@ mod tests {
         let (seen, distinct, merged) = pool.counts();
         assert!(seen > distinct, "precondition: equal texts to share");
         assert_eq!(merged, 0, "a text is held in more than one allocation");
+    }
+
+    /// S10.4: a dependency publisher with a dependency subscriber AND a
+    /// workspace subscriber is split: the dependency route goes to the
+    /// tier's shared links (one `Arc` for every root), the workspace route to
+    /// the root's own. Both subscribers still see the publisher as an
+    /// incoming caller, its fan-out counts both, and every answer equals a
+    /// cache-less build's.
+    #[test]
+    fn dependency_event_links_are_shared_and_split_from_the_workspace_ones() {
+        use crate::program::resolve::edge::RouteTarget;
+        let fx = two_roots_one_alpackages();
+        let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
+        let symbols =
+            r#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#;
+        let dep_sub = "codeunit 81 \"DepSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Sales-Post\", 'OnAfterRun', '', false, false)]\n    local procedure HandleInDep()\n    begin\n    end;\n}\n";
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+            ("src/SalesPost.Codeunit.al", SALES_POST_SRC.as_bytes()),
+            ("src/DepSub.Codeunit.al", dep_sub.as_bytes()),
+        ]);
+        std::fs::write(
+            fx.alpackages.join("Microsoft_Base Application_28.4.app"),
+            app,
+        )
+        .unwrap();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(
+            Arc::ptr_eq(&a.dep_events, &b.dep_events),
+            "the roots share one dependency-link set"
+        );
+
+        let targets = |edges: &[crate::program::resolve::full::ClassifiedEdge]| -> Vec<String> {
+            edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "onafterrun")
+                .flat_map(|ce| &ce.edge.routes)
+                .filter_map(|r| match &r.target {
+                    RouteTarget::Routine(id) => Some(id.name_lc.to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(targets(&a.dep_events.edges), ["handleindep"]);
+        assert_eq!(targets(&a.ws_event_edges), ["handleafterrun"]);
+
+        let publisher = a
+            .dep_events
+            .edges
+            .iter()
+            .find(|ce| ce.edge.from.name_lc == "onafterrun")
+            .unwrap()
+            .edge
+            .from
+            .clone();
+        assert_eq!(a.publisher_fanout(&publisher), 2);
+        for sub in ["handleindep", "handleafterrun"] {
+            let id = a
+                .event_edges()
+                .flat_map(|ce| &ce.edge.routes)
+                .find_map(|r| match &r.target {
+                    RouteTarget::Routine(id) if id.name_lc == sub => Some(id.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                a.incoming(&id).any(|r| a.edge(r).edge.from == publisher),
+                "{sub} has the publisher as an incoming caller"
+            );
+        }
+
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_eq!(answers(&b), answers(&solo));
     }
 
     /// A source remembered at one stamp is never served, with or without its

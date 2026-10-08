@@ -125,7 +125,8 @@ use rayon::prelude::*;
 use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::snapshot::{
     DeclEntry, LspSnapshot, ParsedFileEntry, build_decl_by_id, build_decl_multiplicity,
-    build_incoming, edge_targets, push_edge_targets, recompute_file,
+    build_incoming, debug_assert_same_dep_links, edge_targets, push_edge_targets, recompute_file,
+    split_event_links,
 };
 use crate::program::assemble_program_graph;
 use crate::program::dep_cache::DepCache;
@@ -133,7 +134,7 @@ use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::emit_event_flow_edges;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, app_object_map};
+use crate::program::resolve::full::{ClassifiedEdge, app_object_map};
 use crate::program::resolve::index::ResolveIndex;
 use crate::snapshot::{DependencySource, ParsedFile, ParsedUnit, Provenance, TrustTier};
 
@@ -581,20 +582,14 @@ impl Updater {
             );
         }
 
-        let raw_event_edges = emit_event_flow_edges(&new_graph, &surface);
-        // Links without routes have no LSP reader (no incoming ref, no
-        // fan-out, no outgoing item); the program report keeps them
-        // (spec §2, §6 2b). Same filter as `LspSnapshot::from_context`.
-        let event_edges = Arc::new(
-            raw_event_edges
-                .into_iter()
-                .filter(|edge| !edge.routes.is_empty())
-                .map(|edge| ClassifiedEdge {
-                    obligation_id: ObligationId::Publisher(edge.from.clone()),
-                    edge,
-                })
-                .collect::<Vec<ClassifiedEdge>>(),
-        );
+        // Same split as `LspSnapshot::from_context`: the dependency-only
+        // links cannot change at rung 2 (the dependency layer is reused), so
+        // the shared part is forwarded and only the workspace part kept.
+        let (ws_links, dep_links) =
+            split_event_links(emit_event_flow_edges(&new_graph, &surface), primary_app_ref);
+        debug_assert_same_dep_links(&dep_links, &cur.dep_events);
+        drop(dep_links);
+        let event_edges = Arc::new(ws_links);
 
         let decl_by_id = build_decl_by_id(&decls_by_file);
         self.decl_multiplicity = Some(build_decl_multiplicity(&decls_by_file));
@@ -608,9 +603,10 @@ impl Updater {
             snap: Arc::clone(&cur.snap),
             parsed: parsed_files,
             edges_by_file,
-            event_edges,
-            incoming,
-            publisher_fanout,
+            ws_event_edges: event_edges,
+            dep_events: Arc::clone(&cur.dep_events),
+            ws_incoming: incoming,
+            ws_publisher_fanout: publisher_fanout,
             decls_by_file,
             decl_by_id,
             // Dependency source cannot change at rung 2 (it reuses the
@@ -804,7 +800,7 @@ fn apply_rung1_core(
     // module's amended H-10 doc (`src/lsp/snapshot.rs`'s module doc) for the
     // licensing parity gate (`tests/lsp_incremental_parity.rs`).
     let mut decl_by_id = cur.decl_by_id.clone();
-    let mut incoming = cur.incoming.clone();
+    let mut incoming = cur.ws_incoming.clone();
     let mult = decl_multiplicity.get_or_insert_with(|| build_decl_multiplicity(&cur.decls_by_file));
 
     let mut touched_files: Vec<String> = Vec::new();
@@ -926,14 +922,14 @@ fn apply_rung1_core(
         pending.insert(vp, pf);
     }
 
-    let event_edges = Arc::clone(&cur.event_edges);
+    let event_edges = Arc::clone(&cur.ws_event_edges);
     // `event_edges` is unchanged at rung 1 — rung 1 touches only workspace
     // Call/Run/ImplicitTrigger edges — so `publisher_fanout` (derived ONLY
     // from `event_edges`, see its own doc) is byte-identical to `cur`'s;
     // Arc-forwarded rather than recomputed (Tier-2 latency wave, Task 1 —
     // was recomputed via a full `build_incoming` pass every rung-1 call
     // before this task; see updater.rs's own history in the CHANGELOG).
-    let publisher_fanout = Arc::clone(&cur.publisher_fanout);
+    let publisher_fanout = Arc::clone(&cur.ws_publisher_fanout);
 
     let mut affected_ids: Vec<RoutineNodeId> = affected_ids.into_iter().collect();
     affected_ids.sort();
@@ -950,9 +946,10 @@ fn apply_rung1_core(
         snap: Arc::clone(&cur.snap),
         parsed: parsed_files,
         edges_by_file,
-        event_edges,
-        incoming,
-        publisher_fanout,
+        ws_event_edges: event_edges,
+        dep_events: Arc::clone(&cur.dep_events),
+        ws_incoming: incoming,
+        ws_publisher_fanout: publisher_fanout,
         decls_by_file,
         decl_by_id,
         // Rung 1 touches ONLY workspace files — dependency source is
@@ -1426,11 +1423,7 @@ mod tests {
             .iter()
             .find(|d| d.name.eq_ignore_ascii_case("DoIt"))
             .expect("DoIt declared");
-        let pre_count = base
-            .incoming
-            .get(&target_decl.id)
-            .map(Vec::len)
-            .unwrap_or(0);
+        let pre_count = base.incoming_count(&target_decl.id);
         assert_eq!(
             pre_count, 2,
             "sanity: DoIt should have exactly 2 incoming callers pre-edit \
@@ -1461,11 +1454,7 @@ mod tests {
             .iter()
             .find(|d| d.name.eq_ignore_ascii_case("DoIt"))
             .expect("DoIt still declared");
-        let post_count = after
-            .incoming
-            .get(&target_decl_after.id)
-            .map(Vec::len)
-            .unwrap_or(0);
+        let post_count = after.incoming_count(&target_decl_after.id);
         assert_eq!(
             post_count, pre_count,
             "a case-mismatched no-op save must not duplicate incoming edges \
@@ -1535,10 +1524,11 @@ mod tests {
             .expect("Beta.Process decl")
             .id
             .clone();
-        let incoming = new_snap
-            .incoming
-            .get(&beta_process)
-            .expect("Beta.Process must have incoming callers");
+        let incoming: Vec<_> = new_snap.incoming(&beta_process).collect();
+        assert!(
+            !incoming.is_empty(),
+            "Beta.Process must have incoming callers"
+        );
         let from_alpha = incoming.iter().filter(|r| &*r.file == "Alpha.al").count();
         assert_eq!(
             from_alpha, 2,
@@ -1656,10 +1646,11 @@ mod tests {
             .expect("Beta.Process decl")
             .id
             .clone();
-        let incoming_before = base
-            .incoming
-            .get(&beta_process)
-            .expect("Beta.Process must have incoming callers before delete");
+        let incoming_before: Vec<_> = base.incoming(&beta_process).collect();
+        assert!(
+            !incoming_before.is_empty(),
+            "Beta.Process must have incoming callers before delete"
+        );
         assert!(
             incoming_before.iter().any(|r| &*r.file == "Gamma.al"),
             "baseline: Gamma.al must be one of Beta.Process's incoming callers"
@@ -1681,10 +1672,11 @@ mod tests {
         assert!(!new_snap.decls_by_file.contains_key("Gamma.al"));
         assert!(!new_snap.parsed.contains_key("Gamma.al"));
 
-        let incoming_after = new_snap
-            .incoming
-            .get(&beta_process)
-            .expect("Beta.Process must still have Alpha.al as an incoming caller");
+        let incoming_after: Vec<_> = new_snap.incoming(&beta_process).collect();
+        assert!(
+            !incoming_after.is_empty(),
+            "Beta.Process must still have Alpha.al as an incoming caller"
+        );
         assert!(
             !incoming_after.iter().any(|r| &*r.file == "Gamma.al"),
             "Gamma.al's incoming entry must be gone"
