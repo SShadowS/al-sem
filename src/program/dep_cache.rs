@@ -1003,6 +1003,10 @@ mod tests {
                 b"codeunit 81 \"Extra\" { procedure Run() begin end; }",
             ),
             ("src/T.Table.al", table.as_bytes()),
+            (
+                "src/S.Codeunit.al",
+                b"codeunit 83 \"S\"\n{\n    [EventSubscriber(ObjectType::Table, Database::\"T\", 'OnAfterInsertEvent', '', false, false)]\n    local procedure H(var Rec: Record \"T\")\n    begin\n    end;\n}\n",
+            ),
         ]);
         std::fs::write(
             fx.alpackages.join("Microsoft_Base Application_28.4.app"),
@@ -1036,6 +1040,21 @@ mod tests {
         assert_ne!(meta_runs[0].virtual_path, meta_runs[1].virtual_path);
         assert!(SharedStr::ptr_eq(&meta_runs[0].name, &meta_runs[1].name));
         assert!(SharedStr::ptr_eq(&meta_runs[0].name, &runs[0].name));
+        // A synthesized platform-event publisher id (built per root) holds the
+        // subscriber's own text, not a copy.
+        let sub_event = routines
+            .iter()
+            .flat_map(|r| &r.event_subscribers)
+            .find(|s| s.event_name == "onafterinsertevent")
+            .expect("precondition: the dependency subscribes to a platform event")
+            .event_name
+            .clone();
+        let synth = a
+            .event_edges
+            .iter()
+            .find(|e| e.edge.from.name_lc == "onafterinsertevent")
+            .expect("precondition: the platform publisher is linked");
+        assert!(SharedStr::ptr_eq(&synth.edge.from.name_lc, &sub_event));
         let mut metas: Vec<_> = tier.dep_meta.values().cloned().collect();
         let mut pool = StrPool::default();
         objects.share_strings(&mut pool);

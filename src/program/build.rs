@@ -557,7 +557,8 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             };
             let synth_id = RoutineNodeId {
                 object: pub_obj.id.clone(),
-                name_lc: args.event_name.as_str().into(),
+                // The subscriber's own (pooled) text: a clone, not a copy.
+                name_lc: args.event_name.clone(),
                 enclosing_member_lc: None,
                 params_count: PLATFORM_EVENT_PUBLISHER_ARITY,
                 sig_fp: 0,
