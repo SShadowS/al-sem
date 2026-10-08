@@ -622,25 +622,22 @@ mod tests {
         assert!(c.len() > a.len(), "the new file's source is the new one");
     }
 
-    /// Dropping the last root frees the dependency's texts: the cache keeps
-    /// no `Weak` into a text (an `Arc<str>`'s bytes share the allocation with
-    /// its counts, so such a `Weak` would pin the whole text).
+    /// The LSP keeps no dependency text (S10.1), stated directly: a snapshot
+    /// built first on the same cache holds the extracted texts, and the LSP
+    /// root built next shares those very allocations (the cache serves a list
+    /// some root still holds). Once that first holder is dropped the texts are
+    /// gone, while the LSP root is still alive: neither its tier
+    /// (`dep_lines`), nor its retained snapshot, nor the cache (no `Weak` into
+    /// a text: an `Arc<str>`'s bytes share the allocation with its counts, so
+    /// such a `Weak` would pin the whole text) holds one.
     #[test]
-    fn dependency_texts_are_freed_with_their_last_root() {
+    fn the_lsp_keeps_no_dependency_text() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
+        let src = dep_source(&cache, &fx.root_a);
+        let text = Arc::downgrade(&src[0].text);
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let text = a
-            .snap
-            .apps
-            .iter()
-            .find(|u| u.id.guid == DEP_GUID)
-            .and_then(|u| u.source.as_ref())
-            .and_then(|s| s.files.first())
-            .map(|f| Arc::downgrade(&f.text))
-            .expect("precondition: the dependency ships embedded source");
-        let live = text.upgrade().expect("held by the snapshot");
-        drop(live);
+        assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         // Checked while the text is alive: `Weak::weak_count` reads 0 once
         // the strong count is 0, whoever still holds a `Weak`.
         assert_eq!(
@@ -648,10 +645,12 @@ mod tests {
             1,
             "the cache holds no Weak into the text (only this test does)"
         );
+        drop(src);
+        assert!(
+            text.upgrade().is_none(),
+            "the live LSP root holds no dependency text"
+        );
         drop(a);
-        // No dependency tree outlives the build (LIGHT drops each one during
-        // the parse), so the last strong holder goes with `a`.
-        assert!(text.upgrade().is_none(), "no strong holder is left");
     }
 
     #[test]

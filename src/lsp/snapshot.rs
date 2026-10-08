@@ -245,9 +245,12 @@ pub struct LspSnapshot {
     pub graph: Arc<ProgramGraph>,
     pub dep_layer: Arc<DepLayer>,
     /// Identity/roots for rebuilds. `Arc`-shared for the same reason as
-    /// `graph` above: `AppSetSnapshot` carries every app's full source TEXT
+    /// `graph` above: `AppSetSnapshot` carries the workspace's source TEXT
     /// (`AppUnit::source`), so a plain `.clone()` on every incremental swap
-    /// would copy megabytes of text neither rung 1 nor rung 2 ever touches.
+    /// would copy text neither rung 1 nor rung 2 ever touches. Dependency
+    /// apps keep their `source` (tier, content hash) but NO files: the LSP
+    /// keeps no dependency text once [`Self::dep_lines`] is built (engine-
+    /// switch S10.1; see [`without_dependency_text`]).
     pub snap: Arc<AppSetSnapshot>,
     /// `virtual_path` → file+text+`DefSurface`, workspace files ONLY (mirrors
     /// `edges_by_file`'s workspace scoping — a dependency's own source is
@@ -611,7 +614,7 @@ impl LspSnapshot {
             generation: 0,
             graph: Arc::new(graph),
             dep_layer: Arc::new(dep_layer),
-            snap: Arc::new(snap),
+            snap: Arc::new(without_dependency_text(snap)),
             parsed: parsed_files,
             edges_by_file,
             event_edges,
@@ -935,6 +938,23 @@ pub fn build_decl_multiplicity(
         }
     }
     mult
+}
+
+/// `snap` with every dependency app's source files dropped, for
+/// [`LspSnapshot::snap`]. `source` stays `Some` with its tier and content
+/// hash, so "this app ships source" keeps its meaning; only the files go. No
+/// LSP reader needs them after the build: positions come from
+/// [`LspSnapshot::dep_lines`], `dependencyDocumentSymbol` and `al-preview://`
+/// read the ABI, rungs 1 and 2 reuse the dependency tier, and rung 3 reloads
+/// from disk.
+fn without_dependency_text(mut snap: AppSetSnapshot) -> AppSetSnapshot {
+    let workspace = snap.workspace_app.clone();
+    for unit in snap.apps.iter_mut().filter(|u| u.id != workspace) {
+        if let Some(source) = unit.source.as_mut() {
+            source.files = Arc::new(Vec::new());
+        }
+    }
+    snap
 }
 
 /// Build [`LspSnapshot::dep_lines`]: a [`LineIndex`] of every dependency file
