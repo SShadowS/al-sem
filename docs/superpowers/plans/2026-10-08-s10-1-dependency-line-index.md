@@ -82,6 +82,34 @@ the text is still on disk and in `DepCache`'s source path for any build that nee
   build time and peak for roots 2-7 and a rung-3 rebuild, before and after; measurement-
   auditor over the numbers; CHANGELOG; spec §8 status line.
 
+## Result (T5, 2026-10-08; `tools/census-probe/runs-s10-1/` vs `runs-s10-base/`)
+
+Counted heap, one run per cell:
+
+| Cell | before | after | change |
+|---|---:|---:|---:|
+| CG `embedded`, root 1 retained | 251.2 | 152.2 | −99.0 |
+| CG `embedded`, 7 roots live | 292.9 | 193.8 | −99.1 |
+| CG `embedded`, 7 roots idle with updaters | 327.5 | 228.4 | −99.1 |
+| CDO `embedded`, retained | 381.4 | 275.7 | −105.7 |
+| CDO `embedded`, idle with updater | 393.7 | 287.9 | −105.8 |
+| CG and CDO `symbols` (no dependency text: the control) | — | — | ±0.1 |
+| CG root 1 build peak | 297.2 | 297.2 | 0 |
+| CDO build peak | 408.1 | 410.5 | +2.4 |
+| CG roots 2-7 build peak (relative to the live heap before each) | 24.8-25.2 | 134.2-134.6 | +109.4 |
+| CG roots 2-7 build time (one run, noise not measured) | 0.9-1.0 s | 1.2-1.3 s | +0.3 s |
+
+The dependency text was 108.33 MiB; the line indexes therefore cost about 9.3 MiB (by
+subtraction, not measured on their own).
+
+**The cost, as predicted in Design item 5:** with no root holding the extracted text,
+`DepCache::source` cannot share it, so each later root (and each rung-3 rebuild) extracts it
+again while it builds and drops it after: roots 2-7 peak 109 MiB higher and take about 0.3 s
+longer. The process heap peak therefore moves from root 1's build (297.2 MiB) to root 7's:
+about 186.6 + 134.6 ≈ 321 MiB by arithmetic (live heap before root 7 plus its build peak), not
+measured. Removing it needs the build to skip source extraction when the dependency tier is
+already live with its line index (S10.1b, owner's call).
+
 ## Held throughout
 
 - Every LSP position is byte-identical: the handler tests, `lsp_incremental_parity`, and T2's

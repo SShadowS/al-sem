@@ -430,6 +430,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The LSP server keeps no dependency source text** (engine-switch S10.1, compact-graph
+  spec §8 item 5, built first by the owner's biggest-first decision). It used the text only to
+  turn a dependency declaration's byte offsets into editor columns, so each dependency file
+  now has a text-free `LineIndex` (each line's length plus its non-ASCII characters; it
+  answers `LineTable::col_out` exactly, both encodings). The shared tier holds `dep_lines`
+  instead of `dep_texts`, and the retained snapshot drops dependency `SourceRoot.files`
+  (`source` stays `Some`). Counted heap (`tools/census-probe/runs-s10-1/`): CG, 7 roots idle
+  with updaters, 327.5 → 228.4 MiB; CDO 393.7 → 287.9 MiB; `symbols` mode unchanged. Cost:
+  later roots and rung-3 rebuilds re-extract the text while they build (CG roots 2-7: build
+  peak +109 MiB, +0.3 s each), so the process heap peak moves from root 1 (297 MiB) to about
+  321 MiB at root 7 (arithmetic, not measured). Every LSP position is unchanged: pinned by
+  `dependency_decl_columns_equal_the_line_table_over_the_text` and
+  `line_index_answers_col_out_exactly_as_line_table`; `the_lsp_keeps_no_dependency_text`
+  pins the drop (each with a discrimination proof).
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

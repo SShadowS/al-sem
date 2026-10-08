@@ -163,13 +163,13 @@ fn drop_root_by_field(r: Root) {
         publisher_fanout,
         decls_by_file,
         decl_by_id,
-        dep_texts,
+        dep_lines,
         dep_meta,
         workspace_root,
         ..
     } = snap;
     step("snapshot.dep_meta (Arc clone)", dep_meta);
-    step("snapshot.dep_texts (Arc clone)", dep_texts);
+    step("snapshot.dep_lines (Arc clone)", dep_lines);
     step("decl_by_id", decl_by_id);
     step("decls_by_file", decls_by_file);
     step("incoming", incoming);
@@ -242,7 +242,7 @@ fn drop_root_by_field(r: Root) {
                     step("SHARED dep tier: bodies (Keep only)", bodies);
                     match lsp.into_inner().map(Arc::try_unwrap) {
                         Some(Ok(t)) => {
-                            step("SHARED dep tier: dep_texts", t.dep_texts);
+                            step("SHARED dep tier: dep_lines", t.dep_lines);
                         }
                         Some(Err(t)) => {
                             step("SHARED dep tier: lsp (held elsewhere)", t);
@@ -555,11 +555,15 @@ impl<'a> W<'a> {
                 self.meta("dep_meta", k, m);
             }
         }
-        if self.first(Arc::as_ptr(&l.dep_texts)) {
-            self.elems::<((u32, String), Arc<str>)>("dep_texts", l.dep_texts.len());
-            for ((_, vp), t) in l.dep_texts.iter() {
-                self.s(("dep_texts", "key.virtual_path"), vp);
-                self.text("dep_texts", t);
+        // S10.1: a text-free line index per dependency file (its own heap is
+        // measured by the drop steps, not walked here).
+        if self.first(Arc::as_ptr(&l.dep_lines)) {
+            self.elems::<((u32, String), al_sem::lsp::encoding::LineIndex)>(
+                "dep_lines",
+                l.dep_lines.len(),
+            );
+            for ((_, vp), _) in l.dep_lines.iter() {
+                self.s(("dep_lines", "key.virtual_path"), vp);
             }
         }
         for (k, v) in &l.edges_by_file {
@@ -1320,7 +1324,7 @@ fn main() {
             a2 - a1
         );
         println!(
-            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {}, dep_texts {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
+            "  shape: objects {} (shared {} own {}), routines {} (shared {} own {}), dep_meta {}, dep_lines {}, ws files {}, edges_by_file edges {}, event_edges {}, incoming keys {}, decl_by_id {}",
             snap.graph.objects.len(),
             snap.graph.objects.shared().len(),
             snap.graph.objects.own().len(),
@@ -1328,7 +1332,7 @@ fn main() {
             snap.graph.routines.shared().len(),
             snap.graph.routines.own().len(),
             snap.dep_meta.len(),
-            snap.dep_texts.len(),
+            snap.dep_lines.len(),
             snap.parsed.len(),
             snap.edges_by_file.values().map(|v| v.len()).sum::<usize>(),
             snap.event_edges.len(),
@@ -1343,10 +1347,10 @@ fn main() {
         );
         if let Some(r0) = built.first() {
             println!(
-                "  sharing vs root 1: dep_nodes ptr_eq {} | dep_meta ptr_eq {} | dep_texts ptr_eq {} | objects.shared ptr_eq {}",
+                "  sharing vs root 1: dep_nodes ptr_eq {} | dep_meta ptr_eq {} | dep_lines ptr_eq {} | objects.shared ptr_eq {}",
                 Arc::ptr_eq(&r0.snap.dep_layer.dep_nodes, &snap.dep_layer.dep_nodes),
                 Arc::ptr_eq(&r0.snap.dep_meta, &snap.dep_meta),
-                Arc::ptr_eq(&r0.snap.dep_texts, &snap.dep_texts),
+                Arc::ptr_eq(&r0.snap.dep_lines, &snap.dep_lines),
                 Arc::ptr_eq(snap.graph.objects.shared(), r0.snap.graph.objects.shared()),
             );
         }
