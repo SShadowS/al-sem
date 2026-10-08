@@ -249,26 +249,26 @@ fn sha256_hex(s: &str) -> String {
 /// ```
 #[test]
 fn cdo_whole_program_v2_matches_frozen_digest() {
-    use al_sem::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-    use al_sem::engine::l3::event_graph::build_event_graph;
-    use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+    use al_sem::engine::l3::call_resolver::calls_for;
+    use al_sem::engine::l3::event_graph::events_for;
     use al_sem::engine::l3::symbol_table::SymbolTable;
     use al_sem::engine::l4::combined_graph::build_combined_graph;
     use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
     let Some(ws_path) = cdo_ws_or_enforce() else {
         return;
     };
 
-    let resolved = assemble_and_resolve_workspace_default(&ws_path)
-        .expect("assemble_and_resolve_workspace_default must succeed on CDO_WS");
+    // The production model and its program-engine calls and events (engine-
+    // switch S9.5d; until then L3's own `resolve_calls`/`build_event_graph`).
+    let resolved = assemble_and_resolve_workspace_with_program_calls(&ws_path)
+        .expect("the program-backed model must build on CDO_WS");
     let ws = &resolved.workspace;
 
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
-    let event_graph = build_event_graph(&ws.routines, &symbols);
+    let calls = calls_for(&resolved, &symbols);
+    let event_graph = events_for(&resolved, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -1030,30 +1030,30 @@ mod reverse_index_differential {
 fn cdo_reverse_index_matches_slow_oracle() {
     use std::collections::BTreeMap;
 
-    use al_sem::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-    use al_sem::engine::l3::event_graph::build_event_graph;
-    use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+    use al_sem::engine::l3::call_resolver::calls_for;
+    use al_sem::engine::l3::event_graph::events_for;
     use al_sem::engine::l3::symbol_table::SymbolTable;
     use al_sem::engine::l4::combined_graph::build_combined_graph;
     use al_sem::engine::l4::reverse_index::ReverseEffectIndex;
     use al_sem::engine::l4::routine_interner::RoutineIx;
     use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
     use al_sem::engine::l4::summary_runner::compute_summaries_v2_bundle_with_leaves;
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
     use reverse_index_differential as diff;
 
     let Some(ws_path) = cdo_ws_or_enforce() else {
         return;
     };
 
-    let resolved = assemble_and_resolve_workspace_default(&ws_path)
-        .expect("assemble_and_resolve_workspace_default must succeed on CDO_WS");
+    // The production model and its program-engine calls and events (engine-
+    // switch S9.5d; until then L3's own `resolve_calls`/`build_event_graph`).
+    let resolved = assemble_and_resolve_workspace_with_program_calls(&ws_path)
+        .expect("the program-backed model must build on CDO_WS");
     let ws = &resolved.workspace;
 
     let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-    let no_deps: Vec<DeclaredDependency> = Vec::new();
-    let no_fetched: Vec<String> = Vec::new();
-    let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
-    let event_graph = build_event_graph(&ws.routines, &symbols);
+    let calls = calls_for(&resolved, &symbols);
+    let event_graph = events_for(&resolved, &symbols);
     let graph = build_combined_graph(ws, &calls, &event_graph);
 
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();

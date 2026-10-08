@@ -496,8 +496,8 @@ mod release_checks {
     /// L4 db-effect gates below solve over — assembled by the SAME public
     /// functions in the SAME order as `build_detector_context`'s CORE_SUMMARIES
     /// path (its own SCC + field-index construction, in that order):
-    /// symbol table -> `resolve_calls` (no deps, no fetched apps —
-    /// matching the source-only detector-context path) -> event graph ->
+    /// the production model -> symbol table -> `calls_for` (the program
+    /// engine's precomputed calls) -> `events_for` ->
     /// combined graph -> a Tarjan SCC over `graph.edges_by_from` -> the field
     /// index. Mirrors `tests/l4_summary_differential.rs`'s
     /// `cdo_whole_program_v2_parity` assembly, just over a synthetic
@@ -519,26 +519,25 @@ mod release_checks {
 
     impl L4Substrate {
         fn assemble(workspace: &Path) -> Self {
-            use al_sem::engine::l3::call_resolver::{DeclaredDependency, resolve_calls};
-            use al_sem::engine::l3::event_graph::build_event_graph;
-            use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
+            use al_sem::engine::l3::call_resolver::calls_for;
+            use al_sem::engine::l3::event_graph::events_for;
             use al_sem::engine::l3::symbol_table::SymbolTable;
             use al_sem::engine::l4::combined_graph::build_combined_graph;
             use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
             use al_sem::engine::l4::summary_runner::FieldIndex;
+            use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
             use std::collections::HashMap;
 
-            let resolved = assemble_and_resolve_workspace_default(workspace).expect(
-                "assemble_and_resolve_workspace_default must succeed on a perf_support corpus",
-            );
+            // The production model and its program-engine calls and events
+            // (engine-switch S9.5d; until then L3's own resolver).
+            let resolved = assemble_and_resolve_workspace_with_program_calls(workspace)
+                .expect("the program-backed model must build on a perf_support corpus");
             let (graph, scc, calls, field_index) = {
                 let ws = &resolved.workspace;
                 let symbols = SymbolTable::build(&ws.objects, &ws.tables, &ws.routines);
-                let no_deps: Vec<DeclaredDependency> = Vec::new();
-                let no_fetched: Vec<String> = Vec::new();
-                let calls = resolve_calls(ws, &symbols, &no_deps, &no_fetched);
+                let calls = calls_for(&resolved, &symbols).into_owned();
 
-                let event_graph = build_event_graph(&ws.routines, &symbols);
+                let event_graph = events_for(&resolved, &symbols);
                 let graph = build_combined_graph(ws, &calls, &event_graph);
 
                 let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();

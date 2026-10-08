@@ -422,6 +422,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The L4 summary differential and `perf_bounds` solve over the production
+  model** (engine-switch S9.5d). The two CDO tests of `l4_summary_differential`
+  and `perf_bounds`' L4 substrate read the program engine's calls and events
+  (`calls_for` / `events_for`) instead of L3's `resolve_calls` /
+  `build_event_graph`. The two CDO digests are re-frozen (5,479 routines; the
+  reverse index over 66 tables is checked against its slow oracle in the same
+  run before its digest is minted). The 19 synthetic fixture parities do not
+  involve L3 and are unchanged.
+
 - **The r3a1/2/3 differentials and oracles build the production model**
   (engine-switch S9.5c; `r3a2_branch_aware` too). 11 goldens over 4 fixtures
   move, each traced to its call-graph change (receipt): a call to a `local`
