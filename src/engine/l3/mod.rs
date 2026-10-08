@@ -14,7 +14,9 @@
 // The detector model moved to `program::model` in engine-switch S2b.2. These
 // aliases keep the old `engine::l3::…` paths compiling; they and every such path
 // are removed in S9.
+pub use crate::program::model::event_param_temp;
 pub use crate::program::model::extension_fields;
+pub use crate::program::model::program_calls;
 pub use crate::program::model::record_types;
 pub use crate::program::model::symbol_table;
 pub use crate::program::model::taxonomy;
@@ -27,11 +29,9 @@ pub mod call_graph_projection;
 pub mod call_resolver;
 pub mod coverage;
 pub mod event_graph;
-pub mod event_param_temp;
 pub mod implicit_edges;
 pub mod l3_mint;
 pub mod member_builtins;
-pub mod program_calls;
 pub mod receiver;
 pub mod receiver_type;
 pub mod resolution_class;

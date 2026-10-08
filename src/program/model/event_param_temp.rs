@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::l3::l3_workspace::{L3Resolved, L3Routine};
+use super::workspace::{L3Resolved, L3Routine};
 use crate::program::body::features::{PCallee, PTempState};
 
 fn unq(s: &str) -> &str {

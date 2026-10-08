@@ -182,7 +182,7 @@ Driven via `aldump --program-call-graph-stats <workspace>` (the north-star metri
 or consumed by `src/engine/gate` (the `analyze` CLI).
 **`alsem analyze`'s detectors (`src/engine/l4`/`l5`) read the program engine's call
 resolution** (B3 Phase A, `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md`
-§7): `src/engine/l3/program_calls.rs` (`attach_program_calls`) converts the resolved
+§7): `src/program/model/program_calls.rs` (`attach_program_calls`; in `engine/l3` until S9.4) converts the resolved
 edges into L3's call shape and sets `L3Resolved.precomputed_calls`, and since
 engine-switch S4 also the event graph (`L3Resolved.precomputed_events`, from the program
 engine's subscription inventory, `program::model::events`). Consumers read them through

@@ -225,6 +225,25 @@ pub struct ProgramEvents {
     pub census: EventCensus,
 }
 
+/// Collect the set of internal EventIds whose publisher routine carries an
+/// `Isolated` event attribute (`EventSymbol.isolated === true`). Used by the
+/// R4-F ordering engine (Rule 5 §0.5) to promote isolated event-dispatch links
+/// to barriers. EventId form matches the witness hop's `event_id`
+/// (`${publisherObjectId}/event/${eventName_lc}`).
+pub fn isolated_event_ids(routines: &[L3Routine]) -> std::collections::HashSet<String> {
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for routine in routines {
+        if routine.kind != "event-publisher" {
+            continue;
+        }
+        let symbol = build_event_symbol(routine);
+        if symbol.isolated == Some(true) {
+            ids.insert(symbol.id);
+        }
+    }
+    ids
+}
+
 /// Build the detector event graph from the program engine's subscription
 /// inventory (`SubscriberIndex::subscriptions`) for the model `ws`.
 ///

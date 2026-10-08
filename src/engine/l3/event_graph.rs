@@ -36,6 +36,8 @@ use crate::program::model::events::{build_event_symbol, encode_event_id};
 // The internal event-graph model (NOT the serde projection shape) moved to
 // `program::model::events` in engine-switch S4.2a.
 pub use crate::program::model::events::{EventEdge, EventGraph, EventSymbol, Evidence};
+// `isolated_event_ids` moved there too in engine-switch S9.4.
+pub use crate::program::model::events::isolated_event_ids;
 
 // ---------------------------------------------------------------------------
 // Attribute helper (port of parseSubscriberAttribute).
@@ -83,25 +85,6 @@ fn encode_object_id(app_guid: &str, object_type: &str, object_number: i64) -> St
 /// subscriber routines (open-world: every parseable subscriber → an edge, never a
 /// silent gap). Iterates `routines` once for publishers, once for subscribers; Vecs
 /// in iteration order, maps for lookup/dedup only.
-/// Collect the set of internal EventIds whose publisher routine carries an
-/// `Isolated` event attribute (`EventSymbol.isolated === true`). Used by the
-/// R4-F ordering engine (Rule 5 §0.5) to promote isolated event-dispatch links
-/// to barriers. EventId form matches the witness hop's `event_id`
-/// (`${publisherObjectId}/event/${eventName_lc}`).
-pub fn isolated_event_ids(routines: &[L3Routine]) -> std::collections::HashSet<String> {
-    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for routine in routines {
-        if routine.kind != "event-publisher" {
-            continue;
-        }
-        let symbol = build_event_symbol(routine);
-        if symbol.isolated == Some(true) {
-            ids.insert(symbol.id);
-        }
-    }
-    ids
-}
-
 pub fn build_event_graph(routines: &[L3Routine], symbols: &SymbolTable) -> EventGraph {
     let mut events: Vec<EventSymbol> = Vec::new();
     let mut event_by_id: HashMap<String, usize> = HashMap::new();

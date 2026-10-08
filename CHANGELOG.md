@@ -374,6 +374,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The program-call adapter leaves `engine/l3`** (engine-switch S9.4, a pure
+  move). `program_calls` and `event_param_temp` are now under `program::model`,
+  with the binding helpers (in `calls`) and `isolated_event_ids` (in `events`).
+  The old `engine::l3` paths re-export them until S9.7. `calls_for`,
+  `events_for` and coverage stay in L3 until S9.6: their fallback is L3's own
+  resolver, and the program engine must never import L3. The adapter tests,
+  which compare with that resolver, live in
+  `engine/l3/program_calls_adapter_tests.rs` for the same reason.
+
 - **The r4/r4f test helper builds the production model** (engine-switch S9.3).
   `assemble_and_resolve_workspace_with_program_calls` built L3's disk model and
   attached the program calls to it; it now calls

@@ -118,6 +118,17 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
 - **S9.4 Move the keepers out of `engine/l3`** (pure moves): the adapter
   (`program_calls`), `event_param_temp`, binding helpers, `coverage` (minus
   `project_coverage_cross_app`), `calls_for`/`events_for`/`isolated_event_ids`.
+  - **Done (2026-10-08), partly by design.** Moved to `program::model`:
+    `program_calls`, `event_param_temp`, the binding helpers and
+    `object_run_dispatch_kind` (into `calls`), `isolated_event_ids` (into `events`);
+    the old `engine::l3` paths re-export them until S9.7. **Not moved:**
+    `calls_for`, `events_for` and `coverage`. Their `None` fallback is L3's own
+    `resolve_calls`/`build_event_graph`, so in `program/` they would break the S1
+    guard (`program_has_no_legacy_engine_imports`: the program engine never
+    imports L3). They move in S9.6, when `precomputed_calls/_events` become
+    mandatory and the fallback goes. Same reason: the adapter tests compare with
+    `resolve_calls`, so their file is `engine/l3/program_calls_adapter_tests.rs`
+    (a `#[path]` child module of `program_calls`); S9.6 reworks or deletes them.
 - **S9.5 Switch every test that uses L3 only as a model builder**, family by family,
   each with a golden triage: gap, temp_state, src unit tests, cli_b_*, cli_a_stats,
   d1_downgraded, cli_p1, r3a1/2/3 (goldens move), l4_summary_differential (re-freeze),
