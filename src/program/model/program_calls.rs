@@ -722,7 +722,8 @@ pub fn assemble_and_resolve_workspace_program(
 /// that `app.json`, and no `roots.config.json` is read.
 ///
 /// # Panics
-/// On an absolute or `..` path, an I/O failure, or a failed build: test input.
+/// On an absolute or `..` path, a name not ending in `.al`, an I/O failure, or a
+/// failed build: test input.
 #[must_use]
 pub fn assemble_and_resolve_inline_program(
     files: &[(String, String)],
@@ -743,6 +744,13 @@ pub fn assemble_and_resolve_inline_program(
             rel.components()
                 .all(|c| matches!(c, std::path::Component::Normal(_))),
             "inline file name must be a plain relative path: {name}"
+        );
+        // The workspace discovery reads `.al` files only; any other name would be
+        // silently absent from the model.
+        assert!(
+            rel.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("al")),
+            "inline file name must end in .al (the program engine reads no other file): {name}"
         );
         let path = dir.path().join(rel);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");

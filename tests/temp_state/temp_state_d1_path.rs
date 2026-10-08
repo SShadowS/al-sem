@@ -2,7 +2,7 @@
 //! temp state + the worst-severity merge-tie with a dual-verdict note.
 //!
 //! These drive the REAL d1 detector over inline AL workspaces (via
-//! `assemble_and_resolve_default` + `run_detectors`) and inspect the emitted
+//! `assemble_and_resolve_inline_program_default` + `run_detectors`) and inspect the emitted
 //! findings. The unit-level edge-kind allowlist guard (case c) lives in
 //! `tests/temp_state_path.rs` (`edge_kind_guard_dynamic_hop_resolves_unknown`);
 //! these cover the end-to-end detector behaviour:
@@ -10,16 +10,16 @@
 //!   (b) PD resolves to info on a pure temp-caller path (was "(temp state uncertain)");
 //!   (d) a non-PD terminal already Known(true) still downgrades to info (regression).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000d1abc";
 
 /// Run d1 in isolation over an inline workspace and return its emitted findings.
 fn run_d1(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let d1: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == "d1-db-op-in-loop")

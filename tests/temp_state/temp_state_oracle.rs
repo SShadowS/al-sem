@@ -35,13 +35,13 @@
 //! red — a genuine product-soundness signal, NOT a golden to refresh.
 //!
 //! These drive the REAL default detector set over inline AL workspaces via
-//! `assemble_and_resolve_default` + `run_detectors` (same in-process entry as
+//! `assemble_and_resolve_inline_program_default` + `run_detectors` (same in-process entry as
 //! `tests/temp_state_d1_path.rs` / `tests/temp_state_calcfields.rs`).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000014ec70";
 
@@ -56,7 +56,7 @@ const APP_GUID: &str = "11111111-0000-0000-0000-00000014ec70";
 /// property is about the analyzer's RAW finding production, before any presentation
 /// gate that could itself drop a finding for orthogonal reasons.
 fn run_all_detectors(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors = registered_detectors();
     assert!(
         !detectors.is_empty(),

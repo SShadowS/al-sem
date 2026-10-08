@@ -4987,7 +4987,11 @@ mod tests {
         let mut stats = BfsStats::default();
         for dir in &dirs {
             if let Some(resolved) =
-                crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(dir)
+                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                    dir,
+                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                    false,
+                )
             {
                 check_witness_bfs(&resolved, &dir.display().to_string(), &mut stats);
             }
@@ -5034,10 +5038,11 @@ codeunit 50100 "T7b Diamond"
     end;
 }
 "#;
-        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
-            &[("Diamond.al".to_string(), src.to_string())],
-            "00000000-0000-0000-0000-00000000d1a0",
-        );
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("Diamond.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a0",
+            );
         let mut stats = BfsStats::default();
         check_witness_bfs(&resolved, "diamond", &mut stats);
         // The stated precondition: the diamond's two Leaf edges are walked.
@@ -5098,10 +5103,11 @@ codeunit 50101 "T7b Temp Classes"
     end;
 }
 "#;
-        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
-            &[("TempClasses.al".to_string(), src.to_string())],
-            "00000000-0000-0000-0000-00000000d1a1",
-        );
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("TempClasses.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a1",
+            );
         // The stated precondition: one known-temp and one physical inherited
         // insert whose keys differ ONLY in the temp class.
         let snap = compose_snapshot(&resolved);

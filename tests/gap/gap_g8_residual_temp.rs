@@ -24,15 +24,15 @@
 //! Asserts both the L3 resolution and the real d1 detector pipeline, mirroring
 //! tests/gap_g2_runtime_temp.rs.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g8abc";
 
 fn run_gap_detectors(files: &[(String, String)], wanted: &[&str]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| wanted.contains(&d.name.as_str()))
@@ -106,7 +106,7 @@ codeunit 50981 "G8 Dispatcher Plain"
 #[test]
 fn case_a_global_temporary_record_ops_resolve_known_true() {
     let files = [al("G8Dispatcher", DISPATCHER_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let collect = resolved
         .routine_by_name("CollectErrors")
@@ -160,7 +160,7 @@ fn case_a_d1_downgrades_global_temp_in_loop_insert_to_info() {
 #[test]
 fn case_a_control_non_temp_global_stays_physical_and_d1_fires() {
     let files = [al("G8DispatcherPlain", DISPATCHER_CONTROL_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let collect = resolved
         .routine_by_name("CollectErrors")
@@ -342,7 +342,7 @@ page 50984 "G8 Upgrade Page"
 #[test]
 fn case_b_keyword_temp_by_var_param_resolves_known_true() {
     let files = [al("G8UpgradeMgt", UPGRADE_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let routine = resolved
         .routine_by_name("GetUpgradeData")
@@ -410,7 +410,7 @@ fn case_b_keywordless_by_var_param_is_pd_and_stays_uncertain_per_path() {
         al("G8UpgradeMgt", UPGRADE_SRC),
         al("G8UpgradePage", PAGE_CALLER_SRC),
     ];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let plain = resolved
         .routine_by_name("GetUpgradeDataPlain")

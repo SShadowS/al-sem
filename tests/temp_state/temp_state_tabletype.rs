@@ -13,7 +13,7 @@
 //! `Known(true)` to false, and never forces `Known(false)`. The only signal is
 //! the structural `TableType` property (Part A), so the upgrade is sound.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
@@ -41,8 +41,10 @@ codeunit 50801 "Probe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // Part A: the table is structurally temporary.
     let table = resolved
@@ -106,8 +108,10 @@ codeunit 50801 "Probe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // By-var param of a temp table → Known(true) (override beats the L2 PD(i)).
     let by_var = resolved

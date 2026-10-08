@@ -14,16 +14,16 @@
 //! Drives the REAL detectors in-process over inline AL workspaces, exactly like
 //! `tests/temp_state_d1_path.rs`.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g13ab";
 
 /// Run a single detector in isolation over an inline workspace.
 fn run_detector(detector_name: &str, files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let selected: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == detector_name)

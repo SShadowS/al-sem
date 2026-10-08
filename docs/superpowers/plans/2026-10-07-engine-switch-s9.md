@@ -134,6 +134,18 @@ Branch: `engine-switch/s9-delete-l3`, from master `78466762` (S8 merged).
   d1_downgraded, cli_p1, r3a1/2/3 (goldens move), l4_summary_differential (re-freeze),
   perf_bounds. Replace r2a and r2d with program-backed goldens; add a program
   event-graph golden in place of r2c.
+  - **Census (2026-10-08):** pointing every L3 builder at the program builder
+    moved 25 tests. Not moved at all: temp_state, `l4_summary_differential` (no
+    re-freeze needed), every gap test but G-18's stated collision. Moved:
+    the 3 stated-collision tests; `cli_a_stats` and `cli_b_fingerprint` on
+    `ws-d35` only (numeric `ObjectType::Codeunit, 50` subscriber targets: L3
+    dropped them, the program engine keeps them as `unknown`); r3a1/2/3
+    differential goldens; the r2d coverage golden; the r3 and `tests/l3` vector
+    tests (file names without `.al`). `tests/l3` measures L3 itself and goes in
+    S9.6; `perf_bounds` is release-only and was not in the census.
+  - **S9.5a done (2026-10-08):** l5 unit tests, gap, temp_state,
+    d1_downgraded (50 files); the 3 collision tests re-key the precomputed
+    edges.
 - **S9.6 Delete the legacy engine:** resolver chain, event-graph builder and
   projections, `implicit_edges`, `receiver*`, `static_arg`, `type_ref`, `type_rel`,
   `al_type`, `al_builtins`, `member_builtins`, `resolution_class`,

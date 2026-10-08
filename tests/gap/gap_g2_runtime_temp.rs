@@ -23,16 +23,16 @@
 //! Asserts both the L3 resolution (like tests/temp_state_tabletype.rs) and the
 //! real detector pipeline (d1 / d33, like tests/gap_g6_virtual_tables.rs).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g2abc";
 
 /// Run the named detectors over an inline workspace and return all findings.
 fn run_gap_detectors(files: &[(String, String)], wanted: &[&str]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| wanted.contains(&d.name.as_str()))
@@ -137,7 +137,7 @@ fn guarded_table_is_temporary_by_contract_and_ops_resolve_known_true() {
         al("G2GuardedNoParens", GUARDED_TABLE_NO_PARENS_SRC),
         al("G2Probe", &loop_insert_codeunit(50992, "G2 Guarded Buffer")),
     ];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     // The guard marks the table temporary by contract (both call shapes).
     let table = resolved
@@ -200,7 +200,7 @@ fn control_plain_table_stays_physical_and_d1_fires() {
         al("G2PlainBuffer", PLAIN_TABLE_SRC),
         al("G2Probe", &loop_insert_codeunit(50992, "G2 Plain Buffer")),
     ];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let table = resolved
         .table_by_name("G2 Plain Buffer")
         .expect("plain table must be indexed");
@@ -234,7 +234,7 @@ fn control_non_negated_istemporary_trigger_is_not_a_guard() {
             &loop_insert_codeunit(50992, "G2 NonGuard Buffer"),
         ),
     ];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let table = resolved
         .table_by_name("G2 NonGuard Buffer")
         .expect("non-guard table must be indexed");
@@ -301,7 +301,7 @@ codeunit 50993 "G2 Routines"
 #[test]
 fn entry_guarded_routine_param_ops_resolve_known_true() {
     let files = [al("G2Routines", ROUTINES_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let guarded = resolved
         .routine_by_name("GuardedDelete")
@@ -322,7 +322,7 @@ fn entry_guarded_routine_param_ops_resolve_known_true() {
 #[test]
 fn control_unguarded_routine_param_stays_unproven() {
     let files = [al("G2Routines", ROUTINES_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let unguarded = resolved
         .routine_by_name("UnguardedDelete")
@@ -337,7 +337,7 @@ fn control_unguarded_routine_param_stays_unproven() {
 #[test]
 fn control_guard_not_first_statement_is_not_proven() {
     let files = [al("G2Routines", ROUTINES_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let late = resolved
         .routine_by_name("LateGuardDelete")
@@ -358,7 +358,7 @@ fn control_guard_not_first_statement_is_not_proven() {
 #[test]
 fn control_non_error_then_branch_is_not_proven() {
     let files = [al("G2Routines", ROUTINES_SRC)];
-    let resolved = assemble_and_resolve_default(&files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
 
     let exit_guard = resolved
         .routine_by_name("ExitGuardDelete")

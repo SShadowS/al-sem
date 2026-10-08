@@ -15,7 +15,7 @@
 //! NOT have its implicit Rec/xRec force-upgraded — the override is strictly
 //! additive toward `Known(true)`.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000005aa";
 
@@ -52,8 +52,10 @@ page 50700 "TmpPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // Part A: the page object must carry source_table_temporary == Some(true).
     let obj = resolved
@@ -117,8 +119,10 @@ page 50710 "PhysPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // The page object must carry source_table_temporary == None (absent).
     let obj = resolved
@@ -175,8 +179,10 @@ page 50720 "FalseTmpPage"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     // source_table_temporary == Some(false) when present but false.
     let obj = resolved

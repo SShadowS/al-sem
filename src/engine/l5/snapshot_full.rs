@@ -1624,7 +1624,7 @@ mod tests {
     /// `build_inventory_doc` end to end and asserts on its actual output order.
     #[test]
     fn hand_stated_collision_discriminates_by_member_case_insensitively() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let src = r#"
 page 50816 "T4 I-2 Wizard"
@@ -1651,7 +1651,7 @@ page 50816 "T4 I-2 Wizard"
     }
 }
 "#;
-        let mut resolved = assemble_and_resolve_default(
+        let mut resolved = assemble_and_resolve_inline_program_default(
             &[("T4I2Wizard.Page.al".to_string(), src.to_string())],
             "66666666-0000-0000-0000-0000000cp006",
         );
@@ -1756,7 +1756,7 @@ page 50816 "T4 I-2 Wizard"
     /// test (verified by removal, not asserted).
     #[test]
     fn hand_stated_collision_discriminates_by_originating_object_when_member_also_ties() {
-        use crate::engine::l3::l3_workspace::assemble_and_resolve_default;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
         let files = vec![
             (
@@ -1806,8 +1806,10 @@ page 50818 "T5 I-3 Wizard Alpha"
                 .to_string(),
             ),
         ];
-        let mut resolved =
-            assemble_and_resolve_default(&files, "66666666-0000-0000-0000-0000000cp007");
+        let mut resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "66666666-0000-0000-0000-0000000cp007",
+        );
         assert_eq!(
             resolved.workspace.routines.len(),
             2,

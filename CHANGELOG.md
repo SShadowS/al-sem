@@ -374,6 +374,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Detector, gap and temp-state tests build the production model**
+  (engine-switch S9.5a). 50 test files (the `engine::l5` unit tests,
+  `tests/gap`, `tests/temp_state`, `d1_downgraded_to_info_oracle`) now use
+  `assemble_and_resolve_inline_program[_default]` /
+  `assemble_and_resolve_workspace_program` instead of L3's builders. Every
+  test passes unchanged except three that state a routine-id collision by
+  assignment:
+  - The program model's calls and events are resolved once, at build time, so
+    re-keying only the routines left their edges on ids no routine carried.
+    `force_shared_id` (detector context) and `force_id_collision` (G-18) now
+    re-key the precomputed call and event edges too.
+  - `colliding_ids_keep_the_full_summary_union_not_just_the_edges` needed a new
+    inheritable uncertainty: its `MissingDeeper()` was `unknown` under L3 but is
+    `member-not-found` under the program engine, a callsite-local kind that is
+    never inherited. `Touch` now runs a codeunit chosen at run time
+    (`dynamic-dispatch`, inherited).
+  - Discrimination: removing the drain's `processed` guard fails the union
+    test; removing the later-occurrence `continue` fails the summary test;
+    removing `edge_target_matches_callsite_callee` in `d1_graph` fails both
+    stated G-18 collision tests.
+  - The inline builder now refuses a file name without `.al` with a clear
+    message (the engine reads no other file; the L3 vector tests use `"a"`).
+
 - **The program-call adapter leaves `engine/l3`** (engine-switch S9.4, a pure
   move). `program_calls` and `event_param_temp` are now under `program::model`,
   with the binding helpers (in `calls`) and `isolated_event_ids` (in `events`).

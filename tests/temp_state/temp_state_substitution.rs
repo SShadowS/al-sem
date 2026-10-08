@@ -19,11 +19,12 @@
 //! from a binding source that is itself Known(true).
 //!
 //! Asserts on the composed caller summary's db_effects tempStates, obtained via
-//! the same `assemble_and_resolve_workspace_default(...) -> project_r3a2(...)`
-//! entry the R3a-2 differential uses, run over an on-disk synthetic workspace.
+//! the `assemble_and_resolve_workspace_program(...) -> project_r3a2(...)`
+//! entry, run over an on-disk synthetic workspace.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::summary::{PDbEffect, PDbEffectTempState, R3a2Projection, project_r3a2};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use tempfile::TempDir;
 
 const APP_JSON: &str = r#"{
@@ -41,7 +42,8 @@ fn project(al_src: &str) -> R3a2Projection {
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir src");
     std::fs::write(dir.path().join("src").join("main.al"), al_src).expect("write al");
     let resolved =
-        assemble_and_resolve_workspace_default(dir.path()).expect("assemble + resolve workspace");
+        assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
+            .expect("assemble + resolve workspace");
     project_r3a2(&resolved)
 }
 

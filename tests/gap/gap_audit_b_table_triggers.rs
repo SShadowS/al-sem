@@ -17,16 +17,16 @@
 //! Drives the REAL detectors over inline AL workspaces (mirrors
 //! `tests/gap_g14_onlookup_triggers.rs`).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-000000audb01";
 
 /// Run d21 + d37 + d39 over an inline workspace and return all emitted findings.
 fn run_class_b_detectors(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let wanted = [
         "d21-read-without-load",
         "d37-validate-without-persist",

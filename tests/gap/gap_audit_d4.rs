@@ -14,10 +14,10 @@
 //! Drives the REAL d4 detector over inline AL workspaces (mirrors
 //! `tests/r0-corpus/ws-d4-repeated-get` and `tests/gap_audit_d2_guards.rs`).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-000000audd04";
 
@@ -35,7 +35,7 @@ table 50180 "AuditD4 Customer"
 
 /// Run ONLY d4 over an inline workspace and return its findings.
 fn run_d4(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == "d4-repeated-lookup-in-loop")

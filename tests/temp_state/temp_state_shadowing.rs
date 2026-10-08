@@ -24,7 +24,7 @@
 //!    (first-wins picks "Baz").
 //!
 //! 2. `integration_local_shadows_global_end_to_end` — an end-to-end test
-//!    through `assemble_and_resolve_default`. This passes both before AND after
+//!    through `assemble_and_resolve_inline_program_default`. This passes both before AND after
 //!    the fix because `extract_variables` already deduplicates the global
 //!    variable when a local has the same name. It serves as a regression guard
 //!    confirming the full-pipeline behavior is correct.
@@ -32,10 +32,10 @@
 use al_sem::engine::l2::features::PAnchor;
 use al_sem::engine::l3::l3_workspace::{
     L3RecordOperation, L3Routine, L3Table, L3Variable, RoutineVariables,
-    assemble_and_resolve_default,
 };
 use al_sem::engine::l3::record_types::resolve_routine_record_types;
 use al_sem::engine::l3::symbol_table::SymbolTable;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
@@ -201,7 +201,7 @@ fn pass_2b_first_wins_on_name_collision() {
 
 // ============================================================================
 // Test 2 — END-TO-END integration test: verifies that the full pipeline
-//          (assemble_and_resolve_default) correctly resolves the LOCAL var.
+//          (assemble_and_resolve_inline_program_default) correctly resolves the LOCAL var.
 //          This passes both before AND after the fix because `extract_variables`
 //          already deduplicates globals when a same-named local exists.
 //          Kept as a regression guard for the full-pipeline shape.
@@ -234,8 +234,10 @@ codeunit 50902 "ShadowProbe"
 }
 "#;
 
-    let resolved =
-        assemble_and_resolve_default(&[("src/main.al".to_string(), source.to_string())], APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(
+        &[("src/main.al".to_string(), source.to_string())],
+        APP_GUID,
+    );
 
     let routine = resolved
         .routine_by_name("DoWork")

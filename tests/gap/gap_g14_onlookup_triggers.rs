@@ -10,16 +10,16 @@
 //! Drives the REAL detectors over inline AL workspaces (mirrors
 //! `tests/gap_g9_trigger_rec.rs`).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-000000g14abc";
 
 /// Run d11 + d21 + d37 over an inline workspace and return all emitted findings.
 fn run_g14_detectors(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let wanted = [
         "d11-modify-without-get",
         "d21-read-without-load",

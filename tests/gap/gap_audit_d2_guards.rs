@@ -17,10 +17,10 @@
 //! event inside a loop + an `[EventSubscriber]`; mirrors
 //! `tests/r0-corpus/ws-d2` and `tests/gap_audit_b_table_triggers.rs`).
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_default;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-000000audd02";
 
@@ -38,7 +38,7 @@ table 50170 "AuditD2 Customer"
 
 /// Run ONLY d2 over an inline workspace and return its findings.
 fn run_d2(files: &[(String, String)]) -> Vec<Finding> {
-    let resolved = assemble_and_resolve_default(files, APP_GUID);
+    let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
     let detectors: Vec<_> = registered_detectors()
         .into_iter()
         .filter(|d| d.name == "d2-event-fanout-in-loop")

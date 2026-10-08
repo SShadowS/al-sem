@@ -3407,8 +3407,12 @@ mod shadow_tests {
         );
 
         let resolved =
-            crate::engine::l3::l3_workspace::assemble_and_resolve_workspace_default(&ws_path)
-                .expect("assemble_and_resolve_workspace_default failed for DO_WS");
+            crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                &ws_path,
+                crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                false,
+            )
+            .expect("assemble_and_resolve_workspace_program failed for DO_WS");
         let ctx = crate::engine::l5::detector_context::build_detector_context(
             &resolved,
             crate::engine::l5::registry::substrate::SUMMARIES
@@ -4335,10 +4339,11 @@ codeunit 50790 "T5 D1 G7"
 }
 "#;
         let files = vec![("src/T5D1G7.al".to_string(), SRC.to_string())];
-        let resolved = crate::engine::l3::l3_workspace::assemble_and_resolve_default(
-            &files,
-            "11111111-0000-0000-0000-0000000g7d1a",
-        );
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "11111111-0000-0000-0000-0000000g7d1a",
+            );
         let d1: Vec<_> = crate::engine::l5::detectors::registered_detectors()
             .into_iter()
             .filter(|d| d.name == "d1-db-op-in-loop")

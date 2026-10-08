@@ -53,21 +53,22 @@
 //! hand_stated_id_collision_keeps_a_real_summary_and_derived_row`, which took the
 //! same remedy for the sibling defect one module over.
 
-use al_sem::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_default};
+use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g18ab";
 
 fn resolve(files: &[(String, String)]) -> L3Resolved {
-    assemble_and_resolve_default(files, APP_GUID)
+    assemble_and_resolve_inline_program_default(files, APP_GUID)
 }
 
 /// Run d1 in isolation over an already-assembled workspace and return its findings.
-/// `run_detectors` rebuilds the symbol table, call resolution and combined graph from
+/// `run_detectors` rebuilds the symbol table and combined graph from
 /// `resolved.workspace.routines` on every call, reading whatever ids are on those
-/// routines AT CALL TIME — which is what makes [`force_id_collision`] effective.
+/// routines AT CALL TIME; [`force_id_collision`] rebases the precomputed calls too.
 fn run_d1_on(resolved: &L3Resolved) -> Vec<Finding> {
     let d1: Vec<_> = registered_detectors()
         .into_iter()
@@ -126,28 +127,65 @@ fn ids_named(resolved: &L3Resolved, name: &str) -> Vec<String> {
 ///
 /// This never asks `compute_routine_id` whether these two routines collide — it makes
 /// them collide — so it is independent of the id schema, today's and any future one.
+///
+/// The model's calls and events are the program engine's, resolved once at build
+/// time from the ORIGINAL ids (engine-switch S9.5; the L3 builder re-resolved them
+/// from the routines on every read). So the precomputed edges are rebased the same
+/// way: an edge end equal to an old id becomes the shared id, and an edge's call-site
+/// and operation ids get the same prefix rewrite as the routine's own call sites.
 fn force_id_collision(resolved: &mut L3Resolved, routine_name: &str, shared_id: &str) -> usize {
-    let mut forced = 0usize;
+    let mut old_ids: Vec<String> = Vec::new();
     for r in resolved.workspace.routines.iter_mut() {
         if !r.name.eq_ignore_ascii_case(routine_name) {
             continue;
         }
         let old_id = std::mem::replace(&mut r.id, shared_id.to_string());
-        let rebase = |s: &str| -> Option<String> {
-            s.strip_prefix(&old_id)
-                .map(|suffix| format!("{shared_id}{suffix}"))
-        };
         for cs in r.call_sites.iter_mut() {
-            if let Some(new) = rebase(&cs.id) {
+            if let Some(new) = rebase(&old_id, shared_id, &cs.id) {
                 cs.id = new;
             }
-            if let Some(new) = rebase(&cs.operation_id) {
+            if let Some(new) = rebase(&old_id, shared_id, &cs.operation_id) {
                 cs.operation_id = new;
             }
         }
-        forced += 1;
+        old_ids.push(old_id);
     }
-    forced
+    let rekey = |id: &mut String| {
+        if old_ids.contains(id) {
+            *id = shared_id.to_string();
+        }
+    };
+    let rebase_any = |id: &mut String| {
+        if let Some(new) = old_ids.iter().find_map(|o| rebase(o, shared_id, id)) {
+            *id = new;
+        }
+    };
+    if let Some(calls) = resolved.precomputed_calls.as_mut() {
+        for e in &mut std::sync::Arc::make_mut(calls).edges {
+            rekey(&mut e.from);
+            e.to.as_mut().map(rekey);
+            e.candidates.iter_mut().flatten().for_each(rekey);
+            rebase_any(&mut e.callsite_id);
+            rebase_any(&mut e.operation_id);
+        }
+    }
+    if let Some(events) = resolved.precomputed_events.as_mut() {
+        let graph = &mut std::sync::Arc::make_mut(events).graph;
+        for e in &mut graph.edges {
+            rekey(&mut e.subscriber_routine_id);
+        }
+        for s in &mut graph.events {
+            s.publisher_routine_id.as_mut().map(rekey);
+        }
+    }
+    old_ids.len()
+}
+
+/// `s` with its `old` routine-id prefix replaced by `shared` (a derived id such as
+/// `{rid}/cs{n}`), or `None` when `s` does not start with `old`.
+fn rebase(old: &str, shared: &str, s: &str) -> Option<String> {
+    s.strip_prefix(old)
+        .map(|suffix| format!("{shared}{suffix}"))
 }
 
 const TABLES: &str = r#"

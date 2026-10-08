@@ -15,9 +15,10 @@
 //! Every case reads the cone of the CALLER (the callee's own physical set is
 //! unchanged: its param could be physical from another caller).
 
-use al_sem::engine::l3::l3_workspace::{L3Resolved, assemble_and_resolve_default};
+use al_sem::engine::l3::l3_workspace::L3Resolved;
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::registry::substrate;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-00000000c0e1";
 
@@ -203,7 +204,7 @@ fn resolve() -> L3Resolved {
         ("src/Callers.al".to_string(), CALLERS.to_string()),
         ("src/Pages.al".to_string(), PAGES.to_string()),
     ];
-    assemble_and_resolve_default(&files, APP_GUID)
+    assemble_and_resolve_inline_program_default(&files, APP_GUID)
 }
 
 /// The unique routine id for `object_name` + `routine_name`.

@@ -65,14 +65,14 @@
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::l3::l3_workspace::{
-    L3Resolved, L3Routine, assemble_and_resolve_workspace_default,
-};
+use al_sem::engine::l3::l3_workspace::{L3Resolved, L3Routine};
 use al_sem::engine::l5::detector_context::{DetectorContext, build_detector_context};
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::{run_detectors, substrate};
 use al_sem::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 
 const FIXTURE: &str = "ws-d50-medium";
 const DETECTOR: &str = "d50-checked-run-implicit-commit";
@@ -98,7 +98,7 @@ fn resolve_fixture() -> L3Resolved {
         "fixture workspace {} is missing",
         dir.display()
     );
-    assemble_and_resolve_workspace_default(&dir)
+    assemble_and_resolve_workspace_program(&dir, MODEL_INSTANCE_ID_DEFAULT, false)
         .unwrap_or_else(|| panic!("workspace assembly returned None for {}", dir.display()))
 }
 
