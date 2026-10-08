@@ -4925,28 +4925,45 @@ fn assert_stays_ambiguous_resolved(report: &ProgramReport, caller_name_lc: &str)
     );
 }
 
-/// Test 23j: `CallVariant(S: InStream)` calls `T.V(S)` where `V` overloads
-/// on `(Variant)` / `(Integer)` — the Round-1 addendum's Variant-wildcard
-/// rule (I5): a Variant candidate at a discriminating position degrades the
-/// WHOLE call, even though a naive exclusion-style matcher would have
-/// eliminated `Integer` (InStream vs Integer are disjoint) and left Variant
-/// as an UNPROVEN "sole survivor" — that is not a confident pick.
-#[test]
-fn ws_overload_negatives_call_variant_stays_ambiguous_resolved() {
-    assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callvariant");
+fn ws_overload_negatives_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/r0-corpus/ws-overload-negatives")
 }
 
-/// Test 23k: `CallIndistinct(A: Integer; B: Text)` calls `T.I(A, B)` where
-/// `I` overloads on `(Integer, Text)` / `(Integer, Code[20])` — position 0
-/// is identical on both (non-discriminating); position 1's declared `Text`
-/// arg EXACTLY matches the `Text` candidate, but `Code[20]` is NOT
-/// eliminated (Text and Code are the SAME "text-ish" soft family — AL's own
-/// Text<->Code conversions mean a declared Text var is not PROVEN
-/// incompatible with a `Code[20]` parameter). The undecided `Code[20]`
-/// candidate blocks the pick.
+/// Test 23j, renamed from `..._call_variant_stays_ambiguous_resolved`
+/// (S9.5c; it pinned Round-1 addendum I5, "never pick the Variant
+/// survivor"): `CallVariant(S: InStream)` calls `T.V(S)` over `(Variant)` /
+/// `(Integer)`. An InStream cannot become an Integer (AL0133), so `V(Variant)`
+/// is the one overload that applies and binds — the compiler's choice (altool
+/// graph on this fixture: `CallVariant -> Neg Target.V` at the Variant
+/// declaration).
 #[test]
-fn ws_overload_negatives_call_indistinct_stays_ambiguous_resolved() {
-    assert_stays_ambiguous_resolved(&ws_overload_negatives_report(), "callindistinct");
+fn ws_overload_negatives_call_variant_binds_the_variant_overload() {
+    let report = ws_overload_negatives_report();
+    assert_binds_param(
+        &report,
+        &ws_overload_negatives_dir(),
+        "callvariant",
+        "variant",
+    );
+}
+
+/// Test 23k, renamed from `..._call_indistinct_stays_ambiguous_resolved`
+/// (S9.5c): `CallIndistinct(A: Integer; B: Text)` calls `T.I(A, B)` over
+/// `(Integer, Text)` / `(Integer, Code[20])`. The Text argument exactly
+/// matches the first; the second needs a Text-to-Code conversion, and an
+/// exact match beats a conversion — the compiler binds `I(Integer; Text)`
+/// (altool graph on this fixture). Until S9.5c the convertible sibling
+/// blocked the pick.
+#[test]
+fn ws_overload_negatives_call_indistinct_binds_the_exact_text_overload() {
+    let report = ws_overload_negatives_report();
+    assert_binds_param(
+        &report,
+        &ws_overload_negatives_dir(),
+        "callindistinct",
+        "b: text",
+    );
 }
 
 /// Test 23l: `CallObject(L: Codeunit "Neg Target")` calls `T.O(L)` where `O`
@@ -5312,17 +5329,18 @@ fn non_discriminating_untyped_arg_sibling_picks() {
     assert_picks_init_new(&report, tmp.path(), "runoptionvar", "lineno: integer");
 }
 
-/// Negatives the fix must keep: `Text` vs `Code[20]` stays ambiguous because
-/// a pick needs an EXACT match (a `Text` var matches neither overload
-/// exactly). `Text`->`Integer` is provably incompatible, so AL itself would
-/// bind `Code[20]`; this pins our conservative rule, not AL behaviour. A `Decimal` field
-/// exactly matches neither overload; and an untyped arg AT the discriminating
-/// position still degrades the whole call.
+/// Neither overload matches exactly, but only one can take the argument, so
+/// it binds (S9.5c; until then both stayed ambiguous, "our conservative rule,
+/// not AL behaviour"). A `Text` cannot become an `Integer` (AL0133), so
+/// `RunTextVar` binds `Code[20]`; a `Decimal` cannot become a `Code` (AL0133)
+/// but converts to `Integer`, so `RunDecimalField` binds `Integer` — both the
+/// compiler's picks for this shape (altool graph, probe `F15`). An untyped arg
+/// AT the discriminating position still degrades the whole call.
 #[test]
-fn non_discriminating_untyped_arg_negatives_stay_ambiguous() {
-    let (_tmp, report) = non_discriminating_untyped_report();
-    assert_stays_ambiguous_resolved(&report, "runtextvar");
-    assert_stays_ambiguous_resolved(&report, "rundecimalfield");
+fn non_discriminating_untyped_arg_sole_applicable_binds_and_untyped_stays_ambiguous() {
+    let (tmp, report) = non_discriminating_untyped_report();
+    assert_picks_init_new(&report, tmp.path(), "runtextvar", "valuecode: code[20]");
+    assert_picks_init_new(&report, tmp.path(), "rundecimalfield", "lineno: integer");
     assert_stays_ambiguous_resolved(&report, "rununtypeddisc");
 }
 
@@ -10540,9 +10558,13 @@ fn dependency_body_unknown_ceiling_on_cdo() {
     // selection narrows candidates to the call's build, 679 once an enum
     // value argument types as its enum (S9.5c; 20 of the 31 sites checked
     // against the compiler graph, all on the Enum overload, the other 11 are
-    // repeat calls the graph keeps one edge for). A rise is lost precision;
-    // list the sites with `--sites` (`ambiguousSites`).
-    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 679;
+    // repeat calls the graph keeps one edge for), 459 once an exact match beats
+    // a conversion and a sole applicable overload binds (S9.5c; all 220 sites
+    // checked against the compiler graph: 178 on the compiler's overload at the
+    // same line, 42 repeat calls on an overload the compiler binds from that
+    // file, 0 wrong). A rise is lost precision; list the sites with `--sites`
+    // (`ambiguousSites`).
+    const CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING: usize = 459;
     assert!(
         h.ambiguous_resolved <= CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
         "dependency-body ambiguousResolved edges {} exceed the ceiling {}; list them \

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Overload selection follows the compiler where it is proven** (engine-switch
+  S9.5c). Probed with alc 18.0.41.45789 and the altool graph (~90 calls):
+  - **An exact match beats a conversion.** `I(Integer; Text)` and
+    `I(Integer; Code[20])` called with `(Integer, Text)` bind the Text overload;
+    an enum value binds `EI(Enum)` over `EI(Integer)`. Until now any rival that
+    could take the argument by conversion blocked the pick.
+  - **Exact includes the length.** A by-value `Text`/`Code` match is exact only
+    when the argument fits: unbounded `Text` or `Text[60]` into
+    `TL(Text[50] | Code[20])` is AL0196 in the compiler and stays ambiguous;
+    `Text[30]` binds `Text[50]`.
+  - **A sole applicable overload binds.** When every other candidate is proven
+    unable to take the arguments, the one left binds, `Variant` included:
+    `V(Variant | Integer)` with an InStream binds `Variant` (this retires
+    Round-1 addendum I5, "never pick the Variant survivor"); `InitNew(...;
+    Integer; ...)`/`(...; Code[20]; ...)` with a Text binds Code[20], with a
+    Decimal binds Integer.
+  - **"Incompatible" is now sound.** It claimed six convertible pairs (Option,
+    Char, Byte, an enum into Integer; Guid and Text into each other) were
+    impossible. The relation is now built from single-overload calls (AL0133 =
+    inconvertible), not from `(Variant | T)` preferences, which mislead: a
+    Decimal binds `Variant` over `Integer` yet converts to Integer. The numeric-
+    like types (Integer, Decimal, BigInteger, Duration, Char, Byte, Option)
+    convert into each other; an enum with Integer/BigInteger/Option.
+  - Not attempted: ranking two needed conversions (the compiler binds
+    `Code[30]` into `TC(Text | Code[20])` to Text). Those calls stay ambiguous,
+    never guessed.
+  - L3 had resolved `ws-overload-negatives`' `CallVariant`; the switch had lost
+    it. CDO: dependency `ambiguousResolved` 679 -> 459; all 220 sites checked
+    against the compiler graph (178 at the exact line, 42 repeat calls on an
+    overload the compiler binds from that file), 0 wrong. Workspace unchanged
+    (0 unknown / 23).
+
 - **An enum value argument binds its enum overload** (engine-switch S9.5c).
   `T.P("Probe Kind"::Open)` over `P(Enum "Probe Kind")`/`P(InStream)` stayed
   an ambiguous overload: the argument was untyped. It now types as its enum,

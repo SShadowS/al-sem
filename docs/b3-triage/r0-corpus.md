@@ -36,13 +36,12 @@ Differing sites by category:
 | program-site: Direct/MemberNotFound, details | 2 |
 | program-site: Direct/Resolved -> Unresolved/Unknown(BareUnresolved) | 2 |
 | program-site: Interface/Maybe, details | 1 |
-| program-site: Method/Ambiguous -> Method/Resolved | 4 |
+| program-site: Method/Ambiguous -> Method/Resolved | 5 |
 | program-site: Method/MemberNotFound -> Builtin/Builtin | 8 |
 | program-site: Method/MemberNotFound -> Method/Ambiguous | 1 |
 | program-site: Method/MemberNotFound -> Method/Resolved | 2 |
 | program-site: Method/MemberNotFound -> Method/Unknown(CompoundReceiver) | 2 |
 | program-site: Method/MemberNotFound, details | 1 |
-| program-site: Method/Resolved -> Method/Ambiguous | 1 |
 | program-site: Method/Resolved -> Method/MemberNotFound | 1 |
 | program-site: Method/Resolved -> Method/Unknown(UntrackedReceiver) | 1 |
 | program-site: Method/Resolved, details | 4 |
@@ -183,7 +182,7 @@ Differing sites by category:
 | ws-overload-callresult-guards/src/Caller.Codeunit.al:20:13 | `Ambiguous` | Direct/Ambiguous candidates 2 | Direct/Resolved -> Codeunit CRN Caller.Ambiguous | Call Exact [Source] | program-site: Direct/Ambiguous -> Direct/Resolved |
 | ws-overload-collision/Caller.Codeunit.al:28:9 | `Target.Resolve` | Method/Ambiguous candidates 2 | Method/Resolved -> Codeunit Overload Collision Target.Resolve recv Codeunit "Overload Collision Target" | Call Exact [Source] | program-site: Method/Ambiguous -> Method/Resolved |
 | ws-overload-membercall-discriminator/src/Caller.Codeunit.al:14:9 | `T.P` | Method/Ambiguous candidates 2 | Method/Resolved -> Codeunit MCD Target.P recv Codeunit "MCD Target" | Call Exact [Source] | program-site: Method/Ambiguous -> Method/Resolved |
-| ws-overload-negatives/src/Caller.Codeunit.al:7:9 | `T.V` | Method/Resolved -> Codeunit Neg Target.V recv Codeunit "Neg Target" | Method/Ambiguous candidates 2 | Call AmbiguousOverload [Source, Source] | program-site: Method/Resolved -> Method/Ambiguous |
+| ws-overload-negatives/src/Caller.Codeunit.al:14:9 | `T.I` | Method/Ambiguous candidates 2 | Method/Resolved -> Codeunit Neg Target.I recv Codeunit "Neg Target" | Call Exact [Source] | program-site: Method/Ambiguous -> Method/Resolved |
 | ws-overload-pageext-callresult/src/Caller.Codeunit.al:18:9 | `T.P` | Method/Ambiguous candidates 2 | Method/Resolved -> Codeunit PCR Target.P recv Codeunit "PCR Target" | Call Exact [Source] | program-site: Method/Ambiguous -> Method/Resolved |
 | ws-overload-pageext-callresult/src/Caller.Codeunit.al:18:13 | `PageVar.GetCount` | Method/MemberNotFound | Method/Resolved -> PageExtension PCR Ext1.GetCount recv Page "PCR Base Page" | Call Exact [Source] | program-site: Method/MemberNotFound -> Method/Resolved |
 | ws-overload-pageext-callresult/src/Caller.Codeunit.al:32:13 | `PageVar2.GetCount` | Method/MemberNotFound | Method/Ambiguous | Call Exact [Unknown(OverloadAmbiguous)] | program-site: Method/MemberNotFound -> Method/Ambiguous |
