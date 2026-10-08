@@ -508,6 +508,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dep_meta_answers_as_the_map_it_replaces` (with a discrimination proof) and the existing
   sibling-app test, which now also checks no orphans. Packing `RoutineMeta`'s two `Origin`s is
   priced, not built: about 4 MiB, owner's call.
+- **Dependency event links are shared by every root** (engine-switch S10.4, re-scoped by the
+  owner from numeric ids after re-pricing). Each routed event link is split: the part touching
+  the workspace stays in the root (`LspSnapshot::ws_event_edges`, `ws_incoming`,
+  `ws_publisher_fanout`); the dependency-only part (`DepEventLinks`: edges, `incoming`,
+  fan-out) is built once per dependency tier (`DepNodes::lsp_events`) and every root and rung
+  holds the same `Arc`. A dependency publisher with subscribers on both sides is split in two.
+  Readers use `LspSnapshot::incoming(id)`, `incoming_count`, `publisher_fanout(id)` and
+  `edge(r)`, which add both parts and answer as before; `event_edges()` lists a split
+  publisher once per part (`merged_event_edges` gives one edge per publisher). Debug builds
+  assert that every rung-2 rebuild's, and every cache-sharing later root's, own dependency part
+  equals the shared one (a first or cache-less root has nothing to compare with). No golden
+  moved; CDO stats JSON byte-identical. Counted heap (`tools/census-probe/runs-s10-3/` →
+  `runs-s10-4/`, `cg-embedded-base`): each CG root after the first keeps 0.9-1.6 MiB instead of
+  5.9-6.3 in `embedded` mode; CG 7 roots idle with updaters 174.1 → 145.3 MiB; CDO (one root)
+  and `symbols` mode unchanged within ±0.2. Pinned by
+  `dependency_event_links_are_shared_and_split_from_the_workspace_ones` (with a discrimination
+  proof). Numeric ids re-priced on what is left: about 1.2 MiB of id copies outside the
+  canonical rows on CG (all copies 9.13 MiB), not built.
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

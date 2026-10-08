@@ -361,6 +361,14 @@ dependency tier rather than `u32` symbols (owner decision 2026-10-08; reasons in
 `2026-10-08-s10-2-shared-strings.md`); it also shrank every id copy (`RoutineNodeId` 96 → 72 B),
 so item 1's inline price above is now lower (that 22.0 MiB was root 1's walk alone; over all 7
 roots it was 31.04 MiB, now 23.28). Re-price items 3 and 1 before building them.
+S10.3 done (`dep_meta` as a column; plan `2026-10-08-s10-3-dep-meta-columns.md`; packing priced
+at about 4 MiB, not built). S10.4 re-scoped by the owner: most id copies outside the canonical
+rows (110,206 of 111,307 on CG) were in per-root event links identical in every root, so those
+links are now shared per dependency tier (plan
+`2026-10-08-s10-4-shared-dependency-event-links.md`); the numeric ids of item 1 then re-price
+at about 1.2 MiB of copies outside the canonical rows on CG (all copies 9.13 MiB) and are not
+built. The resolver's linear object scans (item 1's speed
+part) stay open.
 
 ## §9 — How the effort runs
 

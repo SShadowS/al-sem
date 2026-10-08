@@ -158,9 +158,10 @@ fn drop_root_by_field(r: Root) {
         snap,
         parsed,
         edges_by_file,
-        event_edges,
-        incoming,
-        publisher_fanout,
+        ws_event_edges,
+        dep_events,
+        ws_incoming,
+        ws_publisher_fanout,
         decls_by_file,
         decl_by_id,
         dep_lines,
@@ -170,12 +171,14 @@ fn drop_root_by_field(r: Root) {
     } = snap;
     step("snapshot.dep_meta (Arc clone)", dep_meta);
     step("snapshot.dep_lines (Arc clone)", dep_lines);
+    step("snapshot.dep_events (Arc clone)", dep_events);
     step("decl_by_id", decl_by_id);
     step("decls_by_file", decls_by_file);
-    step("incoming", incoming);
-    step("publisher_fanout", publisher_fanout);
+    // S10.4: these three now hold only the workspace part of the event links.
+    step("incoming", ws_incoming);
+    step("publisher_fanout", ws_publisher_fanout);
     step("edges_by_file", edges_by_file);
-    step("event_edges", event_edges);
+    step("event_edges", ws_event_edges);
     step("parsed (ws AlFile IR + text + LineTable)", parsed);
     match Arc::try_unwrap(graph) {
         Ok(g) => {
@@ -231,7 +234,12 @@ fn drop_root_by_field(r: Root) {
                         recovered,
                         bodies,
                         lsp,
+                        lsp_events,
                     } = n;
+                    step(
+                        "SHARED dep tier: dependency event links",
+                        lsp_events.into_inner(),
+                    );
                     step("SHARED dep tier: objects", objects);
                     step("SHARED dep tier: routines", routines);
                     step("SHARED dep tier: abi_ingest_errors", abi_ingest_errors);
@@ -589,24 +597,46 @@ impl<'a> W<'a> {
                 }
             }
         }
-        if self.first(Arc::as_ptr(&l.event_edges)) {
-            self.elems::<ClassifiedEdge>("event_edges", l.event_edges.len());
-            for ce in l.event_edges.iter() {
+        // S10.4: `event_edges`/`incoming`/`publisher_fanout` are the
+        // workspace part; the shared dependency part is walked once, as
+        // `dep_events.*`.
+        if self.first(Arc::as_ptr(&l.ws_event_edges)) {
+            self.elems::<ClassifiedEdge>("event_edges", l.ws_event_edges.len());
+            for ce in l.ws_event_edges.iter() {
                 self.cedge("event_edges", ce);
             }
         }
-        self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("incoming", l.incoming.len());
-        for (k, v) in &l.incoming {
+        self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("incoming", l.ws_incoming.len());
+        for (k, v) in &l.ws_incoming {
             self.rid(("incoming", "key"), k);
             self.v(("incoming", "edgerefs[]"), v);
             for e in v {
                 self.text("incoming.edgeref.file(Arc<str>)", &e.file);
             }
         }
-        if self.first(Arc::as_ptr(&l.publisher_fanout)) {
-            self.elems::<(RoutineNodeId, usize)>("publisher_fanout", l.publisher_fanout.len());
-            for k in l.publisher_fanout.keys() {
+        if self.first(Arc::as_ptr(&l.ws_publisher_fanout)) {
+            self.elems::<(RoutineNodeId, usize)>("publisher_fanout", l.ws_publisher_fanout.len());
+            for k in l.ws_publisher_fanout.keys() {
                 self.rid(("publisher_fanout", "key"), k);
+            }
+        }
+        if self.first(Arc::as_ptr(&l.dep_events)) {
+            let d = &l.dep_events;
+            self.elems::<ClassifiedEdge>("dep_events.edges", d.edges.len());
+            for ce in &d.edges {
+                self.cedge("dep_events.edges", ce);
+            }
+            self.elems::<(RoutineNodeId, Vec<EdgeRef>)>("dep_events.incoming", d.incoming.len());
+            for (k, v) in &d.incoming {
+                self.rid(("dep_events.incoming", "key"), k);
+                self.v(("dep_events.incoming", "edgerefs[]"), v);
+            }
+            self.elems::<(RoutineNodeId, usize)>(
+                "dep_events.publisher_fanout",
+                d.publisher_fanout.len(),
+            );
+            for k in d.publisher_fanout.keys() {
+                self.rid(("dep_events.publisher_fanout", "key"), k);
             }
         }
         for (k, v) in &l.decls_by_file {
@@ -822,8 +852,8 @@ fn event_edge_classes(l: &LspSnapshot) -> (u64, u64, u64, u64, Vec<u64>) {
     // (dep->dep only, dep pub with some ws subscriber, ws publisher, total routes to ws) + hashes of dep-only
     let (mut lib, mut mixed, mut ws, mut ws_routes) = (0, 0, 0, 0);
     let mut hashes = Vec::new();
-    for ce in l.event_edges.iter() {
-        let e = &ce.edge;
+    // S10.4: one edge per publisher, both parts merged (as before the split).
+    for e in &l.merged_event_edges() {
         let to_ws = e
             .routes
             .iter()
@@ -1369,8 +1399,8 @@ fn main() {
             snap.dep_lines.len(),
             snap.parsed.len(),
             snap.edges_by_file.values().map(|v| v.len()).sum::<usize>(),
-            snap.event_edges.len(),
-            snap.incoming.len(),
+            snap.event_edges().count(),
+            snap.all_incoming().len(),
             snap.decl_by_id.len()
         );
         let (lib, mixed, wsn, wsr, h) = event_edge_classes(&snap);
