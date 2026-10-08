@@ -448,6 +448,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dependency_decl_columns_equal_the_line_table_over_the_text` and
   `line_index_answers_col_out_exactly_as_line_table`; `the_lsp_keeps_no_dependency_text`
   pins the drop (each with a discrimination proof).
+- **A root built on a live dependency tier no longer extracts dependency text**
+  (engine-switch S10.1b; removes S10.1's cost above). `DepCache::source` now remembers each
+  `.app`'s source descriptor (tier, content hash) after its text dies, and remembers `.app`s
+  that ship no source (no longer re-hashed on every build). `build_context_with` first builds
+  the snapshot without the text of known sources, and continues only on a live tier whose LSP
+  products already exist, holding it until the build returns; otherwise it builds the snapshot
+  again with the text. `parse_for_build` and `build_dep_lines` assert they never see a
+  dependency source without its text. Counted heap (`tools/census-probe/runs-s10-1/` →
+  `runs-s10-1b/`, `cg-embedded-base`): CG roots 2-7 build peak 134.2-134.6 → 24.8-25.1 MiB
+  (pre-S10.1: 24.8-25.2), their snapshot phase ending 109.5 → 0.0 MiB above its start.
+  Retained and idle heap unchanged (±0.2 MiB). By arithmetic (roots built one after another,
+  as the probe does) the build-time heap peak is now root 1's 297.2 MiB (root 7: 186.6 + 25.1
+  ≈ 212), against about 321 MiB after S10.1 and about 311 before it. RSS peak working set
+  508 → 431 MiB (`cg-embedded-updaters`, one run, context only). Not measured: a rung-3
+  rebuild takes the same path by the code, but nothing counts its extractions; and a root
+  whose tier died now builds its snapshot twice (without, then with the text).
+  Pinned by `a_root_on_a_live_lsp_tier_extracts_no_dependency_text`,
+  `a_root_after_the_tier_died_extracts_the_text_again`, `a_source_less_app_is_extracted_once`
+  and `a_deferred_source_is_served_only_at_its_stamp` (each with a discrimination proof).
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/
