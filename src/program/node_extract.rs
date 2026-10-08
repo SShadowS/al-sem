@@ -5,7 +5,7 @@ use al_syntax::ir::{AlFile, ObjectKind, Param, ParseStatus, RoutineKind};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::deps::symbol_reference::SubtypeTag;
-use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::resolve::edge::{AbiEventKind, AbiRoutineKind};
 use crate::program::resolve::event::{
     ParsedSubscriberArgs, PublisherKind, is_event_publisher, parse_event_subscriber_ir,
@@ -47,6 +47,9 @@ impl Access {
 pub enum ObjectRef {
     /// A name reference. `raw` preserves the as-written (unquoted) text for
     /// display; `normalized_lc` is the lowercased form used for matching.
+    /// Plain `String`s, not [`SharedStr`] (S10.2): the resolver builds a
+    /// transient `ObjectRef` per lookup, and the stored ones total 0.24 MiB on
+    /// CG, so sharing would cost an allocation per lookup to save almost nothing.
     Name { raw: String, normalized_lc: String },
     /// A numeric AL object id reference.
     Id(i64),
@@ -67,7 +70,7 @@ pub enum PageControlKind {
 /// receivers (beyond-1B.3b).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageControlNode {
-    pub name_lc: String,
+    pub name_lc: SharedStr,
     pub kind: PageControlKind,
     pub target: ObjectRef,
 }
@@ -84,8 +87,8 @@ pub struct PageControlNode {
 /// other `*Ref` field on this struct).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataitemNode {
-    pub name_lc: String,
-    pub name: String,
+    pub name_lc: SharedStr,
+    pub name: SharedStr,
     pub source_table: ObjectRef,
 }
 
@@ -94,9 +97,9 @@ pub struct DataitemNode {
 /// dataitem's table; `field_lc` the lowercased, unquoted source field name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryColumnNode {
-    pub name_lc: String,
+    pub name_lc: SharedStr,
     pub source_table: ObjectRef,
-    pub field_lc: String,
+    pub field_lc: SharedStr,
 }
 
 /// One table field surface entry (Table / TableExtension only) — Task 3
@@ -116,17 +119,17 @@ pub struct QueryColumnNode {
 /// catalog if used for classification instead of the declared text).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldNode {
-    pub name_lc: String,
-    pub type_text: String,
+    pub name_lc: SharedStr,
+    pub type_text: SharedStr,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjectNode {
     pub id: ObjectNodeId,
-    pub name: String,
+    pub name: SharedStr,
     pub declared_id: Option<i64>,
-    pub extends_target: Option<String>,
-    pub implements: Vec<String>,
+    pub extends_target: Option<SharedStr>,
+    pub implements: Vec<SharedStr>,
     pub tier: TrustTier,
     /// The `SourceTable` object property — Page/PageExtension/Report/
     /// ReportExtension only; `None` for every other kind (and when the
@@ -159,7 +162,7 @@ pub struct ObjectNode {
     pub query_columns: Vec<QueryColumnNode>,
     /// The object's `protected var` globals as `(name lowercased, declared type
     /// text)`, document order: what an extension of it can read (S9.0e).
-    pub protected_vars: Vec<(String, String)>,
+    pub protected_vars: Vec<(SharedStr, SharedStr)>,
     /// `true` when the OWNING FILE's parse hit tree-sitter error recovery
     /// (`AlFile::parse_status == ParseStatus::Recovered` — receiver-closure
     /// plan, Task 1). File-level, not object- or routine-level: a `#if`
@@ -198,13 +201,13 @@ pub struct AbiParamRetained {
     /// The parameter name as the symbol reference declares it (engine-switch
     /// S2b.5, G15a: argument bindings and event parameters need it). Not part
     /// of any fingerprint or dispatch decision.
-    pub name: String,
-    pub type_text: String,
+    pub name: SharedStr,
+    pub type_text: SharedStr,
     pub is_var: bool,
     /// Declared `temporary` (G15a). Not part of any fingerprint.
     pub is_temporary: bool,
     pub subtype_id: Option<i64>,
-    pub subtype_raw_name: Option<String>,
+    pub subtype_raw_name: Option<SharedStr>,
     pub subtype_tag: SubtypeTag,
 }
 
@@ -247,7 +250,7 @@ pub enum AbiParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoutineNode {
     pub id: RoutineNodeId,
-    pub name: String,
+    pub name: SharedStr,
     pub is_trigger: bool,
     pub access: Access,
     pub tier: TrustTier,
@@ -299,7 +302,7 @@ pub struct RoutineNode {
     /// was duplicated. Always `String::new()` for ABI/SymbolOnly routines —
     /// those already carry a non-zero `sig_fp` in their `RoutineNodeId` when
     /// signatures differ, so same-id runs there are already true duplicates.
-    pub param_sig_key: String,
+    pub param_sig_key: SharedStr,
     /// Declared return-type text, verbatim (e.g. `"Codeunit X"`) for a SOURCE
     /// routine (copied from `RoutineDecl.return_type`), or the reconstructed
     /// SOURCE-SHAPED text for an ABI/SymbolOnly routine (Task 2 — see
@@ -309,7 +312,7 @@ pub struct RoutineNode {
     /// return type could not be safely reconstructed (fail-closed — see that
     /// function's doc). Not yet consumed by any resolver; additive plumbing
     /// for a future compound-receiver Phase-A step (`Func().Method()`).
-    pub return_type: Option<String>,
+    pub return_type: Option<SharedStr>,
     /// The structured `(name, id)` cross-validation pair from an ABI return
     /// type's `Subtype` (Task 2), present only when the underlying
     /// `AbiRoutine::return_type_id` carried both fields. Always `None` for a
@@ -318,7 +321,7 @@ pub struct RoutineNode {
     /// regardless of which `RouteTarget` shape a consumer resolves through —
     /// see `AbiRoutine::return_type_id`'s doc for the full cross-validation
     /// rationale (Task 3 consumes this; Task 2 only carries it).
-    pub return_type_id: Option<(String, i64)>,
+    pub return_type_id: Option<(SharedStr, i64)>,
     /// `true` when this node is the arbitrary SURVIVOR of a dedup collapse
     /// that folded ≥2 raw ABI overload entries onto the same `RoutineNodeId`
     /// (Task 3 review fix). An ABI routine's [`param_sig_key`] is always
@@ -407,12 +410,55 @@ pub struct RoutineNode {
 impl ShareStrings for ObjectNode {
     fn share_strings(&mut self, pool: &mut StrPool) {
         self.id.share_strings(pool);
+        pool.share(&mut self.name);
+        pool.share_opt(&mut self.extends_target);
+        for s in &mut self.implements {
+            pool.share(s);
+        }
+        for c in &mut self.page_controls {
+            pool.share(&mut c.name_lc);
+        }
+        for f in &mut self.fields {
+            pool.share(&mut f.name_lc);
+            pool.share(&mut f.type_text);
+        }
+        for d in &mut self.dataitems {
+            pool.share(&mut d.name_lc);
+            pool.share(&mut d.name);
+        }
+        for q in &mut self.query_columns {
+            pool.share(&mut q.name_lc);
+            pool.share(&mut q.field_lc);
+        }
+        for (name, ty) in &mut self.protected_vars {
+            pool.share(name);
+            pool.share(ty);
+        }
     }
 }
 
 impl ShareStrings for RoutineNode {
     fn share_strings(&mut self, pool: &mut StrPool) {
         self.id.share_strings(pool);
+        pool.share(&mut self.name);
+        for s in &mut self.event_subscribers {
+            pool.share(&mut s.publisher_object_type);
+            pool.share(&mut s.publisher_name);
+            pool.share(&mut s.event_name);
+            pool.share_opt(&mut s.element);
+        }
+        pool.share(&mut self.param_sig_key);
+        pool.share_opt(&mut self.return_type);
+        if let Some((name, _)) = &mut self.return_type_id {
+            pool.share(name);
+        }
+        if let AbiParams::Complete(params) = &mut self.abi_params {
+            for p in params {
+                pool.share(&mut p.name);
+                pool.share(&mut p.type_text);
+                pool.share_opt(&mut p.subtype_raw_name);
+            }
+        }
     }
 }
 
@@ -639,7 +685,7 @@ pub fn extract_nodes(
                 .iter()
                 .filter_map(|pc| {
                     Some(PageControlNode {
-                        name_lc: pc.name.fold_identifier(),
+                        name_lc: pc.name.fold_identifier().into(),
                         kind: page_control_kind(&pc.kind)?,
                         target: parse_object_ref_value(&pc.target).0,
                     })
@@ -657,8 +703,8 @@ pub fn extract_nodes(
             obj.fields
                 .iter()
                 .map(|f| FieldNode {
-                    name_lc: f.name.fold_identifier(),
-                    type_text: f.data_type.clone(),
+                    name_lc: f.name.fold_identifier().into(),
+                    type_text: f.data_type.as_str().into(),
                 })
                 .collect()
         } else {
@@ -678,8 +724,8 @@ pub fn extract_nodes(
             obj.dataitems
                 .iter()
                 .map(|(name, table)| DataitemNode {
-                    name_lc: name.fold_identifier(),
-                    name: name.clone(),
+                    name_lc: name.fold_identifier().into(),
+                    name: name.as_str().into(),
                     source_table: parse_object_ref_value(table).0,
                 })
                 .collect()
@@ -689,10 +735,10 @@ pub fn extract_nodes(
 
         objects.push(ObjectNode {
             id: obj_id.clone(),
-            name: obj.name.clone(),
+            name: obj.name.as_str().into(),
             declared_id: obj.id,
-            extends_target: obj.extends_target.clone(),
-            implements: obj.implements.clone(),
+            extends_target: obj.extends_target.as_deref().map(SharedStr::from),
+            implements: obj.implements.iter().map(SharedStr::from).collect(),
             tier,
             source_table,
             table_no,
@@ -704,9 +750,9 @@ pub fn extract_nodes(
                 .query_columns
                 .iter()
                 .map(|(name, table, field)| QueryColumnNode {
-                    name_lc: name.fold_identifier(),
+                    name_lc: name.fold_identifier().into(),
                     source_table: parse_object_ref_value(table).0,
-                    field_lc: field.fold_identifier(),
+                    field_lc: field.fold_identifier().into(),
                 })
                 .collect(),
             protected_vars: obj
@@ -714,7 +760,7 @@ pub fn extract_nodes(
                 .iter()
                 .filter_map(|name| {
                     let g = obj.globals.iter().find(|g| g.name == *name)?;
-                    Some((name.fold_identifier(), g.ty.clone()?))
+                    Some((name.fold_identifier().into(), g.ty.as_deref()?.into()))
                 })
                 .collect(),
             parse_incomplete: file.parse_status != ParseStatus::Clean,
@@ -740,7 +786,7 @@ pub fn extract_nodes(
             let include_sender = publisher_include_sender(r, &file.ir);
             routines.push(RoutineNode {
                 id: source_routine_node_id(obj_id.clone(), r),
-                name: r.name.clone(),
+                name: r.name.as_str().into(),
                 is_trigger: matches!(r.kind, RoutineKind::Trigger),
                 access: Access::from_modifier(r.access_modifier.as_deref()),
                 tier,
@@ -750,8 +796,8 @@ pub fn extract_nodes(
                 include_sender,
                 abi_routine_kind: None,
                 abi_event_kind: None,
-                param_sig_key: param_sig_key(&r.params),
-                return_type: r.return_type.clone(),
+                param_sig_key: param_sig_key(&r.params).into(),
+                return_type: r.return_type.as_deref().map(SharedStr::from),
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
@@ -799,7 +845,7 @@ pub(crate) mod test_fixtures {
                 params_count: 2,
                 sig_fp: 0xDEAD_BEEF_CAFE_F00D,
             },
-            name: "DoThing".to_string(),
+            name: "DoThing".into(),
             is_trigger: false,
             access: Access::Internal,
             tier: TrustTier::EmbeddedSource,
@@ -810,12 +856,12 @@ pub(crate) mod test_fixtures {
             // had ZERO round-trip coverage anywhere in the repo despite being
             // exactly what Task 5 persists. Populated with real values below.
             event_subscribers: vec![ParsedSubscriberArgs {
-                publisher_object_type: "codeunit".to_string(),
-                publisher_name: "sales-post".to_string(),
+                publisher_object_type: "codeunit".into(),
+                publisher_name: "sales-post".into(),
                 // Maximal: set although a real attribute carries a name OR a number.
                 publisher_id: Some(80),
-                event_name: "onbeforepostsalesdoc".to_string(),
-                element: Some("no.".to_string()),
+                event_name: "onbeforepostsalesdoc".into(),
+                element: Some("no.".into()),
                 skip_on_missing_license: true,
                 skip_on_missing_permission: false,
             }],
@@ -824,19 +870,19 @@ pub(crate) mod test_fixtures {
             include_sender: Some(false),
             abi_routine_kind: Some(AbiRoutineKind::EventPublisher),
             abi_event_kind: Some(AbiEventKind::Business),
-            param_sig_key: "integer|code[20]".to_string(),
-            return_type: Some("Codeunit \"Sales-Post\"".to_string()),
-            return_type_id: Some(("Sales-Post".to_string(), 80)),
+            param_sig_key: "integer|code[20]".into(),
+            return_type: Some("Codeunit \"Sales-Post\"".into()),
+            return_type_id: Some(("Sales-Post".into(), 80)),
             abi_overload_collapsed: false,
             source_overload_aliased: true,
             preproc_context: vec![("CLEAN27".to_string(), false)].into_boxed_slice(),
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
-                name: "Customer".to_string(),
-                type_text: "Record".to_string(),
+                name: "Customer".into(),
+                type_text: "Record".into(),
                 is_var: true,
                 is_temporary: true,
                 subtype_id: Some(18),
-                subtype_raw_name: Some("Customer".to_string()),
+                subtype_raw_name: Some("Customer".into()),
                 subtype_tag: SubtypeTag::Full,
             }]),
         }
@@ -850,10 +896,10 @@ pub(crate) mod test_fixtures {
                 kind: al_syntax::ir::ObjectKind::Page,
                 key: crate::program::node::ObjKey::Id(50100),
             },
-            name: "Sales Card".to_string(),
+            name: "Sales Card".into(),
             declared_id: Some(50100),
-            extends_target: Some("Base Card".to_string()),
-            implements: vec!["ICustomInterface".to_string()],
+            extends_target: Some("Base Card".into()),
+            implements: vec!["ICustomInterface".into()],
             tier: TrustTier::EmbeddedSource,
             source_table: Some(ObjectRef::Name {
                 raw: "Customer".to_string(),
@@ -862,7 +908,7 @@ pub(crate) mod test_fixtures {
             table_no: Some(ObjectRef::Id(18)),
             source_table_temporary: true,
             page_controls: vec![PageControlNode {
-                name_lc: "lines".to_string(),
+                name_lc: "lines".into(),
                 kind: PageControlKind::Part,
                 target: ObjectRef::Name {
                     raw: "Sales Line Subform".to_string(),
@@ -870,16 +916,16 @@ pub(crate) mod test_fixtures {
                 },
             }],
             fields: vec![FieldNode {
-                name_lc: "no.".to_string(),
-                type_text: "Code[20]".to_string(),
+                name_lc: "no.".into(),
+                type_text: "Code[20]".into(),
             }],
             dataitems: vec![DataitemNode {
-                name_lc: "customer".to_string(),
-                name: "Customer".to_string(),
+                name_lc: "customer".into(),
+                name: "Customer".into(),
                 source_table: ObjectRef::Id(18),
             }],
             query_columns: Vec::new(),
-            protected_vars: vec![("item".to_string(), "Record Item".to_string())],
+            protected_vars: vec![("item".into(), "Record Item".into())],
             parse_incomplete: true,
         }
     }
@@ -1057,7 +1103,7 @@ page 50100 "Card"
         assert_eq!(
             page.page_controls[0],
             PageControlNode {
-                name_lc: "lines".to_string(),
+                name_lc: "lines".into(),
                 kind: PageControlKind::Part,
                 target: ObjectRef::Name {
                     raw: "Sales Line Subform".to_string(),

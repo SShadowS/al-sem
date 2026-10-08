@@ -575,7 +575,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
             }
             synth.push(RoutineNode {
                 id: synth_id,
-                name: platform_event_display_name(&args.event_name).to_string(),
+                name: platform_event_display_name(&args.event_name).into(),
                 is_trigger: false,
                 access: Access::Public,
                 tier: pub_obj.tier,
@@ -590,7 +590,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 include_sender: None,
                 abi_routine_kind: None,
                 abi_event_kind: None,
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 return_type: None,
                 return_type_id: None,
                 abi_overload_collapsed: false,
@@ -1151,7 +1151,7 @@ codeunit 50100 "Ws2 Cu"
                 .routines
                 .iter()
                 .filter(|r| r.id.object.app == ws_ref)
-                .map(|r| r.name.clone())
+                .map(|r| r.name.to_string())
                 .collect();
             names.sort();
             names
@@ -1315,7 +1315,7 @@ codeunit 50100 "Ws2 Cu"
                 params_count,
                 sig_fp,
             },
-            name: name_lc.to_string(),
+            name: name_lc.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::SymbolOnly,
@@ -1325,7 +1325,7 @@ codeunit 50100 "Ws2 Cu"
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,
@@ -1357,7 +1357,7 @@ codeunit 50100 "Ws2 Cu"
                 params_count,
                 sig_fp,
             },
-            name: name_lc.to_string(),
+            name: name_lc.into(),
             is_trigger: false,
             access: Access::Public,
             tier: TrustTier::Workspace,
@@ -1367,7 +1367,7 @@ codeunit 50100 "Ws2 Cu"
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: param_sig_key.to_string(),
+            param_sig_key: param_sig_key.into(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,

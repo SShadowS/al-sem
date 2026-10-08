@@ -245,7 +245,7 @@ pub fn object_fact_census(
                 out.push(format!("{field}\t{}\tmodel={m}\tprogram={p}", o.id));
             }
         };
-        differ("name", o.name.clone(), n.name.clone());
+        differ("name", o.name.clone(), n.name.to_string());
         differ(
             "number",
             o.object_number.to_string(),

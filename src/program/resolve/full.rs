@@ -1029,7 +1029,7 @@ fn receiver_fact(
                 },
             };
             let i = graph.objects.binary_search_by(|o| o.id.cmp(&id)).ok()?;
-            Some(graph.objects[i].name.clone())
+            Some(graph.objects[i].name.to_string())
         };
     // AL spelling: quoted when the name is not a plain identifier.
     let al_name = |n: &str| {

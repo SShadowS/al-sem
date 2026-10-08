@@ -33,10 +33,12 @@ remove many id and name COPIES; this step makes the copies that remain share one
 - **Fields that become `Arc<str>`:**
   - T1 identity: `RoutineNodeId.name_lc`, `.enclosing_member_lc`; `ObjKey::Name`.
   - T2 nodes: `ObjectNode` (`name`, `extends_target`, `implements`, `protected_vars`),
-    `ObjectRef::Name` (`raw`, `normalized_lc`), `FieldNode`, `PageControlNode`,
-    `DataitemNode`, `QueryColumnNode`, `RoutineNode` (`name`, `param_sig_key`,
-    `return_type`, `return_type_id.0`), `ParsedSubscriberArgs` (string fields),
-    `AbiParamRetained` (string fields).
+    `FieldNode`, `PageControlNode`, `DataitemNode`, `QueryColumnNode`, `RoutineNode`
+    (`name`, `param_sig_key`, `return_type`, `return_type_id.0`), `ParsedSubscriberArgs`
+    (string fields), `AbiParamRetained` (string fields). **`ObjectRef::Name` stays
+    `String`** (decided in T2): the resolver builds a transient `ObjectRef` per lookup,
+    so `SharedStr` would add an allocation and copy on a hot path, and the stored ones
+    total 0.24 MiB on CG.
   - T3 metadata: `RoutineMeta` (`name`, `enclosing_member`, `virtual_path`), `ParamMeta`
     (`name`, `ty`).
 - **Not in scope:** dependency bodies (`Keep`), edge witness/evidence (S10.5), `dep_lines`

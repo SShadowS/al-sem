@@ -117,8 +117,8 @@ impl<'g> DependencyRegistry<'g> {
                 AbiParams::Complete(ps) => TargetParams::Known(
                     ps.iter()
                         .map(|p| TargetParam {
-                            name: p.name.clone(),
-                            ty: Some(p.type_text.clone()),
+                            name: p.name.to_string(),
+                            ty: Some(p.type_text.to_string()),
                             by_ref: p.is_var,
                             temporary: Some(p.is_temporary),
                         })

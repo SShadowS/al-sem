@@ -766,7 +766,7 @@ fn routine_label(
 ) -> String {
     let obj_name = obj_by_id
         .get(&nid.object)
-        .map(|o| o.name.clone())
+        .map(|o| o.name.to_string())
         .unwrap_or_else(|| obj_key_str(&nid.object.key));
     format!("{obj_name}.{name}()")
 }
@@ -1068,7 +1068,7 @@ mod tests {
                 kind,
                 key: ObjKey::Id(id),
             },
-            name: name.to_string(),
+            name: name.into(),
             declared_id: Some(id),
             extends_target: None,
             implements: vec![],
@@ -1098,7 +1098,7 @@ mod tests {
                 params_count: params,
                 sig_fp: 0,
             },
-            name: name.to_string(),
+            name: name.into(),
             is_trigger: false,
             access: crate::program::node_extract::Access::Public,
             tier: TrustTier::Workspace,
@@ -1108,7 +1108,7 @@ mod tests {
             include_sender: None,
             abi_routine_kind: None,
             abi_event_kind: None,
-            param_sig_key: String::new(),
+            param_sig_key: Default::default(),
             return_type: None,
             return_type_id: None,
             abi_overload_collapsed: false,

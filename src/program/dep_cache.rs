@@ -979,6 +979,66 @@ mod tests {
         assert!(links > 0, "precondition: root B links a tier publisher");
     }
 
+    /// S10.2: the built tier holds one allocation per distinct text across
+    /// every pooled field (ids, `dep_meta` keys, node names, types, subscriber
+    /// arguments, ...): a fresh pool over a copy of it merges nothing.
+    #[test]
+    fn the_tier_holds_one_allocation_per_text() {
+        use crate::program::str_pool::SharedStr;
+        use crate::program::str_pool::{ShareStrings, StrPool};
+        let fx = two_roots_one_alpackages();
+        // Repeated texts in both node kinds: `Run` in two codeunits, and one
+        // field type in two fields of a table.
+        let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
+        let symbols =
+            r#"{"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Run","Id":1}]}]}"#;
+        let table = "table 82 \"T\"\n{\n    fields\n    {\n        field(1; \"A\"; Code[20]) { }\n        field(2; \"B\"; Code[20]) { }\n    }\n}\n";
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+            ("src/SalesPost.Codeunit.al", SALES_POST_SRC.as_bytes()),
+            (
+                "src/Extra.Codeunit.al",
+                b"codeunit 81 \"Extra\" { procedure Run() begin end; }",
+            ),
+            ("src/T.Table.al", table.as_bytes()),
+        ]);
+        std::fs::write(
+            fx.alpackages.join("Microsoft_Base Application_28.4.app"),
+            app,
+        )
+        .unwrap();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        let tier = &a.dep_layer.dep_nodes;
+        let mut objects = (*tier.objects).clone();
+        let mut routines = (*tier.routines).clone();
+        let fields = &objects
+            .iter()
+            .find(|o| o.name == "T")
+            .expect("precondition: the table loads")
+            .fields;
+        assert_eq!(fields.len(), 2, "precondition: two fields");
+        assert!(SharedStr::ptr_eq(
+            &fields[0].type_text,
+            &fields[1].type_text
+        ));
+        let mut keys: Vec<crate::program::node::RoutineNodeId> =
+            tier.dep_meta.keys().cloned().collect();
+        let runs: Vec<_> = routines.iter().filter(|r| r.name == "Run").collect();
+        assert!(runs.len() >= 2, "precondition: a node name repeats");
+        // Stated directly, not through `ShareStrings` (whose field list the
+        // pool check below shares with the build).
+        assert!(SharedStr::ptr_eq(&runs[0].name, &runs[1].name));
+        let mut pool = StrPool::default();
+        objects.share_strings(&mut pool);
+        routines.share_strings(&mut pool);
+        keys.share_strings(&mut pool);
+        let (seen, distinct, merged) = pool.counts();
+        assert!(seen > distinct, "precondition: equal texts to share");
+        assert_eq!(merged, 0, "a text is held in more than one allocation");
+    }
+
     /// A source remembered at one stamp is never served, with or without its
     /// text, for another stamp of the same path.
     #[test]

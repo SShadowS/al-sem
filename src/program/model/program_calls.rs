@@ -1110,7 +1110,7 @@ impl<'a> Converter<'a> {
     fn type_ref(&self, key: &ObjectKey) -> Option<ExternalTypeRef> {
         self.objects.get(key).map(|o| ExternalTypeRef {
             kind: format!("{:?}", o.id.kind),
-            name: o.name.clone(),
+            name: o.name.to_string(),
         })
     }
 
@@ -1646,7 +1646,7 @@ impl<'a> Converter<'a> {
             .iter()
             .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
             .min_by_key(|o| o.id.app != self.primary)
-            .map_or_else(|| name_lc.clone(), |o| o.name.clone());
+            .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
         let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
             let mut v: Vec<&ObjectNode> = self
                 .graph

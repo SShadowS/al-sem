@@ -10,6 +10,8 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AttributeIr, ExprId, ExprKind, Ir, Literal, ObjectDecl, RoutineDecl};
 use serde::{Deserialize, Serialize};
 
+use crate::program::str_pool::SharedStr;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Subscriber argument parsing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20,18 +22,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParsedSubscriberArgs {
     /// Publisher object type, lowercased (e.g. `"codeunit"`).
-    pub publisher_object_type: String,
+    pub publisher_object_type: SharedStr,
     /// Publisher object name, unquoted and lowercased. Empty when the attribute
     /// names the publisher by number (`publisher_id`).
-    pub publisher_name: String,
+    pub publisher_name: SharedStr,
     /// The publisher's object number when the attribute names it that way
     /// (`[EventSubscriber(ObjectType::Codeunit, 50, …)]`; engine-switch S4.3b).
     pub publisher_id: Option<i64>,
     /// Event procedure name, unquoted and lowercased.
-    pub event_name: String,
+    pub event_name: SharedStr,
     /// Optional element filter — `None` when absent or when the arg is an empty
     /// string literal.
-    pub element: Option<String>,
+    pub element: Option<SharedStr>,
     pub skip_on_missing_license: bool,
     pub skip_on_missing_permission: bool,
 }
@@ -95,11 +97,11 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
         .is_some_and(|&id| matches!(&ir.expr(id).kind, ExprKind::Literal(Literal::Bool(true))));
 
     Some(ParsedSubscriberArgs {
-        publisher_object_type,
-        publisher_name,
+        publisher_object_type: publisher_object_type.into(),
+        publisher_name: publisher_name.into(),
         publisher_id,
-        event_name,
-        element,
+        event_name: event_name.into(),
+        element: element.map(SharedStr::from),
         skip_on_missing_license,
         skip_on_missing_permission,
     })
@@ -455,7 +457,7 @@ mod tests {
             .map(|r| {
                 let a = parse_event_subscriber_ir(&r.attributes_parsed[0], &af.ir)
                     .expect("identifier forms parse");
-                (a.event_name, a.element)
+                (a.event_name.to_string(), a.element.map(String::from))
             })
             .collect();
         assert_eq!(

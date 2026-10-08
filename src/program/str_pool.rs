@@ -126,17 +126,33 @@ impl PartialEq<SharedStr> for String {
 
 /// One allocation per distinct text.
 #[derive(Default)]
-pub struct StrPool(HashSet<SharedStr>);
+pub struct StrPool {
+    texts: HashSet<SharedStr>,
+    seen: usize,
+    merged: usize,
+}
 
 impl StrPool {
     /// Replace `s` with the pool's copy of its text (adding it when new).
     pub fn share(&mut self, s: &mut SharedStr) {
-        match self.0.get(s.as_str()) {
-            Some(pooled) => *s = pooled.clone(),
+        self.seen += 1;
+        match self.texts.get(s.as_str()) {
+            Some(pooled) => {
+                if !SharedStr::ptr_eq(pooled, s) {
+                    self.merged += 1;
+                    *s = pooled.clone();
+                }
+            }
             None => {
-                self.0.insert(s.clone());
+                self.texts.insert(s.clone());
             }
         }
+    }
+
+    /// Strings passed to [`Self::share`], distinct texts among them, and how
+    /// many were a second allocation of a text the pool already held.
+    pub fn counts(&self) -> (usize, usize, usize) {
+        (self.seen, self.texts.len(), self.merged)
     }
 
     pub fn share_opt(&mut self, s: &mut Option<SharedStr>) {
@@ -202,5 +218,12 @@ mod tests {
         pool.share(&mut c);
         assert!(SharedStr::ptr_eq(&a, &b));
         assert!(!SharedStr::ptr_eq(&a, &c));
+        assert_eq!(pool.counts(), (3, 2, 1));
+        pool.share(&mut b);
+        assert_eq!(
+            pool.counts(),
+            (4, 2, 1),
+            "an already shared text is no merge"
+        );
     }
 }

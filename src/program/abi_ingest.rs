@@ -10,7 +10,7 @@ use crate::engine::deps::symbol_reference::{
     parse_symbol_reference,
 };
 use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
-use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::{
     AbiParamRetained, AbiParams, Access, FieldNode, ObjectNode, RoutineNode,
 };
@@ -104,12 +104,12 @@ fn retain_abi_params(routine: &AbiRoutine) -> AbiParams {
             .parameters
             .iter()
             .map(|p| AbiParamRetained {
-                name: p.name.clone(),
-                type_text: p.type_text.clone(),
+                name: p.name.as_str().into(),
+                type_text: p.type_text.as_str().into(),
                 is_var: p.is_var,
                 is_temporary: p.is_temporary,
                 subtype_id: p.subtype_id,
-                subtype_raw_name: p.subtype_raw_name.clone(),
+                subtype_raw_name: p.subtype_raw_name.as_deref().map(SharedStr::from),
                 subtype_tag: p.subtype_tag,
             })
             .collect(),
@@ -313,8 +313,8 @@ fn abi_table_fields(tables: &[AbiTable], object_number: i64, name: &str) -> Vec<
             t.fields
                 .iter()
                 .map(|f| FieldNode {
-                    name_lc: f.name.fold_identifier(),
-                    type_text: f.data_type.clone(),
+                    name_lc: f.name.fold_identifier().into(),
+                    type_text: f.data_type.as_str().into(),
                 })
                 .collect()
         })
@@ -491,14 +491,19 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
 
         objects.push(ObjectNode {
             id: obj_id.clone(),
-            name: abi_obj.name.clone(),
+            name: abi_obj.name.as_str().into(),
             declared_id: if abi_obj.object_number != 0 {
                 Some(abi_obj.object_number)
             } else {
                 None
             },
-            extends_target: abi_obj.extends_target_name.clone(),
-            implements: abi_obj.implemented_interfaces.clone().unwrap_or_default(),
+            extends_target: abi_obj.extends_target_name.as_deref().map(SharedStr::from),
+            implements: abi_obj
+                .implemented_interfaces
+                .iter()
+                .flatten()
+                .map(SharedStr::from)
+                .collect(),
             tier: TrustTier::SymbolOnly,
             // ABI/SymbolOnly ingestion does not (yet) project SourceTable/TableNo/
             // page-control data from the dependency symbol reference — additive gap,
@@ -543,7 +548,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
 
             routines.push(RoutineNode {
                 id: rid,
-                name: routine.name.clone(),
+                name: routine.name.as_str().into(),
                 is_trigger: false,
                 // `protected` ABI members are carried as `Access::Protected` —
                 // an extension of the declaring object may call them (Task 1).
@@ -597,19 +602,22 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // type-query OR plain dispatch (`resolver::resolve_in_object`,
                 // Task 2's plain-dispatch marker guard) declines rather than
                 // trusts a possibly-wrong candidate.
-                param_sig_key: String::new(),
+                param_sig_key: Default::default(),
                 // Task 2: the reconstructed SOURCE-SHAPED return-type text
                 // (see `symbol_reference::reconstruct_return_type_text`'s
                 // fail-closed rules) now flows through instead of being
                 // hard-discarded — resolution-neutral until Task 3 adds a
                 // consumer (nothing reads `RoutineNode.return_type` for an
                 // ABI-tier routine yet).
-                return_type: routine.return_type_text.clone(),
+                return_type: routine.return_type_text.as_deref().map(SharedStr::from),
                 // The structured `(name, id)` cross-validation pair, carried
                 // alongside the text so Task 3 can reach it via the SAME
                 // `RoutineNodeId` lookup regardless of route shape (`AbiSymbol`
                 // or `Routine(rid)`) — see `AbiRoutine::return_type_id`'s doc.
-                return_type_id: routine.return_type_id.clone(),
+                return_type_id: routine
+                    .return_type_id
+                    .as_ref()
+                    .map(|(name, id)| (SharedStr::from(name), *id)),
                 // Never marked here: ingestion emits one `RoutineNode` per RAW
                 // ABI routine, with no folding yet — the actual collapse (and
                 // thus the only place that can know ≥2 raw entries shared a
@@ -1687,7 +1695,7 @@ codeunit 50900 "Subscriber CU"
         );
         assert_eq!(
             get_helper.return_type_id,
-            Some(("Helper".to_string(), 2354)),
+            Some(("Helper".into(), 2354)),
             "the structured (name, id) cross-validation pair must also be carried \
              onto the graph-level RoutineNode, reachable by RoutineNodeId lookup \
              for Task 3's cross-object chain cross-validation"
