@@ -57,11 +57,11 @@ use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::encoding::{ColOut, LineIndex, LineTable};
 use crate::program::dep_cache::DepCache;
 use crate::program::dep_cache::DepLspTier;
-use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::BuildProfile;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMeta};
-use crate::program::resolve::edge::{Edge, RouteTarget};
+use crate::program::resolve::edge::{AbiRoutineKey, Edge, EdgeKind, RouteTarget, SourcePos};
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::{
     ClassifiedEdge, ObligationId, ProgramContext, app_object_map, build_context_with,
@@ -99,6 +99,107 @@ pub struct EdgeRef {
 /// event-flow edges.
 pub const EVENT_EDGES_KEY: &str = "\u{0}events";
 
+/// A position range in one file, the file named once per file (`SharedStr`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LspSpan {
+    pub unit: SharedStr,
+    pub start: SourcePos,
+    pub end: SourcePos,
+}
+
+/// An edge target the LSP can show: a routine (`incoming`, outgoing items)
+/// or an ABI symbol (an outgoing item at a synthesized location).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LspTarget {
+    Routine(RoutineNodeId),
+    Abi(Box<AbiRoutineKey>),
+}
+
+/// The LSP's stored form of one resolved edge (engine-switch S10.5): only the
+/// facts the LSP reads. The resolver's complete edge (`ClassifiedEdge`:
+/// evidence, conditions, witness, dispatch shape, completeness, repeated caller
+/// copies, builtin and unresolved routes) stays in the program report; the LSP
+/// projects it with [`LspEdge::project`] right after resolution. Every call
+/// site is kept, even one with no target here, so call-site counts are those
+/// of the report.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LspEdge {
+    /// The caller (a call edge) or the publisher (an event link).
+    pub from: RoutineNodeId,
+    pub kind: EdgeKind,
+    /// The site's span.
+    pub span: LspSpan,
+    /// The site's callee fingerprint (with `from` and `span`, a call site's
+    /// identity: see [`Self::obligation_id`]).
+    pub callee_fp: u64,
+    pub targets: Box<[LspTarget]>,
+    /// The resolved edge's route count, every target kind included: an event
+    /// link's subscriber count (`publisher_fanout`), which can include a
+    /// subscriber the LSP cannot show.
+    pub route_count: u32,
+}
+
+impl LspEdge {
+    /// `edge`'s LSP form; `unit` must be its site's file (shared per file).
+    pub fn project(edge: &Edge, unit: &SharedStr) -> LspEdge {
+        debug_assert_eq!(edge.site.span.unit, unit.as_str());
+        LspEdge {
+            from: edge.from.clone(),
+            kind: edge.kind,
+            span: LspSpan {
+                unit: unit.clone(),
+                start: edge.site.span.start,
+                end: edge.site.span.end,
+            },
+            callee_fp: edge.site.callee_fingerprint,
+            targets: edge
+                .routes
+                .iter()
+                .filter_map(|r| match &r.target {
+                    RouteTarget::Routine(id) => Some(LspTarget::Routine(id.clone())),
+                    RouteTarget::AbiSymbol { key } => Some(LspTarget::Abi(Box::new(key.clone()))),
+                    RouteTarget::Builtin(_) | RouteTarget::Unresolved => None,
+                })
+                .collect(),
+            route_count: u32::try_from(edge.routes.len()).expect("routes fit in u32"),
+        }
+    }
+
+    /// [`Self::project`] of a call edge, checking (debug builds) that its
+    /// identity is the one the resolver gave it.
+    pub fn project_classified(ce: &ClassifiedEdge, unit: &SharedStr) -> LspEdge {
+        let e = LspEdge::project(&ce.edge, unit);
+        debug_assert_eq!(e.obligation_id(), ce.obligation_id);
+        e
+    }
+
+    /// The resolver's identity of this edge: an event link's publisher, a
+    /// call site's caller, span and callee fingerprint.
+    #[must_use]
+    pub fn obligation_id(&self) -> ObligationId {
+        if self.kind == EdgeKind::EventFlow {
+            return ObligationId::Publisher(self.from.clone());
+        }
+        ObligationId::CallSite {
+            caller: self.from.clone(),
+            span: crate::program::resolve::edge::CanonicalSpan {
+                unit: self.span.unit.to_string(),
+                start: self.span.start,
+                end: self.span.end,
+            },
+            callee_fp: self.callee_fp,
+        }
+    }
+
+    /// The routine targets, each once (see [`push_edge_targets`]).
+    pub fn routine_targets(&self) -> impl Iterator<Item = &RoutineNodeId> {
+        self.targets.iter().filter_map(|t| match t {
+            LspTarget::Routine(id) => Some(id),
+            LspTarget::Abi(_) => None,
+        })
+    }
+}
+
 /// Reserved `EdgeRef.file` key for [`DepEventLinks::edges`] (same reasoning as
 /// [`EVENT_EDGES_KEY`]).
 pub const DEP_EVENT_EDGES_KEY: &str = "\u{0}dep-events";
@@ -112,7 +213,7 @@ pub const DEP_EVENT_EDGES_KEY: &str = "\u{0}dep-events";
 /// subscribers on both sides is split between the two.
 #[derive(Default)]
 pub struct DepEventLinks {
-    pub edges: Vec<ClassifiedEdge>,
+    pub edges: Vec<LspEdge>,
     /// `incoming` over [`Self::edges`] (refs keyed [`DEP_EVENT_EDGES_KEY`]).
     pub incoming: HashMap<RoutineNodeId, Vec<EdgeRef>>,
     /// `publisher_fanout` over [`Self::edges`].
@@ -120,13 +221,13 @@ pub struct DepEventLinks {
 }
 
 impl DepEventLinks {
-    pub fn new(edges: Vec<ClassifiedEdge>) -> Self {
+    pub fn new(edges: Vec<LspEdge>) -> Self {
         let mut incoming = HashMap::new();
         let mut publisher_fanout = HashMap::new();
         let key: Arc<str> = Arc::from(DEP_EVENT_EDGES_KEY);
-        for (idx, ce) in edges.iter().enumerate() {
-            push_edge_targets(&mut incoming, &ce.edge, &key, idx as u32);
-            *publisher_fanout.entry(ce.edge.from.clone()).or_insert(0) += ce.edge.routes.len();
+        for (idx, e) in edges.iter().enumerate() {
+            push_edge_targets(&mut incoming, e, &key, idx as u32);
+            *publisher_fanout.entry(e.from.clone()).or_insert(0) += e.route_count as usize;
         }
         incoming.shrink_to_fit();
         publisher_fanout.shrink_to_fit();
@@ -143,13 +244,13 @@ impl DepEventLinks {
 /// workspace (`primary`) and the dependency-only part (see
 /// [`DepEventLinks`]). A route is the workspace's when it targets a workspace
 /// routine; a link whose publisher is in the workspace is the workspace's whole.
-pub(crate) fn split_event_links(
-    raw: Vec<Edge>,
-    primary: AppRef,
-) -> (Vec<ClassifiedEdge>, Vec<ClassifiedEdge>) {
-    let classify = |edge: Edge| ClassifiedEdge {
-        obligation_id: ObligationId::Publisher(edge.from.clone()),
-        edge,
+pub(crate) fn split_event_links(raw: Vec<Edge>, primary: AppRef) -> (Vec<LspEdge>, Vec<LspEdge>) {
+    // One file text per file (publishers' files), as for call edges.
+    let mut pool = crate::program::str_pool::StrPool::default();
+    let mut classify = |edge: Edge| {
+        let mut unit = SharedStr::from(edge.site.span.unit.as_str());
+        pool.share(&mut unit);
+        LspEdge::project(&edge, &unit)
     };
     let in_ws = |r: &crate::program::resolve::edge::Route| matches!(&r.target, RouteTarget::Routine(id) if id.object.app == primary);
     let (mut ws, mut dep) = (Vec::new(), Vec::new());
@@ -178,22 +279,20 @@ pub(crate) fn split_event_links(
     (ws, dep)
 }
 
-/// An event link with its routes sorted: the form
+/// An LSP edge with its targets sorted: the form
 /// [`LspSnapshot::merged_event_edges`] returns, for comparisons.
 #[must_use]
-pub fn canonical_event_edge(mut edge: Edge) -> Edge {
-    edge.routes.sort();
+pub fn canonical_event_edge(mut edge: LspEdge) -> LspEdge {
+    edge.targets.sort();
     edge
 }
 
 /// Debug check: a freshly computed dependency part equals the shared one
-/// (order aside). Every test run thereby checks that the dependency links do
-/// not depend on the root or the rung.
-pub(crate) fn debug_assert_same_dep_links(fresh: &[ClassifiedEdge], shared: &DepEventLinks) {
+/// (order aside): every rung-2 rebuild and every cache-sharing later root.
+pub(crate) fn debug_assert_same_dep_links(fresh: &[LspEdge], shared: &DepEventLinks) {
     if cfg!(debug_assertions) {
-        let key = |ce: &ClassifiedEdge| (ce.obligation_id.clone(), ce.edge.clone());
-        let mut a: Vec<_> = fresh.iter().map(key).collect();
-        let mut b: Vec<_> = shared.edges.iter().map(key).collect();
+        let mut a: Vec<&LspEdge> = fresh.iter().collect();
+        let mut b: Vec<&LspEdge> = shared.edges.iter().collect();
         a.sort();
         b.sort();
         assert!(
@@ -364,7 +463,7 @@ pub struct LspSnapshot {
     pub parsed: HashMap<String, Arc<ParsedFileEntry>>,
     /// Workspace-scoped: holds ONLY Phase-1 (workspace-caller) `Call`/`Run`/
     /// `ImplicitTrigger` edge buckets, keyed by `virtual_path`.
-    pub edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>>,
+    pub edges_by_file: HashMap<String, Arc<Vec<LspEdge>>>,
     /// Phase-2 `EventFlow` edges (whole-program: subscribed publishers in
     /// every app, not just the workspace) — kept in ONE flat bucket rather
     /// than per-file, addressed via the reserved [`EVENT_EDGES_KEY`].
@@ -377,7 +476,7 @@ pub struct LspSnapshot {
     /// dependency-only links are in [`Self::dep_events`], shared by every root
     /// on the same dependency tier (see [`split_event_links`]). Read both
     /// through [`Self::incoming`] / [`Self::publisher_fanout`].
-    pub ws_event_edges: Arc<Vec<ClassifiedEdge>>,
+    pub ws_event_edges: Arc<Vec<LspEdge>>,
     /// The dependency-only event links, with their own `incoming` and fan-out
     /// (built once per tier; forwarded by every rung).
     pub dep_events: Arc<DepEventLinks>,
@@ -613,10 +712,10 @@ impl LspSnapshot {
         // (or, for `pf.file`/`pf.text`, `Arc::clone`d in the sharing phase
         // below — perf safe-wins Task 2 — rather than moved, since `parsed`
         // must survive intact for the caller).
-        let mut edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>> = HashMap::new();
+        let mut edges_by_file: HashMap<String, Arc<Vec<LspEdge>>> = HashMap::new();
         let mut surfaces_by_file: HashMap<String, DefSurface> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
-        let event_edges: Arc<Vec<ClassifiedEdge>>;
+        let event_edges: Arc<Vec<LspEdge>>;
         let dep_events: Arc<DepEventLinks>;
         let dep_lines: Arc<DepLines>;
         let dep_meta: Arc<DepMeta>;
@@ -657,7 +756,7 @@ impl LspSnapshot {
                     .iter()
                     .filter(|pf| ws_file_set.contains(&pf.virtual_path))
                     .collect();
-                let results: Vec<(Vec<ClassifiedEdge>, DefSurface, Vec<DeclEntry>)> =
+                let results: Vec<(Vec<LspEdge>, DefSurface, Vec<DeclEntry>)> =
                     crate::big_stack::big_stack_pool().install(|| {
                         files
                             .par_iter()
@@ -790,7 +889,7 @@ impl LspSnapshot {
 
     /// Look up one classified edge by its [`EdgeRef`].
     #[must_use]
-    pub fn edge(&self, r: &EdgeRef) -> &ClassifiedEdge {
+    pub fn edge(&self, r: &EdgeRef) -> &LspEdge {
         match &*r.file {
             EVENT_EDGES_KEY => &self.ws_event_edges[r.idx as usize],
             DEP_EVENT_EDGES_KEY => &self.dep_events.edges[r.idx as usize],
@@ -830,29 +929,35 @@ impl LspSnapshot {
 
     /// Every routed event link, both parts (a publisher with subscribers on
     /// both sides appears once per part; see [`split_event_links`]).
-    pub fn event_edges(&self) -> impl Iterator<Item = &ClassifiedEdge> {
+    pub fn event_edges(&self) -> impl Iterator<Item = &LspEdge> {
         self.ws_event_edges
             .iter()
             .chain(self.dep_events.edges.iter())
     }
 
     /// The routed event links as one edge per publisher, as the program
-    /// report holds them: the parts of a split publisher merged, every edge's
-    /// routes sorted (the order between parts is not kept), sorted. For
-    /// comparisons; pair it with [`canonical_event_edge`] on the other side.
+    /// report holds them: the parts of a split publisher merged (targets and
+    /// route counts added), every edge's targets sorted (the order between
+    /// parts is not kept), sorted. For comparisons; pair it with
+    /// [`canonical_event_edge`] on the other side.
     #[must_use]
-    pub fn merged_event_edges(&self) -> Vec<Edge> {
-        let mut by_publisher: std::collections::BTreeMap<RoutineNodeId, Edge> =
+    pub fn merged_event_edges(&self) -> Vec<LspEdge> {
+        let mut by_publisher: std::collections::BTreeMap<RoutineNodeId, LspEdge> =
             std::collections::BTreeMap::new();
-        for ce in self.event_edges() {
-            match by_publisher.get_mut(&ce.edge.from) {
-                Some(e) => e.routes.extend(ce.edge.routes.iter().cloned()),
+        for e in self.event_edges() {
+            match by_publisher.get_mut(&e.from) {
+                Some(m) => {
+                    let mut targets = std::mem::take(&mut m.targets).into_vec();
+                    targets.extend(e.targets.iter().cloned());
+                    m.targets = targets.into_boxed_slice();
+                    m.route_count += e.route_count;
+                }
                 None => {
-                    by_publisher.insert(ce.edge.from.clone(), ce.edge.clone());
+                    by_publisher.insert(e.from.clone(), e.clone());
                 }
             }
         }
-        let mut out: Vec<Edge> = by_publisher
+        let mut out: Vec<LspEdge> = by_publisher
             .into_values()
             .map(canonical_event_edge)
             .collect();
@@ -956,8 +1061,8 @@ fn point_in_origin(pos: (u32, u32), origin: &al_syntax::ir::Origin) -> bool {
 /// this function).
 #[must_use]
 pub fn build_incoming(
-    edges_by_file: &HashMap<String, Arc<Vec<ClassifiedEdge>>>,
-    event_edges: &[ClassifiedEdge],
+    edges_by_file: &HashMap<String, Arc<Vec<LspEdge>>>,
+    event_edges: &[LspEdge],
 ) -> (
     HashMap<RoutineNodeId, Vec<EdgeRef>>,
     HashMap<RoutineNodeId, usize>,
@@ -966,17 +1071,17 @@ pub fn build_incoming(
 
     for (file, edges) in edges_by_file {
         let file_arc: Arc<str> = Arc::from(file.as_str());
-        for (idx, ce) in edges.iter().enumerate() {
-            push_edge_targets(&mut incoming, &ce.edge, &file_arc, idx as u32);
+        for (idx, e) in edges.iter().enumerate() {
+            push_edge_targets(&mut incoming, e, &file_arc, idx as u32);
         }
     }
 
     let mut publisher_fanout: HashMap<RoutineNodeId, usize> = HashMap::new();
     let event_key: Arc<str> = Arc::from(EVENT_EDGES_KEY);
-    for (idx, ce) in event_edges.iter().enumerate() {
-        push_edge_targets(&mut incoming, &ce.edge, &event_key, idx as u32);
-        if !ce.edge.routes.is_empty() {
-            *publisher_fanout.entry(ce.edge.from.clone()).or_insert(0) += ce.edge.routes.len();
+    for (idx, e) in event_edges.iter().enumerate() {
+        push_edge_targets(&mut incoming, e, &event_key, idx as u32);
+        if e.route_count > 0 {
+            *publisher_fanout.entry(e.from.clone()).or_insert(0) += e.route_count as usize;
         }
     }
 
@@ -1001,22 +1106,15 @@ pub fn build_incoming(
 /// disagree about the per-edge dedup rule.
 pub(crate) fn push_edge_targets(
     incoming: &mut HashMap<RoutineNodeId, Vec<EdgeRef>>,
-    edge: &Edge,
+    edge: &LspEdge,
     file: &Arc<str>,
     idx: u32,
 ) {
-    let mut seen_this_edge: Vec<&RoutineNodeId> = Vec::new();
-    for route in &edge.routes {
-        if let RouteTarget::Routine(target) = &route.target {
-            if seen_this_edge.contains(&target) {
-                continue;
-            }
-            seen_this_edge.push(target);
-            incoming.entry(target.clone()).or_default().push(EdgeRef {
-                file: Arc::clone(file),
-                idx,
-            });
-        }
+    for target in edge_targets(edge) {
+        incoming.entry(target.clone()).or_default().push(EdgeRef {
+            file: Arc::clone(file),
+            idx,
+        });
     }
 }
 
@@ -1026,12 +1124,10 @@ pub(crate) fn push_edge_targets(
 /// targets did this OLD edge contribute to" when REMOVING a touched file's
 /// stale entries, without needing a `file`/`idx` to construct a throwaway
 /// [`EdgeRef`] just to discard it.
-pub(crate) fn edge_targets(edge: &Edge) -> Vec<&RoutineNodeId> {
+pub(crate) fn edge_targets(edge: &LspEdge) -> Vec<&RoutineNodeId> {
     let mut seen: Vec<&RoutineNodeId> = Vec::new();
-    for route in &edge.routes {
-        if let RouteTarget::Routine(target) = &route.target
-            && !seen.contains(&target)
-        {
+    for target in edge.routine_targets() {
+        if !seen.contains(&target) {
             seen.push(target);
         }
     }
@@ -1053,7 +1149,7 @@ pub(crate) fn recompute_file(
     index: &ResolveIndex,
     surface: &DeclSurface,
     obj_node_map: &HashMap<ObjectNodeId, &ObjectNode>,
-) -> (Vec<ClassifiedEdge>, DefSurface, Vec<DeclEntry>) {
+) -> (Vec<LspEdge>, DefSurface, Vec<DeclEntry>) {
     let file_res = crate::program::resolve::full::resolve_file_obligations(
         pf,
         primary_app_ref,
@@ -1088,7 +1184,14 @@ pub(crate) fn recompute_file(
     }
     decls.sort_by_key(|d| d.origin.byte.start);
 
-    (file_res.edges, def_surface, decls)
+    // The LSP's stored form (S10.5); every site of this file names it.
+    let unit = SharedStr::from(pf.virtual_path.as_str());
+    let edges = file_res
+        .edges
+        .iter()
+        .map(|ce| LspEdge::project_classified(ce, &unit))
+        .collect();
+    (edges, def_surface, decls)
 }
 
 /// DERIVED index (see [`LspSnapshot::decl_by_id`]'s doc): every `DeclEntry`
@@ -1308,29 +1411,35 @@ mod tests {
         let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
         let report = resolve_full_program(dir.path()).expect("resolve_full_program");
 
-        let mut got: Vec<Edge> = snap
+        let mut got: Vec<LspEdge> = snap
             .edges_by_file
             .values()
-            .flat_map(|v| v.iter().map(|ce| ce.edge.clone()))
+            .flat_map(|v| v.iter().cloned())
             .collect();
         got.extend(snap.merged_event_edges());
         got.sort();
 
         // The LSP keeps only event links with routes; the report keeps all.
+        // The LSP stores each edge's projection (S10.5): every call site, one
+        // edge per publisher, only the facts it reads.
         let all: Vec<Edge> = report.edges.into_iter().map(|ce| ce.edge).collect();
         let is_empty_link = |e: &Edge| e.kind == EdgeKind::EventFlow && e.routes.is_empty();
         assert!(
             all.iter().any(is_empty_link),
             "the report must still hold route-less event links (not lost)"
         );
-        let mut want: Vec<Edge> = all
-            .into_iter()
+        // (Which targets a projection keeps is pinned by
+        // `project_keeps_the_routine_and_abi_targets_and_counts_every_route`;
+        // this fixture has routine targets only.)
+        let mut want: Vec<LspEdge> = all
+            .iter()
             .filter(|e| !is_empty_link(e))
             .map(|e| {
+                let p = LspEdge::project(e, &SharedStr::from(e.site.span.unit.as_str()));
                 if e.kind == EdgeKind::EventFlow {
-                    canonical_event_edge(e)
+                    canonical_event_edge(p)
                 } else {
-                    e
+                    p
                 }
             })
             .collect();
@@ -1338,12 +1447,12 @@ mod tests {
 
         assert_eq!(
             got, want,
-            "build_full's edges_by_file + event_edges union must equal a \
-             direct resolve_full_program run minus route-less event links \
-             (order-insensitive)"
+            "build_full's edges_by_file + event_edges union must equal the \
+             projection of a direct resolve_full_program run minus route-less \
+             event links (order-insensitive)"
         );
         assert!(
-            snap.event_edges().all(|ce| !ce.edge.routes.is_empty()),
+            snap.event_edges().all(|e| e.route_count > 0),
             "no route-less event link is stored in the LSP snapshot"
         );
         assert!(!got.is_empty(), "fixture must produce real edges");
@@ -1374,21 +1483,15 @@ mod tests {
         ef2.sort();
         assert_eq!(ef1, ef2);
         for f in &ef1 {
-            let mut a: Vec<Edge> = s1.edges_by_file[f]
-                .iter()
-                .map(|ce| ce.edge.clone())
-                .collect();
-            let mut b: Vec<Edge> = s2.edges_by_file[f]
-                .iter()
-                .map(|ce| ce.edge.clone())
-                .collect();
+            let mut a: Vec<LspEdge> = s1.edges_by_file[f].to_vec();
+            let mut b: Vec<LspEdge> = s2.edges_by_file[f].to_vec();
             a.sort();
             b.sort();
             assert_eq!(a, b, "file {f}: same edge set");
         }
 
-        let mut e1: Vec<Edge> = s1.event_edges().map(|ce| ce.edge.clone()).collect();
-        let mut e2: Vec<Edge> = s2.event_edges().map(|ce| ce.edge.clone()).collect();
+        let mut e1: Vec<LspEdge> = s1.event_edges().cloned().collect();
+        let mut e2: Vec<LspEdge> = s2.event_edges().cloned().collect();
         e1.sort();
         e2.sort();
         assert_eq!(e1, e2, "same event-edge set");
@@ -1477,11 +1580,8 @@ mod tests {
              Beta.Process; got {incoming_process:?}"
         );
         for r in incoming_process.iter().filter(|r| &*r.file == "Alpha.al") {
-            let ce = snap.edge(r);
             assert!(
-                ce.edge.routes.iter().any(
-                    |route| matches!(&route.target, RouteTarget::Routine(t) if *t == beta_process)
-                ),
+                snap.edge(r).routine_targets().any(|t| *t == beta_process),
                 "the referenced edge must actually route to Beta.Process"
             );
         }
@@ -1503,8 +1603,7 @@ mod tests {
              key; got {incoming_sub:?}"
         );
         for r in incoming_sub.iter().filter(|r| &*r.file == EVENT_EDGES_KEY) {
-            let ce = snap.edge(r);
-            assert_eq!(ce.edge.kind, EdgeKind::EventFlow);
+            assert_eq!(snap.edge(r).kind, EdgeKind::EventFlow);
         }
     }
 
@@ -1603,7 +1702,7 @@ mod tests {
         // Its route-less link is not stored at all, and the lens count and
         // the incoming index are unchanged (zero).
         assert!(
-            snap.event_edges().all(|ce| ce.edge.from != publisher),
+            snap.event_edges().all(|e| e.from != publisher),
             "a route-less event link must not be stored in the LSP snapshot"
         );
         assert_eq!(
@@ -1671,17 +1770,10 @@ mod tests {
             routes: vec![dup_route(&target), dup_route(&target)],
         };
 
-        let mut edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>> = HashMap::new();
+        let mut edges_by_file: HashMap<String, Arc<Vec<LspEdge>>> = HashMap::new();
         edges_by_file.insert(
             "F.al".to_string(),
-            Arc::new(vec![ClassifiedEdge {
-                obligation_id: ObligationId::CallSite {
-                    caller: edge.from.clone(),
-                    span: edge.site.span.clone(),
-                    callee_fp: edge.site.callee_fingerprint,
-                },
-                edge,
-            }]),
+            Arc::new(vec![LspEdge::project(&edge, &SharedStr::from("F.al"))]),
         );
 
         let (incoming, _fanout) = build_incoming(&edges_by_file, &[]);
@@ -1693,6 +1785,122 @@ mod tests {
             1,
             "one edge with 2 routes to the SAME target must produce exactly 1 \
              EdgeRef, not one per route; got {refs:?}"
+        );
+    }
+
+    // ── every call site is kept, even one with no target the LSP shows ────
+
+    #[test]
+    fn a_call_site_without_an_lsp_target_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"33333333-0000-0000-0000-000000000105","name":"S105","publisher":"probe","version":"1.0.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("A.al"),
+            "codeunit 50100 \"A\"\n{\n    procedure Go()\n    begin\n        Message('x');\n        Other();\n    end;\n\n    procedure Other()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let sites: Vec<&LspEdge> = snap.edges_by_file.values().flat_map(|v| v.iter()).collect();
+        assert!(
+            sites.iter().any(|e| e.targets.is_empty()),
+            "precondition: the Message call has no target the LSP shows"
+        );
+        let report_sites = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.kind != EdgeKind::EventFlow)
+            .count();
+        assert_eq!(sites.len(), report_sites, "every call site is kept");
+    }
+
+    // ── LspEdge::project: what the LSP stores of an edge (S10.5) ──────────
+
+    #[test]
+    fn project_keeps_the_routine_and_abi_targets_and_counts_every_route() {
+        use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
+        use crate::program::resolve::edge::{
+            AbiEventKind, AbiRoutineKind, BuiltinId, CanonicalSpan, DispatchShape, Evidence, Route,
+            SetCompleteness, SiteId, SourcePos, Witness,
+        };
+        use al_syntax::ir::ObjectKind;
+
+        let rid = |name: &str| RoutineNodeId {
+            object: ObjectNodeId {
+                app: AppRef(0),
+                kind: ObjectKind::Codeunit,
+                key: ObjKey::Id(1),
+            },
+            name_lc: name.into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        let key = AbiRoutineKey {
+            app: AppRef(1),
+            object_type: "Codeunit".into(),
+            object_number: 80,
+            object_name_lc: "sales-post".into(),
+            routine_name_lc: "run".into(),
+            params_count: 0,
+            param_type_fp: 0,
+            routine_kind: AbiRoutineKind::Procedure,
+            event_kind: AbiEventKind::None,
+        };
+        let route = |target: RouteTarget| Route {
+            target,
+            evidence: Evidence::Source,
+            conditions: vec![],
+            witness: Witness::None,
+            receiver_tier: None,
+        };
+        let caller = rid("caller");
+        let edge = Edge {
+            from: caller.clone(),
+            site: SiteId {
+                caller: caller.clone(),
+                span: CanonicalSpan {
+                    unit: "F.al".into(),
+                    start: SourcePos { line: 1, col: 2 },
+                    end: SourcePos { line: 1, col: 9 },
+                },
+                callee_fingerprint: 7,
+            },
+            kind: EdgeKind::Call,
+            shape: DispatchShape::Exact,
+            completeness: SetCompleteness::Complete,
+            routes: vec![
+                route(RouteTarget::Routine(rid("target"))),
+                route(RouteTarget::Builtin(BuiltinId("Message".into()))),
+                route(RouteTarget::AbiSymbol { key: key.clone() }),
+                route(RouteTarget::Unresolved),
+            ],
+        };
+        let e = LspEdge::project(&edge, &SharedStr::from("F.al"));
+        assert_eq!(
+            &*e.targets,
+            [
+                LspTarget::Routine(rid("target")),
+                LspTarget::Abi(Box::new(key))
+            ]
+        );
+        assert_eq!(e.route_count, 4);
+        assert_eq!(e.from, caller);
+        assert_eq!(
+            (e.span.start, e.span.end, e.callee_fp),
+            (edge.site.span.start, edge.site.span.end, 7)
+        );
+        assert_eq!(
+            e.obligation_id(),
+            ObligationId::CallSite {
+                caller,
+                span: edge.site.span.clone(),
+                callee_fp: 7,
+            }
         );
     }
 
@@ -1759,26 +1967,12 @@ mod tests {
         let edge_a = single_route_edge(caller_a, &target, 1);
         let edge_b = single_route_edge(caller_b, &target, 2);
 
-        let mut edges_by_file: HashMap<String, Arc<Vec<ClassifiedEdge>>> = HashMap::new();
+        let mut edges_by_file: HashMap<String, Arc<Vec<LspEdge>>> = HashMap::new();
         edges_by_file.insert(
             "F.al".to_string(),
             Arc::new(vec![
-                ClassifiedEdge {
-                    obligation_id: ObligationId::CallSite {
-                        caller: edge_a.from.clone(),
-                        span: edge_a.site.span.clone(),
-                        callee_fp: edge_a.site.callee_fingerprint,
-                    },
-                    edge: edge_a,
-                },
-                ClassifiedEdge {
-                    obligation_id: ObligationId::CallSite {
-                        caller: edge_b.from.clone(),
-                        span: edge_b.site.span.clone(),
-                        callee_fp: edge_b.site.callee_fingerprint,
-                    },
-                    edge: edge_b,
-                },
+                LspEdge::project(&edge_a, &SharedStr::from("F.al")),
+                LspEdge::project(&edge_b, &SharedStr::from("F.al")),
             ]),
         );
 

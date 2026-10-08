@@ -482,7 +482,7 @@ mod tests {
                 let mut all: Vec<_> = s
                     .edges_by_file
                     .values()
-                    .flat_map(|v| v.iter().map(|c| c.edge.clone()))
+                    .flat_map(|v| v.iter().cloned())
                     .collect();
                 all.sort();
                 all
@@ -771,11 +771,8 @@ mod tests {
     /// with routes, on both sides.
     fn answers(s: &LspSnapshot) -> String {
         use std::collections::BTreeMap;
-        let sorted = |v: &[crate::program::resolve::full::ClassifiedEdge]| {
-            let mut v: Vec<_> = v
-                .iter()
-                .map(|c| (c.obligation_id.clone(), c.edge.clone()))
-                .collect();
+        let sorted = |v: &[crate::lsp::snapshot::LspEdge]| {
+            let mut v: Vec<_> = v.iter().map(|e| (e.obligation_id(), e.clone())).collect();
             v.sort();
             v
         };
@@ -793,10 +790,7 @@ mod tests {
             .all_incoming()
             .into_keys()
             .map(|t| {
-                let mut o: Vec<_> = s
-                    .incoming(&t)
-                    .map(|r| s.edge(r).obligation_id.clone())
-                    .collect();
+                let mut o: Vec<_> = s.incoming(&t).map(|r| s.edge(r).obligation_id()).collect();
                 o.sort();
                 (t, o)
             })
@@ -830,9 +824,9 @@ mod tests {
             "precondition: event edges"
         );
         assert!(
-            s.ws_event_edges.iter().any(|e| !e.edge.routes.is_empty()),
+            s.ws_event_edges.iter().any(|e| !e.targets.is_empty()),
             "precondition: the workspace subscriber is wired {:#?}",
-            s.event_edges().map(|e| &e.edge).collect::<Vec<_>>()
+            s.event_edges().collect::<Vec<_>>()
         );
         assert!(
             !s.ws_publisher_fanout.is_empty(),
@@ -840,26 +834,23 @@ mod tests {
         );
         // The call must hit the dependency routine `Post` (declared only in
         // its embedded source, not in the symbols) and resolve from source,
-        // not through the ABI or a builtin.
+        // not through the ABI or a builtin: a routine target (an ABI call is
+        // an `Abi` target, a builtin none) declared in the tier's source
+        // metadata.
         assert!(
             s.ws_incoming.iter().any(|(t, refs)| {
                 t.object.app != AppRef(0)
                     && t.object.key == crate::program::node::ObjKey::Id(80) // "Sales-Post"
                     && t.name_lc == "post"
-                    && refs.iter().any(|r| {
-                        s.edge(r).edge.routes.iter().any(|route| {
-                            route.evidence == crate::program::resolve::edge::Evidence::Source
-                                && matches!(
-                                    &route.target,
-                                    crate::program::resolve::edge::RouteTarget::Routine(_)
-                                )
-                        })
-                    })
+                    && s.dep_meta.contains_key(t)
+                    && refs
+                        .iter()
+                        .any(|r| s.edge(r).routine_targets().any(|x| x == t))
             }),
-            "precondition: the workspace calls Sales-Post.Post with Source evidence {:#?}",
+            "precondition: the workspace calls Sales-Post.Post, resolved from source {:#?}",
             s.edges_by_file
                 .values()
-                .flat_map(|v| v.iter().map(|c| &c.edge))
+                .flat_map(|v| v.iter())
                 .collect::<Vec<_>>()
         );
     }
@@ -984,8 +975,8 @@ mod tests {
         assert!(same_text > 0, "precondition: equal texts to share");
         let mut links = 0;
         for e in b.event_edges() {
-            if let Some(r) = tier.routines.iter().find(|r| r.id == e.edge.from) {
-                assert!(SharedStr::ptr_eq(&r.id.name_lc, &e.edge.from.name_lc));
+            if let Some(r) = tier.routines.iter().find(|r| r.id == e.from) {
+                assert!(SharedStr::ptr_eq(&r.id.name_lc, &e.from.name_lc));
                 links += 1;
             }
         }
@@ -1063,9 +1054,9 @@ mod tests {
             .clone();
         let synth = a
             .event_edges()
-            .find(|e| e.edge.from.name_lc == "onafterinsertevent")
+            .find(|e| e.from.name_lc == "onafterinsertevent")
             .expect("precondition: the platform publisher is linked");
-        assert!(SharedStr::ptr_eq(&synth.edge.from.name_lc, &sub_event));
+        assert!(SharedStr::ptr_eq(&synth.from.name_lc, &sub_event));
         let mut metas: Vec<_> = tier.dep_meta.values().cloned().collect();
         let mut pool = StrPool::default();
         objects.share_strings(&mut pool);
@@ -1085,7 +1076,6 @@ mod tests {
     /// cache-less build's.
     #[test]
     fn dependency_event_links_are_shared_and_split_from_the_workspace_ones() {
-        use crate::program::resolve::edge::RouteTarget;
         let fx = two_roots_one_alpackages();
         let manifest = test_apps::manifest_xml(DEP_GUID, "Base Application");
         let symbols =
@@ -1110,15 +1100,12 @@ mod tests {
             "the roots share one dependency-link set"
         );
 
-        let targets = |edges: &[crate::program::resolve::full::ClassifiedEdge]| -> Vec<String> {
+        let targets = |edges: &[crate::lsp::snapshot::LspEdge]| -> Vec<String> {
             edges
                 .iter()
-                .filter(|ce| ce.edge.from.name_lc == "onafterrun")
-                .flat_map(|ce| &ce.edge.routes)
-                .filter_map(|r| match &r.target {
-                    RouteTarget::Routine(id) => Some(id.name_lc.to_string()),
-                    _ => None,
-                })
+                .filter(|e| e.from.name_lc == "onafterrun")
+                .flat_map(|e| e.routine_targets())
+                .map(|id| id.name_lc.to_string())
                 .collect()
         };
         assert_eq!(targets(&a.dep_events.edges), ["handleindep"]);
@@ -1128,23 +1115,20 @@ mod tests {
             .dep_events
             .edges
             .iter()
-            .find(|ce| ce.edge.from.name_lc == "onafterrun")
+            .find(|e| e.from.name_lc == "onafterrun")
             .unwrap()
-            .edge
             .from
             .clone();
         assert_eq!(a.publisher_fanout(&publisher), 2);
         for sub in ["handleindep", "handleafterrun"] {
             let id = a
                 .event_edges()
-                .flat_map(|ce| &ce.edge.routes)
-                .find_map(|r| match &r.target {
-                    RouteTarget::Routine(id) if id.name_lc == sub => Some(id.clone()),
-                    _ => None,
-                })
-                .unwrap();
+                .flat_map(|e| e.routine_targets())
+                .find(|id| id.name_lc == sub)
+                .unwrap()
+                .clone();
             assert!(
-                a.incoming(&id).any(|r| a.edge(r).edge.from == publisher),
+                a.incoming(&id).any(|r| a.edge(r).from == publisher),
                 "{sub} has the publisher as an incoming caller"
             );
         }

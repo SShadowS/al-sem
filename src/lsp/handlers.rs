@@ -38,9 +38,8 @@ use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 
 use crate::lsp::encoding::{ColOut, PositionEncoding};
-use crate::lsp::snapshot::{DeclView, LspSnapshot};
-use crate::program::resolve::edge::{AbiRoutineKey, EdgeKind, Route, RouteTarget};
-use crate::program::resolve::full::ClassifiedEdge;
+use crate::lsp::snapshot::{DeclView, LspEdge, LspSnapshot, LspTarget};
+use crate::program::resolve::edge::{AbiRoutineKey, EdgeKind};
 use crate::program::{AppRef, ObjectNodeId, ProgramGraph, RoutineNodeId};
 use crate::protocol::{path_to_uri, uri_to_path};
 
@@ -163,14 +162,14 @@ pub fn incoming(
     // (Previously this re-filtered ALL refs per distinct caller — O(refs²)
     // with a string-hashed map lookup per pair; see the 2026-07-14
     // improvement-hunt F1 finding.) A stale node has no refs: empty result.
-    let mut groups: HashMap<RoutineNodeId, (bool, Vec<&ClassifiedEdge>)> = HashMap::new();
+    let mut groups: HashMap<RoutineNodeId, (bool, Vec<&LspEdge>)> = HashMap::new();
     for r in snap.incoming(&data.node) {
-        let ce = snap.edge(r);
+        let e = snap.edge(r);
         let entry = groups
-            .entry(ce.edge.from.clone())
+            .entry(e.from.clone())
             .or_insert_with(|| (false, Vec::new()));
-        entry.0 |= ce.edge.kind == EdgeKind::EventFlow;
-        entry.1.push(ce);
+        entry.0 |= e.kind == EdgeKind::EventFlow;
+        entry.1.push(e);
     }
 
     let mut callers: Vec<RoutineNodeId> = groups.keys().cloned().collect();
@@ -193,14 +192,14 @@ pub fn incoming(
         // tier's `LineIndex`.
 
         let mut from_ranges: Vec<Range> = Vec::new();
-        for ce in edges {
-            let range = if ce.edge.kind == EdgeKind::EventFlow {
+        for e in edges {
+            let range = if e.kind == EdgeKind::EventFlow {
                 // Rule 2: an EventFlow edge's own site span is stale-prone;
                 // re-derive from the PUBLISHER's (== this caller's) fresh
                 // name_origin instead.
                 origin_to_range(decl.name_origin, table, enc)
             } else {
-                canonical_span_to_range(&ce.edge.site.span, table, enc)
+                canonical_span_to_range(&e.span, table, enc)
             };
             from_ranges.push(range);
         }
@@ -264,46 +263,39 @@ pub fn outgoing(
     let mut out = Vec::new();
 
     if let Some(edges) = snap.edges_by_file.get(&caller_decl.virtual_path) {
-        for ce in edges.iter().filter(|ce| ce.edge.from == data.node) {
-            let from_ranges = vec![canonical_span_to_range(
-                &ce.edge.site.span,
-                caller_table,
-                enc,
-            )];
-            push_route_items(snap, enc, &ce.edge.routes, &from_ranges, &mut out);
+        for e in edges.iter().filter(|e| e.from == data.node) {
+            let from_ranges = vec![canonical_span_to_range(&e.span, caller_table, enc)];
+            push_route_items(snap, enc, &e.targets, &from_ranges, &mut out);
         }
     }
 
     // A workspace routine's event links are all in `ws_event_edges` (a link
     // whose publisher is in the workspace is never split; see
     // `split_event_links`), so the shared dependency part is not scanned.
-    for ce in snap
-        .ws_event_edges
-        .iter()
-        .filter(|ce| ce.edge.from == data.node)
-    {
+    for e in snap.ws_event_edges.iter().filter(|e| e.from == data.node) {
         // Rule 2: re-derive from THIS routine's (the publisher's) own fresh
-        // name_origin — never `ce.edge.site.span`.
+        // name_origin — never the link's own site span.
         let from_ranges = vec![origin_to_range(&caller_decl.name_origin, caller_table, enc)];
-        push_route_items(snap, enc, &ce.edge.routes, &from_ranges, &mut out);
+        push_route_items(snap, enc, &e.targets, &from_ranges, &mut out);
     }
 
     out
 }
 
-/// Emit one `CallHierarchyOutgoingCall` per route in `routes` that resolves
-/// to a real or ABI-boundary target, sharing the same `from_ranges` (they
-/// are all candidates for the SAME call/event site).
+/// Emit one `CallHierarchyOutgoingCall` per target, sharing the same
+/// `from_ranges` (they are all candidates for the SAME call/event site). The
+/// stored targets are already only the real and ABI-boundary ones: builtin
+/// and unresolved routes give no item and are not stored (`LspEdge::project`).
 fn push_route_items(
     snap: &LspSnapshot,
     enc: PositionEncoding,
-    routes: &[Route],
+    targets: &[LspTarget],
     from_ranges: &[Range],
     out: &mut Vec<CallHierarchyOutgoingCall>,
 ) {
-    for route in routes {
-        let item = match &route.target {
-            RouteTarget::Routine(rid) => match snap.decl_and_line_table(rid) {
+    for target in targets {
+        let item = match target {
+            LspTarget::Routine(rid) => match snap.decl_and_line_table(rid) {
                 Some((decl, table)) => {
                     build_item(snap, enc, decl, table, decl_uri(snap, decl), None)
                 }
@@ -314,8 +306,7 @@ fn push_route_items(
                 // skipping rather than guessing.
                 None => continue,
             },
-            RouteTarget::AbiSymbol { key } => abi_symbol_item(snap, key),
-            RouteTarget::Builtin(_) | RouteTarget::Unresolved => continue,
+            LspTarget::Abi(key) => abi_symbol_item(snap, key),
         };
         out.push(CallHierarchyOutgoingCall {
             to: item,
@@ -554,7 +545,7 @@ pub(crate) fn origin_to_range(
 }
 
 fn canonical_span_to_range(
-    span: &crate::program::resolve::edge::CanonicalSpan,
+    span: &crate::lsp::snapshot::LspSpan,
     table: &dyn ColOut,
     enc: PositionEncoding,
 ) -> Range {
