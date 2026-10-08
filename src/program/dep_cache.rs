@@ -26,7 +26,16 @@ use crate::snapshot::{AppId, AppSetSnapshot, ParsedUnit, TrustTier};
 pub struct DepCache {
     nodes: Mutex<HashMap<DepKey, Weak<DepNodes>>>,
     packages: Mutex<HashMap<(PathBuf, AppFileStamp), Weak<ParsedAppPackage>>>,
-    sources: Mutex<HashMap<(PathBuf, AppFileStamp), WeakSource>>,
+    /// One entry per `.app` path: what the last load at that stamp found.
+    sources: Mutex<HashMap<PathBuf, (AppFileStamp, KnownSource)>>,
+}
+
+/// What a load of one `.app` found (see [`DepCache::source`]).
+enum KnownSource {
+    /// Embedded source; the entry outlives its text.
+    Source(WeakSource),
+    /// The `.app` ships no source.
+    NoSource,
 }
 
 /// A `SourceRoot` whose file list is held weakly (see [`DepCache::source`]).
@@ -45,16 +54,23 @@ impl WeakSource {
         }
     }
 
-    fn is_live(&self) -> bool {
-        self.files.strong_count() > 0
-    }
-
     fn upgrade(&self) -> Option<SourceRoot> {
         Some(SourceRoot {
             files: self.files.upgrade()?,
             tier: self.tier,
             content_hash: self.content_hash.clone(),
         })
+    }
+
+    /// The source without its text: an empty file list, the same tier and
+    /// content hash. No provider loads `Some` with no files, so an empty list
+    /// on a dependency means exactly this.
+    fn deferred(&self) -> SourceRoot {
+        SourceRoot {
+            files: Arc::new(Vec::new()),
+            tier: self.tier,
+            content_hash: self.content_hash.clone(),
+        }
     }
 }
 
@@ -121,9 +137,10 @@ impl DepCache {
 
     /// The live entry for `key`, if any. Never builds. Any live entry is a
     /// hit: it always carries `dep_meta` and `recovered` (and the bodies when
-    /// `key` keeps them), and its LSP products (`dep_lines`) can be built
-    /// from any fresh snapshot (it still holds the dependency source until
-    /// the LSP build drops it), so a hit never needs to parse the dependencies.
+    /// `key` keeps them), and its LSP products (`dep_lines`) are either built
+    /// already or built from the fresh snapshot (which then holds the
+    /// dependency text: `build_context_with` extracts it whenever the tier has
+    /// no LSP products yet), so a hit never needs to parse the dependencies.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
         self.lock().get(key).and_then(Weak::upgrade)
     }
@@ -158,41 +175,62 @@ impl DepCache {
 
     /// The `.app`'s extracted embedded source, with every file text shared
     /// with any live snapshot that already holds it, or `load()`'s result
-    /// (now cached). `stamp` must be the one taken before the file was read;
-    /// without one nothing is cached. A failed or empty (`None`) load caches
+    /// (now remembered). `stamp` must be the one taken before the file was
+    /// read; without one nothing is remembered. A failed load remembers
     /// nothing.
+    ///
+    /// What is remembered outlives the text: a `.app` that ships no source
+    /// answers `None` again without `load()`, and with `defer_text` a `.app`
+    /// whose text no snapshot holds any more answers its source WITHOUT the
+    /// text ([`WeakSource::deferred`]) instead of extracting it again. Only a
+    /// build that will read no dependency text asks for that (see
+    /// `build_context_with`, engine-switch S10.1b). One entry per path: a
+    /// load at a new stamp replaces the old one.
     ///
     /// Representation: the map holds a `Weak` to the source's file list
     /// (`SourceRoot.files: Arc<Vec<SourceFile>>`), never a `Weak` into a
     /// text. A hit shares that same list. When the last `SourceRoot` holding
     /// the list is dropped, the list and every text it owns are freed; the
-    /// dead map entry then pins only the list's small `Arc` header until a
-    /// later miss purges it. (A `Weak<str>` would pin the whole text: an
-    /// `Arc<str>` stores its bytes in the same allocation as its counts.)
+    /// entry then pins only the list's small `Arc` header. (A `Weak<str>`
+    /// would pin the whole text: an `Arc<str>` stores its bytes in the same
+    /// allocation as its counts.)
     pub fn source(
         &self,
         path: &Path,
         stamp: Option<AppFileStamp>,
+        defer_text: bool,
         load: impl FnOnce() -> anyhow::Result<Option<SourceRoot>>,
     ) -> anyhow::Result<Option<SourceRoot>> {
         let Some(stamp) = stamp else {
             return load();
         };
-        let key = (path.to_path_buf(), stamp);
         let lock = || self.sources.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(live) = lock().get(&key).and_then(WeakSource::upgrade) {
-            return Ok(Some(live));
+        match lock().get(path) {
+            Some((s, KnownSource::NoSource)) if *s == stamp => return Ok(None),
+            Some((s, KnownSource::Source(w))) if *s == stamp => {
+                if let Some(live) = w.upgrade() {
+                    return Ok(Some(live));
+                }
+                if defer_text {
+                    return Ok(Some(w.deferred()));
+                }
+            }
+            _ => {}
         }
-        let Some(built) = load()? else {
-            return Ok(None);
-        };
+        let built = load()?;
         let mut map = lock();
-        map.retain(|_, w| w.is_live());
-        if let Some(live) = map.get(&key).and_then(WeakSource::upgrade) {
+        if let Some((s, KnownSource::Source(w))) = map.get(path)
+            && *s == stamp
+            && let Some(live) = w.upgrade()
+        {
             return Ok(Some(live));
         }
-        map.insert(key, WeakSource::of(&built));
-        Ok(Some(built))
+        let known = match &built {
+            Some(root) => KnownSource::Source(WeakSource::of(root)),
+            None => KnownSource::NoSource,
+        };
+        map.insert(path.to_path_buf(), (stamp, known));
+        Ok(built)
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<DepKey, Weak<DepNodes>>> {
@@ -828,6 +866,119 @@ mod tests {
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
         assert_non_trivial(&solo);
         assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// S10.1b: root B, built while root A holds the shared tier with its LSP
+    /// products, extracts no dependency text (no root holds it after S10.1,
+    /// and nothing would read it), and still answers like a cache-less build.
+    #[test]
+    fn a_root_on_a_live_lsp_tier_extracts_no_dependency_text() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        let a = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            1,
+            "precondition: root A extracted the text"
+        );
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert!(
+            Arc::ptr_eq(&a.dep_lines, &b.dep_lines),
+            "precondition: B was built on A's tier"
+        );
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            1,
+            "root B extracted no dependency text"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// S10.1b: once the tier died, the cache still knows the dependency's
+    /// source but no longer its text, and nothing can supply the parse; the
+    /// build extracts the text again and answers like a cache-less build.
+    #[test]
+    fn a_root_after_the_tier_died_extracts_the_text_again() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        let cache = DepCache::default();
+        drop(build(&fx.root_a, DependencySource::Embedded, &cache));
+        assert_eq!(cache.live_entries(), 0, "precondition: the tier died");
+        let b = build(&fx.root_b, DependencySource::Embedded, &cache);
+        assert_eq!(
+            extractions_under(&fx.alpackages),
+            2,
+            "root B extracted the text again"
+        );
+        let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
+        assert_non_trivial(&solo);
+        assert_eq!(answers(&b), answers(&solo));
+    }
+
+    /// A `.app` that ships no source is opened for it once per stamp, not on
+    /// every build (here: a second root build, which also rebuilds its
+    /// snapshot because the tier died).
+    #[test]
+    fn a_source_less_app_is_extracted_once() {
+        use crate::snapshot::provider::extract_log::extractions_under;
+        let fx = two_roots_one_alpackages();
+        write_compiled_root(&fx.alpackages, GUID_B, "RootB", 50002);
+        let compiled = fx.alpackages.join("Microsoft_RootB_1.0.0.0.app");
+        let cache = DepCache::default();
+        drop(build(&fx.root_a, DependencySource::Embedded, &cache));
+        assert_eq!(
+            extractions_under(&compiled),
+            1,
+            "precondition: root A loads the source-less sibling app"
+        );
+        let again = build(&fx.root_a, DependencySource::Embedded, &cache);
+        assert_eq!(extractions_under(&compiled), 1);
+        assert!(
+            again.graph.objects.iter().any(|o| o.name == "RootB Lib"),
+            "the source-less app is still loaded"
+        );
+    }
+
+    /// A source remembered at one stamp is never served, with or without its
+    /// text, for another stamp of the same path.
+    #[test]
+    fn a_deferred_source_is_served_only_at_its_stamp() {
+        let cache = DepCache::default();
+        let path = Path::new("x.app");
+        let at = |len| {
+            Some(AppFileStamp {
+                len,
+                modified: None,
+            })
+        };
+        let root = |hash: &str| {
+            Ok(Some(SourceRoot {
+                files: Arc::new(vec![SourceFile {
+                    virtual_path: "a.al".into(),
+                    text: Arc::from("codeunit 1 A { }"),
+                }]),
+                tier: TrustTier::EmbeddedSource,
+                content_hash: hash.into(),
+            }))
+        };
+        let old = cache.source(path, at(1), true, || root("old")).unwrap();
+        drop(old);
+        let deferred = cache
+            .source(path, at(1), true, || panic!("known at this stamp"))
+            .unwrap()
+            .expect("source");
+        assert!(deferred.files.is_empty(), "served without its text");
+        assert_eq!(deferred.content_hash, "old");
+        let new = cache.source(path, at(2), true, || root("new")).unwrap();
+        assert_eq!(new.expect("source").content_hash, "new");
+        let text = cache
+            .source(path, at(1), false, || root("reloaded"))
+            .unwrap()
+            .expect("source");
+        assert_eq!(text.content_hash, "reloaded", "the old stamp was replaced");
     }
 
     /// Any live tier is a hit, even one whose LSP products were never

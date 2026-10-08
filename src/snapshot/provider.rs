@@ -76,21 +76,51 @@ pub struct EmbeddedAppProvider<'a> {
     pub stamp: Option<AppFileStamp>,
     /// Shares the extracted texts with every other root loading this `.app`.
     pub cache: &'a DepCache,
+    /// Answer a known source without its text (see [`DepCache::source`]).
+    pub defer_text: bool,
 }
 
 impl SourceProvider for EmbeddedAppProvider<'_> {
     fn try_provide(&self, _app: &AppId) -> Result<Option<SourceRoot>> {
-        self.cache.source(&self.app_path, self.stamp, || {
-            let (files, content_hash) = cached_source(&self.app_path)?;
-            if files.is_empty() {
-                return Ok(None); // symbol-only app
-            }
-            Ok(Some(SourceRoot {
-                files: Arc::new(files),
-                tier: TrustTier::EmbeddedSource,
-                content_hash,
-            }))
-        })
+        self.cache
+            .source(&self.app_path, self.stamp, self.defer_text, || {
+                #[cfg(test)]
+                extract_log::record(&self.app_path);
+                let (files, content_hash) = cached_source(&self.app_path)?;
+                if files.is_empty() {
+                    return Ok(None); // symbol-only app
+                }
+                Ok(Some(SourceRoot {
+                    files: Arc::new(files),
+                    tier: TrustTier::EmbeddedSource,
+                    content_hash,
+                }))
+            })
+    }
+}
+
+/// Every embedded-source extraction (`cached_source` call), by `.app` path.
+#[cfg(test)]
+pub(crate) mod extract_log {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static LOG: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn record(path: &Path) {
+        LOG.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+
+    /// How many extractions so far were of an `.app` under (or at) `path`
+    /// (tests use their own temp dir, so parallel tests do not see each other).
+    pub(crate) fn extractions_under(path: &Path) -> usize {
+        LOG.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|p| p.starts_with(path))
+            .count()
     }
 }
 
@@ -173,6 +203,7 @@ mod tests {
             app_path,
             stamp: None,
             cache: &DepCache::default(),
+            defer_text: false,
         };
         let root = p.try_provide(&dummy_app()).unwrap().expect("source");
         assert_eq!(root.tier, TrustTier::EmbeddedSource);

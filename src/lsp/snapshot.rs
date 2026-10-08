@@ -970,6 +970,12 @@ pub(crate) fn build_dep_lines(
     apps: &AppRegistry,
     primary: AppRef,
 ) -> DepLines {
+    // A source without its text (S10.1b) would index no file of its app, and
+    // every root on the tier would share that silently.
+    assert!(
+        !snap.has_deferred_dependency_text(),
+        "dependency line indexes built from a snapshot without dependency text"
+    );
     let mut dep_lines = DepLines::new();
     for unit in &snap.apps {
         let (Some(app_ref), Some(source)) = (apps.find(&unit.id), unit.source.as_ref()) else {

@@ -68,6 +68,18 @@ pub struct AppSetSnapshot {
     pub world: World,
 }
 
+impl AppSetSnapshot {
+    /// Some dependency has source but not its text: an empty file list
+    /// (`SnapshotBuilder::build_deferring_dependency_text`, or an
+    /// `LspSnapshot`'s retained copy). No provider loads one otherwise.
+    pub fn has_deferred_dependency_text(&self) -> bool {
+        self.apps
+            .iter()
+            .skip(1)
+            .any(|u| u.source.as_ref().is_some_and(|s| s.files.is_empty()))
+    }
+}
+
 /// Where dependency apps' code comes from.
 ///
 /// `Embedded` (the default) indexes a dependency's embedded `.al` source when
@@ -150,6 +162,28 @@ impl SnapshotBuilder {
         &self,
         dependency_source: DependencySource,
         cache: &DepCache,
+    ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
+        self.build_inner(dependency_source, cache, false)
+    }
+
+    /// [`Self::build_with_options`], but a dependency whose embedded source
+    /// `cache` already knows and no snapshot still holds comes back WITHOUT
+    /// its text (its `files` empty, see [`DepCache::source`]). For a build
+    /// that will read no dependency text; it must check before it continues
+    /// (`build_context_with` does).
+    pub fn build_deferring_dependency_text(
+        &self,
+        dependency_source: DependencySource,
+        cache: &DepCache,
+    ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
+        self.build_inner(dependency_source, cache, true)
+    }
+
+    fn build_inner(
+        &self,
+        dependency_source: DependencySource,
+        cache: &DepCache,
+        defer_text: bool,
     ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
         let ws = &self.workspace_root;
 
@@ -281,6 +315,7 @@ impl SnapshotBuilder {
                     app_path: rd.app_path.clone(),
                     stamp: rd.stamp,
                     cache,
+                    defer_text,
                 }));
             }
             // Match a configured local provider by GUID when known (the unique

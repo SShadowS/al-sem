@@ -80,6 +80,13 @@ pub(crate) fn parse_for_build_observed(
             if skip_dependencies {
                 continue;
             }
+            // A source without its text (deferred, S10.1b) would parse to a
+            // tier with none of this app's nodes, shared with every root.
+            assert!(
+                !source.files.is_empty(),
+                "dependency {} reached the parse without its text",
+                unit.id.name
+            );
             #[cfg(test)]
             crate::snapshot::parse::parse_log::record(unit);
             let per_file: Vec<(PackedFile, Option<ParsedFile>)> = source
