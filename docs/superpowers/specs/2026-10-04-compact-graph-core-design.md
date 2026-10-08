@@ -341,6 +341,19 @@ These lose no information, so both profiles get them, except the last two items.
 Order: 1, then 2, then 3, then 4-5. Each item is priced by the probe right before it is built.
 No fixed saving is promised here, because steps 1 and 2 change the base.
 
+**Re-priced 2026-10-08 (owner decision: build biggest first).** The S10 baseline
+(`tools/census-probe/runs-s10-base/`, master after the engine switch) priced the items on CG
+(7 roots, `embedded`; the dependency tier is shared, so these are counted once): item 5,
+dependency source text, **108.3 MiB** of root 1's 251.2 MiB; item 2, strings, 23.8 MiB (18.4
+saved by interning, plus about 19.5 MiB of per-allocation overhead); item 3, `dep_meta`, 31.5
+MiB of entries plus 8.5 MiB of parameter lists; item 1, ids, **22.0 MiB** inline plus 5.5 MiB
+of their strings (step 2's removal of `routines_by_obj_name` took most copies: 801,553 at step
+0, 239,758 now). §11's heap targets are already met (CG idle with updaters 327.5 MiB, build
+peak 297.2 MiB); the container acceptance run is still owed. The LSP never displays dependency
+source: it reads it only to turn byte offsets into editor positions (`LspSnapshot::
+decl_and_line_table`), so item 5's condition holds. New order: **5** (S10.1), **2** (S10.2),
+**3** (S10.3), **1** (S10.4), **4** (S10.5).
+
 ## §9 — How the effort runs
 
 - **Step 0 (before step 1): measure the running server.** Extend the census probe to start
