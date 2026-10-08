@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mint-goldens --fixture` minted against `$CDO_WS`.** Without a workspace
+  argument it fell back to `$CDO_WS` like a CDO mint, so with that variable set it
+  read CDO's app id, matched none of the fixture graph's edges and wrote an empty
+  fixture golden (0 pairs). Found by the post-S9 "every regeneration path runs"
+  check. `--fixture` now always mints from `tests/fixtures/semantic-golden` and
+  refuses a workspace argument; re-minted, the golden is byte-identical to the
+  committed one. `select_workspace` is pinned by a test (discrimination: letting
+  `--fixture` fall through to `$CDO_WS` fails it).
 - **Overload selection follows the compiler where it is proven** (engine-switch
   S9.5c). Probed with alc 18.0.41.45789 and the altool graph (~90 calls):
   - **An exact match beats a conversion.** `I(Integer; Text)` and

@@ -92,6 +92,12 @@ pub fn fixture_compiler_golden_path() -> PathBuf {
         .join("tests/goldens/semantic-edges/fixture-compiler-anon.json")
 }
 
+/// The workspace the fixture golden is minted from.
+#[must_use]
+pub fn fixture_workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/semantic-golden")
+}
+
 /// Load a golden; `None` when missing or unreadable.
 #[must_use]
 pub fn load_compiler_golden(path: &Path) -> Option<CompilerGolden> {
