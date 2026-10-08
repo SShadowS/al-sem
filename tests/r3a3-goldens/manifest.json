@@ -25,7 +25,7 @@
 		"routinesWithInheritedFacts": 144,
 		"factsWithMoreThan1HopWitness": 246,
 		"equalDistanceTies": 5,
-		"coveragesWithNonTrivialInheritedStatus": 22,
+		"coveragesWithNonTrivialInheritedStatus": 23,
 		"provenanceDistribution": {
 			"direct": 615,
 			"inherited": 251
@@ -64,8 +64,8 @@
 			"unknown": 1
 		},
 		"inheritedStatusDistribution": {
-			"complete": 573,
-			"partial": 22
+			"complete": 572,
+			"partial": 23
 		}
 	},
 	"fixtures": [

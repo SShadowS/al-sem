@@ -1,26 +1,17 @@
 {
-  "combinedEdges": [
-    {
-      "from": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e",
-      "to": "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",
-      "kind": "implicit-trigger",
-      "callsiteId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e/op2",
-      "operationId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e/op2",
-      "resolution": "maybe"
-    }
-  ],
+  "combinedEdges": [],
   "uncertaintyEdges": [],
   "typedEdges": [],
   "sccs": [
     {
       "members": [
-        "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e"
+        "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e"
       ],
       "recursive": false
     },
     {
       "members": [
-        "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e"
+        "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e"
       ],
       "recursive": false
     },

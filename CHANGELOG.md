@@ -422,6 +422,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The r3a1/2/3 differentials and oracles build the production model**
+  (engine-switch S9.5c; `r3a2_branch_aware` too). 11 goldens over 4 fixtures
+  move, each traced to its call-graph change (receipt): a call to a `local`
+  procedure of another object is no longer resolved (`member-not-found`, as L3
+  ignored access); `CallIndistinct` binds `I(Integer; Text)` (L3 left it
+  ambiguous); an argument-less `Insert()` raises no trigger; and the run of a
+  page that does not exist is unresolved. The manifest matrices follow. Two
+  regressions the census exposed were fixed first (enum value arguments, the
+  Variant fallback; see `### Fixed`), so `ws-overload-enum-discriminator` and
+  `CallVariant` now agree with L3. The r3 vector tests still use L3's inline
+  builder (their files are named without `.al`).
+
 - **The cli stats, diff and fingerprint differentials build the production
   model** (engine-switch S9.5b). Four goldens move, each triaged against its
   decoded content:

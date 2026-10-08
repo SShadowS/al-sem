@@ -29,8 +29,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::combined_graph::{PScc, R3a1Projection};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -80,7 +80,7 @@ struct OracleInput {
 /// None for a fail-closed/empty layout (those carry no golden, so they never reach
 /// here — but stay total).
 fn build(fixture: &str) -> Option<OracleInput> {
-    let resolved = assemble_and_resolve_workspace_default(&corpus_dir().join(fixture))?;
+    let resolved = assemble_and_resolve_workspace_with_program_calls(&corpus_dir().join(fixture))?;
     let proj = resolved.project_r3a1_combined_graph();
 
     // Real routine ids: the record-type projection enumerates every routine in the

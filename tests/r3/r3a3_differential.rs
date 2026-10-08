@@ -3,7 +3,7 @@
 //!
 //! For each committed al-sem golden under `tests/r3a3-goldens/<fixture>.r3a3.golden.json`,
 //! run the Rust source-only L0→L3→cone/coverage pass
-//! (`assemble_and_resolve_workspace_default(...)` → `project_r3a3(...)`) over the matching
+//! (`assemble_and_resolve_workspace_with_program_calls(...)` → `project_r3a3(...)`) over the matching
 //! `tests/r0-corpus/<fixture>` workspace and assert it BYTE-MATCHES the golden (structural
 //! positional diff over the already-canonically-sorted projection). The SAME `ws-*`
 //! SOURCE-ONLY corpus the al-sem dump read.
@@ -36,8 +36,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::capability_cone::{R3a3Projection, compute_r3a3_real_matrix, project_r3a3};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use serde_json::Value;
 
 use crate::regen;
@@ -424,7 +424,7 @@ fn differential_r3a3_cone_coverage_match_goldens() {
             )
         });
 
-        let resolved = assemble_and_resolve_workspace_default(&fixture_dir);
+        let resolved = assemble_and_resolve_workspace_with_program_calls(&fixture_dir);
         let projection = match &resolved {
             Some(r) => project_r3a3(r),
             None => R3a3Projection { summaries: vec![] },

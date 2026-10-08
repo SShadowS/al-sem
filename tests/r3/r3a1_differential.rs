@@ -3,7 +3,7 @@
 //!
 //! For each committed al-sem golden under `tests/r3a1-goldens/<fixture>.r3a1.golden.json`,
 //! run the Rust source-only L0→L3→buildCombinedGraph→tarjanScc→projectR3a1
-//! (`assemble_and_resolve_workspace_default(...).project_r3a1_combined_graph()`)
+//! (`assemble_and_resolve_workspace_with_program_calls(...).project_r3a1_combined_graph()`)
 //! over the matching `tests/r0-corpus/<fixture>` workspace and assert it
 //! BYTE-MATCHES the golden (structural positional diff over the already-canonically-
 //! sorted projection). The same `ws-*` SOURCE-ONLY corpus the al-sem dump read.
@@ -32,8 +32,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve_workspace_default;
 use al_sem::engine::l4::combined_graph::R3a1Projection;
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use serde_json::Value;
 
 use crate::regen;
@@ -358,7 +358,7 @@ fn differential_r3a1_combined_graph_match_goldens() {
         // projectR3a1 → JSON. Fail-closed layouts yield an empty projection (never
         // throws). The al-sem dump EXCLUDED those fail-closed fixtures, so the golden
         // set never carries one — but the empty fallback keeps this total.
-        let projection = match assemble_and_resolve_workspace_default(&fixture_dir) {
+        let projection = match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
             Some(resolved) => resolved.project_r3a1_combined_graph(),
             None => R3a1Projection {
                 combined_edges: vec![],

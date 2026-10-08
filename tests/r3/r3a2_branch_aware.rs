@@ -16,8 +16,8 @@
 //! behavior; these tests pin the specific facts so the Rust port converges TOWARD
 //! them ahead of the Task-3 158-fixture differential.
 
-use al_sem::engine::l3::l3_workspace::assemble_and_resolve;
 use al_sem::engine::l4::summary::project_r3a2;
+use al_sem::program::model::program_calls::assemble_and_resolve_inline_program;
 use serde_json::Value;
 
 const APP_GUID: &str = "dddddddd-dddd-dddd-dddd-dddddddddd01";
@@ -88,7 +88,7 @@ fn conditional_insert_yields_unknown_dirty_at_exit() {
     }
 }
 "#;
-    let resolved = assemble_and_resolve(
+    let resolved = assemble_and_resolve_inline_program(
         &files(&[("Publisher.al", src_publisher), ("Table.al", src_table)]),
         APP_GUID,
         MODEL_INSTANCE_ID,
@@ -163,7 +163,7 @@ fn repeat_multi_statement_body_sees_all_statements() {
     end;
 }
 "#;
-    let resolved = assemble_and_resolve(
+    let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
         MODEL_INSTANCE_ID,
@@ -214,7 +214,7 @@ fn while_conditional_break_contributes_dirty_state_to_loop_exit() {
     end;
 }
 "#;
-    let resolved = assemble_and_resolve(
+    let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
         MODEL_INSTANCE_ID,
@@ -264,7 +264,7 @@ fn repeat_with_conditional_break_is_sound() {
     end;
 }
 "#;
-    let resolved = assemble_and_resolve(
+    let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
         MODEL_INSTANCE_ID,
