@@ -7,9 +7,10 @@ use std::path::Path;
 /// One embedded source file recovered from a `.app`.
 ///
 /// `text` is `Arc<str>` (perf safe-wins Task 1): the SAME allocation is
-/// shared by `ParsedFile.text` and `LspSnapshot::dep_texts` — embedded
-/// dependency source (~114 MB on a real BC workspace) must exist in memory
-/// exactly once. Serde's `rc` feature serializes it as a plain string, so
+/// shared by `ParsedFile.text` and every root that loads the app (through
+/// `DepCache::source`) — embedded dependency source (~114 MB on a real BC
+/// workspace) must exist in memory at most once. The LSP keeps none of it
+/// after a build (`LspSnapshot::dep_lines`, engine-switch S10.1). Serde's `rc` feature serializes it as a plain string, so
 /// the content-addressed source cache format (`snapshot::cache`) is
 /// unchanged.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

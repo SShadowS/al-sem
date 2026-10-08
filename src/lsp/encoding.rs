@@ -35,8 +35,8 @@ pub fn negotiate(client_encodings: Option<&[String]>) -> PositionEncoding {
 /// Lazy per-line byte<->UTF-16 conversion table for one file's text.
 ///
 /// Owns its source text (`Arc<str>`, a cheap refcount-bump clone whenever
-/// the caller already holds one — `ParsedFileEntry::text`/`dep_texts`
-/// values both do) rather than borrowing it, so a `LineTable` is
+/// the caller already holds one — `ParsedFileEntry::text` does) rather than
+/// borrowing it, so a `LineTable` is
 /// lifetime-free and can be memoized behind a `OnceLock` on the very struct
 /// that owns the text it was built from (`ParsedFileEntry::line_table`,
 /// `src/lsp/snapshot.rs`) — a borrowed `LineTable<'t>` could never be
@@ -141,6 +141,26 @@ impl LineTable {
     }
 }
 
+/// Outbound column conversion, the one operation every position-bearing LSP
+/// answer needs: a workspace file's [`LineTable`] or a dependency file's
+/// [`LineIndex`].
+pub trait ColOut {
+    /// UTF-8 byte column -> column in `enc` (see [`LineTable::col_out`]).
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32;
+}
+
+impl ColOut for LineTable {
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32 {
+        LineTable::col_out(self, line, byte_col, enc)
+    }
+}
+
+impl ColOut for LineIndex {
+    fn col_out(&self, line: u32, byte_col: u32, enc: PositionEncoding) -> u32 {
+        LineIndex::col_out(self, line, byte_col, enc)
+    }
+}
+
 /// A [`LineTable`] without the text: answers [`LineTable::col_out`] exactly,
 /// in both encodings and with the same clamps, from each line's byte length
 /// (`\r` stripped) plus the position and widths of every non-ASCII character.
@@ -148,13 +168,14 @@ impl LineTable {
 /// switch S10.1): dependency positions are only ever converted outward (a
 /// declaration's `origin` / `name_origin`), never inward, so `col_in` is not
 /// offered. AL source is nearly all ASCII, so this is about 4 bytes per line.
+#[derive(Debug, PartialEq, Eq)]
 pub struct LineIndex {
     line_lens: Vec<u32>,
     /// Every non-ASCII character, in (line, start) order.
     wide: Vec<WideChar>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WideChar {
     line: u32,
     /// Byte offset within the line.

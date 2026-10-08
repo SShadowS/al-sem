@@ -54,7 +54,7 @@ use al_syntax::ir::AlFile;
 use rayon::prelude::*;
 
 use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
-use crate::lsp::encoding::LineTable;
+use crate::lsp::encoding::{ColOut, LineIndex, LineTable};
 use crate::program::dep_cache::DepCache;
 use crate::program::dep_cache::DepLspTier;
 use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
@@ -99,8 +99,8 @@ pub struct EdgeRef {
 /// event-flow edges.
 pub const EVENT_EDGES_KEY: &str = "\u{0}events";
 
-/// [`LspSnapshot::dep_texts`]'s map type.
-pub(crate) use crate::program::dep_cache::DepTexts;
+/// [`LspSnapshot::dep_lines`]'s map type.
+pub(crate) use crate::program::dep_cache::DepLines;
 
 /// One routine declaration's identity + LSP-facing spans, owned (never
 /// borrowing the `AlFile` it was read from — `Origin` is plain data).
@@ -118,7 +118,7 @@ pub struct DeclEntry {
 
 /// A borrowed, source-agnostic view of one routine declaration's LSP-facing
 /// data — the common shape of a workspace [`DeclEntry`] and a dependency
-/// [`RoutineMeta`] (`dep_meta` tier), so [`LspSnapshot::decl_and_text`] can
+/// [`RoutineMeta`] (`dep_meta` tier), so [`LspSnapshot::decl_and_line_table`] can
 /// serve BOTH without materializing a second owned map for dependencies
 /// (the old `dep_decl_by_id` duplicated ~103 MB of `dep_meta`'s data on a
 /// CDO-scale workspace, plus an O(all-dep-decls) build pass at every rung-3).
@@ -143,29 +143,6 @@ impl<'a> DeclView<'a> {
             origin: &e.origin,
             name_origin: &e.name_origin,
             virtual_path: &e.virtual_path,
-        }
-    }
-}
-
-/// The [`LspSnapshot::decl_and_line_table`] return shape: either a CACHED
-/// workspace [`LineTable`] (borrowed from a [`ParsedFileEntry`], reused
-/// across every call against the same snapshot generation) or a freshly
-/// built one for a dependency-embedded-source decl (`dep_texts` is not
-/// cache-scoped — see `decl_and_line_table`'s own doc for why). Call
-/// [`Self::table`] to get a plain `&LineTable` regardless of which variant
-/// a given `id` resolved to — callers never need to branch on this
-/// themselves.
-pub enum DeclLineTable<'a> {
-    Cached(&'a LineTable),
-    Owned(LineTable),
-}
-
-impl<'a> DeclLineTable<'a> {
-    #[must_use]
-    pub fn table(&self) -> &LineTable {
-        match self {
-            DeclLineTable::Cached(t) => t,
-            DeclLineTable::Owned(t) => t,
         }
     }
 }
@@ -326,23 +303,23 @@ pub struct LspSnapshot {
     /// `Updater::decl_multiplicity`) at rung 1 — see this module's amended
     /// ownership-law doc above and `apply_rung1_core`'s doc.
     pub decl_by_id: HashMap<RoutineNodeId, DeclEntry>,
-    /// Source text for every file contributing an entry to
+    /// A text-free [`LineIndex`] for every file contributing an entry to
     /// [`Self::dep_meta`], keyed `(app, virtual_path)` — a
     /// dependency's `virtual_path` is only unique WITHIN its own app (two
     /// different deps can each have their own "Codeunit1.al"), unlike
-    /// `Self::parsed`'s workspace-only, plain-`String`-keyed map. This is
-    /// the `LineTable` text source for a dependency-source item's
-    /// position-encoding conversion (mirrors [`ParsedFileEntry::text`]'s
-    /// role for workspace files). Look both maps up together via
-    /// [`Self::decl_and_text`] rather than indexing either directly.
-    pub dep_texts: Arc<DepTexts>,
+    /// `Self::parsed`'s workspace-only, plain-`String`-keyed map. It turns a
+    /// dependency-source item's positions into editor columns (the role
+    /// [`ParsedFileEntry::line_table`] plays for workspace files). The LSP keeps
+    /// no dependency TEXT (engine-switch S10.1): nothing it serves displays it.
+    /// Look both maps up together via [`Self::decl_and_line_table`].
+    pub dep_lines: Arc<DepLines>,
     /// The frozen dependency tier of the owned `DeclSurface` (T3 Task 12):
     /// every non-primary routine's `RoutineMeta` projection (name, origins,
     /// `parse_incomplete`, param `ty`/`by_ref` — never the body), built with
     /// the dependency nodes (`DepNodes::dep_meta`, shared by every root on
     /// the same dependency tier) and forwarded
     /// by `Arc::clone` across rungs 1/2 (sound for the same reason
-    /// `dep_texts` is: dependency source cannot change on those rungs — see
+    /// `dep_lines` is: dependency source cannot change on those rungs — see
     /// its doc). Rung 1/2 rebuild a workspace-only `DeclSurface` via
     /// [`DeclSurface::with_frozen`], composing it with this tier rather than
     /// re-deriving it, so no rung ever needs a dependency parse tree (under
@@ -356,9 +333,8 @@ pub struct LspSnapshot {
     /// for `id` — so any `id` an edge carries as a `Routine` target is
     /// guaranteed to be found in EITHER `decl_by_id` (workspace) or here,
     /// never neither. Served (as a borrowed [`DeclView`]) via
-    /// [`Self::decl_and_text`] rather than a dedicated owned map — the old
-    /// `dep_decl_by_id` duplicated this exact data (see [`build_dep_texts`]'s
-    /// doc for the history).
+    /// [`Self::decl_and_line_table`] rather than a dedicated owned map — the
+    /// old `dep_decl_by_id` duplicated this exact data.
     pub dep_meta: Arc<DepMetaMap>,
     /// The workspace root every `virtual_path` in this snapshot is relative
     /// to, normalized via [`crate::protocol::normalize_path`] (T3 Task 11) —
@@ -413,8 +389,8 @@ impl LspSnapshot {
     ///
     /// `ctx.parsed` holds only the workspace unit: under the LSP's `LIGHT`
     /// profile each dependency tree is dropped right after it is summarized,
-    /// during the parse (the dependency tier supplies `dep_meta`, and
-    /// `dep_texts` comes from the snapshot's source files). So the updater's
+    /// during the parse (the dependency tier supplies `dep_meta` and
+    /// `dep_lines`). So the updater's
     /// steady state never retains dependency parse arenas — see the design
     /// spec (`docs/superpowers/specs/2026-07-13-owned-decl-surface-design.md`).
     /// `ParsedFile.file`/`.text` are `Arc`-shared (perf safe-wins Task 2),
@@ -480,8 +456,8 @@ impl LspSnapshot {
     /// composition a second time just to exercise it without disk I/O.
     ///
     /// Returns the `LspSnapshot` alongside the ONE workspace [`ParsedUnit`]
-    /// (`ctx.parsed` holds nothing else): `dep_meta` comes from the
-    /// dependency tier and `dep_texts` from the snapshot's source files.
+    /// (`ctx.parsed` holds nothing else): `dep_meta` and `dep_lines` come from
+    /// the dependency tier.
     /// `ParsedFile.file`/`.text` are `Arc`-shared (perf
     /// safe-wins Task 2), so the published snapshot's workspace
     /// `ParsedFileEntry`s hold `Arc::clone`s rather than consuming the
@@ -518,7 +494,7 @@ impl LspSnapshot {
         let mut surfaces_by_file: HashMap<String, DefSurface> = HashMap::new();
         let mut decls_by_file: HashMap<String, Arc<Vec<DeclEntry>>> = HashMap::new();
         let event_edges: Arc<Vec<ClassifiedEdge>>;
-        let dep_texts: Arc<DepTexts>;
+        let dep_lines: Arc<DepLines>;
         let dep_meta: Arc<DepMetaMap>;
 
         {
@@ -527,20 +503,20 @@ impl LspSnapshot {
             // The rung-1 construction: workspace decls over the dependency
             // tier's frozen `dep_meta` (built with the dependency nodes, so
             // a shared-tier hit — which parsed only the workspace — has it
-            // too). Roots sharing a dependency tier share its `dep_texts`;
-            // the first root to get here publishes them, read from the
+            // too). Roots sharing a dependency tier share its `dep_lines`;
+            // the first root to get here publishes them, indexed from the
             // snapshot's source files (no parse needed).
             let ws = primary_unit_idx.map_or(&[][..], |i| std::slice::from_ref(&parsed[i]));
             let surface = DeclSurface::build(&graph, ws)
                 .with_frozen(Arc::clone(&dep_layer.dep_nodes.dep_meta));
             let tier = dep_layer.dep_nodes.lsp.get_or_init(|| {
                 Arc::new(DepLspTier {
-                    dep_texts: Arc::new(build_dep_texts(&snap, &graph.apps, primary_app_ref)),
+                    dep_lines: Arc::new(build_dep_lines(&snap, &graph.apps, primary_app_ref)),
                 })
             });
             dep_meta = Arc::clone(&dep_layer.dep_nodes.dep_meta);
-            dep_texts = Arc::clone(&tier.dep_texts);
-            crate::census_hook::mark("5.index+surface+dep_meta+dep_texts");
+            dep_lines = Arc::clone(&tier.dep_lines);
+            crate::census_hook::mark("5.index+surface+dep_meta+dep_lines");
 
             if let Some(idx) = primary_unit_idx {
                 // T3 Task 3 (F7): same ordered-collect-then-`par_iter` shape as
@@ -643,7 +619,7 @@ impl LspSnapshot {
             publisher_fanout: Arc::new(publisher_fanout),
             decls_by_file,
             decl_by_id,
-            dep_texts,
+            dep_lines,
             dep_meta,
             workspace_root: Arc::new(crate::protocol::normalize_path(workspace_root)),
         };
@@ -694,65 +670,26 @@ impl LspSnapshot {
     }
 
     /// Resolve ANY `RoutineNodeId` — workspace OR dependency — to its live
-    /// decl data plus the source text needed for position-encoding
-    /// conversion (`LineTable::new(text)`). The one lookup handlers.rs uses
-    /// for every position-bearing `RouteTarget::Routine(id)` surface, so a
-    /// caller never needs to know whether `id` is served from
+    /// decl data plus the column converter for its file. The one lookup
+    /// handlers.rs uses for every position-bearing `RouteTarget::Routine(id)`
+    /// surface, so a caller never needs to know whether `id` is served from
     /// [`Self::decl_by_id`] (workspace) or [`Self::dep_meta`] (dependency).
-    /// Returns `None` for a stale id (not in either map) — the fail-closed
-    /// "never guess" contract every handler built on this must honor.
+    /// A workspace decl's converter is its file's cached
+    /// [`ParsedFileEntry::line_table`] (memoized — repeat callers against the
+    /// SAME snapshot generation, e.g. `incoming`'s per-distinct-caller loop,
+    /// reuse it); a dependency decl's is its file's [`LineIndex`] in
+    /// [`Self::dep_lines`] (built once per shared tier). Returns `None` for a
+    /// stale id (not in either map) — the fail-closed "never guess" contract
+    /// every handler built on this must honor.
     #[must_use]
-    pub fn decl_and_text(&self, id: &RoutineNodeId) -> Option<(DeclView<'_>, &str)> {
-        if let Some(d) = self.decl_by_id.get(id) {
-            let text: &str = &self.parsed.get(&d.virtual_path)?.text;
-            return Some((DeclView::from_entry(d), text));
-        }
-        let (key, m) = self.dep_meta.get_key_value(id)?;
-        let text = self
-            .dep_texts
-            .get(&(id.object.app, m.virtual_path.clone()))?;
-        Some((
-            DeclView {
-                id: key,
-                name: &m.name,
-                origin: &m.origin,
-                name_origin: &m.name_origin,
-                virtual_path: &m.virtual_path,
-            },
-            text.as_ref(),
-        ))
-    }
-
-    /// The [`Self::decl_and_text`] counterpart that hands back a
-    /// [`LineTable`] instead of raw text — the snapshot-scoped cache entry
-    /// point (`docs/OUTSTANDING.md`'s "Snapshot-scoped LineTable cache"
-    /// item). Mirrors `decl_and_text`'s EXACT workspace-vs-dependency branch
-    /// (both methods must agree on which tier resolves `id` — see that
-    /// method's own doc): a workspace decl's table comes from
-    /// [`ParsedFileEntry::line_table`] (memoized — repeat callers against
-    /// the SAME snapshot generation, e.g. `incoming`'s per-distinct-caller
-    /// loop, reuse the identical cached `LineTable`), a dependency decl's
-    /// table is built fresh every call (`dep_texts` isn't cache-scoped —
-    /// deliberately out of this task's scope, see the phase-1 report at
-    /// `.superpowers/sdd/linetable-cache-report.md`: a much smaller, rarer
-    /// population than per-call workspace fan-in, and `dep_texts`'
-    /// `Arc<str>`-valued shape has existing byte-sharing tests in
-    /// `tests/lsp/lsp_incremental_parity.rs` this task chose not to disturb).
-    #[must_use]
-    pub fn decl_and_line_table(
-        &self,
-        id: &RoutineNodeId,
-    ) -> Option<(DeclView<'_>, DeclLineTable<'_>)> {
+    pub fn decl_and_line_table(&self, id: &RoutineNodeId) -> Option<(DeclView<'_>, &dyn ColOut)> {
         if let Some(d) = self.decl_by_id.get(id) {
             let entry = self.parsed.get(&d.virtual_path)?;
-            return Some((
-                DeclView::from_entry(d),
-                DeclLineTable::Cached(entry.line_table()),
-            ));
+            return Some((DeclView::from_entry(d), entry.line_table()));
         }
         let (key, m) = self.dep_meta.get_key_value(id)?;
-        let text = self
-            .dep_texts
+        let index = self
+            .dep_lines
             .get(&(id.object.app, m.virtual_path.clone()))?;
         Some((
             DeclView {
@@ -762,7 +699,7 @@ impl LspSnapshot {
                 name_origin: &m.name_origin,
                 virtual_path: &m.virtual_path,
             },
-            DeclLineTable::Owned(LineTable::new(Arc::clone(text))),
+            index,
         ))
     }
 }
@@ -1000,20 +937,20 @@ pub fn build_decl_multiplicity(
     mult
 }
 
-/// Build [`LspSnapshot::dep_texts`]: dependency file texts by `(app, virtual
-/// path)`, which [`LspSnapshot::decl_and_text`] pairs with
-/// [`LspSnapshot::dep_meta`] for a dependency decl's position conversion.
-/// Reads the snapshot's source files (the same `Arc<str>`s, never copies;
-/// no parse), first file winning on a repeated key. It runs once per live
-/// shared dependency tier: [`LspSnapshot::from_context`] calls it inside the
-/// tier's `get_or_init`, so every root on that tier shares the result.
+/// Build [`LspSnapshot::dep_lines`]: a [`LineIndex`] of every dependency file
+/// by `(app, virtual path)`, which [`LspSnapshot::decl_and_line_table`] pairs
+/// with [`LspSnapshot::dep_meta`] for a dependency decl's position conversion.
+/// Reads the snapshot's source files (no parse), first file winning on a
+/// repeated key. It runs once per live shared dependency tier:
+/// [`LspSnapshot::from_context`] calls it inside the tier's `get_or_init`, so
+/// every root on that tier shares the result.
 #[must_use]
-pub(crate) fn build_dep_texts(
+pub(crate) fn build_dep_lines(
     snap: &AppSetSnapshot,
     apps: &AppRegistry,
     primary: AppRef,
-) -> DepTexts {
-    let mut dep_texts = DepTexts::new();
+) -> DepLines {
+    let mut dep_lines = DepLines::new();
     for unit in &snap.apps {
         let (Some(app_ref), Some(source)) = (apps.find(&unit.id), unit.source.as_ref()) else {
             continue;
@@ -1022,12 +959,12 @@ pub(crate) fn build_dep_texts(
             continue;
         }
         for f in source.files.iter() {
-            dep_texts
+            dep_lines
                 .entry((app_ref, f.virtual_path.clone()))
-                .or_insert_with(|| Arc::clone(&f.text));
+                .or_insert_with(|| LineIndex::new(&f.text));
         }
     }
-    dep_texts
+    dep_lines
 }
 
 // ---------------------------------------------------------------------------

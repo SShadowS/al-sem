@@ -34,9 +34,10 @@ Spec: `docs/superpowers/specs/2026-10-04-compact-graph-core-design.md` §8 item 
    snapshot's texts, which are then dropped.
 3. **Reader**: `decl_and_line_table` returns a `Cols` view (a small enum over `&LineTable`
    for workspace files and `&LineIndex` for dependency files) with one method, `col_out`.
-   `origin_to_range`, `canonical_span_to_range` and `build_item` take `Cols`. A
-   `debug_assert!` in `incoming` pins the invariant that a non-EventFlow edge's caller is a
-   workspace routine (today an invariant, not a type).
+   `origin_to_range`, `canonical_span_to_range` and `build_item` take `Cols`. (As built: a
+   `ColOut` trait instead of an enum, so the helpers take `&dyn ColOut` and the workspace call
+   sites are unchanged. No guard on dependency call-site spans is needed: a `LineIndex` covers
+   every line of its file, not just the declaration points.)
    `decl_and_text`'s dependency branch (one test caller) is deleted; the test checks
    `decl_and_line_table` instead.
 4. **Retained snapshot**: `LspSnapshot::from_context` builds the tier's line index (if the tier

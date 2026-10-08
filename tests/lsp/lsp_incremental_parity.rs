@@ -121,13 +121,13 @@
 //! (`ts_id` was deleted outright — it was written once by the lowerer and read
 //! by no production code; see the pack-cache spec §17.3.)
 //!
-//! **`dep_meta`/`dep_texts`/`workspace_root` (T3 Task 11 review
+//! **`dep_meta`/`dep_lines`/`workspace_root` (T3 Task 11 review
 //! fix-wave — the three `LspSnapshot` fields Task 11 added for
 //! dependency-source real-span coverage, after this gate was already
 //! written).** All three are now compared, closing what would otherwise be
 //! an invisible-divergence hole in a PERMANENT gate. On THIS fixture
 //! (`tests/fixtures/lsp-incr/`, workspace-only — no dependency apps) `dep_meta`/
-//! `dep_texts` are trivially empty on both sides and `workspace_root` is
+//! `dep_lines` are trivially empty on both sides and `workspace_root` is
 //! trivially identical (`copy_fixture_to_tempdir`'s one tempdir), so this
 //! addition exercises the comparison PLUMBING now without yet proving
 //! anything non-vacuous about dependency-bearing rung 1/2 transitions — a
@@ -417,7 +417,7 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
         "{context}: publisher_fanout diverged (incremental vs fresh build_full)"
     );
 
-    // T3 Task 11 review fix-wave: dep_meta/dep_texts/workspace_root —
+    // T3 Task 11 review fix-wave: dep_meta/dep_lines/workspace_root —
     // trivially equal on this dep-less fixture (see the module doc's note);
     // still compared so a future regression can't slip through silently.
     assert_eq!(
@@ -426,8 +426,8 @@ fn assert_snapshots_equivalent(incremental: &LspSnapshot, fresh: &LspSnapshot, c
         "{context}: dep_meta diverged (incremental vs fresh build_full)"
     );
     assert_eq!(
-        *incremental.dep_texts, *fresh.dep_texts,
-        "{context}: dep_texts diverged (incremental vs fresh build_full)"
+        *incremental.dep_lines, *fresh.dep_lines,
+        "{context}: dep_lines diverged (incremental vs fresh build_full)"
     );
     assert_eq!(
         incremental.workspace_root, fresh.workspace_root,
@@ -1352,7 +1352,7 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
 // Script 10 (T3 Task 14 Step 5, plan-amended): dep-bearing fixture arm.
 //
 // Every script above runs on `tests/fixtures/lsp-incr/`, which declares no
-// dependencies — so the module doc's `dep_meta`/`dep_texts`/
+// dependencies — so the module doc's `dep_meta`/`dep_lines`/
 // `workspace_root` comparisons in `assert_snapshots_equivalent` (added in
 // the Task 10/11 review fix-waves) are trivially vacuous there (both sides
 // empty/identical for a structural, not a proven, reason). This script uses
@@ -1362,7 +1362,7 @@ fn canon_edge_distinguishes_kind_shape_completeness_and_conditions() {
 // shipping `codeunit 60100 "Source Mgt"`'s actual AL source inside the
 // package — see `tests/fixtures/lsp-diff-deps/app.json`'s declared
 // dependencies) — giving these three fields NON-VACUOUS coverage: a real
-// `dep_meta` entry for `Source Mgt.DoWork`, a real `dep_texts` entry
+// `dep_meta` entry for `Source Mgt.DoWork`, a real `dep_lines` entry
 // for its embedded source, through both a rung-1 (body-only) and a rung-2
 // (signature-change) transition on the WORKSPACE caller file. Per the
 // design doc's `dep_layer` Arc-sharing rationale (`snapshot.rs`'s own
@@ -1399,8 +1399,8 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
         "fixture sanity: dep_meta must carry Source Lib's embedded DoWork"
     );
     assert!(
-        !base.dep_texts.is_empty(),
-        "fixture sanity: dep_texts must carry Source Mgt.al's embedded source text"
+        !base.dep_lines.is_empty(),
+        "fixture sanity: dep_lines must index Source Mgt.al's embedded source"
     );
     let base_dep_decls = canon_dep_meta(&base);
 
@@ -1450,7 +1450,7 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
 
     // Rung 2: a SIGNATURE change on the workspace caller (adds a parameter)
     // — must rebuild the workspace layer while REUSING the cached dep
-    // layer; dep_meta/dep_texts must stay non-vacuous AND identical.
+    // layer; dep_meta/dep_lines must stay non-vacuous AND identical.
     let signature_change = r#"codeunit 50000 "Caller"
 {
     procedure CallSymbolOnlyDep(Extra: Integer)
@@ -1491,43 +1491,6 @@ fn dep_bearing_rung1_then_rung2_stay_equivalent_with_nonvacuous_dep_indexes() {
         base_dep_decls,
         "rung 2 must reuse the cached, unchanged dep layer — dep_meta identical across a workspace-only signature-change rebuild"
     );
-}
-
-/// Perf safe-wins Task 1: embedded dependency source text must be ONE shared
-/// allocation — `dep_texts`'s `Arc<str>` and the `AppSetSnapshot`'s own
-/// `SourceFile.text` must be pointer-equal, never independent copies (the
-/// perf doc's T1/T2 duplication).
-#[test]
-fn dep_texts_share_the_snapshot_source_text_allocation() {
-    let dir = copy_fixture_lsp_diff_deps_to_tempdir();
-    let (base, _parsed) = build_full_with_parsed(dir.path());
-
-    assert!(
-        !base.dep_texts.is_empty(),
-        "fixture sanity: dep_texts must carry Source Mgt.al's embedded source"
-    );
-    for ((app_ref, vp), dep_text) in base.dep_texts.iter() {
-        let app_id = base.graph.apps.resolve(*app_ref);
-        let unit = base
-            .snap
-            .apps
-            .iter()
-            .find(|u| &u.id == app_id)
-            .expect("dep_texts app must exist in snap");
-        let sf = unit
-            .source
-            .as_ref()
-            .expect("dep with texts has embedded source")
-            .files
-            .iter()
-            .find(|f| &f.virtual_path == vp)
-            .expect("dep_texts path must exist in snap source");
-        assert!(
-            std::sync::Arc::ptr_eq(dep_text, &sf.text),
-            "dep_texts[({app_ref:?}, {vp})] must share the snapshot's text \
-             allocation, not copy it"
-        );
-    }
 }
 
 /// Perf safe-wins Task 2: `build_full_with_parsed` must NOT run a second
@@ -1589,7 +1552,7 @@ fn build_full_with_parsed_returns_only_the_workspace_unit() {
 /// which is the only externally observable point from this integration
 /// test crate — `Updater`'s fields are private).
 #[test]
-fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
+fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_lines_by_arc_identity() {
     let dir = copy_fixture_lsp_diff_deps_to_tempdir();
     let (base, parsed) = build_full_with_parsed(dir.path());
     assert!(
@@ -1629,8 +1592,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "apply_batch's Rung1 arm must forward dep_meta by Arc identity, never rebuild it"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&base.dep_texts, &rung1_snap.dep_texts),
-        "apply_batch's Rung1 arm must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&base.dep_lines, &rung1_snap.dep_lines),
+        "apply_batch's Rung1 arm must forward dep_lines by Arc identity"
     );
 
     // ── Rung 2, same Updater: a signature change on the workspace caller ──
@@ -1663,8 +1626,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "apply_rung2 must forward dep_meta by Arc identity, never rebuild it"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&rung1_snap.dep_texts, &rung2_snap.dep_texts),
-        "apply_rung2 must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&rung1_snap.dep_lines, &rung2_snap.dep_lines),
+        "apply_rung2 must forward dep_lines by Arc identity"
     );
 
     // ── Path 2: spawn_updater's hot loop — a SEPARATE Updater/thread, so it
@@ -1679,7 +1642,7 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
     let dir2 = copy_fixture_lsp_diff_deps_to_tempdir();
     let (base2, parsed2) = build_full_with_parsed(dir2.path());
     let base2_dep_meta = Arc::clone(&base2.dep_meta);
-    let base2_dep_texts = Arc::clone(&base2.dep_texts);
+    let base2_dep_lines = Arc::clone(&base2.dep_lines);
     let shared = Arc::new(SharedSnapshot::new(Arc::new(base2)));
     let (tx, rx) = mpsc::channel();
 
@@ -1711,8 +1674,8 @@ fn rung1_and_rung2_forward_dep_meta_dep_decls_and_dep_texts_by_arc_identity() {
         "spawn_updater's hot-loop rung-1 path must forward dep_meta by Arc identity"
     );
     assert!(
-        std::sync::Arc::ptr_eq(&base2_dep_texts, &hot_loop_snap.dep_texts),
-        "spawn_updater's hot-loop rung-1 path must forward dep_texts by Arc identity"
+        std::sync::Arc::ptr_eq(&base2_dep_lines, &hot_loop_snap.dep_lines),
+        "spawn_updater's hot-loop rung-1 path must forward dep_lines by Arc identity"
     );
 }
 
@@ -1804,7 +1767,7 @@ fn dep_overload_dispatch_resolves_through_frozen_tier_after_arena_drop() {
 }
 
 /// Every `RouteTarget::Routine(id)` naming a DEPENDENCY routine must resolve
-/// through `decl_and_text` (served by `dep_meta` since the `dep_decl_by_id`
+/// through `decl_and_line_table` (served by `dep_meta` since the `dep_decl_by_id`
 /// deletion) — the fail-closed "never guess" contract must not lose a single
 /// id in the migration.
 #[test]
@@ -1826,7 +1789,7 @@ fn every_dep_routine_route_target_resolves_via_dep_meta() {
                 {
                     dep_targets += 1;
                     assert!(
-                        snap.decl_and_text(rid).is_some(),
+                        snap.decl_and_line_table(rid).is_some(),
                         "dep routine target {rid:?} must resolve via dep_meta"
                     );
                 }

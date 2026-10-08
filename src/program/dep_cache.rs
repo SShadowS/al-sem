@@ -87,11 +87,13 @@ pub struct DepNodes {
 
 /// Dependency-derived LSP data, shared with [`DepNodes`].
 pub struct DepLspTier {
-    pub dep_texts: Arc<DepTexts>,
+    pub dep_lines: Arc<DepLines>,
 }
 
-/// Dependency file texts by `(app, virtual path)`.
-pub(crate) type DepTexts = HashMap<(AppRef, String), Arc<str>>;
+/// A text-free line index of every dependency file, by `(app, virtual path)`:
+/// what the LSP needs to turn a dependency position into an editor column. The
+/// LSP keeps no dependency text (engine-switch S10.1).
+pub(crate) type DepLines = HashMap<(AppRef, String), crate::lsp::encoding::LineIndex>;
 
 impl DepCache {
     /// The live entry for `key`, or `build()`'s result (now cached). The lock
@@ -119,8 +121,9 @@ impl DepCache {
 
     /// The live entry for `key`, if any. Never builds. Any live entry is a
     /// hit: it always carries `dep_meta` and `recovered` (and the bodies when
-    /// `key` keeps them), and its LSP products (`dep_texts`) can be built
-    /// from any snapshot, so a hit never needs to parse the dependencies.
+    /// `key` keeps them), and its LSP products (`dep_lines`) can be built
+    /// from any fresh snapshot (it still holds the dependency source until
+    /// the LSP build drops it), so a hit never needs to parse the dependencies.
     pub fn get(&self, key: &DepKey) -> Option<Arc<DepNodes>> {
         self.lock().get(key).and_then(Weak::upgrade)
     }
@@ -574,7 +577,7 @@ mod tests {
     /// The dependency's embedded source as a snapshot holds it. Returning the
     /// shared file list (not just its texts) keeps it alive, as a live
     /// snapshot would: the cache shares only a list some root still holds.
-    fn dep_texts(cache: &DepCache, root: &Path) -> Arc<Vec<SourceFile>> {
+    fn dep_source(cache: &DepCache, root: &Path) -> Arc<Vec<SourceFile>> {
         use crate::snapshot::SnapshotBuilder;
         let (snap, _) = (SnapshotBuilder {
             workspace_root: root.to_path_buf(),
@@ -603,18 +606,18 @@ mod tests {
     fn roots_share_one_extracted_source_per_app() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
-        let a = dep_texts(&cache, &fx.root_a);
-        let b = dep_texts(&cache, &fx.root_b);
+        let a = dep_source(&cache, &fx.root_a);
+        let b = dep_source(&cache, &fx.root_b);
         assert!(same_allocations(&a, &b), "same app, same stamp: shared");
 
-        let solo = dep_texts(&DepCache::default(), &fx.root_a);
+        let solo = dep_source(&DepCache::default(), &fx.root_a);
         assert!(!same_allocations(&a, &solo), "no shared cache: not shared");
 
         write_dep_app(
             &fx.alpackages,
             r#",{"Id":81,"Name":"Extra","Methods":[{"Name":"Run","Id":1}]}"#,
         );
-        let c = dep_texts(&cache, &fx.root_a);
+        let c = dep_source(&cache, &fx.root_a);
         assert!(!same_allocations(&a, &c), "new stamp: not served stale");
         assert!(c.len() > a.len(), "the new file's source is the new one");
     }
@@ -637,10 +640,6 @@ mod tests {
             .map(|f| Arc::downgrade(&f.text))
             .expect("precondition: the dependency ships embedded source");
         let live = text.upgrade().expect("held by the snapshot");
-        assert!(
-            a.dep_texts.values().any(|t| Arc::ptr_eq(t, &live)),
-            "precondition: the text is the one the LSP surface serves"
-        );
         drop(live);
         // Checked while the text is alive: `Weak::weak_count` reads 0 once
         // the strong count is 0, whoever still holds a `Weak`.
@@ -668,15 +667,15 @@ mod tests {
     }
 
     /// Roots sharing a dependency tier share its `dep_meta` (held by the
-    /// tier's nodes) and `dep_texts`, and the texts are the shared
-    /// extracted-source allocations.
+    /// tier's nodes) and `dep_lines`, which index exactly the dependency's
+    /// embedded source files.
     #[test]
-    fn roots_share_dep_meta_and_dep_texts() {
+    fn roots_share_dep_meta_and_dep_lines() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
-        assert!(!a.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         assert!(!a.dep_meta.is_empty(), "precondition: dependency decls");
         assert!(Arc::ptr_eq(&a.dep_meta, &a.dep_layer.dep_nodes.dep_meta));
         assert!(Arc::ptr_eq(
@@ -684,30 +683,29 @@ mod tests {
             &b.dep_layer.dep_nodes.dep_meta
         ));
         assert!(Arc::ptr_eq(&a.dep_meta, &b.dep_meta));
-        assert!(Arc::ptr_eq(&a.dep_texts, &b.dep_texts));
-        let src = dep_texts(&cache, &fx.root_a);
-        assert!(
-            a.dep_texts
-                .values()
-                .all(|t| src.iter().any(|s| Arc::ptr_eq(&s.text, t))),
-            "dep_texts values are the shared extracted-source Arcs"
-        );
+        assert!(Arc::ptr_eq(&a.dep_lines, &b.dep_lines));
+        let src = dep_source(&cache, &fx.root_a);
+        let mut indexed: Vec<&str> = a.dep_lines.keys().map(|(_, vp)| vp.as_str()).collect();
+        let mut files: Vec<&str> = src.iter().map(|f| f.virtual_path.as_str()).collect();
+        indexed.sort_unstable();
+        files.sort_unstable();
+        assert_eq!(indexed, files, "one index per embedded source file");
     }
 
     /// A dropped last root leaves nothing behind: the next root's tier
-    /// (`dep_meta`, `recovered`, `dep_texts`) is fresh and equals a
+    /// (`dep_meta`, `recovered`, `dep_lines`) is fresh and equals a
     /// cache-less build.
     #[test]
     fn dep_tier_after_the_last_root_is_dropped_is_fresh_and_correct() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
-        let old_texts = Arc::downgrade(&a.dep_texts);
+        let old_lines = Arc::downgrade(&a.dep_lines);
         let old_meta = Arc::downgrade(&a.dep_layer.dep_nodes.dep_meta);
         drop(a);
         assert!(
-            old_texts.upgrade().is_none(),
-            "nothing retains the dropped texts"
+            old_lines.upgrade().is_none(),
+            "nothing retains the dropped line indexes"
         );
         assert!(
             old_meta.upgrade().is_none(),
@@ -716,11 +714,8 @@ mod tests {
         assert_eq!(cache.live_entries(), 0, "the dropped tier is not live");
         let b = build(&fx.root_b, DependencySource::Embedded, &cache);
         let solo = build(&fx.root_b, DependencySource::Embedded, &DepCache::default());
-        assert!(!b.dep_texts.is_empty());
-        assert_eq!(b.dep_texts.len(), solo.dep_texts.len());
-        for (k, v) in b.dep_texts.iter() {
-            assert_eq!(solo.dep_texts.get(k).map(|s| &**s), Some(&**v));
-        }
+        assert!(!b.dep_lines.is_empty());
+        assert_eq!(*b.dep_lines, *solo.dep_lines);
         assert!(!b.dep_meta.is_empty(), "precondition: dependency decls");
         assert_eq!(*b.dep_meta, *solo.dep_meta);
         assert_eq!(
@@ -771,10 +766,9 @@ mod tests {
             .map(|(k, d)| (k.clone(), format!("{d:?}")))
             .collect();
         let dep_meta: BTreeMap<_, _> = s.dep_meta.iter().collect();
-        let mut dep_texts: Vec<_> = s.dep_texts.keys().collect();
-        dep_texts.sort();
+        let dep_lines: BTreeMap<_, _> = s.dep_lines.iter().collect();
         format!(
-            "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_texts:#?}",
+            "{decls:#?}\n{edges:#?}\n{:#?}\n{incoming:#?}\n{fanout:#?}\n{by_id:#?}\n{dep_meta:#?}\n{dep_lines:#?}",
             sorted(&s.event_edges)
         )
     }
@@ -783,7 +777,7 @@ mod tests {
     /// event raised in it and subscribed to by the workspace.
     fn assert_non_trivial(s: &LspSnapshot) {
         assert!(!s.dep_meta.is_empty(), "precondition: dependency decls");
-        assert!(!s.dep_texts.is_empty(), "precondition: dependency texts");
+        assert!(!s.dep_lines.is_empty(), "precondition: dependency files");
         assert!(!s.event_edges.is_empty(), "precondition: event edges");
         assert!(
             s.event_edges.iter().any(|e| !e.edge.routes.is_empty()),
@@ -1082,7 +1076,7 @@ mod tests {
             let report = report_text(&ctx);
             let (snap, _) = LspSnapshot::from_context(ctx, &ws);
             assert!(
-                !snap.dep_meta.is_empty() && !snap.dep_texts.is_empty(),
+                !snap.dep_meta.is_empty() && !snap.dep_lines.is_empty(),
                 "precondition: {profile:?} has a dependency tier"
             );
             (has_bodies, report, answers(&snap))

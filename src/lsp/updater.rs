@@ -622,7 +622,7 @@ impl Updater {
             // only rung that ever rebuilds them (T3 Task 12 — previously
             // rebuilt here too, before the dep tier was frozen once and
             // forwarded).
-            dep_texts: Arc::clone(&cur.dep_texts),
+            dep_lines: Arc::clone(&cur.dep_lines),
             dep_meta: Arc::clone(&cur.dep_meta),
             // The workspace root never changes across a rung 2 rebuild — the
             // running server watches ONE root for its whole session.
@@ -957,10 +957,10 @@ fn apply_rung1_core(
         decl_by_id,
         // Rung 1 touches ONLY workspace files — dependency source is
         // untouched and `cur.graph` is reused unchanged (see this function's
-        // doc), so `dep_texts`/`dep_meta` are byte-identical
+        // doc), so `dep_lines`/`dep_meta` are byte-identical
         // to the previous snapshot's; `Arc::clone` rather than recompute
-        // (see `build_dep_texts`'s doc / `LspSnapshot::dep_meta`'s doc).
-        dep_texts: Arc::clone(&cur.dep_texts),
+        // (see `build_dep_lines`'s doc / `LspSnapshot::dep_meta`'s doc).
+        dep_lines: Arc::clone(&cur.dep_lines),
         dep_meta: Arc::clone(&cur.dep_meta),
         workspace_root: Arc::clone(&cur.workspace_root),
     };

@@ -37,7 +37,7 @@ use lsp_types::{
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 
-use crate::lsp::encoding::{LineTable, PositionEncoding};
+use crate::lsp::encoding::{ColOut, PositionEncoding};
 use crate::lsp::snapshot::{DeclView, LspSnapshot};
 use crate::program::resolve::edge::{AbiRoutineKey, EdgeKind, Route, RouteTarget};
 use crate::program::resolve::full::ClassifiedEdge;
@@ -183,18 +183,18 @@ pub fn incoming(
     let mut out = Vec::new();
     for caller_id in callers {
         let (has_event_flow, edges) = &groups[&caller_id];
-        let Some((decl, dline_table)) = snap.decl_and_line_table(&caller_id) else {
+        let Some((decl, table)) = snap.decl_and_line_table(&caller_id) else {
             // The caller's own decl vanished from the current snapshot —
             // fail closed by dropping this group rather than guessing at a
             // position for an item we can no longer locate.
             continue;
         };
         // Snapshot-scoped cache (`docs/OUTSTANDING.md`'s "Snapshot-scoped
-        // LineTable cache" item): for a workspace caller this is the SAME
+        // LineTable cache" item): for a workspace caller `table` is the SAME
         // `LineTable` every other distinct caller sharing this file, and
         // every OTHER handler querying this file this generation, already
-        // built — never re-scanned per call.
-        let table = dline_table.table();
+        // built — never re-scanned per call. A dependency caller's is the
+        // tier's `LineIndex`.
 
         let mut from_ranges: Vec<Range> = Vec::new();
         for ce in edges {
@@ -305,14 +305,9 @@ fn push_route_items(
     for route in routes {
         let item = match &route.target {
             RouteTarget::Routine(rid) => match snap.decl_and_line_table(rid) {
-                Some((decl, dline_table)) => build_item(
-                    snap,
-                    enc,
-                    decl,
-                    dline_table.table(),
-                    decl_uri(snap, decl),
-                    None,
-                ),
+                Some((decl, table)) => {
+                    build_item(snap, enc, decl, table, decl_uri(snap, decl), None)
+                }
                 // Structurally shouldn't happen (a `Routine(id)` route is
                 // only ever constructed when the SAME body_map lookup this
                 // snapshot's decl indexes were built from just succeeded —
@@ -381,7 +376,7 @@ fn build_item(
     snap: &LspSnapshot,
     enc: PositionEncoding,
     decl: DeclView<'_>,
-    table: &LineTable,
+    table: &dyn ColOut,
     uri: Uri,
     tag: Option<&str>,
 ) -> CallHierarchyItem {
@@ -544,7 +539,7 @@ fn symbol_kind_for(snap: &LspSnapshot, id: &RoutineNodeId) -> SymbolKind {
 
 pub(crate) fn origin_to_range(
     origin: &al_syntax::ir::Origin,
-    table: &LineTable,
+    table: &dyn ColOut,
     enc: PositionEncoding,
 ) -> Range {
     Range {
@@ -561,7 +556,7 @@ pub(crate) fn origin_to_range(
 
 fn canonical_span_to_range(
     span: &crate::program::resolve::edge::CanonicalSpan,
-    table: &LineTable,
+    table: &dyn ColOut,
     enc: PositionEncoding,
 ) -> Range {
     Range {
@@ -1229,6 +1224,45 @@ mod tests {
         // Cross-check against the dep source's OWN known layout: `procedure
         // Bar()` is line 2 (0-based) of `dep_src`.
         assert_eq!(to.selection_range.start.line, 2);
+    }
+
+    /// S10.1: a dependency decl's columns come from the tier's text-free
+    /// `LineIndex`. For every dependency decl's `origin` and `name_origin`
+    /// ends, both encodings, they equal what a `LineTable` over the original
+    /// text gives — on source where UTF-16 and UTF-8 columns differ.
+    #[test]
+    fn dependency_decl_columns_equal_the_line_table_over_the_text() {
+        let ws_src =
+            "codeunit 50100 \"H11WsCu\"\n{\n    procedure CallDep()\n    begin\n    end;\n}\n";
+        let dep_src = "codeunit 60100 \"Bøgeløn Æble\"\n{\n    /* ø🚀 */ procedure \"Ændr Løn\"()\n    begin\n    end;\n\n    procedure Plain()\n    begin\n    end;\n}\n";
+        let snap = two_app_snapshot(ws_src, dep_src);
+        let table = crate::lsp::encoding::LineTable::new(dep_src);
+        let mut points = 0;
+        let mut wide = 0;
+        for id in snap.dep_meta.keys() {
+            let (decl, cols) = snap.decl_and_line_table(id).expect("dependency decl");
+            for o in [decl.origin, decl.name_origin] {
+                for p in [o.start, o.end] {
+                    for enc in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+                        assert_eq!(
+                            cols.col_out(p.row, p.column, enc),
+                            table.col_out(p.row, p.column, enc),
+                            "{} at {p:?} {enc:?}",
+                            decl.name
+                        );
+                        points += 1;
+                    }
+                    let utf8 = table.col_out(p.row, p.column, PositionEncoding::Utf8);
+                    let utf16 = table.col_out(p.row, p.column, PositionEncoding::Utf16);
+                    wide += usize::from(utf8 != utf16);
+                }
+            }
+        }
+        assert!(points >= 16, "precondition: two dependency decls, {points}");
+        assert!(
+            wide > 0,
+            "precondition: some column differs between encodings"
+        );
     }
 
     // ── T3 Task 11 review fix-wave: abi_symbol_uri must conform to ─────────
