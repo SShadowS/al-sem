@@ -467,6 +467,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pinned by `a_root_on_a_live_lsp_tier_extracts_no_dependency_text`,
   `a_root_after_the_tier_died_extracts_the_text_again`, `a_source_less_app_is_extracted_once`
   and `a_deferred_source_is_served_only_at_its_stamp` (each with a discrimination proof).
+- **Engine strings are stored once** (engine-switch S10.2, compact-graph spec §8 item 2). A new
+  `SharedStr` (`src/program/str_pool.rs`, an `Arc<str>` that compares, hashes, orders, prints
+  and serializes exactly as its text) replaces `String` in routine and object ids
+  (`RoutineNodeId.name_lc`/`.enclosing_member_lc`, `ObjKey::Name`), node fields (names, field
+  and return types, `param_sig_key`, subscriber arguments, ABI parameters, page controls,
+  dataitems, query columns, protected vars) and dependency metadata (`RoutineMeta`,
+  `ParamMeta`); `dep_lines` is keyed by it. `build_dep_nodes` runs one `StrPool` over the tier
+  as it is built, so equal texts are one allocation, and clones of tier values (event links,
+  `incoming`, a second root's copies of dependency ids) share it; a synthesized platform-event
+  publisher id, built per root, clones its subscriber's text. Workspace strings are not pooled.
+  `ObjectRef` stays `String`: the resolver builds one per lookup, and the stored ones total
+  0.24 MiB on CG. No output moved: no golden, and the CDO `--program-call-graph-stats` and
+  `--dependency-bodies-stats --sites` JSON are byte-identical to the S10.1b binary's (SHA-256
+  `2009fab1…3c25` and `659e744a…f1cd`). Counted heap (`tools/census-probe/runs-s10-1b/` →
+  `runs-s10-2/`): idle with updaters, CG 7 roots 228.4 → 186.0 MiB, CDO 288.0 → 243.0, and in
+  `symbols` mode CG 106.0 → 91.4, CDO 161.2 → 145.3; build peak CG root 1 297.2 → 274.8,
+  roots 2-7 24.8-25.1 → 19.2-19.6, CDO 410.5 → 363.6 (`embedded`). Live allocations at 7 CG
+  roots 1,658,289 → 595,730. Where it comes from (CG, all roots live, the probe's string walk):
+  1,151,282 strings with 27.63 MiB of text, each its own allocation before (all `String`), are
+  now held in 239,224 allocations (7.90 MiB); the smaller fields shrink every struct that holds
+  them (`RoutineNodeId` 96 → 72 B, `RoutineNode` 280 → 224, `RoutineMeta` 200 → 176,
+  `ClassifiedEdge` 416 → 344). Pinned by `equal_id_texts_are_one_allocation_across_the_tier_and_roots`
+  and `the_tier_holds_one_allocation_per_text` (each with a discrimination proof); the census
+  probe's string walk gains a "held" column (allocations counted once per data pointer).
 - **The detector model's types lose their `L3` names** (engine-switch S9.7, a pure
   rename; owner chose the names): `L3Resolved` → `Model`, `L3Workspace` →
   `ModelEntities`, `L3Routine`/`L3Object`/`L3Table`/`L3Field`/`L3Key`/`L3Variable`/

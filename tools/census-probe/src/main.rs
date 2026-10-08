@@ -299,6 +299,9 @@ struct StrStat<'a> {
     count: u64,
     bytes: u64,
     distinct: HashMap<&'a str, u32>,
+    /// Text allocations actually held (S10.2: a `SharedStr` shares one), by
+    /// data pointer -> length.
+    allocs: HashMap<usize, u64>,
 }
 
 #[derive(Default)]
@@ -311,6 +314,7 @@ struct VecStat {
 struct W<'a> {
     strs: HashMap<Key, StrStat<'a>>,
     global: HashMap<&'a str, u32>,
+    global_allocs: HashMap<usize, u64>,
     vecs: HashMap<Key, VecStat>,
     /// inline element bytes of containers: (structure) -> (elements, bytes)
     elems: HashMap<&'static str, (u64, u64)>,
@@ -336,11 +340,14 @@ impl<'a> W<'a> {
         st.count += 1;
         st.bytes += v.len() as u64;
         *st.distinct.entry(v).or_default() += 1;
+        st.allocs.insert(v.as_ptr() as usize, v.len() as u64);
         *self.global.entry(v).or_default() += 1;
+        self.global_allocs
+            .insert(v.as_ptr() as usize, v.len() as u64);
         v.len() as u64
     }
-    fn os(&mut self, k: Key, v: &'a Option<String>) -> u64 {
-        v.as_deref().map_or(0, |x| self.s(k, x))
+    fn os<S: AsRef<str>>(&mut self, k: Key, v: &'a Option<S>) -> u64 {
+        v.as_ref().map_or(0, |x| self.s(k, x.as_ref()))
     }
     fn v<T>(&mut self, k: Key, v: &[T]) -> u64 {
         if v.is_empty() {
@@ -558,10 +565,13 @@ impl<'a> W<'a> {
         // S10.1: a text-free line index per dependency file (its own heap is
         // measured by the drop steps, not walked here).
         if self.first(Arc::as_ptr(&l.dep_lines)) {
-            self.elems::<((u32, String), al_sem::lsp::encoding::LineIndex)>(
-                "dep_lines",
-                l.dep_lines.len(),
-            );
+            self.elems::<(
+                (
+                    al_sem::program::node::AppRef,
+                    al_sem::program::node::SharedStr,
+                ),
+                al_sem::lsp::encoding::LineIndex,
+            )>("dep_lines", l.dep_lines.len());
             for ((_, vp), _) in l.dep_lines.iter() {
                 self.s(("dep_lines", "key.virtual_path"), vp);
             }
@@ -647,8 +657,20 @@ impl<'a> W<'a> {
             "-- strings by (structure, field), len bytes; 'saved' = bytes/allocs removed by interning WITHIN the field"
         );
         println!(
-            "  {:<22} {:<30} {:>10} {:>9} {:>10} {:>9} {:>9} {:>9}",
-            "structure", "field", "count", "MiB", "distinct", "dist MiB", "saved", "save%"
+            "-- 'held' = text allocations actually held, once per data pointer (a shared string, S10.2, counts once)"
+        );
+        println!(
+            "  {:<22} {:<30} {:>10} {:>9} {:>10} {:>9} {:>9} {:>9} {:>10} {:>9}",
+            "structure",
+            "field",
+            "count",
+            "MiB",
+            "distinct",
+            "dist MiB",
+            "saved",
+            "save%",
+            "held",
+            "held MiB"
         );
         let mut rows: Vec<_> = self.strs.iter().collect();
         rows.sort_by(|a, b| b.1.bytes.cmp(&a.1.bytes));
@@ -658,7 +680,7 @@ impl<'a> W<'a> {
             tc += st.count;
             tb += st.bytes;
             println!(
-                "  {:<22} {:<30} {:>10} {:>9.2} {:>10} {:>9.2} {:>9.2} {:>8.1}%",
+                "  {:<22} {:<30} {:>10} {:>9.2} {:>10} {:>9.2} {:>9.2} {:>8.1}% {:>10} {:>9.2}",
                 s,
                 f,
                 st.count,
@@ -666,7 +688,9 @@ impl<'a> W<'a> {
                 st.distinct.len(),
                 mibu(db),
                 mibu(st.bytes - db),
-                100.0 * (st.bytes - db) as f64 / st.bytes.max(1) as f64
+                100.0 * (st.bytes - db) as f64 / st.bytes.max(1) as f64,
+                st.allocs.len(),
+                mibu(st.allocs.values().sum())
             );
         }
         let gdb: u64 = self.global.keys().map(|k| k.len() as u64).sum();
@@ -679,6 +703,11 @@ impl<'a> W<'a> {
             mibu(tb - gdb),
             tc - self.global.len() as u64,
             mibu((tc - self.global.len() as u64) * 24)
+        );
+        println!(
+            "  HELD: {} text allocations, {:.2} MiB (all strings above, each allocation counted once)",
+            self.global_allocs.len(),
+            mibu(self.global_allocs.values().sum())
         );
         // String headers (24 B each) are inline in their parent: counted under elems/vecs.
 

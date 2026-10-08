@@ -355,6 +355,13 @@ source: it reads it only to turn byte offsets into editor positions (`LspSnapsho
 decl_and_line_table`), so item 5's condition holds. New order: **5** (S10.1), **2** (S10.2),
 **3** (S10.3), **1** (S10.4), **4** (S10.5).
 
+**Status.** S10.1 done (plans `2026-10-08-s10-1-dependency-line-index.md` and
+`…-s10-1b-defer-dependency-text.md`). S10.2 done as shared `Arc<str>` (`SharedStr`) pooled per
+dependency tier rather than `u32` symbols (owner decision 2026-10-08; reasons in
+`2026-10-08-s10-2-shared-strings.md`); it also shrank every id copy (`RoutineNodeId` 96 → 72 B),
+so item 1's inline price above is now lower (that 22.0 MiB was root 1's walk alone; over all 7
+roots it was 31.04 MiB, now 23.28). Re-price items 3 and 1 before building them.
+
 ## §9 — How the effort runs
 
 - **Step 0 (before step 1): measure the running server.** Extend the census probe to start
