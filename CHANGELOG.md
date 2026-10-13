@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hold more than one site. Golden moved: `implicit-trigger-fixture.json`
     (each of its 3 sites gains `col`/`end_line`/`end_col` and loses `callee_fp`;
     targets unchanged).
+    The issue's own discrimination proof runs through the real resolver: a new
+    fixture, `tests/fixtures/same-line-calls`, puts
+    `Codeunit.Run(Codeunit::SLCFirst); Codeunit.Run(Codeunit::SLCSecond);` on
+    one line of one caller (one callee text, so one `callee_fp`), with a new
+    golden, `same-line-calls-fixture.json` (2 sites). `same_line_calls_swap_is_caught`
+    swaps the two fresh targets and requires both sites to come out wrong.
+    With the old (line, `callee_fp`) key and union put back, the golden minted
+    as 1 site holding both targets and the swap read as 1 paired, 1 match,
+    0 wrong; with the span key it reads as 2 wrong.
   - **The CDO compiler audit** (`compiler_golden.rs`). It compared (caller,
     class, target) pairs only, so a resolver that swapped the targets of two
     calls in one routine produced the same pairs and passed. It now also
@@ -41,7 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`CDOMailManagement` `Insert()` 180 vs `Insert(true)` 208,
     `CDOEMailTemplateManagement` 1530 vs 1564), now pinned. Loading a golden,
     or auditing one, that lists the same pair twice now panics instead of
-    reading it last-wins. No golden moved: the stored lines were already there.
+    reading it last-wins (pinned at the file boundary by
+    `loading_a_golden_file_that_lists_one_pair_twice_is_refused`). No golden
+    moved: the stored lines were already there.
+  - Comments that still described the deleted `match_sites` matcher and the
+    deleted L3-era gates (`cdo_genuine_wrong_is_precedence_adjudicated`,
+    `cdo_l3_semantic_audit_no_fresh_wrong`) now say what exists instead
+    (`differential.rs`, `tests/program_resolve_harness.rs`,
+    `docs/2026-10-04-b3-code-map.md`).
   - **Limit, stated openly.** The compiler graph has no column and keeps only
     the first edge of each (caller, callee) pair. A swap between two calls on
     ONE line, or among later calls to a callee called earlier, leaves the
