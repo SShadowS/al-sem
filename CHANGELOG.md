@@ -78,6 +78,14 @@ per-root pass fell from 1.47 s to 0.04 s (changed roots only), which is why
 analyze, graph, digest and query together; that is the lever, not a lighter
 second cross-app path.
 
+The 3.4x default for `digest` is a deliberate cost, not an oversight. Use
+`--single-app` only when the caller needs workspace tables alone; it is then
+faster than before. bc-dev-mcp's three uses named in #66 (test-order polluter
+prediction, the record-write watch's static writer set, risk ranking) all join
+on dependency tables such as Customer, so none of them can switch to
+`--single-app` without losing this fix. Their speed-up has to come from the
+shared base (its adapter step, 6.8 s, is the largest part).
+
 ## [1.6.1] - 2026-10-13
 
 ### Fixed
