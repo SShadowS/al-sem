@@ -99,16 +99,16 @@ fn run_alsem(args: &[&str], format: &str) -> (String, i32) {
 
 /// One golden case: a slug, the argv after the workspace path, and the exit
 /// code the run must produce.
-struct Case {
+pub(crate) struct Case {
     slug: &'static str,
-    workspace: &'static str,
+    pub(crate) workspace: &'static str,
     /// Argv AFTER `query <sub> <workspace>` — flags only.
-    args: &'static [&'static str],
-    sub: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) sub: &'static str,
     exit_code: i32,
 }
 
-const CORPUS: &[Case] = &[
+pub(crate) const CORPUS: &[Case] = &[
     // A table the routine touches DIRECTLY, both directions. `ModifyHelper`'s
     // own `Cust.Modify()` is `via: direct` with `temp: parameter-dependent(0)`
     // (a `var Cust: Record` parameter), and because it touches the table

@@ -154,9 +154,9 @@ struct QueryTouchesCli {
     /// Path to the AL workspace root.
     workspace: String,
 
-    /// Table selector: a table NAME, an internal table id, or the literal
-    /// `unknown` (the "effect is real, target table unresolved" bucket — not a
-    /// table).
+    /// Table selector: a table NUMBER or NAME, an internal table id, or the
+    /// literal `unknown` (the "effect is real, target table unresolved" bucket —
+    /// not a table).
     #[arg(long = "table")]
     table: String,
 
@@ -182,6 +182,11 @@ struct QueryTouchesCli {
     /// Pin timestamps / version for byte-stable output.
     #[arg(long, default_value_t = false)]
     deterministic: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so a dependency's tables are selectable.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `QueryEffectsCli` — arguments for `alsem query effects <ws> --routine R`.
@@ -206,6 +211,11 @@ struct QueryEffectsCli {
     /// Pin timestamps / version for byte-stable output.
     #[arg(long, default_value_t = false)]
     deterministic: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `PolicyCli` — top-level `policy` subcommand group.
@@ -628,6 +638,12 @@ struct DigestCli {
     /// NOT SUPPORTED: the digest command does not support ordering output.
     #[arg(long, default_value_t = false, hide = true)]
     order: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve,
+    /// at more memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 fn main() -> ExitCode {
@@ -753,6 +769,7 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
         direction,
         &version,
         t.deterministic,
+        t.single_app,
     ) {
         Err(msg) => {
             eprintln!("{msg}");
@@ -772,7 +789,13 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
     }
     let workspace = std::path::Path::new(&e.workspace);
     let version = driver_version();
-    match run_query_effects_pipeline(workspace, &e.routine, &version, e.deterministic) {
+    match run_query_effects_pipeline(
+        workspace,
+        &e.routine,
+        &version,
+        e.deterministic,
+        e.single_app,
+    ) {
         Err(msg) => {
             eprintln!("{msg}");
             ExitCode::from(1)
@@ -1060,6 +1083,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         &version,
         d.deterministic,
         d.max_paths,
+        d.single_app,
     ) {
         Err(msg) => {
             // A DigestPipelineError (input/analyze phase) → write the message verbatim

@@ -1045,6 +1045,17 @@ pub fn compute_analyzer_diagnostics(
     detectors: &[crate::engine::l5::registry::Detector],
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = run_detectors(resolved, detectors);
+    analyzer_diagnostics_of_run(ws_path, resolved, &run)
+}
+
+/// [`compute_analyzer_diagnostics`] over a detector run the caller already made:
+/// `alsem digest`'s cross-app mode (#66) passes the cross-app runner's output
+/// (`registry::run_detectors_cross_app`), the combination `alsem analyze` runs.
+pub fn analyzer_diagnostics_of_run(
+    ws_path: &Path,
+    resolved: &crate::program::model::workspace::Model,
+    run: &crate::engine::l5::registry::RunOutput,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
     // (1) workspace.diagnostics.
     all.extend(crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path));

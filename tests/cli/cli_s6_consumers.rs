@@ -83,6 +83,7 @@ fn digest_follows_the_program_engines_calls() {
         "s6",
         true,
         None,
+        false,
     )
     .expect("digest runs");
     assert!(r.json_text.contains("S6 Log"), "{}", r.json_text);
@@ -308,6 +309,7 @@ fn query_follows_the_program_engines_calls() {
         "Run6",
         "s6",
         true,
+        false,
     )
     .expect("query runs");
     assert!(

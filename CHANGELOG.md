@@ -47,11 +47,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `tests/cli-b-goldens/prove/*.json`, plus the digest `.human.txt` files with
   DB_* effects. Only the version and the new field changed; factIds, canonical
   keys and every other golden family are byte-identical.
+  #66 bumps digest to 1.4.0 as well; one bump covers both additive fields.
 - `alsem digest` and `alsem prove` now run a second L4 summary solve, the
-  same assembly `query effects` uses (`build_db_effect_bundle`). Digest's
-  detector context already solves one (`ctx.db_effect_bundle`), but that one
-  takes dependency leaf summaries and cross-app edges, so it is not guaranteed
-  to equal `query effects`. Measured cost on CDO: about 0.1 s warm.
+  same assembly `query effects` uses in the same mode: `build_db_effect_bundle`
+  single-app, `cross_app_db_effect_bundle` cross-app (#66). Digest's detector
+  context already solves one (`ctx.db_effect_bundle`), but it is not built the
+  way `query effects` builds its own, so the two are not guaranteed to be
+  equal. Measured cost on CDO (single-app, before #66): about 0.1 s warm.
+  `cli_digest_temp_state` checks digest against `query effects` in both
+  modes. LIMIT: its workspace has no dependency, so it cannot tell the two
+  stores apart.
+- **`alsem digest` and `alsem query touches|effects` load the workspace's
+  dependencies by default** (#66), the same way `alsem analyze` (cross-app since
+  S8) and `alsem graph` do. They build analyze's own cross-app base
+  (`capability_cone::build_cross_app_base`): one `FULL` program build, the
+  workspace plus the dependency code it reaches, with calls cut to workspace
+  callers and each source-bearing dependency routine a fixed leaf. A new
+  `--single-app` flag on all three keeps the old workspace-only model. Cross-app
+  is the default for three reasons: the issue's consumer (bc-dev-mcp) needs
+  dependency tables in the default output; an opt-in flag would leave the default
+  silently wrong on every BC workspace; and analyze, graph, digest and query then
+  share one mental model. Cross-app digest also runs the envelope diagnostics'
+  detectors with the cross-app runner (`run_detectors_cross_app`), the
+  combination analyze runs, never the single-app runner over a cross-app model.
+- **Every digest and query document states which apps were loaded and how**:
+  `payload.dependencies` = `{mode: "crossApp" | "singleApp", apps: [...]}`. The
+  `apps` rows are exactly `alsem graph`'s `meta.apps` rows (`appId`, `name`,
+  `publisher`, `version`, `source`: `symbolOnly`/`embedded`/…/`missing`), from
+  one producer, `program::resolve::full::loaded_apps`, which graph now calls too
+  (its golden did not move). `--single-app` states `apps: []`. Human output
+  gains one first line, `dependencies: <name> (<source>), …`, only when an app
+  was loaded, so a workspace with no dependency reads the same in both modes.
+  Additive schema bumps: digest `schemaVersion` 1.3.0 -> 1.4.0, query 1.0.0 ->
+  1.1.0. Every digest and query JSON golden moved by exactly the new
+  `dependencies` block and the version line; no `.human.txt` golden moved.
+- Routine selectors stay on the workspace app. A cross-app model also holds
+  dependency routines, so `digest --routine`, `query --from` and
+  `query effects --routine` match only the primary app's routines
+  (`selector_index::build_selector_indexes` takes the primary guid;
+  `effect_query_cli::resolve_routine_selector` filters), and `query touches`
+  without `--from` lists workspace routines only. A dependency routine still
+  appears as an effect's origin (anchored at `dep:<guid>:<path>`).
+- `alsem digest` computes per-root effects for the changed roots only, not every
+  reportable root then filtered. Each root's pass is independent, so no output
+  changes (the goldens pin it byte for byte); it removes most of digest's former
+  peak on a large workspace.
+
+### Fixed
+
+- **A dependency table now resolves in `digest` and `query`** (#66). A write to
+  Base Application's `Customer` (table 18) had no `resourceId` and no
+  `resourceDisplay` in `alsem digest`, and `alsem query touches --table 18` was
+  `unmatched`, because both built the single-app model, which projects the
+  workspace's files only. It now resolves to `<appId>/table/18` named
+  `Customer`.
+- **`query touches --table <number>` matches a table by number.** It accepted
+  only an internal id or a name, so `--table 50160` was `unmatched` even for a
+  workspace table. The number and the case-insensitive name are now one tier:
+  two distinct matches (two apps with table 18, or a table literally named "18")
+  are reported as ambiguous with every candidate, never narrowed silently. A
+  `tableextension` stub's number is not a table number and never matches.
+
+Cost, measured 2026-10-13 on the pinned CDO baseline (`U:/Git/DO-cdo-baseline/Cloud`,
+`release-fast`, warm, best of 3, peak working set; before = master `c057313c`):
+
+| Command | Before | After (default, cross-app) | After `--single-app` |
+|---------|-------:|---------------------------:|---------------------:|
+| `digest --file CDOIssueDocument.Codeunit.al` | 8.4 s, 2112 MB | 27.1 s, 2828 MB | 6.6 s, 576 MB |
+| `query touches --table Customer` | 4.1 s, 577 MB (unmatched) | 17.2 s, 2830 MB (resolved) | 4.2 s, 575 MB |
+
+The cross-app time is the shared base `alsem analyze` already pays (18.5 s of
+the digest run: program build 3.1 s, dependency bodies 3.0 s, model assembly
+2.4 s, adapter 6.8 s), the snapshot over it (3.5 s) and, for digest, the
+cross-app detector context behind the envelope diagnostics (4.7 s, 3.9 s of it
+capability cones). The peak is the base's, the same as analyze's. Digest's own
+per-root pass fell from 1.47 s to 0.04 s (changed roots only), which is why
+`--single-app` digest is faster than before. A faster shared base speeds up
+analyze, graph, digest and query together; that is the lever, not a lighter
+second cross-app path.
+
+The 3.4x default for `digest` is a deliberate cost, not an oversight. Use
+`--single-app` only when the caller needs workspace tables alone; it is then
+faster than before. bc-dev-mcp's three uses named in #66 (test-order polluter
+prediction, the record-write watch's static writer set, risk ranking) all join
+on dependency tables such as Customer, so none of them can switch to
+`--single-app` without losing this fix. Their speed-up has to come from the
+shared base (its adapter step, 6.8 s, is the largest part).
 
 ## [1.6.1] - 2026-10-13
 

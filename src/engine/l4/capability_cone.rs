@@ -3247,6 +3247,9 @@ pub struct R3a5CrossAppBase {
     /// Resolved dep `.app` versions keyed by appGuid (`model.apps[].version`). The d17
     /// resolved-version side. ADDITIVE — same gate-additivity note as above.
     pub resolved_app_versions: HashMap<String, String>,
+    /// Which dependency apps the build loaded, and how (`alsem graph`'s
+    /// `meta.apps` rows); `alsem digest` / `alsem query` state it (#66).
+    pub loaded_apps: Vec<serde_json::Value>,
 }
 
 impl R3a5CrossAppBase {
@@ -3408,6 +3411,7 @@ pub(crate) fn build_cross_app_base(
         .iter()
         .map(|a| (a.guid.clone(), a.version.clone()))
         .collect();
+    let loaded_apps = std::mem::take(&mut x.loaded_apps);
     let mut resolved = x.resolved;
     resolved.calls = std::sync::Arc::new(calls);
     Some(R3a5CrossAppBase {
@@ -3428,6 +3432,7 @@ pub(crate) fn build_cross_app_base(
         nodes,
         declared_dependencies,
         resolved_app_versions,
+        loaded_apps,
     })
 }
 

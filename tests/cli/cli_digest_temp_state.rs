@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
-use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 use serde_json::Value;
 
 const APP_JSON: &str = r#"{
@@ -115,8 +114,17 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Both modes (#66): each digest mode is checked against `query effects` in
+/// the SAME mode, whose L4 store it must share. LIMIT: this workspace has no
+/// dependency, so the two modes' stores are equal here; nothing in this file
+/// tells the cross-app store (with dependency leaves) from the single-app one.
 #[test]
 fn digest_db_effects_carry_query_effects_temp_state() {
+    check_mode(false);
+    check_mode(true);
+}
+
+fn check_mode(single_app: bool) {
     let tmp = write_workspace();
     let ws = tmp.path();
     let result = run_digest_pipeline(
@@ -127,6 +135,7 @@ fn digest_db_effects_carry_query_effects_temp_state() {
         "cli-b-v1",
         true,
         None,
+        single_app,
     )
     .expect("digest runs");
     let doc: Value = serde_json::from_str(&result.json_text).expect("digest json");
@@ -165,8 +174,7 @@ fn digest_db_effects_carry_query_effects_temp_state() {
     // for the same routine.
     let model_id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
         .expect("model id");
-    let resolved = assemble_and_resolve_workspace_program(ws, &model_id, false).expect("resolves");
-    let substrate = QuerySubstrate::from_resolved(resolved);
+    let substrate = QuerySubstrate::build(ws, &model_id, single_app).expect("query substrate");
     for (name, effs) in &got {
         let q = render_query_effects(&substrate, &format!("Probe Writer.{name}"), "t", true);
         let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");

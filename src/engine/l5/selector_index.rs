@@ -77,7 +77,20 @@ pub(crate) struct SelectorIndexes {
     display_to_stable_ids: Vec<(String, Vec<String>)>,
 }
 
-pub(crate) fn build_selector_indexes(snap: &CapabilitySnapshot) -> SelectorIndexes {
+/// `primary_app_guid`: keep only that app's routines (a stable id starts with
+/// `<appGuid>:`). A cross-app snapshot (`alsem digest`, #66) also holds dependency
+/// routines; without this a bare `OnRun` would be ambiguous with every
+/// dependency's. `None` keeps every routine.
+pub(crate) fn build_selector_indexes(
+    snap: &CapabilitySnapshot,
+    primary_app_guid: Option<&str>,
+) -> SelectorIndexes {
+    let is_primary = |id: &str| {
+        primary_app_guid.is_none_or(|g| {
+            id.get(..g.len()).is_some_and(|p| p.eq_ignore_ascii_case(g))
+                && id.as_bytes().get(g.len()) == Some(&b':')
+        })
+    };
     let mut routine_display_by_id: HashMap<String, String> = HashMap::new();
     let mut display_to_stable_ids: Vec<(String, Vec<String>)> = Vec::new();
     let mut key_pos: HashMap<String, usize> = HashMap::new();
@@ -98,7 +111,7 @@ pub(crate) fn build_selector_indexes(snap: &CapabilitySnapshot) -> SelectorIndex
         if id.is_empty() {
             continue;
         }
-        if id.contains(ROUTINE_ID_SEPARATOR) {
+        if id.contains(ROUTINE_ID_SEPARATOR) && is_primary(&id) {
             routine_display_by_id.insert(id.clone(), display.clone());
             let key = normalize_display_key(&display);
             if let Some(&pos) = key_pos.get(&key) {
@@ -219,7 +232,7 @@ mod tests {
     #[test]
     fn selector_form1_exact_stable_id() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         assert_eq!(
             resolve_selector("app:Codeunit:1#abc", &idx).0,
             vec!["app:Codeunit:1#abc".to_string()]
@@ -229,7 +242,7 @@ mod tests {
     #[test]
     fn selector_form2_full_display_case_insensitive() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         assert_eq!(
             resolve_selector("codeunit \"x\"::run", &idx).0,
             vec!["app:Codeunit:1#abc".to_string()]
@@ -239,7 +252,7 @@ mod tests {
     #[test]
     fn selector_form3_two_segment_strips_typeword() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         // Drop the leading "Codeunit " type-word.
         assert_eq!(
             resolve_selector("\"X\"::Run", &idx).0,
@@ -250,7 +263,7 @@ mod tests {
     #[test]
     fn selector_form4_one_segment_routine_name() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         assert_eq!(
             resolve_selector("Run", &idx).0,
             vec!["app:Codeunit:1#abc".to_string()]
@@ -264,7 +277,7 @@ mod tests {
         // selector is object-qualified ("Obj::OnRun"): the segment after the last "::"
         // is looked up directly. Here the identity display is the bare "OnRun".
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "OnRun")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         assert_eq!(
             resolve_selector("Codeunit \"X\"::OnRun", &idx).0,
             vec!["app:Codeunit:1#abc".to_string()]
@@ -279,7 +292,7 @@ mod tests {
             ("app:Codeunit:1#aaa", "Codeunit \"A\"::Run"),
             ("app:Codeunit:2#bbb", "Codeunit \"B\"::Run"),
         ]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         let m = resolve_selector("Run", &idx).0;
         assert_eq!(
             m,
@@ -304,7 +317,7 @@ mod tests {
             ("app:Codeunit:3#ccc", "Codeunit \"C\"::Run"),
             ("app:Codeunit:4#ddd", "Codeunit \"D\"::Run"),
         ]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         let m = resolve_selector("Run", &idx).0;
         assert_eq!(
             m,
@@ -318,10 +331,30 @@ mod tests {
         );
     }
 
+    /// #66: a cross-app snapshot holds dependency routines too. With the primary
+    /// app given, a bare name shared with a dependency routine resolves to the
+    /// workspace's alone; a dependency stable id is not selectable at all.
+    #[test]
+    fn selector_primary_filter_drops_dependency_routines() {
+        let snap = snap_with_identities(&[
+            ("aaaa:Codeunit:1#ws", "Codeunit \"W\"::OnRun"),
+            ("bbbb:Codeunit:2#dep", "Codeunit \"D\"::OnRun"),
+            ("aaaab:Codeunit:3#lookalike", "Codeunit \"L\"::OnRun"),
+        ]);
+        let idx = build_selector_indexes(&snap, Some("AAAA"));
+        assert_eq!(
+            resolve_selector("OnRun", &idx).0,
+            vec!["aaaa:Codeunit:1#ws".to_string()]
+        );
+        assert!(resolve_selector("bbbb:Codeunit:2#dep", &idx).0.is_empty());
+        let all = build_selector_indexes(&snap, None);
+        assert_eq!(resolve_selector("OnRun", &all).0.len(), 3);
+    }
+
     #[test]
     fn selector_unmatched_returns_empty() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
-        let idx = build_selector_indexes(&snap);
+        let idx = build_selector_indexes(&snap, None);
         assert!(resolve_selector("DoesNotExist", &idx).0.is_empty());
     }
 

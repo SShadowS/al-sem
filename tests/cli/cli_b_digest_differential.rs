@@ -29,7 +29,7 @@ use crate::regen;
 const VERSION_OVERRIDE: &str = "cli-b-v1";
 
 /// The digest corpus (same 20 fixtures as dump-digest.ts DIGEST_CORPUS).
-const DIGEST_CORPUS: &[&str] = &[
+pub(crate) const DIGEST_CORPUS: &[&str] = &[
     // transaction-integrity positives
     "ws-d8-commit-in-tx",
     "ws-d34",
@@ -92,7 +92,7 @@ fn regen_golden(golden_path: &std::path::Path, got: &str) -> bool {
 
 /// Collect all `.al` files in `<fixture>/src/`, sorted, workspace-relative.
 /// Mirrors dump-digest.ts `collectAlFiles`.
-fn collect_al_files(ws_dir: &Path) -> Vec<String> {
+pub(crate) fn collect_al_files(ws_dir: &Path) -> Vec<String> {
     let src_dir = ws_dir.join("src");
     if !src_dir.is_dir() {
         return Vec::new();
@@ -157,8 +157,9 @@ fn run_files_digest(fixture: &str) -> (String, String) {
         None, // no routine selectors
         None, // no diff
         VERSION_OVERRIDE,
-        true, // deterministic
-        None, // max_paths
+        true,  // deterministic
+        None,  // max_paths
+        false, // cross-app, the CLI default (#66)
     )
     .unwrap_or_else(|e| panic!("{fixture}: run_digest_pipeline failed: {e}"));
 
@@ -190,8 +191,9 @@ fn run_diff_digest(fixture: &str) -> String {
         None, // no routine selectors
         Some(diff_text),
         VERSION_OVERRIDE,
-        true, // deterministic
-        None, // max_paths
+        true,  // deterministic
+        None,  // max_paths
+        false, // cross-app, the CLI default (#66)
     )
     .unwrap_or_else(|e| panic!("{fixture} (--diff): run_digest_pipeline failed: {e}"));
 

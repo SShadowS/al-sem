@@ -3561,11 +3561,20 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
 /// is computed but `routineReturnSummaries` is NOT passed (the TS CLI path doesn't
 /// pass them, so `errorEscapesChain` always returns false and `IO_BEFORE_ESCAPING_ERROR`
 /// / any error-escape-based labels never fire from this path).
+///
+/// `only`: compute entries for these roots alone (still only reportable ones).
+/// Each root's pass is independent of the others (see `digest_query_with`), so
+/// this changes no entry; `alsem digest` passes its changed roots (#66).
 pub fn compute_digest_effects_cli(
     snap: &CapabilitySnapshot,
     resolved: &Model,
+    only: Option<&[String]>,
 ) -> Vec<DigestEntryResult> {
-    let roots = reportable_roots(resolved);
+    let mut roots = reportable_roots(resolved);
+    if let Some(only) = only {
+        let only: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
+        roots.retain(|r| only.contains(r.as_str()));
+    }
     let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
         None

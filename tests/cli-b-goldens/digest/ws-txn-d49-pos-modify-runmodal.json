@@ -18,6 +18,10 @@
         "kind": "file-unmatched"
       }
     ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
     "entries": [
       {
         "coverage": {

@@ -787,6 +787,9 @@ pub struct CrossAppProgram {
     /// `internalsVisibleTo`, lower-case guids: exposing app -> its friend apps
     /// (engine-switch S8.5, d13).
     pub friends: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// Which dependency apps the build loaded, and how
+    /// ([`crate::program::resolve::full::loaded_apps`], `alsem graph`'s `meta.apps`).
+    pub loaded_apps: Vec<serde_json::Value>,
 }
 
 /// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
@@ -875,6 +878,7 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
+    let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
         attach_program_calls_with(rows, ctx, report, Some(&abi_rows))
@@ -885,6 +889,7 @@ pub fn assemble_and_resolve_cross_app_program(
         dependency_apps,
         coverage,
         friends,
+        loaded_apps,
     })
 }
 

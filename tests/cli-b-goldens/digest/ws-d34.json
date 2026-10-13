@@ -12,6 +12,10 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
     "entries": [
       {
         "coverage": {

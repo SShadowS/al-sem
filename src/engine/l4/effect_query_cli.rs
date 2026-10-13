@@ -53,9 +53,11 @@ use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2_bundle_
 use crate::program::model::workspace::{
     Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
 };
+use crate::program::resolve::full::LoadedDependencies;
 
-/// The JSON envelope's `schemaVersion` for both `query` subcommands.
-const QUERY_SCHEMA_VERSION: &str = "1.0.0";
+/// The JSON envelope's `schemaVersion` for both `query` subcommands. 1.1.0 (#66):
+/// additive `payload.dependencies` {mode, apps}.
+const QUERY_SCHEMA_VERSION: &str = "1.1.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +117,8 @@ pub struct QuerySubstrate {
     pub graph: CombinedGraph,
     pub scc: SccResult,
     pub bundle: SummaryBundle,
+    /// Which dependencies the model holds (#66), stated in every document.
+    pub dependencies: LoadedDependencies,
 }
 
 impl QuerySubstrate {
@@ -122,7 +126,27 @@ impl QuerySubstrate {
     /// The same assembly `cdo_whole_program_v2_matches_frozen_digest` uses,
     /// swapped to the BUNDLE entry point so the compact rows survive (the
     /// materializing `_core` shim would expand and then discard them).
-    pub fn build(workspace: &Path, model_instance_id: &str) -> Result<Self, String> {
+    ///
+    /// `single_app == false` (the default, #66) builds `alsem analyze`'s cross-app
+    /// base instead ([`Self::from_cross_app_base`]), so a dependency's tables
+    /// resolve and are selectable.
+    pub fn build(
+        workspace: &Path,
+        model_instance_id: &str,
+        single_app: bool,
+    ) -> Result<Self, String> {
+        if !single_app {
+            let base = crate::engine::l4::capability_cone::build_cross_app_base(
+                workspace,
+                model_instance_id,
+            )
+            .ok_or_else(|| {
+                "query: the cross-app model could not be built \
+                 (--single-app analyses the workspace alone)"
+                    .to_string()
+            })?;
+            return Ok(Self::from_cross_app_base(base));
+        }
         // Engine-switch S6.7: the program-backed model (program calls and events).
         let resolved =
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
@@ -132,6 +156,26 @@ impl QuerySubstrate {
             )
             .ok_or_else(|| "query: workspace did not resolve".to_string())?;
         Ok(Self::from_resolved(resolved))
+    }
+
+    /// The substrate over `alsem analyze`'s cross-app base (#66): its combined
+    /// graph (workspace callers' calls and the event graph) and SCC, with every
+    /// source-bearing dependency routine a FIXED leaf holding its own direct db
+    /// effects — the bundle form of `project_r3a5_cross_app`'s core. With no
+    /// dependency there are no leaves and the same graph, so this equals
+    /// [`Self::from_resolved`].
+    pub fn from_cross_app_base(base: crate::engine::l4::capability_cone::R3a5CrossAppBase) -> Self {
+        let bundle = cross_app_db_effect_bundle(&base);
+        QuerySubstrate {
+            resolved: base.resolved,
+            graph: base.graph,
+            scc: base.combined_scc,
+            bundle,
+            dependencies: LoadedDependencies {
+                cross_app: true,
+                apps: base.loaded_apps,
+            },
+        }
     }
 
     /// The substrate steps alone, over an already-assembled workspace — the
@@ -144,6 +188,7 @@ impl QuerySubstrate {
             graph,
             scc,
             bundle,
+            dependencies: LoadedDependencies::default(),
         }
     }
 
@@ -153,10 +198,28 @@ impl QuerySubstrate {
     }
 }
 
-/// The L4 db-effect store over a resolved model: combined graph → Tarjan →
-/// `compute_summaries_v2_bundle_with_leaves`. The ONE assembly behind
-/// `query`, `digest` and `prove`'s `tempState` (#65), so the commands cannot
-/// disagree about a record's temp state.
+/// The L4 db-effect store over `alsem analyze`'s cross-app base (#66): its
+/// combined graph and SCC, every source-bearing dependency routine a FIXED
+/// leaf. The cross-app twin of [`build_db_effect_bundle`]; `query` and
+/// `digest` both read it in cross-app mode, so their `tempState` agrees (#65).
+pub fn cross_app_db_effect_bundle(
+    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
+) -> SummaryBundle {
+    compute_summaries_v2_bundle_with_leaves(
+        &base.resolved.workspace.routines,
+        &base.graph,
+        &base.combined_scc,
+        &base.upgraded_bindings,
+        &base.field_index,
+        &base.leaf_summaries,
+    )
+    .0
+}
+
+/// The L4 db-effect store over a single-app resolved model: combined graph →
+/// Tarjan → `compute_summaries_v2_bundle_with_leaves`. The ONE single-app
+/// assembly behind `query`, `digest` and `prove`'s `tempState` (#65), so the
+/// commands cannot disagree about a record's temp state.
 pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, SummaryBundle) {
     let ws = &resolved.workspace;
     // The model's own calls and event graph (the program engine's).
@@ -218,7 +281,10 @@ impl<T> Resolution<T> {
 }
 
 /// Resolve `--table`: an exact internal table id, the literal
-/// [`UNKNOWN_TABLE_ID`] sentinel, or a case-insensitive table NAME.
+/// [`UNKNOWN_TABLE_ID`] sentinel, or a table NUMBER or case-insensitive NAME
+/// (one tier: two distinct matches are ambiguous). In cross-app mode (#66) that
+/// includes the dependencies' tables, so `--table 18` selects Base Application's
+/// Customer.
 ///
 /// Name resolution deliberately goes through [`table_by_id_preferring_real`] so
 /// a `tableextension` STUB never wins an id collision with the real table it
@@ -231,13 +297,19 @@ impl<T> Resolution<T> {
 /// resolution — only by typing it exactly — so a workspace containing a table
 /// literally named `unknown` cannot silently shadow the bucket, nor vice versa.
 pub fn resolve_table_selector(resolved: &Model, selector: &str) -> Resolution<TableRef> {
+    resolve_table_selector_in(&resolved.workspace.tables, selector)
+}
+
+fn resolve_table_selector_in(
+    tables: &[crate::program::model::workspace::ModelTable],
+    selector: &str,
+) -> Resolution<TableRef> {
     if selector == UNKNOWN_TABLE_ID {
         return Resolution::Resolved(TableRef {
             id: UNKNOWN_TABLE_ID.to_string(),
             name: None,
         });
     }
-    let tables = &resolved.workspace.tables;
     let real_by_id = table_by_id_preferring_real(tables);
 
     if let Some(t) = real_by_id.get(selector) {
@@ -247,10 +319,23 @@ pub fn resolve_table_selector(resolved: &Model, selector: &str) -> Resolution<Ta
         });
     }
 
+    // One tier: the table NUMBER (an all-digit selector; a `tableextension` stub's
+    // number is the extension's, not a table's, so stubs never match it) or the
+    // case-insensitive NAME. A table literally named "18" and table 18 are then
+    // both candidates of an ambiguity, never one silently shadowing the other.
+    let number: Option<i64> =
+        if !selector.is_empty() && selector.bytes().all(|b| b.is_ascii_digit()) {
+            selector.parse().ok()
+        } else {
+            None
+        };
     let want = selector.to_lowercase();
     let mut hits: Vec<&&crate::program::model::workspace::ModelTable> = real_by_id
         .values()
-        .filter(|t| t.name.to_lowercase() == want)
+        .filter(|t| {
+            number.is_some_and(|n| !t.is_extension_stub && t.table_number == n)
+                || t.name.to_lowercase() == want
+        })
         .collect();
     hits.sort_by(|a, b| a.id.cmp(&b.id));
     match hits.len() {
@@ -279,6 +364,10 @@ pub struct TableRef {
 /// most specific first: internal id, `stableRoutineId`, `Object.Routine`
 /// (case-insensitive), bare routine name (case-insensitive). Candidates are
 /// sorted by internal id so an ambiguity report is deterministic.
+///
+/// Only the workspace app's routines are candidates: a cross-app model (#66) also
+/// holds dependency routines, and a bare `OnRun` must not become ambiguous with
+/// every dependency's.
 pub fn resolve_routine_selector<'a>(
     resolved: &'a Model,
     selector: &str,
@@ -289,26 +378,27 @@ pub fn resolve_routine_selector<'a>(
         .iter()
         .map(|o| (o.id.as_str(), o.name.as_str()))
         .collect();
+    let routines = || {
+        ws.routines
+            .iter()
+            .filter(|r| is_primary_routine(resolved, r))
+    };
 
-    if let Some(r) = ws.routines.iter().find(|r| r.id == selector) {
+    if let Some(r) = routines().find(|r| r.id == selector) {
         return Resolution::Resolved(r);
     }
-    if let Some(r) = ws.routines.iter().find(|r| r.stable_routine_id == selector) {
+    if let Some(r) = routines().find(|r| r.stable_routine_id == selector) {
         return Resolution::Resolved(r);
     }
 
     let want = selector.to_lowercase();
-    let qualified: Vec<&ModelRoutine> = ws
-        .routines
-        .iter()
+    let qualified: Vec<&ModelRoutine> = routines()
         .filter(|r| {
             let obj = object_name_by_id.get(r.object_id.as_str()).unwrap_or(&"");
             format!("{obj}.{}", r.name).to_lowercase() == want
         })
         .collect();
-    let bare: Vec<&ModelRoutine> = ws
-        .routines
-        .iter()
+    let bare: Vec<&ModelRoutine> = routines()
         .filter(|r| r.name.to_lowercase() == want)
         .collect();
 
@@ -333,6 +423,17 @@ pub fn resolve_routine_selector<'a>(
                 .collect(),
         ),
     }
+}
+
+/// Whether `r` belongs to the workspace app (#66). Routine selectors and the
+/// workspace-global touch list stay there; a dependency routine still shows as an
+/// effect origin or an ancestor reached through an event. No primary app identity
+/// keeps every routine.
+fn is_primary_routine(resolved: &Model, r: &ModelRoutine) -> bool {
+    resolved
+        .primary_app
+        .as_ref()
+        .is_none_or(|a| r.app_guid.eq_ignore_ascii_case(&a.app_guid))
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +479,11 @@ impl<'a> RoutineJoin<'a> {
     pub fn get(&self, routine_id: &str) -> Option<RoutineRef> {
         let r = self.by_id.get(routine_id)?;
         Some(self.of(r))
+    }
+
+    /// The model routine behind an internal id.
+    fn routine(&self, routine_id: &str) -> Option<&'a ModelRoutine> {
+        self.by_id.get(routine_id).copied()
     }
 
     pub fn of(&self, r: &ModelRoutine) -> RoutineRef {
@@ -536,7 +642,18 @@ fn touch_json(
     Value::Object(m)
 }
 
-fn envelope(kind: &str, payload: Value, alsem_ver: &str, deterministic: bool) -> String {
+/// The document envelope. Every payload states how dependencies were loaded
+/// (`payload.dependencies`, #66), the selector-failure documents included.
+fn envelope(
+    kind: &str,
+    mut payload: Value,
+    deps: &LoadedDependencies,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> String {
+    if let Value::Object(m) = &mut payload {
+        m.insert("dependencies".into(), deps.to_json());
+    }
     let mut env = Map::new();
     env.insert("alsemVersion".into(), alsem_ver.into());
     env.insert("deterministic".into(), deterministic.into());
@@ -557,6 +674,7 @@ fn selector_failure_doc<T>(
     selector_field: &str,
     selector: &str,
     resolution: &Resolution<T>,
+    deps: &LoadedDependencies,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
@@ -581,7 +699,7 @@ fn selector_failure_doc<T>(
         s
     };
     QueryRunResult {
-        json_text: envelope(kind, payload, alsem_ver, deterministic),
+        json_text: envelope(kind, payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 2,
     }
@@ -608,11 +726,12 @@ pub fn run_query_touches_pipeline(
     direction: Direction,
     alsem_ver: &str,
     deterministic: bool,
+    single_app: bool,
 ) -> Result<QueryRunResult, String> {
     use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(workspace, &model_id)?;
+    let substrate = QuerySubstrate::build(workspace, &model_id, single_app)?;
     Ok(render_query_touches(
         &substrate,
         table_selector,
@@ -647,6 +766,37 @@ pub fn render_query_touches(
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
+    with_dependencies_line(
+        render_query_touches_body(
+            substrate,
+            table_selector,
+            from,
+            direction,
+            alsem_ver,
+            deterministic,
+        ),
+        &substrate.dependencies,
+    )
+}
+
+/// Human output names the loaded dependency apps on its first line, only when
+/// there are some (a workspace with no dependency reads the same in both modes).
+fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
+    if let Some(line) = deps.human_line() {
+        r.human_text = format!("{line}\n{}", r.human_text);
+    }
+    r
+}
+
+fn render_query_touches_body(
+    substrate: &QuerySubstrate,
+    table_selector: &str,
+    from: Option<&str>,
+    direction: Direction,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> QueryRunResult {
+    let deps = &substrate.dependencies;
     if from.is_none() && direction == Direction::Down {
         let payload = json!({
             "direction": direction.as_str(),
@@ -655,7 +805,7 @@ pub fn render_query_touches(
                       or omit --direction for the workspace-global list",
         });
         return QueryRunResult {
-            json_text: envelope("query.touches", payload, alsem_ver, deterministic),
+            json_text: envelope("query.touches", payload, deps, alsem_ver, deterministic),
             human_text: "query.touches: --direction down requires --from <routine>\n".to_string(),
             exit_code: 2,
         };
@@ -668,6 +818,7 @@ pub fn render_query_touches(
                 "table",
                 table_selector,
                 &other,
+                deps,
                 alsem_ver,
                 deterministic,
             );
@@ -684,6 +835,7 @@ pub fn render_query_touches(
                     "from",
                     sel,
                     &other,
+                    deps,
                     alsem_ver,
                     deterministic,
                 );
@@ -721,7 +873,17 @@ pub fn render_query_touches(
         None => {
             // U-global. Count first, then the complete list (no cap).
             payload.insert("from".into(), Value::Null);
-            let routines = query.routines_touching(&table.id);
+            // Workspace routines only (#66): a cross-app model's dependency
+            // routines are not selectable, so listing them would flood the answer
+            // with rows nobody can scope.
+            let routines: Vec<_> = query
+                .routines_touching(&table.id)
+                .into_iter()
+                .filter(|&ix| {
+                    join.routine(query.bundle().routine_id(ix))
+                        .is_none_or(|r| is_primary_routine(&substrate.resolved, r))
+                })
+                .collect();
             let rows: Vec<Value> = routines
                 .iter()
                 .map(|&ix| {
@@ -783,6 +945,7 @@ pub fn render_query_touches(
                     json_text: envelope(
                         "query.touches",
                         Value::Object(payload),
+                        deps,
                         alsem_ver,
                         deterministic,
                     ),
@@ -915,6 +1078,7 @@ pub fn render_query_touches(
         json_text: envelope(
             "query.touches",
             Value::Object(payload),
+            deps,
             alsem_ver,
             deterministic,
         ),
@@ -935,11 +1099,12 @@ pub fn run_query_effects_pipeline(
     routine_selector: &str,
     alsem_ver: &str,
     deterministic: bool,
+    single_app: bool,
 ) -> Result<QueryRunResult, String> {
     use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(workspace, &model_id)?;
+    let substrate = QuerySubstrate::build(workspace, &model_id, single_app)?;
     Ok(render_query_effects(
         &substrate,
         routine_selector,
@@ -955,6 +1120,19 @@ pub fn render_query_effects(
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
+    with_dependencies_line(
+        render_query_effects_body(substrate, routine_selector, alsem_ver, deterministic),
+        &substrate.dependencies,
+    )
+}
+
+fn render_query_effects_body(
+    substrate: &QuerySubstrate,
+    routine_selector: &str,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> QueryRunResult {
+    let deps = &substrate.dependencies;
     let routine = match resolve_routine_selector(&substrate.resolved, routine_selector) {
         Resolution::Resolved(r) => r,
         other => {
@@ -963,6 +1141,7 @@ pub fn render_query_effects(
                 "routine",
                 routine_selector,
                 &other,
+                deps,
                 alsem_ver,
                 deterministic,
             );
@@ -998,7 +1177,7 @@ pub fn render_query_effects(
             rr.object_display, rr.display
         );
         return QueryRunResult {
-            json_text: envelope("query.effects", payload, alsem_ver, deterministic),
+            json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
             human_text: human,
             exit_code: 0,
         };
@@ -1046,8 +1225,94 @@ pub fn render_query_effects(
     }
 
     QueryRunResult {
-        json_text: envelope("query.effects", payload, alsem_ver, deterministic),
+        json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::model::workspace::ModelTable;
+
+    fn table(app: &str, number: i64, name: &str, stub: bool) -> ModelTable {
+        ModelTable {
+            id: format!("{app}/table/{number}"),
+            app_guid: app.to_string(),
+            table_number: number,
+            name: name.to_string(),
+            fields: Vec::new(),
+            keys: Vec::new(),
+            is_temporary: false,
+            is_extension_stub: stub,
+        }
+    }
+
+    fn resolved_id(r: Resolution<TableRef>) -> String {
+        match r {
+            Resolution::Resolved(t) => t.id,
+            other => panic!("not resolved: {other:?}"),
+        }
+    }
+
+    /// #66: `--table <number>` selects the table with that number, in any app; a
+    /// `tableextension` stub's number is not a table number.
+    #[test]
+    fn table_selector_number_tier() {
+        let tables = vec![
+            table("base", 18, "Customer", false),
+            table("ws", 50160, "Order Pollution Flag", false),
+            table("ws", 50170, "Customer Ext", true),
+        ];
+        assert_eq!(
+            resolved_id(resolve_table_selector_in(&tables, "18")),
+            "base/table/18"
+        );
+        assert_eq!(
+            resolved_id(resolve_table_selector_in(&tables, "50160")),
+            "ws/table/50160"
+        );
+        assert_eq!(
+            resolve_table_selector_in(&tables, "50170"),
+            Resolution::Unmatched
+        );
+        assert_eq!(
+            resolved_id(resolve_table_selector_in(&tables, "customer")),
+            "base/table/18"
+        );
+    }
+
+    /// Two apps declaring the same number (or a table NAMED "18") is an ambiguity
+    /// with every candidate listed, never one silently chosen.
+    #[test]
+    fn table_selector_number_ambiguity_lists_candidates() {
+        let tables = vec![
+            table("a", 18, "Customer", false),
+            table("b", 18, "Other Customer", false),
+            table("c", 50000, "18", false),
+        ];
+        assert_eq!(
+            resolve_table_selector_in(&tables, "18"),
+            Resolution::Ambiguous(vec![
+                "Customer (a/table/18)".to_string(),
+                "Other Customer (b/table/18)".to_string(),
+                "18 (c/table/50000)".to_string(),
+            ])
+        );
+    }
+
+    /// A stub sharing a real table's id loses to the real table (G-5), so
+    /// the number selects the real one.
+    #[test]
+    fn table_selector_number_prefers_the_real_table_over_its_stub() {
+        let tables = vec![
+            table("ws", 50100, "Ext Stub", true),
+            table("ws", 50100, "Real Table", false),
+        ];
+        match resolve_table_selector_in(&tables, "50100") {
+            Resolution::Resolved(t) => assert_eq!(t.name.as_deref(), Some("Real Table")),
+            other => panic!("{other:?}"),
+        }
     }
 }
