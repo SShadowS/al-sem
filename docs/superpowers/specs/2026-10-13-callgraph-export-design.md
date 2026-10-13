@@ -254,7 +254,7 @@ trigger is a `Multicast`, so shape alone would mislabel it):
 |---|---|---|
 | `EdgeKind::Run`, or a `Call` route whose target is a trigger (typed-variable run; no other `Call` reaches a trigger) | `Run`, caller -> the run object's node (4.4) | `Resolved` (static target) |
 | `Call`, `Exact` | `Direct` | `Resolved` |
-| `Call`, `AmbiguousOverload` (each candidate; no producer builds this shape yet, `edge.rs:103-118`, so the row is unexercised and its unit test is a hand-stated in-memory edge) | `Direct` | `OverApprox` |
+| `Call`, `AmbiguousOverload` (each candidate; the review read `edge.rs:103-118`, "NOTHING constructs this shape yet", but that doc is stale: `resolve_in_object`'s `_` arm builds it, and DO has 23 workspace and 459 dependency `ambiguousResolved` edges. The unit test still hand-states the edge, so it does not depend on the resolver producing one) | `Direct` | `OverApprox` |
 | `Call`, `Polymorphic` (interface dispatch) | `Interface` | `OverApprox` |
 | `ImplicitTrigger` | `Trigger` | `Resolved`, or `OverApprox` with conditions |
 | `EventFlow` (publisher -> subscriber) | `Event` | `Resolved`, or `OverApprox` (`manualBinding`) |
@@ -424,11 +424,13 @@ callers and no history is `uncoverable`, and with al-sem that is now a proof.
 ### 4.7 Command
 
 ```
-alsem graph <workspace> [--out <file>] [--deterministic]
+alsem graph <workspace> [--out <file>]
 ```
 
-- JSONL to stdout, or to `--out`. `--deterministic` pins the engine version string in
-  `meta`, as the other subcommands do (`ALCH_DRIVER_VERSION_OVERRIDE`).
+- JSONL to stdout, or to `--out`. The output carries no timestamp or path, so it is
+  always deterministic; there is no `--deterministic` flag (built: it would have
+  had nothing to pin). `meta.engine` is `driver_version()`, which
+  `ALCH_DRIVER_VERSION_OVERRIDE` pins for goldens and recorded fixtures.
 - Exit 0 on success; 1 on any failure, message on stderr (the `alsem query`
   convention, `src/bin/alsem.rs:690-735`).
 - Output order is deterministic: `meta`, then nodes sorted by id, then edges sorted by
@@ -746,8 +748,8 @@ fail, revert with Edit, watch it pass, and record both outcomes (the
    that the dependency table's synthetic publisher survives pruning with
    `unraisedPublisher` and its `Event` edge to the workspace subscriber.
 6. **Byte golden** `tests/cli-query-goldens/graph.test-selection-graph.jsonl`
-   (`--deterministic`; a directory `--test cli` already owns, so `scripts/` is not
-   touched). Pins the format.
+   (`ALCH_DRIVER_VERSION_OVERRIDE` pinned; a directory `--test cli` already owns, so
+   `scripts/` is not touched). Pins the format.
 7. **Required discrimination proofs** (at least): map `Run` to `Direct` (the D4 class
    assertion fails); drop the lifecycle closure (page-trigger reachability fails); put
    shape before kind in the map (the `Trigger` unit test fails); drop the universal
@@ -790,7 +792,8 @@ Same discrimination-proof rule, with `bun test` and `bun run typecheck`.
    uses altool; an al-sem failure uses altool with a warning; explicit `al-sem` raises
    the configuration error; the arguments passed to `alsem`.
 4. `tests/core/test-selection-acceptance.test.ts`, a new `describe` over
-   `call-graph.al-sem.jsonl` (recorded with `alsem graph --deterministic`):
+   `call-graph.al-sem.jsonl` (recorded with `alsem graph`, the version pinned by
+   `ALCH_DRIVER_VERSION_OVERRIDE`):
    - no coverage map: D1 selects 9, D2 10 (`event`, via `Interface`), D3 5, D4 1
      (`NightlyRecalcDecays`, `event`), D6 5 plus `ExportLine` `uncoverable`, and the
      D5 `OnRun` change selects 1 with `fallbackToAll: false`; every live failure listed
@@ -810,8 +813,8 @@ Same discrimination-proof rule, with `bun test` and `bun run typecheck`.
 
 1. In al-sem, on the branch: `cargo build --release --bin alsem`; set `BC_DEV_ALSEM`
    to `target/release/alsem.exe`.
-2. `alsem graph U:/Git/bc-dev-mcp/tests/fixtures/test-selection-acceptance
-   --deterministic --out <bc-dev-mcp>/tests/fixtures/test-selection-acceptance/call-graph.al-sem.jsonl`.
+2. `ALCH_DRIVER_VERSION_OVERRIDE=<label> alsem graph U:/Git/bc-dev-mcp/tests/fixtures/test-selection-acceptance
+   --out <bc-dev-mcp>/tests/fixtures/test-selection-acceptance/call-graph.al-sem.jsonl`.
    Inspect: the D4 chain of section 5, three `Interface` edges from `TaxAmount`, two
    `Event` edges, `ExportLine` with no incoming edge.
 3. In bc-dev-mcp: `bun test` and `bun run typecheck` (the offline acceptance of
@@ -886,3 +889,44 @@ input state in the consumer, not a less precise export.
 - Whether the IR exposes action `RunObject` and table `LookupPageId`/`DrillDownPageId`
   values (4.4 rule 1). If one is missing, list `propertyRunsNotModelled` in
   `meta.assumptions` and file a follow-up rather than drop the rule silently.
+
+## 16. Build notes (Stage A, as built)
+
+Answers to section 15 and the decisions the build took:
+
+- **`Call` to a trigger.** The resolver did NOT hold the premise: a field trigger
+  `OnValidate` and a procedure `OnValidate()` in one table made a call to the procedure
+  an ambiguous two-route edge that included the trigger. `resolve_in_object` now leaves
+  triggers out of the call candidates (AL code cannot call a trigger); the pin is
+  `full::tests::a_call_never_resolves_to_a_same_named_trigger`.
+- **XmlPort table elements** are in the IR (`ObjectDecl::dataitems` for an XmlPort);
+  their tables' triggers are in the XmlPort lifecycle, so `xmlportAutoSave` is not
+  needed.
+- **Dispatching builtins**: `member_catalog::DISPATCHING_BUILTINS`, pinned by
+  `dispatching_builtins_are_real_catalog_ids` (every id is one the catalog emits).
+  `Record::insert`/`modify`/... are listed too: a record receiver the extractor does
+  not classify as a record operation reaches the `Record` catalog.
+- **Request-page triggers** are routines of the report object (with or without an
+  enclosing member), so "every trigger of the object" covers them.
+- **`RunObject`** was not in the IR; the lowerer now collects every `RunObject`
+  property value outside code into `ObjectDecl::run_objects`. `CardPageId`,
+  `LookupPageId` and `DrillDownPageId` are object properties and were already there.
+  `propertyRunsNotModelled` is therefore not needed.
+- **Variables of type `Codeunit`** are left out of rule 2, as the rule says.
+- **Pruned object nodes.** An object node is kept only on a workspace-to-workspace
+  path, so a test codeunit with no `OnRun` loses its `testRunner` edge in the output
+  (nothing for the consumer to walk).
+- **Additive wire details** the tables above did not name: node `synthetic: true`
+  on an engine-synthesized platform event publisher (no declaration, so no
+  location); `via: "coverageMiss"` for a coverage-contract miss into `h:any`. Hub
+  edge kinds: `name` and `any` hubs use `Direct`, `run` uses `Run`, `record` uses
+  `Trigger`, `callbacks` uses `Event` (into the hub) and `Event`/`Interface`/`Trigger`
+  (out of it); every hub edge is `Open`.
+- **`methodId`** is not emitted until Stage C.
+- **Measured on DO** (`U:/Git/DO/Cloud`, release-fast `alsem`, 2026-10-13, dev
+  machine; 10 apps with embedded source plus the symbol-only `Application`): 10.4 s
+  cold / 9.2 s warm wall, 2.13 GB peak working set, 24.0 MB of JSONL; 31,827 nodes
+  (14,730 methods, 14,216 triggers, 2,871 objects, 10 hubs) and 79,860 edges after
+  pruning; no universal-hub caller; coverage contract holds. Dependency bodies: 431,321
+  call sites, 0 `unknown`, 1,059 `honestDynamic`. The unpruned counts were not
+  measured.
