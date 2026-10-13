@@ -65,6 +65,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **agentflow: a design that converged at the spec-panel cap is handed to the
+  next attempt (#45).** Before, a tick that hit the 3-round spec cap ran
+  `finish --outcome blocked`. That label, `agent-blocked`, is on the exclusion
+  list, so `fetch` dropped the issue and its finished design waited for a
+  human (#19, #20 and #34 were all fixed by hand). Now `/issue` returns
+  `handoff <sha>` when the register is handoff-ready. Handoff-ready means:
+  - both closed vocabularies hold;
+  - no entry is `open`;
+  - no blocking entry is `deferred`;
+  - every mark is `accepted` or `re-raised`;
+  - every entry is `accepted` by at least one reviewer.
+
+  An entry both reviewers re-raised blocks the handoff. `finish --outcome
+  handoff --handoff-ref <sha>` re-checks that rule against the register at that
+  commit on the claimed branch. It then writes `.agent/handoffs.json` and
+  labels `agent-design-ready`. That label is deliberately not excluded, so the
+  issue stays eligible. The next claim carries the design as `handoff`, and
+  that attempt starts at the acceptance tests. Merge safety does not change:
+  the carried register, re-raised entries included, still needs both
+  reviewers' acceptance at `attest`. Four more rules:
+  - an issue edited since the handoff voids it (`handoff_void: issue-edited`);
+  - a rolled-back claim does not consume it;
+  - a pre-ratified attempt cannot hand off again;
+  - any refusal labels nothing, so the tick falls back to `blocked`.
+
+  13 new tests in `scripts/agentflow/tests/test_cli_flow.py`; the suite is 284
+  passed (was 271).
+
 - **An inline builder for the program-backed model** (engine-switch S9.2).
   `program_calls::assemble_and_resolve_inline_program(files, app_guid,
   model_instance_id)` (and `_default`) takes `(relative path, source)` pairs,

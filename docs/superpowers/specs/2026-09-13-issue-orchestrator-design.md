@@ -138,7 +138,10 @@ instructions to the flow. Concretely:
   bookkeeping. The current step's local work finishes, the ledger is written,
   the issue is labeled `agent-blocked` with reason `halted`. Resume: the human removes
   the file and runs `python scripts/agentflow unblock N`, which removes `agent-blocked` and lets
-  the issue re-enter eligibility (as a fresh attempt, see Locking).
+  the issue re-enter eligibility (as a fresh attempt, see Locking). Only a block
+  needs `unblock`: a design handed off at the spec-panel cap is labelled
+  `agent-design-ready`, which is not excluded, so the next tick may pick it up
+  on its own.
 - **Post-merge halts.** EVERY post-merge stop writes `.agent/HALT` itself with the
   reason, so no later tick or second session resumes until a human looks — not
   only the one that reverts. A stop where no gate returned a red verdict is not
@@ -163,7 +166,7 @@ instructions to the flow. Concretely:
 
 | Cap | Value | On hit |
 |-----|-------|--------|
-| Spec panel rounds | 3 | `blocked` |
+| Spec panel rounds | 3 | `blocked`, or a handoff when the register is handoff-ready (see "Findings register") |
 | Plan tasks | 12 | `blocked` (issue too big; comment says split it) |
 | Red-to-green attempts per task | 3 | `blocked` |
 | Final panel rounds | 3, the last may be confirm-only | `blocked` |
@@ -253,7 +256,9 @@ Labels are a mirror for humans, not a lock. The lock is local:
    so an empty ranked queue burns no slot and exactly N issues are claimed per
    loop. Take the lock; record the issue body hash; label `agent-working`; comment
    with the session link, classification hint, run id, and attempt number.
-6. **Run `/issue N`.** Returns `merged`, `blocked`, or `spike-answered`.
+6. **Run `/issue N`.** Returns `merged`, `blocked`, `handoff <sha>`, or
+   `spike-answered`. On `handoff`, finish runs `--outcome handoff
+   --handoff-ref <sha>`; if the executor refuses it, `--outcome blocked`.
 7. **Post-merge check** (executor). On `merged`: `post-merge --issue N
    --merge-sha <sha>`. It refuses an invocation it cannot vouch for, fast-forwards
    the main checkout's `master` to `origin/master` (it must fast-forward; anything
@@ -289,14 +294,15 @@ Labels are a mirror for humans, not a lock. The lock is local:
    delete the local branch;
    on `blocked` the worktree stays; on `spike-answered` (the branch never carries
    a commit of its own) `cleanup --spike` removes the worktree and branch outright.
-   Finish then relabels `agent-done` / `agent-blocked` / `agent-answered`, copies
+   Finish then relabels `agent-done` / `agent-blocked` / `agent-answered` /
+   `agent-design-ready` (a handoff, which keeps the worktree like a block), copies
    the run directory to retention, and releases the lock last.
 9. **Reschedule.** Under `/loop`, the next tick fires when the eligible queue is
    non-empty and `--max-issues` is not exhausted. Empty queue, HALT, or
    `agent-regressed` ends the loop.
 
 Labels `agent-working`, `agent-done`, `agent-blocked`, `agent-answered`,
-`agent-filed`, `agent-regressed`, `agent-gates-green-unverified`,
+`agent-filed`, `agent-design-ready`, `agent-regressed`, `agent-gates-green-unverified`,
 `agent-revert-landed` and `agent-revert-blocked` are created on first run if
 missing. The incident path re-runs that create-if-missing pass before it stamps
 anything: `gh issue edit --add-label X` hard-FAILS when X does not exist on the
@@ -737,7 +743,9 @@ reviewer to mark each one `accepted` or `re-raised` against the current hash. A
 `re-raised` stays unresolved whether or not it cites new evidence: the conductor
 must fix it or produce a new refutation for the next round. Silence is
 `unreviewed`, never approval. A dispute that survives the round cap is `blocked`
-for a human to arbitrate; the register never converts a rejection into approval
+for a human to arbitrate, except that a register where every disputed entry
+still has one reviewer's acceptance is carried to the next attempt unresolved
+(the handoff below); the register never converts a rejection into approval
 on its own (fail closed, at the cost of an occasional blocked-by-dispute issue).
 
 Convergence means: every entry carries a severity and a disposition from the two
@@ -748,6 +756,38 @@ is `fixed` or `refuted` with evidence, never `deferred`. A reviewer downgrading 
 recorded but does not count. The final round may be confirm-only (no changes since
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.
+
+**Handoff at the spec-panel cap (#45).** One carve-out, and it moves no merge
+standard. At the spec cap, a register that is *handoff-ready* hands its design
+to the next attempt as PRE-RATIFIED instead of blocking. Handoff-ready means:
+both closed vocabularies hold, no `open` entry, no blocking entry `deferred`,
+every reviewer mark is `accepted` or `re-raised` (none missing, none
+`unreviewed`), and every entry is `accepted` by AT LEAST ONE reviewer, so an
+entry both reviewers re-raised blocks the handoff. #34's register passes this
+rule. The tick commits the spec, ledger and register on its branch and runs
+`finish --outcome handoff --handoff-ref <sha>`. The executor re-checks the rule
+against the register AT that commit (which must be on the claimed branch and
+carry the ledger), writes `.agent/handoffs.json`, and labels
+`agent-design-ready`. Any refusal labels and comments nothing and keeps the
+lock, so the tick falls back to `--outcome blocked`.
+
+The next claim of the issue carries the record as `handoff` and that attempt
+starts at the acceptance tests, after restoring the carried files. It does not
+start at convergence. The carried register, re-raised entries included, is its
+register: the final panel must mark every entry, and `attest` still requires
+BOTH reviewers to accept every one before a merge. No reviewer's mark is
+changed or overridden. Three more rules:
+- the claim consumes the record only once it is final, so a rolled-back claim
+  leaves it for the next one;
+- an issue body edited since the handoff voids it (`handoff_void:
+  issue-edited`), and that attempt runs the spec panel from scratch;
+- an attempt that started from a handoff may not hand off again
+  (`handoff-already-used`).
+
+A crash after a consumed handoff takes the normal `blocked-crashed` route. The
+issue then needs `unblock` and a fresh panel. The handoff record is gone, but
+its SHA survives in the retained `claim.json` and on the first attempt's
+branch.
 
 ## Discoveries
 
