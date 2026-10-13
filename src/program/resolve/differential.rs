@@ -69,6 +69,10 @@ pub struct CanonicalKey {
 
 /// Canonical identity of a call site — combines the caller, source span, and
 /// a content-fingerprint of the callee expression.
+///
+/// The per-site fixture golden does not key on `callee_fp`: its
+/// [`GoldenSiteKey`](crate::program::resolve::semantic_golden::GoldenSiteKey)
+/// takes the caller, the edge kind and the whole span (#28).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanonicalSiteKey {
     pub caller: CanonicalKey,
@@ -76,8 +80,9 @@ pub struct CanonicalSiteKey {
     pub callee_fp: u64,
 }
 
-/// A call/behaviour edge in canonical form — the unit of comparison in the
-/// dual-run differential.
+/// A call/behaviour edge in canonical form — what
+/// [`assert_against_semantic_golden`](crate::program::resolve::semantic_golden::assert_against_semantic_golden)
+/// compares with a per-site fixture golden, one edge per site.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanonicalEdge {
     pub from: CanonicalKey,
@@ -97,9 +102,9 @@ pub struct CanonicalEdge {
 /// Map an already-lowercased object-kind string to the stable `u8` discriminant
 /// used in [`CanonicalTarget::kind`].
 ///
-/// The L3 side lowercases its `object_type` string (e.g. `"Codeunit"` →
-/// `"codeunit"`) and calls this helper so the tag cannot drift from the fresh
-/// side's [`object_kind_tag`].  Values are fixed — do not reorder.
+/// [`object_kind_tag`] is its only caller since L3's projection was deleted
+/// (engine-switch S9.6). Values are fixed — committed goldens store them; do
+/// not reorder.
 pub(crate) fn object_kind_str_to_tag(lc: &str) -> u8 {
     match lc {
         "codeunit" => 0,
@@ -161,8 +166,6 @@ fn object_kind_str(k: ObjectKind) -> String {
 /// `ObjKey` → canonical string.
 ///
 /// `Id(n)` → decimal integer string; `Name(s)` → the already-lowercased name.
-/// `project_l3` mirrors this: L3 objects always carry an `object_number: i64`,
-/// so it uses `format!("{n}")` directly.
 fn obj_key_lc(key: &ObjKey) -> String {
     match key {
         ObjKey::Id(n) => format!("{n}"),
@@ -505,9 +508,9 @@ mod tests {
 
     #[test]
     fn from_side_object_kind_parity() {
-        // Fresh derives the caller key's object_kind via Debug-lowercase; L3 derives it from
-        // its `object_type` string lowercased. They MUST agree for every kind or sites silently
-        // drop out of `matched`. This asserts the canonical spelling for each variant.
+        // The caller key's object_kind is the Debug name lowercased. Committed goldens
+        // store it, so a renamed variant would silently unpair their sites. This asserts
+        // the canonical spelling for each variant.
         use crate::program::node::ObjectKind;
         let cases = [
             (ObjectKind::Codeunit, "codeunit"),
