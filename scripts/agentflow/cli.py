@@ -27,8 +27,13 @@ from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, write_jso
 # vocabulary has exactly one definition. Order is kept stable -- `claim` calls
 # `ensure_labels(LABELS)`, and a stable list keeps that read/create pass
 # deterministic.
+#
+# `agent-design-ready` (#45) is deliberately NOT in `eligibility.EXCLUDE_LABELS`:
+# it marks an issue whose design was handed off at the spec-panel cap, and the
+# whole point is that the next tick can pick it up. Excluding it would strand
+# the design exactly the way `agent-blocked` used to.
 LABELS = ["agent-working", "agent-done", "agent-blocked", "agent-answered", "agent-filed",
-          *recovery.INCIDENT_LABELS]
+          "agent-design-ready", *recovery.INCIDENT_LABELS]
 # Every gate's exit code is a claim about the repository, so the interpreter
 # that runs it has to be the right one. A bare "bash" is resolved by
 # CreateProcess against the inherited PATH, and from PowerShell that finds
@@ -347,6 +352,16 @@ def cmd_claim(args, ctx, gh, git):
             "worktree": str(ctx.paths.root.parent / recovery.worktree_name(args.issue, attempt)),
             "body_hash": mergeops.body_hash(issue.body), "title": issue.title,
         }
+        # #45: a design handed off at the spec-panel cap was ratified against
+        # THIS body. An edited issue may have moved the Acceptance it answers,
+        # so the handoff is void and this attempt runs the panel from scratch.
+        handoffs = read_json(ctx.paths.handoffs, default={})
+        handoff = handoffs.get(str(args.issue))
+        if handoff is not None:
+            if handoff.get("body_hash") == info["body_hash"]:
+                info["handoff"] = handoff
+            else:
+                info["handoff_void"] = "issue-edited"
         write_json(ctx, ctx.run_dir / "claim.json", info)
         gh.ensure_labels(LABELS)
         gh.add_labels(args.issue, ["agent-working"])
@@ -356,6 +371,10 @@ def cmd_claim(args, ctx, gh, git):
         # has succeeded -- a rolled-back claim (nothing labelled, no branch
         # made) must not burn one of the three attempts.
         write_json(ctx, ctx.paths.attempts, {**attempts, str(args.issue): attempt})
+        # Consumed (or voided) under the same rule: a rolled-back claim leaves
+        # the handoff for the next one.
+        if handoff is not None:
+            write_json(ctx, ctx.paths.handoffs, {k: v for k, v in handoffs.items() if k != str(args.issue)})
     except Exception as e:
         try:
             gh.remove_label(args.issue, "agent-working")  # best-effort; may not have been set yet
@@ -366,6 +385,13 @@ def cmd_claim(args, ctx, gh, git):
         except Exception:
             pass  # never let a release failure mask the original error
         raise Fail({"error": f"claim rolled back: {e}"})
+    if handoff is not None:
+        try:
+            # Best-effort, after the claim is final: a stale mirror label must
+            # not undo a claim that already consumed its attempt and handoff.
+            gh.remove_label(args.issue, "agent-design-ready")
+        except Exception:
+            pass
     return _emit(info)
 
 
@@ -491,10 +517,24 @@ SEVERITIES = ("critical", "important", "minor")
 BLOCKING_SEVERITIES = ("critical", "important")
 
 
-def _register_failures(entries, roster=mergeops.ROSTER) -> list[str]:
+def _both_accepted(marks: list) -> bool:
+    return all(m == "accepted" for m in marks)
+
+
+def _handoff_marks(marks: list) -> bool:
+    """#45's handoff rule, the one the human chose: every mark is a real
+    verdict (no missing or `unreviewed`), and at least one reviewer accepted.
+    An entry BOTH reviewers re-raised is a live dispute, not a converged
+    design. This relaxes only which design may skip the spec panel: `attest`
+    still asks `_both_accepted` of every carried entry before a merge."""
+    return "accepted" in marks and all(m in ("accepted", "re-raised") for m in marks)
+
+
+def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted) -> list[str]:
     """Ids of findings-register entries that block a merge: a `severity` or a
     `disposition` outside its closed vocabulary (missing included), an entry
-    still `open`, one not `accepted` by BOTH reviewers, or a blocking finding
+    still `open`, one not `accepted` by BOTH reviewers (`marks_ok`; only the
+    #45 handoff passes `_handoff_marks` instead), or a blocking finding
     merely `deferred`. Anything that is not a list of entries is itself a
     failure -- an unreadable register is never a converged one.
 
@@ -528,7 +568,7 @@ def _register_failures(entries, roster=mergeops.ROSTER) -> list[str]:
             bad.append(eid)  # missing or unknown: a malformed register, not a pass
         elif disposition == "open":
             bad.append(eid)
-        elif marks != ["accepted"] * len(roster):
+        elif not marks_ok(marks):
             bad.append(eid)
         elif blocking and disposition == "deferred":
             bad.append(eid)
@@ -1226,8 +1266,55 @@ def _reason(args) -> str | None:
     return args.reason
 
 
+def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
+    """#45: the record a `handoff` finish writes, or a `Fail` naming why this
+    design may not be handed off. Every refusal happens before any label or
+    comment and keeps the lock, so the conductor falls back to `--outcome
+    blocked`. Read from the COMMIT, never the worktree: the next attempt
+    restores exactly these bytes, so these are the bytes that must pass."""
+    sha = args.handoff_ref or ""
+    if not _FULL_SHA.match(sha):
+        raise Fail({"error": "sha-not-full", "values": {"handoff_ref": sha}})
+    claim = read_json(ctx.run_dir / "claim.json")
+    if not isinstance(claim, dict):
+        raise Fail({"error": "no claim.json for this run"})
+    if claim.get("handoff"):
+        # One handoff per issue. A pre-ratified attempt skipped the spec panel,
+        # so it has no cap of its own to hand off from, and a chain could loop.
+        raise Fail({"error": "handoff-already-used", "from": claim["handoff"].get("sha")})
+    branch = claim.get("branch") or ""
+    if not branch or not git.is_ancestor(sha, f"refs/heads/{branch}"):
+        raise Fail({"error": "handoff-not-on-branch", "branch": branch, "sha": sha})
+    evidence = f".agent/issue-{args.issue}"
+    try:
+        git.out("cat-file", "-e", f"{sha}:{evidence}/ledger.md")
+        register = git.out("show", f"{sha}:{evidence}/findings.json")
+        register_blob = git.rev(f"{sha}:{evidence}/findings.json")
+    except GitError:
+        raise Fail({"error": "handoff-evidence-missing", "sha": sha,
+                    "need": [f"{evidence}/ledger.md", f"{evidence}/findings.json"]})
+    try:
+        entries = json.loads(register)
+    except ValueError:
+        entries = None
+    bad = _register_failures(entries, marks_ok=_handoff_marks)
+    if bad:
+        raise Fail({"error": "handoff-not-ready", "entries": bad})
+    return {"from_run": ctx.run_id, "from_attempt": claim.get("attempt"), "branch": branch, "sha": sha,
+            "body_hash": claim.get("body_hash"), "register_blob": register_blob,
+            "files": git.changed_files(git.out("merge-base", "master", sha), sha)}
+
+
 def cmd_finish(args, ctx, gh, git):
     reason = _reason(args)
+    if args.outcome == "handoff":
+        _scan_or_fail(reason or "")
+        record = _handoff_record(args, ctx, git)
+        # Written BEFORE the label, so the label never names a handoff that
+        # does not exist. The reverse (a record with no label) only costs the
+        # mirror: `claim` reads the record, not the label.
+        write_json(ctx, ctx.paths.handoffs,
+                   {**read_json(ctx.paths.handoffs, default={}), str(args.issue): record})
     if args.outcome in ("answered", "blocked"):
         # Both outcomes post this text as a comment on a PUBLIC issue, and a
         # spike's answer is free-form output from a probe that may have read
@@ -1251,7 +1338,8 @@ def cmd_finish(args, ctx, gh, git):
         # returned a red verdict never stamps it -- and restating the
         # vocabulary here is how the comment went stale the last time it
         # moved. The contract holds whichever labels that function returns.
-        label = {"merged": "agent-done", "blocked": "agent-blocked", "answered": "agent-answered"}[args.outcome]
+        label = {"merged": "agent-done", "blocked": "agent-blocked", "answered": "agent-answered",
+                 "handoff": "agent-design-ready"}[args.outcome]
         gh.add_labels(args.issue, [label])
         gh.remove_label(args.issue, "agent-working")
     if args.outcome == "answered":
@@ -1260,6 +1348,11 @@ def cmd_finish(args, ctx, gh, git):
         gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped: **{reason or 'blocked'}**. "
                                f"Branch and worktree are left in place. See the ledger in the run's PR or comments.")
         recovery.notify(ctx, "halted" if reason == "halted" else "blocked", f"#{args.issue}: {reason}")
+    if args.outcome == "handoff":
+        gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped at **{reason or 'spec-panel-cap'}** with a "
+                               f"converged design, handed off as PRE-RATIFIED at `{record['sha'][:12]}` on "
+                               f"`{record['branch']}`. The next attempt starts at implementation; both reviewers "
+                               f"must still accept every carried finding before a merge.")
     dest = recovery.retain(ctx)
     lock.release(ctx)
     return _emit({"outcome": args.outcome, "retained": str(dest)})
@@ -1349,7 +1442,8 @@ def build_parser() -> argparse.ArgumentParser:
     # remove one. `cmd_cleanup` requires it for every other worktree.
     s = add("cleanup", cmd_cleanup); s.add_argument("--worktree", required=True); s.add_argument("--branch"); s.add_argument("--merge-sha"); s.add_argument("--spike", action="store_true")
     s = add("finish", cmd_finish); s.add_argument("--issue", type=int, required=True)
-    s.add_argument("--outcome", choices=["merged", "blocked", "answered", "regressed"], required=True)
+    s.add_argument("--outcome", choices=["merged", "blocked", "answered", "regressed", "handoff"], required=True)
+    s.add_argument("--handoff-ref", help="full SHA of the commit carrying the handed-off design (--outcome handoff)")
     g = s.add_mutually_exclusive_group(); g.add_argument("--reason"); g.add_argument("--reason-file")
     s = add("loop-tick", cmd_loop_tick); s.add_argument("--max", type=int, required=True)
     add("loop-reset", cmd_loop_reset)

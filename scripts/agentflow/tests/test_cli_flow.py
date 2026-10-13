@@ -2994,3 +2994,205 @@ def test_each_gate_invocation_gets_its_own_log(ctx):
     assert a.log_path != b.log_path
     assert a.log_path.parent.name == b.log_path.parent.name == "probe"
     assert "first" in a.log_path.read_text() and "second" in b.log_path.read_text()
+
+
+# ---- #45: a design converged at the spec-panel cap is handed off -----------
+
+# #34's register, the shape the issue was filed over: an `important` finding
+# one reviewer still re-raised against wording a later spec revision fixed.
+# Stated literally, never produced by the code under test.
+ISSUE34_REGISTER = [
+    {"id": "A1", "severity": "important", "disposition": "fixed",
+     "reviews": {"astra": "re-raised", "flash": "accepted"}},
+    {"id": "A2", "severity": "minor", "disposition": "refuted",
+     "reviews": {"astra": "accepted", "flash": "accepted"}},
+    {"id": "A3", "severity": "minor", "disposition": "deferred",
+     "reviews": {"astra": "accepted", "flash": "accepted"}},
+]
+HANDOFF_GH = {**READS, "issue edit 8 --add-label agent-working": "", "issue comment 8 *": "",
+              "issue edit 8 --add-label agent-design-ready": "",
+              "issue edit 8 --remove-label agent-working": "",
+              "issue edit 8 --remove-label agent-design-ready": ""}
+BRANCH_A1 = "issue/8-c10-scope-a1"
+
+
+def handoff_branch(clone, register, *, branch=BRANCH_A1, ledger=True):
+    """The previous attempt's branch carrying its spec and evidence, committed
+    by hand. Built BEFORE any claim: checking master out again removes the
+    committed `.agent/issue-8/` files from the working tree and nothing else."""
+    g = Git(clone)
+    g._run("checkout", "-q", "-b", branch)
+    commit_file(clone, "docs/superpowers/specs/2026-10-13-issue-8-design.md", "# Design\n", "spec")
+    if ledger:
+        commit_file(clone, ".agent/issue-8/ledger.md", "## Design\n", "ledger")
+    sha = commit_file(clone, ".agent/issue-8/findings.json", json.dumps(register), "register")
+    g.checkout("master")
+    return sha
+
+
+def claim8(capsys, clone, gh, run_id="run-test"):
+    return run(capsys, clone, "claim", "8", "--session", "https://s", "--title-slug", "c10-scope",
+               gh_run=gh, run_id=run_id)
+
+
+def finish_handoff(capsys, clone, sha, gh, run_id="run-test"):
+    return run(capsys, clone, "finish", "--issue", "8", "--outcome", "handoff", "--handoff-ref", sha,
+               "--reason", "spec-panel-cap", gh_run=gh, run_id=run_id)
+
+
+def handoffs(clone):
+    p = clone / ".agent" / "handoffs.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    """`finish` retains the run under `Path.home()`. A refusal test that
+    unexpectedly SUCCEEDS must not write into the real one."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+
+
+def test_a_design_converged_at_the_cap_is_handed_off_and_the_next_claim_starts_from_it(
+        capsys, repo_pair, tmp_path, monkeypatch):
+    """#45. A tick stopped at the spec-panel cap with a converged register used
+    to `finish --outcome blocked`, whose `agent-blocked` is in the exclusion
+    list -- so `fetch` dropped the issue and the design waited for a human.
+    Here the handoff labels `agent-design-ready` instead, the issue stays
+    eligible, and the next claim carries the design and consumes the record."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    code, _ = claim8(capsys, clone, gh)
+    assert code == 0
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 0, out
+    assert "issue edit 8 --add-label agent-design-ready" in gh.calls
+    assert not any("agent-blocked" in c for c in gh.calls), gh.calls
+    assert lock.read(Ctx(Paths(clone))) is None
+    rec = handoffs(clone)["8"]
+    assert (rec["sha"], rec["branch"], rec["from_attempt"], rec["from_run"]) == (sha, BRANCH_A1, 1, "run-test")
+    assert rec["body_hash"] == mergeops.body_hash("## Acceptance\nx")
+    assert ".agent/issue-8/findings.json" in rec["files"]
+
+    # The trap: the label the handoff leaves must not remove the issue from fetch.
+    labelled = json.loads(ISSUES)
+    labelled[0][0]["labels"] = [{"name": "agent-design-ready"}]
+    code, out = run(capsys, clone, "fetch", gh_run=FakeRunner({**READS, READS_ISSUES_KEY: json.dumps(labelled)}),
+                    run_id=None)
+    assert [i["number"] for i in out["eligible"]] == [8], out
+
+    gh2 = FakeRunner(HANDOFF_GH)
+    code, out = claim8(capsys, clone, gh2, run_id="run-2")
+    assert code == 0 and out["attempt"] == 2
+    assert out["handoff"]["sha"] == sha
+    claim = json.loads((clone / ".agent" / "runs" / "run-2" / "claim.json").read_text())
+    assert claim["handoff"]["sha"] == sha
+    assert "8" not in handoffs(clone)
+    assert "issue edit 8 --remove-label agent-design-ready" in gh2.calls
+
+
+READS_ISSUES_KEY = f"api repos/{REPO}/issues?state=open&per_page=100 --paginate --slurp"
+
+
+def _entry(eid, severity, disposition, astra="accepted", flash="accepted"):
+    reviews = {k: v for k, v in (("astra", astra), ("flash", flash)) if v is not None}
+    return {"id": eid, "severity": severity, "disposition": disposition, "reviews": reviews}
+
+
+@pytest.mark.parametrize("bad", [
+    _entry("X", "minor", "open"),
+    _entry("X", "minor", "fixed", astra="re-raised", flash="re-raised"),
+    _entry("X", "important", "deferred"),
+    _entry("X", "critical", "fixed", flash="unreviewed"),
+    _entry("X", "minor", "fixed", flash=None),
+    _entry("X", "High", "fixed"),
+    _entry("X", "minor", "wontfix"),
+], ids=["open", "both-re-raised", "blocking-deferred", "unreviewed", "mark-missing",
+        "severity-unknown", "disposition-unknown"])
+def test_a_register_that_has_not_converged_is_not_handed_off(capsys, repo_pair, fake_home, bad):
+    """Each case is ONE bad entry beside #34's handoff-ready entries, so the
+    refusal can only come from that entry. Nothing leaves the machine and the
+    lock is kept, so the conductor can fall back to `--outcome blocked`."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, [*ISSUE34_REGISTER, bad])
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 1 and out["error"] == "handoff-not-ready" and out["entries"] == ["X"], out
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+    assert handoffs(clone) == {}
+
+
+def test_a_handoff_ref_that_is_short_or_off_branch_is_refused(capsys, repo_pair, fake_home):
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    # Not on the claimed branch: a commit that only exists on a sibling. Its
+    # register DIFFERS, because identical content, message, parent and second
+    # make git mint the very same SHA -- and then it IS on the branch.
+    stray = handoff_branch(clone, ISSUE34_REGISTER[:1], branch="issue/8-other-a9")
+    assert stray != sha and not Git(clone).is_ancestor(stray, BRANCH_A1)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    for ref, error in ((sha[:12], "sha-not-full"), (stray, "handoff-not-on-branch")):
+        gh = FakeRunner(HANDOFF_GH)
+        code, out = finish_handoff(capsys, clone, ref, gh)
+        assert code == 1 and out["error"] == error, out
+        assert gh.calls == [] and handoffs(clone) == {}
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+
+
+def test_a_handoff_without_a_committed_ledger_is_refused(capsys, repo_pair, fake_home):
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER, ledger=False)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 1 and out["error"] == "handoff-evidence-missing", out
+    assert gh.calls == [] and handoffs(clone) == {}
+
+
+def test_a_handoff_is_void_when_the_issue_was_edited_since(capsys, repo_pair, tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    assert finish_handoff(capsys, clone, sha, gh)[0] == 0
+    edited = {**json.loads(ISSUES)[0][0], "body": "## Acceptance\nsomething else"}
+    gh2 = FakeRunner({**HANDOFF_GH, f"api repos/{REPO}/issues/8": json.dumps(edited)})
+    code, out = claim8(capsys, clone, gh2, run_id="run-2")
+    assert code == 0, out
+    assert "handoff" not in out and out["handoff_void"] == "issue-edited"
+    assert "8" not in handoffs(clone)
+    assert "issue edit 8 --remove-label agent-design-ready" in gh2.calls
+
+
+def test_a_pre_ratified_attempt_cannot_hand_off_again(capsys, repo_pair, tmp_path, monkeypatch):
+    """One handoff per issue: an attempt that started from a handed-off design
+    never ran a spec panel, so it has no cap of its own to hand off from."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    assert finish_handoff(capsys, clone, sha, gh)[0] == 0
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH), run_id="run-2")[0] == 0
+    gh3 = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff(capsys, clone, sha, gh3, run_id="run-2")
+    assert code == 1 and out["error"] == "handoff-already-used", out
+    assert gh3.calls == [] and handoffs(clone) == {}
+
+
+def test_a_rolled_back_claim_does_not_consume_the_handoff(capsys, repo_pair, tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    assert finish_handoff(capsys, clone, sha, gh)[0] == 0
+    failing = FakeRunner({**HANDOFF_GH, "issue comment 8 *": (1, "", "HTTP 500: boom")})
+    code, out = claim8(capsys, clone, failing, run_id="run-2")
+    assert code == 1 and "claim rolled back" in out["error"]
+    assert handoffs(clone)["8"]["sha"] == sha
+    assert "issue edit 8 --remove-label agent-design-ready" not in failing.calls

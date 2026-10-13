@@ -56,6 +56,10 @@ class Paths:
         return self.agent / "attempts.json"
 
     @property
+    def handoffs(self) -> Path:
+        return self.agent / "handoffs.json"
+
+    @property
     def incidents(self) -> Path:
         return self.agent / "incidents.json"
 
