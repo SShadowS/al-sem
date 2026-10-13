@@ -359,8 +359,21 @@ fn resolve_in_object(
     // (the same wrappers as `args`).
     build: &[(String, bool)],
 ) -> Option<(DispatchShape, Vec<Route>)> {
-    let candidates = index.routines_in_object(graph, obj_id, name_lc);
-    if candidates.len() == 0 {
+    // A trigger is never a call candidate: AL code cannot call one, so a field
+    // trigger `OnValidate` and a procedure `OnValidate` in the same object are
+    // not overloads of each other (#63; triggers are reached by role, through
+    // `dispatch_entry_trigger` and `resolve_implicit_trigger`).
+    let candidates: Vec<&RoutineNodeId> = graph
+        .routines
+        .run_by(|r| {
+            r.id.object
+                .cmp(obj_id)
+                .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
+        })
+        .filter(|r| !r.is_trigger)
+        .map(|r| &r.id)
+        .collect();
+    if candidates.is_empty() {
         return None;
     }
 
@@ -403,7 +416,10 @@ fn resolve_in_object(
     // degraded-set guard below, never trusted as distinct); an
     // `UNKNOWN_ARITY`-sentinel candidate (Task 1 tri-state arity) never lands
     // in `matched` at all, since it can never equal a real call's `arity`.
-    let matched: Vec<&RoutineNodeId> = candidates.filter(|rid| rid.params_count == arity).collect();
+    let matched: Vec<&RoutineNodeId> = candidates
+        .into_iter()
+        .filter(|rid| rid.params_count == arity)
+        .collect();
     let pre_filter_count = matched.len();
     if pre_filter_count == 0 {
         // Name found but no arity-matched overload: emit Unknown rather than
@@ -2112,8 +2128,11 @@ fn dispatch_entry_trigger(
     )
 }
 
-/// The object a static run (`Page.Run(Page::X)`, `Codeunit.Run(50000)`) names,
-/// from the calling app's closure; `None` when it is in no graph.
+/// The object a static run (`Page.Run(Page::X)`, `Codeunit.Run(Codeunit::50000)`)
+/// names, from the calling app's closure; `None` when it is in no graph. Only a
+/// `DatabaseReference` argument is static: a bare integer (`Codeunit.Run(50000)`)
+/// never reaches here — the extractor leaves its target `None`, a `DynamicOpen`
+/// run (`extract::static_database_reference_target`).
 pub(crate) fn object_run_target<'g>(
     from: AppRef,
     object_kind: ObjectKind,

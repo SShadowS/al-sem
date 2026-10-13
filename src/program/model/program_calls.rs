@@ -802,14 +802,8 @@ pub fn assemble_and_resolve_cross_app_program(
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
-    let (ctx, mut report, coverage) = {
-        let _s = pt::span("crossapp", "crossapp.program_build_full");
-        crate::program::resolve::full::build_program_with_coverage_profiled(
-            workspace,
-            crate::program::profile::BuildProfile::FULL,
-        )
-        .ok()?
-    };
+    let (ctx, report, coverage) =
+        crate::program::resolve::full::build_cross_app_program(workspace).ok()?;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for u in &ctx.snapshot().apps {
@@ -822,13 +816,6 @@ pub fn assemble_and_resolve_cross_app_program(
             }
         }
     }
-    let dependency = {
-        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-        ctx.resolve_dependency_bodies()
-    };
-    report.edges.extend(dependency.edges);
-    report.site_facts.extend(dependency.site_facts);
-    report.parenless_calls.extend(dependency.parenless_calls);
     // S8.2: only what the workspace can reach, and the code around the dependency
     // events it subscribes to (`program::resolve::demand`).
     let demand = {

@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`alsem graph <workspace> [--out F]`: the program's call graph for diff-scoped
+  test selection** (#63; spec
+  `docs/superpowers/specs/2026-10-13-callgraph-export-design.md`). JSONL in the
+  `{"t","v"}` envelope bc-dev-mcp's `bcdev_test_select` reads, schema
+  `al-sem.callgraph` v1 (a `meta` line first). The graph answers "which routines
+  may execute when this one does": the engine's resolved edges (`Direct`,
+  `Interface`, `Event`, `Trigger`, and `Run` to the run object's node) plus four
+  declaration rules — a run reaches the whole object (its triggers, its extensions'
+  triggers, a page's parts, source table, the pages its actions open), a
+  `Page`/`Report`/`XmlPort`/`Query`/`TestPage` variable may run its object,
+  `[HandlerFunctions]` links a test to its handlers, and a test runs its codeunit.
+  Open call sites become bounded hub nodes (`name`, `run`, `record`, `callbacks`
+  for symbol-only apps, and the universal `any`); channels no edge shows yet are
+  flagged on the node (`hiddenCallers`: `unraisedPublisher`, `unboundSubscriber`,
+  `unmodeledRecordTrigger`). Nodes carry their location (`sourcePath`,
+  `line`..`endLine`) so changed code joins by location, triggers included.
+  Dependencies with source are full nodes; the output keeps only what lies on a
+  workspace-to-workspace path. Module `program::impact_graph`; fixture
+  `tests/fixtures/test-selection-graph/`; tests `cli_graph_export::` and
+  `impact_graph::`; golden `tests/cli-query-goldens/graph.test-selection-graph.jsonl`.
+  On the bc-dev-mcp acceptance fixture the `Codeunit.Run`-only `ApplyDecay` now
+  reaches its test with no coverage map. DO (release-fast): 9-10 s, 2.1 GB peak,
+  24 MB, 31,827 nodes / 79,860 edges.
+- **`SiteFacts::open`**: what an open call site may reach (`OpenBound`: a
+  procedure name and arity, an object kind, a record-trigger family, or anything),
+  set by the resolver for unknown routes, `DynamicOpen` sites, record operations on
+  an unresolved table and the catalog builtins that run user code
+  (`member_catalog::DISPATCHING_BUILTINS`: `Page.Run`, `Report.SaveAsPdf`,
+  `RecordRef.Insert`, `Session.StartSession`, ...). Diagnostic: no edge, histogram
+  or golden moves.
+- **`ObjectDecl::run_objects`** in the IR: every `RunObject` property value outside
+  code (page actions and the like).
+- **`full::build_cross_app_program`**: the cross-app program build (FULL, dependency
+  bodies merged) that `alsem analyze`'s cross-app model and `alsem graph` share. It
+  stops before the demand filter, which stays the model's own step.
+
+### Fixed
+
+- **A call never resolves to a trigger.** `resolve_in_object` took every routine of
+  the name as a call candidate, triggers included, so in a table with a field
+  trigger `OnValidate` and a procedure `OnValidate()` a call to the procedure became
+  a two-route edge that also reached the trigger. AL code cannot call a trigger;
+  triggers are now left out of call candidates (they stay reachable by role, through
+  object runs and record operations). Found while building `alsem graph` (#63), which
+  reads a `Call` route to a trigger as a typed-variable run. Pinned by
+  `a_call_never_resolves_to_a_same_named_trigger` (it failed before the fix).
+
 ## [1.5.0] - 2026-10-13
 
 ### Fixed

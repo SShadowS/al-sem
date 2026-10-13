@@ -51,15 +51,17 @@ use crate::program::resolve::abi_check::{
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
+    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram, OpenBound,
     OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, UnknownReason, Witness,
-    callee_fp, classify_obligation,
+    callee_fp, classify_obligation, record_trigger_op,
 };
 use crate::program::resolve::extract::{
     CalleeShape, WithState, extract_sites_for_routine, static_database_reference_target,
 };
 use crate::program::resolve::index::ResolveIndex;
-use crate::program::resolve::member_catalog::is_entry_dispatch_builtin;
+use crate::program::resolve::member_catalog::{
+    DispatchingBuiltin, dispatching_builtin, is_entry_dispatch_builtin,
+};
 use crate::program::resolve::receiver::{
     FrameworkKind, ReceiverType, infer_receiver_type, is_atomic_receiver_token,
 };
@@ -146,6 +148,10 @@ pub struct SiteFacts {
     /// the implicit `Rec`). The compiler's call graph has no trigger edges from
     /// one.
     pub unqualified_record_op: bool,
+    /// #63: what this site may reach beyond its edge's routes, when the site is
+    /// OPEN (see [`OpenBound`] and [`site_open_bounds`]). Empty for a site whose
+    /// routes name every target. Read only by the call-graph export.
+    pub open: Vec<OpenBound>,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -337,6 +343,77 @@ fn unclassified_callee_reason(callee_text: &str) -> UnknownReason {
     } else {
         UnknownReason::UnclassifiedCallee
     }
+}
+
+/// What an open call site may reach (#63, spec
+/// `2026-10-13-callgraph-export-design.md` §4.5): empty when the site's routes
+/// name every target. A site is open when a route is `Unknown`/`Unresolved` or
+/// the shape is `DynamicOpen`; a route to a catalog builtin that runs user code
+/// ([`dispatching_builtin`]) adds that builtin's bound. A record operation on an
+/// unresolved table is bounded in the `RecordOp` arm itself, where the table
+/// lookup happens.
+///
+/// A member call named like a record operation or a run is bounded by that
+/// meaning AND by name: the extractor classifies a record operation only on a
+/// known record variable (`extract::classify_call`), so `X.Insert(true)` on a
+/// call result, a Dictionary value or a Variant arrives here as a member call,
+/// and an untracked `X` may as well be a codeunit with a procedure `Insert`.
+pub(crate) fn site_open_bounds(
+    site: &CalleeShape,
+    arity: usize,
+    shape: DispatchShape,
+    routes: &[Route],
+) -> Vec<OpenBound> {
+    let mut out: Vec<OpenBound> = Vec::new();
+    for r in routes {
+        if let RouteTarget::Builtin(bid) = &r.target {
+            match dispatching_builtin(bid) {
+                Some(DispatchingBuiltin::Run(kind)) => {
+                    out.push(OpenBound::Run { kind: Some(kind) })
+                }
+                Some(DispatchingBuiltin::Record(op)) => out.push(OpenBound::Record { op }),
+                None => {}
+            }
+        }
+    }
+    let open = shape == DispatchShape::DynamicOpen
+        || routes.iter().any(|r| {
+            r.evidence.kind() == EvidenceKind::Unknown || r.target == RouteTarget::Unresolved
+        });
+    if open {
+        let by_name = |name: &str, out: &mut Vec<OpenBound>| {
+            let name_lc = name.fold_identifier();
+            if let Some(op) = record_trigger_op(&name_lc) {
+                out.push(OpenBound::Record { op });
+            }
+            if matches!(name_lc.as_str(), "run" | "runmodal") {
+                out.push(OpenBound::Run { kind: None });
+            }
+            out.push(OpenBound::Name { name_lc, arity });
+        };
+        match site {
+            CalleeShape::Bare { name } => by_name(name, &mut out),
+            CalleeShape::Member { method, .. } => by_name(method, &mut out),
+            CalleeShape::ObjectRun { object_kind, .. } => out.push(OpenBound::Run {
+                kind: match object_kind.as_str() {
+                    "Codeunit" => Some(ObjectKind::Codeunit),
+                    "Page" => Some(ObjectKind::Page),
+                    "Report" => Some(ObjectKind::Report),
+                    "XmlPort" => Some(ObjectKind::XmlPort),
+                    _ => None,
+                },
+            }),
+            CalleeShape::RecordOp { op, .. } => {
+                if let Some(op) = record_trigger_op(&op.fold_identifier()) {
+                    out.push(OpenBound::Record { op });
+                }
+            }
+            CalleeShape::Commit | CalleeShape::Unknown => out.push(OpenBound::Any),
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Derive [`SetCompleteness`] from the shape for member and similar calls.
@@ -749,7 +826,12 @@ fn resolve_call_site_obligation(
                 (shape, completeness, routes)
             } else {
                 // No table resolved: honest-empty Multicast (open-world, no
-                // known triggers, but we cannot say there are none).
+                // known triggers, but we cannot say there are none). On the
+                // edge this looks like a table without triggers; the site fact
+                // says it is open (#63).
+                if let Some(op) = record_trigger_op(&op_lc) {
+                    facts_out.open.push(OpenBound::Record { op });
+                }
                 (
                     DispatchShape::Multicast,
                     SetCompleteness::Partial {
@@ -940,6 +1022,9 @@ pub(crate) fn resolve_file_obligations(
                 }
                 if site.parenless {
                     parenless.push(site.expr);
+                }
+                if facts.open.is_empty() {
+                    facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
                 }
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
@@ -2019,6 +2104,34 @@ pub fn build_program_with_coverage_profiled(
     let (ctx, report) = fresh_program_from_snapshot_with(snap, profile)?;
     let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
     Ok((ctx, report, fc))
+}
+
+/// The cross-app program (engine-switch S7.3): a `FULL` build, with every
+/// source-bearing dependency body resolved from its own app
+/// ([`ProgramContext::resolve_dependency_bodies`]) and merged into the report —
+/// edges, site facts and parens-less calls. `alsem analyze`'s cross-app model and
+/// `alsem graph` (#63) both start here, so the two cannot drift.
+///
+/// It stops at the merged edges. The demand filter
+/// (`program::resolve::demand::cross_app_demand`, S8.2) keeps only what the
+/// workspace reaches and is the detector model's choice; the call-graph export
+/// must not apply it (it would remove dependency code reachable only through
+/// interface implementations, extension triggers or run hubs).
+pub fn build_cross_app_program(
+    workspace_root: &Path,
+) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
+    let (ctx, mut report, coverage) = {
+        let _s = pt::span("crossapp", "crossapp.program_build_full");
+        build_program_with_coverage_profiled(workspace_root, BuildProfile::FULL)?
+    };
+    let dependency = {
+        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+        ctx.resolve_dependency_bodies()
+    };
+    report.edges.extend(dependency.edges);
+    report.site_facts.extend(dependency.site_facts);
+    report.parenless_calls.extend(dependency.parenless_calls);
+    Ok((ctx, report, coverage))
 }
 
 /// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
@@ -3608,6 +3721,127 @@ mod tests {
             .min()
             .expect("edges in P");
         assert_eq!(unknown, vec![first + 4, first + 5]);
+    }
+
+    /// #63: every open call site records what it may reach (`SiteFacts::open`),
+    /// one case per row of the export spec's §4.5 bound table, and a closed site
+    /// records nothing. The edge alone cannot tell a record operation on an
+    /// unresolved table from one on a resolved table without triggers (both are
+    /// an empty open `Multicast`); the fact can.
+    #[test]
+    fn open_call_sites_record_their_bounds() {
+        use crate::program::resolve::edge::OpenBound as B;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "table 50001 T\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n    trigger OnInsert()\n    begin\n    end;\n}\n\
+             table 50002 NoTrig\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n\
+             codeunit 50003 C\n{\n    procedure P(V: Variant; RR: RecordRef; FR: FieldRef)\n    var\n        T: Record T;\n        N: Record NoTrig;\n        U: Record \"No Such Table\";\n        CuId: Integer;\n    begin\n        \
+             U.Insert(true); // unresolved-table\n        \
+             N.Insert(true); // no-triggers\n        \
+             T.Insert(true); // resolved\n        \
+             V.Insert(true); // variant-insert\n        \
+             V.Run(); // variant-run\n        \
+             V.Foo(1); // variant-name\n        \
+             RR.Insert(true); // recordref\n        \
+             FR.Validate(1); // fieldref\n        \
+             Codeunit.Run(50000); // int-run\n        \
+             Codeunit.Run(CuId); // var-run\n        \
+             Report.SaveAsPdf(Report::\"X\", 'f'); // report-saveas\n        \
+             Missing(); // missing-bare\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let at = |tag: &str| -> Vec<B> {
+            let line = src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+            let mut out: Vec<B> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == "p" && ce.edge.site.span.start.line == line)
+                .flat_map(|ce| {
+                    report
+                        .site_facts
+                        .get(&ce.obligation_id)
+                        .map(|f| f.open.clone())
+                        .unwrap_or_default()
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        let name = |n: &str, arity: usize| B::Name {
+            name_lc: n.to_string(),
+            arity,
+        };
+        assert_eq!(at("// unresolved-table"), vec![B::Record { op: "insert" }]);
+        assert_eq!(at("// no-triggers"), vec![], "a resolved table is closed");
+        assert_eq!(at("// resolved"), vec![]);
+        assert_eq!(
+            at("// variant-insert"),
+            vec![name("insert", 1), B::Record { op: "insert" }]
+        );
+        assert_eq!(
+            at("// variant-run"),
+            vec![name("run", 0), B::Run { kind: None }]
+        );
+        assert_eq!(at("// variant-name"), vec![name("foo", 1)]);
+        assert_eq!(at("// recordref"), vec![B::Record { op: "insert" }]);
+        assert_eq!(at("// fieldref"), vec![B::Record { op: "validate" }]);
+        assert_eq!(
+            at("// int-run"),
+            vec![B::Run {
+                kind: Some(ObjectKind::Codeunit)
+            }],
+            "a bare integer is not a static run target"
+        );
+        assert_eq!(
+            at("// var-run"),
+            vec![B::Run {
+                kind: Some(ObjectKind::Codeunit)
+            }]
+        );
+        assert_eq!(
+            at("// report-saveas"),
+            vec![B::Run {
+                kind: Some(ObjectKind::Report)
+            }]
+        );
+        assert_eq!(at("// missing-bare"), vec![name("missing", 0)]);
+    }
+
+    /// #63 (export spec §15): a `Call` never reaches a trigger — AL code cannot
+    /// call one. The call-graph export relies on it: it reads a `Call` route to a
+    /// trigger as a typed-variable run (`dispatch_entry_trigger`) and turns it
+    /// into a `Run` edge to the object. A field trigger and a procedure that
+    /// share a name must therefore leave the call to the procedure alone.
+    #[test]
+    fn a_call_never_resolves_to_a_same_named_trigger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "table 50010 TT\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n    }\n\
+             procedure OnValidate()\n    begin\n    end;\n\
+             procedure Caller()\n    begin\n        OnValidate(); // call\n    end;\n}\n";
+        std::fs::write(dir.path().join("T.al"), src).expect("write T.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let line = src
+            .lines()
+            .position(|l| l.contains("// call"))
+            .expect("tag") as u32;
+        let targets: Vec<&RouteTarget> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.from.name_lc == "caller" && ce.edge.site.span.start.line == line)
+            .flat_map(|ce| ce.edge.routes.iter().map(|r| &r.target))
+            .collect();
+        assert_eq!(targets.len(), 1, "one route: {targets:?}");
+        match targets[0] {
+            RouteTarget::Routine(rid) => {
+                assert_eq!(rid.name_lc.as_str(), "onvalidate");
+                assert_eq!(
+                    rid.enclosing_member_lc, None,
+                    "the procedure, not the field trigger"
+                );
+            }
+            other => panic!("expected the procedure, got {other:?}"),
+        }
     }
 
     #[test]

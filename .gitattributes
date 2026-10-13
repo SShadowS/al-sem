@@ -5,6 +5,7 @@ scripts/** text eol=lf
 # Goldens are byte-compared by several differential tests; force LF so autocrlf
 # (core.autocrlf=true on this checkout) does not corrupt the byte-exact comparison.
 tests/**/*.json text eol=lf
+tests/**/*.jsonl text eol=lf
 tests/**/*.golden.json text eol=lf
 tests/**/*.sarif text eol=lf
 tests/**/*.html text eol=lf

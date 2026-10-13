@@ -793,7 +793,7 @@ fn abi_label(key: &AbiRoutineKey) -> String {
 // Enum → string helpers
 // ---------------------------------------------------------------------------
 
-fn object_kind_str(k: ObjectKind) -> &'static str {
+pub(crate) fn object_kind_str(k: ObjectKind) -> &'static str {
     match k {
         ObjectKind::Codeunit => "Codeunit",
         ObjectKind::Table => "Table",
