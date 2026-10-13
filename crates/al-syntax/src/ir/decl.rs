@@ -50,6 +50,11 @@ pub struct ObjectDecl {
     /// Table keys (Table / TableExtension only) — each the member field NAMES (unquoted,
     /// lowercased) in declaration order; the engine resolves them to field ids.
     pub keys: Vec<Vec<String>>,
+    /// The raw value of every `RunObject` property anywhere in the object outside
+    /// code (page and page-extension actions, report-extension and other members),
+    /// one entry per `#if` arm, document order: `Page "Customer Card"`,
+    /// `Codeunit 50100`, … A user or a `TestPage` action opens that object.
+    pub run_objects: Vec<String>,
     pub origin: Origin,
 }
 

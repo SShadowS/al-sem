@@ -310,6 +310,8 @@ fn lower_object(
     if kind == ObjectKind::XmlPort {
         collect_xmlport_text_nodes(node, source, &mut globals);
     }
+    let mut run_objects = Vec::new();
+    collect_run_objects(node, source, &mut run_objects);
 
     ObjectDecl {
         kind,
@@ -326,7 +328,30 @@ fn lower_object(
         page_controls,
         fields,
         keys,
+        run_objects,
         origin: origin_of(node),
+    }
+}
+
+/// Every `RunObject` property value anywhere under `node`, outside code blocks
+/// (see [`crate::ir::ObjectDecl::run_objects`]). Properties go through
+/// [`lower_property`], so a whole-value `#if` gives one value per arm.
+fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
+    for child in node.named_children() {
+        match child.kind() {
+            RawKind::CodeBlock => {}
+            RawKind::Property => {
+                let mut props = Vec::new();
+                lower_property(child, source, &mut props);
+                out.extend(
+                    props
+                        .into_iter()
+                        .filter(|p| p.name == "runobject" && !p.value.is_empty())
+                        .map(|p| p.value),
+                );
+            }
+            _ => collect_run_objects(child, source, out),
+        }
     }
 }
 
@@ -3646,6 +3671,49 @@ codeunit 50201 "Both Arms"
         assert!(
             param_types.contains(&Some("Text")),
             "got param types: {param_types:?}"
+        );
+    }
+
+    /// `ObjectDecl::run_objects` (#63): every action's `RunObject`, nested in
+    /// groups and `#if` arms, and none from a procedure body or another property.
+    #[test]
+    fn run_object_properties_collected_from_actions() {
+        let src = r#"
+page 50203 "Run Objects"
+{
+    PageType = List;
+    CardPageId = "Some Card";
+    actions
+    {
+        area(Navigation)
+        {
+            group(G)
+            {
+                action(OpenCard)
+                {
+                    RunObject = Page "Customer Card";
+                }
+            }
+#if FOO
+            action(RunCu)
+            {
+                RunObject = Codeunit 50100;
+            }
+#endif
+        }
+    }
+    procedure P()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(
+            af.objects[0].run_objects,
+            vec![
+                "Page \"Customer Card\"".to_string(),
+                "Codeunit 50100".to_string()
+            ]
         );
     }
 
