@@ -116,6 +116,20 @@ enum Commands {
     /// Query the db-effect store: which routines touch a table, and what a
     /// routine's transitive db effects are.
     Query(QueryCli),
+    /// Write the program's may-execute call graph as JSONL (schema
+    /// `al-sem.callgraph` v1), for diff-scoped test selection.
+    Graph(GraphCli),
+}
+
+/// `GraphCli` — arguments for `alsem graph <ws>`.
+#[derive(Parser)]
+struct GraphCli {
+    /// Path to the AL workspace root.
+    workspace: String,
+
+    /// Write the JSONL to a file instead of stdout.
+    #[arg(long = "out")]
+    out: Option<String>,
 }
 
 /// `QueryCli` — top-level `query` subcommand group (the db-effect query surface
@@ -652,6 +666,37 @@ fn main() -> ExitCode {
             QueryCommands::Touches(t) => run_query_touches_cmd(t),
             QueryCommands::Effects(e) => run_query_effects_cmd(e),
         },
+        Commands::Graph(g) => run_graph_cmd(g),
+    }
+}
+
+// ── graph command ────────────────────────────────────────────────────────────
+
+fn run_graph_cmd(g: GraphCli) -> ExitCode {
+    let graph =
+        match al_sem::program::impact_graph::export_workspace(std::path::Path::new(&g.workspace)) {
+            Ok(graph) => graph,
+            Err(msg) => {
+                eprintln!("al-sem graph: {msg}");
+                return ExitCode::from(1);
+            }
+        };
+    let text = graph.to_jsonl();
+    let written = match g.out {
+        Some(path) => std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}")),
+        None => {
+            use std::io::Write;
+            std::io::stdout()
+                .write_all(text.as_bytes())
+                .map_err(|e| e.to_string())
+        }
+    };
+    match written {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("al-sem graph: write error: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 

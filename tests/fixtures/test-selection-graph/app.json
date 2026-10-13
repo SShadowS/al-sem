@@ -1,0 +1,13 @@
+{
+  "id": "6f0c2c51-3a9b-4f39-9c8e-63a1d7e0a063",
+  "name": "Test Selection Graph Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 50900,
+      "to": 50999
+    }
+  ]
+}

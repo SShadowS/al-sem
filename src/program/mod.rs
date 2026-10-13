@@ -9,6 +9,7 @@ pub mod dep_cache;
 pub mod dep_summary;
 pub mod graph;
 pub mod graphify_export;
+pub mod impact_graph;
 pub mod integration_report;
 pub mod model;
 pub mod node;
