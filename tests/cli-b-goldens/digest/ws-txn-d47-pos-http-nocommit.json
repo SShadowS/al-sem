@@ -18,6 +18,10 @@
         "kind": "file-unmatched"
       }
     ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
     "entries": [
       {
         "coverage": {
@@ -120,5 +124,5 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "1.4.0"
 }

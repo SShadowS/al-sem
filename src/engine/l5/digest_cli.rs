@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::gate::run::{analyzer_diagnostics_of_run, compute_analyzer_diagnostics};
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
@@ -86,11 +86,38 @@ pub fn build_envelope_diagnostics_json(
     workspace: &std::path::Path,
     resolved: &Model,
 ) -> serde_json::Value {
-    let default_detectors: Vec<_> = registered_detectors()
+    diagnostics_json(&compute_analyzer_diagnostics(
+        workspace,
+        resolved,
+        &default_detectors(),
+    ))
+}
+
+/// [`build_envelope_diagnostics_json`] for the cross-app digest (#66): the detectors
+/// run with the cross-app runner over the cross-app base, the combination
+/// `alsem analyze` runs by default (never the single-app runner over a cross-app
+/// model, which nothing else runs).
+fn build_envelope_diagnostics_json_cross_app(
+    workspace: &std::path::Path,
+    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
+) -> serde_json::Value {
+    let run =
+        crate::engine::l5::registry::run_detectors_cross_app(base, &default_detectors(), true);
+    diagnostics_json(&analyzer_diagnostics_of_run(
+        workspace,
+        &base.resolved,
+        &run,
+    ))
+}
+
+fn default_detectors() -> Vec<crate::engine::l5::registry::Detector> {
+    registered_detectors()
         .into_iter()
         .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    let diag_vec = compute_analyzer_diagnostics(workspace, resolved, &default_detectors);
+        .collect()
+}
+
+fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> serde_json::Value {
     let arr: Vec<serde_json::Value> = diag_vec
         .iter()
         .map(|d| {
@@ -254,9 +281,19 @@ fn build_routine_file_index(
     (by_file, line_entries)
 }
 
+/// The model's primary app guid, the routine-selector scope of
+/// [`resolve_changed_roots`].
+pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
+    resolved.primary_app.as_ref().map(|a| a.app_guid.as_str())
+}
+
+/// `primary_app_guid` scopes routine selectors to the workspace app's routines: a
+/// cross-app snapshot (#66) also holds dependency routines. Files need no scope: a
+/// dependency routine's file is `dep:<guid>:<path>`, never a workspace path.
 pub fn resolve_changed_roots(
     snap: &CapabilitySnapshot,
     input: &ChangedInput,
+    primary_app_guid: Option<&str>,
 ) -> ChangedRootsResult {
     let mut roots: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut diagnostics: Vec<ChangedRootsDiagnostic> = Vec::new();
@@ -264,7 +301,7 @@ pub fn resolve_changed_roots(
     let (by_file, line_entries) = build_routine_file_index(snap);
 
     // Selector indexes (5-form resolveSelector cascade).
-    let selector_idx = build_selector_indexes(snap);
+    let selector_idx = build_selector_indexes(snap, primary_app_guid);
 
     // 1. File-based matching
     for file in input.files.iter().flatten() {
@@ -1017,6 +1054,7 @@ pub fn project_digest_document(
     entries: &[DigestEntryFull],
     query_diagnostics: &[DigestQueryDiagnostic],
     diagnostics_json: serde_json::Value, // pre-built array from analyzer
+    dependencies: &crate::program::resolve::full::LoadedDependencies,
     alsem_ver: &str,
     deterministic: bool,
 ) -> String {
@@ -1061,6 +1099,7 @@ pub fn project_digest_document(
         "changedRootsDiagnostics".into(),
         serde_json::Value::Array(crd),
     );
+    payload.insert("dependencies".into(), dependencies.to_json());
     payload.insert("entries".into(), serde_json::Value::Array(entries_val));
     payload.insert("summary".into(), serde_json::Value::Object(summary));
     payload.insert(
@@ -1092,7 +1131,8 @@ pub fn project_digest_document(
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "digest".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
-    env.insert("schemaVersion".into(), "1.3.0".into());
+    // 1.4.0 (#66): additive `payload.dependencies` {mode, apps}.
+    env.insert("schemaVersion".into(), "1.4.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1207,6 +1247,14 @@ pub struct DigestRunResult {
 /// `changed_files` are workspace-relative paths (e.g. "src/Foo.al").
 /// `diff_text` is a unified diff string (for --diff).
 /// `alsem_ver` is the version string (e.g. "cli-b-v1").
+///
+/// `single_app == false` (the default, #66) builds `alsem analyze`'s cross-app
+/// base (`capability_cone::build_cross_app_base`): the workspace plus the
+/// dependency code it demands, so a dependency table (Base Application's
+/// Customer) resolves to `<appId>/table/N` with a name. `true` analyses the
+/// workspace alone. With no dependency the two produce the same document apart
+/// from `payload.dependencies.mode` (a contract test).
+#[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
     workspace: &std::path::Path,
     changed_files: Option<Vec<String>>,
@@ -1215,17 +1263,42 @@ pub fn run_digest_pipeline(
     alsem_ver: &str,
     deterministic: bool,
     _max_paths_override: Option<usize>,
+    single_app: bool,
 ) -> Result<DigestRunResult, String> {
+    use crate::engine::gate::run::AnalysisTarget;
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    // Engine-switch S6.2: the program-backed model (program calls and events).
-    let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
-        .ok_or_else(|| "digest: workspace did not resolve".to_string())?;
+    let target = if single_app {
+        // Engine-switch S6.2: the program-backed model (program calls and events).
+        let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
+            .ok_or_else(|| "digest: workspace did not resolve".to_string())?;
+        AnalysisTarget::SingleApp(Box::new(resolved))
+    } else {
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(workspace, &model_id)
+            .ok_or_else(|| {
+            "digest: the cross-app model could not be built \
+                 (--single-app analyses the workspace alone)"
+                .to_string()
+        })?;
+        AnalysisTarget::CrossApp(Box::new(base))
+    };
+    let resolved = target.resolved();
+    let dependencies = match &target {
+        AnalysisTarget::SingleApp(_) => {
+            crate::program::resolve::full::LoadedDependencies::default()
+        }
+        AnalysisTarget::CrossApp(base) => crate::program::resolve::full::LoadedDependencies {
+            cross_app: true,
+            apps: base.loaded_apps.clone(),
+        },
+    };
 
     // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
     // shared helper (no second full-snapshot composition just to fish it out) (#19).
-    let snap = compose_snapshot(&resolved);
+    // Cross-app: over the base's model (calls cut to workspace callers), the same
+    // snapshot `alsem analyze`'s ordering facts read.
+    let snap = compose_snapshot(resolved);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, alsem_ver);
 
@@ -1256,15 +1329,16 @@ pub fn run_digest_pipeline(
         );
     }
 
-    let changed_roots = resolve_changed_roots(&snap, &changed_input);
+    let changed_roots = resolve_changed_roots(&snap, &changed_input, primary_guid_of(resolved));
 
     // Compute transaction context map (for COMMIT effects).
     // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
-    let tx_ctx_map = compute_tx_context_map(&resolved);
+    let tx_ctx_map = compute_tx_context_map(resolved);
 
-    // Compute S4 ordering effects for ALL reportable roots (then filter to roots we care about).
+    // Compute S4 ordering effects for the changed roots alone (each root's pass is
+    // independent, so this equals computing every reportable root and filtering).
     // Use compute_digest_effects_cli which matches TS runDigestPipeline (no routineReturnSummaries).
-    let all_s4_entries = compute_digest_effects_cli(&snap, &resolved);
+    let all_s4_entries = compute_digest_effects_cli(&snap, resolved, Some(&changed_roots.roots));
 
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
@@ -1279,7 +1353,12 @@ pub fn run_digest_pipeline(
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 
     // Build envelope diagnostics (same 34-detector set, shared with prove).
-    let diagnostics_json = build_envelope_diagnostics_json(workspace, &resolved);
+    let diagnostics_json = match &target {
+        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(workspace, r),
+        AnalysisTarget::CrossApp(base) => {
+            build_envelope_diagnostics_json_cross_app(workspace, base)
+        }
+    };
 
     let changed_input_contract = ChangedInputContract {
         files: changed_files,
@@ -1295,12 +1374,17 @@ pub fn run_digest_pipeline(
         &entries,
         &query_diagnostics,
         diagnostics_json,
+        &dependencies,
         alsem_ver,
         deterministic,
     );
 
-    // Human
-    let human_text = format_digest_human(&entries);
+    // Human. The dependencies line appears only when apps were loaded, so a
+    // workspace with no dependency reads the same in both modes.
+    let mut human_text = format_digest_human(&entries);
+    if let Some(line) = dependencies.human_line() {
+        human_text = format!("{line}\n{human_text}");
+    }
 
     Ok(DigestRunResult {
         json_text,

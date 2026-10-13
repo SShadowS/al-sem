@@ -4,6 +4,10 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "query.touches",
   "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
     "direction": "up",
     "from": {
       "resolution": "resolved",
@@ -70,5 +74,5 @@
       ]
     }
   },
-  "schemaVersion": "1.0.0"
+  "schemaVersion": "1.1.0"
 }

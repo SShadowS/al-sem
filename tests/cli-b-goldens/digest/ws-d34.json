@@ -12,6 +12,10 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
     "entries": [
       {
         "coverage": {
@@ -375,5 +379,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "1.4.0"
 }

@@ -43,6 +43,7 @@ mod cli_b_snapshot_differential;
 mod cli_c_cache_differential;
 mod cli_c_events_differential;
 mod cli_c_policy_differential;
+mod cli_digest_query_dependencies;
 mod cli_graph_export;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;

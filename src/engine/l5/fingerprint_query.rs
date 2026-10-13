@@ -656,7 +656,7 @@ pub fn fingerprint_query(
 
     // Selector index (5-form resolveSelector cascade) — built from the identity
     // table's source Vec, deterministic by construction. Shared with digest_cli.
-    let selector_idx = build_selector_indexes(snap);
+    let selector_idx = build_selector_indexes(snap, None);
 
     let mut diagnostics: Vec<FingerprintQueryDiagnostic> = Vec::new();
 

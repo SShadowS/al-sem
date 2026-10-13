@@ -29,7 +29,7 @@ use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
     ChangedInput, DigestEffectFull, DigestEntryFull, FullAnchor, build_envelope_diagnostics_json,
-    resolve_changed_roots, run_digest_query_full_from_entries,
+    primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::compose_snapshot;
 use crate::engine::l5::transaction_spans::SeedKind;
@@ -903,7 +903,7 @@ pub fn run_prove_pipeline(
         routines: Some(vec![routine_selector.to_string()]),
         diff_text: None,
     };
-    let changed_roots = resolve_changed_roots(&snap, &changed_input);
+    let changed_roots = resolve_changed_roots(&snap, &changed_input, primary_guid_of(&resolved));
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -953,7 +953,7 @@ pub fn run_prove_pipeline(
     let tx_ctx_map = compute_tx_context_map(&resolved);
 
     // Compute S4 ordering effects for all routines
-    let all_s4_entries = compute_digest_effects_cli(&snap, &resolved);
+    let all_s4_entries = compute_digest_effects_cli(&snap, &resolved, None);
 
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
