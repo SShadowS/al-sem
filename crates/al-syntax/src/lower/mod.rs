@@ -1262,12 +1262,15 @@ fn lower_routine<'t>(
     // decides these nodes are members, so the fallback only ever sees a node that arm
     // passed. The empty filter is NOT belt-and-braces: a malformed `modify()` parses with
     // a PRESENT, zero-width `target`, and a nameless `action()` does the same on the
-    // `name` path. NOT tree-sitter error recovery, though it looks like it: both files
-    // parse CLEAN — no `ERROR`, no `MISSING`, `has_error()` false — so `ParseStatus`
-    // stays `Clean`, `parse_incomplete` stays false, and NOTHING downstream flags them.
-    // (The grammar accepting a zero-width `identifier` in a required field looks like a
-    // `tree-sitter-al` defect; not this layer's to fix, and the guard is needed either
-    // way.) `Some("")` takes the discriminated arm of `to_stable_routine_id_from_parts`
+    // `name` path. That IS tree-sitter error recovery (issue #56): it inserts a hidden
+    // MISSING keyword token under the `keyword_as_identifier` -> `identifier` alias, so
+    // the field is a present, zero-width `identifier`. `root.has_error()` is true and
+    // `ParseStatus` is `Recovered`. Only the `tree-sitter parse` CLI hides this (it never
+    // reaches the hidden leaf, prints no MISSING and exits 0). `parse_incomplete` of the
+    // ROUTINE stays false, because the error sits in the member header, not in the
+    // trigger's own subtree. The guard still matters for `action("")` (an empty QUOTED
+    // name), which genuinely parses Clean, and for any file that is read past a Recovered
+    // status. `Some("")` takes the discriminated arm of `to_stable_routine_id_from_parts`
     // and mints a different, meaningless stable id, so it must degrade to `None`.
     // Filtering the whole `enclosing_member` covers both paths with one expression
     // (mirroring `dataitem_table_name`, which filters for exactly this reason). Dropping
@@ -3395,6 +3398,50 @@ pageextension 50113 "P Ext" extends "Customer Card"
         );
     }
 
+    /// Issue #56: pins the corrected claim. A zero-width member name (`modify()`,
+    /// `action()`) is tree-sitter recovery, so the file is `Recovered`; an empty
+    /// QUOTED name (`action("")`) is the shape that genuinely parses `Clean`.
+    #[test]
+    fn zero_width_member_names_are_recovered_but_empty_quoted_name_is_clean() {
+        use crate::ir::ParseStatus;
+        let modify = r#"
+pageextension 50113 "P Ext" extends "Customer Card"
+{
+    actions
+    {
+        modify()
+        {
+            trigger OnAfterAction()
+            begin
+            end;
+        }
+    }
+}
+"#;
+        let action = r#"
+page 50116 P
+{
+    actions
+    {
+        area(Processing)
+        {
+            action()
+            {
+                trigger OnAction()
+                begin
+                end;
+            }
+        }
+    }
+}
+"#;
+        let quoted = action.replace("action()", "action(\"\")");
+        assert_ne!(quoted, action, "the replace must apply");
+        assert_eq!(parse(modify).parse_status, ParseStatus::Recovered);
+        assert_eq!(parse(action).parse_status, ParseStatus::Recovered);
+        assert_eq!(parse(&quoted).parse_status, ParseStatus::Clean);
+    }
+
     /// Issue #41, T5: the twin of T4 for the OTHER wrapper kind. One shared
     /// guard covers both, so both are pinned — a per-kind copy of the filter
     /// would pass T4 alone.
@@ -3518,12 +3565,13 @@ report 50115 T
     /// through `name`, so moving the filter back inside the `target`
     /// `or_else` fails here and nowhere else.
     ///
-    /// `action()` with no name parses CLEAN -- `name: (identifier [r,c]-[r,c])`,
-    /// zero width, no `ERROR` and no `MISSING`, so `has_error()` is false and
-    /// NOTHING downstream flags this file. That is why the degrade to `None`
-    /// has to happen here: `Some("")` would take the discriminated arm of
-    /// `to_stable_routine_id_from_parts` and mint a meaningless id for a
-    /// routine the engine otherwise considers perfectly parsed.
+    /// `action()` with no name is tree-sitter error recovery (issue #56): a hidden
+    /// MISSING keyword under the `identifier` alias gives `name: (identifier
+    /// [r,c]-[r,c])`, zero width. `has_error()` is true and the file is `Recovered`
+    /// (see `zero_width_member_names_are_recovered_but_empty_quoted_name_is_clean`).
+    /// The degrade to `None` has to happen here regardless: `Some("")` would take
+    /// the discriminated arm of `to_stable_routine_id_from_parts` and mint a
+    /// meaningless id, and the routine itself is not marked `parse_incomplete`.
     #[test]
     fn empty_action_declaration_name_degrades_to_no_member() {
         let src = r#"
