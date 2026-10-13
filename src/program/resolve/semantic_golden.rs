@@ -10,7 +10,7 @@
 //!
 //! [`mint_fresh_golden_for_kind`] freezes the fresh resolver's own output for
 //! one [`EdgeKind`] into a [`SemanticGolden`]: a sorted list keyed by the
-//! column-ignoring [`GoldenSiteKey`]. The in-repo implicit-trigger fixture
+//! full-span [`GoldenSiteKey`], one entry per site. The in-repo implicit-trigger fixture
 //! golden is minted this way. [`build_golden_from_canonical`] builds one from
 //! any batch of canonical edges.
 //!
@@ -76,15 +76,23 @@ use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::ParsedUnit;
 
 // ---------------------------------------------------------------------------
-// Column-ignoring site key (serde-able)
+// Site key (serde-able)
 // ---------------------------------------------------------------------------
 
-/// Serde-able, column-ignoring key for one call site in the semantic golden.
+/// Serde-able key for one call site in the semantic golden: the caller, the
+/// edge kind and the site's whole span, start and end (0-based line, byte
+/// column).
 ///
-/// Omits the column offset because L3 uses UTF-16 columns while the fresh
-/// side uses byte columns — they agree on ASCII but may differ by a small
-/// delta on non-ASCII identifiers.  The strong key `(unit, line, callee_fp)`
-/// mirrors the invariant used by [`crate::program::resolve::differential::match_sites`].
+/// Both the golden and the comparison come from the fresh resolver, so the span
+/// is computed the same way on both sides (#28). The span alone separates every
+/// site: two calls on one line differ in column, and chained same-name calls
+/// (`X.Foo().Foo()`), which share a start, differ in end. A key that still
+/// collides is an error, never a merge (see [`build_golden_from_canonical`]).
+///
+/// The key once had no column and carried `callee_fp` instead, because L3
+/// counted columns in UTF-16 units and the fresh resolver in bytes. L3 is gone,
+/// and `callee_fp` is a `DefaultHasher` value, which Rust does not keep stable
+/// across releases, so it does not belong in a committed file.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GoldenSiteKey {
     pub from_app_guid: String,
@@ -95,7 +103,9 @@ pub struct GoldenSiteKey {
     pub edge_kind: u8,
     pub unit: String,
     pub line: u32,
-    pub callee_fp: u64,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
 }
 
 /// Serde-able mirror of
@@ -140,6 +150,29 @@ impl SemanticGolden {
                 .map(|(site, targets)| GoldenEntry { site, targets })
                 .collect(),
         }
+    }
+
+    /// `Err` unless `entries` is sorted by site with no site listed twice.
+    /// Lookups binary-search the list, and a site listed twice would leave one
+    /// of its two target sets unread (#28). Check a golden read from disk with
+    /// this before trusting it.
+    pub fn validate(&self) -> Result<(), String> {
+        let dups: Vec<&GoldenSiteKey> = self
+            .entries
+            .windows(2)
+            .filter(|w| w[0].site == w[1].site)
+            .map(|w| &w[0].site)
+            .collect();
+        if !dups.is_empty() {
+            return Err(format!(
+                "{} site key(s) listed more than once: {dups:#?}",
+                dups.len()
+            ));
+        }
+        if !self.entries.windows(2).all(|w| w[0].site < w[1].site) {
+            return Err("entries are not sorted by site".to_string());
+        }
+        Ok(())
     }
 
     /// Lookup targets for `key` (binary search on sorted `entries`).
@@ -589,7 +622,37 @@ fn canonical_to_golden_key(e: &CanonicalEdge) -> GoldenSiteKey {
         },
         unit: e.site.span.unit.clone(),
         line: e.site.span.start.line,
-        callee_fp: e.site.callee_fp,
+        col: e.site.span.start.col,
+        end_line: e.site.span.end.line,
+        end_col: e.site.span.end.col,
+    }
+}
+
+/// Key every edge by its [`GoldenSiteKey`], or `Err` naming each key that more
+/// than one edge produced. Two sites must never share a key: merging their
+/// target sets would hide a swap between them (#28).
+fn key_edges(
+    edges: &[CanonicalEdge],
+) -> Result<BTreeMap<GoldenSiteKey, BTreeSet<GoldenTarget>>, String> {
+    let mut map = BTreeMap::new();
+    let mut dups = BTreeSet::new();
+    for edge in edges {
+        match map.entry(canonical_to_golden_key(edge)) {
+            std::collections::btree_map::Entry::Occupied(o) => {
+                dups.insert(o.key().clone());
+            }
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(canonical_targets_to_golden(&edge.targets));
+            }
+        }
+    }
+    if dups.is_empty() {
+        Ok(map)
+    } else {
+        Err(format!(
+            "{} site key(s) produced by more than one edge: {dups:#?}",
+            dups.len()
+        ))
     }
 }
 
@@ -612,13 +675,13 @@ fn canonical_targets_to_golden(targets: &BTreeSet<CanonicalTarget>) -> BTreeSet<
 /// Build a [`SemanticGolden`] from a batch of canonical edges. Oracle-
 /// agnostic — the caller decides where `edges` came from. Used by
 /// [`mint_fresh_golden_for_kind`].
+///
+/// # Panics
+///
+/// When two edges share a [`GoldenSiteKey`]: the golden cannot tell them
+/// apart, so it refuses to mint rather than merge their targets (#28).
 pub fn build_golden_from_canonical(edges: &[CanonicalEdge]) -> SemanticGolden {
-    let mut map: BTreeMap<GoldenSiteKey, BTreeSet<GoldenTarget>> = BTreeMap::new();
-    for edge in edges {
-        let key = canonical_to_golden_key(edge);
-        let targets = canonical_targets_to_golden(&edge.targets);
-        map.entry(key).or_default().extend(targets);
-    }
+    let map = key_edges(edges).unwrap_or_else(|e| panic!("cannot mint the golden: {e}"));
     SemanticGolden::from_map(map)
 }
 
@@ -669,18 +732,22 @@ pub(crate) fn mint_fresh_golden_for_kind_on(
 /// confidently emit a target the golden says is wrong. `fresh_missing` tracks
 /// sites the golden resolved but fresh did not (a progress gap — reduce it,
 /// never introduce new ones).
+///
+/// # Panics
+///
+/// When two fresh edges share a [`GoldenSiteKey`], or the golden lists one key
+/// twice (see [`SemanticGolden::validate`]): either would merge two sites'
+/// targets and hide a swap between them (#28).
 #[must_use]
 pub fn assert_against_semantic_golden(
     fresh: &[CanonicalEdge],
     golden: &SemanticGolden,
 ) -> SemanticDiff {
-    // Build fresh key → targets map (union duplicate keys).
-    let mut fresh_map: BTreeMap<GoldenSiteKey, BTreeSet<GoldenTarget>> = BTreeMap::new();
-    for edge in fresh {
-        let key = canonical_to_golden_key(edge);
-        let targets = canonical_targets_to_golden(&edge.targets);
-        fresh_map.entry(key).or_default().extend(targets);
+    if let Err(e) = golden.validate() {
+        panic!("invalid semantic golden: {e}");
     }
+    let fresh_map =
+        key_edges(fresh).unwrap_or_else(|e| panic!("cannot compare fresh against the golden: {e}"));
 
     let mut diff = SemanticDiff::default();
 
@@ -2528,5 +2595,111 @@ codeunit 50808 "EvSub4"
             msg.contains("bc3ccb18"),
             "the message must carry the stamped state: {msg}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #28: two calls on one line are two sites
+    // -----------------------------------------------------------------------
+
+    /// One `Call` edge from `Cu.Caller` at line 4, columns `col..end_col`, with
+    /// the callee text `Foo` (so `callee_fp` is equal too) and one target.
+    fn same_line_call(col: u32, end_col: u32, target: &str) -> CanonicalEdge {
+        use crate::program::resolve::differential::{CanonicalKey, CanonicalSiteKey};
+        let caller = CanonicalKey {
+            app_guid: "app".into(),
+            object_kind: "codeunit".into(),
+            object_lc: "cu".into(),
+            routine_lc: "caller".into(),
+        };
+        CanonicalEdge {
+            from: caller.clone(),
+            site: CanonicalSiteKey {
+                caller,
+                span: CanonicalSpan {
+                    unit: "Cu.al".into(),
+                    start: SourcePos { line: 4, col },
+                    end: SourcePos {
+                        line: 4,
+                        col: end_col,
+                    },
+                },
+                callee_fp: callee_fp("Foo"),
+            },
+            kind: EdgeKind::Call,
+            targets: [CanonicalTarget {
+                kind: 0,
+                app: Some("app".into()),
+                object_lc: target.into(),
+                routine_lc: Some("foo".into()),
+            }]
+            .into(),
+        }
+    }
+
+    /// The issue's defeat, stated by hand: the golden has `A` at column 9 and
+    /// `B` at column 20 of one line; fresh swaps them. Both sites must come out
+    /// wrong. With a line-only key the two sites merge into `{A, B}` on both
+    /// sides and the swap reads as a match.
+    #[test]
+    fn swapped_targets_of_two_same_line_calls_are_both_wrong() {
+        let golden =
+            build_golden_from_canonical(&[same_line_call(9, 14, "a"), same_line_call(20, 25, "b")]);
+        assert_eq!(golden.entries.len(), 2, "two calls, two golden sites");
+        let fresh = [same_line_call(9, 14, "b"), same_line_call(20, 25, "a")];
+        let diff = assert_against_semantic_golden(&fresh, &golden);
+        assert_eq!(diff.total_paired, 2, "{diff:#?}");
+        assert_eq!(diff.matches, 0, "{diff:#?}");
+        assert_eq!(diff.fresh_wrong.len(), 2, "{diff:#?}");
+    }
+
+    /// Chained same-name calls (`X.Foo().Foo()`) start at the same place; only
+    /// the end tells them apart.
+    #[test]
+    fn calls_that_share_a_start_are_told_apart_by_their_end() {
+        let golden =
+            build_golden_from_canonical(&[same_line_call(9, 16, "a"), same_line_call(9, 22, "b")]);
+        assert_eq!(golden.entries.len(), 2);
+        let fresh = [same_line_call(9, 16, "b"), same_line_call(9, 22, "a")];
+        assert_eq!(
+            assert_against_semantic_golden(&fresh, &golden)
+                .fresh_wrong
+                .len(),
+            2
+        );
+    }
+
+    /// Two edges with one key are refused at mint, never merged.
+    #[test]
+    #[should_panic(expected = "site key(s) produced by more than one edge")]
+    fn mint_rejects_two_edges_with_one_site_key() {
+        let _ =
+            build_golden_from_canonical(&[same_line_call(9, 14, "a"), same_line_call(9, 14, "b")]);
+    }
+
+    /// Two fresh edges with one key are refused at comparison, never merged.
+    #[test]
+    #[should_panic(expected = "site key(s) produced by more than one edge")]
+    fn comparison_rejects_two_fresh_edges_with_one_site_key() {
+        let golden = build_golden_from_canonical(&[same_line_call(9, 14, "a")]);
+        let _ = assert_against_semantic_golden(
+            &[same_line_call(9, 14, "a"), same_line_call(9, 14, "b")],
+            &golden,
+        );
+    }
+
+    /// A golden that lists one site twice (a hand-edited or corrupt file) is
+    /// refused when validated, and so by the comparison.
+    #[test]
+    fn a_golden_listing_one_site_twice_is_invalid() {
+        let one = build_golden_from_canonical(&[same_line_call(9, 14, "a")]);
+        let mut twice = one.clone();
+        twice.entries.push(one.entries[0].clone());
+        assert!(one.validate().is_ok());
+        let err = twice
+            .validate()
+            .expect_err("a repeated site must be refused");
+        assert!(err.contains("listed more than once"), "{err}");
+        let caught = std::panic::catch_unwind(|| assert_against_semantic_golden(&[], &twice));
+        assert!(caught.is_err(), "the comparison must refuse it too");
     }
 }

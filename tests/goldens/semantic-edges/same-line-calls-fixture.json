@@ -1,0 +1,48 @@
+{
+  "entries": [
+    {
+      "site": {
+        "from_app_guid": "5a5e1111-5a5e-1111-5a5e-111111111111",
+        "from_object_kind": "codeunit",
+        "from_object_lc": "50602",
+        "from_routine_lc": "runboth",
+        "edge_kind": 1,
+        "unit": "SameLine.al",
+        "line": 29,
+        "col": 8,
+        "end_line": 29,
+        "end_col": 40
+      },
+      "targets": [
+        {
+          "kind": 0,
+          "app": "5a5e1111-5a5e-1111-5a5e-111111111111",
+          "object_lc": "50600",
+          "routine_lc": "onrun"
+        }
+      ]
+    },
+    {
+      "site": {
+        "from_app_guid": "5a5e1111-5a5e-1111-5a5e-111111111111",
+        "from_object_kind": "codeunit",
+        "from_object_lc": "50602",
+        "from_routine_lc": "runboth",
+        "edge_kind": 1,
+        "unit": "SameLine.al",
+        "line": 29,
+        "col": 42,
+        "end_line": 29,
+        "end_col": 75
+      },
+      "targets": [
+        {
+          "kind": 0,
+          "app": "5a5e1111-5a5e-1111-5a5e-111111111111",
+          "object_lc": "50601",
+          "routine_lc": "onrun"
+        }
+      ]
+    }
+  ]
+}
