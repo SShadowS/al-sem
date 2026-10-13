@@ -109,8 +109,8 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al grammar (currently **v4.4.1 + `main` at `bf72a2d0`**, see the Grammar
-  section — the package version did not move for 353 commits, many of them shape changes): a plain, gitignored clone of
+- tree-sitter-al grammar (currently **v4.4.1 + `main` at `8682cb5f`**, see the Grammar
+  section — the package version did not move for 459 commits, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
   against `main`, so they always use the same grammar.
@@ -378,10 +378,10 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.4.1 + main `bf72a2d0`)
+## Grammar (tree-sitter-al v4.4.1 + main `8682cb5f`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
-committed `node-types.sha256` matches `main` at **`bf72a2d0`** (2026-10-05), 353 commits
+committed `node-types.sha256` matches `main` at **`8682cb5f`** (2026-10-07), 459 commits
 past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
 version is NOT a grammar identity any more** — name the commit. v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
@@ -426,6 +426,29 @@ histogram byte-identical. Commits keep landing on `main` — it moved twice duri
 upgrade (`821c9147` -> `a7455b69` -> `bf72a2d0`); check `origin/main` again before you
 commit, since CI builds whatever `main` is when it runs.
 
+**`main` at `8682cb5f` (2026-10-07, still "v4.4.1", 106 commits past `bf72a2d0`) moved the
+vocabulary 487 -> 499 named kinds, no field added or removed.** New: `chartpart_keyword`
+(Trivia), `chartpart_section` (a page-layout part, deferred-work 32), `filter_group` (a
+parenthesised filter, 31), `preproc_conditional_property_value_sequence` (a property value
+made of a RUN of whole-value `#if` groups, B11), and eight B7b-1 groups, one per strict
+delimited list, that let an `#if` stand anywhere in the list:
+`preproc_conditional_{implements,field_list_items,sorting_fields,order_by_fields,
+move_elements,array_dimensions,attribute_args,var_names}`. B6 also narrowed
+`_expression_statement` to an invocation and made `and`/`or`/`xor`/`div`/`mod`/`in`/`not`
+reserved in code (operator-led or literal "statements" now ERROR, as alc rejects them).
+The grammar's own audit says every production tree is byte-identical in its four corpora.
+Four shapes needed lowerer arms, because the IR reads those hosts: the property sequence
+(one entry per arm of every group, like G6), `implements` and variable names (every arm's
+names, the union the lowerer already reads across `#if`-wrapped headers and declarations),
+and key field lists and attribute arguments, which are POSITIONAL, so they read ONE arm:
+the first arm the routine's build context does not rule out (`conditional_list_arm`). A
+union there is no build at all and shifts `[EventSubscriber]`'s `args[2]`. Nothing reads
+sorting, `OrderBy`, move elements, array sizes, filters or `chartpart` (not a
+`PageControl`; 0 sites in the grammar's corpora), so those need no arm. Measured: per-test
+outcomes identical old vs new apart from the 5 new lowerer tests, zero goldens moved, CDO
+histogram byte-identical (`recoveredFiles` 0 on both), and the same-length stamp left
+`dry-run.txt` alone.
+
 **v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
 v4.3.0, which moved none.** The six additions are all preproc-split shapes
 (`PreprocOperandPrefix`, `PreprocSplitCaseEndBranch`, `PreprocSplitCaseStatementEnd`,
@@ -454,7 +477,7 @@ all — the IR's `Block`/`Stmt` items are already flattened once, at the lowerin
 boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
 wrapper node.
 
-**Upgrading the grammar (the checklist the v4.3.0, v4.4.0 and v4.4.1 bumps followed):**
+**Upgrading the grammar (the checklist the v4.3.0, v4.4.0, v4.4.1, `bf72a2d0` and `8682cb5f` bumps followed):**
 
 1. `git -C tree-sitter-al pull` — moves the local clone to the new `main` tip.
 2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
@@ -474,7 +497,7 @@ wrapper node.
    are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
    is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
    it** — run `cargo test -p al-sem --lib` too. The stamp carries the grammar COMMIT
-   (`tree-sitter-al-v4.4.1-bf72a2d0-native`) because `main` changes shapes without moving
+   (`tree-sitter-al-v4.4.1-8682cb5f-native`) because `main` changes shapes without moving
    the package version; the guard checks only the version part, so a same-version bump
    passes it with a stale commit — update the commit by hand. A longer stamp can push
    `1234….json` across a 0.1 KB boundary in `tests/cli-c-goldens/cache/dry-run.txt`.
