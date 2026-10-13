@@ -132,7 +132,9 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    whatever this preview computed. Record `branch`, `worktree`, `body_hash`,
    `attempt`.
 8. **Run `/issue <N>`** with the claim JSON. It returns one of `merged <merge_sha>`,
-   `blocked <reason>`, `spike-answered`.
+   `blocked <reason>`, `handoff <full sha>`, `spike-answered`. A claim JSON that
+   carries `handoff` is a PRE-RATIFIED attempt: `/issue` starts it at
+   implementation (its step 1 says how).
 9. **Post-merge check** (only on `merged`): `post-merge --issue N --merge-sha
    <sha>`. It materialises the merge SHA in a disposable worktree, runs
    `ci-steps all`, `check-goldens`, and `cdo-gate` (unless docs-only) there,
@@ -288,8 +290,17 @@ the recovered run's just-retained evidence directory — see step 1. Never set
     (`sanitize-failed`) if the probe's answer quotes a `CDO_WS` or
     `.alpackages/` path. On other `blocked` outcomes, just `finish --issue N
     --outcome blocked --reason R` and leave the worktree in place.
-12. **Report** a short table: issue, classification, outcome, PR, merge SHA or
-    block reason, discoveries filed, caps used (from `status`). Under `/loop`,
+    On `handoff <sha>`, `finish --issue N --outcome handoff --handoff-ref <sha>
+    --reason spec-panel-cap` and leave the worktree in place. It labels
+    `agent-design-ready` instead of `agent-blocked`, so the issue stays
+    eligible and a later tick's claim carries the design as `handoff`. If it
+    refuses (`handoff-not-ready`, `handoff-not-on-branch`,
+    `handoff-evidence-missing`, `handoff-already-used`, `sha-not-full`), it
+    has labelled and commented nothing and still holds the lock: run `finish
+    --issue N --outcome blocked --reason spec-panel-cap` instead. That
+    refusal is the fallback, not a stop.
+12. **Report** a short table: issue, classification, outcome, PR, merge SHA,
+    block reason or handoff SHA, discoveries filed, caps used (from `status`). Under `/loop`,
     the next tick fires only if the outcome was not `regressed` and HALT is
     absent (`halt-check`).
 
@@ -332,7 +343,8 @@ the recovered run's just-retained evidence directory — see step 1. Never set
   rule for it and the prompt really is the only guard. The read-only
   `incidents` and `status` are fine to call.
 - An executor call that exits non-zero, or whose JSON has a TOP-LEVEL `error` key,
-  is a stop for this tick; print it. A per-item `error` field inside a list (e.g.
+  is a stop for this tick; print it. The one exception is a refused `finish
+  --outcome handoff`, whose fallback step 11 names. A per-item `error` field inside a list (e.g.
   `file-discoveries`'s `filed[]`, where a per-discovery `error` is `null` on
   success) is informational, not a stop.
 - Call the push-notification tool whenever an executor prints a `NOTIFY:` line on

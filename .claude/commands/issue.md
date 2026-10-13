@@ -33,8 +33,8 @@ for each call. While a pi call runs in the background, call
 `python scripts/agentflow beat` at least every 10 minutes.
 
 Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`,
-or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
-`blocked <cap-name>`.
+`handoff <full sha>` (step 5 only), or `spike-answered`. Any other cap hit
+(`charge` prints `exhausted`) is `blocked <cap-name>`.
 
 ## Steps
 
@@ -43,6 +43,21 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    the worktree, export `TREE_SITTER_AL_PATH=<main checkout>/tree-sitter-al`. Create
    `.agent/issue-N/` there and start the ledger with the claim JSON and a hash of
    the issue body (`body_hash` from the claim).
+
+   **Pre-ratified design (#45).** If the claim JSON carries `handoff`, an earlier
+   attempt converged its design but hit the spec-panel cap, and handed it off.
+   Restore the files it lists, in the worktree, from its commit:
+   `git restore --source <handoff.sha> -- <every path in handoff.files>`
+   (worktree only, nothing staged). Commit every restored path EXCEPT
+   `.agent/issue-N/ledger.md` and `.agent/issue-N/findings.json` (they stay
+   uncommitted until step 12, as always; a bounded design kept in the ledger
+   leaves nothing to commit here) with the message
+   `docs: pre-ratified design for #N from attempt <handoff.from_attempt>`.
+   Add a ledger timeline line `Pre-ratified from attempt <k> at <sha>`, then
+   SKIP steps 2–5 and continue at step 6; the carried spec (or the ledger's
+   `## Design`) is the spec, and the carried `findings.json` is the register.
+   A claim carrying `handoff_void: issue-edited` means the issue changed since
+   the handoff: ignore it and run every step from 2.
 2. **Classify** with the brainstorming skill's three-path rule (spike / bounded /
    architectural) and write the classification and reason to the ledger.
    - Spike: run the probe (read-only; a throwaway script under `.agent/runs/` if
@@ -80,7 +95,23 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
    entry `accepted` or `re-raised`. Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
    or `refuted` with evidence. A `re-raised` stays unresolved even without new
-   evidence. Not converged after 3 rounds: return `blocked spec-panel-cap`.
+   evidence. Not converged after 3 rounds: check the handoff rule below, else
+   return `blocked spec-panel-cap`.
+
+   **Handoff at the cap (#45).** The design may pass to the next attempt as
+   PRE-RATIFIED when the register meets the handoff rule: every `severity` and
+   `disposition` from the closed vocabularies, no `open` entry, no blocking
+   entry `deferred`, every reviewer mark either `accepted` or `re-raised` (none
+   missing, none `unreviewed`), and every entry `accepted` by AT LEAST ONE
+   reviewer — an entry both reviewers re-raised is a live dispute and blocks
+   the handoff. Never handoff from an attempt whose claim carried `handoff`
+   (the executor refuses `handoff-already-used`). To hand off: run `sanitize`
+   on the ledger and register (as in step 12), commit the spec file, the
+   ledger and `findings.json` on the issue branch — name each path; a spec
+   left untracked is not carried — run `check-diff --base master --head HEAD
+   --issue N --cwd <worktree>`, write the commit's FULL SHA into the ledger,
+   and return `handoff <full sha>`. Not handoff-ready: `blocked
+   spec-panel-cap`, as before.
 6. **Acceptance tests.** Call `python scripts/agentflow beat` immediately before
    AND immediately after dispatching this step's subagent — the same
    30-minute-staleness reason as step 8's dispatches. Dispatch an `opus`
@@ -150,6 +181,10 @@ or `spike-answered`. Any cap hit (`charge` prints `exhausted`) is
     never let a stand-in read as the specified step. Either way its findings
     enter `findings.json`. Then both reviewers over the diff, spec, and
     ledger, `charge final_rounds` per round (cap 3), same convergence rule.
+    On a pre-ratified attempt (step 1), round 1 also asks both reviewers to
+    mark EVERY carried entry against the current hash: a carried `re-raised`
+    is still unresolved, and `attest` refuses until both reviewers have
+    accepted every entry.
     Source-verify every reviewer code claim before editing. Every fix returns to
     step 9's gates.
 11. **Rebase and re-gate.** `git fetch origin && git rebase origin/master` in the
