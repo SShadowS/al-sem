@@ -2134,6 +2134,96 @@ pub fn build_cross_app_program(
     Ok((ctx, report, coverage))
 }
 
+/// Which dependency apps a cross-app build loaded, and how: one row per required
+/// dependency (`appId`, `name`, `publisher`, `version`, `source`), plus one
+/// `source: "missing"` row per declared dependency the ledger did not find, sorted
+/// by name then appId. The ONE producer of `alsem graph`'s `meta.apps` and of the
+/// `dependencies.apps` statement in `alsem digest` / `alsem query` (#66), so the
+/// three cannot describe the same build differently.
+#[must_use]
+pub fn loaded_apps(ctx: &ProgramContext, coverage: &FreshCoverage) -> Vec<serde_json::Value> {
+    let snap = ctx.snapshot();
+    let mut apps: Vec<serde_json::Value> = snap
+        .apps
+        .iter()
+        .filter(|u| ctx.is_required_dependency(&u.id))
+        .map(|u| {
+            serde_json::json!({
+                "appId": u.id.guid.to_ascii_lowercase(),
+                "name": u.id.name,
+                "publisher": u.id.publisher,
+                "version": u.id.version,
+                "source": source_label(u.source.as_ref().map(|s| s.tier)),
+            })
+        })
+        .collect();
+    for missing in coverage.ledger.iter().filter(|l| l.found.is_none()) {
+        apps.push(serde_json::json!({
+            "appId": missing.guid,
+            "name": missing.name,
+            "version": missing.declared_version,
+            "source": "missing",
+        }));
+    }
+    apps.sort_by(|a, b| {
+        (a["name"].as_str(), a["appId"].as_str()).cmp(&(b["name"].as_str(), b["appId"].as_str()))
+    });
+    apps
+}
+
+fn source_label(tier: Option<crate::snapshot::TrustTier>) -> &'static str {
+    use crate::snapshot::TrustTier;
+    match tier {
+        None | Some(TrustTier::SymbolOnly) => "symbolOnly",
+        Some(TrustTier::Workspace) => "workspace",
+        Some(TrustTier::EmbeddedSource) => "embedded",
+        Some(TrustTier::LocalSourceVerified) => "localVerified",
+        Some(TrustTier::LocalSourceApproximate) => "localApproximate",
+    }
+}
+
+/// How `alsem digest` / `alsem query` loaded dependencies (#66): `crossApp` (the
+/// default, the same model `alsem analyze` builds) with the apps it loaded, or
+/// `singleApp` (`--single-app`) with none. Rendered as the payload's
+/// `dependencies` object.
+#[derive(Debug, Clone, Default)]
+pub struct LoadedDependencies {
+    pub cross_app: bool,
+    /// [`loaded_apps`] rows; empty in single-app mode.
+    pub apps: Vec<serde_json::Value>,
+}
+
+impl LoadedDependencies {
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": if self.cross_app { "crossApp" } else { "singleApp" },
+            "apps": self.apps,
+        })
+    }
+
+    /// One human line naming the loaded apps, or `None` when none were loaded (so
+    /// human output for a workspace with no dependency does not change).
+    #[must_use]
+    pub fn human_line(&self) -> Option<String> {
+        if self.apps.is_empty() {
+            return None;
+        }
+        let names: Vec<String> = self
+            .apps
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} ({})",
+                    a["name"].as_str().unwrap_or(""),
+                    a["source"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        Some(format!("dependencies: {}", names.join(", ")))
+    }
+}
+
 /// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
 /// `unreadable` is the dependency loader's list of packages it could not read
 /// (`DependencyLoadReport::unreadable`).

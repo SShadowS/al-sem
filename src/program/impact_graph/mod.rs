@@ -219,31 +219,7 @@ pub fn export_workspace(workspace_root: &Path) -> Result<ImpactGraph, String> {
         .collect();
     let snap = ctx.snapshot();
     let ws = snap.apps.first();
-    let mut apps: Vec<Value> = snap
-        .apps
-        .iter()
-        .filter(|u| ctx.is_required_dependency(&u.id))
-        .map(|u| {
-            json!({
-                "appId": u.id.guid.to_ascii_lowercase(),
-                "name": u.id.name,
-                "publisher": u.id.publisher,
-                "version": u.id.version,
-                "source": source_label(u.source.as_ref().map(|s| s.tier)),
-            })
-        })
-        .collect();
-    for missing in coverage.ledger.iter().filter(|l| l.found.is_none()) {
-        apps.push(json!({
-            "appId": missing.guid,
-            "name": missing.name,
-            "version": missing.declared_version,
-            "source": "missing",
-        }));
-    }
-    apps.sort_by(|a, b| {
-        (a["name"].as_str(), a["appId"].as_str()).cmp(&(b["name"].as_str(), b["appId"].as_str()))
-    });
+    let apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let meta = json!({
         "schema": SCHEMA,
         "version": VERSION,
@@ -284,16 +260,6 @@ pub fn export_workspace(workspace_root: &Path) -> Result<ImpactGraph, String> {
         nodes: projection.nodes,
         edges: projection.edges,
     })
-}
-
-fn source_label(tier: Option<TrustTier>) -> &'static str {
-    match tier {
-        None | Some(TrustTier::SymbolOnly) => "symbolOnly",
-        Some(TrustTier::Workspace) => "workspace",
-        Some(TrustTier::EmbeddedSource) => "embedded",
-        Some(TrustTier::LocalSourceVerified) => "localVerified",
-        Some(TrustTier::LocalSourceApproximate) => "localApproximate",
-    }
 }
 
 fn histogram_json(h: &Histogram) -> Value {
