@@ -381,6 +381,42 @@ pub enum RouteTarget {
     Unresolved,
 }
 
+/// What an OPEN call site may reach: a site whose targets the resolver cannot
+/// list (an `Unknown` route, a `DynamicOpen` shape, a record operation on an
+/// unresolved table) or a catalog builtin that runs user code. Recorded per site
+/// in `full::SiteFacts::open` for the call-graph export's hubs (#63; spec
+/// `2026-10-13-callgraph-export-design.md` §4.5). Diagnostic: it never changes an
+/// edge, a route or the histogram.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum OpenBound {
+    /// Any procedure named `name_lc` (folded) with `arity` parameters.
+    Name { name_lc: String, arity: usize },
+    /// Any object of `kind` (`None`: any runnable kind) — its run reaches the
+    /// object's triggers.
+    Run {
+        kind: Option<al_syntax::ir::ObjectKind>,
+    },
+    /// Any trigger the record operation `op` can fire: `insert`, `modify`,
+    /// `delete`, `rename` or `validate`.
+    Record { op: &'static str },
+    /// Anything: the call names nothing the engine can bound.
+    Any,
+}
+
+/// The record operation a method name fires triggers for, folded to the
+/// trigger family ([`OpenBound::Record`]); `None` for a method that fires none.
+#[must_use]
+pub fn record_trigger_op(method_lc: &str) -> Option<&'static str> {
+    Some(match method_lc {
+        "insert" => "insert",
+        "modify" | "modifyall" => "modify",
+        "delete" | "deleteall" => "delete",
+        "rename" => "rename",
+        "validate" => "validate",
+        _ => return None,
+    })
+}
+
 /// Independent-checkability handle for a route's evidence (spec §5.5).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Witness {

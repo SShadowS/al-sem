@@ -18,6 +18,8 @@
 
 use phf::phf_set;
 
+use al_syntax::ir::ObjectKind;
+
 use crate::program::resolve::edge::BuiltinId;
 use crate::program::resolve::receiver::FrameworkKind;
 
@@ -671,6 +673,140 @@ pub const ENTRY_DISPATCH_BUILTIN_IDS: &[&str] = &[
     "ReportInstance::runmodal",
 ];
 
+/// The catalog builtins that run USER code although they resolve as a
+/// `Catalog` route (#63, spec `2026-10-13-callgraph-export-design.md` §4.5 and
+/// fact 8): each runs an object or fires record triggers the edge does not name.
+/// The call-graph export turns such a route into a bounded hub edge. Wider than
+/// [`ENTRY_DISPATCH_BUILTIN_IDS`], which lists only the entry-dispatching ones
+/// the T0.3 audit justifies.
+pub const DISPATCHING_BUILTINS: &[(&str, DispatchingBuiltin)] = &[
+    (
+        "PageInstance::run",
+        DispatchingBuiltin::Run(ObjectKind::Page),
+    ),
+    (
+        "PageInstance::runmodal",
+        DispatchingBuiltin::Run(ObjectKind::Page),
+    ),
+    (
+        "PageInstance::enqueuebackgroundtask",
+        DispatchingBuiltin::Run(ObjectKind::Codeunit),
+    ),
+    (
+        "ReportInstance::run",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::runmodal",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::execute",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::print",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::runrequestpage",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveas",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveasexcel",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveashtml",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveaspdf",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveasword",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "ReportInstance::saveasxml",
+        DispatchingBuiltin::Run(ObjectKind::Report),
+    ),
+    (
+        "XmlPortInstance::run",
+        DispatchingBuiltin::Run(ObjectKind::XmlPort),
+    ),
+    (
+        "XmlPortInstance::import",
+        DispatchingBuiltin::Run(ObjectKind::XmlPort),
+    ),
+    (
+        "XmlPortInstance::export",
+        DispatchingBuiltin::Run(ObjectKind::XmlPort),
+    ),
+    (
+        "QueryInstance::open",
+        DispatchingBuiltin::Run(ObjectKind::Query),
+    ),
+    (
+        "QueryInstance::saveascsv",
+        DispatchingBuiltin::Run(ObjectKind::Query),
+    ),
+    (
+        "QueryInstance::saveasjson",
+        DispatchingBuiltin::Run(ObjectKind::Query),
+    ),
+    (
+        "QueryInstance::saveasxml",
+        DispatchingBuiltin::Run(ObjectKind::Query),
+    ),
+    (
+        "Session::startsession",
+        DispatchingBuiltin::Run(ObjectKind::Codeunit),
+    ),
+    (
+        "TaskScheduler::createtask",
+        DispatchingBuiltin::Run(ObjectKind::Codeunit),
+    ),
+    ("RecordRef::insert", DispatchingBuiltin::Record("insert")),
+    ("RecordRef::modify", DispatchingBuiltin::Record("modify")),
+    ("RecordRef::delete", DispatchingBuiltin::Record("delete")),
+    ("RecordRef::deleteall", DispatchingBuiltin::Record("delete")),
+    ("RecordRef::rename", DispatchingBuiltin::Record("rename")),
+    ("FieldRef::validate", DispatchingBuiltin::Record("validate")),
+    // A record-typed receiver the extractor did not classify as a record
+    // operation (a compound receiver) reaches the `Record` catalog.
+    ("Record::insert", DispatchingBuiltin::Record("insert")),
+    ("Record::modify", DispatchingBuiltin::Record("modify")),
+    ("Record::modifyall", DispatchingBuiltin::Record("modify")),
+    ("Record::delete", DispatchingBuiltin::Record("delete")),
+    ("Record::deleteall", DispatchingBuiltin::Record("delete")),
+    ("Record::rename", DispatchingBuiltin::Record("rename")),
+    ("Record::validate", DispatchingBuiltin::Record("validate")),
+];
+
+/// What a [`DISPATCHING_BUILTINS`] entry runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DispatchingBuiltin {
+    /// An object of this kind (its triggers).
+    Run(ObjectKind),
+    /// The record triggers of this operation family.
+    Record(&'static str),
+}
+
+/// The [`DISPATCHING_BUILTINS`] entry for `id`, if any.
+#[must_use]
+pub fn dispatching_builtin(id: &BuiltinId) -> Option<DispatchingBuiltin> {
+    DISPATCHING_BUILTINS
+        .iter()
+        .find(|(k, _)| *k == id.0)
+        .map(|(_, d)| *d)
+}
+
 /// `true` when `id`'s text is one of [`ENTRY_DISPATCH_BUILTIN_IDS`] — a
 /// `Builtin` route the T0.3 audit must justify (flag or mark indeterminate)
 /// rather than silently accept. Diagnostic-only (see the const's doc).
@@ -843,6 +979,48 @@ mod tests {
         // Cross-kind miss: "strlen" is a Text/global method, not a Record method.
         assert!(member_builtin_id(MemberCatalogKind::Record, "strlen").is_none());
         assert!(!member_builtin(MemberCatalogKind::Record, "strlen"));
+    }
+
+    /// #63: every `DISPATCHING_BUILTINS` id is a builtin id the resolver can
+    /// actually emit — a real member of the catalog its prefix names, spelled
+    /// the way `member_builtin_id` spells it. A misspelt entry would never match
+    /// a route, and its user-code dispatch would close silently.
+    #[test]
+    fn dispatching_builtins_are_real_catalog_ids() {
+        for (id, _) in DISPATCHING_BUILTINS {
+            let (prefix, method) = id.split_once("::").expect("Prefix::method");
+            let built = match prefix {
+                "RecordRef" => member_builtin_id(MemberCatalogKind::RecordRef, method),
+                "FieldRef" => member_builtin_id(MemberCatalogKind::FieldRef, method),
+                "Record" => member_builtin_id(MemberCatalogKind::Record, method),
+                other => {
+                    let kind = match other {
+                        "PageInstance" => FrameworkKind::PageInstance,
+                        "ReportInstance" => FrameworkKind::ReportInstance,
+                        "XmlPortInstance" => FrameworkKind::XmlPortInstance,
+                        "QueryInstance" => FrameworkKind::QueryInstance,
+                        "Session" => FrameworkKind::Session,
+                        "TaskScheduler" => FrameworkKind::TaskScheduler,
+                        _ => panic!("unexpected prefix {other} in {id}"),
+                    };
+                    member_builtin_id(MemberCatalogKind::Framework(&kind), method)
+                }
+            };
+            assert_eq!(
+                built.map(|b| b.0),
+                Some(id.to_string()),
+                "{id} is not an id the catalog emits"
+            );
+            assert!(dispatching_builtin(&BuiltinId(id.to_string())).is_some());
+        }
+        // Every entry-dispatching builtin the T0.3 audit tracks is dispatching.
+        for id in ENTRY_DISPATCH_BUILTIN_IDS {
+            assert!(
+                dispatching_builtin(&BuiltinId(id.to_string())).is_some(),
+                "{id}"
+            );
+        }
+        assert!(dispatching_builtin(&BuiltinId("Record::setrange".into())).is_none());
     }
 
     #[test]
