@@ -694,4 +694,41 @@ mod tests {
         .expect_err("a repeated pair must be refused");
         assert!(err.contains("listed more than once"), "{err}");
     }
+
+    /// The same refusal at the file boundary: a hand-written golden that lists
+    /// one (caller, class, target) twice is refused by `load_compiler_golden`,
+    /// which never hands back a golden a lookup would read last-wins. The same
+    /// file with the pair once loads.
+    #[test]
+    fn loading_a_golden_file_that_lists_one_pair_twice_is_refused() {
+        let pair = |line: u32| {
+            format!(
+                r#"{{"caller":"c","caller_kind":"codeunit","class":"Call","target":"a","line":{line}}}"#
+            )
+        };
+        let golden = |pairs: &[String]| {
+            format!(
+                r#"{{"schema_version":1,"metadata":{{"workspace_git_sha":null,"workspace_dirty":null,"dependency_closure_sha256":null}},"compiler":{{"extension":"x"}},"pairs":[{}]}}"#,
+                pairs.join(",")
+            )
+        };
+        let dir = std::env::temp_dir();
+        let once = dir.join(format!("al-sem-28-once-{}.json", std::process::id()));
+        let twice = dir.join(format!("al-sem-28-twice-{}.json", std::process::id()));
+        std::fs::write(&once, golden(&[pair(10)])).unwrap();
+        std::fs::write(&twice, golden(&[pair(10), pair(20)])).unwrap();
+
+        let loaded = load_compiler_golden(&once);
+        let refused = std::panic::catch_unwind(|| load_compiler_golden(&twice));
+        let _ = std::fs::remove_file(&once);
+        let _ = std::fs::remove_file(&twice);
+
+        assert_eq!(loaded.expect("the pair listed once loads").pairs.len(), 1);
+        let msg = refused.expect_err("a pair listed twice must be refused");
+        let msg = msg
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(msg.contains("listed more than once"), "{msg}");
+    }
 }
