@@ -1274,6 +1274,16 @@ fn dropped_obligation_is_caught_by_coverage_contract() {
 ///   - Taxonomy'd histogram + real_unknown_rate prints cleanly
 ///   - Deterministic (two consecutive runs produce identical histogram)
 ///   - `real_unknown_rate` ≤ recorded ceiling (regression guard)
+///
+/// The ratchet notes inside cite `genuine_wrong`,
+/// `cdo_genuine_wrong_is_precedence_adjudicated` and
+/// `cdo_l3_semantic_audit_no_fresh_wrong`. Those were the CDO correctness gates
+/// when each note was written; they compared fresh against an L3-minted golden
+/// keyed by (unit, line, callee_fp). Engine-switch S9.0d (`c7194570`) deleted
+/// both with that golden, so read the citations as history. The CDO
+/// correctness gate now is `cdo_compiler_audit_explains_every_disagreement`:
+/// it compares the program's (caller, class, target) pairs, and each pair's
+/// first line (#28), with the AL compiler's call graph.
 #[test]
 fn cdo_full_program_coverage_and_self_reported_metric() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -2802,8 +2812,8 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
 // ---------------------------------------------------------------------------
 
 use al_sem::program::resolve::semantic_golden::{
-    SemanticGolden, mint_fresh_golden_for_kind, run_route_applicability,
-    run_route_applicability_on, run_semantic_diff,
+    SemanticGolden, assert_against_semantic_golden, mint_fresh_golden_for_kind,
+    run_route_applicability, run_route_applicability_on, run_semantic_diff,
     run_unknown_include_sender_plus1_subscribers_preflight_on,
 };
 
@@ -3333,6 +3343,84 @@ fn implicit_trigger_fixture_resolves_exact_target_set() {
         diff.fresh_novel,
         diff.golden_missing,
     );
+}
+
+/// #28's discrimination proof, through the real resolver:
+/// `tests/fixtures/same-line-calls` has `Codeunit.Run(Codeunit::SLCFirst);
+/// Codeunit.Run(Codeunit::SLCSecond);` on one line of one caller. Both calls
+/// have the callee text `Codeunit.Run`, so the old (unit, line, callee_fp) key
+/// gave them one site and the golden held only the union of their targets.
+/// Swapping the two fresh targets must make the audit report BOTH sites wrong.
+///
+/// The golden (`tests/goldens/semantic-edges/same-line-calls-fixture.json`) is
+/// minted from the fresh resolver's `Run` edges. Regenerate with
+/// `REGEN_TEMP_GOLDENS=1 cargo test --test program_resolve_harness
+/// same_line_calls_swap_is_caught` and inspect the diff.
+#[test]
+fn same_line_calls_swap_is_caught() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = root.join("tests/fixtures/same-line-calls");
+    let golden_path = root.join("tests/goldens/semantic-edges/same-line-calls-fixture.json");
+
+    if regen::regen_mode() {
+        let golden = mint_fresh_golden_for_kind(&fixture, EdgeKind::Run);
+        let json = serde_json::to_string_pretty(&golden).expect("golden must serialize to JSON");
+        std::fs::write(&golden_path, &json).expect("write same-line-calls fixture golden");
+        return;
+    }
+
+    let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
+    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+    let run_edges: Vec<_> = report
+        .edges
+        .iter()
+        .filter(|ce| ce.edge.kind == EdgeKind::Run)
+        .map(|ce| ce.edge.clone())
+        .collect();
+    let fresh =
+        al_sem::program::resolve::differential::project_fresh(&run_edges, &ctx.graph().apps);
+
+    // Precondition, read from the fresh edges and not from the key under test:
+    // two sites in one caller, on one line, with one callee fingerprint, and
+    // two different single targets.
+    assert_eq!(fresh.len(), 2, "{fresh:#?}");
+    let (a, b) = (&fresh[0], &fresh[1]);
+    assert_eq!(a.site.caller, b.site.caller, "{fresh:#?}");
+    assert_eq!(a.site.span.unit, b.site.span.unit, "{fresh:#?}");
+    assert_eq!(a.site.span.start.line, b.site.span.start.line, "{fresh:#?}");
+    assert_eq!(a.site.callee_fp, b.site.callee_fp, "{fresh:#?}");
+    assert_eq!((a.targets.len(), b.targets.len()), (1, 1), "{fresh:#?}");
+    assert_ne!(a.targets, b.targets, "{fresh:#?}");
+
+    let json = std::fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
+            "golden file missing: {} (mint it with REGEN_TEMP_GOLDENS=1)",
+            golden_path.display()
+        )
+    });
+    let golden: SemanticGolden = serde_json::from_str(&json).expect("golden JSON must deserialize");
+    if let Err(e) = golden.validate() {
+        panic!("{}: {e}", golden_path.display());
+    }
+
+    // The swap first: under the old key it is this assertion that fails.
+    let mut swapped = fresh.clone();
+    let first = std::mem::take(&mut swapped[0].targets);
+    swapped[0].targets = std::mem::replace(&mut swapped[1].targets, first);
+    let diff = assert_against_semantic_golden(&swapped, &golden);
+    assert_eq!(
+        diff.fresh_wrong.len(),
+        2,
+        "a swap between two same-line calls must make both sites wrong: {diff:#?}"
+    );
+
+    let clean = assert_against_semantic_golden(&fresh, &golden);
+    assert_eq!(
+        (clean.total_paired, clean.matches, clean.fresh_wrong.len()),
+        (2, 2, 0),
+        "the unswapped resolution must match the golden: {clean:#?}"
+    );
+    assert_eq!(golden.entries.len(), 2, "two calls, two golden sites");
 }
 
 // ---------------------------------------------------------------------------
