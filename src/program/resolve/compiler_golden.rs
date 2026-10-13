@@ -23,6 +23,19 @@
 //! established on CDO (`docs/s9-oracle/cdo-workspace-triage.md`), each a compiler
 //! limit or a deliberate policy difference, never a program bug: a program bug is
 //! fixed, not explained.
+//!
+//! **First lines (#28).** A pair both engines report must also start on the same
+//! line ([`Side::FirstLineDiffers`]), where the compiler records one. Comparing
+//! pairs alone would pass a resolver that swapped the targets of two calls in one
+//! routine: `A()` on line 10 and `B()` on line 20 resolved the other way round
+//! still yield the pairs (caller, A) and (caller, B). The line catches that.
+//!
+//! **What the oracle cannot see.** The compiler graph has no column and keeps
+//! only the first edge of each pair. So a swap between two calls on ONE line, or
+//! among later calls to a callee already called earlier, gives the compiler and
+//! the program the same pairs and the same first lines. No check against this
+//! oracle can find it. CDO has 269 (caller, class, line) groups where more than
+//! one target first appears on the same line.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -62,10 +75,36 @@ pub struct AnonPair {
     pub caller_kind: String,
     pub class: EdgeClass,
     pub target: AnonId,
-    /// 1-based line of the pair's first occurrence in the caller, for reading
-    /// only (the audit compares pairs, not lines). 0 when the compiler graph
-    /// records no line: its `Interface` and `Event` edges carry none.
+    /// 1-based line of the pair's first occurrence in the caller. The audit
+    /// compares it with the program's first line for the pair (#28). 0 when
+    /// the compiler graph records no line: its `Interface` and `Event` edges
+    /// carry none, and those pairs are compared without a line.
     pub line: u32,
+}
+
+/// A pair's identity: (caller, class, target).
+type PairKey = (AnonId, EdgeClass, AnonId);
+
+/// The golden's pairs by identity, or `Err` naming every identity listed more
+/// than once. One identity with two lines would leave one line unchecked, so a
+/// golden that holds it is refused, never read last-wins (#28).
+fn index_pairs(pairs: &[AnonPair]) -> Result<HashMap<PairKey, &AnonPair>, String> {
+    let mut out = HashMap::with_capacity(pairs.len());
+    let mut dups = BTreeSet::new();
+    for p in pairs {
+        let key = (p.caller.clone(), p.class, p.target.clone());
+        if out.insert(key.clone(), p).is_some() {
+            dups.insert(key);
+        }
+    }
+    if dups.is_empty() {
+        Ok(out)
+    } else {
+        Err(format!(
+            "{} (caller, class, target) pair(s) listed more than once: {dups:?}",
+            dups.len()
+        ))
+    }
 }
 
 /// The committed golden.
@@ -99,9 +138,18 @@ pub fn fixture_workspace_root() -> PathBuf {
 }
 
 /// Load a golden; `None` when missing or unreadable.
+///
+/// # Panics
+///
+/// When the golden lists one (caller, class, target) pair twice: it is corrupt,
+/// not missing (#28).
 #[must_use]
 pub fn load_compiler_golden(path: &Path) -> Option<CompilerGolden> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    let golden: CompilerGolden = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    if let Err(e) = index_pairs(&golden.pairs) {
+        panic!("{}: {e}", path.display());
+    }
+    Some(golden)
 }
 
 fn anon_caller(r: &Routine) -> AnonId {
@@ -188,6 +236,11 @@ pub enum Verdict {
     /// Compiler-only `Trigger`: the compiler's trigger edges ignore RunTrigger
     /// (S9). Rule: one of the caller's record operations excluded that trigger
     /// because its RunTrigger is false ([`SiteFacts::run_trigger_excluded`]).
+    ///
+    /// The same limit moves a `Trigger` pair's first line (#28): the compiler
+    /// starts it at an `Insert()` the program excludes, the program at a later
+    /// `Insert(true)`. Rule: the compiler's first line is a record operation of
+    /// that caller that excluded that trigger, and the program's is later.
     RunTriggerFalse,
     /// Program-only `Trigger` into a field's `OnValidate`: the compiler graph has
     /// no `Validate` trigger edges (S12). Rule: the target is a field-level
@@ -212,11 +265,16 @@ pub enum Verdict {
     ObjectRun,
 }
 
-/// Which engine reports a disagreeing pair.
+/// How a pair disagrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Side {
+    /// Only the compiler reports the pair.
     CompilerOnly,
+    /// Only the program reports the pair.
     ProgramOnly,
+    /// Both report the pair, but its first line differs (#28). Counted in
+    /// [`CompilerAuditReport::agree`] too, which counts pairs.
+    FirstLineDiffers,
 }
 
 /// The audit's result.
@@ -225,6 +283,7 @@ pub struct CompilerAuditReport {
     pub golden_loaded: bool,
     pub compiler_pairs: usize,
     pub program_pairs: usize,
+    /// Pairs both engines report, whatever their first lines.
     pub agree: usize,
     /// Disagreeing pairs per (side, class, verdict); `None` = unexplained.
     pub disagreements: BTreeMap<(Side, EdgeClass, Option<Verdict>), usize>,
@@ -294,12 +353,15 @@ struct CompilerOnlyFacts {
     subscriptions: HashSet<(AnonId, AnonId)>,
     /// (caller, trigger) each RunTrigger-false record operation excluded.
     run_trigger_false: HashSet<(AnonId, AnonId)>,
+    /// (caller, trigger, 1-based line) of each such record operation.
+    run_trigger_false_lines: HashSet<(AnonId, AnonId, u32)>,
 }
 
 fn compiler_only_facts(ctx: &ProgramContext, report: &ProgramReport) -> CompilerOnlyFacts {
     let apps = &ctx.graph().apps;
     let mut subscriptions = HashSet::new();
     let mut run_trigger_false = HashSet::new();
+    let mut run_trigger_false_lines = HashSet::new();
     for ce in &report.edges {
         if ce.edge.kind == EdgeKind::EventFlow {
             let publisher = anon_target(&target_of_node(&ce.edge.from, apps));
@@ -312,15 +374,50 @@ fn compiler_only_facts(ctx: &ProgramContext, report: &ProgramReport) -> Compiler
         }
         if let Some(f) = report.site_facts.get(&ce.obligation_id) {
             let caller = anon_caller(&routine_of_node(&ce.edge.site.caller, apps));
+            // Program lines are 0-based, the compiler's 1-based.
+            let line = ce.edge.site.span.start.line + 1;
             for t in &f.run_trigger_excluded {
-                run_trigger_false.insert((caller.clone(), anon_target(&target_of_node(t, apps))));
+                let trigger = anon_target(&target_of_node(t, apps));
+                run_trigger_false_lines.insert((caller.clone(), trigger.clone(), line));
+                run_trigger_false.insert((caller.clone(), trigger));
             }
         }
     }
     CompilerOnlyFacts {
         subscriptions,
         run_trigger_false,
+        run_trigger_false_lines,
     }
+}
+
+/// Every pair both engines report whose first lines differ, as (pair, compiler
+/// line, program line, verdict), sorted. A compiler line of 0 means the compiler
+/// recorded none, and that pair is not compared. `program` holds the program's
+/// first line per pair; `run_trigger_false_lines` is
+/// [`CompilerOnlyFacts::run_trigger_false_lines`].
+fn first_line_disagreements(
+    compiler: &HashMap<PairKey, &AnonPair>,
+    program: &BTreeMap<PairKey, u32>,
+    run_trigger_false_lines: &HashSet<(AnonId, AnonId, u32)>,
+) -> Vec<(PairKey, u32, u32, Option<Verdict>)> {
+    program
+        .iter()
+        .filter_map(|(key, &p)| {
+            let c = compiler.get(key)?.line;
+            if c == 0 || c == p {
+                return None;
+            }
+            let explained = key.1 == EdgeClass::Trigger
+                && p > c
+                && run_trigger_false_lines.contains(&(key.0.clone(), key.2.clone(), c));
+            Some((
+                key.clone(),
+                c,
+                p,
+                explained.then_some(Verdict::RunTriggerFalse),
+            ))
+        })
+        .collect()
 }
 
 /// The verdict for a program-only pair, or `None`.
@@ -403,6 +500,11 @@ pub fn check_drift(golden: &CompilerGolden, workspace_root: &Path, on_drift: Dri
 /// workspace report `ctx` produced. `deanon_map`, when given, receives the
 /// plaintext of every program pair the audit saw (the gitignored local map that
 /// makes a failing anonymized pair readable).
+///
+/// # Panics
+///
+/// When `golden` lists one (caller, class, target) pair twice (see
+/// [`load_compiler_golden`]).
 #[must_use]
 pub fn run_compiler_audit(
     ctx: &ProgramContext,
@@ -417,11 +519,8 @@ pub fn run_compiler_audit(
     };
     check_drift(golden, workspace_root, on_drift);
     let program = program_pairs(ctx, report);
-    let compiler: HashMap<(AnonId, EdgeClass, AnonId), &AnonPair> = golden
-        .pairs
-        .iter()
-        .map(|p| ((p.caller.clone(), p.class, p.target.clone()), p))
-        .collect();
+    let compiler =
+        index_pairs(&golden.pairs).unwrap_or_else(|e| panic!("invalid compiler golden: {e}"));
     let facts = compiler_only_facts(ctx, report);
     let defined = defined_symbols(workspace_root);
 
@@ -472,6 +571,20 @@ pub fn run_compiler_audit(
         }
         classified.insert((Side::CompilerOnly, key.1, v, key.0.clone(), key.2.clone()));
     }
+    let program_lines: BTreeMap<PairKey, u32> =
+        program.iter().map(|(k, p)| (k.clone(), p.line)).collect();
+    for (key, c, p, v) in
+        first_line_disagreements(&compiler, &program_lines, &facts.run_trigger_false_lines)
+    {
+        if v.is_none() {
+            let pair = &program[&key];
+            r.unexplained.push(format!(
+                "first line differs {:?} {:?} -> {:?}: compiler line {c}, program line {p}",
+                key.1, pair.caller, pair.target
+            ));
+        }
+        classified.insert((Side::FirstLineDiffers, key.1, v, key.0, key.2));
+    }
     if let Some(path) = deanon_map {
         merge_deanon_map(path, &deanon);
     }
@@ -484,4 +597,101 @@ pub fn run_compiler_audit(
     r.digest = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     r.unexplained.sort();
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(s: &str) -> AnonId {
+        AnonId(s.to_string())
+    }
+
+    fn pair(class: EdgeClass, target: &str, line: u32) -> AnonPair {
+        AnonPair {
+            caller: id("c"),
+            caller_kind: "codeunit".into(),
+            class,
+            target: id(target),
+            line,
+        }
+    }
+
+    fn key(class: EdgeClass, target: &str) -> PairKey {
+        (id("c"), class, id(target))
+    }
+
+    /// #28, stated by hand: the compiler has `A` first on line 10 and `B` on
+    /// line 20; the program resolved the two calls the other way round. The
+    /// pairs agree, so only the lines can show it, and nothing explains it.
+    #[test]
+    fn swapped_targets_on_two_lines_are_unexplained_first_line_disagreements() {
+        let golden = [
+            pair(EdgeClass::Call, "a", 10),
+            pair(EdgeClass::Call, "b", 20),
+        ];
+        let compiler = index_pairs(&golden).unwrap();
+        let program: BTreeMap<_, _> = [
+            (key(EdgeClass::Call, "a"), 20),
+            (key(EdgeClass::Call, "b"), 10),
+        ]
+        .into();
+        let got = first_line_disagreements(&compiler, &program, &HashSet::new());
+        assert_eq!(
+            got,
+            vec![
+                (key(EdgeClass::Call, "a"), 10, 20, None),
+                (key(EdgeClass::Call, "b"), 20, 10, None),
+            ]
+        );
+    }
+
+    /// A compiler line of 0 (an `Interface` or `Event` edge) is not compared.
+    #[test]
+    fn a_pair_with_no_compiler_line_is_not_compared() {
+        let golden = [pair(EdgeClass::Event, "a", 0)];
+        let compiler = index_pairs(&golden).unwrap();
+        let program: BTreeMap<_, _> = [(key(EdgeClass::Event, "a"), 7)].into();
+        assert!(first_line_disagreements(&compiler, &program, &HashSet::new()).is_empty());
+    }
+
+    /// The RunTriggerFalse rule: the compiler starts the trigger pair at an
+    /// excluded `Insert()` on line 10, the program at a later `Insert(true)`.
+    /// Explained only when line 10 really is an excluding site of that caller
+    /// and trigger, and only when the program's line is the later one.
+    #[test]
+    fn an_excluded_record_operation_explains_a_later_program_first_line() {
+        let golden = [pair(EdgeClass::Trigger, "t", 10)];
+        let compiler = index_pairs(&golden).unwrap();
+        let later: BTreeMap<_, _> = [(key(EdgeClass::Trigger, "t"), 30)].into();
+        let earlier: BTreeMap<_, _> = [(key(EdgeClass::Trigger, "t"), 5)].into();
+        let at_10: HashSet<_> = [(id("c"), id("t"), 10)].into();
+        let at_11: HashSet<_> = [(id("c"), id("t"), 11)].into();
+        let verdict = |program: &BTreeMap<PairKey, u32>, facts: &HashSet<_>| {
+            first_line_disagreements(&compiler, program, facts)[0].3
+        };
+        assert_eq!(verdict(&later, &at_10), Some(Verdict::RunTriggerFalse));
+        assert_eq!(
+            verdict(&later, &at_11),
+            None,
+            "line 10 is not an excluding site"
+        );
+        assert_eq!(
+            verdict(&earlier, &at_10),
+            None,
+            "the program's line is earlier"
+        );
+    }
+
+    /// One pair identity listed twice, with two lines, is refused: read
+    /// last-wins it would leave one line unchecked.
+    #[test]
+    fn a_golden_listing_one_pair_twice_is_refused() {
+        let err = index_pairs(&[
+            pair(EdgeClass::Call, "a", 10),
+            pair(EdgeClass::Call, "a", 20),
+        ])
+        .expect_err("a repeated pair must be refused");
+        assert!(err.contains("listed more than once"), "{err}");
+    }
 }

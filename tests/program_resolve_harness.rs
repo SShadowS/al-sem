@@ -3199,6 +3199,50 @@ fn fixture_agrees_with_the_compiler_graph() {
     assert!(audit.disagreements.is_empty(), "{audit:#?}");
 }
 
+/// #28: the audit compares each agreeing pair's first line, and refuses a golden
+/// that lists one pair twice. Stated by hand on the fixture: its one pair starts
+/// on line 22; a golden claiming line 21 must fail the audit even though the
+/// pair itself agrees, and a golden listing the pair twice must not be read.
+#[test]
+fn fixture_audit_checks_first_lines_and_refuses_repeated_pairs() {
+    use al_sem::program::resolve::compiler_golden::{
+        Side, fixture_compiler_golden_path, load_compiler_golden, run_compiler_audit,
+    };
+    use al_sem::program::resolve::compiler_oracle::EdgeClass;
+    fn no_drift(_: &str) {}
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/semantic-golden");
+    let golden = load_compiler_golden(&fixture_compiler_golden_path()).expect("fixture golden");
+    assert_eq!(
+        golden.pairs.iter().map(|p| p.line).collect::<Vec<_>>(),
+        [22],
+        "precondition: the fixture's one pair starts on line 22"
+    );
+    let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
+    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+
+    let mut moved = golden.clone();
+    moved.pairs[0].line = 21;
+    let audit = run_compiler_audit(&ctx, &report, &fixture, Some(&moved), no_drift, None);
+    assert_eq!(audit.agree, 1, "the pair still agrees: {audit:#?}");
+    assert_eq!(
+        audit.disagreements,
+        [((Side::FirstLineDiffers, EdgeClass::Call, None), 1)].into(),
+        "{audit:#?}"
+    );
+    assert_eq!(audit.unexplained.len(), 1, "{audit:#?}");
+
+    let mut repeated = golden.clone();
+    repeated.pairs.push(moved.pairs[0].clone());
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_compiler_audit(&ctx, &report, &fixture, Some(&repeated), no_drift, None)
+    }));
+    assert!(
+        refused.is_err(),
+        "a golden listing one pair twice must be refused"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Test 14b (1B.3b Task 1 Step 4): fixture — ImplicitTrigger target-set
 // ---------------------------------------------------------------------------
@@ -3736,6 +3780,20 @@ fn cdo_compiler_audit_explains_every_disagreement() {
                 Some(Verdict::PlatformPageEvent),
             ),
             5,
+        ),
+        // #28: the first line of every agreeing pair is compared too. Two
+        // Trigger pairs start later in the program, both because the compiler's
+        // first line is a RunTrigger-false `Insert()` the program excludes:
+        // CDOMailManagement.GetBodyAndCID (`Insert()` on line 180, the
+        // program's first `Insert(true)` on 208) and
+        // CDOEMailTemplateManagement.GetDocumentAttachments (1530, 1564).
+        (
+            (
+                Side::FirstLineDiffers,
+                EdgeClass::Trigger,
+                Some(Verdict::RunTriggerFalse),
+            ),
+            2,
         ),
     ]
     .into();
