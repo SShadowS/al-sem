@@ -752,7 +752,11 @@ metric-definition change is never stat-juked.
   committed first, which the regen then fills. The l3eg regen does mint.
 - **New advisory L5 detector = triage on a real workspace BEFORE shipping DEFAULT.**
   Run it on DO/CDO, triage every finding against real source (the `triage-findings`
-  skill; or `/triage-wave` to fan out one subagent per detector). A detector with
+  skill; or `/triage-wave` to fan out one subagent per detector). `alsem analyze` is
+  cross-app by default; `--single-app` leaves d43/d44/d45 with no findings on CDO
+  (0, against 195 at `--scope primary` and 1380 at `--scope all`, measured 2026-10-13 on
+  `U:/Git/DO-cdo-baseline/Cloud`). Measure event detectors in the default mode, at both
+  `--scope primary` and `--scope all`. A detector with
   **> 30% false positives on its sample ships OPT-IN, not default.** When a detector
   is systematically wrong, **fix the root cause — do not demote-and-ship-broken**
   (the BCQuality wave found d56/d60/d63 broken on real code and fixed all three; only

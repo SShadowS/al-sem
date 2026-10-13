@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key_field_list_group_…`, `var_name_list_group_…`, `attribute_args_group_…`); each
   failed when its arm was broken (the attribute test once with the context dropped and
   once with the arm removed) and passed when restored.
+- **Corrected a false claim about zero-width member names (issues #56, #41).** The
+  `lower/mod.rs` comments said `modify()` and `action()` parse Clean with
+  `has_error()` false. They do not: tree-sitter recovery inserts a hidden MISSING
+  keyword under the `identifier` alias, so `has_error()` is true and `ParseStatus` is
+  `Recovered` (only the `tree-sitter parse` CLI hides it). `action("")` (empty quoted
+  name) is the shape that really parses Clean. The empty-name guard stays. A new lib
+  test pins both facts. The older #41 entry below is left as written.
+- **Doctrine: measure event detectors in cross-app mode (issue #57).** d43/d44/d45
+  now have a real population under default `alsem analyze` (pinned CDO baseline,
+  `--scope primary`: 22 / 20 / 153; `--scope all`: 979 / 248 / 153), fixed earlier by
+  engine-switch S4.2 + S8.3. `--single-app` still gives none. `CLAUDE.md` and
+  `/triage-wave` now say so, and `/triage-wave` names the pinned workspace.
 
 - **`mint-goldens --fixture` minted against `$CDO_WS`.** Without a workspace
   argument it fell back to `$CDO_WS` like a CDO mint, so with that variable set it

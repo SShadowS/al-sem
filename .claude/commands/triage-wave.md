@@ -6,8 +6,8 @@ Triage the new/changed L5 detectors' findings against REAL source, in parallel,
 and decide each detector's tier. Use this after building a detector wave and
 before shipping detectors as DEFAULT (see CLAUDE.md "New advisory L5 detector").
 
-Arguments (`$ARGUMENTS`): the workspace to measure on (default: `CDO_WS`, i.e.
-`U:\Git\DO.Support-SlowDOSetup\DocumentOutput\Cloud`) and optionally an explicit
+Arguments (`$ARGUMENTS`): the workspace to measure on (default: the pinned CDO
+baseline, `U:/Git/DO-cdo-baseline/Cloud`; do not set `CDO_WS` globally) and optionally an explicit
 list of detector ids. If none given, triage every detector that emits findings.
 
 Steps:
