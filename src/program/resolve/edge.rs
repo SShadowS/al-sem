@@ -113,9 +113,9 @@ pub enum DispatchShape {
     /// [`crate::program::resolve::full`]'s `completeness_for_shape` maps this
     /// to [`SetCompleteness::Complete`], unlike `Polymorphic`'s
     /// `Partial { ReverseDependentImplementers }`. Every route on an edge of
-    /// this shape carries [`Condition::AmbiguousDispatch`]. NOTHING
-    /// constructs this shape yet (Task 3 is mechanics-only; Task 4 wires the
-    /// candidate-carrying producer in `resolver::resolve_in_object`).
+    /// this shape carries [`Condition::AmbiguousDispatch`]. Built by
+    /// `resolver::resolve_in_object` when overload selection cannot pick one
+    /// candidate (CDO: 23 workspace / 459 dependency edges, 2026-10-13).
     AmbiguousOverload,
 }
 
@@ -1496,8 +1496,8 @@ mod tests {
     }
 
     // ---- Task 3: AmbiguousDispatch / AmbiguousOverload / AmbiguousResolved ----
-    // (sigfp-and-ambiguous-reclassification plan — taxonomy MECHANICS only;
-    // nothing in the resolver constructs these shapes yet. See
+    // (sigfp-and-ambiguous-reclassification plan — taxonomy MECHANICS; the
+    // resolver-side producer is pinned in `resolver.rs`'s tests. See
     // `is_ambiguous_resolved`'s doc for the strict precondition this section
     // pins.)
 

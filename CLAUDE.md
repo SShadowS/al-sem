@@ -266,6 +266,10 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
   (dispatch), `builtins.rs`/`member_catalog.rs` (platform intrinsic catalogs), `edge.rs`
   (the `Histogram` taxonomy + `ObligationOutcome`)
 - `src/program/abi_ingest.rs` - Dependency ABI ingestion (sibling of `resolve/`, not inside it)
+- `src/program/impact_graph/` - The may-execute call graph behind `alsem graph` (JSONL,
+  schema `al-sem.callgraph`), read by bc-dev-mcp's test selection. Its contract (hubs,
+  `hiddenCallers`, pruning) is in `docs/superpowers/specs/2026-10-13-callgraph-export-design.md`;
+  change the schema only together with bc-dev-mcp's parser
 - `src/program/body/` - Structural body-walk + feature projection over the owned IR
   (was `src/engine/l2`, moved in engine-switch S2b.1)
 - `src/program/model/` - The detector model: `Model` (rows + the program engine's calls
@@ -287,7 +291,8 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
 - `src/bin/aldump.rs` - Multi-mode dump CLI: `--program-call-graph-stats` (north-star),
   `--l2`, `--r3a*`/`--r4*` projections, `--graphify-export`, etc. — see its `usage()`
 - `src/bin/alsem.rs` - The production `analyze`/diagnostics CLI (installed binary name);
-  also hosts `alsem query touches|effects` (the db-effect query surface above)
+  also hosts `alsem query touches|effects` (the db-effect query surface above) and
+  `alsem graph <ws> [--out F]` (the call-graph export above)
 - `src/bin/mint-goldens.rs` - Mints/regenerates committed golden fixtures
 
 **`crates/al-syntax`** is the **only** crate that touches tree-sitter: FFI grammar
