@@ -32,7 +32,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "D49 Rec",
-              "resourceId": "11111111-0000-0000-0000-0000000d4902/table/50100"
+              "resourceId": "11111111-0000-0000-0000-0000000d4902/table/50100",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 8,
@@ -133,5 +134,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "1.4.0"
 }

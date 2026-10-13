@@ -5,7 +5,7 @@
     via: 1 path(s)
   [DB_MODIFY] direct
     evidence: ws:src/Sender.Codeunit.al:15 "Rec.Modify"
-    detail: resourceId=11111111-0000-0000-0000-0000000d4706/table/50100, resourceDisplay=D47 Rec
+    detail: resourceId=11111111-0000-0000-0000-0000000d4706/table/50100, resourceDisplay=D47 Rec, tempState=known(false)
     via: 1 path(s)
   [FILE] direct
     evidence: ws:src/Sender.Codeunit.al:16 "F.WriteAllText"

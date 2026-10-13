@@ -5,7 +5,7 @@
     via: 1 path(s)
   [DB_INSERT] transitive
     evidence: ws:src/InstallCU.al:32 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)
 
 --- DoSetup ---
@@ -15,7 +15,7 @@
     via: 1 path(s)
   [DB_INSERT] direct
     evidence: ws:src/InstallCU.al:32 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)
 
 --- DoUpgrade ---
@@ -25,7 +25,7 @@
     via: 1 path(s)
   [DB_MODIFY] direct
     evidence: ws:src/UpgradeCU.al:15 "Setup.Modify"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)
 
 --- OnUpgradePerCompany ---
@@ -35,5 +35,5 @@
     via: 1 path(s)
   [DB_MODIFY] transitive
     evidence: ws:src/UpgradeCU.al:15 "Setup.Modify"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)

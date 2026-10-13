@@ -24,12 +24,13 @@
 use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
+use crate::engine::l4::effect_query_cli::build_db_effect_bundle;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DigestEffectFull, DigestEntryFull, FullAnchor, build_envelope_diagnostics_json,
-    resolve_changed_roots, run_digest_query_full_from_entries,
+    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor,
+    build_envelope_diagnostics_json, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::compose_snapshot;
 use crate::engine::l5::transaction_spans::SeedKind;
@@ -720,7 +721,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "prove".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
-    env.insert("schemaVersion".into(), "1.2.0".into());
+    env.insert("schemaVersion".into(), "1.3.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -955,12 +956,17 @@ pub fn run_prove_pipeline(
     // Compute S4 ordering effects for all routines
     let all_s4_entries = compute_digest_effects_cli(&snap, &resolved);
 
+    // The L4 db-effect store, for DB_* `detail.tempState` (#65).
+    let (_graph, _scc, bundle) = build_db_effect_bundle(&resolved);
+    let temp_states = DbTempStates::new(&resolved, &bundle);
+
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
         &snap,
         std::slice::from_ref(root_id),
         &all_s4_entries,
         &tx_ctx_map,
+        &temp_states,
     );
 
     if query_full.entries.is_empty() {

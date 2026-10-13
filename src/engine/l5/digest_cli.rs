@@ -19,6 +19,9 @@ use std::collections::HashMap;
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::l4::effect_query_cli::{build_db_effect_bundle, temp_state_str};
+use crate::engine::l4::effect_store::SummaryBundle;
+use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::detectors::registered_detectors;
@@ -492,6 +495,55 @@ fn split_object_routine(display: &str) -> (&str, &str) {
     }
 }
 
+/// The L4 db-effect store joined for digest effects (#65): a DB_* effect's
+/// `detail.tempState` is read from the SAME store and rendered by the SAME
+/// function as `alsem query effects`, never from the capability cone's own
+/// `temp_state` (which keeps a callee's stale `parameter-dependent(i)` in the
+/// caller's frame).
+pub struct DbTempStates<'a> {
+    bundle: &'a SummaryBundle,
+    ix_by_stable: HashMap<&'a str, RoutineIx>,
+}
+
+impl<'a> DbTempStates<'a> {
+    pub fn new(resolved: &'a Model, bundle: &'a SummaryBundle) -> Self {
+        let ix_by_stable = resolved
+            .workspace
+            .routines
+            .iter()
+            .filter_map(|r| Some((r.stable_routine_id.as_str(), bundle.routine_ix(&r.id)?)))
+            .collect();
+        DbTempStates {
+            bundle,
+            ix_by_stable,
+        }
+    }
+
+    /// The root's L4 temp states for these originating operations: sorted,
+    /// distinct, `,`-joined. `None` when there is no operation, or when any
+    /// operation has no L4 row (e.g. `Validate`, which L4 does not count as a
+    /// database touch) — absence never becomes an invented value.
+    fn for_effect(&self, root_stable: &str, op_ids: &[String]) -> Option<String> {
+        if op_ids.is_empty() {
+            return None;
+        }
+        let rix = *self.ix_by_stable.get(root_stable)?;
+        let rows: Vec<_> = self.bundle.db_effects(rix).collect();
+        let mut states = std::collections::BTreeSet::new();
+        for op in op_ids {
+            let mut found = false;
+            for e in rows.iter().filter(|e| e.operation_id == op) {
+                states.insert(temp_state_str(e.temp_state));
+                found = true;
+            }
+            if !found {
+                return None;
+            }
+        }
+        Some(states.into_iter().collect::<Vec<_>>().join(","))
+    }
+}
+
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
 /// produce DigestEntryFull for each root (order:false path).
 pub fn run_digest_query_full_from_entries(
@@ -499,6 +551,7 @@ pub fn run_digest_query_full_from_entries(
     roots: &[String],
     base_entries: &[DigestEntryResult],
     tx_ctx_map: &HashMap<String, TransactionContext>,
+    temp_states: &DbTempStates<'_>,
 ) -> DigestQueryFullResult {
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
 
@@ -681,9 +734,20 @@ pub fn run_digest_query_full_from_entries(
                         .collect()
                 };
 
+                // #65: the record's temp state, CLI layer only (the core `detail`
+                // feeds dedupe/factId and must not move).
+                let mut detail = eff.detail.clone();
+                if matches!(
+                    eff.effect_type.as_str(),
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                ) && let Some(ts) = temp_states.for_effect(rid, &eff.origin_operation_ids)
+                {
+                    detail.push(("tempState".to_string(), ts));
+                }
+
                 full_effects.push(DigestEffectFull {
                     effect_type: eff.effect_type.clone(),
-                    detail: eff.detail.clone(),
+                    detail,
                     provenance: eff.provenance,
                     evidence,
                     via_paths: eff.via_paths.clone(),
@@ -1092,7 +1156,7 @@ pub fn project_digest_document(
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "digest".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
-    env.insert("schemaVersion".into(), "1.3.0".into());
+    env.insert("schemaVersion".into(), "1.4.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1266,12 +1330,17 @@ pub fn run_digest_pipeline(
     // Use compute_digest_effects_cli which matches TS runDigestPipeline (no routineReturnSummaries).
     let all_s4_entries = compute_digest_effects_cli(&snap, &resolved);
 
+    // The L4 db-effect store, for DB_* `detail.tempState` (#65).
+    let (_graph, _scc, bundle) = build_db_effect_bundle(&resolved);
+    let temp_states = DbTempStates::new(&resolved, &bundle);
+
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
         &snap,
         &changed_roots.roots,
         &all_s4_entries,
         &tx_ctx_map,
+        &temp_states,
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;

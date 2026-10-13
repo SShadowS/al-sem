@@ -5,7 +5,7 @@
     via: 1 path(s)
   [DB_INSERT] direct
     evidence: ws:src/NormalCU.al:33 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d461/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d461/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)
 
 --- RunSetup ---
@@ -15,5 +15,5 @@
     via: 1 path(s)
   [DB_INSERT] transitive
     evidence: ws:src/NormalCU.al:33 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d461/table/50000, resourceDisplay=My Setup
+    detail: resourceId=11111111-0000-0000-0000-00000000d461/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)

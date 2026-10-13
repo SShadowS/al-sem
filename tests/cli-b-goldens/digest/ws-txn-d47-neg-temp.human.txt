@@ -2,7 +2,7 @@
   coverage: complete
   [DB_INSERT] direct
     evidence: ws:src/Sender.Codeunit.al:14 "TempRec.Insert"
-    detail: resourceId=11111111-0000-0000-0000-0000000d4705/table/50100, resourceDisplay=D47 Rec
+    detail: resourceId=11111111-0000-0000-0000-0000000d4705/table/50100, resourceDisplay=D47 Rec, tempState=known(true)
     via: 1 path(s)
   [HTTP] direct
     evidence: ws:src/Sender.Codeunit.al:15 "Client.Get"
