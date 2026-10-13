@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The lowerer reads four new shapes of the `8682cb5f` grammar** (see Changed;
+  `crates/al-syntax/src/lower/mod.rs`). Each was an ERROR before, and without an arm its
+  content was lost or wrong:
+  - `preproc_conditional_property_value_sequence` (`SourceTable = #if X Customer;
+    #endif #if not X Vendor; #endif`): one `ObjectProperty` per arm of every group, as a
+    single whole-value `#if` already gives. Without it the whole run, directives
+    included, was one property value.
+  - `preproc_conditional_implements` (`implements IA, #if X IB, #endif IC`) and
+    `preproc_conditional_var_names` (`A, #if X B, #endif C: Integer;`, globals and
+    locals): every arm's names, the union the lowerer already reads across `#if`-wrapped
+    headers and declarations. Without it the names inside the group were dropped.
+  - `preproc_conditional_field_list_items` (a key's field list) and
+    `preproc_conditional_attribute_args` (`[EventSubscriber(ObjectType::Table, #if X
+    Database::"New", #else Database::"Old", #endif 'OnX', …)]`): these lists are
+    positional, so they read ONE arm, the first one the build context does not rule out
+    (`conditional_list_arm`; a routine's attributes use the routine's own context, so a
+    subscriber that exists only under `not X` takes the `#else` arm). A union of the arms
+    is no build at all and would move the event name off `args[2]`. An attribute group
+    also records a `SyntaxIssue`. Without the arm a key lost the group's fields, and the
+    group was one `Unknown` attribute argument.
+  Pinned by five `lower::tests` (`property_value_run_…`, `implements_list_group_…`,
+  `key_field_list_group_…`, `var_name_list_group_…`, `attribute_args_group_…`); each
+  failed when its arm was broken (the attribute test once with the context dropped and
+  once with the arm removed) and passed when restored.
+
 - **`mint-goldens --fixture` minted against `$CDO_WS`.** Without a workspace
   argument it fell back to `$CDO_WS` like a CDO mint, so with that variable set it
   read CDO's app id, matched none of the fixture graph's edges and wrote an empty
@@ -429,6 +454,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adding a time-varying row fails `real_dump_is_populated_and_deterministic`.
 
 ### Changed
+
+- **Grammar: tree-sitter-al `main` at `8682cb5f`** (package version still 4.4.1; was
+  `bf72a2d0`). `main` moved 106 commits and the `node-types.json` hash guard had kept CI red
+  since 2026-10-08. 487 -> 499 named kinds, no field change: `chartpart_keyword` is
+  `Trivia`; `chartpart_section`, `filter_group`,
+  `preproc_conditional_property_value_sequence` (B11) and the eight B7b-1 list groups
+  (`preproc_conditional_{implements,field_list_items,sorting_fields,order_by_fields,
+  move_elements,array_dimensions,attribute_args,var_names}`) are `Structural`. Four of them
+  needed lowerer arms (see Fixed); nothing reads sorting, `OrderBy`, move elements, array
+  sizes, filters or `chartpart`, so those need none. B6 (a statement must be an
+  invocation; `and`/`or`/… reserved in code) moves no valid tree. `CACHE_VERSION_GRAMMAR` is
+  now `tree-sitter-al-v4.4.1-8682cb5f-native`. Measured old vs new: per-test outcomes
+  identical apart from the five new lowerer tests, zero goldens moved (the stamp kept its
+  length, so `dry-run.txt` did not move), CDO `--program-call-graph-stats` byte-identical
+  (SHA-256 `2009fab1…3c25`, `recoveredFiles` 0 on both).
 
 - **The LSP server keeps no dependency source text** (engine-switch S10.1, compact-graph
   spec §8 item 5, built first by the owner's biggest-first decision). It used the text only to

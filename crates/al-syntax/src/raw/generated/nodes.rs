@@ -2050,6 +2050,55 @@ impl<'t> RawCaseStatement<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawChartpartKeyword<'t>(pub(super) RawNode<'t>);
+impl<'t> RawChartpartKeyword<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ChartpartKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawChartpartSection<'t>(pub(super) RawNode<'t>);
+impl<'t> RawChartpartSection<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::ChartpartSection {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawDeclarationBody<'t>> {
+        self.0
+            .field(FieldName::Body)
+            .and_then(RawDeclarationBody::cast)
+    }
+    pub fn name(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .field(FieldName::Name)
+            .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+    pub fn source(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .field(FieldName::Source)
+            .and_then(IdentifierOrQuotedIdentifier::cast)
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawCodeBlock<'t>(pub(super) RawNode<'t>);
 impl<'t> RawCodeBlock<'t> {
     #[inline]
@@ -3676,6 +3725,23 @@ impl<'t> RawFileuploadactionKeyword<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::FileuploadactionKeyword {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawFilterGroup<'t>(pub(super) RawNode<'t>);
+impl<'t> RawFilterGroup<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::FilterGroup {
             Some(Self(n))
         } else {
             None
@@ -6180,6 +6246,47 @@ impl<'t> RawPreprocConditionalArguments<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalArrayDimensions<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalArrayDimensions<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalArrayDimensions {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn sizes(self) -> Vec<RawInteger<'t>> {
+        self.0
+            .children_by_field(FieldName::Sizes)
+            .into_iter()
+            .filter_map(RawInteger::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalAttributeArgs<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalAttributeArgs<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalAttributeArgs {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalCase<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalCase<'t> {
     #[inline]
@@ -6274,6 +6381,23 @@ impl<'t> RawPreprocConditionalExpressionTail<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalFieldListItems<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalFieldListItems<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalFieldListItems {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalFieldgroups<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalFieldgroups<'t> {
     #[inline]
@@ -6321,6 +6445,30 @@ impl<'t> RawPreprocConditionalImplValues<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalImplements<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalImplements<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalImplements {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn interface(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Interface)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -6427,6 +6575,30 @@ impl<'t> RawPreprocConditionalListElements<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalMoveElements<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalMoveElements<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalMoveElements {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn element(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Element)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalObject<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalObject<'t> {
     #[inline]
@@ -6449,6 +6621,23 @@ impl<'t> RawPreprocConditionalOptionMembers<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::PreprocConditionalOptionMembers {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalOrderByFields<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalOrderByFields<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalOrderByFields {
             Some(Self(n))
         } else {
             None
@@ -6498,6 +6687,30 @@ impl<'t> RawPreprocConditionalPropertyValue<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalPropertyValueSequence<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalPropertyValueSequence<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalPropertyValueSequence {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn value(self) -> Vec<RawPreprocConditionalPropertyValue<'t>> {
+        self.0
+            .children_by_field(FieldName::Value)
+            .into_iter()
+            .filter_map(RawPreprocConditionalPropertyValue::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalQuery<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalQuery<'t> {
     #[inline]
@@ -6537,6 +6750,23 @@ impl<'t> RawPreprocConditionalReport<'t> {
     #[inline]
     pub fn cast(n: RawNode<'t>) -> Option<Self> {
         if n.kind() == RawKind::PreprocConditionalReport {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalSortingFields<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalSortingFields<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalSortingFields {
             Some(Self(n))
         } else {
             None
@@ -6613,6 +6843,30 @@ impl<'t> RawPreprocConditionalVarBlock<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalVarNames<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalVarNames<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalVarNames {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
