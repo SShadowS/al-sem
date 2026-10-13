@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "al-graph",
+          "informationUri": "https://microsoft.ghe.com/bic/BC-DeveloperExperience",
+          "rules": [
+            {
+              "id": "reachable",
+              "name": "Reachable",
+              "shortDescription": {
+                "text": "A source node can reach a target node along the call graph."
+              }
+            }
+          ]
+        }
+      },
+      "results": []
+    }
+  ]
+}

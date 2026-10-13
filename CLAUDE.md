@@ -755,6 +755,13 @@ metric-definition change is never stat-juked.
   `run_smoke_entry` asserts the golden file exists BEFORE the regen runs, so a new r4
   fixture needs a seed file (the projection shape, `findingCount` 0, empty `findings`)
   committed first, which the regen then fills. The l3eg regen does mint.
+- **Record every hole in Microsoft's `altool graph` in
+  `docs/al-compiler-callgraph-holes.md`, in the same change that finds it.** The owner
+  competes with Microsoft's AL tooling (alc, `altool graph`, the official AL LSP and MCP);
+  each hole is a row in his feature matrix. A compiler/engine disagreement explained by an
+  altool limit (a new `Verdict` in `compiler_golden.rs`, an "oracle cannot see X" limit, a
+  bc-dev-mcp altool workaround) gets an entry with a repro, versions and how al-sem compares.
+  Always name which side a tool is on.
 - **New advisory L5 detector = triage on a real workspace BEFORE shipping DEFAULT.**
   Run it on DO/CDO, triage every finding against real source (the `triage-findings`
   skill; or `/triage-wave` to fan out one subagent per detector). `alsem analyze` is

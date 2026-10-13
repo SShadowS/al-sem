@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "al-graph",
+          "informationUri": "https://microsoft.ghe.com/bic/BC-DeveloperExperience",
+          "rules": [
+            {
+              "id": "reachable",
+              "name": "Reachable",
+              "shortDescription": {
+                "text": "A source node can reach a target node along the call graph."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "reachable",
+          "level": "warning",
+          "message": {
+            "text": "\u0027P Probe2.ReportVar\u0027 can reach \u0027Report.SaveAsPdf\u0027."
+          },
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Probe2.ReportVar \u2014 source"
+                        },
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/bb3fcebb-4fcc-42e9-82de-a5b63c6b6cfa/scratchpad/altool-holes/app/src/Probe2.al"
+                          },
+                          "region": {
+                            "startLine": 68
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": {
+                          "text": "Report.SaveAsPdf \u2014 Direct call (Resolved)"
+                        },
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/bb3fcebb-4fcc-42e9-82de-a5b63c6b6cfa/scratchpad/altool-holes/app/src/Probe2.al"
+                          },
+                          "region": {
+                            "startLine": 73
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "throughElevation": false,
+            "edgeKinds": [
+              "Direct"
+            ],
+            "sinkCategory": "Platform"
+          }
+        }
+      ]
+    }
+  ]
+}

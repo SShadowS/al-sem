@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "al-graph",
+          "informationUri": "https://microsoft.ghe.com/bic/BC-DeveloperExperience",
+          "rules": [
+            {
+              "id": "graph-query",
+              "name": "GraphQuery",
+              "shortDescription": {
+                "text": "A source node reaches a target node matching the query along the call graph."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "graph-query",
+          "level": "warning",
+          "message": {
+            "text": "\u0027P Caller.CallIface\u0027 can reach \u0027P Impl A.Go\u0027."
+          },
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Caller.CallIface \u2014 source"
+                        },
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/bb3fcebb-4fcc-42e9-82de-a5b63c6b6cfa/scratchpad/altool-holes/app/src/Caller.al"
+                          },
+                          "region": {
+                            "startLine": 47
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Iface.Go \u2014 Direct call (Resolved)"
+                        },
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/bb3fcebb-4fcc-42e9-82de-a5b63c6b6cfa/scratchpad/altool-holes/app/src/Caller.al"
+                          },
+                          "region": {
+                            "startLine": 49
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Impl A.Go \u2014 Interface call (OverApprox)"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "throughElevation": false,
+            "edgeKinds": [
+              "Direct",
+              "Interface"
+            ],
+            "sinkCategory": "None"
+          }
+        },
+        {
+          "ruleId": "graph-query",
+          "level": "warning",
+          "message": {
+            "text": "\u0027P Caller.CallIface\u0027 can reach \u0027P Impl A.Go\u0027."
+          },
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Caller.CallIface \u2014 source"
+                        },
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/bb3fcebb-4fcc-42e9-82de-a5b63c6b6cfa/scratchpad/altool-holes/app/src/Caller.al"
+                          },
+                          "region": {
+                            "startLine": 47
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": {
+                          "text": "P Impl A.Go \u2014 Interface call (OverApprox)"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "throughElevation": false,
+            "edgeKinds": [
+              "Interface"
+            ],
+            "sinkCategory": "None"
+          }
+        }
+      ]
+    }
+  ]
+}
