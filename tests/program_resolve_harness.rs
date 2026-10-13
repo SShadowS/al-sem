@@ -3248,6 +3248,9 @@ fn implicit_trigger_fixture_resolves_exact_target_set() {
         )
     });
     let golden: SemanticGolden = serde_json::from_str(&json).expect("golden JSON must deserialize");
+    if let Err(e) = golden.validate() {
+        panic!("{}: {e}", golden_path.display());
+    }
 
     assert!(
         !golden.entries.is_empty(),

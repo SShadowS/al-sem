@@ -9,7 +9,9 @@
         "edge_kind": 2,
         "unit": "ITFTable.al",
         "line": 49,
-        "callee_fp": 735961313321294833
+        "col": 8,
+        "end_line": 49,
+        "end_col": 26
       },
       "targets": [
         {
@@ -35,7 +37,9 @@
         "edge_kind": 2,
         "unit": "ITFTable.al",
         "line": 50,
-        "callee_fp": 3251288147716933750
+        "col": 8,
+        "end_line": 50,
+        "end_col": 26
       },
       "targets": [
         {
@@ -55,7 +59,9 @@
         "edge_kind": 2,
         "unit": "ITFTable.al",
         "line": 51,
-        "callee_fp": 14479562283280843904
+        "col": 8,
+        "end_line": 51,
+        "end_col": 26
       },
       "targets": [
         {
