@@ -27,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Several values** on one effect (one effect merged from facts with
     different temp states) are sorted, distinct and joined with `,`. Test
     `== "known(true)"` for temp-only; do not parse it as one enum value.
-  - **Absent** when the L4 store has no row for the operation. Today that is a
-    DB_MODIFY from `Validate`/`Copy`/`TransferFields`, which L4 does not count as
-    a database touch. Absence is never turned into `unknown`.
+  - **Absent** when the L4 store has no row for any one of the operations the
+    effect was merged from. Today that is a DB_MODIFY from
+    `Validate`/`Copy`/`TransferFields`, which L4 does not count as a database
+    touch. Absence is never turned into `unknown`.
   - Pinned by `tests/cli/cli_digest_temp_state.rs`, which drives
     `run_digest_pipeline` on a hand-written workspace and checks every value
     against `query effects` for the same routine. Discrimination: joining on
@@ -46,8 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `tests/cli-b-goldens/prove/*.json`, plus the digest `.human.txt` files with
   DB_* effects. Only the version and the new field changed; factIds, canonical
   keys and every other golden family are byte-identical.
-- `alsem digest` and `alsem prove` now also run the L4 summary solve (the cost
-  `query effects` already pays).
+- `alsem digest` and `alsem prove` now run a second L4 summary solve, the
+  same assembly `query effects` uses (`build_db_effect_bundle`). Digest's
+  detector context already solves one (`ctx.db_effect_bundle`), but that one
+  takes dependency leaf summaries and cross-app edges, so it is not guaranteed
+  to equal `query effects`. Measured cost on CDO: about 0.1 s warm.
 
 ## [1.6.1] - 2026-10-13
 
