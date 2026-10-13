@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two calls on one line are two sites, and a swap between call sites can no
+  longer pass the goldens unseen** (#28). The issue was written against the
+  L3-minted CDO goldens, which S9.0d deleted; the defect class lived on in two
+  places, and both are closed as far as their oracle allows.
+  - **The per-site fixture golden** (`semantic_golden.rs`, used by
+    `implicit-trigger-fixture.json`). `GoldenSiteKey` had no column, so two calls
+    on one line shared a key, and both mint and comparison merged their targets
+    by union: a swap of their targets read as a match. The key is now the site's
+    whole span (start and end, line and byte column). The end separates chained
+    same-name calls (`X.Foo().Foo()`), which share a start. `callee_fp` is gone
+    from the key: it was a `DefaultHasher` value in a committed file, which Rust
+    does not keep stable across releases. Mint (`build_golden_from_canonical`)
+    and comparison (`assert_against_semantic_golden`) now panic on two edges
+    with one key, and `SemanticGolden::validate` refuses a golden that lists a
+    site twice. The old column-free reason (L3 counted UTF-16 columns) no
+    longer applies: both sides are the fresh resolver. On CDO the span key is
+    unique over all 46,317 resolved edges, where 1,703 (caller, line) groups
+    hold more than one site. Golden moved: `implicit-trigger-fixture.json`
+    (each of its 3 sites gains `col`/`end_line`/`end_col` and loses `callee_fp`;
+    targets unchanged).
+  - **The CDO compiler audit** (`compiler_golden.rs`). It compared (caller,
+    class, target) pairs only, so a resolver that swapped the targets of two
+    calls in one routine produced the same pairs and passed. It now also
+    compares each agreeing pair's first line with the compiler's (where the
+    compiler records one; its `Interface` and `Event` edges carry none). A
+    mismatch is a new `Side::FirstLineDiffers` disagreement that a verdict must
+    explain. One rule explains it: `RunTriggerFalse`, when the compiler's first
+    line is a RunTrigger-false record operation that excluded that trigger and
+    the program's first line is later. CDO has exactly 2, both that shape
+    (`CDOMailManagement` `Insert()` 180 vs `Insert(true)` 208,
+    `CDOEMailTemplateManagement` 1530 vs 1564), now pinned. Loading a golden,
+    or auditing one, that lists the same pair twice now panics instead of
+    reading it last-wins. No golden moved: the stored lines were already there.
+  - **Limit, stated openly.** The compiler graph has no column and keeps only
+    the first edge of each (caller, callee) pair. A swap between two calls on
+    ONE line, or among later calls to a callee called earlier, leaves the
+    compiler's pairs and first lines unchanged, so no check against this oracle
+    can see it. CDO has 269 (caller, class, line) groups where more than one
+    target first appears on one line (249 with 2 targets, 19 with 3, 1 with 6).
+
 ## [1.6.0] - 2026-10-13
 
 ### Added
