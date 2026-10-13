@@ -34,6 +34,7 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::AscendingKeyword
         | RawKind::AssemblyKeyword
         | RawKind::AssignmentOperator
+        | RawKind::ChartpartKeyword
         | RawKind::CodeKeyword
         | RawKind::CommentKeyword
         | RawKind::ConstKeyword
@@ -216,6 +217,26 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocSplitPermissionsProperty
         | RawKind::PreprocSplitTableFieldOpen
         | RawKind::PreprocSplitVarSectionTail
+        // Later 2026-10 `main` additions (8682cb5f, still package v4.4.1). Structure,
+        // not keywords. `chartpart_section` is a page-layout part beside `part`/
+        // `systempart` (deferred-work 32); `filter_group` is a parenthesised filter
+        // inside a `filter_value` (31). `preproc_conditional_property_value_sequence`
+        // is a property value made of several whole-value `#if` groups (B11). The
+        // eight `preproc_conditional_*` list groups are an `#if` group standing
+        // anywhere in a strict delimited list (B7b-1); the lowerer reads the
+        // implements, key field-list, attribute-argument and variable-name groups
+        // (see `lower/mod.rs`), and reads nothing of the other four lists.
+        | RawKind::ChartpartSection
+        | RawKind::FilterGroup
+        | RawKind::PreprocConditionalPropertyValueSequence
+        | RawKind::PreprocConditionalArrayDimensions
+        | RawKind::PreprocConditionalAttributeArgs
+        | RawKind::PreprocConditionalFieldListItems
+        | RawKind::PreprocConditionalImplements
+        | RawKind::PreprocConditionalMoveElements
+        | RawKind::PreprocConditionalOrderByFields
+        | RawKind::PreprocConditionalSortingFields
+        | RawKind::PreprocConditionalVarNames
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration

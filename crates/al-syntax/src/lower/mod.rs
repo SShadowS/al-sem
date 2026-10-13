@@ -378,13 +378,7 @@ fn extract_implements_walk(
     for child in node.named_children() {
         match child.kind() {
             RawKind::ImplementsKeyword => *saw_implements = true,
-            RawKind::ImplementsClause => {
-                for sub in child.named_children() {
-                    if matches!(sub.kind(), RawKind::Identifier | RawKind::QuotedIdentifier) {
-                        out.push(ident_text(sub, source));
-                    }
-                }
-            }
+            RawKind::ImplementsClause => implements_clause_names(child, source, out),
             RawKind::Identifier | RawKind::QuotedIdentifier if *saw_implements => {
                 out.push(ident_text(child, source));
             }
@@ -399,6 +393,20 @@ fn extract_implements_walk(
         }
     }
     false
+}
+
+/// The interface names of an `implements_clause`. An `#if` group in the list
+/// (`preproc_conditional_implements`, grammar 8682cb5f: `implements IA, #if X IB,
+/// #endif IC`) gives the names of every arm, nested groups included: the same
+/// union [`extract_implements`] already reads across a whole-header `#if`.
+fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>) {
+    for sub in clause.named_children() {
+        match sub.kind() {
+            RawKind::Identifier | RawKind::QuotedIdentifier => out.push(ident_text(sub, source)),
+            RawKind::PreprocConditionalImplements => implements_clause_names(sub, source, out),
+            _ => {}
+        }
+    }
 }
 
 /// Collect page `part` / `systempart` / `usercontrol` sections (name, kind, target),
@@ -465,10 +473,23 @@ fn collect_table_fields_keys(
 }
 
 /// A key's member field names (unquoted, lowercased), from its `fields` list.
+///
+/// An `#if` group in the list (`preproc_conditional_field_list_items`, grammar
+/// 8682cb5f) gives its first arm's names ([`conditional_list_arm`]): a key's fields
+/// are ordered, so a union of the arms is a key no build declares. That is the
+/// first-branch-wins policy `preproc_split_key` already follows for a split header.
 fn key_members(key: RawNode, source: &str) -> Vec<String> {
     let mut members = Vec::new();
     if let Some(list) = key.field(FieldName::Fields) {
+        let mut items = Vec::new();
         for m in list.named_children() {
+            if m.kind() == RawKind::PreprocConditionalFieldListItems {
+                conditional_list_arm(m, source, &[], &mut items);
+            } else {
+                items.push(m);
+            }
+        }
+        for m in items {
             if matches!(m.kind(), RawKind::Identifier | RawKind::QuotedIdentifier) {
                 members.push(ident_text(m, source).fold_identifier());
             }
@@ -693,9 +714,15 @@ fn lower_property(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectPr
 }
 
 /// The value text(s) of one property value node: itself, or every arm of a
-/// whole-value `#if`, recursively.
+/// whole-value `#if`, recursively. A run of whole-value `#if` groups
+/// (`preproc_conditional_property_value_sequence`, grammar 8682cb5f, B11:
+/// `Caption = #if X 'a'; #endif #if not X 'b'; #endif`) holds one such group per
+/// `value` field, and gives every arm of each.
 fn property_arm_values(v: RawNode, source: &str, out: &mut Vec<String>) {
-    if v.kind() == RawKind::PreprocConditionalPropertyValue {
+    if matches!(
+        v.kind(),
+        RawKind::PreprocConditionalPropertyValue | RawKind::PreprocConditionalPropertyValueSequence
+    ) {
         for arm in v.children_by_field(FieldName::Value) {
             property_arm_values(arm, source, out);
         }
@@ -1144,6 +1171,35 @@ fn preproc_branches<'t>(
     out
 }
 
+/// The items of an `#if` group inside a POSITIONAL delimited list (grammar `main`
+/// 8682cb5f, B7b-1: `key(PK; A #if X , B #endif , C)`, `[Attr(A, #if X B, #else C,
+/// #endif D)]`), as one build reads them: the first arm `ctx` does not decide
+/// false, the first-branch-wins policy of every split header. A union of the arms
+/// is no build at all and shifts every later position (an `[EventSubscriber]`'s
+/// event name is `args[2]`). A group nested in the chosen arm is read the same way;
+/// when every arm is decided false (an `#if` with no `#else`) the group adds
+/// nothing. Appends to `out` in document order.
+fn conditional_list_arm<'t>(
+    group: RawNode<'t>,
+    source: &str,
+    ctx: &[(String, bool)],
+    out: &mut Vec<RawNode<'t>>,
+) {
+    // Entry 0 is the content before `#if` and the last the content after `#endif`
+    // (live, and empty in a list group), so a group with no live arm reads nothing.
+    let branches = preproc_branches(group, source, ctx);
+    let Some((_, _, items)) = branches.iter().skip(1).find(|(_, live, _)| *live) else {
+        return;
+    };
+    for &item in items {
+        if item.kind() == group.kind() {
+            conditional_list_arm(item, source, ctx, out);
+        } else if crate::schema::class_of(item.kind()) != crate::schema::Class::Trivia {
+            out.push(item);
+        }
+    }
+}
+
 /// Record the symbol values that make preprocessor condition `cond` equal `value`,
 /// where they follow (`A and B` true: both true; `A or B` false: both false).
 /// Symbols match by exact text, as alc's do (see `al_syntax::ir::PreprocSymbols`).
@@ -1315,6 +1371,13 @@ fn lower_routine<'t>(
         );
     }
 
+    // The builds this routine exists in: the object-level `#if` branches around
+    // it, plus its own arm when its header is split.
+    let mut preproc_context = object_ctx.to_vec();
+    if split {
+        preproc_context.extend(arm_symbols(node, arm, source));
+    }
+
     // Attributes: lowercased names (for classify_kind / control-context guards) +
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
@@ -1335,7 +1398,24 @@ fn lower_routine<'t>(
                     // H-8: a comment interleaved between args must never occupy a
                     // positional slot — see `structural_children`'s doc (the
                     // `[EventSubscriber(...)]` silent-unregister case this fixes).
+                    // An `#if` group among the args (grammar 8682cb5f) gives the
+                    // args of the arm this routine's build reads, for the same reason.
+                    let mut items = Vec::new();
                     for arg in structural_children(list) {
+                        if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
+                            issues.push(SyntaxIssue {
+                                message: "`#if` inside attribute arguments — the first \
+                                          arm this routine's build does not rule out is \
+                                          read (the other arms are not modelled)"
+                                    .to_string(),
+                                origin: origin_of(arg),
+                            });
+                            conditional_list_arm(arg, source, &preproc_context, &mut items);
+                        } else {
+                            items.push(arg);
+                        }
+                    }
+                    for arg in items {
                         args.push(lower_expr(arg, ir, issues, source, 0));
                     }
                 }
@@ -1417,12 +1497,6 @@ fn lower_routine<'t>(
         }
     }
 
-    // The builds this routine exists in: the object-level `#if` branches around
-    // it, plus its own arm when its header is split.
-    let mut preproc_context = object_ctx.to_vec();
-    if split {
-        preproc_context.extend(arm_symbols(node, arm, source));
-    }
     let body = with_build_context(&preproc_context, ir, |ir| {
         if let Some(cb) = node
             .field(FieldName::Body)
@@ -1572,47 +1646,52 @@ fn extract_var_section(section: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     for decl in body.named_children() {
         match decl.kind() {
-            RawKind::VariableDeclaration => {
-                let type_node = decl.field(FieldName::Type);
-                let ty = type_node.map(|n| n.text(source).trim().to_string());
-                let temporary = type_node
-                    .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
-                    .unwrap_or(false);
-                let names = decl.children_by_field(FieldName::Name);
-                if names.is_empty() {
-                    // single unnamed-by-field fallback: skip (no name to record)
-                    continue;
-                }
-                for nm in names {
-                    out.push(VarDecl {
-                        name: ident_text(nm, source),
-                        ty: ty.clone(),
-                        temporary,
-                        origin: origin_of(decl),
-                    });
-                }
-            }
+            RawKind::VariableDeclaration => extract_var_decl(decl, source, out),
             _ if is_preproc_wrapper(decl) => {
                 for c in decl.named_children() {
                     if c.kind() == RawKind::VariableDeclaration {
                         // shallow: flatten preproc-wrapped declarations (both branches)
-                        let type_node = c.field(FieldName::Type);
-                        let ty = type_node.map(|n| n.text(source).trim().to_string());
-                        let temporary = type_node
-                            .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
-                            .unwrap_or(false);
-                        for nm in c.children_by_field(FieldName::Name) {
-                            out.push(VarDecl {
-                                name: ident_text(nm, source),
-                                ty: ty.clone(),
-                                temporary,
-                                origin: origin_of(c),
-                            });
-                        }
+                        extract_var_decl(c, source, out);
                     }
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// One `VarDecl` per name of a `variable_declaration` (none when it has no name).
+fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
+    let type_node = decl.field(FieldName::Type);
+    let ty = type_node.map(|n| n.text(source).trim().to_string());
+    let temporary = type_node
+        .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
+        .unwrap_or(false);
+    let mut names = Vec::new();
+    var_decl_names(decl, &mut names);
+    for nm in names {
+        out.push(VarDecl {
+            name: ident_text(nm, source),
+            ty: ty.clone(),
+            temporary,
+            origin: origin_of(decl),
+        });
+    }
+}
+
+/// The `name` fields of a `variable_declaration`, in document order. An `#if` group
+/// in the name list (`preproc_conditional_var_names`, grammar 8682cb5f: `A, #if X B,
+/// #endif C: Integer`) carries its names on its own `name` fields; every arm's are
+/// read, nested groups included, the both-branches policy of the preproc-wrapped
+/// declarations above. A name is a declaration, not a position, so the union is
+/// sound.
+fn var_decl_names<'t>(node: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
+    let names = node.children_by_field(FieldName::Name);
+    for c in node.named_children() {
+        if c.kind() == RawKind::PreprocConditionalVarNames {
+            var_decl_names(c, out);
+        } else if names.iter().any(|n| n.byte_range() == c.byte_range()) {
+            out.push(c);
         }
     }
 }
@@ -5171,6 +5250,175 @@ page 50118 P
             .map(|p| p.value.as_str())
             .collect();
         assert_eq!(values, ["Customer", "\"Sales Header\"", "Item"]);
+    }
+
+    /// Grammar 8682cb5f (B11): a property value made of a RUN of whole-value `#if`
+    /// groups (`preproc_conditional_property_value_sequence`) gives one entry per arm
+    /// of every group, never one entry holding the directive text.
+    #[test]
+    fn property_value_run_gives_one_entry_per_arm_of_every_group() {
+        let src = r#"
+page 50119 P
+{
+    SourceTable =
+#if X
+        Customer;
+#endif
+#if not X
+        Vendor;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values: Vec<&str> = af.objects[0]
+            .properties
+            .iter()
+            .filter(|p| p.name == "sourcetable")
+            .map(|p| p.value.as_str())
+            .collect();
+        assert_eq!(values, ["Customer", "Vendor"]);
+    }
+
+    /// Grammar 8682cb5f (B7b-1): an `#if` group in an `implements` list
+    /// (`preproc_conditional_implements`) — every arm's interfaces are read, in order.
+    #[test]
+    fn implements_list_group_reads_every_arm() {
+        let src = r#"
+codeunit 50120 C implements IA,
+#if X
+    IB,
+#else
+    "I D",
+#endif
+    IC
+{
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(af.objects[0].implements, ["IA", "IB", "I D", "IC"]);
+    }
+
+    /// Grammar 8682cb5f (B7b-1): an `#if` group in a key's field list
+    /// (`preproc_conditional_field_list_items`) gives its FIRST arm's fields — key
+    /// fields are ordered, and the union `a, b, d, c` is a key no build declares.
+    #[test]
+    fn key_field_list_group_reads_the_first_arm() {
+        let src = r#"
+table 50121 T
+{
+    fields
+    {
+        field(1; A; Integer) { }
+    }
+    keys
+    {
+        key(PK; A
+#if X
+            , B
+#else
+            , D
+#endif
+            , C)
+        {
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(af.objects[0].keys, [["a", "b", "c"]]);
+    }
+
+    /// Grammar 8682cb5f (B7b-1): an `#if` group in a variable name list
+    /// (`preproc_conditional_var_names`) declares every arm's names, in order.
+    #[test]
+    fn var_name_list_group_declares_every_arm() {
+        let src = r#"
+codeunit 50122 C
+{
+    var
+        G1,
+#if X
+        G2,
+#endif
+        G3: Integer;
+
+    procedure P()
+    var
+        A,
+#if X
+        B,
+#else
+        D,
+#endif
+        C: Text;
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let names = |v: &[crate::ir::VarDecl]| v.iter().map(|d| d.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&af.objects[0].globals), ["G1", "G2", "G3"]);
+        let locals = &af.objects[0].routines[0].locals;
+        assert_eq!(names(locals), ["A", "B", "D", "C"]);
+        assert!(locals.iter().all(|d| d.ty.as_deref() == Some("Text")));
+    }
+
+    /// Grammar 8682cb5f (B7b-1): an `#if` group among attribute arguments
+    /// (`preproc_conditional_attribute_args`) gives ONE arm's args, so every later
+    /// position stays put (`[EventSubscriber]` reads its event name at `args[2]`). The
+    /// arm is the first one the routine's build does not rule out: `First` takes the
+    /// `#if X` arm, while `Second` exists only under `not X`, so it takes `#else`.
+    #[test]
+    fn attribute_args_group_reads_the_routines_arm() {
+        let src = r#"
+codeunit 50123 S
+{
+    [EventSubscriber(ObjectType::Table,
+#if X
+        Database::"New",
+#else
+        Database::"Old",
+#endif
+        'OnX', '', false, false)]
+    local procedure First()
+    begin
+    end;
+
+#if not X
+    [EventSubscriber(ObjectType::Table,
+#if X
+        Database::"New",
+#else
+        Database::"Old",
+#endif
+        'OnX', '', false, false)]
+    local procedure Second()
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let table_arg = |name: &str| {
+            let r = af.objects[0]
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .expect("routine");
+            let args = &r.attributes_parsed[0].args;
+            assert_eq!(args.len(), 6, "{name}: one arm's args, positions kept");
+            match &af.ir.expr(args[1]).kind {
+                ExprKind::DatabaseReference(s) => s.clone(),
+                _ => panic!("{name}: args[1] is not a database reference"),
+            }
+        };
+        assert_eq!(table_arg("First"), "Database::\"New\"");
+        assert_eq!(table_arg("Second"), "Database::\"Old\"");
     }
 
     /// `preproc_split_modify`: `#if modify(A) #else modify(B) #endif { … }`. A trigger
