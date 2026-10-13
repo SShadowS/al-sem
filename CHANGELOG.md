@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`alsem digest` and `alsem prove` say whether a DB_* effect writes a
+  temporary record** (#65). Every DB_INSERT/DB_MODIFY/DB_DELETE effect now
+  carries `detail.tempState`, with the same values as `alsem query effects`
+  (`known(true)`, `known(false)`, `parameter-dependent(i)`, `unknown`). A
+  temp-only write is `known(true)`, so bc-dev-mcp can drop it from test-order
+  polluters and "writes <table>" risk.
+  - **One source of truth.** The value comes from the L4 db-effect store that
+    `query effects` reads, built by the same function (the new
+    `effect_query_cli::build_db_effect_bundle`, which `QuerySubstrate` now
+    calls too) and rendered by the same `temp_state_str`. It is joined to the
+    digest effect by the root routine and the operation that each merged fact
+    started from. The digest's own cone `temp_state` (which the ordering engine
+    still reads) is NOT used: it keeps a helper's `parameter-dependent(0)` in a
+    caller that has no parameters, both when the caller passes a real record and
+    across a recursive call cycle.
+  - **Several values** on one effect (one effect merged from facts with
+    different temp states) are sorted, distinct and joined with `,`. Test
+    `== "known(true)"` for temp-only; do not parse it as one enum value.
+  - **Absent** when the L4 store has no row for any one of the operations the
+    effect was merged from. Today that is a DB_MODIFY from
+    `Validate`/`Copy`/`TransferFields`, which L4 does not count as a database
+    touch. Absence is never turned into `unknown`.
+  - Pinned by `tests/cli/cli_digest_temp_state.rs`, which drives
+    `run_digest_pipeline` on a hand-written workspace and checks every value
+    against `query effects` for the same routine. Discrimination: joining on
+    the evidence operation (ViaHelperTemp lost its value), rendering the cone
+    `temp_state` (ViaRecursionTemp became `parameter-dependent(0)`), dropping
+    the field (TempOnly lost it) and inventing `unknown` for a missing row
+    (ValidateTemp) each failed the test; each revert passed.
+
+### Changed
+
+- **Digest `schemaVersion` 1.3.0 -> 1.4.0 and prove 1.2.0 -> 1.3.0** (#65), for
+  the additive `detail.tempState`. Prove moves too because its witnesses use the
+  same effect shape. Goldens moved: every `tests/cli-b-goldens/digest/*.json`
+  and `tests/cli-b-goldens/prove/*.json`, plus the digest `.human.txt` files with
+  DB_* effects. Only the version and the new field changed; factIds, canonical
+  keys and every other golden family are byte-identical.
+- `alsem digest` and `alsem prove` now run a second L4 summary solve, the
+  same assembly `query effects` uses (`build_db_effect_bundle`). Digest's
+  detector context already solves one (`ctx.db_effect_bundle`), but that one
+  takes dependency leaf summaries and cross-app edges, so it is not guaranteed
+  to equal `query effects`. Measured cost on CDO: about 0.1 s warm.
+
 ## [1.6.1] - 2026-10-13
 
 ### Fixed

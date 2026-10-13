@@ -77,7 +77,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000"
+              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 12,
@@ -207,7 +208,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000"
+              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 12,
@@ -282,5 +284,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "1.4.0"
 }

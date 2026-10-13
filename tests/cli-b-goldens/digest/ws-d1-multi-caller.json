@@ -24,7 +24,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 8,
@@ -92,7 +93,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 8,
@@ -160,7 +162,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
             },
             "evidence": {
               "column": 8,
@@ -228,7 +231,8 @@
             "confidence": "static",
             "detail": {
               "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "parameter-dependent(0)"
             },
             "evidence": {
               "column": 8,
@@ -277,5 +281,5 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "1.4.0"
 }

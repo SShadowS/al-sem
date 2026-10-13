@@ -138,41 +138,7 @@ impl QuerySubstrate {
     /// seam the differential reuses so it exercises this exact assembly rather
     /// than a parallel copy of it.
     pub fn from_resolved(resolved: Model) -> Self {
-        let (graph, scc, bundle) = {
-            let ws = &resolved.workspace;
-            // The model's own calls and event graph (the program engine's).
-            let calls = &resolved.calls;
-            let event_graph = &resolved.events.graph;
-            let graph = build_combined_graph(ws, calls, event_graph);
-
-            let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
-            for (from, list) in &graph.edges_by_from {
-                scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-            }
-            let scc = tarjan_scc(&SccInputGraph {
-                nodes: &graph.nodes,
-                edges_by_from: &scc_adjacency,
-            });
-
-            let mut field_index: FieldIndex = HashMap::new();
-            for table in &ws.tables {
-                for field in &table.fields {
-                    field_index
-                        .entry((table.id.clone(), field.name.to_lowercase()))
-                        .or_insert_with(|| field.id.clone());
-                }
-            }
-            let no_leaves: HashMap<String, RoutineSummary> = HashMap::new();
-            let (bundle, _map, _diags) = compute_summaries_v2_bundle_with_leaves(
-                &ws.routines,
-                &graph,
-                &scc,
-                &calls.upgraded_bindings,
-                &field_index,
-                &no_leaves,
-            );
-            (graph, scc, bundle)
-        };
+        let (graph, scc, bundle) = build_db_effect_bundle(&resolved);
         QuerySubstrate {
             resolved,
             graph,
@@ -185,6 +151,46 @@ impl QuerySubstrate {
     pub fn query(&self) -> DbEffectQuery<'_> {
         DbEffectQuery::build(&self.bundle, &self.scc, &self.graph)
     }
+}
+
+/// The L4 db-effect store over a resolved model: combined graph → Tarjan →
+/// `compute_summaries_v2_bundle_with_leaves`. The ONE assembly behind
+/// `query`, `digest` and `prove`'s `tempState` (#65), so the commands cannot
+/// disagree about a record's temp state.
+pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, SummaryBundle) {
+    let ws = &resolved.workspace;
+    // The model's own calls and event graph (the program engine's).
+    let calls = &resolved.calls;
+    let event_graph = &resolved.events.graph;
+    let graph = build_combined_graph(ws, calls, event_graph);
+
+    let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    for (from, list) in &graph.edges_by_from {
+        scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
+    }
+    let scc = tarjan_scc(&SccInputGraph {
+        nodes: &graph.nodes,
+        edges_by_from: &scc_adjacency,
+    });
+
+    let mut field_index: FieldIndex = HashMap::new();
+    for table in &ws.tables {
+        for field in &table.fields {
+            field_index
+                .entry((table.id.clone(), field.name.to_lowercase()))
+                .or_insert_with(|| field.id.clone());
+        }
+    }
+    let no_leaves: HashMap<String, RoutineSummary> = HashMap::new();
+    let (bundle, _map, _diags) = compute_summaries_v2_bundle_with_leaves(
+        &ws.routines,
+        &graph,
+        &scc,
+        &calls.upgraded_bindings,
+        &field_index,
+        &no_leaves,
+    );
+    (graph, scc, bundle)
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +479,9 @@ fn routine_ref_json(rr: &RoutineRef) -> Value {
     })
 }
 
-fn temp_state_str(t: &TempStateKind) -> String {
+/// The one renderer of the temp-state vocabulary (`query effects`, and
+/// `digest`/`prove`'s `detail.tempState`).
+pub fn temp_state_str(t: &TempStateKind) -> String {
     match t {
         TempStateKind::Known(true) => "known(true)".to_string(),
         TempStateKind::Known(false) => "known(false)".to_string(),

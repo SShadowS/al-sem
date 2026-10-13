@@ -33,7 +33,7 @@
 //! - Conditionality / transactionContext / guarantees / scopedGuarantees are STAGE 4
 //!   and EXCLUDED from this projection.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::rc::Rc;
 
@@ -2377,6 +2377,11 @@ pub struct DigestEffectResult {
     /// S4-internal (NOT serialized in the digest-effects golden): tempState fed to
     /// the ordering engine's physical-write filter.
     pub temp_state: Option<SnapTempState>,
+    /// The originating operation ids of every fact merged into this effect
+    /// (sorted, distinct). The CLI joins them to the L4 db-effect store to
+    /// report `detail.tempState` (#65) — the same store `query effects` reads,
+    /// because the cone's `temp_state` above is not frame-correct.
+    pub origin_operation_ids: Vec<String>,
     /// S4: per-effect scoped guarantees (attached by `compute_ordering`).
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
 }
@@ -2780,6 +2785,8 @@ fn digest_one_root<'i>(
             temp_state: Option<SnapTempState>,
             /// The fact's subject (stable id) — used for the evidence-unavailable diagnostic.
             fact_subject: String,
+            /// Every merged fact's originating `witness_operation_id` (#65).
+            origin_operation_ids: BTreeSet<String>,
         }
         let mut effect_map: Vec<(String, AccumulatedEffect)> = Vec::new();
         // O(1) key → position index over effect_map (same keys, same positions —
@@ -2970,6 +2977,8 @@ fn digest_one_root<'i>(
                 acc.all_paths = all_paths;
                 acc.all_path_conds = all_path_conds;
                 acc.temp_state = merged_temp;
+                acc.origin_operation_ids
+                    .extend(fact.witness_operation_id.iter().cloned());
                 pos
             } else {
                 let via: Vec<Vec<QueryWitnessHop>> = projected_paths
@@ -2999,6 +3008,7 @@ fn digest_one_root<'i>(
                         all_path_conds: path_conds,
                         temp_state: fact_temp_state,
                         fact_subject: fact.subject.clone(),
+                        origin_operation_ids: fact.witness_operation_id.iter().cloned().collect(),
                     },
                 ));
                 pos
@@ -3069,6 +3079,7 @@ fn digest_one_root<'i>(
                 sort_file,
                 sort_line,
                 temp_state: acc.temp_state,
+                origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
             });
         }

@@ -2,7 +2,7 @@
   coverage: complete
   [DB_MODIFY] direct
     evidence: ws:src/Sender.Codeunit.al:13 "Rec.Modify"
-    detail: resourceId=11111111-0000-0000-0000-0000000d4901/table/50100, resourceDisplay=D49 Rec
+    detail: resourceId=11111111-0000-0000-0000-0000000d4901/table/50100, resourceDisplay=D49 Rec, tempState=known(false)
     via: 1 path(s)
   [UI_MESSAGE] direct
     evidence: ws:src/Sender.Codeunit.al:14 "Message"
