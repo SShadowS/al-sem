@@ -61,6 +61,7 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         modify_allowed: None,
         delete_allowed: None,
         source_anchor: None,
+        declaration_only_routines: Vec::new(),
     }
 }
 

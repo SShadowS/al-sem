@@ -99,6 +99,24 @@ pub struct ModelObject {
     /// objects `None`). Lets object-level detectors (d64) anchor findings on the
     /// object header instead of borrowing a routine anchor. Additive.
     pub source_anchor: Option<crate::program::body::features::PAnchor>,
+    /// Interface / ControlAddIn procedure declarations (#71); empty for every other
+    /// object kind. They are not `ModelRoutine`s.
+    pub declaration_only_routines: Vec<ModelDeclarationOnlyRoutine>,
+}
+
+/// An Interface / ControlAddIn procedure declaration (#71). Not a `ModelRoutine`
+/// (the model keeps skipping those object kinds); digest reads these to make a
+/// changed declaration a root.
+#[derive(Debug, Clone)]
+pub struct ModelDeclarationOnlyRoutine {
+    pub name: String,
+    /// `{stableObjectId}#{64 hex}`, the signature hash folded with the declaring
+    /// object's NAME (every unnumbered object shares `<guid>:<Kind>:0`).
+    pub stable_routine_id: String,
+    pub parameters: Vec<ModelParameter>,
+    pub return_type: Option<String>,
+    pub source_anchor: crate::program::body::features::PAnchor,
+    pub declaration_start_line: u32,
 }
 
 /// A page layout control relevant to member resolution: a `part`/`systempart`
@@ -634,6 +652,37 @@ pub(crate) fn declaration_start_line(r: &al_syntax::ir::RoutineDecl) -> u32 {
         .fold(r.origin.start.row, u32::min)
 }
 
+/// `ModelParameter` rows from the routine-id path's `ParameterSymbol`s.
+fn model_parameters(syms: &[crate::program::body::scope::ParameterSymbol]) -> Vec<ModelParameter> {
+    syms.iter()
+        .map(|p| ModelParameter {
+            index: p.index,
+            name: p.name.clone(),
+            type_text: p.type_text.clone(),
+            is_var: p.is_var,
+            is_record: p.is_record,
+            table_name: p.table_name.clone(),
+        })
+        .collect()
+}
+
+/// The stable routine id's `normalizedSignatureHash` over the same
+/// `ParameterSymbol`s the internal routine id uses, so the two cannot drift.
+fn signature_hash(
+    name: &str,
+    syms: &[crate::program::body::scope::ParameterSymbol],
+    return_type: Option<&str>,
+) -> String {
+    let specs: Vec<crate::engine::ids::ParamSpec> = syms
+        .iter()
+        .map(|p| crate::engine::ids::ParamSpec {
+            type_text: p.type_text.clone(),
+            is_var: p.is_var,
+        })
+        .collect();
+    crate::engine::ids::normalized_signature_hash(name, &specs, return_type)
+}
+
 /// PAnchor from an owned-IR `Origin` — byte-identical to the legacy node anchor on the
 /// node the origin came from (same row + utf16 column basis + raw `kind_text`).
 fn anchor_from_origin(
@@ -849,6 +898,36 @@ fn project_ir(
         // the object header instead of borrowing a routine anchor.
         let source_anchor = Some(anchor_from_origin(&o.origin, source_unit_id, cols));
 
+        // #71: Interface / ControlAddIn procedure declarations, carried on the object
+        // row (the routine loop below still skips these kinds). The id folds in the
+        // object NAME: every unnumbered object shares the object id `<guid>/<Kind>/0`.
+        let declaration_only_routines: Vec<ModelDeclarationOnlyRoutine> =
+            if object_type == "Interface" || object_type == "ControlAddIn" {
+                let stable_object_id = to_stable_object_id(&object_id);
+                o.routines
+                    .iter()
+                    .filter(|r| !r.name.is_empty())
+                    .map(|r| {
+                        let syms = crate::program::body::ir_walk::ir_parameter_symbols(r);
+                        let hash = signature_hash(&r.name, &syms, r.return_type.as_deref());
+                        ModelDeclarationOnlyRoutine {
+                            name: r.name.clone(),
+                            stable_routine_id: to_stable_routine_id_from_parts(
+                                &stable_object_id,
+                                &hash,
+                                Some(&name),
+                            ),
+                            parameters: model_parameters(&syms),
+                            return_type: r.return_type.clone(),
+                            source_anchor: anchor_from_origin(&r.origin, source_unit_id, cols),
+                            declaration_start_line: declaration_start_line(r),
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
         workspace.objects.push(ModelObject {
             id: object_id.clone(),
             app_guid: app_guid.to_string(),
@@ -869,6 +948,7 @@ fn project_ir(
             modify_allowed,
             delete_allowed,
             source_anchor,
+            declaration_only_routines,
         });
 
         if object_type == "Table" || object_type == "TableExtension" {
@@ -891,27 +971,10 @@ fn project_ir(
         let object_global_record_vars =
             crate::program::body::ir_walk::ir_object_global_record_vars(o, &object_id);
 
-        // Interface / ControlAddIn: al-sem's ModelEntities never modeled these objects'
-        // signature-only members as routines — this frozen legacy pipeline (L2/L3/L4,
-        // still differential-gated against the al-sem TS reference) must keep matching
-        // that historical behavior byte-for-byte (see `tests/r3a1_vectors.rs`'s "the
-        // vectors are the ORACLE... fix is in the Rust code, NEVER the vector").
-        // `al_syntax::lower::collect_routines` NOW lowers `interface_procedure` nodes
-        // (receiver-closure plan, Task 1 — controladdin/interface signature-only
-        // procedures were previously invisible to `RoutineDecl` extraction entirely,
-        // a genuine al-syntax gap fixed for `program::resolve`'s NEW, Rust-owned
-        // `node_extract::extract_nodes` consumer, which correctly captures them for
-        // the `CurrPage.<usercontrol>` closed-if-known member gate). That fix is
-        // upstream of BOTH consumers (shared al-syntax IR) — this object-kind skip is
-        // what keeps the LEGACY consumer's parity contract intact without reverting
-        // the shared lowering fix the new consumer needs. `o.routines` for these two
-        // object kinds is, in every REAL AL file, populated ENTIRELY from
-        // `interface_procedure` nodes (the grammar's `interface_body`/
-        // `controladdin_body` rules permit an ordinary bodied `$.procedure` too, but
-        // no real controladdin/interface declares one — a theoretical decompiled edge
-        // case this skip would ALSO exclude, matching pre-fix behavior for that
-        // hypothetical shape too, since nothing in the differential corpus exercises
-        // it).
+        // Interface / ControlAddIn: keep these signature-only methods out of `ModelRoutine`
+        // so body detectors never see them; digest reads them from
+        // `ModelObject.declaration_only_routines` (#71; see the "stale
+        // Interface/ControlAddIn skip" discovery).
         if object_type == "Interface" || object_type == "ControlAddIn" {
             continue;
         }
@@ -1132,17 +1195,7 @@ fn project_ir(
             // ParameterSymbol shape the routine-id/signature-hash path uses so
             // arity/var-ness/type-text cannot drift.
             let param_syms = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
-            let parameters: Vec<ModelParameter> = param_syms
-                .iter()
-                .map(|p| ModelParameter {
-                    index: p.index,
-                    name: p.name.clone(),
-                    type_text: p.type_text.clone(),
-                    is_var: p.is_var,
-                    is_record: p.is_record,
-                    table_name: p.table_name.clone(),
-                })
-                .collect();
+            let parameters = model_parameters(&param_syms);
             let return_type = ir_routine.return_type.clone();
             let mut call_sites = std::mem::take(&mut features.call_sites);
             // RV-8 (Task 8): scope-honest `sourceKind`. The L2 binding builder
@@ -1279,20 +1332,7 @@ fn project_ir(
             // the SAME `enclosing_member` value computed once at the top of this loop as
             // the internal id's discriminator — one string, one normalization, both ids.
             let stable_object_id = to_stable_object_id(&object_id);
-            let norm_hash = {
-                let param_specs: Vec<crate::engine::ids::ParamSpec> = param_syms
-                    .iter()
-                    .map(|p| crate::engine::ids::ParamSpec {
-                        type_text: p.type_text.clone(),
-                        is_var: p.is_var,
-                    })
-                    .collect();
-                crate::engine::ids::normalized_signature_hash(
-                    &rname,
-                    &param_specs,
-                    return_type.as_deref(),
-                )
-            };
+            let norm_hash = signature_hash(&rname, &param_syms, return_type.as_deref());
             let stable_routine_id = to_stable_routine_id_from_parts(
                 &stable_object_id,
                 &norm_hash,

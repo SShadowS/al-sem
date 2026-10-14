@@ -378,6 +378,7 @@ mod tests {
             modify_allowed: None,
             delete_allowed: None,
             source_anchor: None,
+            declaration_only_routines: Vec::new(),
         }
     }
 
