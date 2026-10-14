@@ -738,6 +738,64 @@ fn deleting_a_routines_first_attribute_line_makes_it_a_root() {
     assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "(b) {doc}");
 }
 
+/// Final panel round 2 (flash): the attribute rule covers MULTI-LINE attribute
+/// groups. `Handler`'s `[EventSubscriber(…,` / `'Fire', …)]` spans lines 7-8 and
+/// sits right above `local procedure Handler()` (line 9). (a) deleting both lines
+/// -> `Handler` is a root. (b) mixed: the group plus a `// gone` comment line
+/// (lines 7-9, the procedure at 10) -> a plain deletion, no root.
+///
+/// Mutations: (a) classify each deleted line on its own (`[`-led lines only) ->
+/// the continuation line makes the run plain, no root; (b) ignore text after a
+/// complete group (no depth-0 `[` check after the first line) -> `Handler`
+/// becomes a root.
+#[test]
+fn deleting_a_multi_line_attribute_makes_the_routine_a_root() {
+    let pre = |extra: &str| {
+        format!(
+            "codeunit 50121 MixCu\n{{\n    procedure Fire()\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::MixCu,\n        'Fire', '', false, false)]\n{extra}    local procedure Handler()\n    begin\n    end;\n}}\n"
+        )
+    };
+    let group = "-    [EventSubscriber(ObjectType::Codeunit, Codeunit::MixCu,\n-        'Fire', '', false, false)]\n";
+
+    let multi = pre("");
+    assert_eq!(line(&multi, 9), "    local procedure Handler()");
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    write(
+        &dir.path().join("src/Mix.Codeunit.al"),
+        &without_lines(&multi, 7, 8),
+    );
+    let (doc, code) = digest(
+        dir.path(),
+        &[],
+        Some(&format!(
+            "--- a/src/Mix.Codeunit.al\n+++ b/src/Mix.Codeunit.al\n@@ -7,2 +6,0 @@\n{group}"
+        )),
+    );
+    assert_eq!(code, 0, "(a) {doc}");
+    assert_eq!(roots(&doc), vec!["Handler"], "(a) {doc}");
+    assert!(diags(&doc).is_empty(), "(a) {doc}");
+
+    let mixed = pre("    // gone\n");
+    assert_eq!(line(&mixed, 9), "    // gone");
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    write(
+        &dir.path().join("src/Mix.Codeunit.al"),
+        &without_lines(&mixed, 7, 9),
+    );
+    let (doc, code) = digest(
+        dir.path(),
+        &[],
+        Some(&format!(
+            "--- a/src/Mix.Codeunit.al\n+++ b/src/Mix.Codeunit.al\n@@ -7,3 +6,0 @@\n{group}-    // gone\n"
+        )),
+    );
+    assert_eq!(code, 2, "(b) {doc}");
+    assert!(roots(&doc).is_empty(), "(b) {doc}");
+    assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "(b) {doc}");
+}
+
 /// A1i. The stated limit stays pinned; a change of it is deliberate: a `#if`
 /// directive line around duplicated procedures is outside every span.
 /// Mutation: extend spans to the enclosing `#if` -> `Dup` becomes a root.

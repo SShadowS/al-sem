@@ -30,8 +30,11 @@ pub struct DiffHunk {
 pub enum HunkChange {
     Added(i32),
     DeletedAfter(i32),
-    /// A `DeletedAfter` whose deleted lines are ALL attribute lines (trimmed
-    /// text starts with `[`): such a gap right above a routine belongs to it.
+    /// A `DeletedAfter` whose deleted lines are one or more complete attribute
+    /// groups (each starts with a trimmed `[` and runs, over one or more lines,
+    /// until its brackets balance): such a gap right above a routine belongs to
+    /// it. Brackets are counted on raw text, so a bracket inside a string
+    /// argument (`'[x'`) can misclassify the run.
     DeletedAttributesAfter(i32),
 }
 
@@ -254,6 +257,10 @@ struct OpenHunk {
     new_left: i32,
     cursor: i32,
     in_deletion_run: bool,
+    /// The current deletion run is still only complete attribute groups...
+    attribute_run: bool,
+    /// ...and this is the bracket depth of its open group (0 = between groups).
+    attribute_depth: i32,
 }
 
 impl OpenHunk {
@@ -268,6 +275,8 @@ impl OpenHunk {
                 h.new_start
             },
             in_deletion_run: false,
+            attribute_run: false,
+            attribute_depth: 0,
         }
     }
 
@@ -290,20 +299,39 @@ impl OpenHunk {
             }
             Some(b'-') if self.old_left > 0 => {
                 self.old_left -= 1;
-                let attribute = line[1..].trim_start().starts_with('[');
-                let gap = self.cursor - 1;
+                let text = line[1..].trim();
                 if !self.in_deletion_run {
-                    changes.push(if attribute {
-                        HunkChange::DeletedAttributesAfter(gap)
+                    self.attribute_run = true;
+                    self.attribute_depth = 0;
+                    changes.push(HunkChange::DeletedAfter(self.cursor - 1));
+                }
+                // The run is attribute-only while it is a sequence of complete
+                // attribute groups: each starts with `[` (at depth 0) and runs
+                // until its brackets balance. Any other text between groups, or
+                // a stray `]`, makes the whole run a plain deletion.
+                if self.attribute_depth == 0 && !text.starts_with('[') {
+                    self.attribute_run = false;
+                }
+                if self.attribute_run {
+                    self.attribute_depth += text
+                        .chars()
+                        .map(|c| match c {
+                            '[' => 1,
+                            ']' => -1,
+                            _ => 0,
+                        })
+                        .sum::<i32>();
+                    self.attribute_run = self.attribute_depth >= 0;
+                }
+                // Classified after every line, so a group still open when the run
+                // ends leaves a plain deletion.
+                if let Some(last) = changes.last_mut() {
+                    let l = last.line();
+                    *last = if self.attribute_run && self.attribute_depth == 0 {
+                        HunkChange::DeletedAttributesAfter(l)
                     } else {
-                        HunkChange::DeletedAfter(gap)
-                    });
-                } else if !attribute
-                    && let Some(last) = changes.last_mut()
-                    && let HunkChange::DeletedAttributesAfter(l) = *last
-                {
-                    // One non-attribute line makes the whole run a plain deletion.
-                    *last = HunkChange::DeletedAfter(l);
+                        HunkChange::DeletedAfter(l)
+                    };
                 }
                 self.in_deletion_run = true;
                 true
@@ -940,6 +968,18 @@ mod tests {
         let (c, _) = changes(&format!("{HEAD}@@ -3,2 +2,0 @@\n-[A]\n-x\n"));
         assert_eq!(c, vec![vec![DeletedAfter(2)]]);
         let (c, _) = changes(&format!("{HEAD}@@ -3,2 +2,0 @@\n-x\n-[A]\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        // A multi-line attribute group is one group once its brackets balance.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,3 +2,0 @@\n-    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"X\",\n-        'OnAfterPost', '', false, false)]\n-    [A]\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAttributesAfter(2)]]);
+        // A complete group followed by other text, or a group left open, is not.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,3 +2,0 @@\n-    [B(1,\n-        2)]\n-    // note\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -3,1 +2,0 @@\n-    [B(1,\n"));
         assert_eq!(c, vec![vec![DeletedAfter(2)]]);
         // Separate runs are classified separately.
         let (c, _) = changes(&format!("{HEAD}@@ -3,3 +3,1 @@\n-x\n ctx\n-[A]\n"));

@@ -46,13 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a pure function) could never be a root. Now, for `--diff`: an added or changed line touches
   the span that holds it; a deletion touches a span only when the gap lies inside it (so
   deleting a whole routine, or blank lines between routines, blames no neighbour), with one
-  narrow exception: a run of deleted lines that are ALL attribute lines (trimmed text starts
-  with `[`) right above a span belongs to that routine, so deleting its first or only
-  attribute makes it a root. Context lines never count. `--file` takes every routine the
+  narrow exception: a run of deleted lines that is one or more complete attribute groups
+  (each starts with a trimmed `[` and runs, over one or more lines, until its brackets
+  balance, with nothing else between groups) right above a span belongs to that routine,
+  so deleting its first or only attribute, single- or multi-line, makes it a root. Limit:
+  brackets are counted on raw text, so a `[` or `]` inside a string argument can
+  misclassify the run. Context lines never count. `--file` takes every routine the
   file declares. Only workspace (`ws:`) routines are indexed. Pinned in
   `tests/cli/cli_digest_changed_spans.rs` (`hunk_on_assignment_line_is_a_changed_root`,
   `every_routine_shape_line_maps_to_its_routine`, `context_lines_do_not_create_roots`,
   `deletions_resolve_by_interior_gap`, `deleting_a_routines_first_attribute_line_makes_it_a_root`,
+  `deleting_a_multi_line_attribute_makes_the_routine_a_root`,
   `one_inside_one_outside_hunk`, `rename_with_and_without_hunks`,
   `file_with_only_opless_routines_is_matched`, `file_digest_returns_every_routine_of_the_file`,
   `hunkless_modified_file_takes_every_declaration`, `object_level_hunk_is_outside_routines`,
