@@ -15,18 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses age mode, not cargo-sweep's stamp mode, because NTFS updates last-access times up to
   an hour late. The first run cleaned 13.2 GiB. Background: U: filled up for the third time
   on 2026-10-14, which failed #68's post-merge check on a green merge.
-- `alsem digest`: Interface and ControlAddIn procedures are now changed roots. A change
+- `alsem digest`: Interface and ControlAddIn PROCEDURES are now changed roots. A change
   inside one (or `--file` on its file) gives a "declaration-only" entry: `routine.declarationOnly:
   true`, `effects` and `unresolved` empty, `coverage` status `unknown` with the new reason
   `declaration-only`. It is counted once in `rootsRequested` and `rootsResolved` and adds no
   `DIAG-digest-*` diagnostic. Its `stableId` keeps the `<app>:<Kind>:0#<hash>` shape, with the
-  object NAME folded into the hash, because every unnumbered object shares object number 0;
-  two interfaces declaring the same `procedure Bar()` therefore give two roots. The method
-  becomes a root, not the routines that implement it (#81), and `--routine` selectors do not
-  reach these procedures. Carried on the model as `ModelObject.declaration_only_routines`
-  (the model still does not make them `ModelRoutine`s, #82). Pinned by
-  `declaration_only_procedures_are_roots` and `interface_object_rows_carry_declaration_only_routines`
-  (#71).
+  object's LOGICAL name (a quoted `"I""Foo"` is `I"Foo`) folded into the hash, because every
+  unnumbered object shares object number 0; two interfaces declaring the same
+  `procedure Bar()` therefore give two roots. The method becomes a root, not the routines
+  that implement it (#81), and `--routine` selectors do not reach these procedures.
+  ControlAddIn `event` declarations are not lowered as routines, so they are not roots.
+  Carried on the model as `ModelObject.declaration_only_routines`, which follows the same
+  file population as the model's routines. Limit: declaration-only roots are special-cased
+  in digest instead of being model routines; the root cause is the model's stale
+  Interface/ControlAddIn skip (#82). Pinned by `declaration_only_procedures_are_roots`,
+  `interface_object_rows_carry_declaration_only_routines`,
+  `quoted_interface_name_is_unescaped_in_the_id` and
+  `declaration_only_routines_follow_the_population` (#71).
 - `alsem digest`: `routine.anchors` lists every declaration's anchor, in document order, for a
   routine id that has more than one declaration (two `#if` arms with one signature). The key
   is absent when the id has one declaration (#71).
@@ -40,17 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `end;` found no routine, and a routine with no indexed operation (an empty event publisher,
   a pure function) could never be a root. Now, for `--diff`: an added or changed line touches
   the span that holds it; a deletion touches a span only when the gap lies inside it (so
-  deleting a whole routine, or blank lines between routines, blames no neighbour); context
-  lines never count. `--file` takes every routine the file declares. Only workspace (`ws:`)
-  routines are indexed. Pinned in `tests/cli/cli_digest_changed_spans.rs`
-  (`hunk_on_assignment_line_is_a_changed_root`, `every_routine_shape_line_maps_to_its_routine`,
-  `context_lines_do_not_create_roots`, `deletions_resolve_by_interior_gap`,
+  deleting a whole routine, or blank lines between routines, blames no neighbour), with one
+  narrow exception: a run of deleted lines that are ALL attribute lines (trimmed text starts
+  with `[`) right above a span belongs to that routine, so deleting its first or only
+  attribute makes it a root. Context lines never count. `--file` takes every routine the
+  file declares. Only workspace (`ws:`) routines are indexed. Pinned in
+  `tests/cli/cli_digest_changed_spans.rs` (`hunk_on_assignment_line_is_a_changed_root`,
+  `every_routine_shape_line_maps_to_its_routine`, `context_lines_do_not_create_roots`,
+  `deletions_resolve_by_interior_gap`, `deleting_a_routines_first_attribute_line_makes_it_a_root`,
   `one_inside_one_outside_hunk`, `rename_with_and_without_hunks`,
   `file_with_only_opless_routines_is_matched`, `file_digest_returns_every_routine_of_the_file`,
   `hunkless_modified_file_takes_every_declaration`, `object_level_hunk_is_outside_routines`,
-  `limits_are_pinned`). Stated limits, pinned by `limits_are_pinned`: deleting a whole
-  attribute line gives no root, an `#if`/`#else`/`#endif` line gives no root, and an
-  attribute separated from its routine by a comment, pragma or `#if` is not in the span (#80).
+  `limits_are_pinned`) and `diff_parser::tests::attribute_only_deletion_runs`. Stated limits:
+  an `#if`/`#else`/`#endif` line gives no root (pinned by `limits_are_pinned`); an attribute
+  separated from its routine by a comment, pragma or `#if` is not in the span (#80); the
+  arms of an `#if`-split procedure header with DIFFERENT signatures share one span, so a
+  change in either arm's header line makes both arms' ids roots (a safe over-approximation).
   Object-level changes (global `var`, fields, properties) still map to no routine (#79).
 - The changed-root diagnostics have new meanings: `file-unmatched` means the file declares no
   routine at all (Interface/ControlAddIn procedures count); `diff-file-unmatched` means the
@@ -90,9 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (object-level changes map to no routine), #80 (an attribute separated by trivia is
   dropped), #81 (an interface method change does not reach its implementers), #82 (the stale
   Interface/ControlAddIn skip in the model), #83 (unnumbered objects share one object id).
-
-### Changed
-
 - `[profile.dev]` keeps line-table debug info only (`debug = "line-tables-only"`), and
   dependencies keep none. Full debug info had grown `target/debug/deps` to 19 GB of `.pdb`
   files. Panics and backtraces still name file and line; for a debugger session that needs
@@ -101,6 +108,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one issue run builds a worktree target of up to ~30 GB and the post-merge check builds
   another. `cli.MIN_FREE_GB`, pinned by `test_preflight_refuses_below_the_free_disk_floor`
   (fails with the floor at 20).
+- `gate::presets::PRESET_NAMES_LIST` is replaced by `preset_names()`, and presets are one
+  `PRESETS` table. `DEFAULT_DETECTOR_NAMES` and `OPT_IN_DETECTOR_NAMES` (presets and
+  digest_cli) are removed; the default set is `detectors::default_detectors()` and the
+  opt-in set is `detectors::opt_in_detectors()`. Which function a detector sits in IS its
+  class. **To demote a detector**, move its entry from `default_detectors()` to
+  `opt_in_detectors()`, then update T1b's hand-stated opt-in literal (the 14 opt-in names)
+  AND its default count (`detectors::tests::default_and_opt_in_membership` asserts 40
+  defaults and 54 in all), add a CHANGELOG entry, and regenerate the detectorStats goldens
+  (`scripts/check-goldens --regen`, then triage the diff): `registered_detectors()` is the
+  default set followed by the opt-in set, and detectorStats follows that order, so the move
+  reorders them.
+  `compute_analyzer_diagnostics` no longer takes a detector list;
+  `compute_analyzer_diagnostics_cross_app` is new (#68).
 
 ### Fixed
 
@@ -121,7 +141,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `omitted_counts_bound_the_body`) and in `cli_digest_changed_spans.rs` by
   `hunk_body_is_count_bounded`, `bare_header_pair_inside_short_hunk_is_body`,
   `minus_line_past_old_count_ends_the_hunk` and `bare_header_pair_exact_fill_is_complete`
-  (#71).
+  (#71). The header counts are authoritative, as in `git apply` and GNU `patch`. **Limit:**
+  plain `diff -u` outputs concatenated with no `diff --git` line, after a malformed hunk whose
+  header promises more lines than its body holds, have the next file's `---`/`+++` pair read
+  as body lines while counts remain. When the counts happen to be filled exactly, the next
+  file's hunks attach to the previous file and no error is reported
+  (`bare_header_pair_exact_fill_is_complete`); otherwise a `diff-parse-error` is reported.
+  `git apply --numstat` reads that exact-fill input the same way (one file, 2 added, 3
+  deleted), and GNU patch 2.7.6 also reads both hunks as hunks of the first file (#71).
+- `alsem digest --diff`: a `+++ ` line opens a file only right after a `--- ` header. A `+`
+  line that overran a hunk's new count, re-read at top level, replaced the current file and
+  silently dropped its hunks (the changes already read were lost). Pinned by
+  `plus_header_without_a_pending_minus_header_keeps_the_current_file` and
+  `orphan_plus_header_keeps_the_current_file` (#71).
+- `alsem digest --diff`: a hunk header whose line range does not fit in a 32-bit line number
+  (e.g. `@@ -1,1 +2147483647,0 @@`) overflowed the body cursor, a panic in debug builds. It is
+  now a `diff-parse-error` ("hunk at +N has an invalid line range") and opens no hunk; a file
+  left with no hunk then takes every declaration, as a hunkless rename does. A number too large
+  for 32 bits, which made the whole header line silently ignored, gets the same error. Pinned by
+  `out_of_range_hunk_header_is_an_error_not_a_panic` and
+  `out_of_range_hunk_header_is_a_parse_error` (#71).
 - `alsem digest --file dep:<guid>:<path>` selected the dependency file's routines as changed
   roots, because path matching lowercased the `dep:` key on both sides. Only workspace
   routines are selected now; the call gives `file-unmatched`, exit 2. Pinned by
@@ -146,22 +185,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check +0.1 / +0.2 s. Two runs per side are too few to call any of these a regression or a gain
   (digest's own before-runs differed by 6.5 s), so the time result is inconclusive. Peak memory
   moved by 6 MB or less (#68).
-
-### Changed
-
-- `gate::presets::PRESET_NAMES_LIST` is replaced by `preset_names()`, and presets are one
-  `PRESETS` table. `DEFAULT_DETECTOR_NAMES` and `OPT_IN_DETECTOR_NAMES` (presets and
-  digest_cli) are removed; the default set is `detectors::default_detectors()` and the
-  opt-in set is `detectors::opt_in_detectors()`. Which function a detector sits in IS its
-  class. **To demote a detector**, move its entry from `default_detectors()` to
-  `opt_in_detectors()`, then update T1b's hand-stated opt-in literal (the 14 opt-in names)
-  AND its default count (`detectors::tests::default_and_opt_in_membership` asserts 40
-  defaults and 54 in all), add a CHANGELOG entry, and regenerate the detectorStats goldens
-  (`scripts/check-goldens --regen`, then triage the diff): `registered_detectors()` is the
-  default set followed by the opt-in set, and detectorStats follows that order, so the move
-  reorders them.
-  `compute_analyzer_diagnostics` no longer takes a detector list;
-  `compute_analyzer_diagnostics_cross_app` is new (#68).
 
 ## [1.7.1] - 2026-10-14
 
