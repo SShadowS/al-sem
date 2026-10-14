@@ -896,7 +896,7 @@ pub fn run_prove_pipeline(
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, alsem_ver);
 
-    // Build envelope diagnostics (same 34-detector set, shared with digest).
+    // Build envelope diagnostics (the registry's 40-detector default set, shared with digest).
     let diagnostics_json = build_envelope_diagnostics_json(workspace, &resolved);
 
     // Resolve the routine selector → root IDs

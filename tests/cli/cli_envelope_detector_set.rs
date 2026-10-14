@@ -35,8 +35,17 @@ fn corpus(ws: &str) -> String {
 fn detector_spans(case: &str, args: &[String]) -> BTreeMap<String, usize> {
     let dir = tempfile::tempdir().expect("tempdir");
     let trace = dir.path().join("trace.json");
+    // The child inherits the whole environment, so clear every other knob the
+    // trace reads (`src/engine/perf_trace.rs` `Config::from_reader`): a stray
+    // `ALSEM_TRACE_EXIT_AFTER` would end the run early, and the others change
+    // what the trace holds or where it goes.
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args(args)
+        .env_remove("ALSEM_TRACE_DETAIL")
+        .env_remove("ALSEM_TRACE_SAMPLE_EVERY")
+        .env_remove("ALSEM_TRACE_SCC_MIN")
+        .env_remove("ALSEM_TRACE_STDERR")
+        .env_remove("ALSEM_TRACE_EXIT_AFTER")
         .env("ALSEM_TRACE", "1")
         .env("ALSEM_TRACE_FILE", &trace)
         .output()

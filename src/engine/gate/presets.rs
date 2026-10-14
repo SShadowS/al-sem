@@ -138,9 +138,13 @@ mod tests {
         assert!(resolve_preset("nope").is_err());
     }
 
-    /// Issue #68 (T1, selector): `analyze` with no `--detector`/`--preset`
-    /// selects the registry's default set, in registry order. The USE is pinned
-    /// end to end by `tests/cli/cli_envelope_detector_set.rs`'s analyze cases.
+    /// Issue #68 (T1, selector): the no-flag branch of `resolve_analyze_detectors`
+    /// (no `--detector`/`--preset`) returns `default_detectors()`, same names in
+    /// the same order. It checks only that branch, not which detectors are
+    /// default: membership is guarded by T1b
+    /// (`detectors::tests::default_and_opt_in_membership`), and the USE (what
+    /// `analyze` and the other commands actually run) by T3
+    /// (`tests/cli/cli_envelope_detector_set.rs`).
     #[test]
     fn analyze_default_is_registry_default() {
         let selected: Vec<String> = resolve_analyze_detectors(None, None)
