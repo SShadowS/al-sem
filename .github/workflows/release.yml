@@ -73,6 +73,15 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --release
 
+      # Standalone `alsem` release asset, built WITHOUT the default `telemetry`
+      # feature: consumers such as bc-dev-mcp download and run it unattended, so
+      # it must not phone home. Overwrites the default-feature `alsem` from the
+      # step above; `al-call-hierarchy.exe` is untouched.
+      - name: Build alsem (no telemetry)
+        env:
+          TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
+        run: cargo build --release --no-default-features --bin alsem
+
       # Authenticode-sign via Azure Artifact Signing (Trusted Signing).
       # Steps SKIP cleanly until configured: repo vars AZURE_SIGNING_ENDPOINT /
       # AZURE_SIGNING_ACCOUNT / AZURE_SIGNING_PROFILE, secrets AZURE_TENANT_ID /
@@ -96,7 +105,9 @@ jobs:
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
           # The action requires rooted (absolute) paths
-          files: ${{ github.workspace }}\target\release\al-call-hierarchy.exe
+          files: |
+            ${{ github.workspace }}\target\release\al-call-hierarchy.exe
+            ${{ github.workspace }}\target\release\alsem.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -105,7 +116,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: al-call-hierarchy-windows-x64
-          path: target/release/al-call-hierarchy.exe
+          path: |
+            target/release/al-call-hierarchy.exe
+            target/release/alsem.exe
 
   build-linux:
     needs: test
@@ -128,11 +141,31 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --release
 
+      # Standalone `alsem` release asset, no telemetry (see build-windows).
+      - name: Build alsem (no telemetry)
+        env:
+          TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
+        run: cargo build --release --no-default-features --bin alsem
+
+      # Same glibc 2.34 floor as build-and-deploy.yml (e.g. Ubuntu 22.04).
+      - name: Check glibc floor
+        run: |
+          set -euo pipefail
+          for b in target/release/al-call-hierarchy target/release/alsem; do
+            v=$(objdump -T "$b" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+            echo "$b needs glibc $v"
+            if [ "$(printf '%s\n2.34\n' "$v" | sort -V | tail -1)" != "2.34" ]; then
+              echo "::error::$b needs glibc $v (> 2.34)"; exit 1
+            fi
+          done
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: al-call-hierarchy-linux-x64
-          path: target/release/al-call-hierarchy
+          path: |
+            target/release/al-call-hierarchy
+            target/release/alsem
 
   release:
     needs: [build-windows, build-linux]
@@ -154,7 +187,9 @@ jobs:
         run: |
           mv windows/al-call-hierarchy.exe al-call-hierarchy-windows-x64.exe
           mv linux/al-call-hierarchy al-call-hierarchy-linux-x64
-          chmod +x al-call-hierarchy-linux-x64
+          mv windows/alsem.exe alsem-windows-x64.exe
+          mv linux/alsem alsem-linux-x64
+          chmod +x al-call-hierarchy-linux-x64 alsem-linux-x64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -163,3 +198,5 @@ jobs:
           files: |
             al-call-hierarchy-windows-x64.exe
             al-call-hierarchy-linux-x64
+            alsem-windows-x64.exe
+            alsem-linux-x64

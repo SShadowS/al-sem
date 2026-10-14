@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Releases carry standalone `alsem` binaries**: `alsem-windows-x64.exe`
+  (Authenticode-signed with `al-call-hierarchy.exe`) and `alsem-linux-x64`
+  (glibc 2.34 floor), both built with `--no-default-features`, so without
+  telemetry. Tools that fetch al-sem themselves (bc-dev-mcp) can pin a release
+  and its asset digest instead of depending on the plugin's copy.
+
 ## [1.7.0] - 2026-10-14
 
 ### Added
