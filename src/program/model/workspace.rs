@@ -113,8 +113,6 @@ pub struct ModelDeclarationOnlyRoutine {
     /// `{stableObjectId}#{64 hex}`, the signature hash folded with the declaring
     /// object's NAME (every unnumbered object shares `<guid>:<Kind>:0`).
     pub stable_routine_id: String,
-    pub parameters: Vec<ModelParameter>,
-    pub return_type: Option<String>,
     pub source_anchor: crate::program::body::features::PAnchor,
     pub declaration_start_line: u32,
 }
@@ -904,8 +902,12 @@ fn project_ir(
         let declaration_only_routines: Vec<ModelDeclarationOnlyRoutine> =
             if object_type == "Interface" || object_type == "ControlAddIn" {
                 let stable_object_id = to_stable_object_id(&object_id);
-                o.routines
+                // The LOGICAL object name: the IR keeps a quoted name's inner `""`.
+                let logical_name = crate::program::body::scope::unescape_al_identifier(&name);
+                // Like the routine loop: only the routines `population` names.
+                routine_ixs
                     .iter()
+                    .map(|&ri| &o.routines[ri])
                     // `procedure ();` recovers with a zero-width MISSING name; skip it
                     // like the routine loop does.
                     .filter(|r| !r.name.is_empty())
@@ -917,10 +919,8 @@ fn project_ir(
                             stable_routine_id: to_stable_routine_id_from_parts(
                                 &stable_object_id,
                                 &hash,
-                                Some(&name),
+                                Some(&logical_name),
                             ),
-                            parameters: model_parameters(&syms),
-                            return_type: r.return_type.clone(),
                             source_anchor: anchor_from_origin(&r.origin, source_unit_id, cols),
                             declaration_start_line: declaration_start_line(r),
                         }
@@ -2865,5 +2865,64 @@ mod population_tests {
         );
         assert!(full.workspace.routines.iter().any(|r| at(r) == gone));
         assert!(!fewer.workspace.routines.iter().any(|r| at(r) == gone));
+    }
+
+    /// #71 final panel (code-review): declaration-only routines follow the
+    /// population too (the cross-app path projects dependency files with a
+    /// demanded population). Hand-stated precondition: one Interface routine's
+    /// row is removed; the object row must lose exactly that declaration.
+    #[test]
+    fn declaration_only_routines_follow_the_population() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let (mut ctx, _report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+        let decls = |m: &ModelRows| -> Vec<(String, u32)> {
+            m.workspace
+                .objects
+                .iter()
+                .flat_map(|o| &o.declaration_only_routines)
+                .map(|d| {
+                    (
+                        d.source_anchor.source_unit_id.clone(),
+                        d.source_anchor.start_line,
+                    )
+                })
+                .collect()
+        };
+        let full = decls(
+            &assemble_and_resolve_workspace_from_program(
+                &ws,
+                "r0",
+                true,
+                &ctx,
+                &Default::default(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(full.len(), 2, "ICCFoo and ICCBar each declare GetHelper");
+
+        let k = ctx
+            .graph
+            .workspace_rows
+            .routines
+            .iter()
+            .position(|r| r.node.object.kind == al_syntax::ir::ObjectKind::Interface)
+            .unwrap();
+        let dropped = ctx.graph.workspace_rows.routines.remove(k);
+        let fewer = decls(
+            &assemble_and_resolve_workspace_from_program(
+                &ws,
+                "r0",
+                true,
+                &ctx,
+                &Default::default(),
+            )
+            .unwrap(),
+        );
+        let gone = (format!("ws:{}", dropped.file), dropped.start.row);
+        assert!(full.contains(&gone));
+        assert_eq!(fewer.len(), 1);
+        assert!(!fewer.contains(&gone));
     }
 }
