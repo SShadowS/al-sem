@@ -45,7 +45,14 @@ rustfmt path/to/file.rs        # Format a file (NEVER `cargo fmt` — whole-crat
 scripts/ci-steps clippy        # Lint — CI's EXACT bar (release + -D warnings)
 scripts/check-goldens          # Run ALL byte-compared golden families at once (see Testing Philosophy & Goldens)
 scripts/ci-steps task          # The per-task gate (see Test tiers below)
+scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
+                               # needs `cargo install cargo-sweep`). Run after an issue, before a release,
+                               # or when `df -h /u` is low: U: has filled up three times
 ```
+
+`[profile.dev]` keeps only line-table debug info (dependencies none), which cut the dev/test
+`.pdb` files that had grown to 19 GB. For a debugger session that needs local variables:
+`CARGO_PROFILE_DEV_DEBUG=full cargo test …`.
 
 ### Test tiers
 

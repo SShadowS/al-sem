@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Delete stale Rust build output: the main checkout's target/ and every
+# al-sem-issue-* worktree beside it. Run it after an issue is finished, before a
+# release, and whenever `df -h` shows U: getting full.
+#
+#   scripts/sweep-builds [--dry-run] [--days N]     (default: 7 days)
+#
+# Uses cargo-sweep (`cargo install cargo-sweep`):
+#   --toolchains  drops output from Rust toolchains no longer installed (the
+#                 installed ones for this host are passed explicitly, see below);
+#   --time N      drops artifacts not used in the last N days, in every profile.
+#
+# Why not cargo-sweep's stamp mode (--stamp / --file around a build): it judges
+# "used" by last-access time, and NTFS updates that lazily (up to an hour late),
+# so files a build has just read can still look old and be deleted. Day-scale
+# ages are not affected by that lag.
+#
+# U: has filled up three times (2026-10-03, and twice since). Rust target/
+# directories grow without bound: every flag change writes new hashed artifacts
+# next to the old ones, and Cargo never deletes the old ones.
+set -u
+
+DRY=""
+DAYS=7
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY="--dry-run" ;;
+        --days) shift; DAYS="${1:?--days needs a number}" ;;
+        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        *) echo "usage: scripts/sweep-builds [--dry-run] [--days N]" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+if ! cargo sweep --version >/dev/null 2>&1; then
+    echo "sweep-builds: cargo-sweep is not installed; run: cargo install cargo-sweep" >&2
+    exit 2
+fi
+
+# --installed alone fails when a cross-compile toolchain is installed (e.g.
+# 1.96.0-x86_64-unknown-linux-gnu on Windows): cargo-sweep cannot run its rustc.
+# Keep exactly the installed toolchains whose host is this machine's host.
+host="$(rustc -vV | sed -n 's/^host: //p')"
+toolchains="$(rustup toolchain list | awk '{print $1}' | grep -- "-$host\$" | paste -sd, -)"
+if [ -z "$toolchains" ]; then
+    echo "sweep-builds: no installed toolchain for host $host" >&2
+    exit 2
+fi
+
+root="$(git rev-parse --show-toplevel)" || exit 1
+parent="$(dirname "$root")"
+
+free() { df -h "$root" | tail -1; }
+echo "before: $(free)"
+
+status=0
+sweep_one() {
+    [ -d "$1/target" ] || return 0
+    echo "== $1"
+    cargo sweep $DRY --toolchains "$toolchains" "$1" || status=1
+    cargo sweep $DRY --time "$DAYS" "$1" || status=1
+}
+
+sweep_one "$root"
+for wt in "$parent"/al-sem-issue-*; do
+    [ -d "$wt" ] && sweep_one "$wt"
+done
+
+echo "after:  $(free)"
+exit $status

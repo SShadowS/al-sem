@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/sweep-builds [--dry-run] [--days N]`: deletes Rust build output not used for N
+  days (default 7) and output from toolchains no longer installed, in the main checkout and
+  every `al-sem-issue-*` worktree, through `cargo-sweep` (`cargo install cargo-sweep`). It
+  uses age mode, not cargo-sweep's stamp mode, because NTFS updates last-access times up to
+  an hour late. The first run cleaned 13.2 GiB. Background: U: filled up for the third time
+  on 2026-10-14, which failed #68's post-merge check on a green merge.
+
+### Changed
+
+- `[profile.dev]` keeps line-table debug info only (`debug = "line-tables-only"`), and
+  dependencies keep none. Full debug info had grown `target/debug/deps` to 19 GB of `.pdb`
+  files. Panics and backtraces still name file and line; for a debugger session that needs
+  local variables, set `CARGO_PROFILE_DEV_DEBUG=full`.
+- The issue orchestrator's preflight refuses a tick below 40 GB free disk (was 20 GB):
+  one issue run builds a worktree target of up to ~30 GB and the post-merge check builds
+  another. `cli.MIN_FREE_GB`, pinned by `test_preflight_refuses_below_the_free_disk_floor`
+  (fails with the floor at 20).
+
 ### Fixed
 
 - `alsem digest`, `prove`, `fingerprint`, `events` and `policy check` ran 14 detectors
