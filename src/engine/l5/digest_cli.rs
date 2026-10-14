@@ -208,13 +208,9 @@ pub struct RoutineSpan {
     pub anchor_line: u32,
     /// `source_anchor.start_column` (UTF-8 bytes).
     pub anchor_column: u32,
-    /// Set for Interface / ControlAddIn procedure declarations.
-    pub declaration_only: Option<DeclOnlyInfo>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DeclOnlyInfo {
-    pub display: String,
+    /// The procedure name, set only for Interface / ControlAddIn procedure
+    /// declarations.
+    pub declaration_only_display: Option<String>,
 }
 
 /// Every workspace routine declaration's span, with lookups by normalized file
@@ -231,11 +227,17 @@ impl RoutineSpan {
     /// Does a diff change touch this span? `Added(n)`: n in the span (1-based).
     /// `DeletedAfter(l)`: the gap between new lines l and l+1 is INTERIOR, so
     /// deleting a whole routine, or blank lines between routines, blames no one.
+    /// `DeletedAttributesAfter(l)`: also the gap RIGHT ABOVE the span (`l + 1 ==
+    /// first`), since deleted attribute lines there were the routine's own
+    /// (deleting its first or only attribute).
     fn touched_by(&self, c: &HunkChange) -> bool {
         let (first, last) = (i64::from(self.start) + 1, i64::from(self.end) + 1);
         match *c {
             HunkChange::Added(n) => (first..=last).contains(&i64::from(n)),
             HunkChange::DeletedAfter(l) => first <= i64::from(l) && i64::from(l) < last,
+            HunkChange::DeletedAttributesAfter(l) => {
+                first - 1 <= i64::from(l) && i64::from(l) < last
+            }
         }
     }
 
@@ -258,6 +260,32 @@ impl RoutineSpanIndex {
     fn of_routine(&self, id: &str) -> &[usize] {
         self.by_routine.get(id).map_or(&[], Vec::as_slice)
     }
+
+    /// The declarations among `ixs` (one file's, from [`Self::of_file`]) that any
+    /// of `changes` touches, possibly repeated. Per change a binary search, not a
+    /// scan: within one unit `ixs` is in document order and spans never nest
+    /// (the arms of an `#if`-split header share one span), so `end` ascends too.
+    /// A normalized key can hold two units (paths differing in case only), so
+    /// each unit's run is searched on its own.
+    fn touched_in(&self, ixs: &[usize], changes: &[HunkChange]) -> Vec<usize> {
+        let span = |i: usize| &self.spans[i];
+        let mut hit = Vec::new();
+        for unit in ixs.chunk_by(|&a, &b| span(a).source_unit_id == span(b).source_unit_id) {
+            for c in changes {
+                let n = i64::from(c.line());
+                // Every touched span has `end + 1 >= n` and `start <= n`.
+                let from = unit.partition_point(|&i| i64::from(span(i).end) + 1 < n);
+                hit.extend(
+                    unit[from..]
+                        .iter()
+                        .copied()
+                        .take_while(|&i| i64::from(span(i).start) <= n)
+                        .filter(|&i| span(i).touched_by(c)),
+                );
+            }
+        }
+        hit
+    }
 }
 
 /// One span per routine DECLARATION (never collapsed by id), in document order,
@@ -272,7 +300,7 @@ pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
         end: r.source_anchor.end_line,
         anchor_line: r.source_anchor.start_line,
         anchor_column: r.source_anchor.start_column,
-        declaration_only: None,
+        declaration_only_display: None,
     });
     let declaration_only = resolved
         .workspace
@@ -286,9 +314,7 @@ pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
             end: d.source_anchor.end_line,
             anchor_line: d.source_anchor.start_line,
             anchor_column: d.source_anchor.start_column,
-            declaration_only: Some(DeclOnlyInfo {
-                display: d.name.clone(),
-            }),
+            declaration_only_display: Some(d.name.clone()),
         });
     let mut spans: Vec<RoutineSpan> = model_routines
         .chain(declaration_only)
@@ -420,11 +446,7 @@ pub fn resolve_changed_roots(
 
             for hunk in &diff_file.hunks {
                 // Only the hunk's CHANGED lines count; context never makes a root.
-                let hit: Vec<usize> = ixs
-                    .iter()
-                    .copied()
-                    .filter(|&i| hunk.changes.iter().any(|c| spans.spans[i].touched_by(c)))
-                    .collect();
+                let hit = spans.touched_in(ixs, &hunk.changes);
                 if hit.is_empty() {
                     // endLine = newStart + max(newCount - 1, 0). When newCount == 0
                     // (pure deletion hunk) TS yields newStart, NOT newStart - 1 (#14).
@@ -686,13 +708,13 @@ pub fn run_digest_query_full_from_entries(
         // Declaration-only roots (Interface / ControlAddIn methods) are not in the
         // snapshot: build them from the span index FIRST, so they push no
         // `root-not-in-snapshot` / `no-coverage-record` and count once (#71).
-        if let Some(info) = decls
+        if let Some(display) = decls
             .first()
-            .and_then(|&i| spans.spans[i].declaration_only.as_ref())
+            .and_then(|&i| spans.spans[i].declaration_only_display.as_ref())
         {
             out.push(DigestEntryFull {
                 routine_id: rid.clone(),
-                routine_display: info.display.clone(),
+                routine_display: display.clone(),
                 object_display: String::new(),
                 routine_anchor,
                 routine_anchors,

@@ -694,19 +694,24 @@ rename to src/posting.al
     );
 }
 
-/// A1i. The stated limits stay pinned; a change of either is deliberate.
+/// Final panel (code-review): deleting a routine's FIRST (or only) attribute line
+/// makes the routine a root. The gap sits right above the span, and the deleted
+/// text, all attribute lines, belongs to the routine below it. (a) delete the
+/// only attribute `[IntegrationEvent(false, false)]` (line 18) of
+/// `OnAfterPostSalesDoc` -> root. (b) the rule is narrow: the same gap with a
+/// deleted blank line in the run (lines 17-18) is a plain deletion -> no root.
 ///
-/// (a) deleting a whole attribute line gives no root (the gap's lower neighbour
-/// is outside the span); (b) a `#if` directive line around duplicated procedures
-/// is outside every span.
-/// Mutations: (a) treat a gap whose upper neighbour is `decl_start` as touching
-/// -> `OnAfterPostSalesDoc` becomes a root; (b) extend spans to the enclosing
-/// `#if` -> `Dup` becomes a root.
+/// Mutations: (a) treat `DeletedAttributesAfter` like `DeletedAfter` (interior
+/// only) -> no root, `hunk-outside-routines`; (b) classify the run by its LAST
+/// deleted line -> `OnAfterPostSalesDoc` becomes a root. The parser's run rule
+/// itself is pinned by `diff_parser::tests::attribute_only_deletion_runs`.
 #[test]
-fn limits_are_pinned() {
+fn deleting_a_routines_first_attribute_line_makes_it_a_root() {
     let posting = d8_posting();
-    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(line(&posting, 17), "");
     assert_eq!(line(&posting, 18), "    [IntegrationEvent(false, false)]");
+
+    let dir = tempfile::tempdir().unwrap();
     d8_workspace(dir.path(), &without_lines(&posting, 18, 18));
     let (doc, code) = digest(
         dir.path(),
@@ -715,10 +720,29 @@ fn limits_are_pinned() {
             "--- a/src/posting.al\n+++ b/src/posting.al\n@@ -18,1 +17,0 @@\n-    [IntegrationEvent(false, false)]\n",
         ),
     );
-    assert_eq!(code, 2, "(a) {doc}");
-    assert!(roots(&doc).is_empty(), "(a) {doc}");
-    assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "(a) {doc}");
+    assert_eq!(code, 0, "(a) {doc}");
+    assert_eq!(roots(&doc), vec!["OnAfterPostSalesDoc"], "(a) {doc}");
+    assert!(diags(&doc).is_empty(), "(a) {doc}");
 
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &without_lines(&posting, 17, 18));
+    let (doc, code) = digest(
+        dir.path(),
+        &[],
+        Some(
+            "--- a/src/posting.al\n+++ b/src/posting.al\n@@ -17,2 +16,0 @@\n-\n-    [IntegrationEvent(false, false)]\n",
+        ),
+    );
+    assert_eq!(code, 2, "(b) {doc}");
+    assert!(roots(&doc).is_empty(), "(b) {doc}");
+    assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "(b) {doc}");
+}
+
+/// A1i. The stated limit stays pinned; a change of it is deliberate: a `#if`
+/// directive line around duplicated procedures is outside every span.
+/// Mutation: extend spans to the enclosing `#if` -> `Dup` becomes a root.
+#[test]
+fn limits_are_pinned() {
     let shapes = SHAPES.replacen(
         "#if CLEAN25\n    procedure Dup",
         "#if CLEAN26\n    procedure Dup",
@@ -946,6 +970,56 @@ fn bare_header_pair_exact_fill_is_complete() {
     assert_eq!(code, 0, "{doc}");
     assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{doc}");
     assert!(diags(&doc).is_empty(), "{doc}");
+}
+
+/// Final panel (astra): a `+++` line that overruns a hunk's new count is re-read
+/// at top level. With no `---` header before it, it must not open a file: the
+/// posting hunk's `Added(3)` (inside `PostSalesDoc`, lines 3-16) stays, and the
+/// next `@@` attaches to `src/posting.al` (line 9, also inside `PostSalesDoc`).
+///
+/// Mutation: let any `+++ ` line open a file once a `---` was ever seen -> the
+/// posting file is replaced by `src/subscriber.al`; `HandlePosted` (its line 9)
+/// becomes the only root.
+#[test]
+fn orphan_plus_header_keeps_the_current_file() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let diff = "diff --git a/src/posting.al b/src/posting.al
+--- a/src/posting.al
++++ b/src/posting.al
+@@ -3,2 +3,1 @@
+-old
++new
++++ b/src/subscriber.al
+@@ -9 +9 @@
+-x
++y
+";
+    let (doc, code) = digest(dir.path(), &[], Some(diff));
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{doc}");
+}
+
+/// Final panel (astra): a hunk header whose range does not fit in i32 is a
+/// `diff-parse-error`, not a panic, and opens no hunk. The file then has no
+/// hunk, so (like a hunkless rename) every declaration of it is a root.
+///
+/// Mutation: drop the range check -> `attempt to add with overflow` in a debug
+/// build (the process exits 101, no JSON).
+#[test]
+fn out_of_range_hunk_header_is_a_parse_error() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let diff = "--- a/src/posting.al\n+++ b/src/posting.al\n@@ -1,1 +2147483647,0 @@\n-x\n";
+    let (doc, code) = digest(dir.path(), &[], Some(diff));
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
+        "{doc}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,6 +1566,38 @@ fn hunkless_modified_file_takes_every_declaration() {
         vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
         "{doc}"
     );
+}
+
+/// Final panel (astra, R2-07): the object name folded into a declaration-only id
+/// is the LOGICAL name. `interface "I""Foo"` is the interface `I"Foo`; the IR keeps
+/// the escaped inner text `I""Foo`, which must be unescaped once.
+///
+/// Mutation: fold the raw IR name (drop the unescape) -> the id is the hash of
+/// `I""Foo`.
+#[test]
+fn quoted_interface_name_is_unescaped_in_the_id() {
+    let dir = tempfile::tempdir().unwrap();
+    decl_only_workspace(dir.path());
+    write(
+        &dir.path().join("src/IQuoted.Interface.al"),
+        "interface \"I\"\"Foo\"\n{\n    procedure Bar();\n}\n",
+    );
+    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
+    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let quoted = model
+        .workspace
+        .objects
+        .iter()
+        .find(|o| o.name == "I\"\"Foo")
+        .expect("the IR keeps the escaped inner text");
+    let ids: Vec<&str> = quoted
+        .declaration_only_routines
+        .iter()
+        .map(|d| d.stable_routine_id.as_str())
+        .collect();
+    let logical = decl_only_id("Interface", "I\"Foo", "Bar");
+    assert_ne!(logical, decl_only_id("Interface", "I\"\"Foo", "Bar"));
+    assert_eq!(ids, vec![logical.as_str()]);
 }
 
 /// Plan Task 4: Interface/ControlAddIn procedures ride on their object row with a
