@@ -146,7 +146,7 @@ def test_charge_and_status(capsys, root, ctx, monkeypatch):
     # cli.main the SAME frozen clock the `ctx` fixture used to write
     # claimed_at, so budget.charge's wall-clock-deadline check compares a
     # frozen `now()` against a frozen `claimed_at`, not a frozen `claimed_at`
-    # against the real wall clock (which would always exceed the 4h cap).
+    # against the real wall clock (which would always exceed the wall-clock cap).
     monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
     budget.init(ctx, claimed_at=ctx.now())
     code, out = run_cli(capsys, root, "charge", "ci_fix")
