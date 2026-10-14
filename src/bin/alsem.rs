@@ -66,7 +66,7 @@ use al_sem::engine::gate::events::{
 };
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
 use al_sem::engine::gate::filter::Scope;
-use al_sem::engine::gate::presets::PRESET_NAMES_LIST;
+use al_sem::engine::gate::presets::preset_names;
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{
@@ -1528,7 +1528,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
             "al-sem: unsupported --format '{}'. Supported: {} (known presets: {})",
             a.format,
             VALID_FORMATS.join(", "),
-            PRESET_NAMES_LIST.join(", ")
+            preset_names().join(", ")
         );
         return ExitCode::from(3);
     }

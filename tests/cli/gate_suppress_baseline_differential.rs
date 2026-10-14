@@ -25,8 +25,8 @@ use std::path::PathBuf;
 
 use al_sem::engine::gate::baseline::serialize_baseline;
 use al_sem::engine::gate::filter::Scope;
-use al_sem::engine::gate::presets::DEFAULT_DETECTOR_NAMES;
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze, run_analyze_with_exit};
+use al_sem::engine::l5::detectors::default_detectors;
 
 use crate::regen;
 
@@ -103,10 +103,7 @@ fn manifest_named_goldens_exist() {
 /// them — but since exactly those ran, the allow-list filter is a no-op, so the output
 /// is byte-equivalent (see presets.rs `resolve_analyze_detectors` doc).
 fn inline_suppress_detectors() -> String {
-    let mut names: Vec<String> = DEFAULT_DETECTOR_NAMES
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut names: Vec<String> = default_detectors().into_iter().map(|d| d.name).collect();
     names.push("d47-io-unsafe-txn".to_string());
     names.join(",")
 }
