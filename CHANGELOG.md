@@ -24,9 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   25.0 s, 2836 / 2828 → 2830 / 2831 MB; prove 7.9 / 7.7 → 8.0 / 7.9 s, ~2070 MB both;
   fingerprint 7.3 / 7.3 → 7.5 / 6.9 s, ~1360 MB both; events fanout 4.7 / 4.6 → 4.4 / 5.3 s,
   events chains 4.3 / 4.8 → 4.4 / 5.5 s, policy check 4.5 / 4.4 → 4.6 / 4.6 s, all ~575 MB.
-  With two runs each, the differences are about 1 s or less (the events after-runs were up
-  to 1.1 s slower once; digest varied 6.5 s between identical runs), and peak memory moved
-  by 6 MB or less (#68).
+  Paired time deltas (after − before, run 1 / run 2): digest −3.0 / +0.2 s, prove +0.1 / +0.2 s,
+  fingerprint +0.2 / −0.4 s, events fanout −0.3 / +0.7 s, events chains +0.1 / +0.7 s, policy
+  check +0.1 / +0.2 s. Two runs per side are too few to call any of these a regression or a gain
+  (digest's own before-runs differed by 6.5 s), so the time result is inconclusive. Peak memory
+  moved by 6 MB or less (#68).
 
 ### Changed
 
