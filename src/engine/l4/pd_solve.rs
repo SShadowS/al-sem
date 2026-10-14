@@ -89,6 +89,7 @@ pub struct ResolvedEntry {
     pub dist: usize,
     /// The edge of this state's shortest link (an out-edge of its routine).
     pub first_hop: TypedOutEdge,
+    /// No walk reads this yet; the witness path (spec D3) will.
     pub reqs: Vec<Req>,
 }
 
@@ -581,10 +582,11 @@ mod tests {
         );
     }
 
-    /// Review Focus 3: a cycle that forwards the `var` parameter terminates;
-    /// the visited set is the state tuple, never the routine.
+    /// Review Focus 3: a cycle that forwards the `var` parameter ends with
+    /// ONE state per routine (the same tuple is never pushed twice). This pins
+    /// the state-level dedup, not termination as such.
     #[test]
-    fn solve_terminates_on_cycle() {
+    fn solve_cycle_has_one_state_per_tuple() {
         let a = caller_passing("A", "a1", pd_ts_pd(0));
         let b = caller_passing("B", "b1", pd_ts_pd(0));
         let g = graph(vec![
@@ -635,5 +637,119 @@ mod tests {
         let entry = &resolved["C"][0];
         assert_eq!(entry.dist, 1);
         assert_eq!(entry.first_hop.callsite.as_deref(), Some("cs1"));
+    }
+
+    /// `frames` entry for `id`: usable guard params and `site -> reqs`.
+    fn frame(id: &str, usable: &[u32], sites: &[(&str, Vec<Req>)]) -> (String, FrameGuards) {
+        (
+            id.to_string(),
+            FrameGuards {
+                usable: usable.to_vec(),
+                by_site: sites
+                    .iter()
+                    .map(|(s, r)| (s.to_string(), r.clone()))
+                    .collect(),
+            },
+        )
+    }
+
+    /// States of `routine`, as `(t, reqs)`.
+    fn states_at(arena: &ConeArena, routine: &str) -> Vec<(TempState, Vec<Req>)> {
+        arena
+            .by_routine
+            .get(routine)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|&s| (arena.states[s].t.clone(), arena.states[s].reqs.clone()))
+            .collect()
+    }
+
+    /// Guard step: the seed carries the producer's own site requirements,
+    /// read through the OWNER's frame.
+    #[test]
+    fn solve_seed_takes_site_reqs_from_the_owner_frame() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let frames: HashMap<String, FrameGuards> =
+            [frame("H", &[], &[("H/op1", vec![(1, true)])])].into();
+        let (arena, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert!(arena.states[0].seed);
+        assert_eq!(arena.states[0].reqs, vec![(1, true)]);
+    }
+
+    /// Guard step: the caller's requirements for the call site (`edge_reqs`)
+    /// are conjoined into the caller's state.
+    #[test]
+    fn solve_conjoins_the_call_site_guard_of_the_caller() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let frames: HashMap<String, FrameGuards> =
+            [frame("C", &[0], &[("cs1", vec![(0, true)])])].into();
+        let (arena, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert_eq!(
+            states_at(&arena, "C"),
+            vec![(TempState::Known(true), vec![(0, true)])]
+        );
+    }
+
+    /// Guard step: a callee requirement is re-anchored on the caller's guard
+    /// parameter, which needs the CALLER's frame (`usable`) in `cross_edge`.
+    #[test]
+    fn solve_passes_the_caller_frame_to_the_guard_step() {
+        let mut c = caller_passing("C", "cs1", pd_ts_known(true));
+        c.call_sites[0].argument_bindings[0].source_kind = "parameter".to_string();
+        c.call_sites[0].argument_bindings[0].source_parameter_index = Some(2);
+        let h = pd_routine("H");
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let frames: HashMap<String, FrameGuards> = [
+            frame("H", &[], &[("H/op1", vec![(0, true)])]),
+            frame("C", &[2], &[]),
+        ]
+        .into();
+        let (arena, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        let reqs: Vec<Vec<Req>> = states_at(&arena, "C").into_iter().map(|s| s.1).collect();
+        assert_eq!(reqs, vec![vec![(2, true)]]);
+    }
+
+    /// Guard step: a transition an argument contradicts is dropped, not kept
+    /// with the requirement forgotten.
+    #[test]
+    fn solve_drops_a_contradicted_transition() {
+        let mut c = caller_passing("C", "cs1", pd_ts_known(true));
+        c.call_sites[0].argument_texts = vec!["false".to_string()];
+        let h = pd_routine("H");
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let frames: HashMap<String, FrameGuards> =
+            [frame("H", &[], &[("H/op1", vec![(0, true)])])].into();
+        let (arena, resolved) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert!(states_at(&arena, "C").is_empty());
+        assert!(!resolved.contains_key("C"));
+    }
+
+    /// No state stops (R1-F12): a known state keeps propagating, so a guard
+    /// two hops up still applies to it.
+    #[test]
+    fn solve_known_state_still_picks_up_a_guard_higher_up() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let d = caller_passing("D", "d1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let g = graph(vec![
+            ("C", edge("direct-call", Some("cs1"), "H")),
+            ("D", edge("direct-call", Some("d1"), "C")),
+        ]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("D", &d), ("H", &h)].into();
+        let frames: HashMap<String, FrameGuards> =
+            [frame("D", &[0], &[("d1", vec![(0, true)])])].into();
+        let (arena, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert_eq!(
+            states_at(&arena, "D"),
+            vec![(TempState::Known(true), vec![(0, true)])]
+        );
     }
 }

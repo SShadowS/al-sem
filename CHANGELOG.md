@@ -146,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The capability cone resolves a parameter-dependent write in every routine's own frame
   through a transitive per-producer solve (`l4::pd_solve`, #69 D1). A write a caller makes
   temporary is graded known(true), a real record known(false), across recursion, cycles and
-  root SCCs too; guards on these writes now hold on every typed edge, cycles included.
+  root SCCs too; guards on these writes now hold on every typed edge.
   Producers no longer share a cone key with ordinary facts. Before, the cone resolved such a
   write only for a non-recursive singleton caller, and only to known(true): a real-record
   caller kept the callee's `parameter-dependent(0)`, and a recursive or root caller kept the

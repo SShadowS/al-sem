@@ -1780,11 +1780,13 @@ fn inherited_facts_for_singleton<'g>(
     // the same rule. They are its COMPLETE parameter-dependent-origin output:
     // no cone carries a producer.
     for (e, key) in own.iter().zip(&own_keys) {
+        c_entries += 1;
         if candidate_wins(
             e.dist,
             &e.first_hop,
             best.get(key.as_str()).map(|c| (c.dist, c.edge)),
         ) {
+            c_wins += 1;
             best.insert(
                 key,
                 Best {
@@ -2350,7 +2352,10 @@ fn compose_inherited_cones(
                 .map(move |f| super::pd_solve::Producer {
                     fact: Arc::new(f.clone()),
                     owner: Arc::from(id.as_str()),
-                    operation_id: f.witness_operation_id.clone().unwrap_or_default(),
+                    operation_id: f
+                        .witness_operation_id
+                        .clone()
+                        .expect("a producer has a witness operation id"),
                 })
         })
         .collect();
@@ -4122,4 +4127,121 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     }
 
     m
+}
+
+/// #69 D1.3: the two cone walks read the subject's own producer-solve entries.
+#[cfg(test)]
+mod pd_uses_tests {
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeOutput};
+    use crate::engine::l4::db_effect_solver::tests::pd_ts_known;
+    use crate::engine::l4::pd_solve::ResolvedEntry;
+
+    /// An own entry for subject `C`: a physical (known/false) insert into
+    /// `app/Table/1`, reached through `cs1` at distance 1. No cone and no graph
+    /// edge supplies it, so only the `own` merge can put it in the output.
+    fn own_entry() -> ResolvedEntry {
+        let rep = CapabilityFact {
+            subject: "H".to_string(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: Some("app/Table/1".to_string()),
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: Some("H/op1".to_string()),
+            witness_callsite_id: None,
+            extra: Some(CapabilityExtra::Table {
+                record_variable_id: None,
+                temp_state: Some(pd_ts_known(false)),
+                op_subtype: None,
+            }),
+        };
+        ResolvedEntry {
+            state: 1,
+            rep: Arc::new(rep),
+            dist: 1,
+            first_hop: TypedOutEdge::new(
+                "H".to_string(),
+                "direct-call".to_string(),
+                Some("cs1".to_string()),
+                None,
+            ),
+            reqs: Vec::new(),
+        }
+    }
+
+    fn empty_graph() -> TypedEdgeGraph {
+        TypedEdgeGraph {
+            nodes: Vec::new(),
+            outgoing: HashMap::new(),
+            unresolved_sources: BTreeSet::new(),
+        }
+    }
+
+    fn singleton(mode: ConeOutput, derived: &mut ConeDerivedBuilder) -> Vec<CapabilityFact> {
+        let own = [own_entry()];
+        let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
+        inherited_facts_for_singleton(
+            "C",
+            &empty_graph(),
+            &scc,
+            &HashMap::new(),
+            None,
+            None,
+            &HashMap::new(),
+            &own,
+            mode,
+            derived,
+        )
+    }
+
+    /// Use (a), singleton walk: the own entry is a candidate, and (b) the raw
+    /// output retags it onto the subject through its first hop.
+    #[test]
+    fn singleton_walk_emits_own_entries_retagged() {
+        let mut derived = ConeDerivedBuilder::default();
+        let out = singleton(ConeOutput::RawOnly, &mut derived);
+        assert_eq!(out.len(), 1);
+        let f = &out[0];
+        assert_eq!(f.subject, "C");
+        assert_eq!(f.provenance, "inherited");
+        assert_eq!(f.witness_callsite_id.as_deref(), Some("cs1"));
+        assert_eq!(f.witness_operation_id.as_deref(), Some("H/op1"));
+    }
+
+    /// Use (b), singleton walk: the derived fold sees the own entry, so a
+    /// physical write reaches the routine's derived row.
+    #[test]
+    fn singleton_walk_folds_own_entries() {
+        let mut derived = ConeDerivedBuilder::default();
+        derived.begin_routine();
+        let out = singleton(ConeOutput::DerivedOnly, &mut derived);
+        assert!(out.is_empty(), "DerivedOnly builds no raw Vec");
+        derived.finish_routine("C");
+        let store = derived.finish();
+        assert_eq!(
+            store.writes_physical_tables_of("C"),
+            vec!["app/Table/1".to_string()]
+        );
+    }
+
+    /// Use (a), recursive walk: the own entry is picked even though no member
+    /// or downstream cone carries it.
+    #[test]
+    fn bfs_walk_picks_own_entries() {
+        let own = [own_entry()];
+        let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
+        let g = empty_graph();
+        let direct: RoutineDirectFacts = HashMap::new();
+        let cones: HashMap<usize, ConeFacts> = HashMap::new();
+        let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &own);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].0.witness_operation_id.as_deref(), Some("H/op1"));
+        assert_eq!(picks[0].1.callsite.as_deref(), Some("cs1"));
+    }
 }
