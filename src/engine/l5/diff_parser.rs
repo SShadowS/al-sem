@@ -1,7 +1,12 @@
 //! Port of al-sem `src/digest/diff-parser.ts`.
 //!
 //! Minimal unified diff parser: produces a list of DiffFile (with hunks) from
-//! `git diff` / `diff -u` output. Only the new-side line ranges are extracted.
+//! `git diff` / `diff -u` output. Each hunk body is read line by line, bounded
+//! by the header's old/new counts, and its additions and deletion gaps are
+//! recorded as [`HunkChange`]s. Inside a body, header tests (`--- `, `+++ `,
+//! `diff --git`, `@@`) do not apply; a line that does not fit the remaining
+//! counts ends the hunk as truncated (an error) and is re-read as a top-level
+//! line.
 //!
 //! Handles the 9 spec edge cases: a/b/ prefix stripping, quoted paths, /dev/null,
 //! renames, omitted hunk count (defaults to 1), zero-length ranges, CRLF,
@@ -13,6 +18,18 @@ pub struct DiffHunk {
     pub new_start: i32,
     /// Number of new-file lines (may be 0 for pure deletions).
     pub new_count: i32,
+    /// Number of old-file lines (may be 0 for pure additions; omitted → 1).
+    pub old_count: i32,
+    /// The changes the hunk body records, in body order.
+    pub changes: Vec<HunkChange>,
+}
+
+/// One change of a hunk body. 1-based new-file numbers; `DeletedAfter(L)` = a
+/// gap between new lines L and L+1 (one per run of consecutive `-` lines).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkChange {
+    Added(i32),
+    DeletedAfter(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,10 +182,11 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
     }
     i += 1;
     eat_digits(bytes, &mut i)?;
-    // (?:,(\d+))?
+    // (?:,(\d+))?  — omitted count → 1
+    let mut old_count = 1;
     if i < bytes.len() && bytes[i] == b',' {
         i += 1;
-        eat_digits(bytes, &mut i)?;
+        old_count = eat_digits(bytes, &mut i)?;
     }
     // \s+
     if !eat_ws1(bytes, &mut i) {
@@ -198,7 +216,70 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
     Some(DiffHunk {
         new_start,
         new_count,
+        old_count,
+        changes: Vec::new(),
     })
+}
+
+/// The hunk whose body is being read: lines left on each side, and the next
+/// new-file line (`cursor`). Git writes `new_start` as the line BEFORE the gap
+/// when `new_count == 0`, so the cursor then starts one later.
+struct OpenHunk {
+    new_start: i32,
+    old_left: i32,
+    new_left: i32,
+    cursor: i32,
+    in_deletion_run: bool,
+}
+
+impl OpenHunk {
+    fn new(h: &DiffHunk) -> Self {
+        OpenHunk {
+            new_start: h.new_start,
+            old_left: h.old_count,
+            new_left: h.new_count,
+            cursor: if h.new_count == 0 {
+                h.new_start + 1
+            } else {
+                h.new_start
+            },
+            in_deletion_run: false,
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.old_left <= 0 && self.new_left <= 0
+    }
+
+    /// Consume one line as body. `None`: the line is not body (its side has no
+    /// count left, or it is not a body line), so the hunk ends INCOMPLETE.
+    /// `Some(change)`: accepted; `change` is the change it records, if any.
+    fn accept(&mut self, line: &str) -> Option<Option<HunkChange>> {
+        match line.as_bytes().first() {
+            Some(b'\\') => Some(None),
+            None | Some(b' ') if self.old_left > 0 && self.new_left > 0 => {
+                self.old_left -= 1;
+                self.new_left -= 1;
+                self.cursor += 1;
+                self.in_deletion_run = false;
+                Some(None)
+            }
+            Some(b'-') if self.old_left > 0 => {
+                self.old_left -= 1;
+                let starts_run = !self.in_deletion_run;
+                self.in_deletion_run = true;
+                Some(starts_run.then_some(HunkChange::DeletedAfter(self.cursor - 1)))
+            }
+            Some(b'+') if self.new_left > 0 => {
+                self.new_left -= 1;
+                self.in_deletion_run = false;
+                let c = HunkChange::Added(self.cursor);
+                self.cursor += 1;
+                Some(Some(c))
+            }
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,10 +296,15 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
 
     // Normalize CRLF → LF
     let normalized = text.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
+    let mut lines: Vec<&str> = normalized.split('\n').collect();
+    // A final '\n' is the last line's terminator, not an empty context line.
+    if normalized.ends_with('\n') {
+        lines.pop();
+    }
+    let mut open: Option<OpenHunk> = None;
 
     let mut files: Vec<DiffFile> = Vec::new();
-    let errors: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
 
     // State
     let mut current_file: Option<DiffFile> = None;
@@ -248,6 +334,27 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
     for raw_line in &lines {
         // Strip trailing CR
         let line = raw_line.trim_end_matches('\r');
+
+        // Inside a hunk body, header tests do not apply.
+        if let Some(h) = open.as_mut() {
+            if let Some(change) = h.accept(line) {
+                if let Some(c) = change {
+                    current_file
+                        .as_mut()
+                        .and_then(|f| f.hunks.last_mut())
+                        .expect("an open hunk belongs to the current file")
+                        .changes
+                        .push(c);
+                }
+                if h.is_complete() {
+                    open = None;
+                }
+                continue;
+            }
+            errors.push(format!("hunk at +{} truncated", h.new_start));
+            open = None;
+            // The line that ended the hunk is a top-level line: fall through.
+        }
 
         // Edge case 8: "\ No newline at end of file" — skip
         if line.starts_with("\\ ") {
@@ -373,9 +480,17 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             && let Some(hunk) = parse_hunk_header(line)
             && let Some(ref mut f) = current_file
         {
+            let state = OpenHunk::new(&hunk);
             f.hunks.push(hunk);
+            if !state.is_complete() {
+                open = Some(state);
+            }
         }
         // All other lines ignored
+    }
+
+    if let Some(h) = open {
+        errors.push(format!("hunk at +{} truncated", h.new_start));
     }
 
     // End-of-input
@@ -416,8 +531,11 @@ mod tests {
             --- a/src/Foo.al\n\
             +++ b/src/Foo.al\n\
             @@ -10,3 +10,4 @@ SomeContext\n\
+            \x20ctx1\n\
             -old\n\
-            +new\n";
+            +new\n\
+            +new2\n\
+            \x20ctx2\n";
         let r = parse_unified_diff(diff);
         assert_eq!(r.files.len(), 1);
         let f = &r.files[0];
@@ -426,6 +544,7 @@ mod tests {
         assert_eq!(f.hunks.len(), 1);
         assert_eq!(f.hunks[0].new_start, 10);
         assert_eq!(f.hunks[0].new_count, 4);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 
     #[test]
@@ -475,8 +594,11 @@ mod tests {
             --- a/Old.al\n\
             +++ b/New.al\n\
             @@ -1,3 +1,4 @@\n\
+            \x20ctx1\n\
             -old\n\
-            +new\n";
+            +new\n\
+            +new2\n\
+            \x20ctx2\n";
         let r = parse_unified_diff(diff);
         assert_eq!(r.files.len(), 1);
         let f = &r.files[0];
@@ -490,6 +612,7 @@ mod tests {
         assert_eq!(f.hunks.len(), 1);
         assert_eq!(f.hunks[0].new_start, 1);
         assert_eq!(f.hunks[0].new_count, 4);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 
     #[test]
@@ -608,5 +731,118 @@ mod tests {
             rename from \"\n\
             rename to \"\n";
         let _ = parse_unified_diff(diff);
+    }
+
+    // -----------------------------------------------------------------------
+    // #71: count-bounded hunk bodies
+    // -----------------------------------------------------------------------
+
+    use super::HunkChange::{Added, DeletedAfter};
+
+    const HEAD: &str = "--- a/x.al\n+++ b/x.al\n";
+
+    fn changes(diff: &str) -> (Vec<Vec<HunkChange>>, Vec<String>) {
+        let r = parse_unified_diff(diff);
+        (
+            r.files
+                .iter()
+                .flat_map(|f| f.hunks.iter().map(|h| h.changes.clone()))
+                .collect(),
+            r.errors,
+        )
+    }
+
+    #[test]
+    fn hunk_changes_follow_the_body() {
+        // old: ctx, -, -, blank = 4; new: ctx, +, blank, + = 4.
+        let (c, e) = changes(&format!(
+            "{HEAD}@@ -3,4 +3,4 @@\n ctx\n-old1\n-old2\n+new\n\n+tail\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(3), Added(4), Added(6)]]);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn pure_deletion_cursor_starts_after_new_start() {
+        let (c, _) = changes(&format!("{HEAD}@@ -9,1 +8,0 @@\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(8)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -1,1 +0,0 @@\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(0)]]);
+    }
+
+    #[test]
+    fn truncated_hunk_is_an_error_with_or_without_final_newline() {
+        for d in [
+            format!("{HEAD}@@ -3,2 +3,1 @@\n-old\n"),
+            format!("{HEAD}@@ -3,2 +3,1 @@\n-old"),
+        ] {
+            let (c, e) = changes(&d);
+            assert_eq!(e, vec!["hunk at +3 truncated".to_string()], "{d:?}");
+            assert_eq!(c, vec![vec![DeletedAfter(2)]], "{d:?}");
+        }
+    }
+
+    #[test]
+    fn header_looking_lines_inside_a_body_are_body() {
+        let r = parse_unified_diff(&format!("{HEAD}@@ -9,1 +9,1 @@\n--- x\n+++ y\n"));
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].hunks[0].changes, vec![DeletedAfter(8), Added(9)]);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn the_line_ending_a_truncated_hunk_is_redispatched() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\ndiff --git a/y.al b/y.al\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["x.al", "y.al"]);
+        assert_eq!(r.errors.len(), 1);
+        assert_eq!(r.files[1].hunks[0].changes, vec![DeletedAfter(8), Added(9)]);
+    }
+
+    #[test]
+    fn minus_line_past_old_count_ends_the_hunk() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,1 +3,2 @@\n-old\n+a\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["x.al", "y.al"]);
+        assert_eq!(r.errors, vec!["hunk at +3 truncated".to_string()]);
+    }
+
+    #[test]
+    fn exact_fill_completes_the_hunk() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        assert_eq!(r.files.len(), 1);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let c: Vec<_> = r.files[0].hunks.iter().map(|h| h.changes.clone()).collect();
+        assert_eq!(
+            c,
+            vec![
+                vec![DeletedAfter(2), Added(3)],
+                vec![DeletedAfter(8), Added(9)]
+            ]
+        );
+    }
+
+    #[test]
+    fn no_newline_marker_is_not_counted() {
+        let (c, e) = changes(&format!(
+            "{HEAD}@@ -9,1 +9,1 @@\n-x\n\\ No newline at end of file\n+y\n\\ No newline at end of file\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(8), Added(9)]]);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn omitted_counts_bound_the_body() {
+        let r = parse_unified_diff(&format!("{HEAD}@@ -5 +5 @@\n-a\n+b\n ctx-after\n"));
+        let h = &r.files[0].hunks[0];
+        assert_eq!((h.old_count, h.new_count), (1, 1));
+        assert_eq!(h.changes, vec![DeletedAfter(4), Added(5)]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 }
