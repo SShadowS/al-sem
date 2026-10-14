@@ -1,0 +1,642 @@
+[
+  {
+    "id": "R1-01",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "critical",
+    "text": "'Every routine' is not delivered: the model drops Interface and ControlAddIn procedures (workspace.rs:881-904) although the lowerer emits them, so indexing model routines cannot keep those files from FileUnmatched. (Round 2, re-raised: a diagnostic satisfies only the FileUnmatched clause, not 'a hunk inside any routine's span makes that routine a changed root'.)",
+    "disposition": "fixed",
+    "evidence": "Confirmed at src/program/model/workspace.rs:880-904. Round 2: delivered literally. Ledger Design > Declaration-only procedures: a hunk inside an Interface/ControlAddIn procedure makes it a changed root entry (stableId derived with the same helpers as stable_routine_id, routine.declarationOnly true, no effects, coverage reason 'declaration-only', anchor at its declaration); carried on ModelObject.declaration_only_routines built from the same IR before the continue (Data plumb 5); the *-declarations-only diagnostics are removed because every file declaring a routine now yields roots; FileUnmatched only for files declaring no routine at all. The ModelRoutine skip stays (detector safety); its stale reason is a new discovery. Acceptance A2d asserts the root, id, flag, multiplicity and ControlAddIn case, with three mutations. Not delivered states the acceptance is met in full. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-02",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Zero-count hunks need a different cursor start: git writes new_start as the line before the gap when new_count==0, so cursor=new_start records the gap one line early and blames the preceding routine at a boundary; A1d's interior case cannot detect it.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (diff_parser.rs:182-199 keeps only new_start/new_count). Ledger: P10 states the convention; Design > Data plumb 4 starts the cursor at new_start+1 when new_count==0; Acceptance A1d adds boundary (-U0 blank line after end;), whole-routine, file-start and file-end deletions with mutation 'cursor = new_start always'. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-03",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Hunk-body parsing is not tied to line counts: header tests (--- / +++ / diff --git) run first on every line so body text starting '-- '/'++ ' becomes a header; empty context lines are dropped and shift the cursor; the header-range fallback for truncated hunks reintroduces context-only roots.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at src/engine/l5/diff_parser.rs:258-272 and :377; old_count dropped at :167-172. Ledger: P16; Design > Data plumb 4 specifies a count-bounded state machine (header tests suspended inside a body, physical empty line = context, '\\' uncounted, truncation -> DiffParseError keeping only lines read, terminating line re-dispatched, no header-range fallback) and corrects the two short-body unit tests; Acceptance A1g. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-04",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Acceptance matrix",
+    "line": null,
+    "severity": "important",
+    "text": "A2b: Shapes has 12 declarations but 11 distinct stable ids (both Dup arms share one id; roots are a set), so 'all 12 incl. both Dup' cannot hold. Keep both physical spans and test a hunk in each Dup arm. (astra: important; flash: minor)",
+    "disposition": "fixed",
+    "evidence": "Confirmed: identity inputs at workspace.rs:1269-1288, HashSet roots at digest_cli.rs:244. Ledger: P13; Design > Data plumb 3 keeps one RoutineSpan per declaration, never collapsed by id; A2b expects 11 ids; A1b has a row per Dup arm with mutation 'one span per id'. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-05",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Acceptance matrix",
+    "line": null,
+    "severity": "important",
+    "text": "A2c's mutation cannot fail: dependency units keep the 'dep:<guid>:' prefix, so a same-relative-path dependency file never shares the workspace key. (Round 2, re-raised: a listed dependency app does not prove its routines survived demand filtering; use the embedded fixture with CallLib and assert a dependency-routine effect origin first.)",
+    "disposition": "fixed",
+    "evidence": "Confirmed: workspace.rs:1517 (dep:<guid>:<path>), digest_cli.rs:84-100, demand filtering workspace.rs:1502-1506. Round 2: Ledger P17(f); Acceptance A2c now uses workspace(dir, true) + embedded_dependency(dir) in both modes, asserts app_sources == [(DEP_GUID, embedded)] and a query-effects origin anchor starting dep:{DEP_GUID} (as cli_digest_query_dependencies.rs:260-270) BEFORE checking --file dep:{DEP_GUID}:src/Lib.al -> file-unmatched; mutation 'drop the ws: filter' then matches the demanded dependency routines and fails. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-06",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Attribute coverage is incomplete: collect_routines clears pending attributes on any other named child (comments are named extras, preproc arms clear too), so an attribute separated by a comment/pragma/#if is never attached; adding an origin cannot recover it. Pre-existing lowerer bug that also unbinds event subscribers.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at crates/al-syntax/src/lower/mod.rs:984-986 and :936. Ledger: P14; Design > Known limits states the limit exactly; Discovery 'al-syntax / lowerer (routine attributes)' with reproducer and acceptance; Not delivered lists it. Kept out of #71 because the fix changes event binding (event-graph/resolution output), a different capability. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-07",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Acceptance matrix",
+    "line": null,
+    "severity": "important",
+    "text": "No production-path cases for CRLF, no-newline markers, rename with/without hunks, multi-hunk cursor resets, mixed matched/unmatched hunks with diagnostic ranges, or malformed/truncated bodies. (astra: important; flash: minor)",
+    "disposition": "fixed",
+    "evidence": "Ledger Acceptance matrix: A1c pins the diagnostic range (14/20); A1f mixed hunks with per-hunk cursor mutation; A1g count-bounded body incl. '-- x'/'++ y', empty context line, truncated hunk with/without final newline, terminating-line re-dispatch, CRLF, '\\ No newline'; A1h rename with and without hunks. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-08",
+    "source": "flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "The new roots #71 adds have no routine.anchor, and bc-dev-mcp joins digest entries by anchor file+line, so the routines #71 surfaces never reach that consumer. Pull the anchor discovery into #71 and widen the license.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at digest_cli.rs:568-611 and U:/Git/bc-dev-mcp/src/core/risk.ts:99-110. Ledger: P15; Design > Entry anchor + Data plumb 6 (both callers); license field by field; Acceptance A4. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-09",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Assumption probes",
+    "line": null,
+    "severity": "minor",
+    "text": "P2 says six matching posting lines but lists five; callsite evidence also includes typed-edge anchors, not only capability witnesses.",
+    "disposition": "fixed",
+    "evidence": "Ledger P2 now says 5 of 14 (8, 10, 12, 13, 15) and describes the index as fact-witness ops plus callsites that witness a fact or anchor a typed edge (snapshot.rs:1515-1542). Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-10",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "Diagnostic redefinitions are coherent; keep wire shapes and exit semantics, add a CHANGELOG entry, and note the stale bc-dev-mcp comment (risk.ts says --diff is not used because of #71).",
+    "disposition": "fixed",
+    "evidence": "Ledger: Classification states existing kinds/keys/exit codes keep their spelling and no kind is added; Design > Also in the change lists CHANGELOG items and the bc-dev-mcp follow-up note (risk.ts:12-18, separate repo). Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-11",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "Golden license confirmed; predicted totals d8 3/11, d34 6/5, d14 3/0; regenerate all families together.",
+    "disposition": "fixed",
+    "evidence": "Ledger Design > Golden license states per-file roots/totalEffects, the anchor-only moves, the unchanged Rec.Table.al file-unmatched diagnostics, no schemaVersion move, and regeneration via scripts/check-goldens --regen. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed). | Attempt 2 round 1, astra re-raised (the no-version-change premise is stale: digest 1.4.0 shipped in v1.7.0, CHANGELOG.md:79,115-121). Fixed together with R1-26: P21 verifies the release and counts the goldens; Data plumb 7 bumps digest 1.4.0 -> 1.5.0 (digest_cli.rs:1141-1143) and keeps prove at 1.3.0 (prove.rs:725; prove's routine ref projects only anchor, prove.rs:692-702, and gains no new key). Golden license: the single schemaVersion line moves in all 21 tests/cli-b-goldens/digest/*.json (15 of them in that line only), the field-level moves of the 6 listed files and the 3 human files are unchanged, every .human.txt and all 19 prove/*.json (still 1.3.0) stay byte-identical. A3's triage count is updated to match.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-12",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Discoveries",
+    "line": null,
+    "severity": "minor",
+    "text": "The recorded discoveries are real and separately scoped; do not use them to defer declaration-span coverage. (Round 2, re-raised: declaration-only diagnostics still defer the declaration-span gap.)",
+    "disposition": "fixed",
+    "evidence": "Round 2: no declaration-span coverage is deferred. Interface/ControlAddIn procedures are now changed roots by span (Design > Declaration-only procedures; A2d). The Discoveries keep only work outside the acceptance: implementer mapping, the stale ModelRoutine skip reason, the unnumbered-object id collision, object-level mapping, the lowerer attribute bug, path forms, objectDisplay. Not delivered states the acceptance is met in full. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-13",
+    "source": "flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "Deleting a whole attribute line, or editing #if/#else directive lines around a duplicated procedure, yields no root; state these limits and add an acceptance row. (Round 2, re-raised by astra: regression rows absent.)",
+    "disposition": "fixed",
+    "evidence": "Round 2: Acceptance A1i adds both regression rows: (a) -U0 deletion of the whole [IntegrationEvent] line above OnAfterPostSalesDoc -> zero roots + hunk-outside-routines; (b) '#if CLEAN25' -> '#if CLEAN26' above Dup -> zero roots + hunk-outside-routines; each with the mutation that would flip it. Design > Known limits references both. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-14",
+    "source": "flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "Data plumb 2 names only abi_rows.rs; list every ModelRoutine struct literal that must gain the new field.",
+    "disposition": "fixed",
+    "evidence": "Ledger Design > Data plumb 2 lists all 16 files holding ModelRoutine literals; Data plumb 5 lists the 6 ModelObject literal files. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-15",
+    "source": "flash",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "interface_procedure declarations are RoutineDecls, so --file on an interface file would return bodiless roots where today it is file-unmatched; state it and add an A2a row.",
+    "disposition": "fixed",
+    "evidence": "Round 2: was refuted (workspace.rs:880-904 keeps them out of ModelRoutine); the design now deliberately makes them bodiless declaration-only roots, which is what this finding asked to state and test. Ledger Design > Declaration-only procedures states it; Acceptance A2d(b) asserts --file on an interface file returns its procedures as roots and A2d(e) keeps file-unmatched for an empty interface. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-16",
+    "source": "flash",
+    "round": 1,
+    "file": "ledger.md#Discoveries",
+    "line": null,
+    "severity": "minor",
+    "text": "The objectDisplay discovery's locator 'effect_query_cli.rs:497' is missing its directory.",
+    "disposition": "fixed",
+    "evidence": "Ledger Discoveries objectDisplay entry cites src/engine/l4/effect_query_cli.rs:497. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-01",
+    "source": "astra+flash",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "The span index loses the original anchor file: its key strips 'ws:' and lowercases, and RoutineSpan stores no source unit, so anchors built from it cannot preserve existing file bytes (and first-in-document-order needs a by-id lookup). Keep the original source_unit_id beside each anchor; normalize lookup keys only. (astra: important; flash: minor)",
+    "disposition": "fixed",
+    "evidence": "Confirmed: digest_cli.rs:98-100 (normalize) vs :571-579 (raw sa.source_unit_id). Ledger Design > Data plumb 3: RoutineSpan keeps the original source_unit_id; by_file (normalized key) and by_routine maps index one Vec<RoutineSpan>. Acceptance A4(b) pins a mixed-case file name byte-identical in the anchor, mutation 'build the anchor from the normalized key'. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-02",
+    "source": "astra+flash",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "First-declaration-wins makes a changed second Dup declaration invisible to bc-dev-mcp's span join; and 'root-slot routines keep today's anchor' is false for duplicate ids (today last-wins). Keep declaration multiplicity through the anchor projection and test the second arm. (astra: important; flash: minor)",
+    "disposition": "fixed",
+    "evidence": "Attempt 1 (superseded by attempt 2 below): Confirmed: digest_cli.rs:569-581 (HashMap insert per slot, last-wins); risk.ts:158-169. Ledger Design > Entry anchor: anchor = first TOUCHED declaration for --diff, first in document order otherwise; routine.anchors lists every declaration when an id has more than one (absent otherwise, so no golden changes shape); the duplicate-id last-wins -> first change is stated. Acceptance A4(c): second-arm change anchors at line 24 with anchors [19, 24]; --routine Dup anchors at 19. | Attempt 2 (Option A, inside al-sem): routine.anchor = the LAST TOUCHED declaration of the id in document order; touched = the declarations a --diff change touches, or every declaration for --file, a rename without hunks, --routine and prove (Data plumb 3). P20 re-reads bc-dev-mcp at 715e0b9: the provider calls --file (risk.ts:130), parseAlSemDigest reads only routine.anchor (risk.ts:99-110), findRisk joins by anchor line in the subject's [startLine, endLine] (risk.ts:158-169). So with the reader unchanged: --diff with one arm changed joins the changed arm (first or second); --file and --diff with both arms changed anchor at the last declaration, which equals today's root-slot last-wins value (digest_cli.rs:569-581; --routine Dup -> line 24, re-run in P18), so nothing a consumer sees today moves for a root-slot duplicate. The remaining gap (under --file the other arm joins only when the subject has no endLine) is a stated limit (Known limits; Not delivered) and a bc-dev-mcp follow-up (expand over routine.anchors or switch to --diff; separate repo, Option B rejected as undeliverable in #71). Acceptance A4(c): c1 second-arm diff -> 24, c2 first-arm diff -> 19, c3 both -> 24, c4 --file and --routine -> 24, anchors [19, 24]; a literal transcription of risk.ts's join with two endLine subjects asserts c1 joins arm 2 only, c2 arm 1 only, c4 arm 2 only (pinned limit); mutations first-regardless, last-regardless, first-touched, drop anchors each fail a row.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-03",
+    "source": "astra+flash",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Empty-context handling can mistake the splitter's synthetic EOF element for a real context line, so '@@ -3,2 +3,1 @@\\n-old\\n' falsely satisfies both counts; and the line that ends a truncated hunk must be re-dispatched, with the bare '---' concatenation case pinned. (astra: important; flash: minor)",
+    "disposition": "fixed",
+    "evidence": "Confirmed: diff_parser.rs:217-218 (normalized.split('\\n')), headers recognised only at top level :258-343. Ledger Design > Data plumb 4: the terminal split element of text ending in '\\n' is dropped before parsing, so only a physical blank line is context; the terminating line of a truncated hunk is processed as a top-level line; a bare '---' while old-side count remains is consumed as a deleted line (pinned). Acceptance A1g(c) with and without a final newline, A1g(c1) diff --git re-dispatch, A1g(c2) bare '---' outcome. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-04",
+    "source": "astra+flash",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "'Prove ... no anchor read' is false: prove calls the shared entry builder and serializes its anchor; specify anchor plumbing for both callers, justify unchanged prove goldens by their selected routines, add a non-root-slot prove regression and the CHANGELOG line.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: prove.rs:965 (run_digest_query_full_from_entries), :694-700, :1002. Ledger Design > Data plumb 6 plumbs the span index into the shared builder for digest and prove; license reason rewritten (each of the 18 non-dummy prove goldens' roots is a single-declaration root-slot routine anchored at its procedure line); CHANGELOG line names prove routine.anchor; Acceptance A4(e) runs run_prove_pipeline(ws-d34, Persist) -> anchor line 45 col 4. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-05",
+    "source": "astra",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "minor",
+    "text": "The column contract is misstated as UTF-16: Utf16Cols returns UTF-8 byte columns unchanged. State UTF-8 byte columns, preserve values, and pin a declaration preceded by non-ASCII text on its line.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: src/program/body/node_util.rs:21-37 (col returns byte_col verbatim). Ledger P17(b); Design > Entry anchor and Golden license state UTF-8 byte columns; Acceptance A4(d): '    /*é*/ procedure Y()' -> column 11 (UTF-16 would be 10). Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-06",
+    "source": "flash",
+    "round": 2,
+    "file": "ledger.md#Acceptance matrix",
+    "line": null,
+    "severity": "minor",
+    "text": "A2c's precondition (dependency listed under payload.dependencies.apps) also holds for the symbol-only fixture, whose dependency has no source routine, so the mutation could not fail; require the embedded fixture with call_lib = true and assert a dep:{guid} anchor first.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: abi_rows.rs:219 (ABI rows have an empty unit), cli_digest_query_dependencies.rs:89-108, 251-270. Same ledger change as R1-05: A2c uses the embedded fixture with CallLib, asserts app_sources embedded and a dep:{DEP_GUID} effect origin before the exclusion check. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-07",
+    "source": "conductor",
+    "round": 2,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Two interfaces declaring the same procedure would give #71's new declaration-only roots one shared stableId (every unnumbered object has object id <guid>/<Kind>/0), so the collision is created by #71 and cannot be deferred. Derive the declaration-only id from the object's name with the same hashing scheme; keep the general object-id collision as a discovery.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: src/engine/ids.rs:130-132 and src/program/model/workspace.rs:718. Ledger Design > Declaration-only procedures: id = to_stable_routine_id_from_parts(to_stable_object_id(object_id), normalized_signature_hash(...), Some(<unescaped object name>)), i.e. the existing discriminator fold (ids.rs:315-328) over a key carrying the object name (unique per kind per app); the {stableObjectId}#{64 hex} shape is kept (ids.rs:290-298, bc-dev-mcp risk.ts:99-110). Acceptance A2d(c) two_interfaces_same_procedure_distinct_roots: both Bar lines changed -> two roots, distinct ids each equal to its own name-folded id; mutation 'pass None (shared object id)' yields one id and fails. The 'unnumbered object id' discovery keeps the general collision for other consumers. Attempt 2: carried over unchanged; citations re-verified on 52e64d1a (digest_cli.rs lines shifted by #68, re-pointed). | FINAL r1 astra re-raise fixed (edacd9f1): the object name is unescaped once via scope::unescape_al_identifier before hashing; test quoted_interface_name_is_unescaped_in_the_id.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-01",
+    "source": "flash",
+    "round": 3,
+    "file": "ledger.md Design / Acceptance matrix",
+    "line": null,
+    "severity": "minor",
+    "text": "Declaration-only roots are not in the snapshot identity table, so the shared builder drops them (DIAG-digest-root-not-in-snapshot, digest_cli.rs:682-690) or adds no-coverage-record (:692-700), inflating rootsRequested (:1128-1136). Build them from DeclOnlyInfo before the snapshot lookups with no query diagnostic; A2d(a) asserts rootsRequested == rootsResolved == 1 and no DIAG-digest-* diagnostic.",
+    "disposition": "fixed",
+    "evidence": "Attempt 2: confirmed (P19: digest_cli.rs:623-631 RootNotInSnapshot skip, :633-641 NoCoverageRecord, :1035/:1043 DIAG-digest-* codes, :1069-1071 rootsRequested/rootsResolved; snapshot.rs:1087-1110 identity table reads ws.routines only; digest.rs:3568-3586 drops unknown ids silently). Ledger Design > Data plumb 6: a root whose declarations are declaration_only is built entirely from the span index BEFORE the identity, coverage, base-entry and unresolved-cone lookups, pushes no query diagnostic, and is counted once in rootsRequested and rootsResolved. Acceptance A2d(a) asserts rootsRequested == rootsResolved == 1 and no envelope diagnostic code starting DIAG-digest-; A2d(b) asserts 2 == 2; mutation (iv) routes the root through the lookups and fails.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-02",
+    "source": "flash",
+    "round": 3,
+    "file": "ledger.md Design / Acceptance matrix",
+    "line": null,
+    "severity": "minor",
+    "text": "A1g(c2) gives no hunk counts; with @@ -3,2 +3,1 @@ the ---/+++ lines exactly fill the counts, so no DiffParseError, a phantom Added(3) in file 1, and the second hunk attached to file 1 (diff_parser.rs:363-369). Pin explicit counts (e.g. @@ -3,3 +3,1 @@) and the full outcome.",
+    "disposition": "fixed",
+    "evidence": "Attempt 2: confirmed (exact-fill counts complete the hunk; a hunk header attaches to the current file, diff_parser.rs:371-376). Ledger Design > Data plumb 4 states per-side count acceptance (a '-' line needs old-side count, '+' needs new-side, context both; a non-accepted line before both counts reach zero truncates). New acceptance row A1g(c2) bare_header_pair_inside_short_hunk_is_body pins @@ -3,3 +3,1 @@ with '-old', '--- a/src/subscriber.al', '+++ b/src/subscriber.al', then '@@ -9,1 +9,1 @@', '-x', '+y': DeletedAfter(2) and Added(3) in hunk 1, one DiffParseError for the hunk at +3, the re-dispatched header becomes a second hunk on src/posting.al (Added(9)), one parsed file, roots [PostSalesDoc], no HandlePosted, no diff-file-unmatched, no hunk-outside-routines, exit 0; mutations: header tests inside a body (HandlePosted appears), accepting '-' with no old count left or treating exact-fill as truncated, dropping the re-dispatched line (parser asserts two hunks).",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-26",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Design",
+    "line": null,
+    "severity": "important",
+    "text": "Attempt 2 round 1: Data plumb 7 / Golden license say '1.4.0 is unreleased', which contradicts the current CHANGELOG (1.4.0 shipped in v1.7.0). New declarationOnly/anchors keys cannot ride on 1.4.0; version the additive schema (e.g. 1.5.0), amend the acceptance assertions and permit schemaVersion-only changes in all 21 digest JSON goldens, keeping the field-level restrictions.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: CHANGELOG.md:79 '## [1.7.0] - 2026-10-14' with the 1.3.0 -> 1.4.0 digest bump at :115-121; digest_cli.rs:1143 sets 1.4.0; prove.rs:725 sets 1.3.0; 21 digest JSON goldens each with one schemaVersion line, 19 prove goldens at 1.3.0 (ledger P21). Ledger: Classification and Declaration-only section restated; Data plumb 7 bumps digest to 1.5.0 (minor: additive keys; bc-dev-mcp checks the major only, risk.ts:90-93) and states why prove stays 1.3.0 (no new key in prove's routine ref, prove.rs:692-702; anchor value change only, no prove golden value moves); the two version-pinning tests (cli_digest_query_dependencies.rs:169, cli_digest_temp_state.rs:142) move to 1.5.0. Golden license: schemaVersion line permitted in all 21 digest JSON goldens, every other restriction kept, prove goldens byte-identical. Acceptance: A2d(f) asserts digest 1.5.0 and prove 1.3.0; A3 triage expects 21 digest JSON + 3 human files and no prove move. CHANGELOG line names the bump.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-27",
+    "source": "astra",
+    "round": 1,
+    "file": "ledger.md#Acceptance matrix",
+    "line": null,
+    "severity": "minor",
+    "text": "Attempt 2 round 1: A1g(c2)'s named mutation 'accept a - line with no old-side count left' cannot fail the literal fixture (every body - arrives while old count remains), and the exact-fill variant is mentioned but not specified as an executed case. Add an explicit per-side-overrun case and the exact-fill variant with expected outcomes, or drop the discrimination claims.",
+    "disposition": "fixed",
+    "evidence": "Confirmed by tracing the c2 body (@@ -3,3 +3,1 @@: '-old' old 1/3, '---' old 2/3, '+++' new 1/1; no '-' after the old count is spent). Ledger: the claim is removed from the A1g(c2) row (stated as not claimed there) and two executed rows are added. A1g(c2-overrun) minus_line_past_old_count_ends_the_hunk: @@ -3,1 +3,2 @@ with '-old', '+a', '--- a/src/subscriber.al', '+++ b/src/subscriber.al', '@@ -9,1 +9,1 @@', '-x', '+y' -> one DiffParseError for the hunk at +3, two parsed files, roots exactly {PostSalesDoc, HandlePosted}, exit 0; under the mutation the hunk completes, '@@ -9' attaches to posting.al, one file, zero errors, roots [PostSalesDoc] -> fails. A1g(c2-exact) bare_header_pair_exact_fill_is_complete: @@ -3,2 +3,1 @@ with the same tail -> no error, one parsed file with two hunks (Added(3), Added(9)), roots [PostSalesDoc], changedRootsDiagnostics [], exit 0; mutations 'treat count exhaustion as truncation' (an error appears) and 'header tests inside a body' (file 2 and HandlePosted appear) fail it. Data plumb 4 references all three rows.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-01",
+    "source": "astra",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 242,
+    "severity": "important",
+    "text": "Hunk cursor/range arithmetic unchecked; `@@ -1,1 +2147483647,0 @@` overflows (panic in checked builds).",
+    "disposition": "fixed",
+    "evidence": "5b956c2d: checked ranges; an out-of-i32 range is a diff-parse-error that opens no hunk (the file is then hunkless: every routine a root, stated in CHANGELOG); unit + CLI boundary tests with proofs.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-02",
+    "source": "astra",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 387,
+    "severity": "important",
+    "text": "An orphan `+++` after a plus-side overrun overwrites current_file and discards the previous file's partial hunk.",
+    "disposition": "fixed",
+    "evidence": "5b956c2d: `+++` opens a file only right after a `---` header; astra's repro tested through the CLI with a proof.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-03",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 234,
+    "severity": "important",
+    "text": "Deleting a routine's first (or only) attribute line gave no changed root.",
+    "disposition": "fixed",
+    "evidence": "5b956c2d: a deleted run of attribute-only lines directly above a span marks that routine (HunkChange::DeletedAttributesAfter); positive test replaces limit (a); attribute_only_deletion_runs pins the narrow rule.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-04",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 339,
+    "severity": "minor",
+    "text": "Concatenated diffs with no diff --git separator and an exact-fill hunk attach the next file's hunks to the previous file.",
+    "disposition": "refuted",
+    "evidence": "Header counts are authoritative, as git and GNU patch read them: on the exact-fill input `git apply --numstat` gives one file and GNU patch 2.7.6 reads both hunks as the first file's; a short body is \"corrupt/malformed patch\" in both. Stated as a limit in the ledger and CHANGELOG.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-05",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 904,
+    "severity": "minor",
+    "text": "declaration_only_routines ignored the projection population in cross-app mode.",
+    "disposition": "fixed",
+    "evidence": "edacd9f1: follows `population` like the routine loop.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-06",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 267,
+    "severity": "minor",
+    "text": "#if-split header arms with DIFFERENT signatures share one origin, so an edit in one arm marks both ids.",
+    "disposition": "deferred",
+    "evidence": "Safe over-approximation (reports more, never fewer); stated as a limit in the ledger Not delivered and CHANGELOG.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-07",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 689,
+    "severity": "minor",
+    "text": "Declaration-only roots are special-cased in digest instead of being represented in the model and snapshot.",
+    "disposition": "deferred",
+    "evidence": "Root cause is the stale Interface/ControlAddIn ModelRoutine skip, tracked by issue #82; stated as a limit.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-08",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "crates/al-syntax/src/lower/mod.rs",
+    "line": 4014,
+    "severity": "minor",
+    "text": "ControlAddIn `event` declarations are not lowered as routines, so they are not changed roots; the CHANGELOG over-claimed.",
+    "disposition": "fixed",
+    "evidence": "fb098dbc: CHANGELOG says procedures only; \"ControlAddIn events are not changed roots\" recorded as a ledger Discovery.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-09",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 423,
+    "severity": "minor",
+    "text": "Per-hunk matching was O(spans x changes).",
+    "disposition": "fixed",
+    "evidence": "5b956c2d: binary search per change, per file; no output change.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 116,
+    "severity": "minor",
+    "text": "Unused ModelDeclarationOnlyRoutine.parameters/.return_type and a one-field DeclOnlyInfo.",
+    "disposition": "fixed",
+    "evidence": "edacd9f1/5b956c2d: fields removed; DeclOnlyInfo replaced by declaration_only_display: Option<String>; ids unchanged.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-11",
+    "source": "code-review+opus-5.5",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 34,
+    "severity": "minor",
+    "text": "[Unreleased] had three `### Changed` headers.",
+    "disposition": "fixed",
+    "evidence": "fb098dbc: each group header appears once.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F2-01",
+    "source": "opus-5.5",
+    "round": "final-2",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": null,
+    "severity": "minor",
+    "text": "The attribute-deletion rule (F1-03) recognised only lines that themselves start with `[`, so deleting a multi-line attribute gave no root; the limit was unstated.",
+    "disposition": "fixed",
+    "evidence": "8c4306ee: a deleted run is attribute-only when it parses as complete bracket-balanced attribute groups; multi-line and mixed tests with proofs M7/M8; remaining limit (a bracket inside a string argument) stated in the ledger.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F3-01",
+    "source": "gpt-6.1-sol",
+    "round": "final-3",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 315,
+    "severity": "minor",
+    "text": "The multi-line attribute classifier ignored non-attribute text after a closing `]` on the same line, so deleting a whole routine whose attribute closes on its header line blamed the next routine.",
+    "disposition": "fixed",
+    "evidence": "7da1fbe6: after a group balances, only whitespace or a // comment may follow on that line; unit + CLI tests with proofs M9/M10.",
+    "hash": "7da1fbe69e6457d320ca3a377b7b5fc8ee01bb78",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  }
+]
