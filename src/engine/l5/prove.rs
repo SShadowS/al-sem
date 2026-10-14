@@ -1070,6 +1070,7 @@ mod tests {
                 visited_routines: 1,
             },
             entry_diagnostics,
+            declaration_only: false,
         }
     }
 

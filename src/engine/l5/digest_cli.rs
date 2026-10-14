@@ -33,7 +33,7 @@ use crate::engine::l5::digest::{DigestEntryResult, compute_digest_effects_cli};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::{
-    UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
+    DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 use crate::program::model::workspace::Model;
@@ -208,7 +208,7 @@ pub struct RoutineSpan {
     pub anchor_line: u32,
     /// `source_anchor.start_column` (UTF-8 bytes).
     pub anchor_column: u32,
-    /// Set for Interface / ControlAddIn procedure declarations (Task 7 fills it).
+    /// Set for Interface / ControlAddIn procedure declarations.
     pub declaration_only: Option<DeclOnlyInfo>,
 }
 
@@ -261,23 +261,38 @@ impl RoutineSpanIndex {
 }
 
 /// One span per routine DECLARATION (never collapsed by id), in document order,
-/// from the model's workspace routines. Only `ws:` units: dependency source
-/// routines are `dep:<guid>:<path>`, ABI-only ones have an empty unit.
+/// from the model's workspace routines and the Interface / ControlAddIn
+/// declaration-only procedures on its object rows. Only `ws:` units: dependency
+/// source routines are `dep:<guid>:<path>`, ABI-only ones have an empty unit.
 pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
-    let mut spans: Vec<RoutineSpan> = resolved
+    let model_routines = resolved.workspace.routines.iter().map(|r| RoutineSpan {
+        routine: r.stable_routine_id.clone(),
+        source_unit_id: r.source_anchor.source_unit_id.clone(),
+        start: r.declaration_start_line,
+        end: r.source_anchor.end_line,
+        anchor_line: r.source_anchor.start_line,
+        anchor_column: r.source_anchor.start_column,
+        declaration_only: None,
+    });
+    let declaration_only = resolved
         .workspace
-        .routines
+        .objects
         .iter()
-        .filter(|r| r.source_anchor.source_unit_id.starts_with("ws:"))
-        .map(|r| RoutineSpan {
-            routine: r.stable_routine_id.clone(),
-            source_unit_id: r.source_anchor.source_unit_id.clone(),
-            start: r.declaration_start_line,
-            end: r.source_anchor.end_line,
-            anchor_line: r.source_anchor.start_line,
-            anchor_column: r.source_anchor.start_column,
-            declaration_only: None,
-        })
+        .flat_map(|o| &o.declaration_only_routines)
+        .map(|d| RoutineSpan {
+            routine: d.stable_routine_id.clone(),
+            source_unit_id: d.source_anchor.source_unit_id.clone(),
+            start: d.declaration_start_line,
+            end: d.source_anchor.end_line,
+            anchor_line: d.source_anchor.start_line,
+            anchor_column: d.source_anchor.start_column,
+            declaration_only: Some(DeclOnlyInfo {
+                display: d.name.clone(),
+            }),
+        });
+    let mut spans: Vec<RoutineSpan> = model_routines
+        .chain(declaration_only)
+        .filter(|s| s.source_unit_id.starts_with("ws:"))
         .collect();
     // Stable: the arms of an `#if`-split header share one origin and keep model order.
     spans.sort_by(|a, b| {
@@ -499,6 +514,8 @@ pub struct DigestEntryFull {
     pub unresolved: Vec<UnresolvedConeItem>,
     pub unresolved_traversal: UnresolvedTraversal,
     pub entry_diagnostics: Vec<EntryDiagnostic>,
+    /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
+    pub declaration_only: bool,
 }
 
 pub struct DigestEffectFull {
@@ -652,6 +669,48 @@ pub fn run_digest_query_full_from_entries(
     let mut out: Vec<DigestEntryFull> = Vec::new();
 
     for rid in roots {
+        // Routine anchor at the declaration (#71): the LAST touched declaration in
+        // document order (a single-declaration id: that one). See the ledger's
+        // Entry anchor for why last, not first. `None` when the id has no `ws:` span.
+        let decls = spans.of_routine(rid);
+        let routine_anchor = touched
+            .get(rid.as_str())
+            .and_then(|t| t.iter().next_back())
+            .map(|&i| spans.spans[i].anchor());
+        let routine_anchors: Vec<FullAnchor> = if decls.len() > 1 {
+            decls.iter().map(|&i| spans.spans[i].anchor()).collect()
+        } else {
+            Vec::new()
+        };
+
+        // Declaration-only roots (Interface / ControlAddIn methods) are not in the
+        // snapshot: build them from the span index FIRST, so they push no
+        // `root-not-in-snapshot` / `no-coverage-record` and count once (#71).
+        if let Some(info) = decls
+            .first()
+            .and_then(|&i| spans.spans[i].declaration_only.as_ref())
+        {
+            out.push(DigestEntryFull {
+                routine_id: rid.clone(),
+                routine_display: info.display.clone(),
+                object_display: String::new(),
+                routine_anchor,
+                routine_anchors,
+                coverage_status: "unknown".to_string(),
+                coverage_reasons: vec!["declaration-only".to_string()],
+                effects: Vec::new(),
+                unresolved: Vec::new(),
+                unresolved_traversal: UnresolvedTraversal {
+                    truncated: false,
+                    max_depth: DEFAULT_MAX_DEPTH,
+                    visited_routines: 0,
+                },
+                entry_diagnostics: Vec::new(),
+                declaration_only: true,
+            });
+            continue;
+        }
+
         // Verify the routine exists in the snapshot. Missing display → emit
         // `root-not-in-snapshot` and skip (no entry). Mirrors digest-query.ts.
         let Some(display_full) = display_by_id.get(rid.as_str()).copied() else {
@@ -672,20 +731,6 @@ pub fn run_digest_query_full_from_entries(
                 });
                 ("unknown", Vec::new())
             }
-        };
-
-        // Routine anchor at the declaration (#71): the LAST touched declaration in
-        // document order (a single-declaration id: that one). See the ledger's
-        // Entry anchor for why last, not first. `None` when the id has no `ws:` span.
-        let decls = spans.of_routine(rid);
-        let routine_anchor = touched
-            .get(rid.as_str())
-            .and_then(|t| t.iter().next_back())
-            .map(|&i| spans.spans[i].anchor());
-        let routine_anchors: Vec<FullAnchor> = if decls.len() > 1 {
-            decls.iter().map(|&i| spans.spans[i].anchor()).collect()
-        } else {
-            Vec::new()
         };
 
         // Get base effects (from S4 ordering)
@@ -795,6 +840,7 @@ pub fn run_digest_query_full_from_entries(
             unresolved: cone.items,
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
+            declaration_only: false,
         });
     }
 
@@ -984,6 +1030,9 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
     routine_m.insert("objectDisplay".into(), entry.object_display.clone().into());
     if let Some(ref a) = entry.routine_anchor {
         routine_m.insert("anchor".into(), anchor_to_value(a));
+    }
+    if entry.declaration_only {
+        routine_m.insert("declarationOnly".into(), true.into());
     }
     if !entry.routine_anchors.is_empty() {
         routine_m.insert(
