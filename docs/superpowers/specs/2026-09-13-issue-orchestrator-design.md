@@ -628,7 +628,7 @@ render of the ledger becomes the PR body.
    failure shapes", and "Measurement plan".
 5. **Spec panel.** `panel-review` protocol: briefing file, both models in parallel,
    `require_evidence` on, `output_file` per model. Convergence is defined by the
-   **findings register** (below). Cap 5 rounds via `continuation_id` (3 until 2026-10-14: three issues in a row
+   **findings register** (below). Cap 5 rounds via `continuation_id` (3 until 2026-10-14: two issues in a row, #64 and #71,
    ended one round short with every entry accepted by one reviewer and new round-3 findings
    left unreviewed); each round's
    prompt carries the diff of the spec since the last round and the register.
