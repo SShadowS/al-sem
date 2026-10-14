@@ -906,6 +906,8 @@ fn project_ir(
                 let stable_object_id = to_stable_object_id(&object_id);
                 o.routines
                     .iter()
+                    // `procedure ();` recovers with a zero-width MISSING name; skip it
+                    // like the routine loop does.
                     .filter(|r| !r.name.is_empty())
                     .map(|r| {
                         let syms = crate::program::body::ir_walk::ir_parameter_symbols(r);

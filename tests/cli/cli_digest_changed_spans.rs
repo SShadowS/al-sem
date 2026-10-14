@@ -465,6 +465,19 @@ fn every_routine_shape_line_maps_to_its_routine() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 
+    // (ii) alone: an ADDED-only hunk on the routine's last line (`end;`, line 16).
+    // No `-` line, so no `DeletedAfter` can stand in for an end-exclusive `Added`.
+    let (doc, code) = digest(
+        d8.path(),
+        &[],
+        Some("--- a/src/posting.al\n+++ b/src/posting.al\n@@ -15,0 +16,1 @@\n+    end;\n"),
+    );
+    assert_eq!(
+        (code, roots(&doc)),
+        (0, vec!["PostSalesDoc".to_string()]),
+        "added-only `end;`: {doc}"
+    );
+
     // The two `OnValidate`s (table field, page field) are different routines.
     let (t, _) = digest(
         shapes.path(),
@@ -1398,6 +1411,8 @@ fn interface_object_rows_carry_declaration_only_routines() {
     );
     assert_eq!((ifoo[1].0.as_str(), ifoo[1].2), ("Baz", 3));
     assert_ne!(ifoo[1].1, ifoo[0].1);
+    // The key property: two interfaces declaring the same `Bar()` get two ids.
+    assert_ne!(rows("IFoo")[0].1, rows("IQux")[0].1);
     assert_eq!(
         rows("IQux"),
         vec![(
