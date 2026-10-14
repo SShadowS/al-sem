@@ -180,7 +180,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     `master..HEAD` instead and record the substitution in the ledger by name;
     never let a stand-in read as the specified step. Either way its findings
     enter `findings.json`. Then both reviewers over the diff, spec, and
-    ledger, `charge final_rounds` per round (cap 3), same convergence rule.
+    ledger, `charge final_rounds` per round (cap 5), same convergence rule.
     On a pre-ratified attempt (step 1), round 1 also asks both reviewers to
     mark EVERY carried entry against the current hash: a carried `re-raised`
     is still unresolved, and `attest` refuses until both reviewers have

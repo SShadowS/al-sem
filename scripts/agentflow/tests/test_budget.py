@@ -6,8 +6,8 @@ from agentflow.state import Ctx
 
 def test_caps_match_spec():
     assert budget.CAPS == {
-        "spec_rounds": 5, "plan_tasks": 12, "task_attempts": 3, "final_rounds": 3,
-        "rebase_regate": 1, "ci_fix": 1, "discoveries": 5, "subagents": 60, "pi_calls": 14,
+        "spec_rounds": 5, "plan_tasks": 12, "task_attempts": 3, "final_rounds": 5,
+        "rebase_regate": 1, "ci_fix": 1, "discoveries": 5, "subagents": 60, "pi_calls": 20,
     }
     assert budget.WALL_CLOCK_SECONDS == 10 * 3600
 
