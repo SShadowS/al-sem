@@ -1213,6 +1213,8 @@ where
 /// (DEFAULT_DETECTORS first, then OPT_IN_DETECTORS). This order governs the
 /// `detectorStats` array for the `all` slot; the `default` slot is a subset in this
 /// same order (as `select_detectors` filters by name while preserving registry order).
+/// [`default_detectors`] defines that default set; this list is it followed by
+/// [`opt_in_detectors`].
 ///
 /// DEFAULT order (40): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
 ///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
@@ -1225,7 +1227,8 @@ pub fn registered_detectors() -> Vec<Detector> {
 }
 
 /// The DEFAULT detector set: what `alsem analyze` runs with no `--detector` or
-/// `--preset`, and what digest, prove, fingerprint, events and policy run.
+/// `--preset`, and what digest, prove, fingerprint, events and policy check run
+/// (through `gate::run::compute_analyzer_diagnostics` and its cross-app sibling).
 /// Which function a detector sits in IS its class: demote one by moving its
 /// entry to [`opt_in_detectors`].
 pub fn default_detectors() -> Vec<Detector> {

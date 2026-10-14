@@ -18,7 +18,9 @@ use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use crate::engine::gate::run::{analyzer_diagnostics_of_run, compute_analyzer_diagnostics};
+use crate::engine::gate::run::{
+    compute_analyzer_diagnostics, compute_analyzer_diagnostics_cross_app,
+};
 use crate::engine::l4::effect_query_cli::{
     build_db_effect_bundle, cross_app_db_effect_bundle, temp_state_str,
 };
@@ -26,7 +28,6 @@ use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
-use crate::engine::l5::detectors::registered_detectors;
 use crate::engine::l5::diff_parser::{DiffFileKind, parse_unified_diff};
 use crate::engine::l5::digest::{DigestEntryResult, compute_digest_effects_cli};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
@@ -38,64 +39,17 @@ use crate::program::model::program_calls::assemble_and_resolve_workspace_program
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
-// DEFAULT_DETECTOR_NAMES — same as cli_b_snapshot_differential (the 34-detector set).
-// Shared by the digest AND prove CLI pipelines (the next detector added must land
-// here so BOTH stay in sync — see build_envelope_diagnostics_json below).
-// ---------------------------------------------------------------------------
-
-pub const DEFAULT_DETECTOR_NAMES: &[&str] = &[
-    "d1-db-op-in-loop",
-    "d2-event-fanout-in-loop",
-    "d3-missing-setloadfields",
-    "d4-repeated-lookup-in-loop",
-    "d5-set-based-opportunity",
-    "d7-recursive-event-expansion",
-    "d8-commit-in-transaction",
-    "d9-transaction-span-summary",
-    "d10-self-modifying-loop",
-    "d11-modify-without-get",
-    "d12-dead-integration-event",
-    "d13-cross-app-internal-call",
-    "d14-dead-routine",
-    "d16-blob-in-loop",
-    "d17-non-setbased-on-large-table",
-    "d18-event-subscriber-heavy",
-    "d19-flowfield-in-loop",
-    "d20-unbounded-result-set",
-    "d21-temp-table-misuse",
-    "d22-deprecated-api-use",
-    "d29-onaftergetrecord-heavy",
-    "d32-internal-event-publisher",
-    "d33-event-without-subscribers",
-    "d34-page-source-heavy",
-    "d35-implicit-transaction-scope",
-    "d36-redundant-calcfields",
-    "d37-record-passed-by-value",
-    "d38-page-trigger-heavy",
-    "d39-codeunit-instantiation-in-loop",
-    "d41-unindexed-filter",
-    "d42-locktable-late",
-    "d43-event-ishandled-skip",
-    "d44-event-recursive-publish",
-    "d45-text-encoding-mismatch",
-];
-
-// ---------------------------------------------------------------------------
 // Shared envelope-diagnostics projection
 // ---------------------------------------------------------------------------
 
 /// Build the envelope `diagnostics` JSON array (the analyzer's per-stage diagnostics
-/// over the DEFAULT_DETECTOR_NAMES set). Shared by the digest AND prove CLI pipelines
+/// over the registry's default detector set). Shared by the digest AND prove CLI pipelines
 /// so they cannot desync. Each entry is `{code: "DIAG-<stage>", message, severity}`.
 pub fn build_envelope_diagnostics_json(
     workspace: &std::path::Path,
     resolved: &Model,
 ) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics(
-        workspace,
-        resolved,
-        &default_detectors(),
-    ))
+    diagnostics_json(&compute_analyzer_diagnostics(workspace, resolved))
 }
 
 /// [`build_envelope_diagnostics_json`] for the cross-app digest (#66): the detectors
@@ -106,20 +60,7 @@ fn build_envelope_diagnostics_json_cross_app(
     workspace: &std::path::Path,
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> serde_json::Value {
-    let run =
-        crate::engine::l5::registry::run_detectors_cross_app(base, &default_detectors(), true);
-    diagnostics_json(&analyzer_diagnostics_of_run(
-        workspace,
-        &base.resolved,
-        &run,
-    ))
-}
-
-fn default_detectors() -> Vec<crate::engine::l5::registry::Detector> {
-    registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect()
+    diagnostics_json(&compute_analyzer_diagnostics_cross_app(workspace, base))
 }
 
 fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> serde_json::Value {
@@ -1428,7 +1369,7 @@ pub fn run_digest_pipeline(
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 
-    // Build envelope diagnostics (same 34-detector set, shared with prove).
+    // Build envelope diagnostics (the analyze default detector set, shared with prove).
     let diagnostics_json = match &target {
         AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(workspace, r),
         AnalysisTarget::CrossApp(base) => {

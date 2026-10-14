@@ -29,8 +29,6 @@ use crate::engine::gate::policy::policy_loader::{
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::compute_analyzer_diagnostics;
 use crate::engine::l5::detector_context::build_detector_context;
-use crate::engine::l5::detectors::registered_detectors;
-use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::root_classification::classify_roots;
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -297,11 +295,7 @@ fn analyze_workspace_diagnostic_lines(
     workspace: &Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<String> {
-    let default_detectors: Vec<_> = registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    compute_analyzer_diagnostics(workspace, resolved, &default_detectors)
+    compute_analyzer_diagnostics(workspace, resolved)
         .iter()
         .map(|d| format!("{}: {}", d.severity, d.message))
         .collect()
