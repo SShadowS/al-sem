@@ -1453,6 +1453,7 @@ fn lower_routine<'t>(
             name: raw_name,
             raw: item.text(source).to_string(),
             args,
+            origin: origin_of(item),
         });
     }
     let name = arm_field(FieldName::Name)
@@ -5569,5 +5570,24 @@ pageextension 50117 PE extends P
             Some("A")
         );
         assert!(!r.in_dataset_modify_context);
+    }
+
+    /// #71: an attribute keeps its own origin, so a routine's declaration span can
+    /// start at its first attached attribute.
+    #[test]
+    fn attribute_origin_is_the_attribute_item() {
+        let src = "codeunit 1 C\n{\n    [IntegrationEvent(false, false)]\n    [Obsolete('x', '1.0')]\n    procedure P()\n    begin\n    end;\n}\n";
+        let af = parse(src);
+        let r = &af.objects[0].routines[0];
+        let rows: Vec<(u32, u32)> = r
+            .attributes_parsed
+            .iter()
+            .map(|a| (a.origin.start.row, a.origin.start.column))
+            .collect();
+        assert_eq!(rows, vec![(2, 4), (3, 4)]);
+        assert_eq!(
+            r.origin.start.row, 4,
+            "the routine node starts at the keyword"
+        );
     }
 }
