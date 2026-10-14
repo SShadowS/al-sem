@@ -321,6 +321,133 @@
         },
         "effects": [
           {
+            "conditionality": "unknown",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "sourceKind": "unavailable"
+            },
+            "factId": "4ad986136a11c4e7",
+            "guarantees": [
+              "ORDERING_UNKNOWN"
+            ],
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "ORDERING_UNKNOWN",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "COMMIT",
+            "viaPaths": [],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unknown",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "Audit Entry",
+              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/50100",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "sourceKind": "unavailable"
+            },
+            "factId": "1b0f28d232a82f5d",
+            "guarantees": [
+              "ORDERING_UNKNOWN"
+            ],
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "ORDERING_UNKNOWN",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "DB_INSERT",
+            "viaPaths": [],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unknown",
+            "confidence": "static",
+            "detail": {
+              "eventClass": "Integration",
+              "resourceDisplay": "onafterpostsalesdoc",
+              "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
+            },
+            "evidence": {
+              "sourceKind": "unavailable"
+            },
+            "factId": "b5d3dd3861f27868",
+            "guarantees": [
+              "ORDERING_UNKNOWN"
+            ],
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "ORDERING_UNKNOWN",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "EVENT_PUBLISH",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
+          }
+        ],
+        "entryDiagnostics": [
+          {
+            "effectType": "COMMIT",
+            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
+            "kind": "evidence-unavailable"
+          },
+          {
+            "effectType": "DB_INSERT",
+            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
+            "kind": "evidence-unavailable"
+          },
+          {
+            "effectType": "EVENT_PUBLISH",
+            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
+            "kind": "evidence-unavailable"
+          }
+        ],
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/posting.al",
+            "line": 18,
+            "sourceKind": "source"
+          },
+          "display": "OnAfterPostSalesDoc",
+          "objectDisplay": "",
+          "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
+        },
+        "unresolved": [],
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "reasons": [],
+          "status": "complete"
+        },
+        "effects": [
+          {
             "conditionality": "unconditional-on-success",
             "confidence": "static",
             "detail": {},
@@ -437,9 +564,9 @@
       }
     ],
     "summary": {
-      "rootsRequested": 2,
-      "rootsResolved": 2,
-      "totalEffects": 8,
+      "rootsRequested": 3,
+      "rootsResolved": 3,
+      "totalEffects": 11,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"

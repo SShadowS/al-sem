@@ -28,6 +28,56 @@
           "anchor": {
             "column": 1,
             "file": "ws:src/codeunit.al",
+            "line": 9,
+            "sourceKind": "source"
+          },
+          "display": "DeadHelper",
+          "objectDisplay": "",
+          "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7753483aea24994460cd48f690bd81e349e60e667a799b1cffc587c66d9f9a90"
+        },
+        "unresolved": [],
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "reasons": [],
+          "status": "complete"
+        },
+        "effects": [],
+        "entryDiagnostics": [],
+        "routine": {
+          "anchor": {
+            "column": 1,
+            "file": "ws:src/codeunit.al",
+            "line": 7,
+            "sourceKind": "source"
+          },
+          "display": "LiveHelper",
+          "objectDisplay": "",
+          "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7d7107f8fc84808468c4f81939860ce3e9b1e5ceaddb4b1e74ebbc2f55898f82"
+        },
+        "unresolved": [],
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "reasons": [],
+          "status": "complete"
+        },
+        "effects": [],
+        "entryDiagnostics": [],
+        "routine": {
+          "anchor": {
+            "column": 1,
+            "file": "ws:src/codeunit.al",
             "line": 2,
             "sourceKind": "source"
           },
@@ -44,8 +94,8 @@
       }
     ],
     "summary": {
-      "rootsRequested": 1,
-      "rootsResolved": 1,
+      "rootsRequested": 3,
+      "rootsResolved": 3,
       "totalEffects": 0,
       "totalUnresolved": 0
     },

@@ -218,14 +218,39 @@
         "entryDiagnostics": [],
         "routine": {
           "anchor": {
-            "column": 8,
+            "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 47,
+            "line": 45,
             "sourceKind": "source"
           },
           "display": "Persist",
           "objectDisplay": "",
           "stableId": "11111111-0000-0000-0000-00000000d340:Codeunit:51000#2a1cf2a83798e70f92fda0ecc5f6822fd52b4a96db103863a6c66bc229588480"
+        },
+        "unresolved": [],
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "reasons": [],
+          "status": "complete"
+        },
+        "effects": [],
+        "entryDiagnostics": [],
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 43,
+            "sourceKind": "source"
+          },
+          "display": "DoWork",
+          "objectDisplay": "",
+          "stableId": "11111111-0000-0000-0000-00000000d340:Codeunit:51000#71ee6ca8cae96cc44f98a4a38e0352a3804af68dc4524c8172530b3da4bfe6b4"
         },
         "unresolved": [],
         "unresolvedTraversal": {
@@ -372,8 +397,8 @@
       }
     ],
     "summary": {
-      "rootsRequested": 5,
-      "rootsResolved": 5,
+      "rootsRequested": 6,
+      "rootsResolved": 6,
       "totalEffects": 5,
       "totalUnresolved": 0
     },

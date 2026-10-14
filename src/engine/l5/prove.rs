@@ -905,7 +905,8 @@ pub fn run_prove_pipeline(
         routines: Some(vec![routine_selector.to_string()]),
         diff_text: None,
     };
-    let changed_roots = resolve_changed_roots(&snap, &changed_input, primary_guid_of(&resolved));
+    let changed_roots =
+        resolve_changed_roots(&snap, &resolved, &changed_input, primary_guid_of(&resolved));
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -968,6 +969,8 @@ pub fn run_prove_pipeline(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
+        &changed_roots.spans,
+        &changed_roots.touched,
     );
 
     if query_full.entries.is_empty() {
@@ -1056,6 +1059,7 @@ mod tests {
             routine_display: "TestRoutine".to_string(),
             object_display: "".to_string(),
             routine_anchor: None,
+            routine_anchors: Vec::new(),
             coverage_status: coverage_status.to_string(),
             coverage_reasons: Vec::new(),
             effects,

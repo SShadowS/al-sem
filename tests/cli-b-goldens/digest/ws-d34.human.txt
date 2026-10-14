@@ -16,6 +16,10 @@
     evidence: ws:src/Codeunit.al:47 "commit"
     via: 1 path(s)
 
+--- DoWork ---
+  coverage: complete
+  (no effects)
+
 --- NestedCommit ---
   coverage: complete
   [COMMIT] direct

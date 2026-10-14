@@ -14,7 +14,7 @@
 //!   - project_digest_document → JSON envelope (sorted, null-drop, 2-space, trailing \n)
 //!   - formatDigestHuman → human text
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
@@ -28,7 +28,7 @@ use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
-use crate::engine::l5::diff_parser::{DiffFileKind, parse_unified_diff};
+use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
 use crate::engine::l5::digest::{DigestEntryResult, compute_digest_effects_cli};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
 use crate::engine::l5::transaction_spans::SeedKind;
@@ -181,6 +181,10 @@ pub enum ChangedRootsDiagnostic {
 pub struct ChangedRootsResult {
     pub roots: Vec<String>,
     pub diagnostics: Vec<ChangedRootsDiagnostic>,
+    /// Per root id: indices into `spans.spans` of the declarations the input
+    /// touched (the entry anchor is the last of them, #71).
+    pub touched: HashMap<String, BTreeSet<usize>>,
+    pub spans: RoutineSpanIndex,
 }
 
 pub struct ChangedInput {
@@ -189,42 +193,114 @@ pub struct ChangedInput {
     pub diff_text: Option<String>,
 }
 
-/// Build the file → routines index from operationIndex + callsiteIndex.
-#[allow(clippy::type_complexity)] // documented parallel index maps; a struct adds no clarity
-fn build_routine_file_index(
-    snap: &CapabilitySnapshot,
-) -> (
-    HashMap<String, Vec<String>>,        // file → routines
-    HashMap<String, Vec<(String, u32)>>, // file → [(routineId, startLine)]
-) {
-    let mut by_file: HashMap<String, Vec<String>> = HashMap::new();
-    let mut line_entries: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+/// One routine DECLARATION's span (#71). Lines are 0-based and inclusive.
+#[derive(Debug, Clone)]
+pub struct RoutineSpan {
+    /// Stable routine id.
+    pub routine: String,
+    /// The ORIGINAL unit, e.g. `ws:src/posting.al` (case kept), for the anchor.
+    pub source_unit_id: String,
+    /// First line of the declaration: the routine node or its first attribute.
+    pub start: u32,
+    /// Last line of the routine node.
+    pub end: u32,
+    /// `source_anchor.start_line`.
+    pub anchor_line: u32,
+    /// `source_anchor.start_column` (UTF-8 bytes).
+    pub anchor_column: u32,
+    /// Set for Interface / ControlAddIn procedure declarations (Task 7 fills it).
+    pub declaration_only: Option<DeclOnlyInfo>,
+}
 
-    let mut add = |source_file: &str, routine: &str, start_line: u32| {
-        let norm = normalize_input(source_file);
-        let rset = by_file.entry(norm.clone()).or_default();
-        if !rset.contains(&routine.to_string()) {
-            rset.push(routine.to_string());
+#[derive(Debug, Clone)]
+pub struct DeclOnlyInfo {
+    pub display: String,
+}
+
+/// Every workspace routine declaration's span, with lookups by normalized file
+/// and by routine id (#71).
+#[derive(Debug, Clone, Default)]
+pub struct RoutineSpanIndex {
+    /// One per declaration (never collapsed by id), in document order.
+    pub spans: Vec<RoutineSpan>,
+    by_file: HashMap<String, Vec<usize>>,
+    by_routine: HashMap<String, Vec<usize>>,
+}
+
+impl RoutineSpan {
+    /// Does a diff change touch this span? `Added(n)`: n in the span (1-based).
+    /// `DeletedAfter(l)`: the gap between new lines l and l+1 is INTERIOR, so
+    /// deleting a whole routine, or blank lines between routines, blames no one.
+    fn touched_by(&self, c: &HunkChange) -> bool {
+        let (first, last) = (i64::from(self.start) + 1, i64::from(self.end) + 1);
+        match *c {
+            HunkChange::Added(n) => (first..=last).contains(&i64::from(n)),
+            HunkChange::DeletedAfter(l) => first <= i64::from(l) && i64::from(l) < last,
         }
-        line_entries
-            .entry(norm)
+    }
+
+    fn anchor(&self) -> FullAnchor {
+        FullAnchor {
+            source_kind: "source",
+            file: Some(self.source_unit_id.clone()),
+            line: Some(self.anchor_line),
+            column: Some(self.anchor_column),
+            excerpt: None,
+        }
+    }
+}
+
+impl RoutineSpanIndex {
+    fn of_file(&self, normalized: &str) -> &[usize] {
+        self.by_file.get(normalized).map_or(&[], Vec::as_slice)
+    }
+
+    fn of_routine(&self, id: &str) -> &[usize] {
+        self.by_routine.get(id).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// One span per routine DECLARATION (never collapsed by id), in document order,
+/// from the model's workspace routines. Only `ws:` units: dependency source
+/// routines are `dep:<guid>:<path>`, ABI-only ones have an empty unit.
+pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
+    let mut spans: Vec<RoutineSpan> = resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.source_anchor.source_unit_id.starts_with("ws:"))
+        .map(|r| RoutineSpan {
+            routine: r.stable_routine_id.clone(),
+            source_unit_id: r.source_anchor.source_unit_id.clone(),
+            start: r.declaration_start_line,
+            end: r.source_anchor.end_line,
+            anchor_line: r.source_anchor.start_line,
+            anchor_column: r.source_anchor.start_column,
+            declaration_only: None,
+        })
+        .collect();
+    // Stable: the arms of an `#if`-split header share one origin and keep model order.
+    spans.sort_by(|a, b| {
+        (&a.source_unit_id, a.anchor_line, a.anchor_column).cmp(&(
+            &b.source_unit_id,
+            b.anchor_line,
+            b.anchor_column,
+        ))
+    });
+    let mut by_file: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_routine: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, s) in spans.iter().enumerate() {
+        by_file
+            .entry(normalize_input(&s.source_unit_id))
             .or_default()
-            .push((routine.to_string(), start_line));
-    };
-
-    for op in &snap.operation_index {
-        add(&op.source_file, &op.routine, op.start_line);
+            .push(i);
+        by_routine.entry(s.routine.clone()).or_default().push(i);
     }
-    for cs in &snap.callsite_index {
-        add(&cs.source_file, &cs.routine, cs.start_line);
+    RoutineSpanIndex {
+        spans,
+        by_file,
+        by_routine,
     }
-
-    // Sort line_entries by startLine for each file
-    for entries in line_entries.values_mut() {
-        entries.sort_by_key(|(_, l)| *l);
-    }
-
-    (by_file, line_entries)
 }
 
 /// The model's primary app guid, the routine-selector scope of
@@ -234,34 +310,34 @@ pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
 }
 
 /// `primary_app_guid` scopes routine selectors to the workspace app's routines: a
-/// cross-app snapshot (#66) also holds dependency routines. Files need no scope: a
-/// dependency routine's file is `dep:<guid>:<path>`, never a workspace path.
+/// cross-app snapshot (#66) also holds dependency routines. Files are scoped by
+/// the span index's `ws:` filter ([`build_routine_span_index`]).
+///
+/// Files and diffs resolve by routine declaration span (#71); the result also
+/// carries, per root, the declarations the input touched.
 pub fn resolve_changed_roots(
     snap: &CapabilitySnapshot,
+    resolved: &Model,
     input: &ChangedInput,
     primary_app_guid: Option<&str>,
 ) -> ChangedRootsResult {
     let mut roots: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut diagnostics: Vec<ChangedRootsDiagnostic> = Vec::new();
 
-    let (by_file, line_entries) = build_routine_file_index(snap);
+    let spans = build_routine_span_index(resolved);
+    // Touched declaration indices; each one's id is a root (resolved below).
+    let mut hits: Vec<usize> = Vec::new();
 
     // Selector indexes (5-form resolveSelector cascade).
     let selector_idx = build_selector_indexes(snap, primary_app_guid);
 
     // 1. File-based matching
     for file in input.files.iter().flatten() {
-        let norm = normalize_input(file);
-        match by_file.get(&norm) {
-            Some(rset) if !rset.is_empty() => {
-                for r in rset {
-                    roots.insert(r.clone());
-                }
-            }
-            _ => {
-                diagnostics.push(ChangedRootsDiagnostic::FileUnmatched { file: file.clone() });
-            }
+        let ixs = spans.of_file(&normalize_input(file));
+        if ixs.is_empty() {
+            diagnostics.push(ChangedRootsDiagnostic::FileUnmatched { file: file.clone() });
         }
+        hits.extend_from_slice(ixs);
     }
 
     // 2. Routine selector matching (port of resolveSelector — 5-form cascade).
@@ -289,7 +365,10 @@ pub fn resolve_changed_roots(
                 candidates,
             });
         } else {
-            roots.insert(matches.into_iter().next().unwrap());
+            // Every declaration of the id is touched (a selector names no line).
+            let id = matches.into_iter().next().unwrap();
+            hits.extend_from_slice(spans.of_routine(&id));
+            roots.insert(id);
         }
     }
 
@@ -310,41 +389,28 @@ pub fn resolve_changed_roots(
                 });
                 continue;
             }
-            let norm_path = normalize_input(&diff_file.path);
-            let rset = by_file.get(&norm_path);
-            if rset.map(|v| v.is_empty()).unwrap_or(true) {
+            let ixs = spans.of_file(&normalize_input(&diff_file.path));
+            if ixs.is_empty() {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched {
                     file: diff_file.path.clone(),
                 });
                 continue;
             }
-            let rset = rset.unwrap();
-            let entries = line_entries
-                .get(&norm_path)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
 
             if diff_file.hunks.is_empty() {
-                // Rename with no content — include all routines
-                for r in rset {
-                    roots.insert(r.clone());
-                }
+                // Rename (or mode change) with no content — every declaration.
+                hits.extend_from_slice(ixs);
                 continue;
             }
 
             for hunk in &diff_file.hunks {
-                // 1-based [newStart, newStart+newCount) → 0-based [newStart-1, newStart+newCount-1)
-                let hunk_start = (hunk.new_start - 1).max(0) as u32;
-                let hunk_end = (hunk.new_start - 1 + hunk.new_count.max(0)) as u32;
-
-                let mut matched: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                for (rid, line) in entries {
-                    if *line >= hunk_start && *line < hunk_end {
-                        matched.insert(rid.clone());
-                    }
-                }
-                if matched.is_empty() {
+                // Only the hunk's CHANGED lines count; context never makes a root.
+                let hit: Vec<usize> = ixs
+                    .iter()
+                    .copied()
+                    .filter(|&i| hunk.changes.iter().any(|c| spans.spans[i].touched_by(c)))
+                    .collect();
+                if hit.is_empty() {
                     // endLine = newStart + max(newCount - 1, 0). When newCount == 0
                     // (pure deletion hunk) TS yields newStart, NOT newStart - 1 (#14).
                     diagnostics.push(ChangedRootsDiagnostic::HunkOutsideRoutines {
@@ -352,13 +418,18 @@ pub fn resolve_changed_roots(
                         start_line: hunk.new_start,
                         end_line: hunk.new_start + (hunk.new_count - 1).max(0),
                     });
-                } else {
-                    for r in matched {
-                        roots.insert(r);
-                    }
                 }
+                hits.extend(hit);
             }
         }
+    }
+
+    // Touched sets of one id from several inputs are unioned.
+    let mut touched: HashMap<String, BTreeSet<usize>> = HashMap::new();
+    for i in hits {
+        let id = &spans.spans[i].routine;
+        roots.insert(id.clone());
+        touched.entry(id.clone()).or_default().insert(i);
     }
 
     // Sort + dedup
@@ -368,6 +439,8 @@ pub fn resolve_changed_roots(
     ChangedRootsResult {
         roots: sorted,
         diagnostics,
+        touched,
+        spans,
     }
 }
 
@@ -417,6 +490,9 @@ pub struct DigestEntryFull {
     pub routine_display: String,
     pub object_display: String,
     pub routine_anchor: Option<FullAnchor>,
+    /// Every declaration's anchor in document order, for an id with more than one
+    /// declaration (two `#if` arms); empty otherwise (#71).
+    pub routine_anchors: Vec<FullAnchor>,
     pub coverage_status: String,
     pub coverage_reasons: Vec<String>,
     pub effects: Vec<DigestEffectFull>,
@@ -532,6 +608,8 @@ pub fn run_digest_query_full_from_entries(
     base_entries: &[DigestEntryResult],
     tx_ctx_map: &HashMap<String, TransactionContext>,
     temp_states: &DbTempStates<'_>,
+    spans: &RoutineSpanIndex,
+    touched: &HashMap<String, BTreeSet<usize>>,
 ) -> DigestQueryFullResult {
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
 
@@ -562,53 +640,6 @@ pub fn run_digest_query_full_from_entries(
             .unwrap_or("");
         if !id.is_empty() {
             display_by_id.insert(id, nm);
-        }
-    }
-
-    // Root anchor map
-    let mut anchor_by_rid: HashMap<&str, FullAnchor> = HashMap::new();
-    for slot in &snap.root_classifications {
-        if let Some(ref sa) = slot.source_anchor
-            && !sa.source_unit_id.is_empty()
-        {
-            anchor_by_rid.insert(
-                slot.routine_id.as_str(),
-                FullAnchor {
-                    source_kind: "source",
-                    file: Some(sa.source_unit_id.clone()),
-                    line: Some(sa.range.start_line),
-                    column: Some(sa.range.start_column),
-                    excerpt: None,
-                },
-            );
-        }
-    }
-    for op in &snap.operation_index {
-        if !anchor_by_rid.contains_key(op.routine.as_str()) {
-            anchor_by_rid.insert(
-                op.routine.as_str(),
-                FullAnchor {
-                    source_kind: "source",
-                    file: Some(op.source_file.clone()),
-                    line: Some(op.start_line),
-                    column: Some(op.start_column),
-                    excerpt: None,
-                },
-            );
-        }
-    }
-    for cs in &snap.callsite_index {
-        if !anchor_by_rid.contains_key(cs.routine.as_str()) {
-            anchor_by_rid.insert(
-                cs.routine.as_str(),
-                FullAnchor {
-                    source_kind: "source",
-                    file: Some(cs.source_file.clone()),
-                    line: Some(cs.start_line),
-                    column: Some(cs.start_column),
-                    excerpt: None,
-                },
-            );
         }
     }
 
@@ -643,14 +674,19 @@ pub fn run_digest_query_full_from_entries(
             }
         };
 
-        // Routine anchor
-        let routine_anchor = anchor_by_rid.remove(rid.as_str()).map(|a| FullAnchor {
-            source_kind: a.source_kind,
-            file: a.file,
-            line: a.line,
-            column: a.column,
-            excerpt: a.excerpt,
-        });
+        // Routine anchor at the declaration (#71): the LAST touched declaration in
+        // document order (a single-declaration id: that one). See the ledger's
+        // Entry anchor for why last, not first. `None` when the id has no `ws:` span.
+        let decls = spans.of_routine(rid);
+        let routine_anchor = touched
+            .get(rid.as_str())
+            .and_then(|t| t.iter().next_back())
+            .map(|&i| spans.spans[i].anchor());
+        let routine_anchors: Vec<FullAnchor> = if decls.len() > 1 {
+            decls.iter().map(|&i| spans.spans[i].anchor()).collect()
+        } else {
+            Vec::new()
+        };
 
         // Get base effects (from S4 ordering)
         let base_entry = base_by_rid.get(rid.as_str());
@@ -752,6 +788,7 @@ pub fn run_digest_query_full_from_entries(
             routine_display: rtn_display.to_string(),
             object_display: obj_display.to_string(),
             routine_anchor,
+            routine_anchors,
             coverage_status: cov_status.to_string(),
             coverage_reasons: cov_reasons,
             effects: full_effects,
@@ -947,6 +984,12 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
     routine_m.insert("objectDisplay".into(), entry.object_display.clone().into());
     if let Some(ref a) = entry.routine_anchor {
         routine_m.insert("anchor".into(), anchor_to_value(a));
+    }
+    if !entry.routine_anchors.is_empty() {
+        routine_m.insert(
+            "anchors".into(),
+            serde_json::Value::Array(entry.routine_anchors.iter().map(anchor_to_value).collect()),
+        );
     }
     m.insert("routine".into(), serde_json::Value::Object(routine_m));
 
@@ -1337,7 +1380,8 @@ pub fn run_digest_pipeline(
         );
     }
 
-    let changed_roots = resolve_changed_roots(&snap, &changed_input, primary_guid_of(resolved));
+    let changed_roots =
+        resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
 
     // Compute transaction context map (for COMMIT effects).
     // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
@@ -1363,6 +1407,8 @@ pub fn run_digest_pipeline(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
+        &changed_roots.spans,
+        &changed_roots.touched,
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;

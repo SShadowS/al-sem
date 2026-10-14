@@ -203,9 +203,9 @@
         "entryDiagnostics": [],
         "routine": {
           "anchor": {
-            "column": 8,
+            "column": 4,
             "file": "ws:src/D48Pos.Codeunit.al",
-            "line": 39,
+            "line": 35,
             "sourceKind": "source"
           },
           "display": "SendOne",

@@ -115,9 +115,9 @@
         "entryDiagnostics": [],
         "routine": {
           "anchor": {
-            "column": 15,
+            "column": 4,
             "file": "ws:src/NormalCU.al",
-            "line": 31,
+            "line": 27,
             "sourceKind": "source"
           },
           "display": "DoSetup",
