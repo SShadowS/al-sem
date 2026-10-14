@@ -340,6 +340,7 @@ mod tests {
                 end_column: 0,
                 syntax_kind: "procedure".to_string(),
             },
+            declaration_start_line: 0,
             identifier_references: vec![],
             unreachable_statements: vec![],
             has_branching: false,

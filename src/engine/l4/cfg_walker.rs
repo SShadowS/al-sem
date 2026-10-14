@@ -1790,6 +1790,7 @@ mod tests {
             statement_tree,
             loops: Vec::new(),
             source_anchor: dummy_anchor(),
+            declaration_start_line: 0,
             identifier_references: Vec::new(),
             unreachable_statements: Vec::new(),
             has_branching: false,

@@ -493,6 +493,10 @@ pub struct ModelRoutine {
     /// the L3 record-type projection is field-allowlisted so this never reaches an
     /// R0–R3 golden.
     pub source_anchor: crate::program::body::features::PAnchor,
+    /// 0-based first line of the declaration: the minimum of the routine node's
+    /// start row and every attached attribute's start row (#71). `source_anchor`
+    /// is unchanged.
+    pub declaration_start_line: u32,
     /// Lowercased / sorted / deduped identifier references in the routine body
     /// (L2 features `identifierReferences`). Read by d19 to test parameter use.
     /// Additive — forwarded verbatim from L2.
@@ -619,6 +623,15 @@ fn index_table_ir(
         is_temporary,
         is_extension_stub,
     }
+}
+
+/// The 0-based first line of a routine's declaration: its own node, or its first
+/// attached attribute when one sits above it (#71).
+pub(crate) fn declaration_start_line(r: &al_syntax::ir::RoutineDecl) -> u32 {
+    r.attributes_parsed
+        .iter()
+        .map(|a| a.origin.start.row)
+        .fold(r.origin.start.row, u32::min)
 }
 
 /// PAnchor from an owned-IR `Origin` — byte-identical to the legacy node anchor on the
@@ -1342,6 +1355,7 @@ fn project_ir(
                 statement_tree,
                 loops,
                 source_anchor,
+                declaration_start_line: declaration_start_line(ir_routine),
                 identifier_references,
                 unreachable_statements,
                 has_branching,
