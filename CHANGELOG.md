@@ -38,8 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- L2 capability extraction and the capability cone share one table-op map
-  (`table_commit::map_op`); the cone's `map_table_op` delegates to it (#69).
 - `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
   (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
@@ -142,10 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
   temporary and real records alike (#69). They copy or assign values in memory and never
   write the record's own table (`Validate`'s `OnValidate` writes stay separate effects).
-  Consumers that read these facts: capability facts (no `modify`), digest/prove (no `DB_MODIFY`),
-  physical-write sets of d43/d44/d45, fingerprint `M`, diff `CapabilityGainedWrite`,
-  policy `modify`. The #65 digest test that pinned `ValidateTemp` emitting `DB_MODIFY` is
-  replaced by the opposite assertion. Goldens moved: 9 `tests/r1a-goldens/` and 9
+  Everything that reads the capability `modify` fact (digest/prove, fingerprints, diff, policy,
+  the d43/d44/d45 write sets) inherits this. Goldens moved: 9 `tests/r1a-goldens/` and 9
   `tests/r3a3-goldens/` fixtures plus the R3a-3 manifest matrix (`modify` 134 -> 109).
 - The capability cone resolves a parameter-dependent write in every routine's own frame
   through a transitive per-producer solve (`l4::pd_solve`, #69 D1). A write a caller makes

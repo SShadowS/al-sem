@@ -59,17 +59,10 @@ fn run_mode(single_app: bool) -> Value {
 fn docs() -> &'static [(&'static str, Value)] {
     static DOCS: OnceLock<Vec<(&'static str, Value)>> = OnceLock::new();
     DOCS.get_or_init(|| {
-        let v = vec![
+        vec![
             ("single-app", run_mode(true)),
             ("cross-app", run_mode(false)),
-        ];
-        if let Ok(dir) = std::env::var("ISSUE69_DUMP_DIR") {
-            for (m, d) in &v {
-                let p = std::path::Path::new(&dir).join(format!("{m}.json"));
-                std::fs::write(p, serde_json::to_string_pretty(d).unwrap()).unwrap();
-            }
-        }
-        v
+        ]
     })
 }
 
