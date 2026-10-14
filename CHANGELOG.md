@@ -15,6 +15,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses age mode, not cargo-sweep's stamp mode, because NTFS updates last-access times up to
   an hour late. The first run cleaned 13.2 GiB. Background: U: filled up for the third time
   on 2026-10-14, which failed #68's post-merge check on a green merge.
+- `alsem digest`: Interface and ControlAddIn procedures are now changed roots. A change
+  inside one (or `--file` on its file) gives a "declaration-only" entry: `routine.declarationOnly:
+  true`, `effects` and `unresolved` empty, `coverage` status `unknown` with the new reason
+  `declaration-only`. It is counted once in `rootsRequested` and `rootsResolved` and adds no
+  `DIAG-digest-*` diagnostic. Its `stableId` keeps the `<app>:<Kind>:0#<hash>` shape, with the
+  object NAME folded into the hash, because every unnumbered object shares object number 0;
+  two interfaces declaring the same `procedure Bar()` therefore give two roots. The method
+  becomes a root, not the routines that implement it (#81), and `--routine` selectors do not
+  reach these procedures. Carried on the model as `ModelObject.declaration_only_routines`
+  (the model still does not make them `ModelRoutine`s, #82). Pinned by
+  `declaration_only_procedures_are_roots` and `interface_object_rows_carry_declaration_only_routines`
+  (#71).
+- `alsem digest`: `routine.anchors` lists every declaration's anchor, in document order, for a
+  routine id that has more than one declaration (two `#if` arms with one signature). The key
+  is absent when the id has one declaration (#71).
+
+### Changed
+
+- `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
+  first attached attribute line through the header, `var` section, body and `end;`. Before,
+  a routine was matched only through the start lines of the operations and call sites the
+  snapshot indexed, so a change on a plain assignment line, a header, a `var` line or
+  `end;` found no routine, and a routine with no indexed operation (an empty event publisher,
+  a pure function) could never be a root. Now, for `--diff`: an added or changed line touches
+  the span that holds it; a deletion touches a span only when the gap lies inside it (so
+  deleting a whole routine, or blank lines between routines, blames no neighbour); context
+  lines never count. `--file` takes every routine the file declares. Only workspace (`ws:`)
+  routines are indexed. Pinned in `tests/cli/cli_digest_changed_spans.rs`
+  (`hunk_on_assignment_line_is_a_changed_root`, `every_routine_shape_line_maps_to_its_routine`,
+  `context_lines_do_not_create_roots`, `deletions_resolve_by_interior_gap`,
+  `one_inside_one_outside_hunk`, `rename_with_and_without_hunks`,
+  `file_with_only_opless_routines_is_matched`, `file_digest_returns_every_routine_of_the_file`,
+  `hunkless_modified_file_takes_every_declaration`, `object_level_hunk_is_outside_routines`,
+  `limits_are_pinned`). Stated limits, pinned by `limits_are_pinned`: deleting a whole
+  attribute line gives no root, an `#if`/`#else`/`#endif` line gives no root, and an
+  attribute separated from its routine by a comment, pragma or `#if` is not in the span (#80).
+  Object-level changes (global `var`, fields, properties) still map to no routine (#79).
+- The changed-root diagnostics have new meanings: `file-unmatched` means the file declares no
+  routine at all (Interface/ControlAddIn procedures count); `diff-file-unmatched` means the
+  same for a diff path; `hunk-outside-routines` means none of the hunk's changed lines touch a
+  span (it still reports the hunk header's range). A file with one hunk inside a routine and
+  one outside gives the root and the diagnostic, exit 0; exit 2 still means zero roots.
+- `routine.anchor` in `alsem digest` and `alsem prove` is now the routine's declaration
+  (`source_anchor` line and column, the original `ws:` file name with its case kept), never
+  the first operation or call site inside the body. Routines that had no anchor now have one.
+  For an id with more than one declaration, the anchor is the LAST declaration the input
+  touched (R2-02): under `--diff` with one arm changed, that arm; with both arms changed, or
+  under `--file` or `--routine`, the last declaration, which is the value root-slot routines
+  had before. Columns stay UTF-8 byte columns. Pinned by `entry_anchor_is_the_declaration`,
+  `duplicate_id_anchor_follows_the_changed_arm` and `mixed_inputs_union_touched_declarations`.
+  **Limit for bc-dev-mcp (separate repo, not changed here):** its reader reads only the
+  singular anchor and calls `--file`, so for a two-arm id it joins only the last arm when its
+  subjects carry an `endLine`. `risk.ts` can stop avoiding `--diff` now, and
+  `parseAlSemDigest` should expand an entry over `routine.anchors` (#71).
+- Digest `schemaVersion` 1.4.0 → 1.5.0, for the additive `routine.declarationOnly`,
+  `routine.anchors` and the `declaration-only` coverage reason. Prove stays 1.3.0: its routine
+  reference gains no key, only anchor values can differ, and no prove golden moved. The two
+  version pins (`cli_digest_query_dependencies.rs`, `cli_digest_temp_state.rs`) move with it
+  (#71).
+- `ModelRoutine` gains `declaration_start_line` (the first attached attribute's line, or the
+  header line), and `AttributeIr` gains `origin`. `source_anchor` is unchanged (#71).
+- Goldens, in two regenerations. Regen #1 (span rule and anchors), 9 files:
+  `ws-d8-commit-in-tx` gains the `OnAfterPostSalesDoc` entry (anchor line 18 col 4; roots
+  2→3, `totalEffects` 8→11), JSON and human; `ws-d34` gains `DoWork` (0 effects) and
+  `Persist`'s anchor moves from line 47 to its declaration at line 45 (roots 5→6), JSON and
+  human; `ws-d14-dead-routine` gains `LiveHelper` and `DeadHelper` (0 effects each; roots
+  1→3), JSON and human; the anchor moves from a body line to the declaration in `ws-d35`
+  (`PersistAudit` 31→29), `ws-txn-d46-neg` (`DoSetup` 31→27) and `ws-txn-d48-pos` (second
+  `SendOne` line 39 col 8 → line 35 col 4). Regen #2: all 21 digest JSON goldens move in
+  their `schemaVersion` line only. No prove golden and no other family moved (#71).
+- Not fixed by #71, filed as issues: #76 (a `./src/x.al` spelling never matches), #77 (a
+  diff made from a git root above the workspace), #78 (`objectDisplay` is always empty), #79
+  (object-level changes map to no routine), #80 (an attribute separated by trivia is
+  dropped), #81 (an interface method change does not reach its implementers), #82 (the stale
+  Interface/ControlAddIn skip in the model), #83 (unnumbered objects share one object id).
 
 ### Changed
 
@@ -29,6 +104,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem digest --diff` reads each hunk body line by line and stops when the header's old
+  and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
+  longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,
+  not a new file. An empty line counts as context, `\ No newline at end of file` is not
+  counted, and a pure deletion's cursor follows git's `new_start + 1` rule. A hunk that ends
+  before its counts are used up (end of input, or a line its body cannot accept) is now
+  reported as `diff-parse-error` ("hunk at +N truncated"), which no input could produce
+  before; the line that ended it is then read as a normal top-level line. Pinned by the
+  `diff_parser` unit tests (`hunk_changes_follow_the_body`,
+  `pure_deletion_cursor_starts_after_new_start`,
+  `truncated_hunk_is_an_error_with_or_without_final_newline`,
+  `header_looking_lines_inside_a_body_are_body`,
+  `the_line_ending_a_truncated_hunk_is_redispatched`, `minus_line_past_old_count_ends_the_hunk`,
+  `exact_fill_completes_the_hunk`, `no_newline_marker_is_not_counted`,
+  `omitted_counts_bound_the_body`) and in `cli_digest_changed_spans.rs` by
+  `hunk_body_is_count_bounded`, `bare_header_pair_inside_short_hunk_is_body`,
+  `minus_line_past_old_count_ends_the_hunk` and `bare_header_pair_exact_fill_is_complete`
+  (#71).
+- `alsem digest --file dep:<guid>:<path>` selected the dependency file's routines as changed
+  roots, because path matching lowercased the `dep:` key on both sides. Only workspace
+  routines are selected now; the call gives `file-unmatched`, exit 2. Pinned by
+  `dependency_routines_never_become_changed_roots`, in default and `--single-app` mode (#71).
 - `alsem digest`, `prove`, `fingerprint`, `events` and `policy check` ran 14 detectors
   (13 of `analyze`'s default set plus opt-in d8), because 20 of the 34 names in a list
   copied at port time matched no registered detector. The 20 were invented names on real
