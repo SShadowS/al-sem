@@ -315,23 +315,6 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/6347db8a25413fa2530eea4f807fb070a940ee7ed3a773ee3431b5ed029c1751/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/6347db8a25413fa2530eea4f807fb070a940ee7ed3a773ee3431b5ed029c1751/rv/cust",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 0
-            },
-            "opSubtype": "Validate"
-          }
-        },
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
           "witnessOperationId": "r0/6347db8a25413fa2530eea4f807fb070a940ee7ed3a773ee3431b5ed029c1751/op2",
           "extra": {
             "kind": "table",
@@ -1094,23 +1077,6 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/04445aedf8909f242c3d10fdcbd92e45a61e13e80846a716f6dbe12d9e58f4df/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/04445aedf8909f242c3d10fdcbd92e45a61e13e80846a716f6dbe12d9e58f4df/rv/cust",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 0
-            },
-            "opSubtype": "Validate"
-          }
-        },
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
           "witnessOperationId": "r0/04445aedf8909f242c3d10fdcbd92e45a61e13e80846a716f6dbe12d9e58f4df/op2",
           "extra": {
             "kind": "table",
@@ -1727,23 +1693,6 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/f72d0f7d07f4cb6343378dbbd7203aa8bd7009f61980f1c3aa3592717695bc15/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/f72d0f7d07f4cb6343378dbbd7203aa8bd7009f61980f1c3aa3592717695bc15/rv/cust",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 0
-            },
-            "opSubtype": "Validate"
-          }
-        },
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
           "witnessOperationId": "r0/f72d0f7d07f4cb6343378dbbd7203aa8bd7009f61980f1c3aa3592717695bc15/op2",
           "extra": {
             "kind": "table",
@@ -2132,23 +2081,6 @@
               "parameterIndex": 0
             },
             "opSubtype": "Get"
-          }
-        },
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/394d6a34db51aa43e486314acbdc06d9f0f3c5511f9e5a58a9cd0969a99efb10/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/394d6a34db51aa43e486314acbdc06d9f0f3c5511f9e5a58a9cd0969a99efb10/rv/cust",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 0
-            },
-            "opSubtype": "Validate"
           }
         },
         {

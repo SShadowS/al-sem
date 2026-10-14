@@ -252,25 +252,7 @@
           }
         ]
       },
-      "capabilityFactsDirect": [
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/op0",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/rv/line",
-            "tempState": {
-              "kind": "known",
-              "value": false
-            },
-            "opSubtype": "Validate"
-          }
-        }
-      ],
+      "capabilityFactsDirect": [],
       "capabilityStatus": "complete",
       "capabilityReasons": [],
       "capabilityDiagnostics": []

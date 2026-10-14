@@ -3,27 +3,7 @@
 		{
 			"routineId": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#01d066dc06f48876bdca247c96e59567835060daa1ee39603c1ee01476ab368e",
 			"capabilityFactsDirect": [],
-			"capabilityFactsInherited": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "call",
-					"resourceId": "11111111-d1it-0000-0000-000000000001:Table:72100",
-					"witnessOperationId": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#18bb7c22613767aa9b2ae443e1a65cb43e963659620eed6a343fc4657cbb662d/op0",
-					"witnessCallsiteId": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#01d066dc06f48876bdca247c96e59567835060daa1ee39603c1ee01476ab368e/cs0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/rv/line",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#01d066dc06f48876bdca247c96e59567835060daa1ee39603c1ee01476ab368e",
 				"directStatus": "complete",
@@ -34,26 +14,7 @@
 		},
 		{
 			"routineId": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#18bb7c22613767aa9b2ae443e1a65cb43e963659620eed6a343fc4657cbb662d",
-			"capabilityFactsDirect": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "11111111-d1it-0000-0000-000000000001:Table:72100",
-					"witnessOperationId": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#18bb7c22613767aa9b2ae443e1a65cb43e963659620eed6a343fc4657cbb662d/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/rv/line",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-d1it-0000-0000-000000000001:Codeunit:72101#18bb7c22613767aa9b2ae443e1a65cb43e963659620eed6a343fc4657cbb662d",

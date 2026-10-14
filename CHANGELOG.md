@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- L2 capability extraction and the capability cone share one table-op map
+  (`table_commit::map_op`); the cone's `map_table_op` delegates to it (#69).
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -130,6 +132,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
+  temporary and real records alike (#69). They copy or assign values in memory and never
+  write the record's own table (`Validate`'s `OnValidate` writes stay separate effects).
+  Consumers that read these facts: capability facts (no `modify`), digest/prove (no `DB_MODIFY`),
+  physical-write sets of d43/d44/d45, fingerprint `M`, diff `CapabilityGainedWrite`,
+  policy `modify`. The #65 digest test that pinned `ValidateTemp` emitting `DB_MODIFY` is
+  replaced by the opposite assertion. Goldens moved: 9 `tests/r1a-goldens/` and 9
+  `tests/r3a3-goldens/` fixtures plus the R3a-3 manifest matrix (`modify` 134 -> 109).
 - `alsem digest --diff` reads each hunk body line by line and stops when the header's old
   and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
   longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,

@@ -157,19 +157,9 @@ pub struct CoverageRecord {
 // ===========================================================================
 
 /// Map an AL `RecordOpType` to a `CapabilityOp`, or `None` for state-only /
-/// filter ops (SetRange, SetFilter, Init, ...). Mirrors al-sem `table.ts`
-/// `mapOp`.
+/// filter ops. Delegates to the one table op map shared with L2 (#69 D5).
 fn map_table_op(op: &str) -> Option<&'static str> {
-    match op {
-        "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
-        | "CountApprox" | "Next" | "CalcFields" | "CalcSums" | "TestField" => Some("read"),
-        "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" => Some("modify"),
-        "Insert" => Some("insert"),
-        "Delete" | "DeleteAll" => Some("delete"),
-        // Rename: unmapped until its permission is measured -- see
-        // `l2::capability::table_commit::map_op` (#9).
-        _ => None,
-    }
+    crate::program::body::capability::table_commit::map_op(op)
 }
 
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).

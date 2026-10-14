@@ -7378,23 +7378,6 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/e9b12f248a0d18aa4513e3e884e3e0b7f70cdad69a6981282aaab7a6a527aa46/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/e9b12f248a0d18aa4513e3e884e3e0b7f70cdad69a6981282aaab7a6a527aa46/rv/customer",
-            "tempState": {
-              "kind": "known",
-              "value": false
-            },
-            "opSubtype": "Validate"
-          }
-        },
-        {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
           "witnessOperationId": "r0/e9b12f248a0d18aa4513e3e884e3e0b7f70cdad69a6981282aaab7a6a527aa46/op2",
           "extra": {
             "kind": "table",

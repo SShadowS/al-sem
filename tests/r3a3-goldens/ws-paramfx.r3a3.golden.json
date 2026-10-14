@@ -2,26 +2,7 @@
 	"summaries": [
 		{
 			"routineId": "aaaaaaaa-0000-0000-0000-0000000000b2:Codeunit:60101#3ebe9ba4f4136ce3468dcd2d2e56a6ece24f875e327feba3e6b7d04982d3c4df",
-			"capabilityFactsDirect": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "aaaaaaaa-0000-0000-0000-0000000000b2:Table:60100",
-					"witnessOperationId": "aaaaaaaa-0000-0000-0000-0000000000b2:Codeunit:60101#3ebe9ba4f4136ce3468dcd2d2e56a6ece24f875e327feba3e6b7d04982d3c4df/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/c82631f4c81532890fc07f0b9311a574d1529b43b69e872e20ecd189ad2c0ada/rv/salesline",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "aaaaaaaa-0000-0000-0000-0000000000b2:Codeunit:60101#3ebe9ba4f4136ce3468dcd2d2e56a6ece24f875e327feba3e6b7d04982d3c4df",

@@ -2,26 +2,7 @@
 	"summaries": [
 		{
 			"routineId": "77777777-7777-7777-7777-777777777777:Codeunit:51101#062c53a0a18bc81d40e1eeb8aa85f456e33a6d63f5e0fb727f509f6852024e27",
-			"capabilityFactsDirect": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "77777777-7777-7777-7777-777777777777:Table:51100",
-					"witnessOperationId": "77777777-7777-7777-7777-777777777777:Codeunit:51101#062c53a0a18bc81d40e1eeb8aa85f456e33a6d63f5e0fb727f509f6852024e27/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/e9107abf1036bcf625962fb20016a9ec77a496435b18141df8ed317e91236eba/rv/item",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "77777777-7777-7777-7777-777777777777:Codeunit:51101#062c53a0a18bc81d40e1eeb8aa85f456e33a6d63f5e0fb727f509f6852024e27",
