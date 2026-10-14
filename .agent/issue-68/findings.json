@@ -1,0 +1,514 @@
+[
+  {
+    "id": "R1-01",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "Design / Acceptance matrix (T1, T3)",
+    "line": null,
+    "severity": "important",
+    "text": "T1 calls resolve_analyze_detectors(None, None) directly, so it pins the selector, not the use; T3 never runs `analyze`, so dropping a detector at analyze's call site (run.rs:452) leaves every test green.",
+    "disposition": "fixed",
+    "evidence": "Verified run.rs:452. Ledger Acceptance matrix: T3 gains `analyze` (cross-app) and `analyze --single-app` cases asserting the default_detectors() set; mutation (a) drops d60 at run.rs:452 -> T3 analyze cases fail while T1 stays green. T1 relabelled 'selector'. P4 now records the cross-app analyze trace (trace/analyze_x.json: 40 names, each once).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-02",
+    "source": "astra",
+    "round": 1,
+    "file": "Acceptance matrix (T1b)",
+    "line": null,
+    "severity": "important",
+    "text": "Swapping d8 and d60 between the sets preserves counts, partition equality and disjointness, and T1/T3 follow the changed oracle; duplicates within one set are not guarded.",
+    "disposition": "fixed",
+    "evidence": "Ledger Acceptance matrix T1b: (2) all 54 names unique via HashSet; (3) opt_in_detectors() names equal a hand-stated literal of the 14 opt-ins (independent oracle). Mutations: swap d8/d60 -> (3) fails; duplicate d1 in default -> (2) fails.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-03",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "Assumption probes P12 / Not delivered",
+    "line": null,
+    "severity": "important",
+    "text": "Cost evidence is two CDO samples and an analyze-based estimate, not changed-command measurements, and nothing is said or bounded for a large workspace (8020); findings are still materialized and discarded.",
+    "disposition": "fixed",
+    "evidence": "P12 now: before-numbers for all six invocations (prove/policy/events chains added, cdo/timings2.txt); after labelled an ESTIMATE; reasoned upper bound = analyze's own detector stage on the same workspace and mode, including discarded findings; 8020 not measurable here (no .al/app.json in the available corpus). Design 9: gate re-measures all six on the changed binary. Not delivered: large-workspace safety NOT demonstrated.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-04",
+    "source": "astra",
+    "round": 1,
+    "file": "Acceptance matrix (T3)",
+    "line": null,
+    "severity": "minor",
+    "text": "T3's registered-only set projection hides unknown detector spans and duplicate executions, and does not require a successful exit.",
+    "disposition": "fixed",
+    "evidence": "T3 now asserts exit 0, inspects ALL ph=='B' events named detector.*, fails on an unregistered name, requires each name exactly once, then set equality. P5 verified: detector.result is an instant event (registry.rs:673), every current trace has each name exactly once; the digest invocation changed to `--file src/D1MultiCaller.al` (exit 0 in both modes; the old `--routine x` exited 2).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-05",
+    "source": "astra",
+    "round": 1,
+    "file": "Assumption probes P3",
+    "line": null,
+    "severity": "minor",
+    "text": "The 20 mismatches map to 18 defaults + 2 opt-ins, not 17/3; the port-time invention of the names was asserted without the historical diff.",
+    "disposition": "fixed",
+    "evidence": "P3 corrected to 18 + 2 (d8 listed separately as one of the 14 matches). Historical diff attached: git show 1e5a5f92 line 2230 adds \"d16-blob-in-loop\" under a doc saying 'analyzeWorkspace runs this set'; git show 1e5a5f92^:src/engine/l5/detectors/mod.rs already registers d16-obsolete-routine-call, d17-min-version-drift, d18-constant-filter-in-loop, d19-unused-parameter, d44-event-multi-subscriber-overlap.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-06",
+    "source": "astra+flash",
+    "round": 1,
+    "file": "Design (Rule, item 7 CHANGELOG)",
+    "line": null,
+    "severity": "minor",
+    "text": "'The envelope diagnostics are the diagnostics of the run analyze makes by default' over-claims: the commands keep their own model modes and the shared projection omits dependency diagnostics (2).",
+    "disposition": "fixed",
+    "evidence": "Verified prove.rs:891, fingerprint_cli.rs:353, events.rs:366,515, policy/pipeline.rs:195 (single-app assembly) and run.rs:1027-1029 ('(2) not produced here'). Rule reworded to 'same detector SET'; a 'Not promised' paragraph excludes whole-output parity, mode and (2) changes (#70); CHANGELOG text in Design 7 says 'default detector SET … in their existing modes'.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-07",
+    "source": "astra",
+    "round": 1,
+    "file": "Design 2-4",
+    "line": null,
+    "severity": "minor",
+    "text": "Fixed-default API and cross-app twin fit; analyze's explicit subsets/presets must remain separate (preserve the explicit-selection branches).",
+    "disposition": "fixed",
+    "evidence": "Design 2 now states the --preset and --detector branches of resolve_analyze_detectors are unchanged and explicit selection stays analyze-only.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-08",
+    "source": "astra",
+    "round": 1,
+    "file": "Design (Golden license) / Acceptance matrix A3",
+    "line": null,
+    "severity": "minor",
+    "text": "The zero-byte license is a forecast, not a completed result; keep the stop-on-diff rule and record mutation and changed-source golden results.",
+    "disposition": "fixed",
+    "evidence": "Golden license heading now says 'a FORECAST until the changed source runs'; A3 row requires check-goldens on the CHANGED source with the result in Gate results; Acceptance matrix section notes discrimination outcomes pending; stop-on-diff rule kept.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-09",
+    "source": "astra",
+    "round": 1,
+    "file": "Design 5",
+    "line": null,
+    "severity": "minor",
+    "text": "Distinguish expanded execution (27 detectors newly run in these commands) from advisory-default promotion.",
+    "disposition": "fixed",
+    "evidence": "Design 5 adds 'Expanded execution, not advisory promotion': 27 newly run, no class change, findings discarded, CLAUDE.md triage rule not engaged, cost per P12 bound.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-10",
+    "source": "astra",
+    "round": 1,
+    "file": "Discoveries / Not delivered",
+    "line": null,
+    "severity": "minor",
+    "text": "The three discoveries are real and correctly deferred; close analyze's coverage gap here without rebaselining CLI-a.",
+    "disposition": "fixed",
+    "evidence": "T3's analyze cases close analyze's default-coverage gap in this issue; Not delivered states the cli-a slot (D2) stays on the TS list and is not rebaselined.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-11",
+    "source": "flash",
+    "round": 1,
+    "file": "Design 2 / Discoveries / Not delivered",
+    "line": null,
+    "severity": "important",
+    "text": ".claude/commands/triage-wave.md:31-33 tells operators to demote a detector by moving its presets.rs name between the two constants this design deletes; the flow cannot edit .claude/ and the ledger did not mention it.",
+    "disposition": "fixed",
+    "evidence": "Verified triage-wave.md:31-33. New probe P13; Discovery D4 (owner action, pre_existing false) with the new one-step rule (move the entry from default_detectors() to opt_in_detectors(), update the T1b literal and CHANGELOG); Design 7 CHANGELOG 'Changed' states the rule; Not delivered lists it.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-12",
+    "source": "flash",
+    "round": 1,
+    "file": "Design 3",
+    "line": 1054,
+    "severity": "minor",
+    "text": "'The type signature keeps the five commands on the default' holds only if analyzer_diagnostics_of_run (pub, run.rs:1054) stops being public.",
+    "disposition": "fixed",
+    "evidence": "Verified run.rs:1054 `pub fn analyzer_diagnostics_of_run`, only outside caller digest_cli.rs:21,111. Design 3: it becomes private once the cross-app twin moves into run.rs; the claim is narrowed to code outside run.rs, with T3 pinning the function bodies.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-13",
+    "source": "flash",
+    "round": 1,
+    "file": "Acceptance matrix (T3 mutation c)",
+    "line": null,
+    "severity": "minor",
+    "text": "'Red-first on 35d13ba4' cannot compile: T3 references default_detectors(), which does not exist at the base.",
+    "disposition": "fixed",
+    "evidence": "Verified detectors/mod.rs:1221 (only registered_detectors exists). Design 10 orders the work: registry split first, then T3 red against the old call sites, then call sites; T3 mutation (d) restated accordingly.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-14",
+    "source": "flash",
+    "round": 1,
+    "file": "Acceptance matrix (T2) / Design 2",
+    "line": 109,
+    "severity": "minor",
+    "text": "T2 walks PRESET_NAMES_LIST; a preset added to resolve_preset's match but not to the list escapes it.",
+    "disposition": "fixed",
+    "evidence": "Verified presets.rs:109 and :113-124 are two hand lists (P14). Design 2 makes one PRESETS table driving resolve_preset and preset_names(); T2 walks PRESETS and checks preset_names()/resolve_preset agree with it.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-15",
+    "source": "flash",
+    "round": 1,
+    "file": "docs/2026-10-04-b3-code-map.md",
+    "line": 66,
+    "severity": "minor",
+    "text": "The b3 code map cites DEFAULT_DETECTOR_NAMES (presets.rs:16), which this change deletes.",
+    "disposition": "fixed",
+    "evidence": "Verified docs/2026-10-04-b3-code-map.md:66. Design 8 updates that row in the same change; dated executed plans are left as historical records (P13).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-16",
+    "source": "flash",
+    "round": 1,
+    "file": "Assumption probes P9",
+    "line": null,
+    "severity": "minor",
+    "text": "proxy/ per-run JSON files were keyed by basename; 9 workspaces exist in both corpora, so their raw files were overwritten and cannot be re-checked.",
+    "disposition": "fixed",
+    "evidence": "Verified `comm -12` of the two corpora = 9. P9 now states the collision, that verdicts were written to summary.txt per run (454 SAME, all exit 0/0), and that P9 is a proxy through analyze.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-01",
+    "source": "astra",
+    "round": 2,
+    "file": "Acceptance matrix (T1b)",
+    "line": null,
+    "severity": "minor",
+    "text": "T1b lost the explicit default-count guard: deleting an unbundled default such as d19 from the registry still passes T1b's three checks (and T3, which follows default_detectors()).",
+    "disposition": "fixed",
+    "evidence": "Verified: d19-unused-parameter appears in presets.rs only at :31 (DEFAULT_DETECTOR_NAMES, deleted by this design), in no preset bundle. Ledger Acceptance matrix T1b adds (4) default_detectors().len() == 40 and registered_detectors().len() == 54, plus mutation (iv) delete d19 -> (4) fails while (1)-(3) and T3 stay green.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-02",
+    "source": "flash",
+    "round": 2,
+    "file": "Design 10 (work order)",
+    "line": null,
+    "severity": "minor",
+    "text": "Design 10 step (ii) adds T2 before step (iii) creates PRESETS/preset_names(), so cargo test --lib does not compile at step (ii).",
+    "disposition": "fixed",
+    "evidence": "Verified: T2 walks PRESETS and calls preset_names(), both created by Design 2 in step (iii). Ledger Design 10: step (ii) adds only T3, T1, T1b (they compile against step (i)); T2 moves to step (iii) together with the PRESETS table.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-01",
+    "source": "flash",
+    "round": 3,
+    "file": "ledger Design 7 / Discovery D4",
+    "line": 268,
+    "severity": "minor",
+    "text": "The demotion rule (Design 7 CHANGELOG text and D4's capability) names only the T1b opt-in literal; after R2-01 T1b(4) also asserts 40 defaults, so following the rule leaves T1b red.",
+    "disposition": "fixed",
+    "evidence": "Design 7 and D4 capability now say: update T1b's opt-in literal AND its default count (T1b(4) asserts 40).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-01",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_a_json_differential.rs",
+    "line": 39,
+    "severity": "minor",
+    "text": "Four test-local copies of the retired 34-name list (cli_a_{json,html,stats,terminal}_differential.rs) still drive the cli-a goldens' \"default\" slot; they include opt-in d8/d17/d45 and lack d52-d60.",
+    "disposition": "deferred",
+    "evidence": "Ledger Discovery D2 (filed at finish): test-only drift that moves the cli-a goldens under its own license; no production path reads these copies (grep src/: none).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-02",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".claude/commands/triage-wave.md",
+    "line": 32,
+    "severity": "minor",
+    "text": "/triage-wave demotion steps name the deleted DEFAULT_DETECTOR_NAMES/OPT_IN_DETECTOR_NAMES.",
+    "disposition": "deferred",
+    "evidence": ".claude/ is a protected path the flow may not edit (CLAUDE.md autonomous-flow exception); recorded as Discovery D4 (owner action) with the exact replacement text; the CHANGELOG states the correct steps.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-03",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/run.rs",
+    "line": 505,
+    "severity": "minor",
+    "text": "run_analyze_with_exit keeps its own inline diagnostics aggregation, which adds dependency diagnostics (source 2, from `fresh`) that digest/prove/fingerprint/events/policy do not report.",
+    "disposition": "deferred",
+    "evidence": "Pre-existing (master 8610adb8 has the same split); #68 is about the detector SET, stated in the Rule as \"same detector set, not the same output as analyze\". Recorded as a new Discovery D5.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-04",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/run.rs",
+    "line": 1046,
+    "severity": "minor",
+    "text": "compute_analyzer_diagnostics runs the single-app runner while analyze is cross-app by default; its doc claimed agreement with run_analyze.",
+    "disposition": "fixed",
+    "evidence": "Doc now states the agreement holds for `analyze --single-app` and names compute_analyzer_diagnostics_cross_app for the cross-app path (314fbfbf). That prove/fingerprint/events/policy are single-app at all is pre-existing and tracked by issue #70 item 1.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-05",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/run.rs",
+    "line": 1050,
+    "severity": "minor",
+    "text": "Diagnostics-only callers now run 40 detectors and discard findings; cost and panic exposure.",
+    "disposition": "refuted",
+    "evidence": "Design decision accepted by both reviewers (spec R1 rounds): the commands must run analyze's default set. Measured on CDO before/after (ledger Gate results, CHANGELOG): about 1 s or less, memory within 6 MB. The 26 added detectors already run on every default `alsem analyze`, so no new panic surface exists in the product.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-06",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/events.rs",
+    "line": 461,
+    "severity": "minor",
+    "text": "Three copies of the diagnostics projection (events, policy, fingerprint) and two mode-split functions instead of AnalysisTarget.",
+    "disposition": "fixed",
+    "evidence": "events.rs and policy/pipeline.rs now share run::analyzer_diagnostic_lines (314fbfbf). fingerprint_cli::analyzer_diags_for emits (DIAG-<stage>, severity, message) triples, a different shape, so it is not the same projection. AnalysisTarget owns a Box<Model> that prove/fingerprint/events/policy keep using afterwards; taking it would force a clone or a restructure, so the two named functions stay.",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-07",
+    "source": "code-review+flash",
+    "round": "final-1",
+    "file": "src/engine/l5/prove.rs",
+    "line": 899,
+    "severity": "minor",
+    "text": "Stale comment \"same 34-detector set\".",
+    "disposition": "fixed",
+    "evidence": "Comment now names the registry default set (314fbfbf).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-08",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "docs/2026-10-04-b3-code-map.md",
+    "line": 295,
+    "severity": "minor",
+    "text": "Code map still cites the deleted presets.rs:16 default set and a stale line range for resolve_analyze_detectors.",
+    "disposition": "fixed",
+    "evidence": "Both corrected (314fbfbf).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-09",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_envelope_detector_set.rs",
+    "line": 37,
+    "severity": "minor",
+    "text": "The child alsem inherits ALSEM_TRACE_* variables such as ALSEM_TRACE_EXIT_AFTER, which change its behaviour.",
+    "disposition": "fixed",
+    "evidence": "env_remove for every other ALSEM_TRACE_* variable (314fbfbf). Proof: without it and ALSEM_TRACE_EXIT_AFTER=context.symbols_resolve_calls, 0/9 pass; restored, 9/9 (ledger proof row).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/presets.rs",
+    "line": 150,
+    "severity": "minor",
+    "text": "analyze_default_is_registry_default compares the selector with default_detectors(), so its \"pinned\" doc overclaims.",
+    "disposition": "fixed",
+    "evidence": "Doc now says exactly what it checks (the no-flag branch returns default_detectors()) and names T3 and T1b as the membership and use guards (314fbfbf).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F1-11",
+    "source": "astra",
+    "round": "final-1",
+    "file": ".agent/issue-68/ledger.md",
+    "line": 276,
+    "severity": "minor",
+    "text": "Ledger says every delta is inside run-to-run noise; events after-run 2 was ~0.7-1.1 s above every before run.",
+    "disposition": "fixed",
+    "evidence": "Ledger Gate results and CHANGELOG now give per-command paired deltas (digest -3.0/+0.2 s, prove +0.1/+0.2, fingerprint +0.2/-0.4, events fanout -0.3/+0.7, chains +0.1/+0.7, policy +0.1/+0.2) and call the time result inconclusive; no blanket bound (final round 2 re-raise addressed).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F2-01",
+    "source": "astra",
+    "round": "final-1 (missed by the conductor; restored in final-2)",
+    "file": ".agent/issue-68/ledger.md",
+    "line": 356,
+    "severity": "minor",
+    "text": "'Not delivered' still denied implementation, changed-source golden verification and measured after-results.",
+    "disposition": "fixed",
+    "evidence": "Not delivered refreshed: lists the six commits, the zero-byte check-goldens on the changed source (gate logs), measured after-numbers; keeps only genuine limits (CDO-only, inconclusive timing, no Base App 8020, #70 parity, D4 owner action).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "F2-02",
+    "source": "flash",
+    "round": "final-2",
+    "file": ".agent/issue-68/ledger.md",
+    "line": 287,
+    "severity": "minor",
+    "text": "The Discoveries header lists D1-D4 but not D5.",
+    "disposition": "fixed",
+    "evidence": "Header now lists D5 (dependency diagnostics, from F1-03).",
+    "hash": "40a3d6c1bbaabb4ff5e7e867d13f9d5f3576ffd7",
+    "reviews": {
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  }
+]

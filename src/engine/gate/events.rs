@@ -25,10 +25,8 @@
 //! the caller rather than the live version. Used by every differential test.
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::gate::run::analyzer_diagnostic_lines;
 use crate::engine::l5::detector_context::build_detector_context;
-use crate::engine::l5::detectors::registered_detectors;
-use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::l5::event_flow::{
     ChainNode, ChainReport, ChainWalkOptions, FanoutCoverage, FanoutReport, Scope,
     compute_chain_report, compute_fanout_report,
@@ -378,7 +376,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // diagnostics (e.g. `d43-event-ishandled-skip`). events-fanout.ts emits these
     // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
     // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
-    let diag_lines = analyze_workspace_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {
@@ -457,23 +455,6 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     }
 }
 
-/// Compute the `analyzeWorkspace`-equivalent diagnostic lines (`<severity>: <message>`)
-/// for the events commands' stderr. Runs the DEFAULT detector set so detector-stage
-/// diagnostics (e.g. `d43-event-ishandled-skip`) surface exactly as al-sem does.
-fn analyze_workspace_diagnostic_lines(
-    workspace: &std::path::Path,
-    resolved: &crate::program::model::workspace::Model,
-) -> Vec<String> {
-    let default_detectors: Vec<_> = registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    compute_analyzer_diagnostics(workspace, resolved, &default_detectors)
-        .iter()
-        .map(|d| format!("{}: {}", d.severity, d.message))
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // Events chains pipeline
 // ---------------------------------------------------------------------------
@@ -523,7 +504,7 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
         }
     };
 
-    let diag_lines = analyze_workspace_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {

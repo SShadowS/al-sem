@@ -29,8 +29,6 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
-use crate::engine::l5::detectors::registered_detectors;
-use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
     format_fingerprint_human_verbosity, project_fingerprint_query_full,
@@ -550,12 +548,7 @@ fn analyzer_diags_for(
     workspace: &std::path::Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<(String, String, String)> {
-    let default_detectors: Vec<_> = registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    let diags_vec = compute_analyzer_diagnostics(workspace, resolved, &default_detectors);
-    diags_vec
+    compute_analyzer_diagnostics(workspace, resolved)
         .into_iter()
         .map(|d| (format!("DIAG-{}", d.stage), d.severity, d.message))
         .collect()

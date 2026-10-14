@@ -1213,19 +1213,32 @@ where
 /// (DEFAULT_DETECTORS first, then OPT_IN_DETECTORS). This order governs the
 /// `detectorStats` array for the `all` slot; the `default` slot is a subset in this
 /// same order (as `select_detectors` filters by name while preserving registry order).
+/// [`default_detectors`] defines that default set; this list is it followed by
+/// [`opt_in_detectors`].
 ///
 /// DEFAULT order (40): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
 ///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
 ///   d39, d41, d42, d43, d44, d52, d53, d54, d55, d56, d57, d58, d59, d60.
 /// OPT_IN order (14):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d45, d61, d62, d63, d64.
 pub fn registered_detectors() -> Vec<Detector> {
+    let mut all = default_detectors();
+    all.extend(opt_in_detectors());
+    all
+}
+
+/// The DEFAULT detector set: what `alsem analyze` runs with no `--detector` or
+/// `--preset`, and what digest, prove, fingerprint, events and policy check run
+/// (through `gate::run::compute_analyzer_diagnostics` and its cross-app sibling).
+/// Which function a detector sits in IS its class: demote one by moving its
+/// entry to [`opt_in_detectors`].
+pub fn default_detectors() -> Vec<Detector> {
     // `requires` bits (W1.0): derived from the per-detector `ctx.<field>` audit +
     // the indirect-consumption grep (helpers reading substrate fields are attributed
     // to their callers). `0` = core-only (reads only always-built context). See
     // `registry::substrate`. Under-declaration is caught by the full-vs-minimal
     // parity test (`tests/gap/gap_detector_substrate_parity.rs`).
     vec![
-        // --- DEFAULT_DETECTORS (43: al-sem registry order, then the BCQuality-wave defaults) ---
+        // --- DEFAULT_DETECTORS (40: al-sem registry order, then the BCQuality-wave defaults) ---
         Detector {
             name: "d1-db-op-in-loop".to_string(),
             run: d1::detect_d1,
@@ -1447,7 +1460,13 @@ pub fn registered_detectors() -> Vec<Detector> {
             run: d60::detect_d60,
             requires: 0,
         },
-        // --- OPT_IN_DETECTORS (11: al-sem opt-in order, then the BCQuality-wave opt-ins) ---
+    ]
+}
+
+/// The OPT-IN detector set: run only when named by `--detector` or a preset.
+pub fn opt_in_detectors() -> Vec<Detector> {
+    vec![
+        // --- OPT_IN_DETECTORS (14: al-sem opt-in order, then the BCQuality-wave opt-ins) ---
         // d40: OPT-IN in al-sem (transitive-load-missing).
         Detector {
             name: "d40-transitive-load-missing".to_string(),
@@ -1551,6 +1570,61 @@ pub fn registered_detectors() -> Vec<Detector> {
             requires: 0,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(ds: Vec<Detector>) -> Vec<String> {
+        ds.into_iter().map(|d| d.name).collect()
+    }
+
+    /// Issue #68 (T1b): the default/opt-in split is pinned independently of
+    /// the code that consumes it. The opt-in literal is HAND-STATED (each
+    /// entry carries an `OPT-IN` comment above; d17, d8 and d45 state the
+    /// S8/S8.5 owner decision), so a reclassification must edit it on purpose.
+    #[test]
+    fn default_and_opt_in_membership() {
+        let default = names(default_detectors());
+        let opt_in = names(opt_in_detectors());
+        let all = names(registered_detectors());
+
+        // (1) the registry is the default set, then the opt-in set, in order.
+        let chained: Vec<String> = default.iter().chain(opt_in.iter()).cloned().collect();
+        assert_eq!(all, chained, "registered_detectors() != default ++ opt_in");
+
+        // (2) no name twice, inside one set or across the two.
+        let unique: std::collections::HashSet<&String> = all.iter().collect();
+        assert_eq!(
+            unique.len(),
+            all.len(),
+            "duplicate detector name in {all:?}"
+        );
+
+        // (3) the opt-in set is exactly the owner-decided 14.
+        let expected_opt_in = [
+            "d40-transitive-load-missing",
+            "d46-commit-in-lifecycle",
+            "d47-io-unsafe-txn",
+            "d48-io-in-loop",
+            "d49-uncommitted-write-before-ui",
+            "d50-checked-run-implicit-commit",
+            "d51-retry-side-effect-duplication",
+            "d17-min-version-drift",
+            "d8-commit-in-transaction",
+            "d45-event-transitive-table-exposure",
+            "d61-ishandled-bypasses-critical-write",
+            "d62-telemetry-before-success",
+            "d63-html-concat-injection",
+            "d64-api-page-write-surface",
+        ];
+        assert_eq!(opt_in, expected_opt_in, "opt-in set changed");
+
+        // (4) counts: a default deleted outright passes (1)-(3).
+        assert_eq!(default.len(), 40, "default_detectors() count");
+        assert_eq!(all.len(), 54, "registered_detectors() count");
+    }
 }
 
 #[cfg(test)]

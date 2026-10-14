@@ -35,7 +35,6 @@ use std::path::{Path, PathBuf};
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::gate::run::compute_analyzer_diagnostics;
-use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, compose_full_snapshot, serialize_cbor,
     serialize_cbor_gz, serialize_envelope, serialize_json, serialize_sharded,
@@ -45,55 +44,12 @@ use al_sem::program::model::workspace::Model;
 
 use crate::regen;
 
-/// al-sem `DEFAULT_DETECTORS` (34) by name — `analyzeWorkspace` runs this set, so
-/// the envelope's detector diagnostics (e.g. d43's substrate guard) must come from
-/// exactly these (NOT the opt-in detectors, which `analyzeWorkspace` omits).
-const DEFAULT_DETECTOR_NAMES: &[&str] = &[
-    "d1-db-op-in-loop",
-    "d2-event-fanout-in-loop",
-    "d3-missing-setloadfields",
-    "d4-repeated-lookup-in-loop",
-    "d5-set-based-opportunity",
-    "d7-recursive-event-expansion",
-    "d8-commit-in-transaction",
-    "d9-transaction-span-summary",
-    "d10-self-modifying-loop",
-    "d11-modify-without-get",
-    "d12-dead-integration-event",
-    "d13-cross-app-internal-call",
-    "d14-dead-routine",
-    "d16-blob-in-loop",
-    "d17-non-setbased-on-large-table",
-    "d18-event-subscriber-heavy",
-    "d19-flowfield-in-loop",
-    "d20-unbounded-result-set",
-    "d21-temp-table-misuse",
-    "d22-deprecated-api-use",
-    "d29-onaftergetrecord-heavy",
-    "d32-internal-event-publisher",
-    "d33-event-without-subscribers",
-    "d34-page-source-heavy",
-    "d35-implicit-transaction-scope",
-    "d36-redundant-calcfields",
-    "d37-record-passed-by-value",
-    "d38-page-trigger-heavy",
-    "d39-codeunit-instantiation-in-loop",
-    "d41-unindexed-filter",
-    "d42-locktable-late",
-    "d43-event-ishandled-skip",
-    "d44-event-recursive-publish",
-    "d45-text-encoding-mismatch",
-];
-
 /// Compute the analyzer diagnostics for the envelope, projected to the contract
-/// shape (`code = "DIAG-<stage>"`). versionDiagnostic() is None under the version
-/// override, so it is not prepended.
+/// shape (`code = "DIAG-<stage>"`), over the registry's default detector set
+/// (`compute_analyzer_diagnostics` runs it itself). versionDiagnostic() is None
+/// under the version override, so it is not prepended.
 fn envelope_diagnostics(ws_path: &std::path::Path, resolved: &Model) -> Vec<EnvelopeDiagnostic> {
-    let default_detectors: Vec<_> = registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    compute_analyzer_diagnostics(ws_path, resolved, &default_detectors)
+    compute_analyzer_diagnostics(ws_path, resolved)
         .into_iter()
         .map(|d| EnvelopeDiagnostic {
             code: format!("DIAG-{}", d.stage),

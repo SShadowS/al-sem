@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `alsem digest`, `prove`, `fingerprint`, `events` and `policy check` ran 14 detectors
+  (13 of `analyze`'s default set plus opt-in d8), because 20 of the 34 names in a list
+  copied at port time matched no registered detector. The 20 were invented names on real
+  detector numbers (e.g. `d16-blob-in-loop` for registered `d16-obsolete-routine-call`):
+  18 of those numbers are registered DEFAULT detectors, 2 (d17, d45) are OPT-IN. The five
+  commands now run `analyze`'s default detector set (40) from the registry, each in its
+  existing model mode (digest cross-app by default, `--single-app` single-app; the others
+  single-app). Diagnostics output is unchanged on every golden (zero bytes moved in all 8
+  `scripts/check-goldens` targets), and the output of the five commands (six invocations:
+  events has fanout and chains) on CDO is byte-identical
+  before and after. Cost on CDO (`U:/Git/DO-cdo-baseline/Cloud`, release-fast, 2 runs each,
+  wall time / peak working set, before → after): digest (cross-app) 31.3 / 24.8 s → 28.3 /
+  25.0 s, 2836 / 2828 → 2830 / 2831 MB; prove 7.9 / 7.7 → 8.0 / 7.9 s, ~2070 MB both;
+  fingerprint 7.3 / 7.3 → 7.5 / 6.9 s, ~1360 MB both; events fanout 4.7 / 4.6 → 4.4 / 5.3 s,
+  events chains 4.3 / 4.8 → 4.4 / 5.5 s, policy check 4.5 / 4.4 → 4.6 / 4.6 s, all ~575 MB.
+  Paired time deltas (after − before, run 1 / run 2): digest −3.0 / +0.2 s, prove +0.1 / +0.2 s,
+  fingerprint +0.2 / −0.4 s, events fanout −0.3 / +0.7 s, events chains +0.1 / +0.7 s, policy
+  check +0.1 / +0.2 s. Two runs per side are too few to call any of these a regression or a gain
+  (digest's own before-runs differed by 6.5 s), so the time result is inconclusive. Peak memory
+  moved by 6 MB or less (#68).
+
+### Changed
+
+- `gate::presets::PRESET_NAMES_LIST` is replaced by `preset_names()`, and presets are one
+  `PRESETS` table. `DEFAULT_DETECTOR_NAMES` and `OPT_IN_DETECTOR_NAMES` (presets and
+  digest_cli) are removed; the default set is `detectors::default_detectors()` and the
+  opt-in set is `detectors::opt_in_detectors()`. Which function a detector sits in IS its
+  class. **To demote a detector**, move its entry from `default_detectors()` to
+  `opt_in_detectors()`, then update T1b's hand-stated opt-in literal (the 14 opt-in names)
+  AND its default count (`detectors::tests::default_and_opt_in_membership` asserts 40
+  defaults and 54 in all), add a CHANGELOG entry, and regenerate the detectorStats goldens
+  (`scripts/check-goldens --regen`, then triage the diff): `registered_detectors()` is the
+  default set followed by the opt-in set, and detectorStats follows that order, so the move
+  reorders them.
+  `compute_analyzer_diagnostics` no longer takes a detector list;
+  `compute_analyzer_diagnostics_cross_app` is new (#68).
+
 ## [1.7.1] - 2026-10-14
 
 ### Added

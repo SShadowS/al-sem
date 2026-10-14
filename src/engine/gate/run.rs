@@ -1036,22 +1036,55 @@ fn range_extent_cmp(
 /// channel (`projectDiagnostics`). It follows the `run_diagnostics` build in
 /// `run_analyze`, but the output is the same only for the same `resolved`.
 /// Since engine-switch S6 its callers (events, policy, digest, fingerprint, prove)
-/// pass the same program-backed model `run_analyze` uses
-/// (`program_calls::assemble_and_resolve_workspace_program`), so the cap-hit (3)
-/// and detector (6) diagnostics agree with `run_analyze`'s.
+/// pass a program-backed single-app model
+/// (`program_calls::assemble_and_resolve_workspace_program`), the kind
+/// `run_analyze` builds for `--single-app`, so the cap-hit (3)
+/// and detector (6) diagnostics agree with `alsem analyze --single-app`'s. They
+/// need not agree with plain `alsem analyze`, which is cross-app by default;
+/// the cross-app twin is [`compute_analyzer_diagnostics_cross_app`].
+///
+/// It runs the registry's default set (`detectors::default_detectors()`, what
+/// `alsem analyze` runs with no `--detector`/`--preset`) itself. There is no
+/// detector parameter, so no caller outside this module can pick another set (#68).
 pub fn compute_analyzer_diagnostics(
     ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
-    detectors: &[crate::engine::l5::registry::Detector],
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
-    let run = run_detectors(resolved, detectors);
+    let run = run_detectors(resolved, &crate::engine::l5::detectors::default_detectors());
     analyzer_diagnostics_of_run(ws_path, resolved, &run)
 }
 
-/// [`compute_analyzer_diagnostics`] over a detector run the caller already made:
-/// `alsem digest`'s cross-app mode (#66) passes the cross-app runner's output
-/// (`registry::run_detectors_cross_app`), the combination `alsem analyze` runs.
-pub fn analyzer_diagnostics_of_run(
+/// [`compute_analyzer_diagnostics`] as `<severity>: <message>` lines, the
+/// stderr form `alsem events` and `alsem policy` print (and match `error:`
+/// against under `--strict`).
+pub fn analyzer_diagnostic_lines(
+    ws_path: &Path,
+    resolved: &crate::program::model::workspace::Model,
+) -> Vec<String> {
+    compute_analyzer_diagnostics(ws_path, resolved)
+        .iter()
+        .map(|d| format!("{}: {}", d.severity, d.message))
+        .collect()
+}
+
+/// [`compute_analyzer_diagnostics`] for a cross-app base (`alsem digest`'s
+/// default mode, #66): the default set run by the cross-app runner, the
+/// combination `alsem analyze` runs by default.
+pub fn compute_analyzer_diagnostics_cross_app(
+    ws_path: &Path,
+    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
+    let run = crate::engine::l5::registry::run_detectors_cross_app(
+        base,
+        &crate::engine::l5::detectors::default_detectors(),
+        true,
+    );
+    analyzer_diagnostics_of_run(ws_path, &base.resolved, &run)
+}
+
+/// The diagnostics aggregation shared by [`compute_analyzer_diagnostics`] and
+/// [`compute_analyzer_diagnostics_cross_app`], over the detector run each made.
+fn analyzer_diagnostics_of_run(
     ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
     run: &crate::engine::l5::registry::RunOutput,

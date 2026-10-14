@@ -27,10 +27,8 @@ use crate::engine::gate::policy::policy_loader::{
     BUNDLED_DEFAULT_POLICY_YAML, LoadResult, load_policy_from_file, load_policy_from_string,
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
-use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::gate::run::analyzer_diagnostic_lines;
 use crate::engine::l5::detector_context::build_detector_context;
-use crate::engine::l5::detectors::registered_detectors;
-use crate::engine::l5::digest_cli::DEFAULT_DETECTOR_NAMES;
 use crate::engine::root_classification::classify_roots;
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -206,7 +204,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // analyzeWorkspace diagnostics (run the default detector set so detector-stage
     // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyze_workspace_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
@@ -290,21 +288,6 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
         stderr_lines: diag_lines,
         out_path: opts.out.map(|s| s.to_string()),
     }
-}
-
-/// `analyzeWorkspace`-equivalent diagnostic lines (mirrors events.rs).
-fn analyze_workspace_diagnostic_lines(
-    workspace: &Path,
-    resolved: &crate::program::model::workspace::Model,
-) -> Vec<String> {
-    let default_detectors: Vec<_> = registered_detectors()
-        .into_iter()
-        .filter(|d| DEFAULT_DETECTOR_NAMES.contains(&d.name.as_str()))
-        .collect();
-    compute_analyzer_diagnostics(workspace, resolved, &default_detectors)
-        .iter()
-        .map(|d| format!("{}: {}", d.severity, d.message))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
