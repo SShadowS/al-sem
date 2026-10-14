@@ -6,7 +6,7 @@ from agentflow.state import Ctx
 
 def test_caps_match_spec():
     assert budget.CAPS == {
-        "spec_rounds": 3, "plan_tasks": 12, "task_attempts": 3, "final_rounds": 3,
+        "spec_rounds": 5, "plan_tasks": 12, "task_attempts": 3, "final_rounds": 3,
         "rebase_regate": 1, "ci_fix": 1, "discoveries": 5, "subagents": 60, "pi_calls": 14,
     }
     assert budget.WALL_CLOCK_SECONDS == 4 * 3600
@@ -14,9 +14,8 @@ def test_caps_match_spec():
 
 def test_charge_counts_down_and_raises_at_cap(ctx):
     budget.init(ctx, claimed_at=ctx.now())
-    assert budget.charge(ctx, "spec_rounds") == 2
-    assert budget.charge(ctx, "spec_rounds") == 1
-    assert budget.charge(ctx, "spec_rounds") == 0
+    for left in (4, 3, 2, 1, 0):
+        assert budget.charge(ctx, "spec_rounds") == left
     with pytest.raises(budget.BudgetExceeded) as e:
         budget.charge(ctx, "spec_rounds")
     assert e.value.key == "spec_rounds"

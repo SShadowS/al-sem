@@ -12,7 +12,7 @@ import json
 from .state import Ctx, read_json, write_json
 
 CAPS: dict[str, int] = {
-    "spec_rounds": 3,
+    "spec_rounds": 5,
     "plan_tasks": 12,
     "task_attempts": 3,
     "final_rounds": 3,

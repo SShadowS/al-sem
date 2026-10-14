@@ -77,7 +77,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    the test or measurement that proves it, or "not deliverable, because"),
    Design, False-positive and failure shapes, Measurement plan. For a bounded
    issue the ledger's `## Design` is the spec.
-5. **Spec panel.** `charge spec_rounds` per round (cap 3). Follow the
+5. **Spec panel.** `charge spec_rounds` per round (cap 5). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
    confirm/reject checklist; both reviewers in parallel. Maintain
    `findings.json` as a list of `{id, source, round, file, line,
@@ -95,7 +95,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    entry `accepted` or `re-raised`. Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
    or `refuted` with evidence. A `re-raised` stays unresolved even without new
-   evidence. Not converged after 3 rounds: check the handoff rule below, else
+   evidence. Not converged after 5 rounds: check the handoff rule below, else
    return `blocked spec-panel-cap`.
 
    **Handoff at the cap (#45).** The design may pass to the next attempt as
