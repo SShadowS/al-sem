@@ -796,6 +796,32 @@ fn deleting_a_multi_line_attribute_makes_the_routine_a_root() {
     assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "(b) {doc}");
 }
 
+/// Final panel round 3 (astra): code after a group's closing `]` on the same line
+/// is not attribute text. Deleting `[IntegrationEvent(` / `false, false)] local
+/// procedure Gone() begin end;` (old lines 3-4) deletes a whole routine; the
+/// unchanged `Survives` (now line 3, right below the gap) must not be blamed.
+///
+/// Mutation: ignore text after a balanced `]` (classify by bracket balance
+/// only) -> `Survives` becomes a root.
+#[test]
+fn deleting_a_routine_on_its_attribute_closing_line_blames_no_neighbour() {
+    let post = "codeunit 50122 GoneCu\n{\n    procedure Survives()\n    begin\n    end;\n}\n";
+    assert_eq!(line(post, 3), "    procedure Survives()");
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    write(&dir.path().join("src/Gone.Codeunit.al"), post);
+    let (doc, code) = digest(
+        dir.path(),
+        &[],
+        Some(
+            "--- a/src/Gone.Codeunit.al\n+++ b/src/Gone.Codeunit.al\n@@ -3,2 +2,0 @@\n-    [IntegrationEvent(\n-        false, false)] local procedure Gone() begin end;\n",
+        ),
+    );
+    assert_eq!(code, 2, "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(diag_kinds(&doc), vec!["hunk-outside-routines"], "{doc}");
+}
+
 /// A1i. The stated limit stays pinned; a change of it is deliberate: a `#if`
 /// directive line around duplicated procedures is outside every span.
 /// Mutation: extend spans to the enclosing `#if` -> `Dup` becomes a root.

@@ -307,21 +307,26 @@ impl OpenHunk {
                 }
                 // The run is attribute-only while it is a sequence of complete
                 // attribute groups: each starts with `[` (at depth 0) and runs
-                // until its brackets balance. Any other text between groups, or
-                // a stray `]`, makes the whole run a plain deletion.
+                // until its brackets balance. Any other text between groups
+                // (after a closing `]` only whitespace, another `[` group or a
+                // `//` comment may follow on its line), or a stray `]`, makes the
+                // whole run a plain deletion.
                 if self.attribute_depth == 0 && !text.starts_with('[') {
                     self.attribute_run = false;
                 }
                 if self.attribute_run {
-                    self.attribute_depth += text
-                        .chars()
-                        .map(|c| match c {
-                            '[' => 1,
-                            ']' => -1,
-                            _ => 0,
-                        })
-                        .sum::<i32>();
-                    self.attribute_run = self.attribute_depth >= 0;
+                    for (i, c) in text.char_indices() {
+                        match c {
+                            '[' => self.attribute_depth += 1,
+                            ']' if self.attribute_depth > 0 => self.attribute_depth -= 1,
+                            _ if self.attribute_depth > 0 || c.is_whitespace() => {}
+                            _ if text[i..].starts_with("//") => break,
+                            _ => {
+                                self.attribute_run = false;
+                                break;
+                            }
+                        }
+                    }
                 }
                 // Classified after every line, so a group still open when the run
                 // ends leaves a plain deletion.
@@ -979,6 +984,14 @@ mod tests {
             "{HEAD}@@ -3,3 +2,0 @@\n-    [B(1,\n-        2)]\n-    // note\n"
         ));
         assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        // Code after a group's closing `]` on its line is not attribute text; a
+        // trailing `//` comment is.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,2 +2,0 @@\n-    [IntegrationEvent(\n-        false, false)] local procedure Gone() begin end;\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -3,1 +2,0 @@\n-    [A] // note\n"));
+        assert_eq!(c, vec![vec![DeletedAttributesAfter(2)]]);
         let (c, _) = changes(&format!("{HEAD}@@ -3,1 +2,0 @@\n-    [B(1,\n"));
         assert_eq!(c, vec![vec![DeletedAfter(2)]]);
         // Separate runs are classified separately.
