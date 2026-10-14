@@ -21,12 +21,16 @@
 //! equal here; nothing in this file tells the cross-app store (with dependency
 //! leaves) from the single-app one.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
+use al_sem::engine::l5::snapshot::{
+    CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, compose_snapshot,
+};
+use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 use serde_json::Value;
 
 use crate::temp_state_probe::write_workspace;
@@ -248,6 +252,92 @@ fn a1b_no_temp_state_incoherence() {
             }
         }
     });
+}
+
+/// The snapshot's write facts per routine display:
+/// display -> [(op, rendered temp state, provenance)].
+fn snapshot_writes(snap: &CapabilitySnapshot) -> BTreeMap<String, Vec<(String, String, String)>> {
+    let display: BTreeMap<&str, &str> = snap
+        .identities
+        .stable_ids
+        .iter()
+        .map(String::as_str)
+        .zip(snap.identities.display_names.iter().map(String::as_str))
+        .collect();
+    let mut out: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
+    for fact in &snap.capability_facts {
+        let Some(SnapCapabilityExtra::Table { temp_state, .. }) = &fact.extra else {
+            continue;
+        };
+        let ts = match temp_state {
+            Some(SnapTempState::Known { value }) => format!("known/{value}"),
+            Some(SnapTempState::ParameterDependent { parameter_index }) => {
+                format!("PD({parameter_index})")
+            }
+            Some(SnapTempState::Unknown) => "unknown".to_string(),
+            None => "none".to_string(),
+        };
+        let name = display
+            .get(fact.subject.as_str())
+            .copied()
+            .unwrap_or(fact.subject.as_str());
+        // A display may be object-qualified; keep the routine part.
+        let name = name.rsplit('.').next().unwrap_or(name).to_string();
+        out.entry(name)
+            .or_default()
+            .push((fact.op.clone(), ts, fact.provenance.clone()));
+    }
+    out
+}
+
+/// A1c. Cone values are frame-correct. Stated limit: asserted on
+/// `compose_snapshot`, the production builder `run_digest_pipeline` calls (over
+/// the single-app model, which equals the cross-app one here: no dependency),
+/// and NOT claimed as a pipeline pin. Mutation: give solve entries the
+/// producer's raw PD value instead of `t` → "ViaHelperReal: PD(0) != known/false".
+#[test]
+fn a1c_cone_values_are_frame_correct() {
+    let tmp = write_workspace();
+    let ws = tmp.path();
+    let model_id = compute_gate_model_instance_id(ws).expect("model id");
+    let model = assemble_and_resolve_workspace_program(ws, &model_id, false).expect("model");
+    let snap = compose_snapshot(&model);
+    let writes = snapshot_writes(&snap);
+    let mut f = Vec::new();
+    let inserts = |name: &str| -> Vec<String> {
+        writes
+            .get(name)
+            .map(|v| {
+                v.iter()
+                    .filter(|(op, _, _)| op == "insert")
+                    .map(|(_, ts, _)| ts.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for (name, want) in [
+        ("ViaHelperReal", "known/false"),
+        ("ViaRecursionReal", "known/false"),
+        ("ViaRecursionTemp", "known/true"),
+        ("Forward", "PD(0)"),
+    ] {
+        let got = inserts(name);
+        if got.is_empty() {
+            f.push(format!("{name}: no insert fact ({writes:?})"));
+        }
+        for ts in got {
+            if ts != want {
+                f.push(format!("{name}: {ts} != {want}"));
+            }
+        }
+    }
+    let perm: BTreeSet<String> = inserts("PermUi").into_iter().collect();
+    for want in ["PD(0)", "PD(1)"] {
+        if !perm.contains(want) {
+            f.push(format!("PermUi: no {want} in its own output {perm:?}"));
+        }
+    }
+    assert!(f.is_empty(), "{}", f.join("\n"));
 }
 
 // ---------------------------------------------------------------------------

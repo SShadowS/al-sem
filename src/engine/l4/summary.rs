@@ -25,7 +25,7 @@ use crate::program::model::workspace::Model;
 
 /// The temp-state of a record operation (internal form — NOT the serde
 /// projection shape). Mirrors al-sem `TempState`.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum TempState {
     Known(bool),
     ParameterDependent(u32),
@@ -38,6 +38,20 @@ impl TempState {
             "known" => TempState::Known(ts.value.unwrap_or(false)),
             "parameter-dependent" => TempState::ParameterDependent(ts.parameter_index.unwrap_or(0)),
             _ => TempState::Unknown,
+        }
+    }
+
+    /// The inverse of [`TempState::from_p`].
+    pub fn to_p(&self) -> crate::program::body::features::PTempState {
+        let (kind, value, parameter_index) = match self {
+            TempState::Known(v) => ("known", Some(*v), None),
+            TempState::ParameterDependent(i) => ("parameter-dependent", None, Some(*i)),
+            TempState::Unknown => ("unknown", None, None),
+        };
+        crate::program::body::features::PTempState {
+            kind: kind.to_string(),
+            value,
+            parameter_index,
         }
     }
 

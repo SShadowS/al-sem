@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - L2 capability extraction and the capability cone share one table-op map
   (`table_commit::map_op`); the cone's `map_table_op` delegates to it (#69).
+- `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
+  (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -130,6 +132,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compute_analyzer_diagnostics` no longer takes a detector list;
   `compute_analyzer_diagnostics_cross_app` is new (#68).
 
+### Removed
+
+- The frame-bound parameter-dependent cone entry (`ConeFactEntry.pd`) and its
+  singleton-only substitution in `substitute_entry`, which now carries guards only (#69 D1).
+
 ### Fixed
 
 - `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
@@ -140,6 +147,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy `modify`. The #65 digest test that pinned `ValidateTemp` emitting `DB_MODIFY` is
   replaced by the opposite assertion. Goldens moved: 9 `tests/r1a-goldens/` and 9
   `tests/r3a3-goldens/` fixtures plus the R3a-3 manifest matrix (`modify` 134 -> 109).
+- The capability cone resolves a parameter-dependent write in every routine's own frame
+  through a transitive per-producer solve (`l4::pd_solve`, #69 D1). A write a caller makes
+  temporary is graded known(true), a real record known(false), across recursion, cycles and
+  root SCCs too; guards on these writes now hold on every typed edge, cycles included.
+  Producers no longer share a cone key with ordinary facts. Before, the cone resolved such a
+  write only for a non-recursive singleton caller, and only to known(true): a real-record
+  caller kept the callee's `parameter-dependent(0)`, and a recursive or root caller kept the
+  write physical. Pinned by `a1c_cone_values_are_frame_correct`, the cone/L4 class-parity
+  oracle `a5_cone_l4_class_parity_reduced` (every `tests/r0-corpus` fixture and the #69
+  probe) and the `pd_solve` unit tests. Goldens moved: 6 `tests/r3a3-goldens/` fixtures and
+  the `ws-d1-multi-caller` cli-b snapshot/fingerprint goldens, every line a real-record
+  caller's inherited write going from `parameter-dependent(0)` to known(false) (same nt
+  class, so no detector or digest output moved). The gap test that pinned the old limit
+  (`recursive_callee_write_through_var_param_stays_physical`) now asserts the opposite
+  (`…_forwarded_var_param_is_temporary`).
 - `alsem digest --diff` reads each hunk body line by line and stops when the header's old
   and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
   longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,

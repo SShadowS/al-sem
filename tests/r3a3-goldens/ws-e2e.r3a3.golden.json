@@ -50,8 +50,8 @@
 						"opSubtype": "Modify",
 						"recordVariableId": "r0/4f99cefb7683fef0411894e5170e33fa4deb0f918e7108151b10e0a53a0b67aa/rv/cust",
 						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
+							"kind": "known",
+							"value": false
 						}
 					}
 				}
@@ -202,8 +202,8 @@
 					"resourceId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101::OnAfterRunIteration::ef416bae2295a822d663d04fe57150340b961d83fed90753e0ed3c6494773c5a",
 					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -233,8 +233,8 @@
 					"via": "call",
 					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -257,8 +257,8 @@
 					"via": "self",
 					"resourceId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101::OnAfterRunIteration::ef416bae2295a822d663d04fe57150340b961d83fed90753e0ed3c6494773c5a",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -288,8 +288,8 @@
 					"provenance": "inherited",
 					"via": "event-dispatch",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -314,8 +314,8 @@
 					"resourceId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101::OnAfterRunIteration::ef416bae2295a822d663d04fe57150340b961d83fed90753e0ed3c6494773c5a",
 					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#fa4c5bace0489dffc44cb7e147b3c8399e939479b70ebc672127d0ca24a9d455/cs1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -345,8 +345,8 @@
 					"via": "call",
 					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#fa4c5bace0489dffc44cb7e147b3c8399e939479b70ebc672127d0ca24a9d455/cs1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -386,8 +386,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

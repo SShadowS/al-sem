@@ -2,6 +2,11 @@
 #[path = "../common/regen.rs"]
 mod regen;
 
+#[path = "../common/temp_state_probe.rs"]
+mod temp_state_probe;
+
+mod r3_temp_class_parity;
+
 mod r3a1_differential;
 mod r3a1_oracles;
 mod r3a1_vectors;
