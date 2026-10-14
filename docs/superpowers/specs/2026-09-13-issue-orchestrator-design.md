@@ -166,16 +166,16 @@ instructions to the flow. Concretely:
 
 | Cap | Value | On hit |
 |-----|-------|--------|
-| Spec panel rounds | 3 | `blocked`, or a handoff when the register is handoff-ready (see "Findings register") |
+| Spec panel rounds | 5 (3 until 2026-10-14) | `blocked`, or a handoff when the register is handoff-ready (see "Findings register") |
 | Plan tasks | 12 | `blocked` (issue too big; comment says split it) |
 | Red-to-green attempts per task | 3 | `blocked` |
-| Final panel rounds | 3, the last may be confirm-only | `blocked` |
+| Final panel rounds | 5 (3 until 2026-10-14), the last may be confirm-only | `blocked` |
 | Rebase-driven re-gate | 1 | `blocked` |
 | CI fix attempt | 1, independent of the rebase budget | `blocked` |
 | Discoveries filed per issue | 5 | rest go to the ledger only |
 | Wall-clock per issue | 10 h from claim (4 h until 2026-10-14; a 5-round spec panel alone takes 3-4 h) | `blocked` |
 | Subagent dispatches per issue | 60 | `blocked` |
-| pi calls per issue | 14 (2 reviewers × up to 7 rounds) | `blocked` |
+| pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
 
 - **Per-loop budgets**: `--max-issues` (default 3), counted in

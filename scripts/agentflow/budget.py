@@ -15,12 +15,12 @@ CAPS: dict[str, int] = {
     "spec_rounds": 5,
     "plan_tasks": 12,
     "task_attempts": 3,
-    "final_rounds": 3,
+    "final_rounds": 5,
     "rebase_regate": 1,
     "ci_fix": 1,
     "discoveries": 5,
     "subagents": 60,
-    "pi_calls": 14,
+    "pi_calls": 20,
 }
 WALL_CLOCK_SECONDS = 10 * 3600
 _DEADLINE_MSG = f"{WALL_CLOCK_SECONDS // 3600} h wall-clock cap reached"
