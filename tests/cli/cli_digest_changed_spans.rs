@@ -79,6 +79,43 @@ fn model_routine_declaration_start_includes_attributes() {
     );
 }
 
+/// #71 attribute-start limits: (a) an attribute separated from its routine by a
+/// COMMENT is not claimed by `declaration_start_line` today (issue #80's lowerer
+/// bug drops it; a #80 fix moves this assertion on purpose); (b) a multi-line
+/// attribute's FIRST line is the declaration start.
+#[test]
+fn declaration_start_line_attribute_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    write(
+        &dir.path().join("src/Attrs.Codeunit.al"),
+        "codeunit 50120 AttrsCu\n{\n    [IntegrationEvent(false, false)]\n    // note\n    procedure Commented()\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::AttrsCu,\n        'Commented', '', false, false)]\n    local procedure MultiLine()\n    begin\n    end;\n}\n",
+    );
+    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
+    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let r = |name: &str| {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("{name}: no routine"))
+    };
+    // 0-based: `[IntegrationEvent]` row 2, `// note` row 3, `procedure` row 4.
+    let c = r("Commented");
+    assert_eq!(
+        (c.declaration_start_line, c.source_anchor.start_line),
+        (4, 4),
+        "#80: the comment-separated attribute is not claimed"
+    );
+    // 0-based: `[EventSubscriber(` row 8, its last line row 9, `procedure` row 10.
+    let m = r("MultiLine");
+    assert_eq!(
+        (m.declaration_start_line, m.source_anchor.start_line),
+        (8, 10)
+    );
+}
+
 const DECL_GUID: &str = "7a1e0000-0000-0000-0000-000000000074";
 
 fn decl_only_workspace(dir: &Path) {

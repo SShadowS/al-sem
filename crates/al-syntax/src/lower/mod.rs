@@ -5624,4 +5624,42 @@ pageextension 50117 PE extends P
             ]
         );
     }
+
+    /// #71 stated limit (issue #80, a known lowerer bug): an attribute separated
+    /// from its routine by a comment is NOT attached today, so the routine's
+    /// declaration span cannot reach it. A fix for #80 changes this test on
+    /// purpose.
+    #[test]
+    fn attribute_separated_by_comment_is_not_attached_today() {
+        let src = "codeunit 1 C\n{\n    [IntegrationEvent(false, false)]\n    // note\n    procedure P()\n    begin\n    end;\n}\n";
+        let af = parse(src);
+        let r = &af.objects[0].routines[0];
+        assert_eq!(r.name, "P");
+        let names: Vec<&str> = r
+            .attributes_parsed
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert!(
+            names.is_empty(),
+            "#80: the comment drops the attribute: {names:?}"
+        );
+    }
+
+    /// #71: a multi-line attribute's origin starts at its FIRST line (`[`), so a
+    /// routine's declaration span starts there, not at the attribute's last line.
+    #[test]
+    fn multi_line_attribute_origin_starts_at_its_first_line() {
+        let src = "codeunit 1 C\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"X\",\n        'OnFoo', '', false, false)]\n    local procedure H()\n    begin\n    end;\n}\n";
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let r = &af.objects[0].routines[0];
+        let rows: Vec<(u32, u32)> = r
+            .attributes_parsed
+            .iter()
+            .map(|a| (a.origin.start.row, a.origin.end.row))
+            .collect();
+        assert_eq!(rows, vec![(2, 3)]);
+        assert_eq!(r.origin.start.row, 4);
+    }
 }
