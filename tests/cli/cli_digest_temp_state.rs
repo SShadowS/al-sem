@@ -139,7 +139,7 @@ fn check_mode(single_app: bool) {
     )
     .expect("digest runs");
     let doc: Value = serde_json::from_str(&result.json_text).expect("digest json");
-    assert_eq!(doc["schemaVersion"], "1.4.0");
+    assert_eq!(doc["schemaVersion"], "1.5.0");
     let got = db_effects(&doc);
 
     // Every DB_INSERT in the routine has the expected value.

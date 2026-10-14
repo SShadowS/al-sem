@@ -48,7 +48,7 @@ pub struct UnresolvedConeResult {
     pub visited_ids: HashSet<String>,
 }
 
-const DEFAULT_MAX_DEPTH: u32 = 64;
+pub(crate) const DEFAULT_MAX_DEPTH: u32 = 64;
 const DEFAULT_MAX_VISITED: usize = 25_000;
 
 // ---------------------------------------------------------------------------

@@ -1,3 +1,11 @@
+--- DeadHelper ---
+  coverage: complete
+  (no effects)
+
+--- LiveHelper ---
+  coverage: complete
+  (no effects)
+
 --- OnRun ---
   coverage: complete
   (no effects)

@@ -61,6 +61,7 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         modify_allowed: None,
         delete_allowed: None,
         source_anchor: None,
+        declaration_only_routines: Vec::new(),
     }
 }
 
@@ -224,6 +225,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
             end_column: 0,
             syntax_kind: String::new(),
         },
+        declaration_start_line: 0,
         identifier_references: Vec::new(),
         unreachable_statements: Vec::new(),
         // Dep routines are bodyless (ABI symbol-only) — no branching / assignments /

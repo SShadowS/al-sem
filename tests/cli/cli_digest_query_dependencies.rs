@@ -166,7 +166,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     // digest, default (cross-app).
     let (doc, code) = json(&["digest", &ws, "--file", "src/Work.al"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["schemaVersion"], "1.4.0");
+    assert_eq!(doc["schemaVersion"], "1.5.0");
     assert_eq!(doc["payload"]["dependencies"]["mode"], "crossApp");
     assert_eq!(
         app_sources(&doc),
@@ -297,6 +297,80 @@ fn embedded_dependency_leaf_effects_and_workspace_scoped_selectors() {
         .collect();
     names.sort();
     assert_eq!(names, vec!["CallLib", "DoWork"], "{q}");
+}
+
+/// #71 A2c: changed-root resolution by declaration span indexes workspace
+/// routines only (`ws:` units). A dependency routine's unit is
+/// `dep:<guid>:<path>`; naming it as a `--file` matches nothing, in both modes.
+///
+/// Precondition (default mode, asserted first): the dependency is loaded with
+/// source and `CallLib`'s effects are anchored in a `dep:{DEP_GUID}` file, so
+/// dependency routines with `dep:` units ARE in the model.
+/// Mutation: index every non-empty `source_unit_id` (drop the `ws:` filter) ->
+/// `dep:{DEP_GUID}:src/lib.al` matches the dependency routines, roots appear.
+#[test]
+fn dependency_routines_never_become_changed_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), true);
+    embedded_dependency(dir.path());
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let (q, code) = json(&["query", "effects", &ws, "--routine", "CallLib"]);
+    assert_eq!(code, 0, "{q}");
+    assert_eq!(
+        app_sources(&q),
+        vec![(DEP_GUID.to_string(), "embedded".to_string())]
+    );
+    assert!(
+        q["payload"]["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["origin"]["anchor"]["file"]
+                .as_str()
+                .is_some_and(|f| f.starts_with(&format!("dep:{DEP_GUID}")))),
+        "precondition: dependency routines are in the model: {q}"
+    );
+
+    let dep_file = format!("dep:{DEP_GUID}:src/Lib.al");
+    for mode in [&[][..], &["--single-app"][..]] {
+        let mut a = vec!["digest", &ws, "--file", &dep_file];
+        a.extend_from_slice(mode);
+        let (d, code) = json(&a);
+        assert_eq!(code, 2, "{mode:?}: {d}");
+        assert!(
+            d["payload"]["entries"].as_array().unwrap().is_empty(),
+            "{mode:?}: {d}"
+        );
+        let kinds: Vec<&str> = d["payload"]["changedRootsDiagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["file-unmatched"], "{mode:?}: {d}");
+
+        let mut a = vec!["digest", &ws, "--file", "src/Work.al"];
+        a.extend_from_slice(mode);
+        let (d, code) = json(&a);
+        assert_eq!(code, 0, "{mode:?}: {d}");
+        let mut names: Vec<&str> = d["payload"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["routine"]["display"].as_str().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["CallLib", "DoWork"], "{mode:?}: {d}");
+        assert!(
+            d["payload"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["routine"]["anchor"]["file"] == "ws:src/Work.al"),
+            "{mode:?}: {d}"
+        );
+    }
 }
 
 /// The no-dependency contract: on every digest and query golden workspace (none

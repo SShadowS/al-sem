@@ -1,7 +1,12 @@
 //! Port of al-sem `src/digest/diff-parser.ts`.
 //!
 //! Minimal unified diff parser: produces a list of DiffFile (with hunks) from
-//! `git diff` / `diff -u` output. Only the new-side line ranges are extracted.
+//! `git diff` / `diff -u` output. Each hunk body is read line by line, bounded
+//! by the header's old/new counts, and its additions and deletion gaps are
+//! recorded as [`HunkChange`]s. Inside a body, header tests (`--- `, `+++ `,
+//! `diff --git`, `@@`) do not apply; a line that does not fit the remaining
+//! counts ends the hunk as truncated (an error) and is re-read as a top-level
+//! line.
 //!
 //! Handles the 9 spec edge cases: a/b/ prefix stripping, quoted paths, /dev/null,
 //! renames, omitted hunk count (defaults to 1), zero-length ranges, CRLF,
@@ -13,6 +18,35 @@ pub struct DiffHunk {
     pub new_start: i32,
     /// Number of new-file lines (may be 0 for pure deletions).
     pub new_count: i32,
+    /// Number of old-file lines (may be 0 for pure additions; omitted → 1).
+    pub old_count: i32,
+    /// The changes the hunk body records, in body order.
+    pub changes: Vec<HunkChange>,
+}
+
+/// One change of a hunk body. 1-based new-file numbers; `DeletedAfter(L)` = a
+/// gap between new lines L and L+1 (one per run of consecutive `-` lines).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkChange {
+    Added(i32),
+    DeletedAfter(i32),
+    /// A `DeletedAfter` whose deleted lines are one or more complete attribute
+    /// groups (each starts with a trimmed `[` and runs, over one or more lines,
+    /// until its brackets balance): such a gap right above a routine belongs to
+    /// it. Brackets are counted on raw text, so a bracket inside a string
+    /// argument (`'[x'`) can misclassify the run.
+    DeletedAttributesAfter(i32),
+}
+
+impl HunkChange {
+    /// The new-file line number the change carries.
+    pub fn line(self) -> i32 {
+        match self {
+            HunkChange::Added(n)
+            | HunkChange::DeletedAfter(n)
+            | HunkChange::DeletedAttributesAfter(n) => n,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +142,9 @@ fn extract_path(line: &str) -> Option<String> {
     Some(strip_ab_prefix(&normalized).to_string())
 }
 
-fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
+/// `None`: not a hunk header. `Some(Err(_))`: a hunk header whose line range does
+/// not fit in i32 (#71) — reported, never opened, so no cursor step can overflow.
+fn parse_hunk_header(line: &str) -> Option<Result<DiffHunk, String>> {
     // Strict port of the TS regex (#15):
     //   /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/
     // Anchored at the start; trailing text after the closing `@@` is allowed (no `$`).
@@ -137,7 +173,8 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
         }
         *i > start
     }
-    fn eat_digits(bytes: &[u8], i: &mut usize) -> Option<i32> {
+    /// Digits saturate at i64::MAX; the range check below rejects them.
+    fn eat_digits(bytes: &[u8], i: &mut usize) -> Option<i64> {
         let start = *i;
         while *i < bytes.len() && bytes[*i].is_ascii_digit() {
             *i += 1;
@@ -145,10 +182,8 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
         if *i == start {
             return None;
         }
-        std::str::from_utf8(&bytes[start..*i])
-            .ok()?
-            .parse::<i32>()
-            .ok()
+        let digits = std::str::from_utf8(&bytes[start..*i]).ok()?;
+        Some(digits.parse::<i64>().unwrap_or(i64::MAX))
     }
 
     // ^@@
@@ -164,11 +199,12 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
         return None;
     }
     i += 1;
-    eat_digits(bytes, &mut i)?;
-    // (?:,(\d+))?
+    let old_start = eat_digits(bytes, &mut i)?;
+    // (?:,(\d+))?  — omitted count → 1
+    let mut old_count = 1;
     if i < bytes.len() && bytes[i] == b',' {
         i += 1;
-        eat_digits(bytes, &mut i)?;
+        old_count = eat_digits(bytes, &mut i)?;
     }
     // \s+
     if !eat_ws1(bytes, &mut i) {
@@ -195,10 +231,126 @@ fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
         return None;
     }
 
-    Some(DiffHunk {
-        new_start,
-        new_count,
-    })
+    // The body cursor runs up to `new_start + max(new_count, 1)` (`OpenHunk`), so
+    // that sum must fit in i32; then no cursor step can overflow.
+    let fits = |n: i64| i32::try_from(n).is_ok();
+    let end = new_start.checked_add(new_count.max(1));
+    if !(fits(old_start) && fits(old_count) && end.is_some_and(fits)) {
+        return Some(Err(format!(
+            "hunk at +{new_start} has an invalid line range"
+        )));
+    }
+    Some(Ok(DiffHunk {
+        new_start: new_start as i32,
+        new_count: new_count as i32,
+        old_count: old_count as i32,
+        changes: Vec::new(),
+    }))
+}
+
+/// The hunk whose body is being read: lines left on each side, and the next
+/// new-file line (`cursor`). Git writes `new_start` as the line BEFORE the gap
+/// when `new_count == 0`, so the cursor then starts one later.
+struct OpenHunk {
+    new_start: i32,
+    old_left: i32,
+    new_left: i32,
+    cursor: i32,
+    in_deletion_run: bool,
+    /// The current deletion run is still only complete attribute groups...
+    attribute_run: bool,
+    /// ...and this is the bracket depth of its open group (0 = between groups).
+    attribute_depth: i32,
+}
+
+impl OpenHunk {
+    fn new(h: &DiffHunk) -> Self {
+        OpenHunk {
+            new_start: h.new_start,
+            old_left: h.old_count,
+            new_left: h.new_count,
+            cursor: if h.new_count == 0 {
+                h.new_start + 1
+            } else {
+                h.new_start
+            },
+            in_deletion_run: false,
+            attribute_run: false,
+            attribute_depth: 0,
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.old_left <= 0 && self.new_left <= 0
+    }
+
+    /// Consume one line as body, recording its change in `changes` (the open
+    /// hunk's). `false`: the line is not body (its side has no count left, or it
+    /// is not a body line), so the hunk ends INCOMPLETE.
+    fn accept(&mut self, line: &str, changes: &mut Vec<HunkChange>) -> bool {
+        match line.as_bytes().first() {
+            Some(b'\\') => true,
+            None | Some(b' ') if self.old_left > 0 && self.new_left > 0 => {
+                self.old_left -= 1;
+                self.new_left -= 1;
+                self.cursor += 1;
+                self.in_deletion_run = false;
+                true
+            }
+            Some(b'-') if self.old_left > 0 => {
+                self.old_left -= 1;
+                let text = line[1..].trim();
+                if !self.in_deletion_run {
+                    self.attribute_run = true;
+                    self.attribute_depth = 0;
+                    changes.push(HunkChange::DeletedAfter(self.cursor - 1));
+                }
+                // The run is attribute-only while it is a sequence of complete
+                // attribute groups: each starts with `[` (at depth 0) and runs
+                // until its brackets balance. Any other text between groups
+                // (after a closing `]` only whitespace, another `[` group or a
+                // `//` comment may follow on its line), or a stray `]`, makes the
+                // whole run a plain deletion.
+                if self.attribute_depth == 0 && !text.starts_with('[') {
+                    self.attribute_run = false;
+                }
+                if self.attribute_run {
+                    for (i, c) in text.char_indices() {
+                        match c {
+                            '[' => self.attribute_depth += 1,
+                            ']' if self.attribute_depth > 0 => self.attribute_depth -= 1,
+                            _ if self.attribute_depth > 0 || c.is_whitespace() => {}
+                            _ if text[i..].starts_with("//") => break,
+                            _ => {
+                                self.attribute_run = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Classified after every line, so a group still open when the run
+                // ends leaves a plain deletion.
+                if let Some(last) = changes.last_mut() {
+                    let l = last.line();
+                    *last = if self.attribute_run && self.attribute_depth == 0 {
+                        HunkChange::DeletedAttributesAfter(l)
+                    } else {
+                        HunkChange::DeletedAfter(l)
+                    };
+                }
+                self.in_deletion_run = true;
+                true
+            }
+            Some(b'+') if self.new_left > 0 => {
+                self.new_left -= 1;
+                self.in_deletion_run = false;
+                changes.push(HunkChange::Added(self.cursor));
+                self.cursor += 1;
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,17 +367,21 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
 
     // Normalize CRLF → LF
     let normalized = text.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
+    let mut lines: Vec<&str> = normalized.split('\n').collect();
+    // A final '\n' is the last line's terminator, not an empty context line.
+    if normalized.ends_with('\n') {
+        lines.pop();
+    }
+    let mut open: Option<OpenHunk> = None;
 
     let mut files: Vec<DiffFile> = Vec::new();
-    let errors: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
 
     // State
     let mut current_file: Option<DiffFile> = None;
     let mut pending_rename_from: Option<String> = None;
     let mut pending_rename_to: Option<String> = None;
     let mut pending_old_path: Option<Option<String>> = None; // None means "not seen"; Some(None) means /dev/null
-    let mut in_file = false;
 
     // Mirrors TS `finalizeFile`: clears the pending rename trackers ONLY when a
     // file was actually finalized (currentFile !== null). pendingOldPath is always
@@ -249,6 +405,25 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
         // Strip trailing CR
         let line = raw_line.trim_end_matches('\r');
 
+        // Inside a hunk body, header tests do not apply.
+        if let Some(h) = open.as_mut() {
+            // `open` is set only right after its hunk is pushed onto
+            // `current_file`, and no header arm runs while it is open, so this
+            // always finds the hunk. Should that ever break, drop the open hunk
+            // instead of panicking.
+            if let Some(hunk) = current_file.as_mut().and_then(|f| f.hunks.last_mut()) {
+                if h.accept(line, &mut hunk.changes) {
+                    if h.is_complete() {
+                        open = None;
+                    }
+                    continue;
+                }
+                errors.push(format!("hunk at +{} truncated", h.new_start));
+            }
+            open = None;
+            // The line that ended the hunk is a top-level line: fall through.
+        }
+
         // Edge case 8: "\ No newline at end of file" — skip
         if line.starts_with("\\ ") {
             continue;
@@ -264,12 +439,14 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                 &mut pending_old_path,
             );
             pending_old_path = Some(extract_path(line));
-            in_file = true;
             continue;
         }
 
-        // +++ line (new-side path header)
-        if line.starts_with("+++ ") && in_file {
+        // +++ line (new-side path header). It opens a file only right after a
+        // `---` header: an orphan `+++` (e.g. a hunk's overrunning `+` line,
+        // re-read at top level) must not replace the current file and lose its
+        // hunks (#71).
+        if line.starts_with("+++ ") && pending_old_path.is_some() {
             let new_path = extract_path(line);
             // `old_p`: the old-side path, coalescing both "not seen" (None) and
             // /dev/null (Some(None)) to None — mirrors TS `pendingOldPath ?? null`.
@@ -290,7 +467,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                 }
                 Some(new_p) => {
                     // pending_old_path was Some(None) ⇒ old_p is None ⇒ `--- /dev/null` → added.
-                    // (The `in_file` guard guarantees a `---` was seen, so the only way
+                    // (The `pending_old_path` guard guarantees a `---` was seen, so the only way
                     // old_p is None here is the /dev/null case — matching TS `pendingOldPath === null`.)
                     if let Some(old_real) = old_p {
                         let is_rename =
@@ -364,18 +541,30 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             pending_rename_from = None;
             pending_rename_to = None;
             pending_old_path = None;
-            in_file = false;
             continue;
         }
 
         // Hunk header — pass the full line so the strict `^@@…@@` regex anchors correctly.
         if line.starts_with("@@")
-            && let Some(hunk) = parse_hunk_header(line)
+            && let Some(parsed) = parse_hunk_header(line)
             && let Some(ref mut f) = current_file
         {
-            f.hunks.push(hunk);
+            match parsed {
+                Ok(hunk) => {
+                    let state = OpenHunk::new(&hunk);
+                    f.hunks.push(hunk);
+                    if !state.is_complete() {
+                        open = Some(state);
+                    }
+                }
+                Err(e) => errors.push(e),
+            }
         }
         // All other lines ignored
+    }
+
+    if let Some(h) = open {
+        errors.push(format!("hunk at +{} truncated", h.new_start));
     }
 
     // End-of-input
@@ -416,8 +605,11 @@ mod tests {
             --- a/src/Foo.al\n\
             +++ b/src/Foo.al\n\
             @@ -10,3 +10,4 @@ SomeContext\n\
+            \x20ctx1\n\
             -old\n\
-            +new\n";
+            +new\n\
+            +new2\n\
+            \x20ctx2\n";
         let r = parse_unified_diff(diff);
         assert_eq!(r.files.len(), 1);
         let f = &r.files[0];
@@ -426,6 +618,7 @@ mod tests {
         assert_eq!(f.hunks.len(), 1);
         assert_eq!(f.hunks[0].new_start, 10);
         assert_eq!(f.hunks[0].new_count, 4);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 
     #[test]
@@ -475,8 +668,11 @@ mod tests {
             --- a/Old.al\n\
             +++ b/New.al\n\
             @@ -1,3 +1,4 @@\n\
+            \x20ctx1\n\
             -old\n\
-            +new\n";
+            +new\n\
+            +new2\n\
+            \x20ctx2\n";
         let r = parse_unified_diff(diff);
         assert_eq!(r.files.len(), 1);
         let f = &r.files[0];
@@ -490,6 +686,7 @@ mod tests {
         assert_eq!(f.hunks.len(), 1);
         assert_eq!(f.hunks[0].new_start, 1);
         assert_eq!(f.hunks[0].new_count, 4);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 
     #[test]
@@ -608,5 +805,206 @@ mod tests {
             rename from \"\n\
             rename to \"\n";
         let _ = parse_unified_diff(diff);
+    }
+
+    // -----------------------------------------------------------------------
+    // #71: count-bounded hunk bodies
+    // -----------------------------------------------------------------------
+
+    use super::HunkChange::{Added, DeletedAfter};
+
+    const HEAD: &str = "--- a/x.al\n+++ b/x.al\n";
+
+    fn changes(diff: &str) -> (Vec<Vec<HunkChange>>, Vec<String>) {
+        let r = parse_unified_diff(diff);
+        (
+            r.files
+                .iter()
+                .flat_map(|f| f.hunks.iter().map(|h| h.changes.clone()))
+                .collect(),
+            r.errors,
+        )
+    }
+
+    #[test]
+    fn hunk_changes_follow_the_body() {
+        // old: ctx, -, -, blank = 4; new: ctx, +, blank, + = 4.
+        let (c, e) = changes(&format!(
+            "{HEAD}@@ -3,4 +3,4 @@\n ctx\n-old1\n-old2\n+new\n\n+tail\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(3), Added(4), Added(6)]]);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn pure_deletion_cursor_starts_after_new_start() {
+        let (c, _) = changes(&format!("{HEAD}@@ -9,1 +8,0 @@\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(8)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -1,1 +0,0 @@\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(0)]]);
+    }
+
+    #[test]
+    fn truncated_hunk_is_an_error_with_or_without_final_newline() {
+        for d in [
+            format!("{HEAD}@@ -3,2 +3,1 @@\n-old\n"),
+            format!("{HEAD}@@ -3,2 +3,1 @@\n-old"),
+        ] {
+            let (c, e) = changes(&d);
+            assert_eq!(e, vec!["hunk at +3 truncated".to_string()], "{d:?}");
+            assert_eq!(c, vec![vec![DeletedAfter(2)]], "{d:?}");
+        }
+    }
+
+    #[test]
+    fn header_looking_lines_inside_a_body_are_body() {
+        let r = parse_unified_diff(&format!("{HEAD}@@ -9,1 +9,1 @@\n--- x\n+++ y\n"));
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].hunks[0].changes, vec![DeletedAfter(8), Added(9)]);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn the_line_ending_a_truncated_hunk_is_redispatched() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        // The `@@` line that ends the truncated hunk must open the second hunk;
+        // swallowing it loses that hunk (`-x`/`+y` are then top-level noise).
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.errors, vec!["hunk at +3 truncated".to_string()]);
+        let c: Vec<_> = r.files[0].hunks.iter().map(|h| h.changes.clone()).collect();
+        assert_eq!(
+            c,
+            vec![vec![DeletedAfter(2)], vec![DeletedAfter(8), Added(9)]]
+        );
+    }
+
+    #[test]
+    fn minus_line_past_old_count_ends_the_hunk() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,1 +3,2 @@\n-old\n+a\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["x.al", "y.al"]);
+        assert_eq!(r.errors, vec!["hunk at +3 truncated".to_string()]);
+    }
+
+    #[test]
+    fn exact_fill_completes_the_hunk() {
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+        ));
+        assert_eq!(r.files.len(), 1);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let c: Vec<_> = r.files[0].hunks.iter().map(|h| h.changes.clone()).collect();
+        assert_eq!(
+            c,
+            vec![
+                vec![DeletedAfter(2), Added(3)],
+                vec![DeletedAfter(8), Added(9)]
+            ]
+        );
+    }
+
+    #[test]
+    fn no_newline_marker_is_not_counted() {
+        let (c, e) = changes(&format!(
+            "{HEAD}@@ -9,1 +9,1 @@\n-x\n\\ No newline at end of file\n+y\n\\ No newline at end of file\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(8), Added(9)]]);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn out_of_range_hunk_header_is_an_error_not_a_panic() {
+        // The cursor runs up to `new_start + max(new_count, 1)`; a header whose
+        // range does not fit in i32 is reported and opens no hunk.
+        for (header, body) in [
+            ("@@ -1,1 +2147483647,0 @@", "-x\n"),
+            ("@@ -1 +2147483647,2 @@", "+a\n+b\n"),
+            ("@@ -1 +2147483648 @@", "-x\n+y\n"),
+            ("@@ -99999999999999999999999 +1 @@", "-x\n+y\n"),
+            ("@@ -2147483648 +1 @@", "-x\n+y\n"),
+        ] {
+            let r = parse_unified_diff(&format!("{HEAD}{header}\n{body}"));
+            assert_eq!(r.files.len(), 1, "{header}");
+            assert!(r.files[0].hunks.is_empty(), "{header}");
+            assert_eq!(r.errors.len(), 1, "{header}: {:?}", r.errors);
+            assert!(r.errors[0].contains("invalid line range"), "{:?}", r.errors);
+        }
+        // The largest ranges that fit.
+        let (c, e) = changes(&format!("{HEAD}@@ -1,1 +2147483646,1 @@\n-x\n+y\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2147483645), Added(2147483646)]]);
+        assert!(e.is_empty(), "{e:?}");
+        let (c, e) = changes(&format!("{HEAD}@@ -1,1 +2147483646,0 @@\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2147483646)]]);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn plus_header_without_a_pending_minus_header_keeps_the_current_file() {
+        // `+new` fills the new count, so `+++ b/y.al` overruns the hunk and is
+        // re-read at top level. With no `---` before it, it must not replace
+        // (and lose) `x.al`, whose hunk already holds `Added(3)`.
+        let r = parse_unified_diff(&format!(
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\n+new\n+++ b/y.al\n@@ -9 +9 @@\n-x\n+y\n"
+        ));
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["x.al"]);
+        let c: Vec<_> = r.files[0].hunks.iter().map(|h| h.changes.clone()).collect();
+        assert_eq!(
+            c,
+            vec![
+                vec![DeletedAfter(2), Added(3)],
+                vec![DeletedAfter(8), Added(9)]
+            ]
+        );
+        assert_eq!(r.errors, vec!["hunk at +3 truncated".to_string()]);
+    }
+
+    #[test]
+    fn attribute_only_deletion_runs() {
+        use super::HunkChange::DeletedAttributesAfter;
+        // Every deleted line of the run is an attribute line (trimmed `[`).
+        let (c, _) = changes(&format!("{HEAD}@@ -3,2 +2,0 @@\n-  [A]\n-[B(1)]\n"));
+        assert_eq!(c, vec![vec![DeletedAttributesAfter(2)]]);
+        // One other line, after or before, makes it a plain deletion.
+        let (c, _) = changes(&format!("{HEAD}@@ -3,2 +2,0 @@\n-[A]\n-x\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -3,2 +2,0 @@\n-x\n-[A]\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        // A multi-line attribute group is one group once its brackets balance.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,3 +2,0 @@\n-    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"X\",\n-        'OnAfterPost', '', false, false)]\n-    [A]\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAttributesAfter(2)]]);
+        // A complete group followed by other text, or a group left open, is not.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,3 +2,0 @@\n-    [B(1,\n-        2)]\n-    // note\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        // Code after a group's closing `]` on its line is not attribute text; a
+        // trailing `//` comment is.
+        let (c, _) = changes(&format!(
+            "{HEAD}@@ -3,2 +2,0 @@\n-    [IntegrationEvent(\n-        false, false)] local procedure Gone() begin end;\n"
+        ));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -3,1 +2,0 @@\n-    [A] // note\n"));
+        assert_eq!(c, vec![vec![DeletedAttributesAfter(2)]]);
+        let (c, _) = changes(&format!("{HEAD}@@ -3,1 +2,0 @@\n-    [B(1,\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2)]]);
+        // Separate runs are classified separately.
+        let (c, _) = changes(&format!("{HEAD}@@ -3,3 +3,1 @@\n-x\n ctx\n-[A]\n"));
+        assert_eq!(c, vec![vec![DeletedAfter(2), DeletedAttributesAfter(3)]]);
+    }
+
+    #[test]
+    fn omitted_counts_bound_the_body() {
+        let r = parse_unified_diff(&format!("{HEAD}@@ -5 +5 @@\n-a\n+b\n ctx-after\n"));
+        let h = &r.files[0].hunks[0];
+        assert_eq!((h.old_count, h.new_count), (1, 1));
+        assert_eq!(h.changes, vec![DeletedAfter(4), Added(5)]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
     }
 }

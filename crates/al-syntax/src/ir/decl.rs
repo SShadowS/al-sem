@@ -99,6 +99,9 @@ pub struct AttributeIr {
     pub name: String,
     pub raw: String,
     pub args: Vec<super::ExprId>,
+    /// The `attribute_item` node's origin (#71: the routine's declaration span starts
+    /// at its first attribute).
+    pub origin: super::Origin,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]

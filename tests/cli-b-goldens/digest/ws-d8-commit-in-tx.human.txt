@@ -25,6 +25,21 @@
     via: 1 path(s)
   diagnostic: evidence-unavailable (EVENT_PUBLISH)
 
+--- OnAfterPostSalesDoc ---
+  coverage: complete
+  [COMMIT] transitive
+    evidence: (unavailable)
+  [DB_INSERT] transitive
+    evidence: (unavailable)
+    detail: resourceId=11111111-0000-0000-0000-00000000d80a/table/50100, resourceDisplay=Audit Entry, tempState=known(false)
+  [EVENT_PUBLISH] direct
+    evidence: (unavailable)
+    detail: resourceId=11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc, resourceDisplay=onafterpostsalesdoc, eventClass=Integration
+    via: 1 path(s)
+  diagnostic: evidence-unavailable (COMMIT)
+  diagnostic: evidence-unavailable (DB_INSERT)
+  diagnostic: evidence-unavailable (EVENT_PUBLISH)
+
 --- HandlePosted ---
   coverage: complete
   [COMMIT] direct

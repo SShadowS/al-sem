@@ -322,6 +322,7 @@ mod tests {
                 end_column: 0,
                 syntax_kind: "procedure".to_string(),
             },
+            declaration_start_line: 0,
             identifier_references: Vec::new(),
             unreachable_statements: Vec::new(),
             has_branching: false,
@@ -355,6 +356,7 @@ mod tests {
             modify_allowed: None,
             delete_allowed: None,
             source_anchor: None,
+            declaration_only_routines: Vec::new(),
         }
     }
 
