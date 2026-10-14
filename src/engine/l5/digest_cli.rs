@@ -1183,7 +1183,9 @@ pub fn project_digest_document(
     env.insert("payload".into(), serde_json::Value::Object(payload));
     // 1.4.0: additive `detail.tempState` on DB_* effects (#65) and
     // `payload.dependencies` {mode, apps} (#66).
-    env.insert("schemaVersion".into(), "1.4.0".into());
+    // 1.5.0: additive routine.declarationOnly, routine.anchors and the
+    // "declaration-only" coverage reason (#71).
+    env.insert("schemaVersion".into(), "1.5.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
