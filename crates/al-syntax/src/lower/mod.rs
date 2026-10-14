@@ -5590,4 +5590,38 @@ pageextension 50117 PE extends P
             "the routine node starts at the keyword"
         );
     }
+
+    /// #71: a header split across `#if` arms, with a shared attribute above the
+    /// `#if` and one attribute inside each arm. Each arm's routine keeps the shared
+    /// attribute's origin and its OWN arm attribute's origin, never the other arm's
+    /// and never the split node's.
+    #[test]
+    fn split_header_attribute_origins_are_the_attribute_items() {
+        let src = "codeunit 1 C\n{\n    [Obsolete('x', '1.0')]\n#if X\n    [IntegrationEvent(false, false)]\n    procedure Foo(A: Integer)\n#else\n    [BusinessEvent(false)]\n    procedure Foo(A: Integer; B: Integer)\n#endif\n    begin\n    end;\n}\n";
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let rows: Vec<Vec<(String, u32, u32)>> = af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                r.attributes_parsed
+                    .iter()
+                    .map(|a| (a.name.clone(), a.origin.start.row, a.origin.start.column))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![
+                    ("Obsolete".to_string(), 2, 4),
+                    ("IntegrationEvent".to_string(), 4, 4)
+                ],
+                vec![
+                    ("Obsolete".to_string(), 2, 4),
+                    ("BusinessEvent".to_string(), 7, 4)
+                ],
+            ]
+        );
+    }
 }

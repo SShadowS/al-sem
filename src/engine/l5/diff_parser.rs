@@ -339,12 +339,15 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
         if let Some(h) = open.as_mut() {
             if let Some(change) = h.accept(line) {
                 if let Some(c) = change {
-                    current_file
-                        .as_mut()
-                        .and_then(|f| f.hunks.last_mut())
-                        .expect("an open hunk belongs to the current file")
-                        .changes
-                        .push(c);
+                    // `open` is set only right after its hunk is pushed onto
+                    // `current_file`, and no header arm runs while it is open, so
+                    // this always finds the hunk. Should that ever break, drop the
+                    // open hunk instead of panicking.
+                    let Some(hunk) = current_file.as_mut().and_then(|f| f.hunks.last_mut()) else {
+                        open = None;
+                        continue;
+                    };
+                    hunk.changes.push(c);
                 }
                 if h.is_complete() {
                     open = None;
@@ -793,12 +796,17 @@ mod tests {
     #[test]
     fn the_line_ending_a_truncated_hunk_is_redispatched() {
         let r = parse_unified_diff(&format!(
-            "{HEAD}@@ -3,2 +3,1 @@\n-old\ndiff --git a/y.al b/y.al\n--- a/y.al\n+++ b/y.al\n@@ -9,1 +9,1 @@\n-x\n+y\n"
+            "{HEAD}@@ -3,2 +3,1 @@\n-old\n@@ -9,1 +9,1 @@\n-x\n+y\n"
         ));
-        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, vec!["x.al", "y.al"]);
-        assert_eq!(r.errors.len(), 1);
-        assert_eq!(r.files[1].hunks[0].changes, vec![DeletedAfter(8), Added(9)]);
+        // The `@@` line that ends the truncated hunk must open the second hunk;
+        // swallowing it loses that hunk (`-x`/`+y` are then top-level noise).
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.errors, vec!["hunk at +3 truncated".to_string()]);
+        let c: Vec<_> = r.files[0].hunks.iter().map(|h| h.changes.clone()).collect();
+        assert_eq!(
+            c,
+            vec![vec![DeletedAfter(2)], vec![DeletedAfter(8), Added(9)]]
+        );
     }
 
     #[test]
