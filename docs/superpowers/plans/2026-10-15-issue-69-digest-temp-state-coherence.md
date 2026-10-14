@@ -30,34 +30,25 @@
 
 The acceptance tests already exist, uncommitted. The pre-commit hook builds the WORKING TREE, so uncommitted tests that do not compile (A4b, A5 Compare 1) would block every commit.
 
-**Decision: Task 1 commits every test file now. Each still-red test carries `#[ignore = "issue-69 task N: <why>"]`, where N is the task that turns it green. Task N removes the marker in the same commit as the code.** The two tests that do not compile yet are held back, because an ignore marker cannot help code that does not build:
+**Decision (revised 2026-10-15 after Task 1's `check-diff` STOP): no `#[ignore]` and no `#[allow(...)]` ever enter the tree — the executor forbids both, by doctrine. A still-red acceptance test is PARKED: cut verbatim out of the compiled tree into `.agent/issue-69/parked/<taskN>-<destination>.rs.txt` (never committed), and the task that greens it RESTORES it in the same commit as the code.** Each parked file starts with a `//` header saying where its block goes and which imports to add; restore = paste everything below the header, then follow the header. Task 1 commits only the tests green after D5 (A4, A1b, A3) and the probe workspace `tests/common/temp_state_probe.rs` (no `allow`; it carries only what the committed tests use). `line_of` is parked in the Task-4 cli file, not the probe module: only the cli umbrella reads `// @marker` lines, so in the `r3` umbrella it would be dead code.
 
-- `tests/r3/r3_temp_class_parity_arena.rs` is committed in Task 1, but the line `mod r3_temp_class_parity_arena;` is NOT added to `tests/r3/main.rs` until Task 3. Umbrella members are compiled only through `mod` lines, so the file is inert until then.
-- The A4b block in `src/engine/l5/digest_cli.rs` (`mod tests`, from the comment `// --- #69 D4: the per-operation temp-state join` to the end of `temp_join_no_l4_row_makes_the_field_absent`) is cut out in Task 1 and saved verbatim to `.agent/issue-69/parked/a4b_tests.rs.txt`. Task 5 pastes it back.
+Parked files (the test → the task that restores it):
 
-Marker map (the test → the task that removes its marker):
-
-| Test | File | Marker | Greens in |
+| Parked file (`.agent/issue-69/parked/`) | Destination | Contents | Restored in |
 |---|---|---|---|
-| `digest_db_effects_carry_query_effects_temp_state` (A4) | cli | none (green on base) | — |
-| `a1b_no_temp_state_incoherence` | cli | none (green on base; its proof needs D4, Task 5) | — |
-| `a3_state_only_ops_are_not_db_writes` | cli | none (Task 1 greens it before committing) | 1 |
-| `a1c_cone_values_are_frame_correct` | cli | `issue-69 task 2` | 2 |
-| `a5_cone_l4_class_parity_reduced` | r3 | `issue-69 task 2` | 2 |
-| `a5_cone_l4_class_parity_per_producer` | r3 arena | (mod line added) | 3 |
-| `a2a_temp_call_site_keeps_its_witness` | cli | `issue-69 task 4` | 4 |
-| `a2d_all_paths_and_conditionality_kept` | cli | `issue-69 task 4` | 4 |
-| `a2f_degraded_witnesses_never_share_an_occurrence` | cli | `issue-69 task 4` | 4 |
-| `a2g_incompleteness_reaches_consumers` | cli | `issue-69 task 4` | 4 |
-| `a1a_ordering_filter_agrees_with_temp_state` | cli | `issue-69 task 5` | 5 |
-| `a2b_one_effect_per_class` | cli | `issue-69 task 5` | 5 |
-| `a2c_depth_two_proof_real_call_first` | cli | `issue-69 task 5` | 5 |
-| `a2e_recursion_cycles_mixes_guards` | cli | `issue-69 task 5` | 5 |
-| A4b `temp_join_*` (2 tests) | `--lib` | (re-pasted) | 5 |
+| — (committed in Task 1) | cli | `digest_db_effects_carry_query_effects_temp_state` (A4), `a1b_no_temp_state_incoherence` (green on base; its proof needs D4), `a3_state_only_ops_are_not_db_writes` | — |
+| `task2-cli_digest_temp_state.rs.txt` | `tests/cli/cli_digest_temp_state.rs` | `a1c_cone_values_are_frame_correct` + `snapshot_writes` (+ snapshot/model imports) | 2 |
+| `task2-r3_temp_class_parity.rs.txt` | `tests/r3/r3_temp_class_parity.rs` (whole file) + `tests/r3/main.rs` (`temp_state_probe` and `r3_temp_class_parity` mod lines) | `a5_cone_l4_class_parity_reduced` (A5 Compare 2) | 2 |
+| `task3-r3_temp_class_parity_arena.rs.txt` | `tests/r3/r3_temp_class_parity_arena.rs` (whole file) + its `mod` line | `a5_cone_l4_class_parity_per_producer` (A5 Compare 1) | 3 |
+| `task4-cli_digest_temp_state.rs.txt` | `tests/cli/cli_digest_temp_state.rs` | `line_of`, the A2 reading helpers (`is_kt`, `is_nt`, `has_guarantee`, `via_paths`, `path_str(s)`, `hop_lines`, `evidence_kind`, `the_kt_insert`), `a2a_*`, `a2d_*`, `a2g_*`, `a2f_*` | 4 |
+| `task5-cli_digest_temp_state.rs.txt` | `tests/cli/cli_digest_temp_state.rs` | `terminal`, `a1a_*`, `a2b_*`, `a2c_*`, `a2e_*` + `mixed_carrier_precondition` | 5 |
+| `task5-digest_cli_tests.rs.txt` | `src/engine/l5/digest_cli.rs` `mod tests` | A4b `temp_join_*` (2 tests) | 5 |
+
+A2e's six claims that are already green on the base (RecH, RootCyc1, GuardFwdFalse/True, GCycTrue, GTTrue) ride with their row: they share A2e's closures, and their named reds come only from mutations of new code.
 
 Why A1a/A2b/A2c/A2e wait for Task 5: each has a claim on an operation reached in BOTH classes (`HelperUiBoth`, `HelperUiBothDeep`, `PermMix`, `SelfRecReal`), and today's `for_effect` unions both classes into each effect's `tempState`. Only D4's class filter makes those claims checkable.
 
-**Marker rule.** At the end of every task run `cargo test -p al-sem --test cli cli_digest_temp_state:: -- --include-ignored` and `cargo test -p al-sem --test r3 r3_temp_class_parity -- --include-ignored` and paste the summary into the ledger. If a test assigned to THIS task is still red, do not commit: either finish the work, or (only when the remaining red lines provably need a LATER task's code) move its marker to that task, quote the remaining red lines and the reason in the ledger, and get the reviewer to agree. A test that goes green EARLIER than its task keeps its marker; note it in the ledger.
+**Parking rule.** Task N restores ITS parked files first (red), then greens them. Before committing, run `cargo test -p al-sem --test cli cli_digest_temp_state::` (and, from Task 2, `cargo test -p al-sem --test r3 r3_temp_class_parity`) and paste the summary into the ledger: everything compiled must pass. A later task's parked test may be pasted in temporarily to measure it, and must be cut back out before the commit. If a restored test is still red only on lines that provably need a LATER task's code, re-park it under that task's file name, quote the remaining red lines and the reason in the ledger, and get the reviewer to agree. No parked file is ever staged.
 
 ## Discrimination proof protocol (every task)
 
@@ -87,10 +78,9 @@ For each proof the task owes: (1) make the named mutation with Edit; first `grep
 - Modify: `src/program/body/capability/table_commit.rs:17-31` (`map_op`: drop `Validate`/`Copy`/`TransferFields`; make it `pub(crate)`)
 - Modify: `src/program/body/capability/mod.rs` (re-export so the cone can call it, if `table_commit` is private)
 - Modify: `src/engine/l4/capability_cone.rs:162-174` (`map_table_op` becomes a call to `table_commit::map_op`)
-- Modify: `src/engine/l5/digest_cli.rs` (cut the A4b block out; park it)
-- Modify: `tests/cli/cli_digest_temp_state.rs`, `tests/r3/r3_temp_class_parity.rs` (ignore markers)
-- Modify: `tests/r3/main.rs` (remove the `mod r3_temp_class_parity_arena;` line until Task 3)
-- Commit (already written): `tests/common/temp_state_probe.rs`, `tests/cli/main.rs`, `tests/r3/r3_temp_class_parity_arena.rs`
+- Modify: `src/engine/l5/digest_cli.rs` (cut the A4b block out; park it — net byte-identical to B0)
+- Park (see "How the red tests ride"): every red test in `tests/cli/cli_digest_temp_state.rs`, the whole of `tests/r3/r3_temp_class_parity.rs` and `tests/r3/r3_temp_class_parity_arena.rs`, and their `tests/r3/main.rs` lines (net byte-identical to B0)
+- Commit: `tests/common/temp_state_probe.rs` (no `#![allow(dead_code)]`, no `line_of`), `tests/cli/main.rs`, `tests/cli/cli_digest_temp_state.rs` (A4, A1b, A3 and their helpers only)
 - Modify: `CHANGELOG.md` (`### Fixed` under Unreleased)
 - Goldens: expected to move `tests/r1a-goldens/`, `tests/r3a3-goldens/`, `tests/r3a5-goldens/`, `tests/r4f-goldens/`, `tests/cli-*-goldens/`, `tests/gate-goldens/`, possibly `tests/r4-goldens/`.
 
@@ -99,17 +89,9 @@ For each proof the task owes: (1) make the named mutation with Edit; first `grep
 
 **Acceptance rows greened:** A3.
 
-- [ ] **Step 1: Park the non-compiling tests.** Copy the A4b block (in `src/engine/l5/digest_cli.rs` `mod tests`, from `// --- #69 D4: the per-operation temp-state join (acceptance row A4b) -----` through the closing `}` of `temp_join_no_l4_row_makes_the_field_absent`, including `use crate::engine::l4::effect_lattice::TempStateKind;` and `fn ops`) to `.agent/issue-69/parked/a4b_tests.rs.txt`, then delete it from `digest_cli.rs` with Edit. Remove the line `mod r3_temp_class_parity_arena;` from `tests/r3/main.rs`.
+- [ ] **Step 1: Park the A4b tests.** Copy the A4b block (in `src/engine/l5/digest_cli.rs` `mod tests`, from `// --- #69 D4: the per-operation temp-state join (acceptance row A4b) -----` through the closing `}` of `temp_join_no_l4_row_makes_the_field_absent`, including `use crate::engine::l4::effect_lattice::TempStateKind;` and `fn ops`) to `.agent/issue-69/parked/task5-digest_cli_tests.rs.txt`, then delete it from `digest_cli.rs` with Edit.
 
-- [ ] **Step 2: Add the ignore markers** from the marker map above. Example, on `tests/cli/cli_digest_temp_state.rs`:
-
-```rust
-#[test]
-#[ignore = "issue-69 task 2: cone values are frame-correct only after the D1 producer solve"]
-fn a1c_cone_values_are_frame_correct() {
-```
-
-Use these reasons: task 2 "D1 producer solve"; task 4 "D3 witness proofs / identity / incomplete fold"; task 5 "D4 per-class tempState join". `a5_cone_l4_class_parity_reduced` in `tests/r3/r3_temp_class_parity.rs` gets the task-2 marker.
+- [ ] **Step 2: Park every other red test** into the parked files listed in "How the red tests ride" (A1c/A5/A2*/A1a, with the helpers only they use, `line_of` into the Task-4 cli file). Remove `#![allow(dead_code)]` from `tests/common/temp_state_probe.rs`; the module must then build warning-free in the `cli` umbrella. Remove the `temp_state_probe` / `r3_temp_class_parity*` lines from `tests/r3/main.rs`.
 
 - [ ] **Step 3: Confirm A3 is red on the base.**
 
@@ -152,18 +134,17 @@ Keep the existing Init/SetRange/Rename comment lines. In `capability_cone.rs` re
 
 - [ ] **Step 9: Gate and commit.**
 
-Run: `scripts/ci-steps task > .agent/issue-69/task-1-gate.log 2>&1; echo rc=$?` → `rc=0`; then the Marker rule commands.
+Run: `scripts/ci-steps task > .agent/issue-69/task-1-gate.log 2>&1; echo rc=$?` → `rc=0`; then the Parking rule command.
 
 ```bash
-git add src/program/body/capability/table_commit.rs src/program/body/capability/mod.rs \
-  src/engine/l4/capability_cone.rs src/engine/l5/digest_cli.rs \
+git add src/program/body/capability/table_commit.rs \
+  src/engine/l4/capability_cone.rs \
   tests/common/temp_state_probe.rs tests/cli/main.rs tests/cli/cli_digest_temp_state.rs \
-  tests/r3/main.rs tests/r3/r3_temp_class_parity.rs tests/r3/r3_temp_class_parity_arena.rs \
   CHANGELOG.md <every regenerated golden path>
-git commit -m "#69 D5: Validate/Copy/TransferFields are not DB writes; one table op map; land #69 acceptance tests (ignored until their task)"
+git commit -m "#69 D5: Validate/Copy/TransferFields are not DB writes; one table op map; land the green #69 acceptance tests"
 ```
 
-(Only stage `src/engine/l5/digest_cli.rs` if it differs from HEAD after the cut; it should be byte-identical to B0.)
+(`src/engine/l5/digest_cli.rs` and `tests/r3/main.rs` are byte-identical to B0 after parking; do not stage them.)
 
 ---
 
@@ -181,7 +162,7 @@ git commit -m "#69 D5: Validate/Copy/TransferFields are not DB writes; one table
   - `compose_cone_over_graph` (`:2671`): split producers out of `direct` (D1.1), run the solve, pass `resolved_by_routine` to `compose_inherited_cones`.
   - `inherited_facts_for_singleton` (`:1735`) and `inherited_facts_by_bfs` (`:1930`): use (a) and (b); the BFS no longer emits a sibling's producers.
   - `ConeOutcome`: add `pub pd_solution: pd_solve::ConeArena`.
-- Modify: `tests/cli/cli_digest_temp_state.rs`, `tests/r3/r3_temp_class_parity.rs` (remove task-2 markers)
+- Restore (parked): `task2-cli_digest_temp_state.rs.txt` into `tests/cli/cli_digest_temp_state.rs`; `task2-r3_temp_class_parity.rs.txt` as `tests/r3/r3_temp_class_parity.rs` plus its two `tests/r3/main.rs` mod lines. Do this FIRST (before Step 1) and record the red run in the ledger.
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
@@ -366,7 +347,7 @@ The rep for `(p, t)`: clone `prod.fact`, set `extra`'s table `temp_state` to `t`
   - (c) Delete the branch in `inherited_facts_by_bfs` that emits a sibling member's direct facts when they are producers (`:1977-1985`): sibling producers are now that routine's own entries. `fact_cone_for_scc` never sees producers because `direct` no longer holds them.
   - Delete `ConeFactEntry.pd`, the PD half of `merge_cone`, `entry_pd`, and the PD fields of `PdAnchor`. `cargo build` must show no dead-code warnings; delete what becomes dead.
 
-- [ ] **Step 6: Run the unit tests and A1c / A5 Compare 2.** Remove the task-2 markers.
+- [ ] **Step 6: Run the unit tests and A1c / A5 Compare 2.** (Restored from the Task-2 parked files at the start of the task.)
 
 Run: `cargo test -p al-sem --lib pd_solve` → PASS.
 Run: `cargo test -p al-sem --test cli cli_digest_temp_state::a1c_cone_values_are_frame_correct` → PASS.
@@ -382,11 +363,11 @@ If Compare 2 still shows lines, each is either a real solve bug (fix it) or a GU
 
 - [ ] **Step 9: CHANGELOG.** `### Fixed`: "The capability cone resolves a parameter-dependent write in every routine's own frame through a transitive per-producer solve (#69 D1). A write a caller makes temporary is graded known(true), a real record known(false), across recursion, cycles and root SCCs too; guards on these writes now hold on every typed edge, cycles included. Producers no longer share a cone key with ordinary facts." `### Removed`: "The frame-bound parameter-dependent cone entry (`ConeFactEntry.pd`) and its singleton-only substitution."
 
-- [ ] **Step 10: Gate and commit.** `scripts/ci-steps task` (log + rc), Marker rule, then:
+- [ ] **Step 10: Gate and commit.** `scripts/ci-steps task` (log + rc), Parking rule, then:
 
 ```bash
 git add src/engine/l4/pd_solve.rs src/engine/l4/mod.rs src/engine/l4/capability_cone.rs \
-  src/engine/l4/summary.rs tests/cli/cli_digest_temp_state.rs tests/r3/r3_temp_class_parity.rs \
+  src/engine/l4/summary.rs tests/cli/cli_digest_temp_state.rs tests/r3/main.rs tests/r3/r3_temp_class_parity.rs \
   CHANGELOG.md <regenerated golden paths>
 git commit -m "#69 D1: transitive producer solve; producers leave shared cone propagation"
 ```
@@ -399,7 +380,7 @@ git commit -m "#69 D1: transitive producer solve; producers leave shared cone pr
 - Modify: `src/engine/l5/snapshot.rs` (`CapabilitySnapshot` `:813`, `compose_snapshot` `:1044`, `derive_typed_edges` `:1206`)
 - Modify: the snapshot's base builder that calls `compose_cone_over_graph` (`capability_cone.rs` `build_r3a3_source_only_base` `:3872` / `R3a3SourceBase`): carry `pd_solution` through
 - Modify: `src/engine/l5/detector_context.rs` (`cones_census`, `:344`): new counters + report lines
-- Modify: `tests/r3/main.rs` (add `mod r3_temp_class_parity_arena;`), `tests/r3/r3_temp_class_parity_arena.rs` (accessor lines, if names differ)
+- Restore (parked): `task3-r3_temp_class_parity_arena.rs.txt` as `tests/r3/r3_temp_class_parity_arena.rs` (accessor lines may change if names differ) and add `mod r3_temp_class_parity_arena;` to `tests/r3/main.rs`
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
@@ -454,7 +435,7 @@ Field names `producer_operation_id`, `temp_state`, `by_routine` keyed by stable 
 
 **Acceptance rows greened:** A5 Compare 1.
 
-- [ ] **Step 1: Add the arena mod line (red: does not compile).** Add `mod r3_temp_class_parity_arena;` to `tests/r3/main.rs` (after `mod r3_temp_class_parity;`).
+- [ ] **Step 1: Restore the arena test (red: does not compile).** Restore `.agent/issue-69/parked/task3-r3_temp_class_parity_arena.rs.txt` as `tests/r3/r3_temp_class_parity_arena.rs` and add `mod r3_temp_class_parity_arena;` to `tests/r3/main.rs` (after `mod r3_temp_class_parity;`).
 
 Run: `cargo test -p al-sem --test r3 r3_temp_class_parity_arena` → FAIL `E0609: no field pd_solution`.
 
@@ -499,7 +480,7 @@ git commit -m "#69 D2: snapshot carries the producer solve arena; solve census c
   - existing unit tests near `:4692-4870` that pin first-cond merge: update to least-restrictive.
 - Modify: `src/engine/l5/conditionality.rs` (make `rank` `pub(crate)` if it is private)
 - Modify: `tests/r3/r3a3_oracles.rs` (`oracle_r3a3_inherited_keys_trace_to_a_direct_producer`, `:221`)
-- Modify: `tests/cli/cli_digest_temp_state.rs` (remove task-4 markers)
+- Restore (parked): `task4-cli_digest_temp_state.rs.txt` into `tests/cli/cli_digest_temp_state.rs` (`line_of`, the A2 helpers, A2a/A2d/A2f/A2g); do this at Step 2
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
@@ -545,9 +526,9 @@ struct ProofOutcome {
 
 Run: `cargo test -p al-sem --lib digest::tests::seed_state_is_not_a_proof_carrier digest::tests::proof_never_revisits_a_state digest::tests::projected_twin_merge_keeps_least_restrictive` → FAIL.
 
-- [ ] **Step 2: Confirm the four cli rows are red** (`--include-ignored`):
+- [ ] **Step 2: Restore the Task-4 parked tests and confirm the four cli rows are red.** Paste `.agent/issue-69/parked/task4-cli_digest_temp_state.rs.txt` into `tests/cli/cli_digest_temp_state.rs` as its header says.
 
-Run: `cargo test -p al-sem --test cli cli_digest_temp_state::a2 -- --include-ignored`
+Run: `cargo test -p al-sem --test cli cli_digest_temp_state::a2`
 Expected reds include `HelperUiTemp: evidence unavailable`, `ViaCondTwiceTemp: expected 2 viaPaths, got 0`, `DeepRoot: factIds equal`, `IncRoot: viaPathsTruncated false`.
 
 - [ ] **Step 3: `is_bfs_carrier`.** Replace the class+equivalence test at the `valid_nodes` seed and at the terminal check with `is_bfs_carrier(d.subject, d, fact)` / `is_bfs_carrier(routine, d, fact)`. Exclude raw producers in BOTH (the predicate does it). Also include `is_pd_snap` in `ValidNodesKey` only if `ValidNodesKey::of` would otherwise let two facts with different carrier sets share a key (it reads only `fact`; the predicate's `f`-dependence is class + equivalence, already in the key — verify and note in the ledger).
@@ -577,10 +558,10 @@ and at the merge site pass `outcome.truncated || outcome.incomplete` as `new_tru
 
 - [ ] **Step 8: Oracle.** Rewrite `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`: drop the PD→kt allowance; instead, for each fixture also `compose_snapshot` the model and accept an inherited key `k` at routine R iff `k` is a direct key in the fixture OR R has a non-seed `pd_solution` state whose producer fact's `inherited_fact_key` base (class suffix stripped) + the state's class suffix equals `k`. Update its comment to the new precondition. Rewrite the two stale guard comments in `digest.rs` to: "every inherited fact has a same-class ORDINARY producer reachable below the root, or a same-class non-seed arena state AT the root (a proof); arena states below the root are never carriers."
 
-- [ ] **Step 9: Run.** Remove the task-4 markers.
+- [ ] **Step 9: Run.**
 
 Run: `cargo test -p al-sem --lib digest::tests` → PASS.
-Run: `cargo test -p al-sem --test cli cli_digest_temp_state::` → the four rows PASS; ignored ones still ignored.
+Run: `cargo test -p al-sem --test cli cli_digest_temp_state::` → all compiled rows PASS (the Task-5 rows are still parked).
 Run: `cargo test -p al-sem --test r3 r3a3_oracles` → PASS.
 
 - [ ] **Step 10: Discrimination proofs.**
@@ -613,7 +594,7 @@ git commit -m "#69 D3: witness proofs from root solve states; one carrier predic
 - Modify: `src/engine/l5/digest_cli.rs`: `TempJoin`, `JoinProblem`, `join_temp_states`, `TempJoin::render`; `for_effect` (`:621`) uses them; `EntryDiagnostic` (`:565`) gains `fact_id`, `operation_id`, `reason`; its serializer (`~:1037-1052`); `schemaVersion` `1.6.0` (`:1259`); re-paste the parked A4b tests.
 - Modify: `src/engine/l5/prove.rs` (`schemaVersion` `1.4.0` at `:725`; shared builder `:959-975` serializes the new optional fields)
 - Modify: `src/engine/l4/effect_lattice.rs` (`TempStateKind`: add `PartialOrd, Ord`)
-- Modify: `tests/cli/cli_digest_temp_state.rs` (remove task-5 markers)
+- Restore (parked): `task5-digest_cli_tests.rs.txt` (Step 1) and `task5-cli_digest_temp_state.rs.txt` into `tests/cli/cli_digest_temp_state.rs` (Step 4)
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
@@ -687,7 +668,7 @@ Check the current `temp_state_str` join separator in `for_effect` and keep it (t
 
 **Acceptance rows greened:** A4b, A1a, A2b, A2c, A2e (and A1b's proof).
 
-- [ ] **Step 1: Re-paste A4b (red).** Paste `.agent/issue-69/parked/a4b_tests.rs.txt` back at the end of `digest_cli.rs` `mod tests`.
+- [ ] **Step 1: Re-paste A4b (red).** Paste `.agent/issue-69/parked/task5-digest_cli_tests.rs.txt` (below its header) back at the end of `digest_cli.rs` `mod tests`.
 
 Run: `cargo test -p al-sem --lib digest_cli::tests::temp_join` → FAIL (does not compile: `join_temp_states`, `JoinProblem`, `TempStateKind: Ord`).
 
@@ -697,9 +678,9 @@ Run: `cargo test -p al-sem --lib digest_cli::tests::temp_join` → PASS.
 
 - [ ] **Step 3: Wire it.** `for_effect(root_stable, op_ids, effect_is_kt)` builds `rows` from `self.bundle.db_effects(rix)` and calls `join_temp_states`. `effect_is_kt` = the effect's cone fact class (`acc.temp_state` known(true)). Add the diagnostics. Bump digest to `1.6.0` and prove to `1.4.0`.
 
-- [ ] **Step 4: Run the remaining rows.** Remove the task-5 markers.
+- [ ] **Step 4: Run the remaining rows.** Restore `.agent/issue-69/parked/task5-cli_digest_temp_state.rs.txt` into `tests/cli/cli_digest_temp_state.rs` as its header says.
 
-Run: `cargo test -p al-sem --test cli cli_digest_temp_state::` → all PASS, none ignored.
+Run: `cargo test -p al-sem --test cli cli_digest_temp_state::` → all PASS; nothing remains parked.
 Run: `cargo test -p al-sem --test r3 r3_temp_class_parity` → PASS.
 
 If a row is still red, read its quoted lines: a D1/D3 defect is fixed here (this task is the first where those claims are checkable); record the fix in the ledger with the line it greened.
