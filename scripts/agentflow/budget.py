@@ -22,7 +22,8 @@ CAPS: dict[str, int] = {
     "subagents": 60,
     "pi_calls": 14,
 }
-WALL_CLOCK_SECONDS = 4 * 3600
+WALL_CLOCK_SECONDS = 10 * 3600
+_DEADLINE_MSG = f"{WALL_CLOCK_SECONDS // 3600} h wall-clock cap reached"
 
 
 class BudgetExceeded(RuntimeError):
@@ -65,7 +66,7 @@ def init(ctx: Ctx, claimed_at: float) -> None:
 def check_deadline(ctx: Ctx) -> None:
     data = _load(ctx)
     if ctx.now() - data["claimed_at"] > WALL_CLOCK_SECONDS:
-        raise DeadlineExceeded("4 h wall-clock cap reached")
+        raise DeadlineExceeded(_DEADLINE_MSG)
 
 
 def charge(ctx: Ctx, key: str, n: int = 1, sub: str | None = None) -> int:
@@ -73,7 +74,7 @@ def charge(ctx: Ctx, key: str, n: int = 1, sub: str | None = None) -> int:
         raise KeyError(key)
     data = _load(ctx)
     if ctx.now() - data["claimed_at"] > WALL_CLOCK_SECONDS:
-        raise DeadlineExceeded("4 h wall-clock cap reached")
+        raise DeadlineExceeded(_DEADLINE_MSG)
     slot = f"{key}:{sub}" if sub else key
     used = data["counts"].get(slot, 0) + n
     if used > CAPS[key]:

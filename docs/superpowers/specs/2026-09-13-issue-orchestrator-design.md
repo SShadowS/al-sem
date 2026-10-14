@@ -173,7 +173,7 @@ instructions to the flow. Concretely:
 | Rebase-driven re-gate | 1 | `blocked` |
 | CI fix attempt | 1, independent of the rebase budget | `blocked` |
 | Discoveries filed per issue | 5 | rest go to the ledger only |
-| Wall-clock per issue | 4 h from claim | `blocked` |
+| Wall-clock per issue | 10 h from claim (4 h until 2026-10-14; a 5-round spec panel alone takes 3-4 h) | `blocked` |
 | Subagent dispatches per issue | 60 | `blocked` |
 | pi calls per issue | 14 (2 reviewers × up to 7 rounds) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
@@ -207,7 +207,7 @@ Labels are a mirror for humans, not a lock. The lock is local:
   if `lock.json` names a different run. A recovered or superseded run therefore
   cannot label, push, merge, or file anything after losing the lock.
 - **Deadline.** The executor computes elapsed time since claim on every call and
-  refuses new phases past the 4-hour cap, so the wall-clock budget is enforced by
+  refuses new phases past the 10-hour cap, so the wall-clock budget is enforced by
   code, not by the conductor remembering it.
 - **Stale** means heartbeat older than 30 minutes. There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence

@@ -9,7 +9,7 @@ def test_caps_match_spec():
         "spec_rounds": 5, "plan_tasks": 12, "task_attempts": 3, "final_rounds": 3,
         "rebase_regate": 1, "ci_fix": 1, "discoveries": 5, "subagents": 60, "pi_calls": 14,
     }
-    assert budget.WALL_CLOCK_SECONDS == 4 * 3600
+    assert budget.WALL_CLOCK_SECONDS == 10 * 3600
 
 
 def test_charge_counts_down_and_raises_at_cap(ctx):
