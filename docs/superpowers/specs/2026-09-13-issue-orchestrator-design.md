@@ -239,7 +239,9 @@ Labels are a mirror for humans, not a lock. The lock is local:
 1. **Preflight** (executor). Working tree clean on `master`; `master` equals
    `origin/master`; no `.agent/HALT`; no live lock; `gh auth status` ok; `pi_models`
    lists both reviewer models; `CDO_WS` set and exists; `tree-sitter-al/src/node-types.json`
-   present in the main checkout; at least 20 GB free on the worktree drive. Any failure
+   present in the main checkout; at least 40 GB free on the worktree drive (`cli.MIN_FREE_GB`; 20 GB until
+   2026-10-14, when a tick that started above 20 GB filled the drive and failed #68's
+   post-merge check on a green merge). Any failure
    stops the tick with the reason printed. Nothing is created before preflight passes.
 2. **Fetch** (executor). Paginated list of open issues with number, title, body, labels,
    author, createdAt. Apply Eligibility. Detect the stale-lock case and recover as

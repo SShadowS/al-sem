@@ -112,6 +112,22 @@ def test_preflight_does_not_call_a_byte_identical_crlf_checkout_dirty(
     assert code == 1
 
 
+def test_preflight_refuses_below_the_free_disk_floor(capsys, repo_pair, monkeypatch, tmp_path):
+    """One GB under MIN_FREE_GB fails preflight with `disk-free:`; exactly the
+    floor does not. Stated as numbers, not via the constant, so lowering the
+    floor back to 20 fails this test."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=39 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert "disk-free:39GB" in out["failures"], out["failures"]
+    assert code == 1
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=40 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+
+
 def test_preflight_under_dry_run_never_refreshes_the_index(capsys, repo_pair, monkeypatch, tmp_path):
     """`tree_state(refresh=True)` runs `git update-index -q --refresh`, which
     WRITES `.git/index` (the stat cache). `preflight` is one of the two

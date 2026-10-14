@@ -239,6 +239,18 @@ harness = false
 # `clippy --all-targets` still lints it, so the `-D warnings` bar is unaffected.
 test = false
 
+# Dev and test builds keep file:line debug info (panics and backtraces still name the
+# line) but not full variable info, and dependencies keep none. Full debug info for
+# every test executable made `target/debug/deps` hold 19 GB of .pdb files on Windows
+# (2026-10-14) and helped fill U: during a merge's post-merge check. For a step-debugger
+# session that needs locals, override once:
+# `CARGO_PROFILE_DEV_DEBUG=full cargo test ...`.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = true
 codegen-units = 1
