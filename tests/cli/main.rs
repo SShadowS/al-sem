@@ -52,6 +52,7 @@ mod cli_c_events_differential;
 mod cli_c_policy_differential;
 mod cli_digest_changed_spans;
 mod cli_digest_query_dependencies;
+mod cli_digest_repo_prefix;
 mod cli_digest_temp_state;
 mod cli_envelope_detector_set;
 mod cli_events_policy_dependencies;

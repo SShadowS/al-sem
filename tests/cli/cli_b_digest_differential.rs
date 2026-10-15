@@ -160,6 +160,7 @@ fn run_files_digest(fixture: &str) -> (String, String) {
         true,  // deterministic
         None,  // max_paths
         false, // cross-app, the CLI default (#66)
+        None,  // diff_prefix: discovered (#77)
     )
     .unwrap_or_else(|e| panic!("{fixture}: run_digest_pipeline failed: {e}"));
 
@@ -194,6 +195,7 @@ fn run_diff_digest(fixture: &str) -> String {
         true,  // deterministic
         None,  // max_paths
         false, // cross-app, the CLI default (#66)
+        None,  // diff_prefix: discovered (#77)
     )
     .unwrap_or_else(|e| panic!("{fixture} (--diff): run_digest_pipeline failed: {e}"));
 

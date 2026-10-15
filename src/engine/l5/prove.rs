@@ -903,9 +903,8 @@ pub fn run_prove_pipeline(
 
     // Resolve the routine selector → root IDs
     let changed_input = ChangedInput {
-        files: None,
         routines: Some(vec![routine_selector.to_string()]),
-        diff_text: None,
+        ..Default::default()
     };
     let changed_roots =
         resolve_changed_roots(&snap, &resolved, &changed_input, primary_guid_of(&resolved));

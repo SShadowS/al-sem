@@ -810,6 +810,7 @@ mod tests {
             infra_diagnostics: Vec::new(),
             calls: Default::default(),
             events: Default::default(),
+            workspace_files: vec![],
         };
 
         let output = detect_d50(&resolved, &ctx).unwrap();

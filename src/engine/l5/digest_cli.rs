@@ -201,13 +201,131 @@ pub struct ChangedRootsResult {
     /// Per root id: indices into `spans.spans` of the declarations the input
     /// touched (the entry anchor is the last of them, #71).
     pub touched: HashMap<String, BTreeSet<usize>>,
+    /// The prefixes that resolved at least one changed path, sorted (#77).
+    pub path_prefixes_used: Vec<String>,
     pub spans: RoutineSpanIndex,
 }
 
-pub struct ChangedInput {
+#[derive(Default)]
+pub struct ChangedInput<'a> {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
+    /// How a changed path relates to the workspace (#77).
+    pub prefixes: PathPrefixes,
+    /// The workspace's `.al` files ([`Model::workspace_files`]), as written.
+    pub workspace_files: &'a [String],
+}
+
+/// The workspace's path below each directory a changed path may be relative
+/// to, normalised, with a trailing `/` (#77).
+#[derive(Debug, Clone)]
+pub enum PathPrefixes {
+    /// [`workspace_repo_prefixes`]: a path naming a workspace file is that
+    /// file; any other is retried with each prefix stripped, in order.
+    Discovered(Vec<String>),
+    /// `--diff-prefix` ([`normalize_diff_prefix`]): every path is
+    /// repository-relative and resolves ONLY by stripping this prefix, so a
+    /// path without it has no key, even one that names a workspace file.
+    Explicit(String),
+}
+
+impl Default for PathPrefixes {
+    fn default() -> Self {
+        PathPrefixes::Discovered(Vec::new())
+    }
+}
+
+/// The validated `--diff-prefix` (#77): normalised like a changed path, with
+/// `/` appended. An empty, rooted (`/x`, `//srv`, `C:/x`) or `..` value is
+/// rejected, so a rooted changed path still never matches (#76).
+pub fn normalize_diff_prefix(raw: &str) -> Result<String, String> {
+    let p = normalize_input(raw);
+    let first = p.split('/').next().unwrap_or("");
+    if first.is_empty() || first.contains(':') || p.split('/').any(|s| s == "..") {
+        return Err("digest: --diff-prefix must be a relative path inside the repository".into());
+    }
+    Ok(format!("{p}/"))
+}
+
+/// The workspace's path below every directory at or above it that holds a
+/// `.git` entry (a directory, or a worktree's / submodule's file), innermost
+/// first, normalised like a changed path with a trailing `/` (#77). The
+/// workspace's own `.git` gives an empty prefix, which is dropped. The path is
+/// canonicalised first (`std::path::absolute` if that fails), so `.`, relative
+/// paths and links work, and `strip_prefix` runs on that same path.
+pub fn workspace_repo_prefixes(workspace: &std::path::Path) -> Vec<String> {
+    let ws = std::fs::canonicalize(workspace)
+        .or_else(|_| std::path::absolute(workspace))
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    ws.ancestors()
+        .filter(|a| a.join(".git").exists())
+        .filter_map(|a| {
+            let rel: Vec<String> = ws
+                .strip_prefix(a)
+                .ok()?
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let p = normalize_input(&rel.join("/"));
+            (!p.is_empty()).then(|| format!("{p}/"))
+        })
+        .collect()
+}
+
+/// The workspace-file test and prefixes `--file` / `--diff` paths resolve
+/// against (#77).
+struct ChangedPaths<'a> {
+    /// Normalised: every discovered workspace file, plus every file with spans.
+    workspace_files: std::collections::HashSet<String>,
+    prefixes: &'a PathPrefixes,
+    /// The prefixes that resolved at least one path (`pathPrefixesUsed`).
+    used: BTreeSet<String>,
+}
+
+impl<'a> ChangedPaths<'a> {
+    fn new(input: &'a ChangedInput<'_>, spans: &RoutineSpanIndex) -> Self {
+        let workspace_files = input
+            .workspace_files
+            .iter()
+            .map(|f| normalize_input(f))
+            .chain(spans.by_file.keys().cloned())
+            .collect();
+        ChangedPaths {
+            workspace_files,
+            prefixes: &input.prefixes,
+            used: BTreeSet::new(),
+        }
+    }
+
+    /// The span-index key of a changed path. Discovered: the path itself if it
+    /// names a workspace file, else the first prefix-stripped form that does.
+    /// Explicit: only the form with the prefix stripped. Else none.
+    fn resolve_changed_path(&mut self, raw: &str) -> Option<String> {
+        let p = normalize_input(raw);
+        let prefixes: &'a [String] = match self.prefixes {
+            PathPrefixes::Discovered(v) => {
+                if self.workspace_files.contains(&p) {
+                    return Some(p);
+                }
+                v
+            }
+            PathPrefixes::Explicit(pre) => std::slice::from_ref(pre),
+        };
+        let (pre, key) = prefixes.iter().find_map(|pre| {
+            p.strip_prefix(pre.as_str())
+                .filter(|s| self.workspace_files.contains(*s))
+                .map(|s| (pre, s.to_string()))
+        })?;
+        self.used.insert(pre.clone());
+        Some(key)
+    }
+
+    /// Is a path outside the `--diff-prefix` (never true when discovered)?
+    fn outside_explicit_prefix(&self, raw: &str) -> bool {
+        matches!(self.prefixes, PathPrefixes::Explicit(pre)
+            if !normalize_input(raw).starts_with(pre.as_str()))
+    }
 }
 
 /// One routine DECLARATION's span (#71). Lines are 0-based and inclusive.
@@ -389,9 +507,13 @@ pub fn resolve_changed_roots(
     // Selector indexes (5-form resolveSelector cascade).
     let selector_idx = build_selector_indexes(snap, primary_app_guid);
 
+    let mut paths = ChangedPaths::new(input, &spans);
+
     // 1. File-based matching
     for file in input.files.iter().flatten() {
-        let ixs = spans.of_file(&normalize_input(file));
+        let ixs = paths
+            .resolve_changed_path(file)
+            .map_or(&[][..], |k| spans.of_file(&k));
         if ixs.is_empty() {
             diagnostics.push(ChangedRootsDiagnostic::FileUnmatched { file: file.clone() });
         }
@@ -449,29 +571,34 @@ pub fn resolve_changed_roots(
         }
         // A file with a hunk-header error gives no diff-derived roots, in ANY of
         // its records: the dropped hunk's changes are unknown, so whole-file roots
-        // would hide the error (#72). Keyed by the normalized path, the key
-        // `spans.of_file` matches with.
+        // would hide the error (#72). Keyed by the resolved path, the key
+        // `spans.of_file` matches with, so no spelling of a file escapes it (#77).
         let poisoned: std::collections::HashSet<String> = parsed
             .file_errors
             .iter()
-            .map(|fe| normalize_input(&fe.path))
+            .filter_map(|fe| paths.resolve_changed_path(&fe.path))
             .collect();
         for diff_file in &parsed.files {
             if diff_file.kind == DiffFileKind::Deleted {
-                diagnostics.push(ChangedRootsDiagnostic::DiffFileDeleted {
-                    file: diff_file.path.clone(),
+                // Outside an explicit `--diff-prefix`, a deleted file is not the
+                // workspace's (#77).
+                let file = diff_file.path.clone();
+                diagnostics.push(if paths.outside_explicit_prefix(&file) {
+                    ChangedRootsDiagnostic::DiffFileUnmatched { file }
+                } else {
+                    ChangedRootsDiagnostic::DiffFileDeleted { file }
                 });
                 continue;
             }
-            let key = normalize_input(&diff_file.path);
-            let ixs = spans.of_file(&key);
+            let key = paths.resolve_changed_path(&diff_file.path);
+            let ixs = key.as_ref().map_or(&[][..], |k| spans.of_file(k));
             if ixs.is_empty() {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched {
                     file: diff_file.path.clone(),
                 });
                 continue;
             }
-            if poisoned.contains(&key) {
+            if key.is_some_and(|k| poisoned.contains(&k)) {
                 continue;
             }
 
@@ -515,6 +642,7 @@ pub fn resolve_changed_roots(
         roots: sorted,
         diagnostics,
         touched,
+        path_prefixes_used: paths.used.into_iter().collect(),
         spans,
     }
 }
@@ -1367,6 +1495,13 @@ pub fn project_digest_document(
         let rv: Vec<serde_json::Value> = routines.iter().map(|r| r.clone().into()).collect();
         changed.insert("routines".into(), serde_json::Value::Array(rv));
     }
+    // Omitted when empty, so a workspace-relative input reads as before (#77).
+    if !changed_input.path_prefixes_used.is_empty() {
+        changed.insert(
+            "pathPrefixesUsed".into(),
+            changed_input.path_prefixes_used.clone().into(),
+        );
+    }
 
     // entries
     let entries_val: Vec<serde_json::Value> = entries.iter().map(entry_to_value).collect();
@@ -1432,6 +1567,8 @@ pub struct ChangedInputContract {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_provided: bool,
+    /// [`ChangedRootsResult::path_prefixes_used`].
+    pub path_prefixes_used: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,7 +1681,9 @@ pub struct DigestRunResult {
 
 /// Run the full digest pipeline for a workspace.
 ///
-/// `changed_files` are workspace-relative paths (e.g. "src/Foo.al").
+/// `changed_files` are workspace-relative paths (e.g. "src/Foo.al"), or
+/// relative to a git work tree that contains the workspace; with `diff_prefix`
+/// every path is repository-relative (see below).
 /// `diff_text` is a unified diff string (for --diff).
 /// `alsem_ver` is the version string (e.g. "cli-b-v1").
 ///
@@ -1554,6 +1693,12 @@ pub struct DigestRunResult {
 /// Customer) resolves to `<appId>/table/N` with a name. `true` analyses the
 /// workspace alone. With no dependency the two produce the same document apart
 /// from `payload.dependencies.mode` (a contract test).
+///
+/// `diff_prefix` (`--diff-prefix`) is the workspace's path inside the repository
+/// the changed paths are relative to: every path (`--diff`, `--file`,
+/// `--changed`) then resolves only with it stripped. `None` discovers the
+/// prefixes from the `.git` entries at or above the workspace
+/// ([`workspace_repo_prefixes`], #77), after a workspace-relative reading.
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
     workspace: &std::path::Path,
@@ -1564,8 +1709,13 @@ pub fn run_digest_pipeline(
     deterministic: bool,
     _max_paths_override: Option<usize>,
     single_app: bool,
+    diff_prefix: Option<&str>,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
+    let prefixes = match diff_prefix {
+        Some(p) => PathPrefixes::Explicit(normalize_diff_prefix(p)?),
+        None => PathPrefixes::Discovered(workspace_repo_prefixes(workspace)),
+    };
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
@@ -1586,6 +1736,8 @@ pub fn run_digest_pipeline(
         files: changed_files.clone(),
         routines: changed_routines.clone(),
         diff_text: diff_text.clone(),
+        prefixes,
+        workspace_files: &resolved.workspace_files,
     };
 
     let has_input = changed_files
@@ -1663,6 +1815,7 @@ pub fn run_digest_pipeline(
         files: changed_files,
         routines: changed_routines,
         diff_provided: diff_text.is_some(),
+        path_prefixes_used: changed_roots.path_prefixes_used.clone(),
     };
 
     // JSON
@@ -1718,6 +1871,229 @@ mod tests {
             (".\\SRC\\x.al", "src/x.al"),
         ] {
             assert_eq!(normalize_input(input), expected, "{input}");
+        }
+    }
+
+    // --- #77 repository prefixes -------------------------------------------
+
+    /// A `.git` directory at `dir`.
+    fn git_dir(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    /// `root/<rel>` created as a directory.
+    fn mkdir(root: &std::path::Path, rel: &str) -> std::path::PathBuf {
+        let p = root.join(rel);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// True, after printing why, when `dir` or an ancestor holds a `.git`
+    /// entry: a test that needs no repository above `dir` then skips.
+    fn skip_if_git_at_or_above(dir: &std::path::Path) -> bool {
+        let git = std::fs::canonicalize(dir)
+            .unwrap()
+            .ancestors()
+            .find(|a| a.join(".git").exists())
+            .map(std::path::Path::to_path_buf);
+        if let Some(g) = &git {
+            eprintln!("SKIP: {} holds a .git entry", g.display());
+        }
+        git.is_some()
+    }
+
+    /// #77 T8 (unit). Rooted, empty and `..` values are rejected; a relative one
+    /// is normalised with `/` appended.
+    /// Mutation: accept them -> `Ok` for `/x` (a rooted `/src/x.al` would then
+    /// strip to `src/x.al`).
+    #[test]
+    fn normalize_diff_prefix_rejects_rooted_empty_and_dotdot() {
+        for bad in [
+            "/x", "//srv/x", "\\x", ".", "", "./", "a/../b", "..", "C:/x", "c:", "C:\\x",
+        ] {
+            assert!(normalize_diff_prefix(bad).is_err(), "{bad:?}");
+        }
+        for (ok, expected) in [
+            ("Cloud", "cloud/"),
+            ("./Cloud/", "cloud/"),
+            ("DO\\Cloud", "do/cloud/"),
+        ] {
+            assert_eq!(normalize_diff_prefix(ok).as_deref(), Ok(expected), "{ok}");
+        }
+    }
+
+    /// #77 unit tests for `workspace_repo_prefixes`: top level; nested; two
+    /// levels innermost first; a `.git` file; a trailing slash.
+    /// Mutation: outermost first -> the two-level order flips.
+    #[test]
+    fn workspace_repo_prefixes_per_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path();
+        if skip_if_git_at_or_above(t) {
+            return;
+        }
+
+        let top = mkdir(t, "top");
+        git_dir(&top);
+        assert_eq!(workspace_repo_prefixes(&top), Vec::<String>::new(), "top");
+
+        let ws = mkdir(t, "repo/Cloud");
+        git_dir(&t.join("repo"));
+        assert_eq!(workspace_repo_prefixes(&ws), vec!["cloud/"], "nested");
+
+        let mut slash = ws.clone().into_os_string();
+        slash.push("/");
+        assert_eq!(
+            workspace_repo_prefixes(std::path::Path::new(&slash)),
+            vec!["cloud/"],
+            "trailing slash"
+        );
+
+        let deep = mkdir(t, "two/DO/Cloud");
+        git_dir(&t.join("two"));
+        git_dir(&t.join("two/DO"));
+        assert_eq!(
+            workspace_repo_prefixes(&deep),
+            vec!["cloud/", "do/cloud/"],
+            "two levels, innermost first"
+        );
+
+        let wt = mkdir(t, "wt/Cloud");
+        std::fs::write(t.join("wt/.git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(workspace_repo_prefixes(&wt), vec!["cloud/"], ".git file");
+    }
+
+    /// #77. No `.git` at or above the workspace gives no prefix (skipped when the
+    /// temp dir itself lies inside a repository).
+    /// Mutation: drop the `.git` test -> every ancestor gives a prefix.
+    #[test]
+    fn workspace_repo_prefixes_without_git_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = mkdir(tmp.path(), "x/Cloud");
+        if skip_if_git_at_or_above(&ws) {
+            return;
+        }
+        assert_eq!(workspace_repo_prefixes(&ws), Vec::<String>::new());
+    }
+
+    /// #77. A relative path (the test CWD is the crate root, a git work tree) is
+    /// canonicalised before the walk, so `.` and a path through `..` work.
+    /// Skipped unless the crate root holds `.git` and nothing above it does: a
+    /// relative path needs the process CWD, which a tempdir cannot stand in
+    /// for without racing the other tests.
+    /// Mutation: no canonicalisation (walk the path as given) -> `src/..` stays
+    /// in the prefix.
+    #[test]
+    fn workspace_repo_prefixes_of_a_relative_path() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        if !root.join(".git").exists() {
+            eprintln!("SKIP: the crate root {} holds no .git", root.display());
+            return;
+        }
+        if root.parent().is_some_and(skip_if_git_at_or_above) {
+            return;
+        }
+        assert_eq!(
+            workspace_repo_prefixes(std::path::Path::new(".")),
+            Vec::<String>::new(),
+            "."
+        );
+        assert_eq!(
+            workspace_repo_prefixes(std::path::Path::new(
+                "tests/r0-corpus/ws-d8-commit-in-tx/src/.."
+            )),
+            vec!["tests/r0-corpus/ws-d8-commit-in-tx/"],
+        );
+    }
+
+    /// #77. A symlinked workspace resolves through the link (skipped where a
+    /// symlink cannot be made, e.g. Windows without the privilege).
+    /// Mutation: no canonicalisation -> the link's own ancestors hold no `.git`.
+    #[test]
+    fn workspace_repo_prefixes_follow_a_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        if skip_if_git_at_or_above(tmp.path()) {
+            return;
+        }
+        let ws = mkdir(tmp.path(), "repo/Cloud");
+        git_dir(&tmp.path().join("repo"));
+        let link = tmp.path().join("link");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&ws, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&ws, &link);
+        if let Err(e) = made {
+            eprintln!("SKIP: cannot create a symlink here: {e}");
+            return;
+        }
+        assert_eq!(workspace_repo_prefixes(&link), vec!["cloud/"]);
+    }
+
+    /// #77 (R4-01). Every file with routine spans is in the DISCOVERED workspace
+    /// file list alone (`Model::workspace_files`, before the span files are
+    /// added). That list is the snapshot's (`NestedApps::Walk`), a superset of
+    /// the model's app-scoped files (`NestedApps::Skip`): a nested app's file is
+    /// discovered but has no spans.
+    /// Mutation: an empty `workspace_files` -> `src/a.al not discovered`.
+    #[test]
+    fn every_span_file_is_a_discovered_workspace_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path();
+        let app =
+            |id: &str| format!(r#"{{"id":"{id}","name":"N","publisher":"P","version":"1.0.0.0"}}"#);
+        std::fs::write(
+            t.join("app.json"),
+            app("11111111-0000-0000-0000-000000007701"),
+        )
+        .unwrap();
+        let src = mkdir(t, "src");
+        std::fs::write(
+            src.join("a.al"),
+            "codeunit 50101 A\n{\n    procedure RunA()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let nested = mkdir(t, "Nested/src");
+        std::fs::write(
+            t.join("Nested/app.json"),
+            app("11111111-0000-0000-0000-000000007702"),
+        )
+        .unwrap();
+        std::fs::write(
+            nested.join("b.al"),
+            "codeunit 50102 B\n{\n    procedure RunB()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-d8-commit-in-tx");
+
+        for (ws, must) in [(t.to_path_buf(), "src/a.al"), (fixture, "src/posting.al")] {
+            let model =
+                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                    &ws, "u77", true,
+                )
+                .expect("model");
+            let discovered: std::collections::HashSet<String> = model
+                .workspace_files
+                .iter()
+                .map(|f| normalize_input(f))
+                .collect();
+            let spans = build_routine_span_index(&model);
+            assert!(
+                spans.by_file.contains_key(must),
+                "precondition {}: {must} has spans",
+                ws.display()
+            );
+            for f in spans.by_file.keys() {
+                assert!(
+                    discovered.contains(f),
+                    "{}: {f} not discovered",
+                    ws.display()
+                );
+            }
+            if must == "src/a.al" {
+                assert!(discovered.contains("nested/src/b.al"), "{discovered:?}");
+                assert!(!spans.by_file.contains_key("nested/src/b.al"));
+            }
         }
     }
 

@@ -1,0 +1,610 @@
+[
+ {
+  "id": "R1-01",
+  "source": "sol",
+  "round": "spec-1",
+  "file": "src/engine/l5/digest_cli.rs:308",
+  "line": null,
+  "severity": "important",
+  "text": "Fallback keyed on routine-span membership strips a path that names a routine-less workspace file.",
+  "disposition": "fixed",
+  "evidence": "Step 1 tests 'workspace file' = any file the model holds an object for (tables etc.), not spans; T3b (both input modes). | Round 2 (sol re-raised: object-less files fall through): 'workspace file' is now every discovered workspace .al source file the build read (ws: only), covering object-less files; T3b gains a comments-only variant and pins the diagnostic kind. | Round 3 (sol re-raised: a stale Limits bullet contradicted step 1): the bullet is deleted; step 1 is 'in the analysis target's discovered ws: file list (the model's NestedApps mode) OR has spans', with a unit test that every span file is in the set.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "sol",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "important",
+  "text": "Lexical ancestors of a symlinked/aliased workspace never reach the repo's .git.",
+  "disposition": "fixed",
+  "evidence": "Canonicalise first (fs::canonicalize, absolute fallback); prefixes from strip_prefix on the same canonical path; unit tests incl. symlink.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "sol",
+  "round": "spec-1",
+  "file": "src/engine/l5/digest_cli.rs:452",
+  "line": null,
+  "severity": "important",
+  "text": "No test catches poisoned keys built from the raw path while lookups strip.",
+  "disposition": "fixed",
+  "evidence": "One resolve_changed_path gives the key for both the poisoned set and the lookup; T6 in both orders plus the prefixed/unprefixed pair. | Round 2 (opus re-raised: no collision control): T6 gains the collision control (malformed inner Cloud/src/posting.al must not poison src/posting.al; PostSalesDoc still a root); mutation 'poison every candidate key'.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "sol",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "CHANGELOG overstates outside-workspace rejection; diagnostics keep the parsed path, not the header spelling.",
+  "disposition": "fixed",
+  "evidence": "Design states workspace-first interpretation; Limits name the collision case; diagnostics keep the parsed path; CHANGELOG names both diagnostics and the .git requirement. | Round 2 (sol re-raised): CHANGELOG qualified to repository files whose path names no workspace file; diff-file-deleted kept for deletions. | Final round 1 (both re-raised: the shipped CHANGELOG dropped the discovery-mode qualifier): restored in 44a3a43a - 'except that by default (no --diff-prefix) one whose path also names a workspace file resolves to that workspace file'.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "critical",
+  "text": "The literal reproducer (<tmp>/ws, no .git, headers Cloud/...) stays exit 2; T4 makes it permanent; --diff-root dropped.",
+  "disposition": "fixed",
+  "evidence": "--diff-prefix <path> (the workspace's path inside the diff's repo) added; it alone fixes the literal reproducer (a --diff-root would give 'ws/', not 'Cloud/'). T1b runs the reproducer with --diff-prefix Cloud.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "important",
+  "text": "A relative workspace path ('.') never reaches DO/.git; symlinks.",
+  "disposition": "fixed",
+  "evidence": "Same as R1-02: canonicalise, then walk; unit tests for '.', trailing slash, symlink.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-07",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/engine/l5/digest_cli.rs:453",
+  "line": null,
+  "severity": "important",
+  "text": "Poisoned set vs key may diverge (#72 regression).",
+  "disposition": "fixed",
+  "evidence": "Same as R1-03: one resolved key; T6.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-08",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "important",
+  "text": "T4 is environment-dependent and does not catch a basename heuristic.",
+  "disposition": "fixed",
+  "evidence": "T4 workspace at <tmp>/x/Cloud, the no-.git precondition asserted (skip with a message otherwise); mutation 'basename heuristic' named.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-09",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "important",
+  "text": "First-.git rule fails for submodules.",
+  "disposition": "fixed",
+  "evidence": "Every ancestor with .git gives a prefix, tried innermost first; T7 with nested .git entries.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-10",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "T3 only discriminates if the inner file has a routine on line 8.",
+  "disposition": "fixed",
+  "evidence": "T3 states the inner procedure spans line 8, asserts its display name and PostSalesDoc absent; ids/names do not collide.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-11",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/engine/l5/digest_cli.rs:207",
+  "line": null,
+  "severity": "minor",
+  "text": "Adding a field breaks other ChangedInput constructors.",
+  "disposition": "fixed",
+  "evidence": "grep: only digest_cli.rs:1585 and prove.rs:905 build one (none in tests); ChangedInput derives Default.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-12",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Corpus fixtures now discover a prefix (tests/r0-corpus/<fixture>/).",
+  "disposition": "fixed",
+  "evidence": "Recorded in Design ('Corpus effect'); exact-first keeps every resolving path; digest differential and exit-oracle suites are gates.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-13",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/engine/l5/digest_cli.rs:149",
+  "line": null,
+  "severity": "minor",
+  "text": "--changed auto-detect reads a CWD-relative .al path as a diff; --no-prefix / i/ w/ not stripped.",
+  "disposition": "deferred",
+  "evidence": "Pre-existing and outside #77's acceptance; stated in Limits.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-14",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "CHANGELOG omits the .git requirement and file-unmatched.",
+  "disposition": "fixed",
+  "evidence": "CHANGELOG text revised: .git needed for discovery, --diff-prefix otherwise, both diagnostics named.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-15",
+  "source": "opus",
+  "round": "spec-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Optional stderr hint when a path misses and no prefix exists.",
+  "disposition": "deferred",
+  "evidence": "Optional; the CHANGELOG and --help document --diff-prefix; a hint adds output to every unmatched run of a workspace outside git. Not needed for the acceptance.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-01",
+  "source": "sol",
+  "round": "spec-2",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "important",
+  "text": "T5's mutation is not discriminated: OnPrem/x.al strips to x.al, which names no file either.",
+  "disposition": "fixed",
+  "evidence": "T5 uses OnPrem/src/posting.al, whose wrongly stripped suffix is the real src/posting.al; its unmatched diagnostic must remain.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-02",
+  "source": "sol+opus",
+  "round": "spec-2",
+  "file": "src/bin/alsem.rs:622",
+  "line": null,
+  "severity": "important",
+  "text": "alsem digest has no --changed-files flag (it is --file); clap exits 2, so exit-2 tests could pass for the wrong reason.",
+  "disposition": "fixed",
+  "evidence": "Tests, design and CHANGELOG use --file and the --changed comma list; every exit-2 test parses stdout as a digest document first.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-03",
+  "source": "opus",
+  "round": "spec-2",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "--diff-prefix is not validated: '/', '.', '' or '..' break #76's rooted-path rule.",
+  "disposition": "fixed",
+  "evidence": "normalize_input + '/', reject empty/rooted/'..' with exit 1 and a message; T8 + unit test.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-04",
+  "source": "opus",
+  "round": "spec-2",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "run_digest_pipeline callers not listed; P1 unconfirmed on master.",
+  "disposition": "fixed",
+  "evidence": "All 7 callers listed (they pass None); P1 run on master's binary: exit 2, diff-file-unmatched Cloud/src/posting.al, 0 entries.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-05",
+  "source": "opus",
+  "round": "spec-2",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Routine-less exact matches: diagnostic kind unspecified; ModelObject anchors include dependencies.",
+  "disposition": "fixed",
+  "evidence": "Workspace file set = ws: discovered source files (no dependency anchors); a routine-less exact match keeps today's diagnostic kind, pinned in T3b.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-06",
+  "source": "opus",
+  "round": "spec-2",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "T6 has no collision control.",
+  "disposition": "fixed",
+  "evidence": "Same as the R1-03 round-2 answer: collision control added to T6.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R3-01",
+  "source": "opus",
+  "round": "spec-3",
+  "file": "src/source_text.rs:42",
+  "line": null,
+  "severity": "minor",
+  "text": "discover_al_files has two NestedApps modes; the workspace-file set must match the model's, or a nested-app path that resolves today could fail step 1.",
+  "disposition": "fixed",
+  "evidence": "Step 1 reuses the file list the analysis target already holds (the model's mode) and also accepts any file with spans; unit test: every span file is in the set.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R3-02",
+  "source": "opus",
+  "round": "spec-3",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Stale Limits bullet contradicts step 1; the R1-05 sentence is attached to the validation bullet.",
+  "disposition": "fixed",
+  "evidence": "Bullet deleted; the R1-05 list moved back under item 1.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-01",
+  "source": "opus",
+  "round": "spec-4",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "The 'every span file is in the set' test passes trivially if 'the set' already includes the span files.",
+  "disposition": "fixed",
+  "evidence": "The test asserts every span file is in the DISCOVERED list alone, before span files are added.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "task-review",
+  "round": "final-1",
+  "file": "src/bin/alsem.rs:625",
+  "line": null,
+  "severity": "minor",
+  "text": "--file help and run_digest_pipeline doc say workspace-relative only.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: both name repository-relative paths and --diff-prefix.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "task-review",
+  "round": "final-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Design claimed the discovered list uses the model's NestedApps mode; it is Walk (snapshot) vs Skip (model).",
+  "disposition": "fixed",
+  "evidence": "Ledger Design corrected: Skip ⊆ Walk, a nested app's file is a workspace file, never stripped, stays *-unmatched; pinned by every_span_file_is_a_discovered_workspace_file.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "task-review",
+  "round": "final-1",
+  "file": "src/program/model/workspace.rs:1916",
+  "line": null,
+  "severity": "minor",
+  "text": "Model.workspace_files serves digest only; doc should say so.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: 'Read only by digest.'",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "task-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs",
+  "line": null,
+  "severity": "minor",
+  "text": "normalize_diff_prefix rejects any first segment with ':' (stricter than a drive).",
+  "disposition": "fixed",
+  "evidence": "Kept (a ':' first segment reads as a drive on Windows); stated in the --diff-prefix help in 9256e60a.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:283",
+  "line": null,
+  "severity": "important",
+  "text": "Workspace-first wins even under an explicit --diff-prefix, so a repo file outside the workspace with a workspace file's relative path is read as that workspace file.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: an explicit --diff-prefix is strict (PathPrefixes::Explicit) - every path resolves only by stripping P, no exact step; discovery mode unchanged (workspace-first, a stated limit). T9 (proof :440).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:243",
+  "line": null,
+  "severity": "minor",
+  "text": "Outer .git prefixes can only cause false matches; git stops at the innermost repo.",
+  "disposition": "refuted",
+  "evidence": "Deliberate (spec R1-09, accepted by both reviewers): `git diff --submodule=diff` in an outer repo prints the inner repo's files with the outer prefix, so the outer prefix is real input. The false match needs a folder inside the workspace named after the outer layout; workspace-first still applies, and an explicit --diff-prefix now gives strict control.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:1661",
+  "line": null,
+  "severity": "important",
+  "text": "The prefixes applied are not recorded, so the same command can resolve differently per machine with no visible cause.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: changed.pathPrefixesUsed lists the prefixes that resolved a path (omitted when empty, so no golden moves); T1 asserts ['cloud/'] and absence for a workspace-relative diff (proof :168).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-08",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:545",
+  "line": null,
+  "severity": "minor",
+  "text": "Deleted records skip resolution: deletions anywhere in the repo report diff-file-deleted.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a for explicit mode: a deleted record outside P is diff-file-unmatched; under P it stays diff-file-deleted. T10 (proof :482). Discovery mode keeps today's behaviour (a deleted path cannot be checked against the workspace).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-09",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:1920",
+  "line": null,
+  "severity": "minor",
+  "text": "workspace_repo_prefixes_of_a_relative_path depends on the crate root's .git layout.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: skips with a message when the crate root has no .git or an ancestor has one (a tempdir would need a process-global CWD change).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-10",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:1867",
+  "line": null,
+  "severity": "minor",
+  "text": "workspace_repo_prefixes_per_layout lacks the '.git above temp' skip.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 9256e60a: shared skip_if_git_at_or_above helper.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-11",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/program_calls.rs:657",
+  "line": null,
+  "severity": "minor",
+  "text": "A digest-only file list is added to the shared Model.",
+  "disposition": "deferred",
+  "evidence": "The analysis target holds no file list after ProgramContext is dropped; carrying it on Model avoids a second workspace walk, which the spec forbids (R3-01). Cost ~10k path strings on CDO; documented 'Read only by digest'. Moving it to AnalysisTarget needs the snapshot to outlive the build (a larger refactor).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-12",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:271",
+  "line": null,
+  "severity": "minor",
+  "text": "Redundant span-key chain and a full Vec clone per run.",
+  "disposition": "fixed",
+  "evidence": "Clone removed in 9256e60a (ChangedInput borrows &[String]); the 'OR has spans' chain is kept because the spec requires it (R3-01).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-01",
+  "source": "sol",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:2013",
+  "line": null,
+  "severity": "minor",
+  "text": "The symlink unit test assumes no git repository encloses the temp dir.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 44a3a43a: skip_if_git_at_or_above(tmp.path()) first, like the per-layout test. (No discrimination proof: the test skips on this machine for lack of the symlink privilege, os error 1314.)",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-02",
+  "source": "opus",
+  "round": "final-1",
+  "file": ".agent/issue-77/ledger.md",
+  "line": null,
+  "severity": "minor",
+  "text": "The ledger Design does not describe the shipped behaviour (strict explicit mode, PathPrefixes, deleted records, T9/T10, pathPrefixesUsed, the final CHANGELOG).",
+  "disposition": "fixed",
+  "evidence": "Ledger Design updated: item 1 strict mode + deleted records; Plumbing as shipped (PathPrefixes, borrowed workspace_files, path_prefixes_used); T9, T10 and the T1 pathPrefixesUsed assertions; the CHANGELOG text pasted as shipped.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]

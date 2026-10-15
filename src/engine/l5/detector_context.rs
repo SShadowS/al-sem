@@ -1710,6 +1710,7 @@ mod tests {
             infra_diagnostics: Vec::new(),
             calls: Default::default(),
             events: Default::default(),
+            workspace_files: vec![],
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(
@@ -1755,6 +1756,7 @@ mod tests {
                 external_targets: Vec::new(),
             }),
             events: Default::default(),
+            workspace_files: vec![],
         };
         let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         assert!(

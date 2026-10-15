@@ -1909,6 +1909,13 @@ pub struct Model {
     /// The detector event graph built from the program engine's subscription
     /// inventory (engine-switch S4.2), by the same function.
     pub events: std::sync::Arc<super::events::ProgramEvents>,
+    /// The workspace app's `.al` files as the program engine's snapshot
+    /// discovered them (`rel_posix`, `NestedApps::Walk`; no dependency file),
+    /// kept from the build so `digest` can tell a workspace file without walking
+    /// the workspace again (#77). A superset of the files the rows come from,
+    /// which skip a nested app's folder (`select_program_files`). Read only by
+    /// `digest`.
+    pub workspace_files: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

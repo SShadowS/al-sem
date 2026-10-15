@@ -942,6 +942,7 @@ pub(crate) fn empty_output_result(
                 infra_diagnostics: vec![],
                 calls: Default::default(),
                 events: Default::default(),
+                workspace_files: vec![],
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],
