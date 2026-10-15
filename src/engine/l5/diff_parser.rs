@@ -130,17 +130,22 @@ fn unquote_path(s: &str) -> String {
             Some('b') => bytes.push(0x08),
             Some('f') => bytes.push(0x0c),
             Some('v') => bytes.push(0x0b),
-            Some(o1) if o1.is_ascii_digit() => {
-                // Octal escape \NNN: one byte.
+            Some(o1) if is_octal(o1) => {
+                // Octal escape \NNN: one byte. git never writes one above \377;
+                // such an escape is kept as text, like an unknown escape.
                 let mut oct = String::new();
                 oct.push(o1);
                 for _ in 0..2 {
-                    if chars.peek().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                    if chars.peek().copied().is_some_and(is_octal) {
                         oct.push(chars.next().unwrap());
                     }
                 }
-                if let Ok(n) = u8::from_str_radix(&oct, 8) {
-                    bytes.push(n);
+                match u8::from_str_radix(&oct, 8) {
+                    Ok(n) => bytes.push(n),
+                    Err(_) => {
+                        bytes.push(b'\\');
+                        bytes.extend_from_slice(oct.as_bytes());
+                    }
                 }
             }
             Some(other) => {
@@ -151,6 +156,10 @@ fn unquote_path(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn is_octal(c: char) -> bool {
+    matches!(c, '0'..='7')
 }
 
 fn extract_path(line: &str) -> Option<String> {
@@ -176,28 +185,46 @@ fn quoted_b_start(rest: &str) -> Option<usize> {
     while i < bytes.len() {
         if bytes[i] == b'"' {
             last = Some(i);
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                if bytes[i] == b'\\' {
-                    i += 1;
-                }
-                i += 1;
+            // A quote byte is a char boundary, so the slice is safe.
+            match quoted_token_len(&rest[i..]) {
+                Some(n) => i += n,
+                None => break,
             }
+        } else {
+            i += 1;
         }
-        i += 1;
     }
     last
 }
 
+/// Byte length of the quoted token that `s` starts with, both quotes included.
+/// Escaped characters are skipped, so an escaped `\"` does not end the token.
+/// `None`: the token is not terminated.
+fn quoted_token_len(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// The destination (b-side) path of a `diff --git <a> <b>` line; `rest` is the
-/// text after `diff --git ` (#72). A quoted b-token is unquoted; else one space
-/// splits the two names; else the line splits at its middle space when both
-/// halves name the same path. Anything else is ambiguous: `None` (git writes
-/// unequal unquoted names with spaces only for a rename, whose `rename to`
-/// line then names the file).
+/// text after `diff --git ` (#72). A quoted a-token ends at its closing quote
+/// and the b-token follows one space; else a quoted b-token is unquoted; else
+/// one space splits the two names; else the line splits at its middle space
+/// when both halves name the same path. Anything else is ambiguous: `None`
+/// (for a non-rename, git writes unquoted names with spaces only when both
+/// sides are equal; a rename's `rename to` line then names the file).
 fn git_header_dest(rest: &str) -> Option<String> {
     let rest = rest.trim_end();
-    let b = if rest.ends_with('"') {
+    let b = if rest.starts_with('"') {
+        rest[quoted_token_len(rest)?..].strip_prefix(' ')?
+    } else if rest.ends_with('"') {
         &rest[quoted_b_start(rest)?..]
     } else if rest.matches(' ').count() == 1 {
         rest.split_once(' ')?.1
@@ -215,6 +242,19 @@ fn git_header_dest(rest: &str) -> Option<String> {
     };
     let p = unquote_path(b).replace('\\', "/");
     Some(strip_ab_prefix(&p).to_string())
+}
+
+/// The destination of a section header line: `Some(dest)` for `diff --git`
+/// (its b-side, see [`git_header_dest`]) and for a merge's `diff --cc` /
+/// `diff --combined` (its one path); `None` for any other line.
+fn section_header_dest(line: &str) -> Option<Option<String>> {
+    if let Some(rest) = line.strip_prefix("diff --git ") {
+        return Some(git_header_dest(rest));
+    }
+    let path = line
+        .strip_prefix("diff --cc ")
+        .or_else(|| line.strip_prefix("diff --combined "))?;
+    Some(Some(unquote_path(path).replace('\\', "/")))
 }
 
 /// `None`: not a hunk header. `Some(Err(_))`: a hunk header whose line range does
@@ -428,6 +468,37 @@ impl OpenHunk {
     }
 }
 
+/// #72: the header-error state of the current file section.
+#[derive(Default)]
+struct Section {
+    /// Header errors not yet resolved to a file.
+    pending: Vec<String>,
+    /// The path the section is about (its record's path once it emits one).
+    dest: Option<String>,
+    /// The section began with a `diff --git`/`--cc`/`--combined` line.
+    git: bool,
+    /// After a header error in a git section, the rejected hunk's body has no
+    /// trustworthy length: skip every line up to the next section header.
+    skip: bool,
+}
+
+impl Section {
+    /// Closes the section: its pending errors go to `dest` (global without
+    /// one), and every field resets.
+    fn close(&mut self, file_errors: &mut Vec<FileError>, errors: &mut Vec<String>) {
+        for detail in self.pending.drain(..) {
+            match &self.dest {
+                Some(path) => file_errors.push(FileError {
+                    path: path.clone(),
+                    detail,
+                }),
+                None => errors.push(detail),
+            }
+        }
+        *self = Section::default();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -460,32 +531,12 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
     let mut pending_old_path: Option<Option<String>> = None; // None means "not seen"; Some(None) means /dev/null
 
     // #72: header errors are pending per file section and resolved to the
-    // section's path when it closes. `section_dest`: the path the section is
-    // about (its record's path once it emits one). `in_section`: a `diff --git`,
-    // `---` or `rename` line has been seen (a `@@` line before that is a
-    // preamble line, e.g. a format-patch message, and is ignored).
+    // section's path when it closes. `in_section`: a section header, `---` or
+    // `rename` line has been seen (a `@@` line before that is a preamble line,
+    // e.g. a format-patch message, and is ignored).
     let mut file_errors: Vec<FileError> = Vec::new();
-    let mut pending_header_errors: Vec<String> = Vec::new();
-    let mut section_dest: Option<String> = None;
+    let mut section = Section::default();
     let mut in_section = false;
-    let mut git_section = false;
-    // After a header error in a `diff --git` section, the rejected hunk's body
-    // has no trustworthy length: skip every line up to the next `diff --git`.
-    let mut skip_to_git = false;
-    let resolve = |pending: &mut Vec<String>,
-                   dest: &Option<String>,
-                   file_errors: &mut Vec<FileError>,
-                   errors: &mut Vec<String>| {
-        for detail in pending.drain(..) {
-            match dest {
-                Some(path) => file_errors.push(FileError {
-                    path: path.clone(),
-                    detail,
-                }),
-                None => errors.push(detail),
-            }
-        }
-    };
 
     // Mirrors TS `finalizeFile`: clears the pending rename trackers ONLY when a
     // file was actually finalized (currentFile !== null). pendingOldPath is always
@@ -508,7 +559,8 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
     for raw_line in &lines {
         // Strip trailing CR
         let line = raw_line.trim_end_matches('\r');
-        if skip_to_git && !line.starts_with("diff --git ") {
+        let header_dest = section_header_dest(line);
+        if section.skip && header_dest.is_none() {
             continue;
         }
 
@@ -541,15 +593,8 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             // A `---` closes the section when a record is open or errors are
             // pending; right after `diff --git` it closes nothing, so the git
             // destination survives.
-            if current_file.is_some() || !pending_header_errors.is_empty() {
-                resolve(
-                    &mut pending_header_errors,
-                    &section_dest,
-                    &mut file_errors,
-                    &mut errors,
-                );
-                section_dest = None;
-                git_section = false;
+            if current_file.is_some() || !section.pending.is_empty() {
+                section.close(&mut file_errors, &mut errors);
             }
             finalize(
                 &mut current_file,
@@ -559,8 +604,8 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                 &mut pending_old_path,
             );
             let old = extract_path(line);
-            if section_dest.is_none() {
-                section_dest = old.clone();
+            if section.dest.is_none() {
+                section.dest = old.clone();
             }
             pending_old_path = Some(old);
             in_section = true;
@@ -626,7 +671,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                     }
                 }
             };
-            section_dest = current_file.as_ref().map(|f| f.path.clone());
+            section.dest = current_file.as_ref().map(|f| f.path.clone());
             pending_rename_from = None;
             pending_rename_to = None;
             continue;
@@ -642,21 +687,22 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             // No `a/`/`b/` strip: git writes rename paths bare, and the rename
             // record's `path` is this same string, so the veto and the record agree.
             let to = unquote_path(to.trim()).replace('\\', "/");
-            section_dest = Some(to.clone());
+            section.dest = Some(to.clone());
             pending_rename_to = Some(to);
             in_section = true;
             continue;
         }
 
-        // diff --git header → signals end of previous file
-        if let Some(rest) = line.strip_prefix("diff --git ") {
+        // Section header (`diff --git`, or a merge's `diff --cc`/`--combined`)
+        // → signals end of previous file
+        if let Some(dest) = header_dest {
             // 100% rename with no hunks
             if pending_rename_from.is_some()
                 && pending_rename_to.is_some()
                 && current_file.is_none()
             {
                 let path = pending_rename_to.take().unwrap();
-                section_dest = Some(path.clone());
+                section.dest = Some(path.clone());
                 files.push(DiffFile {
                     path,
                     kind: DiffFileKind::Renamed,
@@ -672,15 +718,9 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                     &mut pending_old_path,
                 );
             }
-            resolve(
-                &mut pending_header_errors,
-                &section_dest,
-                &mut file_errors,
-                &mut errors,
-            );
-            skip_to_git = false;
-            section_dest = git_header_dest(rest);
-            git_section = true;
+            section.close(&mut file_errors, &mut errors);
+            section.dest = dest;
+            section.git = true;
             in_section = true;
             pending_rename_from = None;
             pending_rename_to = None;
@@ -709,10 +749,8 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             if let Some(e) = header_error
                 && in_section
             {
-                pending_header_errors.push(e);
-                if git_section {
-                    skip_to_git = true;
-                }
+                section.pending.push(e);
+                section.skip = section.git;
             }
         }
         // All other lines ignored
@@ -725,7 +763,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
     // End-of-input
     if pending_rename_from.is_some() && pending_rename_to.is_some() && current_file.is_none() {
         let path = pending_rename_to.take().unwrap();
-        section_dest = Some(path.clone());
+        section.dest = Some(path.clone());
         files.push(DiffFile {
             path,
             kind: DiffFileKind::Renamed,
@@ -741,12 +779,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             &mut pending_old_path,
         );
     }
-    resolve(
-        &mut pending_header_errors,
-        &section_dest,
-        &mut file_errors,
-        &mut errors,
-    );
+    section.close(&mut file_errors, &mut errors);
 
     DiffParseResult {
         files,
@@ -962,6 +995,11 @@ mod tests {
         assert_eq!(unquote_path("\"\\a\\b\\f\\v\""), "\u{7}\u{8}\u{c}\u{b}");
         // An invalid sequence degrades to U+FFFD, never a panic.
         assert_eq!(unquote_path("\"\\303.al\""), "\u{fffd}.al");
+        // flash FR1-F02: git never writes `8`/`9` in an octal escape or one
+        // above \377; such text is kept, never silently dropped.
+        assert_eq!(unquote_path("\"a\\8b\""), "a\\8b");
+        assert_eq!(unquote_path("\"a\\18b\""), "a\u{1}8b");
+        assert_eq!(unquote_path("\"a\\777b\""), "a\\777b");
     }
 
     #[test]
@@ -969,11 +1007,24 @@ mod tests {
         // #72: the b-side path of a `diff --git` line (the text after `diff --git `).
         let d = |rest: &str| super::git_header_dest(rest);
         assert_eq!(d("a/src/x.al b/src/x.al").as_deref(), Some("src/x.al"));
-        // Unquoted names with spaces: git writes them only when both sides are
-        // equal, so the line splits at its middle space.
+        // Unquoted names with spaces: for a non-rename, git writes them only
+        // when both sides are equal, so the line splits at its middle space.
         assert_eq!(
             d("a/src/my file.al b/src/my file.al").as_deref(),
             Some("src/my file.al")
+        );
+        // A rename's unequal unquoted names with spaces cannot be split (its
+        // `rename to` line names the file).
+        assert_eq!(d("a/src/old name.al b/src/new.al"), None);
+        // astra FR1-A01: a quoted a-token ends at its closing quote, so its
+        // spaces are not separators and the unquoted b-token follows.
+        assert_eq!(
+            d("\"a/src/old\\303\\251 name.al\" b/src/posting.al").as_deref(),
+            Some("src/posting.al")
+        );
+        assert_eq!(
+            d("\"a/x\\\" y.al\" b/my file.al").as_deref(),
+            Some("my file.al")
         );
         // Quoted b-token, decoded by the one decoder.
         assert_eq!(
@@ -1020,6 +1071,36 @@ mod tests {
         let y = r.files.iter().find(|f| f.path == "y.al").expect("y.al");
         assert_eq!(y.hunks.len(), 1);
         assert_eq!(y.hunks[0].changes, vec![DeletedAfter(0), Added(1)]);
+
+        // CR-02: a section with no path (an unsplittable `diff --git` line and
+        // nothing after it) keeps its error as a global one.
+        let r = parse_unified_diff("diff --git a/x y.al b/z w.al\n@@ garbage @@\n");
+        assert!(r.file_errors.is_empty(), "{:?}", r.file_errors);
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(
+            r.errors[0].contains("malformed hunk header"),
+            "{:?}",
+            r.errors
+        );
+    }
+
+    #[test]
+    fn combined_diff_headers_are_section_boundaries() {
+        // flash FR1-F01: a merge's `diff --cc`/`diff --combined` line starts a
+        // section, so a rejected `@@@` header's skip ends there and every
+        // later file keeps its own error. The first section (binary, no
+        // record) must not leak into the next one.
+        let r = parse_unified_diff(
+            "diff --git a/b.dat b/b.dat\nBinary files a/b.dat and b/b.dat differ\n\
+             diff --cc x.al\n--- a/x.al\n+++ b/x.al\n@@@ -1 -1 +1 @@@\n- a\n +b\n\
+             diff --combined y.al\n--- a/y.al\n+++ b/y.al\n@@@ -1 -1 +1 @@@\n- a\n +b\n\
+             diff --git a/z.al b/z.al\n--- a/z.al\n+++ b/z.al\n@@ -1 +1 @@\n-a\n+b\n",
+        );
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let paths: Vec<&str> = r.file_errors.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["x.al", "y.al"]);
+        let z = r.files.iter().find(|f| f.path == "z.al").expect("z.al");
+        assert_eq!(z.hunks[0].changes, vec![DeletedAfter(0), Added(1)]);
     }
 
     #[test]

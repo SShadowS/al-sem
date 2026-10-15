@@ -1244,6 +1244,33 @@ fn malformed_hunk_header_gives_parse_error_and_no_roots() {
     }
 }
 
+/// #72 (code review CR-01). In a new file's section (`--- /dev/null`), only the
+/// `+++` line names the file, so a header error after it names that path.
+///
+/// Precondition: the pair alone (a hunkless added file) roots both routines.
+/// Mutation: do not set the section's path from the `+++` record -> the error
+/// has no `file`, and the hunkless record roots both routines.
+#[test]
+fn added_file_header_error_names_its_plus_side() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let pair = "--- /dev/null\n+++ b/src/posting.al\n";
+    let (doc, code) = digest(ws, &[], Some(pair));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
+        "precondition: {doc}"
+    );
+
+    let diff = format!("{pair}@@ garbage @@\n{LINE9_BODY}");
+    let (doc, code) = digest(ws, &[], Some(&diff));
+    assert_malformed_error_of(&doc, "src/posting.al", &diff);
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
 /// #72. The error poisons only its own file: posting.al malformed, subscriber.al
 /// valid (line 9, inside `HandlePosted`), in both orders.
 ///
@@ -1337,14 +1364,15 @@ fn git_section_error_before_plus_header_vetoes_its_path() {
 
 /// #72 (astra R3-A02). The `diff --git` line's b-side path names the file of a
 /// header error that comes before any `---`/`+++`/rename line, and that is the
-/// path the veto uses: same names, and distinct names (`a/src/old.al
-/// b/src/posting.al`), each with a healthy `src/posting.al` section in both
-/// orders.
+/// path the veto uses: same names, distinct names (`a/src/old.al
+/// b/src/posting.al`), and a quoted a-name holding a space before an unquoted
+/// b-name, each with a healthy `src/posting.al` section in both orders.
 ///
 /// Precondition: the healthy section alone gives `["PostSalesDoc"]`.
 /// Mutations: delete the `git_header_dest` call at `diff --git` -> no `file`,
 /// `PostSalesDoc` rooted; take the a-side name -> the error names `src/old.al`,
-/// `PostSalesDoc` rooted.
+/// `PostSalesDoc` rooted; drop the quoted a-token scan -> the quoted case has
+/// no `file`, `PostSalesDoc` rooted.
 #[test]
 fn git_header_names_the_file_of_an_immediate_header_error() {
     let dir = tempfile::tempdir().unwrap();
@@ -1358,6 +1386,8 @@ fn git_header_names_the_file_of_an_immediate_header_error() {
     for git in [
         "diff --git a/src/posting.al b/src/posting.al",
         "diff --git a/src/old.al b/src/posting.al",
+        // astra FR1-A01: a quoted a-token with a space, unquoted b-token.
+        "diff --git \"a/src/old\\303\\251 name.al\" b/src/posting.al",
     ] {
         let bad = format!("{git}\n@@ garbage @@\n{LINE9_BODY}");
         for diff in [format!("{bad}{healthy}"), format!("{healthy}{bad}")] {

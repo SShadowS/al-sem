@@ -197,18 +197,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file looked hunkless and EVERY declaration in it became a changed root, with no
   diagnostic and exit 0. It is now a `diff-parse-error` with a new `file` key naming the
   file, and that file gives no diff-derived roots in any of its records (matched by the
-  normalized path; `--file`/`--routine` roots are kept). In a `diff --git` section the lines
-  after the bad header, up to the next `diff --git`, are skipped: the rejected hunk's body has
+  normalized path; `--file`/`--routine` roots are kept). In a `diff --git` section (and a
+  merge's `diff --cc`/`diff --combined` section, now also a section boundary) the lines after
+  the bad header, up to the next section header, are skipped: the rejected hunk's body has
   no trustworthy length. A digest with such an error is incomplete for that file; a diff
   whose only file is broken gives no roots and exits 2. An `@@` line before the first file
   section (a patch preamble) is still ignored. Pinned by
-  `malformed_hunk_header_gives_parse_error_and_no_roots` and ten sibling tests in
+  `malformed_hunk_header_gives_parse_error_and_no_roots` and eleven sibling tests in
   `tests/cli/cli_digest_changed_spans.rs`, and `malformed_hunk_header_is_an_error_of_its_file`
-  / `git_header_dest_names` in `diff_parser` (#72).
+  / `git_header_dest_names` / `combined_diff_headers_are_section_boundaries` in
+  `diff_parser` (#72).
 - `alsem digest --diff`: a git-quoted non-ASCII path (git's default, e.g.
   `"b/src/\303\251.al"` for `src/é.al`) decoded each octal escape as its own character
   (`src/Ã©.al`), so a healthy diff of the file gave `diff-file-unmatched`, no roots and exit
-  2. Escapes are now decoded as UTF-8 bytes (`\a \b \f \v` added). Pinned by
+  2. A quoted path is now decoded as git's C quoting: escapes are UTF-8 bytes (`\a \b \f \v`
+  added), and a non-UTF-8 name degrades to U+FFFD. An escape git never writes (a `8`/`9`
+  digit, or a value above `\377`) is kept as text; it used to be dropped. Pinned by
   `unquote_path_octal_escapes_are_utf8_bytes` and
   `escaped_and_literal_spellings_of_one_file_share_the_veto` (#72).
 - `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
