@@ -13,20 +13,27 @@ use super::{CapabilityExtra, CapabilityFact, CoverageReason, ExtractionContext, 
 
 /// Map an AL `RecordOpType` (string) to a `CapabilityOp`, or `None` for
 /// state-only / filter ops (SetRange, SetFilter, Init, SetLoadFields, ...).
-/// Mirrors `table.ts` `mapOp`.
-fn map_op(op: &str) -> Option<&'static str> {
+/// The ONE table op map: `capability_cone::map_table_op` calls it.
+///
+/// `Validate`, `Copy` and `TransferFields` are NOT writes (#69 D5): `Copy`
+/// copies fields/filters/keys in memory, `TransferFields` assigns field values,
+/// `Validate` assigns and runs `OnValidate` (whose own writes are separate
+/// effects; its relation check reads the RELATED table). None of them modifies
+/// the record's own table.
+pub(crate) fn map_op(op: &str) -> Option<&'static str> {
     match op {
         "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
         | "CountApprox" | "Next" | "CalcFields" | "CalcSums" | "TestField" => Some("read"),
-        "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" => Some("modify"),
+        "Modify" | "ModifyAll" => Some("modify"),
         "Insert" => Some("insert"),
         "Delete" | "DeleteAll" => Some("delete"),
         // Init / SetRange / SetFilter / SetLoadFields / AddLoadFields /
-        // SetCurrentKey / Reset / LockTable → not capability-relevant.
+        // SetCurrentKey / Reset / LockTable / Validate / Copy / TransferFields
+        // → not capability-relevant.
         // Rename IS a write, but which TableData permission it needs is not
         // measured yet (#9: Permissions Mock did not enforce in the test
-        // container), so it is deliberately unmapped here and in
-        // `capability_cone::map_table_op`, and so absent from the cone's writes.
+        // container), so it is deliberately unmapped, and so absent from the
+        // cone's writes.
         _ => None,
     }
 }

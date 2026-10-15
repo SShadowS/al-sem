@@ -1,0 +1,1190 @@
+[
+  {
+    "id": "R1-A01",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D1; src/engine/l4/capability_cone.rs",
+    "line": "1635-1658",
+    "severity": "critical",
+    "text": "D1 maps a non-frame-bound PD representative across an edge. Its entry also stands for a physical same-table write, so promoting it through its rep (to kt, or kt under an nt key) hides a physical obligation. The derived fold reads the rep's state.",
+    "disposition": "fixed",
+    "evidence": "Verified: an entry is not frame-bound when its raw facts disagree (capability_cone.rs:2083-2091, merge_cone 1655-1669), and retag/the derived fold read the rep (1673-1683; cone_derived.rs:699). Spec rev 2 D1: the invariant class(rep)==class(key) holds by construction. Producers (PD raw facts) never share a key with ordinary facts (D1.1) and are resolved per producer (D1.2-3). No rep is ever re-classed. Fixture MixedUiTemp in A2d, with a mutation that re-merges producers. Same as R1-F01.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A02",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D2; src/engine/l4/db_effect_solver.rs",
+    "line": "145-211",
+    "severity": "important",
+    "text": "PdFrames (a parameter-index set per member) is not L4-equivalent. It discards the kt branch of a temp+real mix (X.Insert;Y.Insert with temp X, real Y), and it confuses 'no PD in this frame' with 'non-substitutable nt contributor' (A calls B with temp in a cycle: L4 has only kt at A).",
+    "disposition": "fixed",
+    "evidence": "Verified against solve_pd_reachability (db_effect_solver.rs:170-230: per-(effect, routine, param) states plus terminal emissions). Rev 2 replaces PdFrames with a per-producer product-state solve over typed edges (D1.2): states (p,r,i,reqs) and emissions (p,c,s,edge). Mixed outcomes split per producer, and absence is bottom. Fixtures TwoRecMix, TwoRecTemp, CycA/CallsCycA in A2d. Same as R1-F05 and R1-F06.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A03",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D2; src/engine/l4/capability_cone.rs",
+    "line": "1925-2030, 2399-2418",
+    "severity": "important",
+    "text": "Recursive members' own output (inherited_facts_by_bfs) does not substitute and is not specified correctly. Root SCCs skip fact_cone_for_scc, so a solve placed there leaves recursive roots unsolved.",
+    "disposition": "fixed",
+    "evidence": "Verified: the BFS emits sibling direct facts in the sibling's frame (capability_cone.rs:1977-1985) and downstream reps raw (2012-2026). root_scc skips the cone (2401). Rev 2 D1.4: the solve is SCC-agnostic and runs before cone composition. Members get their own states and emissions. The BFS no longer emits sibling producers. Root SCCs are covered. Fixtures RecH, RootCyc1/2, PermMix in A2d. Same as R1-F02.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A04",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D3; tests/cli/cli_digest_temp_state.rs",
+    "line": "43-44",
+    "severity": "important",
+    "text": "D3's pd_bindings cover only params that are PD in a callee's DIRECT facts, so a forwarding chain (Root -> Forward -> Helper) resolves to nt and the kt witness is lost.",
+    "disposition": "fixed",
+    "evidence": "Verified: Forward (Probe.al) has no direct fact. Rev 2 drops pd_bindings and path re-derivation altogether. Forwarding is a sequence of solve states (D1.2), and the witness reads the solve's proof chains (D2, D3). Fixtures ViaForwardUiTemp/Real in A1a and A2a. Same as R1-F03.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A05",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D3; src/engine/l5/digest.rs",
+    "line": "1243-1280",
+    "severity": "important",
+    "text": "The witness BFS forbids revisiting a routine on a path, so effects reachable only through a binding-changing recursive hop (self-recursion with a temp local) cannot be witnessed.",
+    "disposition": "fixed",
+    "evidence": "Verified: visited_routines at digest.rs:1248-1276. Rev 2 D3.1/D3.2: a PD-origin fact's witness is its proof chain from the solve. It is spliced after the BFS prefix and may revisit routines. Fixtures SelfRecReal and PermMix in A2d, with a mutation that replaces proof chains with the BFS. Same as R1-F04.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A06",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D3 dedupe; src/engine/l5/digest.rs",
+    "line": "2299-2335, 3100-3117",
+    "severity": "important",
+    "text": "A class only in dedupe_key does not stop occurrence-id collisions. When both classes fail the witness, the canonical keys and factIds are equal, and ordering AND-merges them.",
+    "disposition": "fixed",
+    "evidence": "Verified: build_canonical_key uses via_paths[0] and the terminal id (digest.rs:2300-2337), and the ordinal is always 0. Rev 2 D3 Identity: kt DB effects always get a '|kt' canonical-key suffix. Fixture DeepRoot (67-deep chain, generated) in A2e, with a mutation that drops the suffix. Same as R1-F09.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A07",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D4; src/engine/l5/digest_cli.rs",
+    "line": "616-638",
+    "severity": "important",
+    "text": "A union-emptiness check can hide per-op disagreement, and missing rows are not defined. A structured join is needed.",
+    "disposition": "fixed",
+    "evidence": "Verified: for_effect unions per op and returns None on a missing op (digest_cli.rs:621-638). Rev 2 D4: TempJoin with a per-op check (NoL4Row / ClassAbsent), defined rendering, and diagnostics with factId/operationId/reason serialized at digest_cli.rs:1037-1052. A4b pins it with a --lib test (stated limit).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A08",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D5",
+    "line": "119",
+    "severity": "important",
+    "text": "D5's choice is sound, but the container gate and fallback are not. Copy(...,true) on a real record is an error. A read or permission check does not make an own-table modify. A Validate fallback sourced from the cone would break the L4-authority contract.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 D5: settled from documented semantics and the engine's classification (summary_runner.rs:308-330, op_classification.rs:79-82). Gate and fallback removed. Copy(...,true) is stated as a runtime error on real records and is tested on temp only. Real-record Copy/TransferFields cases added to A3.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A09",
+    "source": "astra",
+    "round": 1,
+    "file": "spec acceptance matrix",
+    "line": "131-138",
+    "severity": "important",
+    "text": "Discrimination plans for A1a (an anchor revert makes the write unplaceable instead of regaining the label), A2c (the temp call sorts first) and A4 (the subset still passes) do not discriminate the use.",
+    "disposition": "fixed",
+    "evidence": "Round 4 re-raise (the ForwardMix mutation could not reach ForwardUi through the first-hop filter) fixed in rev 5. Rev 5 D3 'First-hop contract': every witness path (proof or BFS) starts at f.witness_callsite_id, exactly today's first_edges filter (digest.rs:930-956, verified); the depth-0 proofs obey it too. ForwardMix is restructured so both branches sit below one root first hop (ForwardMix -> Both -> {ForwardUi, RealWriter}). The mutation now edits is_bfs_carrier, the ONE predicate shared by the terminal test and the valid_nodes seed, so Both's PD(0) state becomes a carrier on the nt first hop -> named red 'ForwardMix: nt path through ForwardUi'. The A2a mutation is reworded 'skip depth-0 proof enumeration' (HelperUiTemp has no ordinary carrier).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A10",
+    "source": "astra",
+    "round": 1,
+    "file": "spec measurement; src/engine/l5/detectors/d43.rs, d44.rs",
+    "line": "d43:475-498; d44:210-219",
+    "severity": "important",
+    "text": "Fewer physical writes does not mean fewer findings. d43 (guarded minus setter writes) and d44 (readers minus writers) can gain findings, and caps can expose others.",
+    "disposition": "fixed",
+    "evidence": "Verified at d43.rs:475-498 and d44.rs:210-219. Rev 2 Measurement and FP shapes: the red-flag rule is removed. Added, removed, changed and cap-substituted findings are triaged in both directions, at both scopes. Same as R1-F08.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A11",
+    "source": "astra",
+    "round": 1,
+    "file": "spec D4/measurement; src/engine/l5/prove.rs",
+    "line": "959-975",
+    "severity": "minor",
+    "text": "Prove shares the full-entry builder, so D4 moves prove even without witness changes. The 493 figure is L4's. The heap cost of the new structures is unmeasured.",
+    "disposition": "fixed",
+    "evidence": "Verified: prove builds DbTempStates and calls run_digest_query_full_from_entries (prove.rs:961-974). Rev 2: D4 states the prove schema bump. Measurement lists cli-a (prove) for D4 values. D1 Cost names 493 as L4's and makes new census counters (producers, states, emissions, proof links) plus peak RSS a gate. Same as R1-F10.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F01",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D1; src/engine/l4/capability_cone.rs",
+    "line": "2083-2091, 1655-1669, 1680-1688",
+    "severity": "critical",
+    "text": "Mapping a non-frame-bound PD rep can put a known(true) rep under an nt key. The digest and ordering grade the fact by the rep, so a real known(false) write behind the same key is hidden. It also splits the cone from cone_derived.",
+    "disposition": "fixed",
+    "evidence": "Same root cause as R1-A01. Rev 2 D1 invariant class(rep)==class(key), and producers are separated from ordinary facts (D1.1). Fixture MixedUiTemp (write through var R and through a real local; caller passes temp; label must stay) in A2d.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F02",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D2; src/engine/l4/capability_cone.rs",
+    "line": "1977-1985, 2012-2026, 2401-2412, 2462-2471",
+    "severity": "important",
+    "text": "Recursive members use inherited_facts_by_bfs, which never substitutes, and root recursive SCCs build no cone. Combined with D3, a recursive routine calling Helper(TempBuf) would lose a witness that works today.",
+    "disposition": "fixed",
+    "evidence": "Verified at the cited lines. Rev 2 D1.4: the SCC-agnostic solve gives members their own states and emissions, and root SCCs are covered. D3 no longer re-derives classes along paths. Fixtures RecH and RootCyc1/2 in A2d. Same as R1-A03.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F03",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D3",
+    "line": "Snapshot/Terminal bullets",
+    "severity": "important",
+    "text": "pd_bindings only for directly-PD params break forwarding chains (Forward has no direct facts), so ViaHelperTemp's bug comes back one level deeper.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A04. Rev 2 removes pd_bindings. Forwarding is solved states, and witnesses use proof chains (D1.2, D2, D3). Fixture ViaForwardUiTemp in A1a and A2a.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F04",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D3; src/engine/l5/digest.rs",
+    "line": "1248-1276",
+    "severity": "important",
+    "text": "Simple-path resolution cannot reproduce a fixed point when a cycle permutes parameters (Rec(var A; var B) calls Rec(B, A)).",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A05. Rev 2 D3.1: the root-carrier witness is the solve's proof chain, which follows the permutation. Fixture PermMix in A2d (the nt path enters PermUi twice).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F05",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D2",
+    "line": "bullets 2-3",
+    "severity": "important",
+    "text": "The D2 lattice has no bottom vs top: top does not propagate (soundness), absent is read as not-substitutable (spurious nt plus a diagnostic), and merge_cone during seeding would disable D2.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 removes the PdFrames lattice. Physical raw facts are ordinary entries and propagate as today, so the 'top' case is covered by construction (fixture CycQTemp). PD-origin facts exist only where a solve state or emission reaches (absence = bottom, fixture CycA/CallsCycA). merge_cone never sees producers. See D1.1-D1.2 and A2d.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F06",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D2",
+    "line": "substitute bullets",
+    "severity": "important",
+    "text": "The mix rule splits kt+PD but not kt+known(false)/unknown. Temp+Real to a two-param same-table helper grades a kt write physical.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A02 (first counterexample). Rev 2 resolves per producer, so the kt and nt emissions are separate facts. Fixture TwoRecMix in A2d.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F07",
+    "source": "flash",
+    "round": 1,
+    "file": "spec measurement; src/program/body/capability/table_commit.rs",
+    "line": "17-31",
+    "severity": "important",
+    "text": "D5 edits L2, so r1a goldens move (they were listed as must-not-move). The fingerprint 'M', gate diff and policy consumers of modify are missing.",
+    "disposition": "fixed",
+    "evidence": "Verified: 9 tests/r1a-goldens files carry opSubtype Validate/Copy/TransferFields. fingerprint_query.rs:290-297 maps modify->M. gate/diff/passes.rs:809,863. gate/policy/predicate_fields.rs:106. Rev 2 Measurement: r1a is expected to move, cli-c/cli-c-policy/gate goldens may move, ir-l2 stays must-not-move. The D5 CHANGELOG names the consumers.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F08",
+    "source": "flash",
+    "round": 1,
+    "file": "spec measurement; src/engine/l4/capability_cone.rs",
+    "line": "1229-1236",
+    "severity": "important",
+    "text": "'A detector that gains findings is a red flag' is wrong for d44 and d43.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A10. Rev 2 triages in both directions.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F09",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D3 dedupe; src/engine/l5/digest.rs",
+    "line": "2300-2337, 3107",
+    "severity": "minor",
+    "text": "The class split adds an occurrenceId collision in the degraded (synthetic) case.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A06. Rev 2 always adds a '|kt' canonical-key suffix for kt DB effects. Fixture DeepRoot in A2e.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F10",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D1; src/engine/l4/effect_query.rs",
+    "line": "18-22",
+    "severity": "minor",
+    "text": "493/222 483 counts L4 db-effect memberships, not cone PD reps.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A11. Rev 2 D1 Cost attributes the figure to L4 and makes the cone census a measured gate.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F11",
+    "source": "flash",
+    "round": 1,
+    "file": "spec acceptance A1c",
+    "line": "A1c",
+    "severity": "minor",
+    "text": "A1c pins D1's value through compose_snapshot (a helper). The value is not visible in the digest document for ViaHelperReal.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 A1c is relabelled as a stated limit: it is checked on compose_snapshot, the production builder that run_digest_pipeline calls, and is not claimed as a pipeline pin. The pipeline-visible coherence is pinned by A1a and A1b.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F12",
+    "source": "flash",
+    "round": 1,
+    "file": "spec D2; src/engine/l4/capability_cone.rs",
+    "line": "2262-2274, 2205",
+    "severity": "minor",
+    "text": "'A recursive SCC gets an anchor too' contradicts the single-member PdAnchor. The anchor shape and the guards' fate are unstated.",
+    "disposition": "fixed",
+    "evidence": "Round 2 fix (guarded terminal states continue) stood; round 3 re-raise fixed in rev 4. Rev 4 D1.2 'No state stops': the solve is transitive. Every state, including a free kt/known(false) one, keeps propagating across every typed caller edge through cross_edge's full guard step, so a guard introduced ABOVE the resolution point (astra's TempHelper -> guarded recursive G1/G2 -> literal false caller) is conjoined there and a contradiction drops the state. PD-origin facts no longer enter any shared cone (D1.3 use (c)), so the ordinary recursive guard-drop (capability_cone.rs:2193-2207) never touches them. New fixture TempHelperUi/GT1/GT2 with roots GTFalse/GTTrue in A2e; mutation 'stop at free states and hand them to the shared cone (rev-3 rule)' -> named red 'GTFalse: DB_INSERT present'. The non-goal states the claim's exact scope (param_guard's usable Boolean guards only). Cost of transitivity is a D1.4 gate with a budget.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A01",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D1.3/D2/D3; src/engine/l4/capability_cone.rs",
+    "line": "1673-1683",
+    "severity": "important",
+    "text": "Proof ownership is lost. retag copies the rep wholesale, so a pd_origin proof rooted at A leaks into Root's inherited copy, and D3.1 then skips the Root->A prefix and misattributes A's callsite.",
+    "disposition": "fixed",
+    "evidence": "Verified: retag copies ..rep.clone() (capability_cone.rs:1673-1683), and project_path starts at the root (digest.rs:1723-1760). Rev 3 D2: facts carry NO proof field. The solve lives in a snapshot arena indexed by routine (by_routine), so carrier status belongs to a routine, never to a fact, and nothing can leak through retag. Inherited copies reach the emitting routine through the D3 BFS prefix, and the proof is appended there. SelfRecReal's exact path assertion (A2e) pins prefix + proof. Same as R2-F02.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A02",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D1.2/D3.1; src/engine/l5/digest.rs",
+    "line": "2930-2954, 3049-3055",
+    "severity": "important",
+    "text": "One first-discovered parent per state proves presence, not complete witnesses. A conditional and an unconditional call below one first hop collapse to one proof; conditionality and viaPaths change; ordering treats the path set as complete.",
+    "disposition": "fixed",
+    "evidence": "Verified: per-path conditionality is folded across all paths (digest.rs:2930-2954; conditionality.rs:90). Rev 3 D1.2 keeps ALL incoming links per state. D3 enumerates proofs breadth-first by length, with a deterministic tie-break, a global HARD_PATH_CAP, and truncated/incomplete flags. Each path gets its own conditionality. Fixture ViaCondTwiceTemp (A2d) asserts 2 viaPaths and unconditional-on-success; mutation 'one link per state'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A03",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D1.2-3; src/engine/l4/capability_cone.rs",
+    "line": "2068-2119, 2193-2207, 2012-2026",
+    "severity": "important",
+    "text": "Terminal temp states are not frame-independent while guard requirements remain. Stopping the solve at known(b) and handing it to shared propagation loses or misplaces guards through cycles with shifted indices.",
+    "disposition": "fixed",
+    "evidence": "Round 3 re-raise fixed in rev 4. Rev 4 D1.2 'No state stops': the solve is transitive. Every state, including a free kt/known(false) one, keeps propagating across every typed caller edge through cross_edge's full guard step, so a guard introduced ABOVE the resolution point (astra's TempHelper -> guarded recursive G1/G2 -> literal false caller) is conjoined there and a contradiction drops the state. PD-origin facts no longer enter any shared cone (D1.3 use (c)), so the ordinary recursive guard-drop (capability_cone.rs:2193-2207) never touches them. New fixture TempHelperUi/GT1/GT2 with roots GTFalse/GTTrue in A2e; mutation 'stop at free states and hand them to the shared cone (rev-3 rule)' -> named red 'GTFalse: DB_INSERT present'. The non-goal states the claim's exact scope (param_guard's usable Boolean guards only). Cost of transitivity is a D1.4 gate with a budget.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A04",
+    "source": "astra",
+    "round": 2,
+    "file": "spec A5; src/engine/l4/capability_cone.rs",
+    "line": "1237-1247, 2711-2724",
+    "severity": "important",
+    "text": "A5 compares a deduplicated cone (one rep per key) with unreduced L4 rows per operation id, so it fails on correct code. It ignores Rename, and trigger-only exclusion is insufficient.",
+    "disposition": "fixed",
+    "evidence": "Round 3 re-raise fixed in rev 4. Rev 4 A5: both sides are now TRANSITIVE populations. The solve no longer stops (D1.2), and L4's terminal rows are unioned into every ancestor (db_effect_solver.rs:11-18, 392-408, verified). Compare 1 compares p's states at r (seed included when r = owner(p)) with L4's rows for p's op at r. Routines are enumerated from BOTH sides, so astra's Root -> A -> HelperUi counterexample (no solve state at Root under rev 3) now has a kt state at Root. Compare 2 states that 'cone output' means direct + inherited write facts vs L4 base + inherited rows. The mutation is now 'skip intra-SCC transitions' -> named red 'Compare 1: RecUiTemp {nt} != L4 {kt}'. Same as R3-F01.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A05",
+    "source": "astra",
+    "round": 2,
+    "file": "spec A2a/A2c/A2d",
+    "line": "A2a, A2c, RecH",
+    "severity": "important",
+    "text": "Revised mutations still break unused paths. A2a's carrier mutation is bypassed by the root shortcut. A2c needs a below-root precondition. RecH has no sibling producer, so the sibling mutation cannot reach it.",
+    "disposition": "fixed",
+    "evidence": "Round 4 re-raise (ForwardMix lacked a reachable below-root-carrier precondition) fixed in rev 5. Rev 5 D3 'First-hop contract': every witness path (proof or BFS) starts at f.witness_callsite_id, exactly today's first_edges filter (digest.rs:930-956, verified); the depth-0 proofs obey it too. ForwardMix is restructured so both branches sit below one root first hop (ForwardMix -> Both -> {ForwardUi, RealWriter}). The mutation now edits is_bfs_carrier, the ONE predicate shared by the terminal test and the valid_nodes seed, so Both's PD(0) state becomes a carrier on the nt first hop -> named red 'ForwardMix: nt path through ForwardUi'. The A2a mutation is reworded 'skip depth-0 proof enumeration' (HelperUiTemp has no ordinary carrier). The ForwardMix fixture text states the precondition and settles the flash/astra disagreement: both were right (first-hop filter and valid_nodes prune).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A06",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D2-D3; src/engine/l5/digest.rs",
+    "line": "2282-2297, 2845-2910",
+    "severity": "important",
+    "text": "effect_fact_loop_identity ignores the new serde-skipped proof metadata, so two facts with equal serialized fields but different proofs would be skipped as duplicates.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 removes per-fact proof metadata (D2). The D3 carrier test reads only fields already in the identity (op, kind, rid, arg source, extra/class) plus the node and the routine arena, so equal identities have equal witnesses by construction and the skip stays exact. This is stated in D3. Proof alternatives from different guard states at one routine are all carriers (by_routine) and are enumerated together (fixture ViaCondTwiceTemp covers two link alternatives).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A07",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D2 / failure shapes; src/engine/l5/snapshot.rs",
+    "line": "1044-1060",
+    "severity": "minor",
+    "text": "Arc<[EdgeRef]> per fact flattens chains quadratically, contradicting lazy materialization. Edge handles and the tie-break are unspecified.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 D2: one PdArena (states, links, by_routine) with EdgeIx into the sorted and filtered snapshot typed_edges, mapped once by edge identity, with a debug_assert and a counter for a missing mapping. Proofs are materialized only for reported witnesses. The tie-break is by length, then the sequence of edge sort keys. Arena and materialized bytes are census counters (D1.4, failure shapes).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A08",
+    "source": "astra",
+    "round": 2,
+    "file": "spec D4; src/engine/l4/effect_query_cli.rs",
+    "line": "590",
+    "severity": "minor",
+    "text": "TempJoin's BTreeSet<&'static str> cannot hold the dynamically formatted parameter-dependent(i).",
+    "disposition": "fixed",
+    "evidence": "Verified: temp_state_str returns String (effect_query_cli.rs:590). Rev 3 D4 keeps BTreeSet<TempStateKind> and renders with temp_state_str at the presentation boundary.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F01",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D1.3; src/engine/l4/capability_cone.rs",
+    "line": "1766-1821, 1943, 1978-1985, 2131, 2509-2513, 2667-2670",
+    "severity": "important",
+    "text": "Putting resolved facts in `direct` never reaches the routine's own output (the singleton walk reads only callee cones; the BFS seeds visited with the subject and emits only siblings). dist would be 0, guards would come from raw sites, and direct_raw is the serialized capability_facts_direct.",
+    "disposition": "fixed",
+    "evidence": "Verified at the cited lines. Rev 3 D1.3: a separate resolved_by_routine map with ResolvedEntry(state, rep, dist, first_hop, reqs), and four named uses: (a) own output in both walks, (b) the derived fold as inherited, (c) fact_cone_for_scc mints free entries at their own dist, (d) never direct_raw/capability_facts_direct. Mutation 'drop use (a)' -> RecH red (A2e).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F02",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D2/D3.1; src/engine/l4/capability_cone.rs",
+    "line": "1673-1681",
+    "severity": "important",
+    "text": "retag copies pd_origin into every ancestor's copy, with a proof starting at the emitter, so D3.1 drops the prefix and D3.2 splices discontinuously.",
+    "disposition": "fixed",
+    "evidence": "Same as R2-A01. Rev 3 D2: there is no fact field; carriers are a per-routine arena index. SelfRecReal's exact path (prefix SelfRecReal->SelfRecUi, then the proof SelfRecUi->SelfRecUi) is asserted in A2e.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F03",
+    "source": "flash",
+    "round": 2,
+    "file": "spec A5; src/engine/l4/db_effect_solver.rs",
+    "line": "143",
+    "severity": "important",
+    "text": "A5's op-id equality is impossible with one rep per key; trigger exclusion is insufficient; the L4 bundle is unnamed.",
+    "disposition": "fixed",
+    "evidence": "Round 3 re-raise fixed in rev 4. Rev 4 A5: both sides are now TRANSITIVE populations. The solve no longer stops (D1.2), and L4's terminal rows are unioned into every ancestor (db_effect_solver.rs:11-18, 392-408, verified). Compare 1 compares p's states at r (seed included when r = owner(p)) with L4's rows for p's op at r. Routines are enumerated from BOTH sides, so astra's Root -> A -> HelperUi counterexample (no solve state at Root under rev 3) now has a kt state at Root. Compare 2 states that 'cone output' means direct + inherited write facts vs L4 base + inherited rows. The mutation is now 'skip intra-SCC transitions' -> named red 'Compare 1: RecUiTemp {nt} != L4 {kt}'. Same as R3-F01.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F04",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D1.3",
+    "line": "owner states",
+    "severity": "minor",
+    "text": "Owner states with a different index (PermUi's PD(1) via recursion) are dropped, so the owner's output understates its frame.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 D1.3: every bound state at the owner other than the seed is a bound entry of the owner. A1c asserts that PermUi's own output has PD(0) and PD(1).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F05",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D4",
+    "line": "rendering",
+    "severity": "minor",
+    "text": "Rendering is undefined for mixed fine/ClassAbsent ops, and so is the NoL4Row/ClassAbsent precedence.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 D4: per-op contribution rule (filtered rows, or all rows for ClassAbsent), and precedence: any NoL4Row -> field absent; otherwise the union. A4b adds the mixed rows.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F06",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D3/measurement; src/engine/l5/fingerprint_query.rs",
+    "line": "577, 598, 655; digest.rs:3929-4039",
+    "severity": "minor",
+    "text": "alsem fingerprint builds the same index and runs reconstruct_witness_paths_pub, so its witnesses move too and must use the same carriers.",
+    "disposition": "fixed",
+    "evidence": "Verified: fingerprint_query.rs:33, 577, 598 use build_fingerprint_indexes_pub/reconstruct_witness_paths_pub (digest.rs:3929, 3970, 4039). Rev 3 D3 Consumers: both index builders use the same carrier predicate and arena. Measurement lists fingerprint witness paths under cli-c.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F07",
+    "source": "flash",
+    "round": 2,
+    "file": "spec A2d mutation list",
+    "line": "CycA mutation",
+    "severity": "minor",
+    "text": "'Treat a member with no state as nt' names nothing concrete in the rev-2 code.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 A2e: the mutation is 'in cross_edge, map known(true) to unknown on intra-SCC edges' -> named red 'CycA: label present'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F08",
+    "source": "flash",
+    "round": 2,
+    "file": "spec D1.2; src/engine/l4/capability_cone.rs",
+    "line": "1572-1591, 1598, 2154-2157",
+    "severity": "minor",
+    "text": "The guard step in the solve names only across_edge/conjoin and omits the caller's site reqs (edge_reqs) and the event re-anchor, which would lose singleton precision.",
+    "disposition": "fixed",
+    "evidence": "Verified at the cited lines. Rev 3 D1.2: cross_edge is EXACTLY substitute_entry's per-edge step, including the event by-name re-anchor and conjoin with edge_reqs = FrameGuards.by_site[callsite]. Fixture GuardFwdFalse/True with the mutation 'drop edge_reqs' (A2e).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-A01",
+    "source": "astra",
+    "round": 3,
+    "file": "spec D3 Carriers/Depth 0/Path = prefix x proof; src/engine/l5/digest.rs",
+    "line": "710-738",
+    "severity": "important",
+    "text": "Type-(ii) carriers below the root are checked in the wrong frame. A bound state's class (for example PermUi's seed PD(0), nt) holds only in its own routine, so a BFS prefix plus a zero-length proof gives PermMix -> PermUi -> producer as an nt witness, though that execution inserts into Temp. fact_equivalent ignores temp indices.",
+    "disposition": "fixed",
+    "evidence": "Verified: fact_equivalent compares op/kind/rid/arg source/dispatch only (digest.rs:152-181 region, cited 710-738), and the BFS is routine-based. Rev 4 D3: arena states are carriers ONLY at depth 0 (the root's own non-seed states). The seed is never a carrier, and below-root arena carriers do not exist. This is sound because the transitive solve gives every root its own states for every producer it reaches (D1.2), so each root proof is valid in the root's frame by construction. PermMix in A2e now asserts EVERY nt path enters PermUi twice and no one-hop nt path exists; mutation 'admit arena states below the root as carriers' -> named red (ForwardMix). Same as R3-F02.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-A02",
+    "source": "astra",
+    "round": 3,
+    "file": "spec D3 Enumeration / Enumeration blow-up; src/engine/l5/digest.rs",
+    "line": "2954-3025, 3049-3055, 3120-3140",
+    "severity": "important",
+    "text": "Setting `incomplete` does nothing for consumers. Digest accumulates only `truncated`, so conditionality and ordering treat a partial path set (a short conditional proof found, a long unconditional proof cut at MAX_DEPTH) as complete.",
+    "disposition": "fixed",
+    "evidence": "Verified: digest.rs:2954-3025 reads outcome.truncated only (no `incomplete`). effect_conditionality returns unknown when truncated with no unconditional path (conditionality.rs:89-124). ordering_inter.rs:205-220 labels chains 'capped' only from via_paths_capped. Rev 4 D3 'Incompleteness reaches the consumers': `incomplete` is ORed into had_truncation at both the insert and merge sites, which feeds conditionality, via_paths_truncated -> ordering, and the serialized viaPathsTruncated (widened meaning, stated in the CHANGELOG and in FP shapes; goldens triaged). New generated fixture IncRoot (a short conditional proof plus a 67-deep forwarding proof) in A2g; mutation 'drop the OR' -> named red 'IncRoot: conditionality conditional'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-F01",
+    "source": "flash",
+    "round": 3,
+    "file": "spec A5 Compare 1; src/engine/l4/db_effect_solver.rs",
+    "line": "11-18, 146-148, 392-408",
+    "severity": "important",
+    "text": "Compare 1 compares solve states, which are not transitive (a free state stops), with L4 rows, which are transitive (the Step B/C union), so it fails on correct code. The seed is also excluded by the D1.3 'bound' definition. Compare 2 does not say whether direct facts count.",
+    "disposition": "fixed",
+    "evidence": "Same root as R2-A04/R2-F03. Rev 4 makes the solve itself transitive (D1.2) instead of reconstructing a closure in the oracle. A5 Compare 1 includes the seed when r = owner(p), and enumerates routines from both sides. Compare 2 is defined as direct + inherited write facts vs L4 base + inherited rows.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-F02",
+    "source": "flash",
+    "round": 3,
+    "file": "spec D3 Carriers (ii), Seed; src/engine/l5/digest.rs",
+    "line": "1107-1119, 1190-1199",
+    "severity": "important",
+    "text": "Bound arena states below the root are accepted as carriers although their class holds only in their own frame. ForwardMix: the nt fact (from RealWriter) can terminate through ForwardUi's PD state on the TempBuf call, a #32-style mis-anchoring that can create a false WRITE_PENDING_AT_UI. It is unclear whether the seed is a carrier.",
+    "disposition": "fixed",
+    "evidence": "Same as R3-A01. Rev 4 D3: arena carriers only at depth 0 (non-seed root states); the seed is never a carrier; below the root only ordinary facts are carriers, and the valid_nodes seed uses ordinary carriers only. ForwardMix added to A2e (the nt effect has exactly one viaPath ForwardMix -> RealWriter, and no label); mutation 'admit arena states below the root as carriers' -> named red 'ForwardMix: nt path through ForwardUi'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-F03",
+    "source": "flash",
+    "round": 3,
+    "file": "spec D3 Depth 0 / Path = prefix x proof; src/engine/l5/digest.rs",
+    "line": "1196-1199",
+    "severity": "minor",
+    "text": "The spec does not say whether R is expanded after its depth-0 proofs. If depth 0 is terminal, R's ordinary carriers below it are lost; if not, and below-root arena carriers remain, paths come out twice.",
+    "disposition": "fixed",
+    "evidence": "Round 4 re-raise fixed in rev 5. (1) Goal 2 and D3 now state today's contract: paths through the fact's selected first hop only. MixedCarrier is restructured so both kt contributors share that first hop (MixedCarrier -> Wrap -> {HelperUi, TempLocal.Insert}), with the precondition asserted whichever contributor wins the rep selection (capability_cone.rs:1822-1850), and it expects exactly 2 viaPaths. (2) Path identity is the edge sequence plus the terminal evidence kind and id, and an equal projected merge keeps the least restrictive conditionality (see R4-A02).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R4-A01",
+    "source": "astra",
+    "round": 4,
+    "file": "spec D3 'Ordinary carriers, through the BFS', A2e; src/engine/l5/digest.rs",
+    "line": "930-956",
+    "severity": "important",
+    "text": "The BFS is first-hop-filtered to the selected rep's witness_callsite_id, so expanding the root 'as today' does not reach other root branches. MixedCarrier can lose its second path, and ForwardMix's mutation cannot reach ForwardUi. The replacement for the first-edge filter, including guard exclusions, must be stated.",
+    "disposition": "fixed",
+    "evidence": "Verified at digest.rs:930-956 (the first_edges filter by witness_callsite_id). Rev 5 keeps the filter and states it as the contract (D3 'First-hop contract'; Goal 2 reworded: paths through the selected first hop, today's contract, not widened). Guards stay as the cone decided them (guarded/unguarded copies; contradicted edges never produce f). Proofs are restricted to the same first hop. MixedCarrier and ForwardMix are restructured below one root first hop, with explicit preconditions. IncRoot is also moved under one first hop (IncWrap) so its depth-limited proof is reachable.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R4-A02",
+    "source": "astra",
+    "round": 4,
+    "file": "spec D3 'final path set'; src/engine/l5/digest.rs",
+    "line": "710-738, 2427-2464, 2640-2703",
+    "severity": "important",
+    "text": "Deduplicating proofs by edge sequence alone collapses distinct terminal operations (HelperTwo: a conditional p1 and an unconditional p2 behind one call edge), and merge_normalize keeps the first conditionality for equal projected paths, so an unconditional terminal can be lost.",
+    "disposition": "fixed",
+    "evidence": "Verified: compute_path_conditionality reads the terminal op's own context (digest.rs:2427-2464). Rev 5 D3 'Path identity and merge': raw path identity = edge sequence + terminal evidence kind and id, with tie order length, then edge sort keys, then terminal id. merge_normalize_via_paths keeps the LEAST RESTRICTIVE conditionality on an equal projected merge (the same rank effect_conditionality uses). HelperTwoTemp fixture in A2d (unconditional-on-success), with two mutations (edge-only dedup; first-wins merge), each -> named red 'HelperTwoTemp: conditionality conditional'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R4-F01",
+    "source": "flash",
+    "round": 4,
+    "file": "spec D3 Incompleteness; src/engine/l5/digest.rs",
+    "line": "1312-1316, 932-956",
+    "severity": "important",
+    "text": "terminal-not-found is a third source of `incomplete`. Under rev 4 the BFS for a PD-origin fact finds no ordinary carrier, so it would flag every PD-origin effect as incomplete and truncated, and conditional-only effects would become unknown. Decide it over the combined set, and decide whether it is folded.",
+    "disposition": "fixed",
+    "evidence": "Verified at digest.rs:1312-1316. Rev 5 D3 'Not folded: empty path sets': terminal-not-found and first-hop-not-found are decided over the COMBINED set (proofs plus BFS); the BFS reports 'no ordinary path' and the caller emits the diagnostic only when the proofs are empty too. Neither is folded into had_truncation (an empty set already gives unknown); only the state and depth limits are folded, stated in the FP-shapes bullet. CondOnlyTemp fixture in A2d (conditional, viaPathsTruncated false); mutation 'fold the BFS's own terminal-not-found into had_truncation' -> named red 'CondOnlyTemp: conditionality unknown'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R4-F02",
+    "source": "flash",
+    "round": 4,
+    "file": "spec D1.4 Cost; src/engine/l4/capability_cone.rs",
+    "line": "2570-2615",
+    "severity": "minor",
+    "text": "The budget's denominator ('the cone's bytes') is undefined because cones are freed during the walk. resolved_by_routine is missing from the numerator, and wall time has no bound.",
+    "disposition": "fixed",
+    "evidence": "Rev 5 D1.4: numerator = solve bytes = arena + resolved_by_routine including reps (shared per (producer, t)). Budget: solve bytes ≤ 5% of B0's measured peak RSS of the same run; peak RSS within B0's noise band; wall time ≤ B0 median + 10%. Measured on DO and CDO, release-fast, 3 runs each, for analyze and the digest probe.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R4-F03",
+    "source": "flash",
+    "round": 4,
+    "file": "spec acceptance A5, A2a, A2e",
+    "line": "mutation lines",
+    "severity": "minor",
+    "text": "(a) A5's mutation cannot produce the named 'RecUiTemp {nt} != {kt}', and the RecUi fixture does not say which member writes. (b) A2a still says 'terminal test'. (c) The ForwardMix mutation must widen the valid_nodes seed too.",
+    "disposition": "fixed",
+    "evidence": "(a) The RecUi1/RecUi2 fixture is pinned (the producer is in RecUi1; RecUi2 reaches it only intra-SCC); the A5 named red is now 'Compare 1: RecUi2 ∅ != L4 {nt}'. (b) A2a: 'skip depth-0 proof enumeration'. (c) The mutation edits is_bfs_carrier, the single predicate used by both the terminal test and the valid_nodes seed (D3 'One carrier predicate').",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R5-F01",
+    "source": "flash",
+    "round": 5,
+    "file": "spec D3 'Path identity and merge', acceptance A2d; src/engine/l5/digest.rs",
+    "line": "2979-3010, 2964-2973, 2665-2703",
+    "severity": "important",
+    "text": "The least-restrictive conditionality fix lives only in merge_normalize_via_paths, which runs in the MERGE branch and at the identity-duplicate site. An effect's first fact goes through the INSERT branch, which stores the raw projected paths and conds with no projected dedup and caps by projected_paths.len() > MAX_PATHS. So the A2d 'keep first conditionality' mutation can never turn HelperTwoTemp red (one cone fact, insert only), and projected twins (common for PD-origin facts) appear as duplicate viaPaths and count toward MAX_PATHS/had_truncation.",
+    "disposition": "fixed",
+    "evidence": "Verified: the insert branch (digest.rs:2979-3010) sets via = projected_paths.take(MAX_PATHS), had_truncation = outcome.truncated || projected_paths.len() > MAX_PATHS, all_paths = projected_paths, all_path_conds = path_conds, with no dedup. Rev 5b D3 'Path identity and merge': the insert branch now calls merge_normalize_via_paths(&[], &[], false, &projected_paths, &path_conds, outcome.truncated, MAX_PATHS), so both branches share one dedup-and-cap with the least-restrictive rule; viaPaths-count/truncation moves in r4f/cli-b are triaged as this cause. A2d: HelperTwoTemp has exactly ONE viaPath; the 'keep first conditionality' mutation now reds through the insert normalization ('HelperTwoTemp: conditionality conditional'); a new mutation 'skip the insert-branch normalization' -> 'HelperTwoTemp: expected 1 viaPath, got 2'. Also flash's R1-A09 note: the ForwardMix named assertion now compares the whole nt path list ('ForwardMix: nt viaPaths != [ForwardMix->Both->RealWriter]'), so it is red whatever path the mutation produces (the terminal continue at digest.rs:1215). Spec diff: .agent/runs/20261014-220818-bd516e/spec-r5-to-r5b.diff.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R6-F01",
+    "source": "flash",
+    "round": 6,
+    "file": "docs/superpowers/specs/2026-10-14-issue-69-digest-temp-state-coherence-design.md",
+    "line": 106,
+    "severity": "minor",
+    "text": "The 5b insert-branch normalization re-sorts paths into projected order, which can change the first viaPath of a single-fact effect and with it canonicalKey/factId; the triage sentence named only viaPaths count and viaPathsTruncated.",
+    "disposition": "fixed",
+    "evidence": "Spec D3 'Path identity and merge' (line 106) now also names viaPaths order and the canonicalKey/factId move that follows from it as triaged causes; the triage-every-moved-file rule (Measurement plan) already covered them. To be marked by both reviewers in final-panel round 1.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-01",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "CHANGELOG claims prove unchanged; widened viaPathsTruncated feeds prove's witness-truncated check and prove omits temp-state-incoherent",
+    "disposition": "fixed",
+    "evidence": "Fixed. CHANGELOG.md: the viaPathsTruncated Changed bullet now says prove's witness-truncated check reads it (an answer can move to unknown); the D4 bullet replaces 'prove is unchanged' with the decision: prove shows the shared tempState value but carries no entry diagnostics and does not count temp-state-incoherent as an incomplete witness (the diagnostic is about the rendered tempState, which no prove obligation reads; spec D3 folds only state/depth limits). Decision recorded in the ledger timeline. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-02",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "CHANGELOG cost numbers mix MB/MiB and compare two branch states, not a released baseline",
+    "disposition": "fixed",
+    "evidence": "Fixed. CHANGELOG.md: all cost figures in MiB (119.2 MiB analyze, 186.7 MiB digest probe, RSS bands in MiB), and the within-branch 'fell from 951.6 MB' comparison dropped (edge-sharing fact kept). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-03",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Validate CHANGELOG wording suggests callers inherit OnValidate trigger writes (no implicit-trigger edges in the typed graph)",
+    "disposition": "fixed",
+    "evidence": "Fixed. CHANGELOG.md Fixed/Validate bullet: the OnValidate trigger's writes are not inherited by the caller in the capability cone (no implicit-trigger edges, stated non-goal); L4 still follows the trigger. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-04",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Duplicate depth-exceeded/state-limit-exceeded diagnostics when both BFS and proofs hit a limit; fingerprint copies them",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l5/digest.rs reconstruct_witness_paths merges proofs.diagnostics push-if-absent. New test digest::tests::a_limit_hit_by_bfs_and_proofs_is_listed_once (69-edge chain, BFS and proofs both pass MAX_DEPTH); proof FP1-P4 (red: depth-exceeded listed twice). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-05",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "enumerate_proofs clones the whole path per push; limit counts pops, so memory is unbounded in the worst case",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l5/digest.rs enumerate_proofs: partial paths are parent-linked Node {state, parent: Option<(node, edge)>, len}; a push is one node, the no-revisit check walks the parent chain, edges are materialized only for a completed proof. Pinned by the existing proof_never_revisits_a_state; proof FP1-P5 (break the chain walk -> cyclic proofs appear). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-06",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Unread per-state data: ResolvedEntry.state, StateNode.reqs/dist; producer_operation_id read only by tests",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l5/snapshot.rs StateNode drops reqs, dist and producer_operation_id (not named by spec D2; pd_arena_bytes updated); tests/r3/r3a3_oracles.rs and tests/r3/r3_temp_class_parity_arena.rs read the op from capability_facts[producer_fact].witness_operation_id. ResolvedEntry.state KEPT: spec D1.3 names it and it is the entry's only link to its state's reqs; src/engine/l4/pd_solve.rs doc says why it stays. StateNode.routine kept (read by both r3 oracles). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-07",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Two producer predicates can drift: cone is_producer requires an operation id, digest is_pd_snap does not",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l4/capability_cone.rs is_producer is the temp state alone (fact_pd_index), the producer collection expects the op id; digest.rs is_pd_snap doc states it mirrors is_producer. Behaviour-preserving (every table fact carries its op id); task gate green. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-08",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "compose_full_snapshot runs the cone and producer solve twice and discards one result (unmeasured cost)",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l5/snapshot.rs new compose_snapshot_from_base(resolved, &base); compose_snapshot wraps it; src/engine/l5/snapshot_full.rs compose_full_snapshot builds build_r3a3_source_only_base once and passes it to both the core and derive_permissions. Output-neutral: every cli-b snapshot golden unchanged in the task gate. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-09",
+    "source": "code-review",
+    "round": 1,
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Stale comments: ASSUMED/RED-before-#69 in the A5 arena test, 'never compared' note at digest.rs:1316, 'Review Focus N' comments",
+    "disposition": "fixed",
+    "evidence": "Fixed. tests/r3/r3_temp_class_parity_arena.rs: ASSUMED/RED paragraphs and '// ASSUMED field' markers removed; digest.rs N9 note now cites the CDO evidence-unavailable delta (43005 master -> 41746) and names what stays unmeasured (terminal-not-found alone); 'Review Focus N' labels removed from pd_solve.rs (3) and digest.rs (1). Labels in files this branch does not touch (build.rs, dep_cache.rs, dep_summary.rs, node_set.rs) left alone. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-A01",
+    "source": "astra",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 2343,
+    "severity": "important",
+    "text": "Duplicate routine IDs (two #if declarations) duplicate the same producer; enumerate_proofs counts completed paths before the raw-identity dedup, so duplicates consume the path cap and drop a distinct longer proof.",
+    "disposition": "fixed",
+    "evidence": "Fixed. Root cause verified: the model holds two ModelRoutines for one id (two #if arms), g.nodes repeats the id and both repeats read one direct_raw entry. src/engine/l4/capability_cone.rs compose_inherited_cones collects producers unique by (owner, operation_id); src/engine/l5/digest.rs enumerate_proofs counts only distinct (edge sequence, producer fact) proofs toward the cap. Tests: digest::tests::duplicated_declaration_is_one_producer (AL fixture, H in two #if arms; one seed; Root->A->H and Root->A->B->H both kept at cap 2), digest::tests::twin_proofs_count_once_toward_the_cap (hand-built twin arena, short + longer proof, cap 2). Proofs FP1-P3 (red: 2 seeds), FP1-P1 (red: twin short proof twice, longer lost). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-A02",
+    "source": "astra",
+    "round": "final-1",
+    "file": "tests/cli/cli_digest_temp_state.rs",
+    "line": 276,
+    "severity": "important",
+    "text": "A4 has no recorded discrimination proof, and its named mutation cannot reach the named subset assertion (an earlier expect_inserts panics first).",
+    "disposition": "fixed",
+    "evidence": "Fixed. tests/cli/cli_digest_temp_state.rs check_mode returns its failures (fixed values, schemaVersion and the query-effects subset), the test asserts after both modes. Proof FP1-P6: for_effect renders unknown -> '[single-app] TempOnly: digest says unknown, query effects says {\"known(true)\"}' and the same '[cross-app]' line; reverted green. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-A03",
+    "source": "astra",
+    "round": "final-1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 812,
+    "severity": "minor",
+    "text": "Capped proofs are not selected in the promised global tie order (queue starts in discovery order), so the capped result need not be a prefix of the uncapped sorted result.",
+    "disposition": "fixed",
+    "evidence": "Fixed. src/engine/l5/digest.rs enumerate_proofs: once cap distinct proofs are found it finishes that length and leaves the choice to reconstruct_witness_paths' existing global sort and cap, so every proof left out is longer than the kept ones and the capped witness is a prefix of the uncapped one (no second comparator). Test digest::tests::capped_proofs_are_a_prefix_of_the_uncapped_set (two root states share the first hop; the first one's proof takes the later cs-z edge; asserts paths(1) == paths(HARD_PATH_CAP)[..1]). Proof FP1-P2 (stop at the cap -> the cs-z proof is kept). commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-A04",
+    "source": "astra",
+    "round": "final-1",
+    "file": "tests/cli/cli_digest_temp_state.rs",
+    "line": 643,
+    "severity": "minor",
+    "text": "A2c's depth precondition is vacuous when both effects have zero paths.",
+    "disposition": "fixed",
+    "evidence": "Fixed. tests/cli/cli_digest_temp_state.rs a2c_depth_two_proof_real_call_first requires every kt and nt effect to have a viaPath and source evidence before the path checks. Proof FP1-P7: enumerate_proofs finds no proof -> 'HelperUiBothDeep: known(true) effect has no viaPath' / 'evidence unavailable' (both classes, both modes); no other A2c line fired, confirming the old test was vacuous under this mutation. commit acf9b467.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR2-A01",
+    "source": "astra",
+    "round": "final-2",
+    "file": "CHANGELOG.md",
+    "line": 225,
+    "severity": "minor",
+    "text": "CHANGELOG over-claims: 'a capped witness is a prefix of the uncapped one' holds for proofs only; ordinary BFS paths are still capped in discovery order (digest.rs:1321), pre-existing behaviour.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG.md:225-227 reworded in f50270d9: the prefix guarantee is stated for the proof set only, and BFS paths are said to be capped in discovery order as before #69. Pre-existing BFS behaviour recorded as a discovery.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR2-F01",
+    "source": "flash",
+    "round": "final-2",
+    "file": "CHANGELOG.md",
+    "line": 225,
+    "severity": "minor",
+    "text": "CHANGELOG over-claims: 'a capped witness is a prefix of the uncapped one' holds for proofs only; ordinary BFS paths are still capped in discovery order (digest.rs:1321), pre-existing behaviour.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG.md:225-227 reworded in f50270d9: the prefix guarantee is stated for the proof set only, and BFS paths are said to be capped in discovery order as before #69. Pre-existing BFS behaviour recorded as a discovery.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  }
+]

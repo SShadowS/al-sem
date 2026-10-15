@@ -622,6 +622,14 @@ impl SnapshotGraphEdge {
         }
     }
 
+    /// The (internal) eventId of an event-dispatch edge.
+    fn event_id(&self) -> Option<&str> {
+        match self {
+            SnapshotGraphEdge::EventDispatch { event_id, .. } => Some(event_id),
+            _ => None,
+        }
+    }
+
     /// Public `from` accessor (R4-F Stage-4 ordering: typedEdge `.from`).
     pub fn edge_from(&self) -> &str {
         self.source_routine()
@@ -825,6 +833,44 @@ pub struct CapabilitySnapshot {
     /// (StableRoutineId → ScopeFrame[]); serialized in sorted-key order with
     /// declaration-ordered frame fields via `RoutineOrderFrames`.
     pub routine_order_frames: Option<RoutineOrderFrames>,
+    /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
+    /// serialized: the serialized snapshot moves only where fact values move.
+    pub pd_solution: PdArena,
+}
+
+/// Index into `PdArena::states`.
+pub type StateIx = usize;
+/// Index into `CapabilitySnapshot::typed_edges` (after its sort and filter).
+pub type EdgeIx = usize;
+/// Stable routine id (the snapshot's routine identity).
+pub type RoutineId = String;
+
+/// #69 D2: the producer solve in snapshot ids. A state says: in `routine`'s
+/// frame, the producer's write has temp state `temp_state`. Guards are not
+/// carried: the solve already dropped every contradicted state, and a proof
+/// reads only links. The producer's operation id is
+/// `capability_facts[producer_fact].witness_operation_id`.
+#[derive(Debug, Clone, Default)]
+pub struct PdArena {
+    pub states: Vec<StateNode>,
+    /// Each state's incoming links, contiguous: `(callee state, edge)`, in edge
+    /// order. The edge is an out-edge of the state's routine.
+    pub links: Vec<(StateIx, EdgeIx)>,
+    /// Stable routine id → its states (seed included), in state order.
+    pub by_routine: HashMap<RoutineId, Vec<StateIx>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StateNode {
+    /// Index into `CapabilitySnapshot::capability_facts` of the producer's
+    /// owner-direct fact (its `extra` carries the raw parameter-dependent state).
+    pub producer_fact: usize,
+    pub temp_state: crate::engine::l4::effect_lattice::TempStateKind,
+    pub routine: RoutineId,
+    /// True only for the seed (the producer's owner, its own frame).
+    pub seed: bool,
+    /// Range into `PdArena::links`.
+    pub links: std::ops::Range<usize>,
 }
 
 /// Ordered routine-order-frames map. Entries are pre-sorted by StableRoutineId;
@@ -1042,24 +1088,31 @@ fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
 pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
-    use crate::engine::perf_trace as pt;
     let base = {
-        let _s = pt::span("snapshot", "snapshot.r3a3_base");
+        let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
         build_r3a3_source_only_base(resolved)
     };
-    let _s = pt::span("snapshot", "snapshot.derive");
+    compose_snapshot_from_base(resolved, &base)
+}
+
+/// [`compose_snapshot`] over an already-built source-only base, for a caller
+/// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
+/// runs the whole cone and the producer solve, so it is built once.
+pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> CapabilitySnapshot {
+    let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
     let identities = derive_identity_table(resolved);
-    let capability_facts = derive_capability_facts(&base);
-    let typed_edges = derive_typed_edges(&base);
-    let operation_index = derive_operation_evidence(&base);
-    let callsite_index = derive_callsite_evidence(&base);
-    let callsite_resolutions = derive_callsite_resolutions(&base, &typed_edges);
-    let analysis_gaps = derive_analysis_gaps(&base);
-    let coverage = derive_coverage(&base);
-    let event_declarations = derive_event_declarations(&base);
-    let root_classifications = derive_root_classifications(resolved, &base);
-    let routine_order_frames = derive_routine_order_frames(&base);
+    let capability_facts = derive_capability_facts(base);
+    let typed_edges = derive_typed_edges(base);
+    let operation_index = derive_operation_evidence(base);
+    let callsite_index = derive_callsite_evidence(base);
+    let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges);
+    let analysis_gaps = derive_analysis_gaps(base);
+    let coverage = derive_coverage(base);
+    let event_declarations = derive_event_declarations(base);
+    let root_classifications = derive_root_classifications(resolved, base);
+    let routine_order_frames = derive_routine_order_frames(base);
+    let pd_solution = derive_pd_arena(base, &typed_edges, &capability_facts);
 
     CapabilitySnapshot {
         identities,
@@ -1073,6 +1126,7 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
         event_declarations,
         root_classifications,
         routine_order_frames,
+        pd_solution,
     }
 }
 
@@ -1363,6 +1417,119 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
 
     out.sort_by_key(|e| e.sort_key());
     out
+}
+
+// ---------------------------------------------------------------------------
+// derivePdArena (#69 D2) — the cone's producer solve rewritten into snapshot
+// ids: routines → StableRoutineId, each link's cone edge → its index in the
+// sorted `typed_edges`, each producer → its owner-direct fact's index.
+// ---------------------------------------------------------------------------
+
+/// Edge identity shared by a cone `TypedOutEdge` and a snapshot edge:
+/// `(kind, stable from, stable to, callsite, event)`.
+type PdEdgeKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str);
+
+fn derive_pd_arena(
+    base: &R3a3SourceBase,
+    typed_edges: &[SnapshotGraphEdge],
+    capability_facts: &[SnapshotCapabilityFact],
+) -> PdArena {
+    use crate::engine::l5::detector_context::cones_census;
+    let cone = &base.pd_solution;
+    if cone.states.is_empty() {
+        return PdArena::default();
+    }
+    let map = &base.routine_to_stable;
+    // The key must be unique: a duplicate makes the index ambiguous and
+    // silently points a link at the wrong edge (event-dispatch edges carry no
+    // call site, so only `derive_typed_edges` keeps them apart).
+    let mut edge_ix: HashMap<PdEdgeKey, EdgeIx> = HashMap::with_capacity(typed_edges.len());
+    for (ix, e) in typed_edges.iter().enumerate() {
+        let Some(to) = e.to_endpoint() else { continue };
+        let key = (
+            e.kind_str(),
+            e.source_routine(),
+            to,
+            e.callsite_id().unwrap_or(""),
+            e.event_id().unwrap_or(""),
+        );
+        let prev = edge_ix.insert(key, ix);
+        debug_assert!(
+            prev.is_none(),
+            "pd arena: snapshot edges {prev:?} and {ix} share the key {key:?}"
+        );
+    }
+    // (owner stable id, operation id) → the owner's direct fact.
+    let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
+    for (ix, f) in capability_facts.iter().enumerate() {
+        if let ("direct", Some(op)) = (f.provenance.as_str(), f.witness_operation_id.as_deref()) {
+            direct_fact_ix.entry((f.subject.as_str(), op)).or_insert(ix);
+        }
+    }
+
+    let mut out = PdArena::default();
+    for (ix, s) in cone.states.iter().enumerate() {
+        let producer = &cone.producers[s.producer];
+        let routine = stable_routine_id(&s.routine, map);
+        let owner = stable_routine_id(&producer.owner, map);
+        let producer_fact = *direct_fact_ix
+            .get(&(owner.as_str(), producer.operation_id.as_str()))
+            .expect("a producer is its owner's direct fact");
+        let start = out.links.len();
+        for l in &cone.links[s.links.clone()] {
+            let edge = &cone.edges[l.edge];
+            let to = stable_routine_id(&edge.to, map);
+            let event = match edge.kind.as_str() {
+                "event-dispatch" => edge.event_id.as_deref().unwrap_or(""),
+                _ => "",
+            };
+            let key = (
+                edge.kind.as_str(),
+                routine.as_str(),
+                to.as_str(),
+                edge.callsite.as_deref().unwrap_or(""),
+                event,
+            );
+            match edge_ix.get(&key) {
+                Some(&e) => out.links.push((l.callee_state, e)),
+                None => {
+                    debug_assert!(false, "pd arena: cone edge {key:?} has no snapshot edge");
+                    cones_census::add_gated(&cones_census::PD_EDGE_UNMAPPED, 1);
+                }
+            }
+        }
+        out.by_routine.entry(routine.clone()).or_default().push(ix);
+        out.states.push(StateNode {
+            producer_fact,
+            temp_state: s.t.to_kind(),
+            routine,
+            seed: s.seed,
+            links: start..out.links.len(),
+        });
+    }
+    if cones_census::enabled() {
+        let bytes = pd_arena_bytes(&out);
+        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, bytes);
+        cones_census::add(&cones_census::PD_SOLVE_BYTES, bytes);
+    }
+    out
+}
+
+/// The bytes a `PdArena` retains, counted like `pd_solve::solve_bytes`: every
+/// `Vec` and hash table at its capacity, plus string heap.
+fn pd_arena_bytes(a: &PdArena) -> u64 {
+    use std::mem::size_of;
+    let state_heap: usize = a.states.iter().map(|s| s.routine.capacity()).sum();
+    let by_routine: usize = a
+        .by_routine
+        .iter()
+        .map(|(k, v)| k.capacity() + v.capacity() * size_of::<StateIx>())
+        .sum::<usize>()
+        + a.by_routine.capacity() * (size_of::<RoutineId>() + size_of::<Vec<StateIx>>() + 1);
+    (a.states.capacity() * size_of::<StateNode>()
+        + state_heap
+        + a.links.capacity() * size_of::<(StateIx, EdgeIx)>()
+        + by_routine) as u64
 }
 
 /// Project a combined-graph internal `ValueSource` (object-run targetIdSource)

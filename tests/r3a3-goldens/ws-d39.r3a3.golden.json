@@ -38,26 +38,7 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "unresolved",
-					"provenance": "inherited",
-					"via": "call",
-					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777/op0",
-					"witnessCallsiteId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#19b2a700e36745a749bf18750e08ce9d528a2299fe6295411f72a8d3ce9701ae/cs0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/3bd160d2afe9df01a35891f95f15377a40668852a4ec80a0e914c1082edc3b3e/rv/cust",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#19b2a700e36745a749bf18750e08ce9d528a2299fe6295411f72a8d3ce9701ae",
 				"directStatus": "complete",
@@ -87,26 +68,7 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "unresolved",
-					"provenance": "inherited",
-					"via": "call",
-					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777/op0",
-					"witnessCallsiteId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#338223a36f4f71f00d1687727b90f514c8bb77519ed5e9043f80c366ea58baf1/cs0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/3bd160d2afe9df01a35891f95f15377a40668852a4ec80a0e914c1082edc3b3e/rv/cust",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#338223a36f4f71f00d1687727b90f514c8bb77519ed5e9043f80c366ea58baf1",
 				"directStatus": "complete",
@@ -118,23 +80,6 @@
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc",
 			"capabilityFactsDirect": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "unresolved",
-					"provenance": "direct",
-					"via": "self",
-					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/819a2d3bce55b45fd7251b14dbb3c4b6f416d45df5224af7dc5bff2c99ee06d5/rv/cust",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				},
 				{
 					"op": "modify",
 					"resourceKind": "table",
@@ -164,25 +109,7 @@
 		},
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777",
-			"capabilityFactsDirect": [
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "unresolved",
-					"provenance": "direct",
-					"via": "self",
-					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/3bd160d2afe9df01a35891f95f15377a40668852a4ec80a0e914c1082edc3b3e/rv/cust",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777",
@@ -220,15 +147,15 @@
 					"confidence": "unresolved",
 					"provenance": "inherited",
 					"via": "call",
-					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc/op0",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc/op1",
 					"witnessCallsiteId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#f39f4972f1fc7bc9550469d22a987c26c3766c8e9e7037ca940e7def8f006503/cs0",
 					"extra": {
 						"kind": "table",
-						"opSubtype": "Validate",
+						"opSubtype": "Modify",
 						"recordVariableId": "r0/819a2d3bce55b45fd7251b14dbb3c4b6f416d45df5224af7dc5bff2c99ee06d5/rv/cust",
 						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
+							"kind": "known",
+							"value": false
 						}
 					}
 				}

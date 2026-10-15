@@ -1686,7 +1686,7 @@ pub fn seed_fixed_leaf_rows(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::l4::combined_graph::CombinedEdge;
 
@@ -1803,7 +1803,7 @@ mod tests {
     /// `cfg_walker::tests::minimal_routine` / the differential harness's own
     /// `routine` ctor — the SAME from-scratch pattern, unavoidable here since
     /// `l5::test_support` is private to `l5`).
-    fn pd_routine(id: &str) -> ModelRoutine {
+    pub(crate) fn pd_routine(id: &str) -> ModelRoutine {
         ModelRoutine {
             id: id.to_string(),
             stable_routine_id: format!("stable::{id}"),
@@ -1842,7 +1842,7 @@ mod tests {
         }
     }
 
-    fn pd_ts_known(value: bool) -> PTempState {
+    pub(crate) fn pd_ts_known(value: bool) -> PTempState {
         PTempState {
             kind: "known".to_string(),
             value: Some(value),
@@ -1850,7 +1850,7 @@ mod tests {
         }
     }
 
-    fn pd_ts_pd(idx: u32) -> PTempState {
+    pub(crate) fn pd_ts_pd(idx: u32) -> PTempState {
         PTempState {
             kind: "parameter-dependent".to_string(),
             value: None,
@@ -1885,7 +1885,7 @@ mod tests {
 
     /// One argument binding of callee param `parameter_index` to
     /// `source_temp_state` — the shape `substitute_pd_temp_state` reads.
-    fn pd_arg_binding(
+    pub(crate) fn pd_arg_binding(
         parameter_index: u32,
         source_temp_state: Option<PTempState>,
     ) -> PCallArgumentBinding {
@@ -1903,7 +1903,7 @@ mod tests {
 
     /// A bare call site `id` calling `callee_name`, with the given argument
     /// bindings.
-    fn pd_call_site(
+    pub(crate) fn pd_call_site(
         id: &str,
         callee_name: &str,
         argument_bindings: Vec<PCallArgumentBinding>,

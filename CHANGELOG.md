@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
+  states and links over the snapshot's typed edges, in stable routine ids (#69 D2).
+  `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries, distinct
+  edges and retained bytes (`solve_bytes`: the cone solve plus every snapshot arena, each
+  `Vec` and hash table at capacity, shared data counted once; `snapshot_bytes`: the
+  snapshot arenas alone), and the solve links that found no snapshot edge.
+- A5 oracle: cone/L4 temp-class parity on a matched graph, per producer and reduced
+  (`tests/r3/r3_temp_class_parity*.rs`), plus a check that every arena link names the
+  snapshot edge of its hop.
 - `scripts/sweep-builds [--dry-run] [--days N]`: deletes Rust build output not used for N
   days (default 7) and output from toolchains no longer installed, in the main checkout and
   every `al-sem-issue-*` worktree, through `cargo-sweep` (`cargo install cargo-sweep`). It
@@ -38,6 +47,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
+  (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
+  A link indexes the arena's table of distinct edges, and a resolved entry borrows its
+  first-hop edge from the graph, instead of each owning a clone of the edge and its five
+  strings: on CDO `alsem analyze`, 984,412 links share 15,172 edges, and the solve holds
+  119.2 MiB (counted at capacity, with `Vec` slack and table overhead). The analyzer drops the
+  arena once the cone is built.
+- `alsem digest` frees the snapshot (with its solve arena), the ordering entries and the L4
+  store as soon as the digest query is done, before the envelope's detector run and the
+  JSON projection. CDO digest probe (the first 200 files) peak RSS: 6446..6488 MiB before
+  #69, 5297..5333 MiB now; output byte-identical (#69 D1.4).
+- `viaPathsTruncated` now also means a non-empty path set is not known to be complete: a
+  state or depth limit cut the witness enumeration (BFS or proofs). Such effects can move
+  from `conditional` to `unknown` conditionality, ordering chains report `capped`, and
+  `alsem prove`'s witness-truncated check (any effect's `viaPathsTruncated`) fires, so a
+  prove answer can move to `unknown` (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`, or a limit hit
+  that found nothing) are not folded; they are decided over the proofs and the BFS together.
+- `FingerprintIndexesPub` gains `pd_solution`, `typed_edges` and `capability_facts`, and
+  `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` accepts an inherited key from an
+  ordinary direct fact or from the routine's own solve states, no longer a PD→kt rewrite
+  (#69 D3).
+- digest/prove `detail.tempState` is a per-operation join filtered to the effect's class
+  (#69 D4): each originating operation contributes only its L4 rows in the effect's temp
+  class (kt = `known(true)`); one with rows only in the other class contributes all of
+  them; one with no L4 row makes the field absent. Each failed operation is a new entry
+  diagnostic `temp-state-incoherent` with `factId`, `operationId` and `reason`
+  (`no-l4-row` | `class-absent`). digest `schemaVersion` 1.6.0, prove 1.4.0 (additive).
+  Goldens moved: the `schemaVersion` line of 21 digest and 19 prove files under
+  `tests/cli-b-goldens/`, nothing else. Pinned by `a1b_no_temp_state_incoherence`,
+  `a2b_one_effect_per_class` and the two `digest_cli::tests::temp_join_*` unit tests. Every
+  `cli_digest_temp_state` test fails on any `temp-state-incoherent` item (the `class-absent`
+  fallback would otherwise hide a wrong class from a test that reads the rendered value). The
+  text output shows the diagnostic's `reason=` and `op=`. `alsem prove` shows the same
+  `tempState` value (one shared builder) but carries no entry diagnostics, so it does not
+  show `temp-state-incoherent`, and it does not count it as an incomplete witness: the
+  diagnostic is about the rendered `tempState`, which no prove obligation reads (prove still
+  treats only `evidence-unavailable`, and `viaPathsTruncated`, as an incomplete witness).
+- Measured on the CDO baseline (`bc3ccb18`, release-fast, against master before #69), #69 as
+  a whole: `aldump --program-call-graph-stats` is byte-identical (unknown 0). Detectors only
+  lose tables, never gain a write: `alsem analyze` cross-app default findings 2292 -> 2293
+  at `--scope primary` and 27106 -> 26954 at `--scope all` (d43 -139 +1, d44 -14; d9, d8 and
+  d50 `affectedTables` shrink; the opt-in set 399 -> 394 / 418 -> 413, d45 -4 +1, d49 -2).
+  Every change is a `Validate`/`Copy`/`TransferFields` no longer counted as a write, a
+  write now known temporary, or d45's per-publisher cap letting a hidden table in.
+  `temp-state-incoherent`: 0 over 16,764 DB_INSERT/DB_MODIFY/DB_DELETE effects (5,512 roots).
+  Cost: peak RSS of `alsem analyze` unchanged (2827..2838 MiB before, 2830..2835 now), the
+  digest probe 6446..6488 -> 5297..5333 MiB, wall time +6.5% (analyze) and +4.3% (digest);
+  the solve holds 119.2 MiB (analyze) and 186.7 MiB (digest probe), 4.2% and 2.9% of peak.
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -128,8 +185,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compute_analyzer_diagnostics` no longer takes a detector list;
   `compute_analyzer_diagnostics_cross_app` is new (#68).
 
+### Removed
+
+- The frame-bound parameter-dependent cone entry (`ConeFactEntry.pd`) and its
+  singleton-only substitution in `substitute_entry`, which now carries guards only (#69 D1).
+
 ### Fixed
 
+- `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
+  temporary and real records alike (#69). They copy or assign values in memory and never
+  write the record's own table. The `OnValidate` trigger's own writes are not inherited by
+  the caller in the capability cone (the typed graph has no implicit-trigger edges, a
+  stated non-goal), so a caller of `Validate` now shows no write for that statement; L4
+  still follows the trigger.
+  Everything that reads the capability `modify` fact (digest/prove, fingerprints, diff, policy,
+  the d43/d44/d45 write sets) inherits this. Goldens moved: 9 `tests/r1a-goldens/` and 9
+  `tests/r3a3-goldens/` fixtures plus the R3a-3 manifest matrix (`modify` 134 -> 109).
+- The capability cone resolves a parameter-dependent write in every routine's own frame
+  through a transitive per-producer solve (`l4::pd_solve`, #69 D1). A write a caller makes
+  temporary is graded known(true), a real record known(false), across recursion, cycles and
+  root SCCs too; guards on these writes now hold on every typed edge.
+  Producers no longer share a cone key with ordinary facts. Before, the cone resolved such a
+  write only for a non-recursive singleton caller, and only to known(true): a real-record
+  caller kept the callee's `parameter-dependent(0)`, and a recursive or root caller kept the
+  write physical. Pinned by `a1c_cone_values_are_frame_correct`, the cone/L4 class-parity
+  oracle `a5_cone_l4_class_parity_reduced` (every `tests/r0-corpus` fixture and the #69
+  probe) and the `pd_solve` unit tests. Goldens moved: 6 `tests/r3a3-goldens/` fixtures and
+  the `ws-d1-multi-caller` cli-b snapshot/fingerprint goldens, every line a real-record
+  caller's inherited write going from `parameter-dependent(0)` to known(false) (same nt
+  class, so no detector or digest output moved). The gap test that pinned the old limit
+  (`recursive_callee_write_through_var_param_stays_physical`) now asserts the opposite
+  (`…_forwarded_var_param_is_temporary`).
+- Digest witnesses for writes a call site makes temporary keep their evidence,
+  conditionality and every via-path through the fact's first hop (#69 D3): the paths come
+  from the root's own solve states (proofs), and the BFS and fingerprint share one carrier
+  predicate (`is_bfs_carrier`: ordinary direct facts only, same temp class). Before, such a
+  write had `evidence: unavailable`, no viaPaths and `ORDERING_UNKNOWN`. A path's identity
+  is its edges plus its terminal, so two writes reached through the same calls stay two
+  paths. Only distinct proofs count toward the path cap, and a capped proof set is a prefix
+  of the uncapped one in the global order. Ordinary BFS paths are still capped in discovery
+  order, as before #69, so a capped whole witness need not be a prefix. A routine id
+  declared twice (two `#if` arms) is one producer, not two. `alsem fingerprint` takes the
+  same proofs.
+- `viaPaths` are deduplicated by projected path on an effect's first fact too, not only on
+  a merge; equal projected paths keep the least restrictive conditionality (#69 D3).
+- A kt and an nt DB effect never share an occurrence id: a kt DB effect's canonical key
+  ends in `|kt`, and the class is part of the effect's dedupe key (#69 D3). Golden moved:
+  `tests/cli-b-goldens/digest/ws-txn-d47-neg-temp.json`, one `factId` of a temporary
+  record's direct insert. Pinned by `a2a_temp_call_site_keeps_its_witness`,
+  `a2d_all_paths_and_conditionality_kept`, `a2f_degraded_witnesses_never_share_an_occurrence`,
+  `a2g_incompleteness_reaches_consumers` and three `digest::tests` unit tests.
+- The ordering engine's physical-write filter now grades a write the way `detail.tempState`
+  reports it (#69): a write that is temporary in the reporting routine's frame (through
+  recursion, cycles, a guard or a call-site buffer) no longer raises `WRITE_PENDING_AT_UI`,
+  and a routine reaching one write with a temporary and a real record gets one effect per
+  class. Pinned by `a1a_ordering_filter_agrees_with_temp_state`,
+  `a2c_depth_two_proof_real_call_first` and `a2e_recursion_cycles_mixes_guards`.
 - `alsem digest --diff` reads each hunk body line by line and stops when the header's old
   and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
   longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,

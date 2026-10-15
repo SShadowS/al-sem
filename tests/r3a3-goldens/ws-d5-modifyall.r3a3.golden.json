@@ -1136,24 +1136,6 @@
 					"provenance": "direct",
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-00000000d50a:Table:18",
-					"witnessOperationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d/op1",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "Validate",
-						"recordVariableId": "r0/e9b12f248a0d18aa4513e3e884e3e0b7f70cdad69a6981282aaab7a6a527aa46/rv/customer",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				},
-				{
-					"op": "modify",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "11111111-0000-0000-0000-00000000d50a:Table:18",
 					"witnessOperationId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50105#f242ef51927a1a06bc5df77158f78085a557b7e88a42b2d40e92217d9fa3056d/op2",
 					"extra": {
 						"kind": "table",

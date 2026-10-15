@@ -373,14 +373,15 @@ fn forwarded_param_merged_with_a_physical_write_of_the_same_table_still_counts()
 }
 
 #[test]
-fn recursive_callee_write_through_var_param_stays_physical() {
-    // Inside a recursive SCC a PD fact has no single frame (the recursive call
-    // may bind the param to anything), so the cone does not resolve it — a
-    // stated, conservative limit. Pins the non-recursive-singleton anchor gate.
+fn recursive_callee_write_through_forwarded_var_param_is_temporary() {
+    // #69 D1: the producer solve follows the recursive call too. It forwards
+    // `R`, so in the caller's frame the write is into its `temporary` record.
+    // (Before #69 the cone resolved a PD fact only below a non-recursive
+    // singleton and kept this write physical.)
     let r = resolve();
     assert_eq!(
         physical_writes(&r, "CT Callers", "TempIntoRecursive"),
-        vec!["CT One"]
+        Vec::<String>::new()
     );
 }
 

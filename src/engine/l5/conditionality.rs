@@ -29,7 +29,7 @@ pub const ERROR_PATH: EffectConditionality = "error-path";
 pub const UNKNOWN: EffectConditionality = "unknown";
 
 /// Restrictiveness rank for non-unknown conditionalities.
-fn rank(c: EffectConditionality) -> Option<u32> {
+pub(crate) fn rank(c: EffectConditionality) -> Option<u32> {
     match c {
         "unconditional-on-success" => Some(0),
         "conditional" => Some(1),

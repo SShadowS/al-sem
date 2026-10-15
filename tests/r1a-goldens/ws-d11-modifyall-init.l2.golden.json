@@ -605,23 +605,6 @@
       },
       "capabilityFactsDirect": [
         {
-          "op": "modify",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/7b72dc66b4072eae4f6566341a7e0a3e02abae097f9fe8010474b2cc6152d319/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/7b72dc66b4072eae4f6566341a7e0a3e02abae097f9fe8010474b2cc6152d319/rv/customer",
-            "tempState": {
-              "kind": "known",
-              "value": false
-            },
-            "opSubtype": "Validate"
-          }
-        },
-        {
           "op": "insert",
           "resourceKind": "table",
           "confidence": "unresolved",

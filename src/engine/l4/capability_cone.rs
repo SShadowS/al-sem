@@ -157,19 +157,9 @@ pub struct CoverageRecord {
 // ===========================================================================
 
 /// Map an AL `RecordOpType` to a `CapabilityOp`, or `None` for state-only /
-/// filter ops (SetRange, SetFilter, Init, ...). Mirrors al-sem `table.ts`
-/// `mapOp`.
+/// filter ops. Delegates to the one table op map shared with L2 (#69 D5).
 fn map_table_op(op: &str) -> Option<&'static str> {
-    match op {
-        "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
-        | "CountApprox" | "Next" | "CalcFields" | "CalcSums" | "TestField" => Some("read"),
-        "Modify" | "ModifyAll" | "Validate" | "Copy" | "TransferFields" => Some("modify"),
-        "Insert" => Some("insert"),
-        "Delete" | "DeleteAll" => Some("delete"),
-        // Rename: unmapped until its permission is measured -- see
-        // `l2::capability::table_commit::map_op` (#9).
-        _ => None,
-    }
+    crate::program::body::capability::table_commit::map_op(op)
 }
 
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
@@ -1096,11 +1086,11 @@ pub(crate) fn direct_facts_for_routine(
 /// A resolved outgoing typed edge (only edges with a `to`). Mirrors al-sem
 /// `TypedOutEdge`.
 #[derive(Debug, Clone)]
-struct TypedOutEdge {
-    to: String,
-    kind: String,
-    callsite: Option<String>,
-    event_id: Option<String>,
+pub struct TypedOutEdge {
+    pub(crate) to: String,
+    pub(crate) kind: String,
+    pub(crate) callsite: Option<String>,
+    pub(crate) event_id: Option<String>,
     /// `edge_sort_key(self)`, computed ONCE at graph build.
     ///
     /// It is both the out-edge sort key and the first-hop tie-breaker in
@@ -1109,15 +1099,34 @@ struct TypedOutEdge {
     /// per cone entry per out-edge over 100,419 singleton routines. The value is a
     /// pure function of the edge's four fields, none of which change after
     /// construction, so computing it here is the same string, once.
-    sort_key: String,
+    pub(crate) sort_key: String,
+}
+
+impl TypedOutEdge {
+    pub(crate) fn new(
+        to: String,
+        kind: String,
+        callsite: Option<String>,
+        event_id: Option<String>,
+    ) -> Self {
+        let mut out = TypedOutEdge {
+            to,
+            kind,
+            callsite,
+            event_id,
+            sort_key: String::new(),
+        };
+        out.sort_key = edge_sort_key(&out);
+        out
+    }
 }
 
 /// The typed-edge graph: per-routine sorted out-edges + the unresolved sources.
 /// Mirrors al-sem `TypedEdgeGraph`.
-struct TypedEdgeGraph {
-    nodes: Vec<String>,
-    outgoing: HashMap<String, Vec<TypedOutEdge>>,
-    unresolved_sources: BTreeSet<String>,
+pub(crate) struct TypedEdgeGraph {
+    pub(crate) nodes: Vec<String>,
+    pub(crate) outgoing: HashMap<String, Vec<TypedOutEdge>>,
+    pub(crate) unresolved_sources: BTreeSet<String>,
 }
 
 /// `edgeSortKey(e)` = `${kind}|${callsite ?? ""}|${eventId ?? ""}|${to}`.
@@ -1171,15 +1180,15 @@ fn build_typed_edge_graph(graph: &CombinedGraph, nodes: &[String]) -> TypedEdgeG
         let Some(to) = &edge.to else {
             continue;
         };
-        let mut out = TypedOutEdge {
-            to: to.clone(),
-            kind: edge.kind.clone(),
-            callsite: callsite_id_for_edge(edge),
-            event_id: edge.event_id.clone(),
-            sort_key: String::new(),
-        };
-        out.sort_key = edge_sort_key(&out);
-        outgoing.entry(edge.from.clone()).or_default().push(out);
+        outgoing
+            .entry(edge.from.clone())
+            .or_default()
+            .push(TypedOutEdge::new(
+                to.clone(),
+                edge.kind.clone(),
+                callsite_id_for_edge(edge),
+                edge.event_id.clone(),
+            ));
     }
     for list in outgoing.values_mut() {
         list.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
@@ -1407,20 +1416,15 @@ struct ConeFactEntry {
     /// The rep is immutable across merges, so the key is too.
     rep_key: Arc<str>,
     dist: usize,
-    /// `Some(i)`: every fact behind this key is a record op whose temp state is
-    /// `parameter-dependent(i)` in the frame of this cone's ONE routine (the
-    /// cone of a non-recursive singleton SCC), so a caller can resolve it
-    /// against the argument it passes for param `i` ([`substitute_pd_entry`]).
-    /// `None` everywhere else — that keeps the fact's own temp state, the
-    /// pre-substitution behaviour. The rep is not rewritten for a `PD -> PD`
-    /// re-anchor, so a rep's own `parameterIndex` can be stale; this field is
-    /// the frame-correct one.
-    pd: Option<u32>,
     /// `Some`: the fact happens only when this cone's routine receives the
     /// required boolean argument values ([`super::param_guard`]); the cone key
     /// carries them as a suffix, so a guarded and an unguarded copy of one fact
-    /// never collapse. Like `pd`, only a non-recursive singleton's cone keeps
-    /// it; everywhere else it is dropped (the fact becomes unconditional).
+    /// never collapse. Only a non-recursive singleton's cone keeps it;
+    /// everywhere else it is dropped (the fact becomes unconditional).
+    ///
+    /// A cone holds no parameter-dependent PRODUCER ([`is_producer`]): those
+    /// are resolved per routine by [`super::pd_solve`] (#69 D1), so every
+    /// entry's rep already has its key's temp class.
     guard: Option<Arc<EntryGuard>>,
 }
 
@@ -1469,14 +1473,44 @@ fn base_key_of<'k>(key: &'k Arc<str>, entry: &'k ConeFactEntry) -> &'k Arc<str> 
     entry.guard.as_ref().map_or(key, |g| &g.base_key)
 }
 
-/// Whether an entry is bound to its cone routine's frame (its temp state or its
-/// guard is resolved per call edge).
+/// Whether an entry is bound to its cone routine's frame (its guard is
+/// resolved per call edge).
 fn frame_bound(entry: &ConeFactEntry) -> bool {
-    entry.pd.is_some() || entry.guard.is_some()
+    entry.guard.is_some()
+}
+
+/// Whether a raw direct fact is a PRODUCER (#69 D1.1): a table fact whose temp
+/// state is `parameter-dependent` in its owner's frame. Producers never enter a
+/// shared cone; [`super::pd_solve::solve`] resolves them in every routine that
+/// reaches them.
+///
+/// The test is the temp state alone, like digest's `is_pd_snap`, so the cone
+/// and the witness BFS can never disagree on what a producer is. Every table
+/// fact carries its operation id (`direct_facts_for_routine`); the producer
+/// collection in `compose_inherited_cones` `expect`s it.
+fn is_producer(f: &CapabilityFact) -> bool {
+    fact_pd_index(f).is_some()
+}
+
+/// A routine's raw direct facts deduplicated by [`inherited_fact_key`]
+/// (canonical rep per key: min `rep_key`), producers excluded. The ONE builder
+/// of the cone's `direct` map.
+fn dedup_direct(facts: &[CapabilityFact]) -> BTreeMap<String, CapabilityFact> {
+    let mut byk: BTreeMap<String, CapabilityFact> = BTreeMap::new();
+    for f in facts.iter().filter(|f| !is_producer(f)) {
+        let k = inherited_fact_key(f);
+        match byk.get(&k) {
+            Some(cur) if rep_key(f) >= rep_key(cur) => {}
+            _ => {
+                byk.insert(k, f.clone());
+            }
+        }
+    }
+    byk
 }
 
 /// The `parameter-dependent` index of a table fact, if it has one.
-fn fact_pd_index(f: &CapabilityFact) -> Option<u32> {
+pub(crate) fn fact_pd_index(f: &CapabilityFact) -> Option<u32> {
     use super::summary::TempState;
     match &f.extra {
         Some(CapabilityExtra::Table {
@@ -1490,30 +1524,12 @@ fn fact_pd_index(f: &CapabilityFact) -> Option<u32> {
     }
 }
 
-/// Carry one PD cone entry of callee `edge.to` across `edge` into the caller's
-/// frame: the caller's argument for param `i` decides the temp state, exactly
-/// as the L4 db-effect solver's `substitute_pd_temp_state` does.
-///
-/// - `known(true)` → a NEW rep marked `known/true` (so it leaves the physical
-///   sets — [`fact_is_known_temp`]), under its new `kt` key.
-/// - `parameter-dependent(j)` (the caller forwards its own `var` param) → same
-///   rep and key, re-anchored to `j`.
-/// - anything else → same rep and key, no longer substitutable.
-///
-/// Only `direct-call` / `variable-typed-call` edges carry argument bindings
-/// keyed by the callee's parameter index (the typed twins of the solver's
-/// `direct` / `method`); every other edge kind keeps the fact as it is.
-///
-/// This allowlist is a CONSERVATIVE SUBSET of `substitute_pd_temp_state`'s
-/// (`summary_runner.rs`: `direct | method | implicit-trigger`): the typed graph
-/// carries no `implicit-trigger` edges (`combined_graph.rs` skips them), so a PD
-/// fact never crosses one here and stays physical. Keep the two in step.
-///
-/// The same edge carries the entry's GUARD into the caller's frame
-/// ([`super::param_guard::across_edge`], over the same two edge kinds), then
-/// adds `edge_reqs`, the requirements under which the caller makes this call.
-/// `None`: an argument contradicts a requirement, so the fact cannot happen
-/// through this edge.
+/// Carry one GUARDED cone entry of callee `edge.to` across `edge` into the
+/// caller's frame ([`super::pd_solve::carry_reqs`], the guard step the
+/// producer solve shares), then add `edge_reqs`, the requirements under which
+/// the caller makes this call. `None`: an argument contradicts a requirement,
+/// so the fact cannot happen through this edge. The rep and its temp state are
+/// unchanged: a cone holds no producer.
 fn substitute_entry(
     key: &Arc<str>,
     entry: &ConeFactEntry,
@@ -1523,87 +1539,15 @@ fn substitute_entry(
     caller_frame: Option<&super::param_guard::FrameGuards>,
     edge_reqs: &[super::param_guard::Req],
 ) -> Option<(Arc<str>, ConeFactEntry)> {
-    use super::summary::TempState;
-    // Publisher -> subscriber: the subscriber's parameters are the publisher's,
-    // by name (engine-switch S8; `summary_runner::event_param_temp_state`).
-    let event = match (edge.kind.as_str(), caller, callee) {
-        ("event-dispatch", Some(publisher), Some(subscriber)) => Some((publisher, subscriber)),
-        _ => None,
-    };
-    let binds = matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call");
-    let site = match (edge.callsite.as_deref(), caller) {
-        (Some(cs), Some(caller)) if binds => Some((cs, caller)),
-        _ => None,
-    };
-    let mut base = Arc::clone(base_key_of(key, entry));
-    let mut rep = Arc::clone(&entry.rep);
-    let mut rep_key_s = Arc::clone(&entry.rep_key);
-    let mut pd = None;
-    let pd_state = match (entry.pd, site, event) {
-        (Some(i), _, Some((publisher, subscriber))) => Some(
-            super::summary_runner::event_param_temp_state(publisher, subscriber, i),
-        ),
-        (Some(i), Some((cs, caller)), None) => Some(
-            super::summary_runner::pd_temp_state_at_callsite(caller, cs, i),
-        ),
-        _ => None,
-    };
-    if let Some(state) = pd_state {
-        match state {
-            TempState::Known(true) => {
-                let mut r = (*entry.rep).clone();
-                if let Some(CapabilityExtra::Table { temp_state, .. }) = &mut r.extra {
-                    *temp_state = Some(crate::program::body::features::PTempState {
-                        kind: "known".to_string(),
-                        value: Some(true),
-                        parameter_index: None,
-                    });
-                }
-                base = Arc::from(inherited_fact_key(&r));
-                rep_key_s = Arc::from(rep_key(&r));
-                rep = Arc::new(r);
-            }
-            TempState::ParameterDependent(j) => pd = Some(j),
-            _ => {}
-        }
-    }
-    let mut reqs: Vec<super::param_guard::Req> = Vec::new();
-    if let Some(g) = &entry.guard {
-        if let Some((publisher, subscriber)) = event {
-            // A subscriber's guard re-anchors on the same-named publisher
-            // parameter, when that one is a usable guard there.
-            for &(j, v) in &g.reqs {
-                let mapped = subscriber
-                    .parameters
-                    .iter()
-                    .find(|p| p.index == j)
-                    .and_then(|sp| {
-                        publisher
-                            .parameters
-                            .iter()
-                            .find(|pp| pp.name.eq_ignore_ascii_case(&sp.name))
-                    })
-                    .map(|pp| pp.index)
-                    .filter(|i| caller_frame.is_some_and(|f| f.usable.contains(i)));
-                if let Some(i) = mapped {
-                    reqs = super::param_guard::conjoin(&reqs, &[(i, v)])?;
-                }
-            }
-        } else if let Some((cs, caller)) = site
-            && let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs)
-        {
-            reqs = super::param_guard::across_edge(&g.reqs, cs, caller_frame)?;
-        }
-    }
-    let reqs = super::param_guard::conjoin(&reqs, edge_reqs)?;
-    let (key, guard) = with_reqs(base, reqs);
+    let reqs = entry.guard.as_ref().map_or(&[][..], |g| g.reqs.as_slice());
+    let reqs = super::pd_solve::carry_reqs(reqs, edge, caller, callee, caller_frame, edge_reqs)?;
+    let (key, guard) = with_reqs(Arc::clone(base_key_of(key, entry)), reqs);
     Some((
         key,
         ConeFactEntry {
-            rep,
-            rep_key: rep_key_s,
+            rep: Arc::clone(&entry.rep),
+            rep_key: Arc::clone(&entry.rep_key),
             dist: entry.dist,
-            pd,
             guard,
         },
     ))
@@ -1648,21 +1592,8 @@ fn merge_cone(dst: &mut ConeFacts, key: &Arc<str>, entry: ConeFactEntry) {
             // min dist wins; equal dist → smaller canonical rep wins (mergeCone).
             let wins = entry.dist < existing.dist
                 || (entry.dist == existing.dist && entry.rep_key < existing.rep_key);
-            // Two facts under one key stay substitutable only when both agree
-            // on the SAME parameter; otherwise one of them may be physical
-            // whatever the caller passes, so the merged entry keeps its own
-            // temp state (sound: it stays in the physical sets).
-            let pd = if existing.pd == entry.pd {
-                entry.pd
-            } else {
-                None
-            };
             if wins {
-                dst.insert(Arc::clone(key), ConeFactEntry { pd, ..entry });
-            } else if existing.pd != pd
-                && let Some(e) = dst.get_mut(&**key)
-            {
-                e.pd = pd;
+                dst.insert(Arc::clone(key), entry);
             }
         }
     }
@@ -1723,6 +1654,16 @@ struct CoverageCone {
     unknown_targets: Vec<String>,
 }
 
+/// The per-key witness rule of a routine's inherited output: min dist wins;
+/// equal dist → smaller edgeSortKey of the first hop wins. Mirrors
+/// inheritedFactsForSingleton. `cur`: the current winner's `(dist, first hop)`.
+fn candidate_wins(dist: usize, edge: &TypedOutEdge, cur: Option<(usize, &TypedOutEdge)>) -> bool {
+    match cur {
+        None => true,
+        Some((d, e)) => dist < d || (dist == d && edge.sort_key < e.sort_key),
+    }
+}
+
 /// Singleton non-recursive fast path. Mirrors `inheritedFactsForSingleton`.
 ///
 /// ⟨C1⟩ `best` holds BORROWED representatives/edges (it used to clone both on
@@ -1740,6 +1681,7 @@ fn inherited_facts_for_singleton<'g>(
     caller: Option<&ModelRoutine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
+    own: &'g [super::pd_solve::ResolvedEntry<'g>],
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
@@ -1757,12 +1699,11 @@ fn inherited_facts_for_singleton<'g>(
     let my_scc = scc_id_by_routine.get(subject).copied();
     let out_edges: &'g [TypedOutEdge] =
         g.outgoing.get(subject).map(|v| v.as_slice()).unwrap_or(&[]);
-    // Frame-bound entries (parameter-dependent or guarded) are carried across
-    // their edge into this routine's frame FIRST, per edge
-    // (`substitute_entry`); the scan below skips them in the cone and reads
-    // these instead. A guarded entry an argument contradicts is dropped here.
-    // Rare: only writes through a keyword-less `var` record param are PD, and
-    // only sites under a boolean-parameter guard are guarded.
+    // Frame-bound (guarded) entries are carried across their edge into this
+    // routine's frame FIRST, per edge (`substitute_entry`); the scan below
+    // skips them in the cone and reads these instead. A guarded entry an
+    // argument contradicts is dropped here. Rare: only sites under a
+    // boolean-parameter guard are guarded.
     let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
         .iter()
         .map(|edge| {
@@ -1791,6 +1732,7 @@ fn inherited_facts_for_singleton<'g>(
     // 136,952 out-edges — i.e. the walk is cone-ENTRY-bound, and every one of
     // those insertions was allocating a fresh `String` copy of a key that
     // already lives in `cones` for the whole walk.
+    let own_keys: Vec<String> = own.iter().map(|e| inherited_fact_key(&e.rep)).collect();
     let mut best: BTreeMap<&str, Best<'_>> = BTreeMap::new();
     // Census populations: plain locals, folded into the atomics ONCE per call.
     let mut c_edges: u64 = 0;
@@ -1825,15 +1767,7 @@ fn inherited_facts_for_singleton<'g>(
             // unknown here, so a guarded fact is a possible one. One fact, one key.
             let key = base_key_of(key, entry);
             let cand_dist = entry.dist + 1;
-            // min dist wins; equal dist → smaller edgeSortKey wins (the
-            // first-hop tie-breaker). Mirrors inheritedFactsForSingleton.
-            let wins = match best.get(&**key) {
-                None => true,
-                Some(cur) => {
-                    cand_dist < cur.dist
-                        || (cand_dist == cur.dist && edge.sort_key < cur.edge.sort_key)
-                }
-            };
+            let wins = candidate_wins(cand_dist, edge, best.get(&**key).map(|c| (c.dist, c.edge)));
             if wins {
                 c_wins += 1;
                 best.insert(
@@ -1845,6 +1779,27 @@ fn inherited_facts_for_singleton<'g>(
                     },
                 );
             }
+        }
+    }
+    // #69 D1.3 use (a): the subject's own producer-solve entries compete under
+    // the same rule. They are its COMPLETE parameter-dependent-origin output:
+    // no cone carries a producer.
+    for (e, key) in own.iter().zip(&own_keys) {
+        c_entries += 1;
+        if candidate_wins(
+            e.dist,
+            e.first_hop,
+            best.get(key.as_str()).map(|c| (c.dist, c.edge)),
+        ) {
+            c_wins += 1;
+            best.insert(
+                key,
+                Best {
+                    rep: &e.rep,
+                    dist: e.dist,
+                    edge: e.first_hop,
+                },
+            );
         }
     }
     crate::engine::l5::detector_context::cones_census::add_since(
@@ -1924,27 +1879,34 @@ fn inherited_facts_for_singleton<'g>(
 /// because the two inputs gave different answers; with the temp class in
 /// [`inherited_fact_key`] the derived fold is dedup-invariant and they agree, so
 /// this is now a cost choice rather than a correctness one (see
-/// `cone_derived`'s module docs). Under [`ConeOutput::DerivedOnly`] the `retag`
-/// clones and `sort_inherited` are skipped; the walk (and therefore the fold) is
-/// unchanged.
+/// `cone_derived`'s module docs). The walk returns its picks, one
+/// `(representative, first hop)` per key in emission order; [`emit_picks`]
+/// folds and retags them.
+///
+/// #69 D1.3 use (a): after the walk, the subject's own producer-solve entries
+/// (`own`) compete per key with the walk's picks under [`candidate_wins`]
+/// (a pick's dist is its hop count plus its cone entry's dist). A sibling's
+/// producers are not in `direct`, so they are never emitted in the sibling's
+/// frame; the subject reaches them through its own entries.
 fn inherited_facts_by_bfs<'g>(
     subject: &str,
     g: &'g TypedEdgeGraph,
     direct: &'g RoutineDirectFacts,
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
-    mode: ConeOutput,
-    derived: &mut ConeDerivedBuilder,
-) -> Vec<CapabilityFact> {
+    own: &'g [super::pd_solve::ResolvedEntry<'g>],
+) -> Vec<(&'g CapabilityFact, &'g TypedOutEdge)> {
     let my_scc = scc_id_by_routine.get(subject).copied();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut out: Vec<CapabilityFact> = Vec::new();
+    // key -> index into `picked`; `picked` keeps emission order.
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut picked: Vec<(&'g CapabilityFact, usize, &'g TypedOutEdge)> = Vec::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
     visited.insert(subject.to_string());
 
     struct QI<'g> {
         id: String,
         first_hop: &'g TypedOutEdge,
+        hops: usize,
     }
     let mut queue: std::collections::VecDeque<QI<'g>> = std::collections::VecDeque::new();
     let out_edges = |id: &str| -> &'g [TypedOutEdge] {
@@ -1956,20 +1918,10 @@ fn inherited_facts_by_bfs<'g>(
             queue.push_back(QI {
                 id: edge.to.clone(),
                 first_hop: edge,
+                hops: 1,
             });
         }
     }
-    // One emission helper so the raw push and the derived fold can never drift
-    // apart on WHICH representative they consume.
-    let mut emit =
-        |rep: &CapabilityFact, first_hop: &TypedOutEdge, out: &mut Vec<CapabilityFact>| {
-            if mode.wants_derived() {
-                derived.fold_fact(rep);
-            }
-            if mode.wants_raw() {
-                out.push(retag(rep, subject, first_hop));
-            }
-        };
     while let Some(item) = queue.pop_front() {
         let id = item.id;
         let first_hop = item.first_hop;
@@ -1977,9 +1929,9 @@ fn inherited_facts_by_bfs<'g>(
             // sibling member: emit its own direct facts (attributed to firstHop).
             if let Some(byk) = direct.get(&id) {
                 for (key, rep) in byk {
-                    if !seen.contains(key) {
-                        seen.insert(key.clone());
-                        emit(rep, first_hop, &mut out);
+                    if !seen.contains_key(key) {
+                        seen.insert(key.clone(), picked.len());
+                        picked.push((rep, item.hops, first_hop));
                     }
                 }
             }
@@ -1989,6 +1941,7 @@ fn inherited_facts_by_bfs<'g>(
                     queue.push_back(QI {
                         id: edge.to.clone(),
                         first_hop,
+                        hops: item.hops + 1,
                     });
                 }
             }
@@ -2013,22 +1966,62 @@ fn inherited_facts_by_bfs<'g>(
                     // No frame here (recursive subject): a guard is dropped,
                     // and the fact keeps its one base key.
                     let key = base_key_of(key, entry);
-                    // `key` is the cone's `Arc<str>`; `seen` stays `BTreeSet<String>`
+                    // `key` is the cone's `Arc<str>`; `seen` stays keyed by `String`
                     // because the sibling branch above feeds it `direct`'s own
                     // `String` keys. This walk runs 503 times per 8020 run, so the
                     // one owned copy per newly-seen key is not on any hot path.
-                    if !seen.contains(&**key) {
-                        seen.insert(key.to_string());
-                        emit(&entry.rep, first_hop, &mut out);
+                    if !seen.contains_key(&**key) {
+                        seen.insert(key.to_string(), picked.len());
+                        picked.push((&entry.rep, item.hops + entry.dist, first_hop));
                     }
                 }
             }
         }
     }
+    for e in own {
+        let key = inherited_fact_key(&e.rep);
+        match seen.get(&key) {
+            Some(&i) => {
+                let (_, d, hop) = picked[i];
+                if candidate_wins(e.dist, e.first_hop, Some((d, hop))) {
+                    picked[i] = (&e.rep, e.dist, e.first_hop);
+                }
+            }
+            None => {
+                seen.insert(key, picked.len());
+                picked.push((&e.rep, e.dist, e.first_hop));
+            }
+        }
+    }
+    picked
+        .into_iter()
+        .map(|(rep, _, first_hop)| (rep, first_hop))
+        .collect()
+}
+
+/// A recursive member's inherited output from its BFS picks: the raw push and
+/// the derived fold consume the SAME picks. Under [`ConeOutput::DerivedOnly`]
+/// the `retag` clones and `sort_inherited` are skipped; the fold is unchanged.
+fn emit_picks(
+    subject: &str,
+    picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
+    mode: ConeOutput,
+    derived: &mut ConeDerivedBuilder,
+) -> Vec<CapabilityFact> {
+    if mode.wants_derived() {
+        for (rep, _) in &picks {
+            derived.fold_fact(rep);
+        }
+    }
     if !mode.wants_raw() {
         return Vec::new();
     }
-    sort_inherited(out)
+    sort_inherited(
+        picks
+            .into_iter()
+            .map(|(rep, first_hop)| retag(rep, subject, first_hop))
+            .collect(),
+    )
 }
 
 /// Distinct successor SCCs per SCC (cross-SCC edges only). Mirrors
@@ -2061,41 +2054,32 @@ fn fact_cone_for_scc(
     succ_ids: &BTreeSet<usize>,
     fact_cones: &HashMap<usize, ConeFacts>,
     direct: &RoutineDirectFacts,
-    pd: Option<PdAnchor<'_>>,
+    anchor: Option<GuardAnchor<'_>>,
 ) -> ConeFacts {
     let mut cone: ConeFacts = BTreeMap::new();
-    let frame = pd.as_ref().and_then(|a| a.frame);
+    let frame = anchor.as_ref().and_then(|a| a.frame);
     for m in members {
         if let Some(byk) = direct.get(m) {
-            // The raw facts' keys, when this frame has guarded sites: a key's
-            // guards are those of the raw facts deduped under it.
-            let raw_keys: Option<Vec<String>> = match (&pd, frame) {
-                (Some(a), Some(fg)) if !fg.by_site.is_empty() => {
-                    Some(a.direct_raw.iter().map(inherited_fact_key).collect())
-                }
+            // The ordinary raw facts and their keys, when this frame has
+            // guarded sites: a key's guards are those of the raw facts deduped
+            // under it. Producers are not in `direct`, so they are skipped here.
+            let raw: Option<Vec<(&CapabilityFact, String)>> = match (&anchor, frame) {
+                (Some(a), Some(fg)) if !fg.by_site.is_empty() => Some(
+                    a.direct_raw
+                        .iter()
+                        .filter(|f| !is_producer(f))
+                        .map(|f| (f, inherited_fact_key(f)))
+                        .collect(),
+                ),
                 _ => None,
             };
             for (key, f) in byk {
-                // A direct PD fact stays substitutable only in a non-recursive
-                // singleton's cone (one frame), and only when EVERY raw fact
-                // deduped under this key is PD on the same param: the dedup
-                // keeps one rep, and a physical sibling under the same key
-                // must not be resolved away with it.
-                let entry_pd = match (&pd, fact_pd_index(f)) {
-                    (Some(a), Some(i)) => a
-                        .direct_raw
-                        .iter()
-                        .filter(|g| inherited_fact_key(g) == *key)
-                        .all(|g| fact_pd_index(g) == Some(i))
-                        .then_some(i),
-                    _ => None,
-                };
                 // One entry per distinct requirement list among the raw facts
                 // under this key; any unguarded raw fact makes the key
                 // unconditional (it dominates every guarded copy).
                 let mut req_sets: Vec<Vec<super::param_guard::Req>> = Vec::new();
-                if let (Some(a), Some(fg), Some(raw_keys)) = (&pd, frame, &raw_keys) {
-                    for (g, _) in a.direct_raw.iter().zip(raw_keys).filter(|(_, k)| *k == key) {
+                if let (Some(fg), Some(raw)) = (frame, &raw) {
+                    for (g, _) in raw.iter().filter(|(_, k)| k == key) {
                         match site_reqs(fg, g) {
                             Some(r) => {
                                 if !req_sets.contains(r) {
@@ -2129,7 +2113,6 @@ fn fact_cone_for_scc(
                             rep: Arc::clone(&rep),
                             rep_key: Arc::clone(&rep_key_s),
                             dist: 0,
-                            pd: entry_pd,
                             guard,
                         },
                     );
@@ -2142,7 +2125,7 @@ fn fact_cone_for_scc(
     // entry behind an edge the member makes under a guard (it gains the
     // edge's requirements).
     let mut guarded_only: BTreeSet<usize> = BTreeSet::new();
-    if let Some(a) = &pd {
+    if let Some(a) = &anchor {
         let mut unguarded_to: BTreeSet<usize> = BTreeSet::new();
         for edge in a.out_edges {
             let Some(&yj) = a.scc_id_by_routine.get(&edge.to) else {
@@ -2198,7 +2181,7 @@ fn fact_cone_for_scc(
         );
         if let Some(yc) = fact_cones.get(y) {
             for (key, entry) in yc {
-                if pd.is_some() && frame_bound(entry) {
+                if anchor.is_some() && frame_bound(entry) {
                     continue; // carried per edge above
                 }
                 merge_cone(
@@ -2209,8 +2192,7 @@ fn fact_cone_for_scc(
                         rep_key: Arc::clone(&entry.rep_key),
                         dist: entry.dist + 1,
                         // Without an anchor (recursive / multi-member SCC) a
-                        // successor's PD frame and guard mean nothing here.
-                        pd: None,
+                        // successor's guard means nothing here.
                         guard: None,
                     },
                 );
@@ -2222,7 +2204,7 @@ fn fact_cone_for_scc(
 
 /// The requirements under which raw direct fact `f`'s site runs, by its
 /// witness operation or call site. `None`: unguarded.
-fn site_reqs<'f>(
+pub(crate) fn site_reqs<'f>(
     fg: &'f super::param_guard::FrameGuards,
     f: &CapabilityFact,
 ) -> Option<&'f Vec<super::param_guard::Req>> {
@@ -2256,10 +2238,10 @@ fn guard_frames(
     out
 }
 
-/// What [`fact_cone_for_scc`] needs to keep parameter-dependent facts
-/// substitutable: present only for a NON-RECURSIVE SINGLETON SCC, whose cone
-/// has exactly one frame (its member's parameters).
-struct PdAnchor<'a> {
+/// What [`fact_cone_for_scc`] needs to keep guarded facts frame-bound: present
+/// only for a NON-RECURSIVE SINGLETON SCC, whose cone has exactly one frame
+/// (its member's parameters).
+struct GuardAnchor<'a> {
     /// The member's RAW (un-deduped) direct facts.
     direct_raw: &'a [CapabilityFact],
     /// The member's out-edges.
@@ -2353,9 +2335,48 @@ fn compose_inherited_cones(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
-) -> (HashMap<String, InheritedConeResult>, ConeDerivedStore) {
+) -> (
+    HashMap<String, InheritedConeResult>,
+    ConeDerivedStore,
+    super::pd_solve::ConeArena,
+) {
     let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
     let mut derived = ConeDerivedBuilder::default();
+
+    // #69 D1: the producers (raw direct facts, in node order) leave the shared
+    // cone and are resolved per routine by the transitive producer solve.
+    // A producer's identity is `(owner, operation_id)`: `g.nodes` repeats a
+    // routine id once per declaration (two `#if` arms, one id), and each repeat
+    // reads the same `direct_raw` entry, so a repeat must not make a second
+    // producer (the solve keys states by producer, so its states would be
+    // twins).
+    let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
+    let producers: Vec<super::pd_solve::Producer> = g
+        .nodes
+        .iter()
+        .flat_map(|id| {
+            direct_raw
+                .get(id)
+                .into_iter()
+                .flatten()
+                .filter(|f| is_producer(f))
+                .map(move |f| {
+                    let op = f
+                        .witness_operation_id
+                        .as_deref()
+                        .expect("a producer has a witness operation id");
+                    (id.as_str(), op, f)
+                })
+        })
+        .filter(|&(id, op, _)| seen.insert((id, op)))
+        .map(|(id, op, f)| super::pd_solve::Producer {
+            fact: Arc::new(f.clone()),
+            owner: Arc::from(id),
+            operation_id: op.to_string(),
+        })
+        .collect();
+    let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);
+    let own_entries = |m: &str| resolved.get(m).map_or(&[][..], Vec::as_slice);
 
     let succ_sccs = build_succ_sccs(g, &scc.sccs, &scc.scc_id_by_routine);
     let mut remaining_uses: Vec<usize> = scc.sccs.iter().map(|_| 0usize).collect();
@@ -2400,7 +2421,7 @@ fn compose_inherited_cones(
         if !root_scc {
             let _t_fc = crate::engine::l5::detector_context::cones_census::start();
             let anchor = match scc_entry.members.as_slice() {
-                [m] if !scc_entry.recursive => Some(PdAnchor {
+                [m] if !scc_entry.recursive => Some(GuardAnchor {
                     direct_raw: direct_raw.get(m).map(|v| v.as_slice()).unwrap_or(&[]),
                     out_edges: g.outgoing.get(m).map(|v| v.as_slice()).unwrap_or(&[]),
                     scc_id_by_routine: &scc.scc_id_by_routine,
@@ -2460,15 +2481,15 @@ fn compose_inherited_cones(
             }
             let _t_walk = crate::engine::l5::detector_context::cones_census::start();
             let inherited = if recursive {
-                inherited_facts_by_bfs(
+                let picks = inherited_facts_by_bfs(
                     m,
                     g,
                     direct,
                     &scc.scc_id_by_routine,
                     &fact_cones,
-                    mode,
-                    &mut derived,
-                )
+                    own_entries(m),
+                );
+                emit_picks(m, picks, mode, &mut derived)
             } else {
                 inherited_facts_for_singleton(
                     m,
@@ -2478,6 +2499,7 @@ fn compose_inherited_cones(
                     routines_by_id.get(m.as_str()).copied(),
                     frames.get(m),
                     routines_by_id,
+                    own_entries(m),
                     mode,
                     &mut derived,
                 )
@@ -2624,7 +2646,7 @@ fn compose_inherited_cones(
         );
     }
 
-    (out, derived.finish())
+    (out, derived.finish(), arena)
 }
 
 // ===========================================================================
@@ -2653,6 +2675,8 @@ pub struct ConeOutcome {
     pub cones: HashMap<String, ConeResultPub>,
     /// The compact derived substrate. Empty under [`ConeOutput::RawOnly`].
     pub derived: ConeDerivedStore,
+    /// The transitive producer solve (#69 D1), in cone (internal) ids.
+    pub pd_solution: super::pd_solve::ConeArena,
 }
 
 /// Compute every routine's `capabilityFactsInherited` + `coverage` over the given
@@ -2709,16 +2733,7 @@ pub fn compose_cone_over_graph(
     for id in nodes {
         routine_ids.insert(id.clone());
         if let Some(facts) = direct_in.get(id) {
-            let mut byk: BTreeMap<String, CapabilityFact> = BTreeMap::new();
-            for f in facts {
-                let k = inherited_fact_key(f);
-                match byk.get(&k) {
-                    Some(cur) if rep_key(f) >= rep_key(cur) => {}
-                    _ => {
-                        byk.insert(k, f.clone());
-                    }
-                }
-            }
+            let byk = dedup_direct(facts);
             if !byk.is_empty() {
                 direct.insert(id.clone(), byk);
             }
@@ -2742,7 +2757,7 @@ pub fn compose_cone_over_graph(
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, routines, &routines_by_id);
-    let (cones, derived) = compose_inherited_cones(
+    let (cones, derived, pd_solution) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -2818,6 +2833,7 @@ pub fn compose_cone_over_graph(
             })
             .collect(),
         derived,
+        pd_solution,
     }
 }
 
@@ -3709,18 +3725,9 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, mut status, reasons) = direct_facts_for_routine(r, pubs);
 
-        // Canonical rep per dedup key (min repKey wins) — mirrors the
+        // Canonical rep per dedup key (min repKey wins) — the
         // composeInheritedCones direct-fact dedup.
-        let mut byk: BTreeMap<String, CapabilityFact> = BTreeMap::new();
-        for f in &facts {
-            let k = inherited_fact_key(f);
-            match byk.get(&k) {
-                Some(cur) if rep_key(f) >= rep_key(cur) => {}
-                _ => {
-                    byk.insert(k, f.clone());
-                }
-            }
-        }
+        let byk = dedup_direct(&facts);
         if !byk.is_empty() {
             direct.insert(r.id.clone(), byk);
         }
@@ -3759,7 +3766,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
-    let (cones, _derived) = compose_inherited_cones(
+    let (cones, _derived, _pd_solution) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -3864,6 +3871,8 @@ pub struct R3a3SourceBase {
     pub cones: HashMap<String, ConeResultPub>,
     /// Internal RoutineId → StableRoutineId.
     pub routine_to_stable: HashMap<String, String>,
+    /// The producer solve (#69 D1), internal ids; the snapshot maps it (D2).
+    pub pd_solution: super::pd_solve::ConeArena,
 }
 
 /// Assemble the RAW source-only cone/graph base (mirrors `project_r3a3`'s inline
@@ -3928,15 +3937,16 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     // ⟨C1 Task 3⟩ `RawOnly` — the snapshot/digest/prove derivers read the RAW
     // cone off this base and never touch `ConeOutcome::derived` (see
     // `project_r3a5_cross_app`). Raw bytes and ordering unchanged.
-    let cones = compose_cone_over_graph(
+    let ConeOutcome {
+        cones, pd_solution, ..
+    } = compose_cone_over_graph(
         &graph,
         &nodes,
         &direct_full,
         &direct_coverage,
         &ws.routines,
         ConeOutput::RawOnly,
-    )
-    .cones;
+    );
 
     let routine_to_stable: HashMap<String, String> = ws
         .routines
@@ -3952,6 +3962,7 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
         direct_full,
         cones,
         routine_to_stable,
+        pd_solution,
     }
 }
 
@@ -4136,4 +4147,120 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     }
 
     m
+}
+
+/// #69 D1.3: the two cone walks read the subject's own producer-solve entries.
+#[cfg(test)]
+mod pd_uses_tests {
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeOutput};
+    use crate::engine::l4::db_effect_solver::tests::pd_ts_known;
+    use crate::engine::l4::pd_solve::ResolvedEntry;
+
+    /// An own entry for subject `C`: a physical (known/false) insert into
+    /// `app/Table/1`, reached through `cs1` at distance 1. No cone and no graph
+    /// edge supplies it, so only the `own` merge can put it in the output.
+    fn own_entry() -> ResolvedEntry<'static> {
+        let rep = CapabilityFact {
+            subject: "H".to_string(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: Some("app/Table/1".to_string()),
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: Some("H/op1".to_string()),
+            witness_callsite_id: None,
+            extra: Some(CapabilityExtra::Table {
+                record_variable_id: None,
+                temp_state: Some(pd_ts_known(false)),
+                op_subtype: None,
+            }),
+        };
+        ResolvedEntry {
+            state: 1,
+            rep: Arc::new(rep),
+            dist: 1,
+            first_hop: Box::leak(Box::new(TypedOutEdge::new(
+                "H".to_string(),
+                "direct-call".to_string(),
+                Some("cs1".to_string()),
+                None,
+            ))),
+        }
+    }
+
+    fn empty_graph() -> TypedEdgeGraph {
+        TypedEdgeGraph {
+            nodes: Vec::new(),
+            outgoing: HashMap::new(),
+            unresolved_sources: BTreeSet::new(),
+        }
+    }
+
+    fn singleton(mode: ConeOutput, derived: &mut ConeDerivedBuilder) -> Vec<CapabilityFact> {
+        let own = [own_entry()];
+        let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
+        inherited_facts_for_singleton(
+            "C",
+            &empty_graph(),
+            &scc,
+            &HashMap::new(),
+            None,
+            None,
+            &HashMap::new(),
+            &own,
+            mode,
+            derived,
+        )
+    }
+
+    /// Use (a), singleton walk: the own entry is a candidate, and (b) the raw
+    /// output retags it onto the subject through its first hop.
+    #[test]
+    fn singleton_walk_emits_own_entries_retagged() {
+        let mut derived = ConeDerivedBuilder::default();
+        let out = singleton(ConeOutput::RawOnly, &mut derived);
+        assert_eq!(out.len(), 1);
+        let f = &out[0];
+        assert_eq!(f.subject, "C");
+        assert_eq!(f.provenance, "inherited");
+        assert_eq!(f.witness_callsite_id.as_deref(), Some("cs1"));
+        assert_eq!(f.witness_operation_id.as_deref(), Some("H/op1"));
+    }
+
+    /// Use (b), singleton walk: the derived fold sees the own entry, so a
+    /// physical write reaches the routine's derived row.
+    #[test]
+    fn singleton_walk_folds_own_entries() {
+        let mut derived = ConeDerivedBuilder::default();
+        derived.begin_routine();
+        let out = singleton(ConeOutput::DerivedOnly, &mut derived);
+        assert!(out.is_empty(), "DerivedOnly builds no raw Vec");
+        derived.finish_routine("C");
+        let store = derived.finish();
+        assert_eq!(
+            store.writes_physical_tables_of("C"),
+            vec!["app/Table/1".to_string()]
+        );
+    }
+
+    /// Use (a), recursive walk: the own entry is picked even though no member
+    /// or downstream cone carries it.
+    #[test]
+    fn bfs_walk_picks_own_entries() {
+        let own = [own_entry()];
+        let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
+        let g = empty_graph();
+        let direct: RoutineDirectFacts = HashMap::new();
+        let cones: HashMap<usize, ConeFacts> = HashMap::new();
+        let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &own);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].0.witness_operation_id.as_deref(), Some("H/op1"));
+        assert_eq!(picks[0].1.callsite.as_deref(), Some("cs1"));
+    }
 }

@@ -40,9 +40,10 @@ use std::rc::Rc;
 use serde::Serialize;
 
 use crate::engine::ids::sha256_hex;
+use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::snapshot::{
-    CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, SnapValueSource,
-    SnapshotCallsiteEvidence, SnapshotGraphEdge, compose_snapshot,
+    CapabilitySnapshot, EdgeIx, PdArena, SnapCapabilityExtra, SnapTempState, SnapValueSource,
+    SnapshotCallsiteEvidence, SnapshotGraphEdge, StateIx, compose_snapshot,
 };
 use crate::program::model::workspace::Model;
 
@@ -184,6 +185,12 @@ struct FingerprintIndexes<'a> {
     callsite_by_id: HashMap<String, &'a crate::engine::l5::snapshot::SnapshotCallsiteEvidence>,
     operation_by_id: HashMap<String, &'a crate::engine::l5::snapshot::SnapshotOperationEvidence>,
     event_display_by_id: HashMap<String, String>,
+    /// #69 D3: the producer solve (`CapabilitySnapshot::pd_solution`), plus the
+    /// edges its links index and the facts its states index. Read only by
+    /// [`enumerate_proofs`].
+    pd: &'a PdArena,
+    typed_edges: &'a [SnapshotGraphEdge],
+    capability_facts: &'a [Fact],
 }
 
 fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_> {
@@ -302,6 +309,9 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         callsite_by_id,
         operation_by_id,
         event_display_by_id,
+        pd: &snap.pd_solution,
+        typed_edges: &snap.typed_edges,
+        capability_facts: &snap.capability_facts,
     }
 }
 
@@ -484,6 +494,11 @@ struct WitnessOutcomeExt {
     paths: Vec<WitnessPath>,
     truncated: bool,
     incomplete: bool,
+    /// #69 D3: a state or depth limit cut the enumeration (the BFS's or the
+    /// proofs'), so a non-empty path set is not known to be complete. The ONLY
+    /// part of `incomplete` digest folds into `viaPathsTruncated`: missing
+    /// evidence and empty path sets also set `incomplete`, and are not folded.
+    limit_hit: bool,
     /// Internal diagnostics (kind, optional detail). Forwarded by
     /// `reconstruct_witness_paths_pub` as `WitnessDiagnosticPub`.
     diagnostics: Vec<(String, Option<String>)>,
@@ -745,6 +760,165 @@ fn dispatch_object_type(f: &Fact) -> Option<&str> {
     }
 }
 
+/// A raw producer: a direct fact whose temp state is parameter-dependent. Its
+/// class at a caller comes from the producer solve, never from the fact (#69 D1).
+/// Mirrors the cone's `capability_cone::is_producer` (the temp state alone), so
+/// a fact the cone keeps out of every shared cone is never a BFS carrier.
+fn is_pd_snap(d: &Fact) -> bool {
+    matches!(
+        fact_temp_state_of(d),
+        Some(SnapTempState::ParameterDependent { .. })
+    )
+}
+
+/// THE carrier predicate (#69 D3) of the witness BFS: its terminal test and its
+/// `valid_nodes` seed both call it, so the two can never drift apart. A carrier
+/// of inherited fact `f` is an ORDINARY direct fact `d`: same temp class,
+/// `fact_equivalent`, and not a raw producer. Producer-origin facts are
+/// witnessed by [`enumerate_proofs`] instead; arena states are never BFS
+/// carriers (a state's class holds only in its own routine's frame).
+fn is_bfs_carrier(d: &Fact, f: &Fact) -> bool {
+    !is_pd_snap(d) && is_known_temp_snap(d) == is_known_temp_snap(f) && fact_equivalent(d, f)
+}
+
+/// What [`enumerate_proofs`] found.
+#[derive(Default)]
+struct ProofOutcome {
+    /// Each: the edge sequence root → … → the producer's owner, and the
+    /// producer's fact (an index into `capability_facts`).
+    paths: Vec<(Vec<EdgeIx>, usize)>,
+    truncated: bool,
+    /// The state or depth limit cut the enumeration.
+    incomplete: bool,
+    diagnostics: Vec<(String, Option<String>)>,
+}
+
+/// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
+/// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
+/// whose class is `f`'s, every link path from that state down to the seed whose
+/// FIRST edge has `f`'s first-hop callsite (the witness's first-hop contract).
+/// Each proof is a complete path from `root`, so it holds in `root`'s frame by
+/// construction. Breadth-first by length; a path never revisits a STATE (it may
+/// revisit a routine). Limits as the BFS: `MAX_DEPTH` edges, `MAX_STATES`
+/// expansions.
+///
+/// The cap. A proof's identity is its edge sequence plus its producer fact (its
+/// terminal), and only distinct proofs count toward `cap`. Once `cap` are found,
+/// the rest of that LENGTH is still enumerated: the caller picks the first `cap`
+/// of the combined set in its own global order, and every proof left out is
+/// longer than all of those, so the capped result is a prefix of the uncapped
+/// one. Partial paths are parent-linked nodes, so a push costs one node, never
+/// a copy of the path.
+fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) -> ProofOutcome {
+    /// A partial path's last state, and its parent node plus the edge between
+    /// them (`None` at the root state).
+    struct Node {
+        state: StateIx,
+        parent: Option<(usize, EdgeIx)>,
+        len: usize,
+    }
+    let mut out = ProofOutcome::default();
+    let (Some(first_cs), Some(root_states)) = (
+        f.witness_callsite_id.as_deref(),
+        idx.pd.by_routine.get(root),
+    ) else {
+        return out;
+    };
+    let kt = is_known_temp_snap(f);
+    let mut nodes: Vec<Node> = root_states
+        .iter()
+        .filter(|&&s| {
+            let st = &idx.pd.states[s];
+            !st.seed
+                && (st.temp_state == TempStateKind::Known(true)) == kt
+                && fact_equivalent(&idx.capability_facts[st.producer_fact], f)
+        })
+        .map(|&s| Node {
+            state: s,
+            parent: None,
+            len: 0,
+        })
+        .collect();
+    let mut queue: std::collections::VecDeque<usize> = (0..nodes.len()).collect();
+    let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
+        std::collections::HashSet::new();
+    // The length at which the `cap`-th distinct proof was found.
+    let mut cut_len: Option<usize> = None;
+    let mut popped = 0usize;
+    let mut depth_exceeded = false;
+    while let Some(&ni) = queue.front() {
+        let len = nodes[ni].len;
+        if cut_len.is_some_and(|cut| len > cut) {
+            break;
+        }
+        queue.pop_front();
+        popped += 1;
+        if popped > MAX_STATES {
+            out.diagnostics.push((
+                "state-limit-exceeded".to_string(),
+                Some(format!("maxExpandedStates={MAX_STATES}")),
+            ));
+            out.incomplete = true;
+            break;
+        }
+        if len > MAX_DEPTH {
+            depth_exceeded = true;
+            continue;
+        }
+        let st = &idx.pd.states[nodes[ni].state];
+        if st.seed {
+            let mut edges = Vec::with_capacity(len);
+            let mut cur = ni;
+            while let Some((parent, e)) = nodes[cur].parent {
+                edges.push(e);
+                cur = parent;
+            }
+            edges.reverse();
+            if seen.insert((edges.clone(), st.producer_fact)) {
+                out.paths.push((edges, st.producer_fact));
+                if out.paths.len() >= cap {
+                    cut_len.get_or_insert(len);
+                }
+            }
+            continue;
+        }
+        for &(callee, e) in &idx.pd.links[st.links.clone()] {
+            if len == 0 && edge_callsite_id(&idx.typed_edges[e]) != Some(first_cs) {
+                continue;
+            }
+            let mut cur = Some(ni);
+            let mut revisits = false;
+            while let Some(c) = cur {
+                if nodes[c].state == callee {
+                    revisits = true;
+                    break;
+                }
+                cur = nodes[c].parent.map(|(parent, _)| parent);
+            }
+            if revisits {
+                continue;
+            }
+            nodes.push(Node {
+                state: callee,
+                parent: Some((ni, e)),
+                len: len + 1,
+            });
+            queue.push_back(nodes.len() - 1);
+        }
+    }
+    if cut_len.is_some() && !queue.is_empty() {
+        out.truncated = true;
+    }
+    if depth_exceeded {
+        out.diagnostics.push((
+            "depth-exceeded".to_string(),
+            Some(format!("maxDepth={MAX_DEPTH}")),
+        ));
+        out.incomplete = true;
+    }
+    out
+}
+
 /// One graph edge's witness hop, its projection and its raw JSON (built on
 /// first use), shared by every path through that edge.
 struct NodeMemo {
@@ -760,8 +934,8 @@ impl NodeMemo {
 }
 
 /// [`NodeMemo`]s keyed by graph edge, kept across the witness BFS calls of one
-/// root. A hop and its projection depend only on the edge (see the
-/// `debug_assert` in `reconstruct_witness_paths`), and one root's BFS calls walk
+/// root. A hop and its projection depend only on the edge (see
+/// [`HopCache::get`]), and one root's BFS calls walk
 /// the same edges again and again — so each is built once per root.
 ///
 /// Keyed by the edge's address. `'i` ties the cache to the borrow of the graph
@@ -774,15 +948,30 @@ struct HopCache<'i>(
 );
 
 impl<'i> HopCache<'i> {
-    fn get_or_build(
-        &mut self,
-        edge: &'i SnapshotGraphEdge,
-        build: impl FnOnce() -> NodeMemo,
-    ) -> Rc<NodeMemo> {
+    /// The memo of `edge`, built on first use. A hop leaves the routine its
+    /// edge leaves, so the hop and its projection are a function of the edge
+    /// alone — what makes keying by edge sound.
+    fn get(&mut self, edge: &'i SnapshotGraphEdge, idx: &FingerprintIndexes) -> Rc<NodeMemo> {
         Rc::clone(
             self.0
                 .entry(edge as *const SnapshotGraphEdge)
-                .or_insert_with(|| Rc::new(build())),
+                .or_insert_with(|| {
+                    let hop = edge_to_hop(edge, idx)
+                        .expect("only edges with a hop are walked (edge_has_hop)");
+                    let from_id = edge_from(edge);
+                    let from_display = idx
+                        .routine_display_by_id
+                        .get(from_id)
+                        .cloned()
+                        .unwrap_or_else(|| from_id.to_string());
+                    let projected =
+                        project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
+                    Rc::new(NodeMemo {
+                        hop: Rc::new(hop),
+                        raw_json: std::cell::OnceCell::new(),
+                        projected,
+                    })
+                }),
         )
     }
 }
@@ -855,8 +1044,12 @@ impl<'i> ValidNodesCache<'i> {
 /// projection and the digest path agree on witness shape. The `(kind, detail)`
 /// pairs mirror `projectFingerprintQuery`'s diag mapping (contracts/fingerprint-query.ts).
 ///
-/// `hop_cache` must belong to `root_id` (its memos carry `root_id`'s display on
-/// the seed hops); `valid_cache` may be shared by every root over `idx`.
+/// `hop_cache` holds memos built over `idx`; `valid_cache` may be shared by
+/// every root over `idx`.
+///
+/// Case C (#69 D3): the path set is the root's own proofs (`enumerate_proofs`)
+/// plus the BFS's paths to ordinary carriers (`is_bfs_carrier`), deduplicated
+/// by edge sequence AND terminal, sorted, then capped at `cap`.
 fn reconstruct_witness_paths<'i>(
     root_id: &str,
     fact: &Fact,
@@ -882,6 +1075,7 @@ fn reconstruct_witness_paths<'i>(
                 }],
                 truncated: false,
                 incomplete,
+                limit_hit: false,
                 diagnostics,
                 projected: None,
             };
@@ -900,6 +1094,7 @@ fn reconstruct_witness_paths<'i>(
                 }],
                 truncated: false,
                 incomplete,
+                limit_hit: false,
                 diagnostics,
                 projected: None,
             };
@@ -919,6 +1114,7 @@ fn reconstruct_witness_paths<'i>(
             }],
             truncated: false,
             incomplete: true,
+            limit_hit: false,
             diagnostics: vec![(
                 "missing-witness-anchor".to_string(),
                 Some(fact.subject.clone()),
@@ -935,10 +1131,16 @@ fn reconstruct_witness_paths<'i>(
             paths: Vec::new(),
             truncated: false,
             incomplete: true,
+            limit_hit: false,
             diagnostics: vec![("first-hop-not-found".to_string(), Some(fact.via.clone()))],
             projected: None,
         };
     };
+
+    // #69 D3: the root's own proofs first, then the BFS for ordinary carriers.
+    // Both obey the first-hop contract, and an empty-path diagnostic is decided
+    // over the combined set.
+    let proofs = enumerate_proofs(root_id, fact, idx, cap);
 
     let empty: Vec<&SnapshotGraphEdge> = Vec::new();
     let out_from_root = idx.outgoing_edges.get(root_id).unwrap_or(&empty);
@@ -947,12 +1149,13 @@ fn reconstruct_witness_paths<'i>(
         .filter(|e| edge_callsite_id(e) == Some(witness_cs.as_str()))
         .copied()
         .collect();
-    if first_edges.is_empty() {
+    if first_edges.is_empty() && proofs.paths.is_empty() {
         // first-hop-not-found → detail = callsiteId (present here).
         return WitnessOutcomeExt {
             paths: Vec::new(),
             truncated: false,
             incomplete: true,
+            limit_hit: false,
             diagnostics: vec![("first-hop-not-found".to_string(), Some(witness_cs.clone()))],
             projected: None,
         };
@@ -1034,6 +1237,9 @@ fn reconstruct_witness_paths<'i>(
     let mut state_count = 0usize;
     let mut truncated = false;
     let mut incomplete = false;
+    // Only the state and depth limits (#69 D3), set where they fire — not a copy of
+    // `incomplete`, which missing evidence and `terminal-not-found` also set.
+    let mut limit_hit = false;
     let mut depth_exceeded = false;
 
     // Reachability-directed pruning. A node can lie on a witness path to `fact`
@@ -1072,48 +1278,29 @@ fn reconstruct_witness_paths<'i>(
         // carrier — look up that bucket instead of scanning every routine's direct
         // facts per call (the previous O(all-direct-facts)/call hot-spot).
         //
-        // ⟨issue 32⟩ The temp-class check must match the TERMINAL check below.
-        // The two mispairings are NOT symmetric, and it is worth being exact about
-        // which one is dangerous, because the cheap-looking edit is the fatal one:
+        // The seed and the terminal test below call the ONE carrier predicate,
+        // `is_bfs_carrier` (#69 D3): a seed narrower than the terminal would
+        // never walk to a terminal the matcher accepts, and the witness would
+        // degrade to `terminal-not-found` silently; a broader seed only costs
+        // states. `ValidNodesKey` holds every field of `fact` the predicate
+        // reads (class and the `fact_equivalent` fields; `is_pd_snap` reads
+        // only `d`).
         //
-        //   - Seed BROADER than the terminal (e.g. dropping this check alone):
-        //     `valid_nodes` is a strict SUPERSET, the forward BFS explores more
-        //     nodes, and every terminal it would have found it still finds. Costs
-        //     states, never answers — measured, not argued: dropping this guard
-        //     moved nothing (both r4 tests and all 76 `cli_b_*` goldens green).
-        //     So this guard is a COST optimisation resting on a soundness
-        //     precondition, not a correctness guard in its own right.
-        //   - Seed NARROWER than the terminal (guarding here while relaxing the
-        //     terminal below): a node whose only carrier is the other class is
-        //     never marked valid, the forward BFS never reaches it or anything
-        //     behind it, and a terminal the matcher WOULD have accepted is never
-        //     found — the witness degrades to `terminal-not-found` silently (see
-        //     the terminal guard's own note on how that failure is swallowed).
-        //     This is the direction to protect: never tighten here without
-        //     tightening there.
-        //
-        // The soundness precondition the pairing rests on: `retag`
-        // (`capability_cone.rs`) copies `extra` through untouched, so every
-        // INHERITED fact has a same-class DIRECT producer somewhere in its cone,
-        // and the guarded seed therefore admits exactly the routines the guarded
-        // terminal can stop at. That precondition is pinned executably by
+        // Precondition: every inherited fact has a same-class ORDINARY producer
+        // reachable below the root, or a same-class non-seed arena state AT the
+        // root (a proof, `enumerate_proofs`); arena states below the root are
+        // never carriers. Pinned by
         // `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`
-        // (`tests/r3/r3a3_oracles.rs`) — with the temp class in
-        // `inherited_fact_key`, that oracle now asserts precisely "every inherited
-        // fact traces to a SAME-CLASS direct producer". Stated limit: the oracle
-        // runs over the source-only fixture corpus, so a cross-app scope mismatch
-        // between the cone's node set and `snap.capability_facts` would still
-        // degrade witnesses undetected.
+        // (`tests/r3/r3a3_oracles.rs`). Stated limit: that oracle runs over the
+        // source-only fixture corpus, so a cross-app scope mismatch between the
+        // cone's node set and `snap.capability_facts` would still degrade
+        // witnesses undetected.
         if let Some(cands) = idx
             .direct_facts_by_op_kind
             .get(&(fact.op.clone(), fact.resource_kind.clone()))
         {
-            let fact_kt = is_known_temp_snap(fact);
             for d in cands {
-                if is_known_temp_snap(d) == fact_kt
-                    && fact_equivalent(d, fact)
-                    && visited.insert(d.subject.as_str())
-                {
+                if is_bfs_carrier(d, fact) && visited.insert(d.subject.as_str()) {
                     rev_queue.push_back(d.subject.as_str());
                 }
             }
@@ -1143,6 +1330,7 @@ fn reconstruct_witness_paths<'i>(
                 Some(format!("maxExpandedStates={MAX_STATES}")),
             ));
             incomplete = true;
+            limit_hit = true;
             break;
         }
         // depth check: arena[ni].depth is the number of hops to this node.
@@ -1156,60 +1344,36 @@ fn reconstruct_witness_paths<'i>(
         // usable while children are pushed below.
         let routine: &str = arena[ni].routine;
 
-        // Terminal check: FIRST matching direct fact in insertion order.
+        // Terminal check: FIRST carrier (`is_bfs_carrier`) in insertion order.
         //
-        // ⟨issue 32⟩ ...of the SAME temp class. `fact_equivalent` compares op,
-        // resourceKind, resourceId, resourceArgSource and (for dispatch) objectType
-        // — never temp state — so without this a physical fact would happily
-        // terminate on a routine's known-temp write of the same table. The
-        // occurrence would then be GRADED physical (from the fact) and ANCHORED at
-        // an in-memory operation (from the terminal), which is how d47 comes to
-        // report `WRITE_PENDING_AT_EXTERNAL_IO` for a `Temp.Insert(); Http.Get();
-        // PhysWriter()` body. The class is total (absent temp state = not
-        // known-temp), so this narrows the match without ever leaving it undefined,
-        // and the reverse-BFS prune seed above applies the identical test.
+        // ⟨issue 32⟩ The class is part of the predicate: `fact_equivalent` never
+        // compares temp state, so without it a physical fact would terminate on a
+        // routine's known-temp write of the same table, GRADED physical (from the
+        // fact) and ANCHORED at an in-memory operation (from the terminal) — how
+        // d47 came to report `WRITE_PENDING_AT_EXTERNAL_IO` for a `Temp.Insert();
+        // Http.Get(); PhysWriter()` body. The class lives in `is_bfs_carrier`,
+        // not in `fact_equivalent`: that one is deliberately undefined-tolerant
+        // on `resource_id`/`resourceArgSource`.
         //
-        // The guard lives HERE, not inside `fact_equivalent`: that predicate is
-        // deliberately undefined-tolerant on `resource_id`/`resourceArgSource`, and
-        // it is also used for the prune seed, where widening it would change which
-        // nodes are walked for every fact rather than only the ones that can
-        // mis-terminate.
+        // Precondition (#69 D3): every inherited fact has a same-class ORDINARY
+        // producer reachable below the root, or a same-class non-seed arena
+        // state AT the root (a proof); arena states below the root are never
+        // carriers. See the `valid_nodes` seed above for the oracle that pins it.
+        // When it fails, the combined path set is empty: the effect gets
+        // `terminal-not-found`, `unknown` conditionality and no ordered op.
         //
-        // SOUNDNESS PRECONDITION, and why narrowing the match cannot lose a
-        // terminal: `retag` (`capability_cone.rs`) copies `extra` through
-        // untouched, so every INHERITED fact has a same-class DIRECT producer
-        // somewhere in its cone. Pinned executably by
-        // `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`
-        // (`tests/r3/r3a3_oracles.rs`), which — now that the temp class is in
-        // `inherited_fact_key` — asserts exactly that. Stated limit: that oracle
-        // runs over the source-only fixture corpus only.
-        //
-        // WHEN IT DOES FAIL, IT FAILS SILENTLY. `reconstruct_witness_paths` sets
-        // `incomplete = true` and pushes `terminal-not-found`, but the digest path
-        // never stores `WitnessOutcomeExt.incomplete` on `AccumulatedEffect` (only
-        // `reconstruct_witness_paths_pub` forwards it). The occurrence then carries
-        // no `evidence_operation_id`/`evidence_callsite_id`, `compute_ordering`
-        // leaves `ordered_op = None`, and the effect contributes NO ordering fact —
-        // so a d45/d47-class finding vanishes rather than the run failing loudly.
-        //
-        // UNMEASURED REGRESSION VECTOR ⟨review N9⟩: this guard can only push a
-        // terminal DEEPER (the nearest equivalent direct fact may now be the wrong
-        // class). A witness that used to terminate shallow and now terminates deep
-        // could in principle cross `MAX_DEPTH` / `MAX_STATES` / `HARD_PATH_CAP` and
-        // degrade exactly as above. The fixture corpus shows none, and the paired
-        // seed means the producer is always reachable, but the `incomplete` /
-        // `terminal-not-found` counts on a real workspace were never compared
-        // before and after, and no CDO-gated ratchet covers the witness layer.
+        // Regression vector: the class check can only push a terminal DEEPER,
+        // across `MAX_DEPTH` / `MAX_STATES` / `HARD_PATH_CAP`. The fixture corpus
+        // shows none. Measured on CDO (#69): digest's `evidence-unavailable`
+        // entry diagnostics went 43005 (master) -> 41746. Still
+        // unmeasured: the `terminal-not-found` count alone, and no CDO-gated
+        // ratchet covers the witness layer.
         let directs: &[&Fact] = idx
             .direct_facts_by_routine
             .get(routine)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let fact_kt = is_known_temp_snap(fact);
-        if let Some(equivalent) = directs
-            .iter()
-            .find(|d| is_known_temp_snap(d) == fact_kt && fact_equivalent(d, fact))
-        {
+        if let Some(equivalent) = directs.iter().find(|d| is_bfs_carrier(d, fact)) {
             let terminal = terminal_hop_from_fact(equivalent, idx);
             found.push((ni, Some(terminal)));
             continue;
@@ -1309,9 +1473,22 @@ fn reconstruct_witness_paths<'i>(
             Some(format!("maxDepth={MAX_DEPTH}")),
         ));
         incomplete = true;
+        limit_hit = true;
     }
-    if found.is_empty() && !incomplete {
-        // terminal-not-found: TS flows through the projection `default` → kind only, NO detail.
+    truncated |= proofs.truncated;
+    incomplete |= proofs.incomplete;
+    limit_hit |= proofs.incomplete;
+    // The BFS and the proofs report a limit with the same `(kind, detail)`; one
+    // witness lists it once.
+    for d in proofs.diagnostics {
+        if !diagnostics.contains(&d) {
+            diagnostics.push(d);
+        }
+    }
+    if found.is_empty() && proofs.paths.is_empty() && !incomplete {
+        // terminal-not-found, over the COMBINED set (#69 D3): the BFS alone
+        // finding nothing is normal for a producer-origin fact.
+        // TS flows through the projection `default` → kind only, NO detail.
         diagnostics.push(("terminal-not-found".to_string(), None));
         incomplete = true;
     }
@@ -1329,14 +1506,9 @@ fn reconstruct_witness_paths<'i>(
     //   never a proper prefix of another's, so comparing hop by hop gives the
     //   whole-string order (see `ProjPath`);
     // - a projected hop depends only on its own raw hop and the routine it leaves
-    //   (the parent node's routine, or `root_id` for a seed);
+    //   (the edge's `from`; see `HopCache::get`);
     // - the terminal hop, never an arena node, is the last raw hop and is skipped
     //   by the projection exactly as `project_path` skips it.
-    let root_display: &str = idx
-        .routine_display_by_id
-        .get(root_id)
-        .map(String::as_str)
-        .unwrap_or(root_id);
     // `slot[arena node]` = 1 + its index in `memo`, 0 = not looked up yet. Only
     // nodes on a found path get one, and most arena nodes are never on one (CDO
     // with the B3 calls: 21.2 M pushed in total over ~22.5 k BFS calls), so the
@@ -1348,34 +1520,7 @@ fn reconstruct_witness_paths<'i>(
         while cur != 0 && slot[cur] == 0 {
             let node = &arena[cur];
             let edge = node.edge.expect("a real arena node has its in-edge");
-            let m = hop_cache.get_or_build(edge, || {
-                let hop = edge_to_hop(edge, idx)
-                    .expect("only edges with a hop are pushed (edge_has_hop)");
-                let from_id: &str = if node.parent == 0 {
-                    root_id
-                } else {
-                    arena[node.parent].routine
-                };
-                // Every edge leaves the routine it is filed under in
-                // `outgoing_edges`, so the hop's projection is a function of the
-                // edge alone — what makes `HopCache` sound.
-                debug_assert_eq!(from_id, edge_from(edge));
-                let from_display = if from_id == root_id {
-                    root_display.to_string()
-                } else {
-                    idx.routine_display_by_id
-                        .get(from_id)
-                        .cloned()
-                        .unwrap_or_else(|| from_id.to_string())
-                };
-                let projected = project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
-                NodeMemo {
-                    hop: Rc::new(hop),
-                    raw_json: std::cell::OnceCell::new(),
-                    projected,
-                }
-            });
-            memo.push(m);
+            memo.push(hop_cache.get(edge, idx));
             slot[cur] = u32::try_from(memo.len()).expect("memo fits in u32");
             cur = node.parent;
         }
@@ -1408,6 +1553,25 @@ fn reconstruct_witness_paths<'i>(
             }
         })
         .collect();
+    // The proofs, through the same memos: each ends at its producer's own
+    // operation.
+    for (edges, producer_fact) in &proofs.paths {
+        let chain = edges
+            .iter()
+            .map(|&e| {
+                memo.push(hop_cache.get(&idx.typed_edges[e], idx));
+                memo.len() - 1
+            })
+            .collect();
+        keyed.push(Found {
+            chain,
+            terminal: Some(terminal_hop_from_fact(
+                &idx.capability_facts[*producer_fact],
+                idx,
+            )),
+            terminal_json: std::cell::OnceCell::new(),
+        });
+    }
     fn raw_elem<'a>(memo: &'a [Rc<NodeMemo>], k: &'a Found, i: usize) -> &'a str {
         match k.chain.get(i) {
             Some(&n) => memo[n].raw_json(),
@@ -1433,6 +1597,38 @@ fn reconstruct_witness_paths<'i>(
         }
         std::cmp::Ordering::Equal
     });
+    // A raw path's identity is its full edge sequence PLUS its terminal (#69
+    // D3): two producers reached through the same edges stay two paths, each
+    // with its own conditionality. Deduplicated before the cap counts paths;
+    // the first in sort order wins.
+    let mut seen: std::collections::HashSet<(
+        Vec<*const NodeMemo>,
+        Option<String>,
+        Option<String>,
+    )> = std::collections::HashSet::new();
+    keyed.retain(|k| {
+        let (op, cs) = match &k.terminal {
+            Some(WitnessHop::Terminal {
+                operation_id,
+                callsite_id,
+                ..
+            }) => (operation_id.clone(), callsite_id.clone()),
+            _ => (None, None),
+        };
+        let edges = k.chain.iter().map(|&n| Rc::as_ptr(&memo[n])).collect();
+        seen.insert((edges, op, cs))
+    });
+    if keyed.len() > cap {
+        keyed.truncate(cap);
+        truncated = true;
+    }
+    if truncated
+        && !diagnostics
+            .iter()
+            .any(|(kind, _)| kind == "path-limit-reached")
+    {
+        diagnostics.push(("path-limit-reached".to_string(), Some(format!("cap={cap}"))));
+    }
     let mut paths: Vec<WitnessPath> = Vec::with_capacity(keyed.len());
     let mut projected: Vec<ProjPath> = Vec::with_capacity(keyed.len());
     for k in keyed {
@@ -1450,10 +1646,13 @@ fn reconstruct_witness_paths<'i>(
         projected.push(ProjPath(proj));
     }
 
+    // Spec D3: only a NON-EMPTY path set is "not known complete".
+    let limit_hit = limit_hit && !paths.is_empty();
     WitnessOutcomeExt {
         paths,
         truncated,
         incomplete,
+        limit_hit,
         diagnostics,
         projected: Some(projected),
     }
@@ -2226,13 +2425,16 @@ fn dedupe_key(
         ),
     };
     let resource_id = fact.resource_id.clone().unwrap_or_default();
+    // The temp class (#69 D3): a kt and an nt fact never merge into one effect.
+    let class = if is_known_temp_snap(fact) { "kt" } else { "nt" };
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         effect_type,
         anchor_id,
         fact.resource_kind,
         resource_id,
-        detail_json(detail)
+        detail_json(detail),
+        class
     )
 }
 
@@ -2271,6 +2473,9 @@ fn detail_json(detail: &[(String, String)]) -> String {
 ///     `fact_equivalent`) and `table`'s `temp_state` (read directly in the loop for
 ///     the physical-write filter), plus every other extra field the (currently
 ///     unread-elsewhere) variants carry — over-included defensively.
+///   - `witness_callsite_id`, the temp class (in `extra`) and the `fact_equivalent`
+///     fields — also read by `enumerate_proofs` (#69 D3), which is why equal
+///     identities still have equal witnesses.
 ///   - `detail` (the computed `effect_detail_of` output) — folded into `dedupe_key`'s
 ///     grouping key, so two facts differing only in a detail field must NOT collapse.
 ///
@@ -2379,8 +2584,8 @@ pub struct DigestEffectResult {
     pub temp_state: Option<SnapTempState>,
     /// The originating operation ids of every fact merged into this effect
     /// (sorted, distinct). The CLI joins them to the L4 db-effect store to
-    /// report `detail.tempState` (#65) — the same store `query effects` reads,
-    /// because the cone's `temp_state` above is not frame-correct.
+    /// report `detail.tempState` (#65) — the same store `query effects` reads —
+    /// filtered to the class of `temp_state` above (#69 D4).
     pub origin_operation_ids: Vec<String>,
     /// S4: per-effect scoped guarantees (attached by `compute_ordering`).
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
@@ -2578,7 +2783,7 @@ fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
 /// `known/true` signal. Absent, `Unknown` and parameter-dependent temp state all
 /// read as NOT known-temp, exactly as the L4 predicate treats them — so the
 /// class is TOTAL, never undefined.
-fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
+pub(crate) fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
     crate::program::body::features::known_temp_suppresses(ts.and_then(SnapTempState::known_value))
 }
 
@@ -2654,9 +2859,9 @@ fn merge_temp_state(
 /// identity-duplicate normalization path (`new_*` empty — see `digest_one_root`'s
 /// identity-duplicate handling). Combines `existing_*` with `new_*` into
 /// (path, conditionality, json) triples, stable-sorts by `(projected_len, json)`,
-/// dedupes by json (first occurrence wins), then caps `via_paths` at `max_paths` and
-/// ORs in `had_truncation`. This is byte-for-byte the inline logic the MERGE branch
-/// used to run — extracting it does not change any output.
+/// dedupes by json (first occurrence's path, the least restrictive conditionality
+/// of the run, #69 D3), then caps `via_paths` at `max_paths` and ORs in
+/// `had_truncation`. The insert branch (an effect's first fact) runs it too.
 ///
 /// Dedupe is adjacent-run: equal JSON implies equal length, so after the stable
 /// sort every set of equal paths is one contiguous run with its first occurrence
@@ -2699,6 +2904,16 @@ fn merge_normalize_via_paths(
             .last()
             .is_some_and(|last| last.key_cmp(&p) == std::cmp::Ordering::Equal)
         {
+            // Equal projected paths keep the LEAST restrictive conditionality
+            // (#69 D3): projection drops the terminal, so an unconditional
+            // terminal must never hide behind a conditional twin. `unknown`
+            // (no rank) never replaces a ranked one.
+            let last = unique_conds.last_mut().expect("parallel to unique_paths");
+            if let Some(r) = crate::engine::l5::conditionality::rank(c)
+                && crate::engine::l5::conditionality::rank(last).is_none_or(|l| r < l)
+            {
+                *last = c;
+            }
             continue;
         }
         unique_paths.push(p);
@@ -2896,6 +3111,7 @@ fn digest_one_root<'i>(
                     paths: Vec::new(),
                     truncated: false,
                     incomplete: false,
+                    limit_hit: false,
                     diagnostics: Vec::new(),
                     projected: None,
                 }
@@ -2954,23 +3170,36 @@ fn digest_one_root<'i>(
             // Find existing in ordered effect_map.
             let existing_pos = effect_index.get(&key).copied();
 
+            // Merge (or, for a new effect, insert against nothing): combine
+            // (path, cond, json) triples, sort shortest-first + JSON tiebreak, dedupe
+            // exact dups by hops-JSON. Conds/jsons travel WITH their paths (#8).
+            // Delegates to `merge_normalize_via_paths`, the SAME helper the
+            // identity-duplicate normalization path above uses, so the two can never
+            // drift apart. ONE call serves both branches (#69 D3), so the
+            // truncation fold below cannot be dropped from only one of them.
+            let (existing_paths, existing_conds, existing_trunc): (
+                &[ProjPath],
+                &[crate::engine::l5::conditionality::EffectConditionality],
+                bool,
+            ) = match existing_pos {
+                Some(pos) => {
+                    let e = &effect_map[pos].1;
+                    (&e.all_paths, &e.all_path_conds, e.had_truncation)
+                }
+                None => (&[], &[], false),
+            };
+            let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
+                existing_paths,
+                existing_conds,
+                existing_trunc,
+                &projected_paths,
+                &path_conds,
+                outcome.truncated || outcome.limit_hit,
+                MAX_PATHS,
+            );
+
             let final_pos = if let Some(pos) = existing_pos {
-                // Merge: combine (path, cond, json) triples, sort shortest-first + JSON
-                // tiebreak, dedupe exact dups by hops-JSON. Conds/jsons travel WITH
-                // their paths (#8). Delegates to `merge_normalize_via_paths`, the SAME
-                // helper the identity-duplicate normalization path above uses, so the
-                // two can never drift apart.
-                let existing = &effect_map[pos].1;
-                let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
-                    &existing.all_paths,
-                    &existing.all_path_conds,
-                    existing.had_truncation,
-                    &projected_paths,
-                    &path_conds,
-                    outcome.truncated,
-                    MAX_PATHS,
-                );
-                let merged_temp = merge_temp_state(&existing.temp_state, &fact_temp_state);
+                let merged_temp = merge_temp_state(&effect_map[pos].1.temp_state, &fact_temp_state);
                 let acc = &mut effect_map[pos].1;
                 acc.via_paths = via;
                 acc.had_truncation = had_truncation;
@@ -2981,12 +3210,6 @@ fn digest_one_root<'i>(
                     .extend(fact.witness_operation_id.iter().cloned());
                 pos
             } else {
-                let via: Vec<Vec<QueryWitnessHop>> = projected_paths
-                    .iter()
-                    .take(MAX_PATHS)
-                    .map(ProjPath::materialize)
-                    .collect();
-                let had_truncation = outcome.truncated || projected_paths.len() > MAX_PATHS;
                 let pos = effect_map.len();
                 effect_index.insert(key.clone(), pos);
                 effect_map.push((
@@ -3004,8 +3227,8 @@ fn digest_one_root<'i>(
                         evidence_callsite_id,
                         via_paths: via,
                         had_truncation,
-                        all_paths: projected_paths,
-                        all_path_conds: path_conds,
+                        all_paths,
+                        all_path_conds,
                         temp_state: fact_temp_state,
                         fact_subject: fact.subject.clone(),
                         origin_operation_ids: fact.witness_operation_id.iter().cloned().collect(),
@@ -3035,12 +3258,21 @@ fn digest_one_root<'i>(
                 .or_else(|| acc.evidence_callsite_id.clone())
                 .unwrap_or_default();
 
+            // A kt DB effect's key carries its class (#69 D3), so a kt and an nt
+            // write never share an occurrence id; nt keys are unchanged.
+            let key_effect_type = if acc.effect_type.starts_with("DB_")
+                && is_known_temp_state(acc.temp_state.as_ref())
+            {
+                format!("{}|kt", acc.effect_type)
+            } else {
+                acc.effect_type.to_string()
+            };
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,
                 &acc.via_paths,
                 terminal_evidence_kind,
                 &terminal_evidence_id,
-                acc.effect_type,
+                &key_effect_type,
             );
 
             let sort_file = acc.evidence.file.clone().unwrap_or_default();
@@ -3909,8 +4141,11 @@ pub struct WitnessOutcomePub {
 }
 
 /// Owned public version of the internal `FingerprintIndexes`.
-/// Borrowed fields are cloned so the caller doesn't hold a snapshot reference.
-pub struct FingerprintIndexesPub {
+/// The per-routine maps are cloned; the three #69 D3 fields (the solve, the
+/// typed edges, the fact table) are BORROWED from the snapshot — they are the
+/// graph-sized parts, and the proofs' edge/fact indexes must stay the same
+/// allocations the snapshot owns.
+pub struct FingerprintIndexesPub<'a> {
     pub stable_id_to_display: HashMap<String, String>,
     pub routine_display_by_id: HashMap<String, String>,
     pub outgoing_edges: HashMap<String, Vec<SnapshotGraphEdge>>,
@@ -3922,11 +4157,17 @@ pub struct FingerprintIndexesPub {
     pub callsite_by_id: HashMap<String, crate::engine::l5::snapshot::SnapshotCallsiteEvidence>,
     pub operation_by_id: HashMap<String, crate::engine::l5::snapshot::SnapshotOperationEvidence>,
     pub event_display_by_id: HashMap<String, String>,
+    /// #69 D3: the snapshot's producer solve, the typed edges its links index
+    /// and the facts its states index — so fingerprint's witnesses take the
+    /// same proofs digest's do.
+    pub pd_solution: &'a PdArena,
+    pub typed_edges: &'a [SnapshotGraphEdge],
+    pub capability_facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
 }
 
 /// Build the public fingerprint indexes from a `CapabilitySnapshot`.
 /// Mirrors `buildFingerprintIndexes` (indexes.ts) but returns owned data.
-pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIndexesPub {
+pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIndexesPub<'_> {
     let private = build_fingerprint_indexes(snap);
     FingerprintIndexesPub {
         stable_id_to_display: private.stable_id_to_display,
@@ -3962,12 +4203,15 @@ pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIn
             .map(|(k, v)| (k, v.clone()))
             .collect(),
         event_display_by_id: private.event_display_by_id,
+        pd_solution: &snap.pd_solution,
+        typed_edges: &snap.typed_edges,
+        capability_facts: &snap.capability_facts,
     }
 }
 
 /// Adapter: convert a `FingerprintIndexesPub` to a borrowed `FingerprintIndexes`
 /// usable by the internal witness BFS helpers.
-fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
+fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintIndexes<'i> {
     // Build incoming_edges (reverse graph) from outgoing_edges — mirrors what
     // `build_fingerprint_indexes` does from `typed_edges`.  `FingerprintIndexesPub`
     // stores owned `SnapshotGraphEdge` values so we derive `to` from each edge.
@@ -4029,6 +4273,9 @@ fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
             .map(|(k, v)| (k.clone(), v))
             .collect(),
         event_display_by_id: idx.event_display_by_id.clone(),
+        pd: idx.pd_solution,
+        typed_edges: idx.typed_edges,
+        capability_facts: idx.capability_facts,
     }
 }
 
@@ -4039,7 +4286,7 @@ fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
 pub fn reconstruct_witness_paths_pub(
     root_id: &str,
     fact: &crate::engine::l5::snapshot::SnapshotCapabilityFact,
-    idx: &FingerprintIndexesPub,
+    idx: &FingerprintIndexesPub<'_>,
     cap: usize,
 ) -> WitnessOutcomePub {
     let private_idx = pub_idx_as_private(idx);
@@ -4211,6 +4458,7 @@ mod tests {
             event_declarations: vec![],
             root_classifications: vec![],
             routine_order_frames: None,
+            pd_solution: Default::default(),
         }
     }
 
@@ -5153,5 +5401,497 @@ codeunit 50101 "T7b Temp Classes"
         let mut stats = BfsStats::default();
         check_witness_bfs(&resolved, "temp-classes", &mut stats);
         assert!(stats.paths > 0, "{stats:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // #69 D3 — depth-0 proofs over a hand-built arena.
+    // -----------------------------------------------------------------------
+
+    fn call_edge(from: &str, to: &str, cs: &str) -> SnapshotGraphEdge {
+        SnapshotGraphEdge::DirectCall {
+            kind: "direct-call",
+            callsite_id: cs.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            source_anchor: SnapshotSourceAnchor {
+                source_unit_id: "su".to_string(),
+                range: SnapshotRange {
+                    start_line: 1,
+                    start_column: 0,
+                    end_line: 1,
+                    end_column: 1,
+                },
+                enclosing_routine_id: from.to_string(),
+                syntax_kind: "call".to_string(),
+            },
+            edge_id: format!("e-{cs}"),
+        }
+    }
+
+    /// An insert fact into table T, with a temp state.
+    fn insert_fact(
+        subject: &str,
+        provenance: &str,
+        op: Option<&str>,
+        cs: Option<&str>,
+        temp: SnapTempState,
+    ) -> Fact {
+        let mut f = make_fact("insert", "table", Some("T"), provenance, op, cs);
+        f.subject = subject.to_string();
+        f.extra = Some(SnapCapabilityExtra::Table {
+            op_subtype: None,
+            record_variable_id: None,
+            temp_state: Some(temp),
+        });
+        f
+    }
+
+    fn state(
+        routine: &str,
+        temp_state: TempStateKind,
+        seed: bool,
+        links: std::ops::Range<usize>,
+    ) -> crate::engine::l5::snapshot::StateNode {
+        crate::engine::l5::snapshot::StateNode {
+            producer_fact: 0,
+            temp_state,
+            routine: routine.to_string(),
+            seed,
+            links,
+        }
+    }
+
+    /// The owner's seed is never a proof carrier for the owner's own fact
+    /// (that fact is direct and takes Case A).
+    #[test]
+    fn seed_state_is_not_a_proof_carrier() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "R",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        snap.pd_solution.states =
+            vec![state("R", TempStateKind::ParameterDependent(0), true, 0..0)];
+        snap.pd_solution.by_routine.insert("R".to_string(), vec![0]);
+        let f = insert_fact(
+            "R",
+            "inherited",
+            None,
+            Some("cs"),
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let out = enumerate_proofs("R", &f, &idx, HARD_PATH_CAP);
+        assert!(out.paths.is_empty(), "{:?}", out.paths);
+    }
+
+    /// The BFS carrier predicate (#69 D3) refuses a raw producer: a direct fact
+    /// whose own temp state is parameter-dependent never terminates the BFS for
+    /// an inherited fact of the same op and (non-temporary) class — it is a
+    /// proof's business. An ordinary known(false) direct fact still does.
+    #[test]
+    fn bfs_carrier_refuses_a_raw_producer() {
+        let pd = insert_fact(
+            "R",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        );
+        let ordinary = insert_fact(
+            "R",
+            "direct",
+            Some("op1"),
+            None,
+            SnapTempState::Known { value: false },
+        );
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs"),
+            SnapTempState::Known { value: false },
+        );
+        assert!(!is_bfs_carrier(&pd, &f));
+        assert!(is_bfs_carrier(&ordinary, &f));
+    }
+
+    /// A proof may revisit a routine but never a state: `Perm`'s two states
+    /// (PD0 ↔ PD1, a parameter swap) form a cycle above the seed in `Helper`.
+    /// The one proof enters `Perm` twice; going round the cycle is not a proof.
+    #[test]
+    fn proof_never_revisits_a_state() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "Helper",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        // 0: Root → Perm, 1: Perm → Perm (the swap), 2: Perm → Helper.
+        snap.typed_edges = vec![
+            call_edge("Root", "Perm", "cs-root"),
+            call_edge("Perm", "Perm", "cs-self"),
+            call_edge("Perm", "Helper", "cs-help"),
+        ];
+        let arena = &mut snap.pd_solution;
+        arena.states = vec![
+            state("Helper", TempStateKind::ParameterDependent(0), true, 0..0),
+            // (Perm, PD0): Helper's seed, and (Perm, PD1) across the swap.
+            state("Perm", TempStateKind::ParameterDependent(0), false, 0..2),
+            // (Perm, PD1): (Perm, PD0) across the swap.
+            state("Perm", TempStateKind::ParameterDependent(1), false, 2..3),
+            // (Root, known(false)): Root passes a real record as Perm's B.
+            state("Root", TempStateKind::Known(false), false, 3..4),
+        ];
+        arena.links = vec![(0, 2), (2, 1), (1, 1), (2, 0)];
+        arena.by_routine.insert("Helper".to_string(), vec![0]);
+        arena.by_routine.insert("Perm".to_string(), vec![1, 2]);
+        arena.by_routine.insert("Root".to_string(), vec![3]);
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let out = enumerate_proofs("Root", &f, &idx, HARD_PATH_CAP);
+        assert_eq!(out.paths, vec![(vec![0, 1, 2], 0)]);
+        assert!(!out.incomplete && !out.truncated);
+    }
+
+    /// Projection drops the terminal, so two raw paths can project equal; the
+    /// merged one keeps the LEAST restrictive conditionality, never the first.
+    #[test]
+    fn projected_twin_merge_keeps_least_restrictive() {
+        use crate::engine::l5::conditionality::{CONDITIONAL, UNCONDITIONAL};
+        let p = ProjPath::from_hops(vec![mk_hop("a")]);
+        let (via, truncated, all, conds) = merge_normalize_via_paths(
+            &[],
+            &[],
+            false,
+            &[p.clone(), p],
+            &[CONDITIONAL, UNCONDITIONAL],
+            false,
+            3,
+        );
+        assert_eq!(via.len(), 1);
+        assert_eq!(all.len(), 1);
+        assert_eq!(conds, vec![UNCONDITIONAL]);
+        assert!(!truncated);
+    }
+
+    /// Only DISTINCT proofs count toward the cap (#69 D3: dedup before the
+    /// cap). Hand-stated precondition: every state has a twin (two producers of
+    /// one fact, as a duplicated producer makes), so each proof is found twice.
+    /// `Root → A → H` is short, `Root → A → B → H` longer. Counting twins, cap 2
+    /// is spent on the short proof twice and the longer one is lost.
+    #[test]
+    fn twin_proofs_count_once_toward_the_cap() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "H",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        // 0: Root → A, 1: A → H, 2: A → B, 3: B → H.
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "H", "cs-a1"),
+            call_edge("A", "B", "cs-a2"),
+            call_edge("B", "H", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        // Even states are one producer's, odd states its twin's.
+        arena.states = vec![
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("B", real.clone(), false, 0..1),
+            state("B", real.clone(), false, 1..2),
+            state("A", real.clone(), false, 2..4),
+            state("A", real.clone(), false, 4..6),
+            state("Root", real.clone(), false, 6..7),
+            state("Root", real, false, 7..8),
+        ];
+        arena.links = vec![
+            (0, 3),
+            (1, 3),
+            (0, 1),
+            (2, 2),
+            (1, 1),
+            (3, 2),
+            (4, 0),
+            (5, 0),
+        ];
+        for (r, ixs) in [
+            ("H", [0, 1]),
+            ("B", [2, 3]),
+            ("A", [4, 5]),
+            ("Root", [6, 7]),
+        ] {
+            arena.by_routine.insert(r.to_string(), ixs.to_vec());
+        }
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let out = enumerate_proofs("Root", &f, &idx, 2);
+        assert_eq!(out.paths, vec![(vec![0, 1], 0), (vec![0, 2, 3], 0)]);
+        assert!(!out.truncated && !out.incomplete);
+    }
+
+    /// A capped witness is a PREFIX of the uncapped one (#69 D3: the cap
+    /// applies in the global order). Hand-stated precondition: two root states
+    /// share the first hop, and the FIRST root state's proof goes through the
+    /// later edge (`cs-z` to `Hz`), so a cap taken in enumeration order keeps
+    /// the proof the global order puts second.
+    #[test]
+    fn capped_proofs_are_a_prefix_of_the_uncapped_set() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![
+            insert_fact(
+                "Hz",
+                "direct",
+                Some("opz"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+            insert_fact(
+                "Hb",
+                "direct",
+                Some("opb"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+        ];
+        // 0: Root → A, 1: A → Hz, 2: A → Hb.
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "Hz", "cs-z"),
+            call_edge("A", "Hb", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        let of = |producer_fact, s| crate::engine::l5::snapshot::StateNode { producer_fact, ..s };
+        arena.states = vec![
+            of(
+                0,
+                state("Hz", TempStateKind::ParameterDependent(0), true, 0..0),
+            ),
+            of(
+                1,
+                state("Hb", TempStateKind::ParameterDependent(0), true, 0..0),
+            ),
+            of(0, state("A", real.clone(), false, 0..1)),
+            of(1, state("A", real.clone(), false, 1..2)),
+            of(0, state("Root", real.clone(), false, 2..3)),
+            of(1, state("Root", real, false, 3..4)),
+        ];
+        arena.links = vec![(0, 1), (1, 2), (2, 0), (3, 0)];
+        for (r, ixs) in [("Hz", vec![0]), ("Hb", vec![1]), ("A", vec![2, 3])] {
+            arena.by_routine.insert(r.to_string(), ixs);
+        }
+        arena.by_routine.insert("Root".to_string(), vec![4, 5]);
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let paths = |cap| -> Vec<String> {
+            reconstruct_witness_paths(
+                "Root",
+                &f,
+                &idx,
+                cap,
+                &mut HopCache::default(),
+                &ValidNodesCache::default(),
+            )
+            .paths
+            .iter()
+            .map(|p| witness_hops_json(&p.hops))
+            .collect()
+        };
+        let all = paths(HARD_PATH_CAP);
+        assert_eq!(all.len(), 2, "precondition: two proofs");
+        assert!(all[0].contains("cs-b"), "precondition: {all:?}");
+        assert_eq!(paths(1), all[..1]);
+    }
+
+    /// When the BFS and the proofs both pass `MAX_DEPTH`, the witness lists
+    /// `depth-exceeded` once. Hand-stated precondition: a 69-edge chain
+    /// `R0 → … → R69` whose last routine holds both an ordinary carrier (the
+    /// BFS's terminal) and the producer (the proof's seed).
+    #[test]
+    fn a_limit_hit_by_bfs_and_proofs_is_listed_once() {
+        const N: usize = 69;
+        let mut snap = empty_snapshot();
+        let last = format!("R{N}");
+        snap.capability_facts = vec![
+            insert_fact(
+                &last,
+                "direct",
+                Some("op0"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+            insert_fact(
+                &last,
+                "direct",
+                Some("op1"),
+                None,
+                SnapTempState::Known { value: false },
+            ),
+        ];
+        // Edge i: R{i} → R{i+1}. State j sits at R{N-j}; state 0 is the seed.
+        snap.typed_edges = (0..N)
+            .map(|i| call_edge(&format!("R{i}"), &format!("R{}", i + 1), &format!("c{i}")))
+            .collect();
+        let arena = &mut snap.pd_solution;
+        arena.states.push(state(
+            &last,
+            TempStateKind::ParameterDependent(0),
+            true,
+            0..0,
+        ));
+        for j in 1..=N {
+            arena.states.push(state(
+                &format!("R{}", N - j),
+                TempStateKind::Known(false),
+                false,
+                j - 1..j,
+            ));
+            arena.links.push((j - 1, N - j));
+        }
+        for j in 0..=N {
+            arena.by_routine.insert(format!("R{}", N - j), vec![j]);
+        }
+        let f = insert_fact(
+            "R0",
+            "inherited",
+            None,
+            Some("c0"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        assert!(
+            enumerate_proofs("R0", &f, &idx, HARD_PATH_CAP)
+                .diagnostics
+                .iter()
+                .any(|(k, _)| k == "depth-exceeded"),
+            "precondition: the proofs pass MAX_DEPTH"
+        );
+        let out = reconstruct_witness_paths(
+            "R0",
+            &f,
+            &idx,
+            HARD_PATH_CAP,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        );
+        let depth = out
+            .diagnostics
+            .iter()
+            .filter(|(k, _)| k == "depth-exceeded")
+            .count();
+        assert_eq!(depth, 1, "{:?}", out.diagnostics);
+    }
+
+    /// A routine id declared twice (two `#if` arms) is ONE producer: the solve
+    /// seeds it once, and its short and its longer proof both survive cap 2.
+    #[test]
+    fn duplicated_declaration_is_one_producer() {
+        let src = r#"
+table 50410 "Dup Tab"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+}
+
+codeunit 50410 DupProducer
+{
+    procedure Root()
+    var
+        Row: Record "Dup Tab";
+    begin
+        A(Row);
+    end;
+
+    procedure A(var R: Record "Dup Tab")
+    begin
+        H(R);
+        B(R);
+    end;
+
+    procedure B(var R: Record "Dup Tab")
+    begin
+        H(R);
+    end;
+
+#if CLEAN25
+    procedure H(var R: Record "Dup Tab")
+    begin
+        R.Insert();
+    end;
+#else
+    procedure H(var R: Record "Dup Tab")
+    begin
+        R.Insert();
+    end;
+#endif
+}
+"#;
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("DupProducer.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a2",
+            );
+        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == n)
+                .collect()
+        };
+        let h = named("H");
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 1, "H's insert is one producer");
+        let root = &named("Root")[0].stable_routine_id;
+        let f = snap
+            .capability_facts
+            .iter()
+            .find(|f| &f.subject == root && f.provenance != "direct" && f.op == "insert")
+            .expect("Root inherits H's insert");
+        let idx = build_fingerprint_indexes(&snap);
+        let out = reconstruct_witness_paths(
+            root,
+            f,
+            &idx,
+            2,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        );
+        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
+        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
     }
 }

@@ -299,7 +299,7 @@ fn table_op_to_right(op: &str) -> Option<&'static str> {
 fn build_block(
     rid: &str,
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
-    idx: &FingerprintIndexesPub,
+    idx: &FingerprintIndexesPub<'_>,
     filters: &FingerprintFilters,
 ) -> FingerprintBlock {
     let display_full = idx
@@ -1668,6 +1668,7 @@ mod tests {
             event_declarations: Vec::new(),
             root_classifications: Vec::new(),
             routine_order_frames: None,
+            pd_solution: Default::default(),
         }
     }
 

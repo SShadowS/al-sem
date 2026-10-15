@@ -15,6 +15,9 @@ mod symbol_app;
 #[path = "../common/regen.rs"]
 mod regen;
 
+#[path = "../common/temp_state_probe.rs"]
+mod temp_state_probe;
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that

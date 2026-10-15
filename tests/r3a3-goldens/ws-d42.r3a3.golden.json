@@ -74,8 +74,8 @@
 						"opSubtype": "FindFirst",
 						"recordVariableId": "r0/4032d182944bd7fbb902ebb020c8009aea2c02d85675d0eacbd65393e028c55e/rv/cust",
 						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
+							"kind": "known",
+							"value": false
 						}
 					}
 				},
