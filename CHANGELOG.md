@@ -42,9 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lookups of an object by type and number (record typing's numeric `SourceTable`, an
   unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
   number for number `0` (#83).
-- `alsem graph` gives two dependency objects without a number distinct `al:abi:` node ids
-  (`…/interface/<name>#…`, not `…/interface/0#…`), and an LSP call-hierarchy item for such an
-  object carries its name in the `al-preview:` URI's id segment, not `0` (#83).
+- `aldump --graphify-export` keys an object without a number by the engine's object key in
+  its `al:obj:`, `al:rtn:` and `al:abi:` node ids (`…/interface/@i%20foo#…`). Before, a
+  dependency object's `al:abi:` id carried `0`, and the other ids carried a lossy slug, so
+  `I Foo` and `I-Foo` (or two dependency interfaces with a same-named method) shared a node.
+  An LSP call-hierarchy item for such a dependency object carries its folded name in the
+  `al-preview:` URI's id segment, not `0` (#83).
 - **`alsem diff` no longer reports a parameter appended to a `local` or `internal` event
   publisher as critical (#236).** For an `[IntegrationEvent]` or `[BusinessEvent]` publisher that
   is `local` or `internal` on both sides, adding parameters at the END is not a break
