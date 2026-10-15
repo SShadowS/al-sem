@@ -599,6 +599,27 @@ fn split_object_routine(display: &str) -> (&str, &str) {
     }
 }
 
+/// One `temp-state-incoherent` diagnostic per failed join, carrying the effect's
+/// `factId` and the failed operation (#69 D4).
+fn incoherence_diagnostics(
+    effect_type: &str,
+    fact_subject: &str,
+    fact_id: &str,
+    problems: Vec<(String, JoinProblem)>,
+) -> Vec<EntryDiagnostic> {
+    problems
+        .into_iter()
+        .map(|(op, problem)| EntryDiagnostic {
+            kind: "temp-state-incoherent",
+            effect_type: Some(effect_type.to_string()),
+            fact_subject: Some(fact_subject.to_string()),
+            fact_id: Some(fact_id.to_string()),
+            operation_id: Some(op),
+            reason: Some(problem.reason()),
+        })
+        .collect()
+}
+
 /// Why one originating operation failed the temp-state join (#69 D4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinProblem {
@@ -912,16 +933,12 @@ pub fn run_digest_query_full_from_entries(
                     if let Some(ts) = join.render() {
                         detail.push(("tempState".to_string(), ts));
                     }
-                    for (op, problem) in join.problems {
-                        entry_diagnostics.push(EntryDiagnostic {
-                            kind: "temp-state-incoherent",
-                            effect_type: Some(eff.effect_type.clone()),
-                            fact_subject: Some(eff.fact_subject.clone()),
-                            fact_id: Some(eff.fact_id.clone()),
-                            operation_id: Some(op),
-                            reason: Some(problem.reason()),
-                        });
-                    }
+                    entry_diagnostics.extend(incoherence_diagnostics(
+                        &eff.effect_type,
+                        &eff.fact_subject,
+                        &eff.fact_id,
+                        join.problems,
+                    ));
                 }
 
                 full_effects.push(DigestEffectFull {
@@ -1455,7 +1472,16 @@ pub fn format_digest_human(entries: &[DigestEntryFull]) -> String {
                     .as_deref()
                     .map(|et| format!(" ({})", et))
                     .unwrap_or_default();
-                lines.push(format!("  diagnostic: {}{}", d.kind, et_part));
+                lines.push(format!(
+                    "  diagnostic: {}{}{}{}",
+                    d.kind,
+                    et_part,
+                    d.reason.map(|r| format!(" reason={r}")).unwrap_or_default(),
+                    d.operation_id
+                        .as_deref()
+                        .map(|o| format!(" op={o}"))
+                        .unwrap_or_default()
+                ));
             }
         }
         lines.push(String::new());
@@ -1759,5 +1785,105 @@ mod tests {
             join.problems
         );
         assert_eq!(join.render(), None, "NoL4Row: the field must be absent");
+    }
+
+    fn entry_with(diagnostics: Vec<EntryDiagnostic>) -> DigestEntryFull {
+        DigestEntryFull {
+            routine_id: "r".to_string(),
+            routine_display: "R".to_string(),
+            object_display: String::new(),
+            routine_anchor: None,
+            routine_anchors: Vec::new(),
+            coverage_status: "complete".to_string(),
+            coverage_reasons: Vec::new(),
+            effects: Vec::new(),
+            unresolved: Vec::new(),
+            unresolved_traversal: UnresolvedTraversal {
+                truncated: false,
+                max_depth: 64,
+                visited_routines: 1,
+            },
+            entry_diagnostics: diagnostics,
+            declaration_only: false,
+        }
+    }
+
+    /// #69 I3, construction: the failed join becomes one diagnostic per problem
+    /// carrying the EFFECT's `factId` and the FAILED op. Mutation: swap
+    /// `fact_id` and `operation_id` → "factId".
+    #[test]
+    fn incoherence_diagnostics_carry_fact_id_and_failed_op() {
+        let d = incoherence_diagnostics(
+            "DB_INSERT",
+            "Subject",
+            "fact-1",
+            vec![
+                ("op-a".to_string(), JoinProblem::NoL4Row),
+                ("op-b".to_string(), JoinProblem::ClassAbsent),
+            ],
+        );
+        assert_eq!(d.len(), 2, "one diagnostic per problem");
+        assert_eq!(d[0].kind, "temp-state-incoherent");
+        assert_eq!(d[0].effect_type.as_deref(), Some("DB_INSERT"));
+        assert_eq!(d[0].fact_subject.as_deref(), Some("Subject"));
+        assert_eq!(d[0].fact_id.as_deref(), Some("fact-1"), "factId");
+        assert_eq!(d[0].operation_id.as_deref(), Some("op-a"), "operationId");
+        assert_eq!(d[0].reason, Some("no-l4-row"));
+        assert_eq!(d[1].operation_id.as_deref(), Some("op-b"));
+        assert_eq!(d[1].reason, Some("class-absent"));
+    }
+
+    /// #69 I3, serialization: the three new keys reach the wire for
+    /// `temp-state-incoherent` and are absent for `evidence-unavailable`.
+    /// Mutation: delete the `dm.insert("factId" …)` arm (and likewise the
+    /// `operationId` and `reason` arms) → "factId".
+    #[test]
+    fn entry_to_value_serializes_incoherence_fields() {
+        let mut diags = incoherence_diagnostics(
+            "DB_MODIFY",
+            "Subject",
+            "fact-1",
+            vec![("op-a".to_string(), JoinProblem::ClassAbsent)],
+        );
+        diags.push(EntryDiagnostic {
+            kind: "evidence-unavailable",
+            effect_type: Some("DB_MODIFY".to_string()),
+            fact_subject: Some("Subject".to_string()),
+            fact_id: None,
+            operation_id: None,
+            reason: None,
+        });
+        let v = entry_to_value(&entry_with(diags));
+        let ed = v["entryDiagnostics"].as_array().expect("entryDiagnostics");
+        assert_eq!(ed[0]["factId"], "fact-1", "factId");
+        assert_eq!(ed[0]["operationId"], "op-a", "operationId");
+        assert_eq!(ed[0]["reason"], "class-absent", "reason");
+        for key in ["factId", "operationId", "reason"] {
+            assert!(
+                ed[1].get(key).is_none(),
+                "evidence-unavailable must not carry {key}: {}",
+                ed[1]
+            );
+        }
+    }
+
+    /// #69 I2: the human output names the reason and the operation of a
+    /// `temp-state-incoherent` diagnostic. Mutation: drop the `reason=` part →
+    /// "reason=class-absent".
+    #[test]
+    fn human_output_shows_incoherence_reason_and_op() {
+        let diags = incoherence_diagnostics(
+            "DB_INSERT",
+            "Subject",
+            "fact-1",
+            vec![("op-a".to_string(), JoinProblem::ClassAbsent)],
+        );
+        let text = format_digest_human(&[entry_with(diags)]);
+        assert!(
+            text.contains(
+                "diagnostic: temp-state-incoherent (DB_INSERT) reason=class-absent op=op-a"
+            ),
+            "reason=class-absent op=op-a missing: {text}"
+        );
     }
 }

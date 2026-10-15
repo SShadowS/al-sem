@@ -67,11 +67,31 @@ fn docs() -> &'static [(&'static str, Value)] {
     })
 }
 
-/// Run `check` on both modes; panic with every collected failure.
+/// D4's `class-absent` fallback renders ALL of an op's L4 rows, so a wrongly
+/// classed effect shows the other class's value, and a test that classes an
+/// effect by its rendered `tempState` is fooled by it. Every test through
+/// `each_mode` therefore also fails on any `temp-state-incoherent` item (#69 I1).
+fn no_incoherence(doc: &Value, f: &mut Vec<String>) {
+    for e in doc["payload"]["entries"].as_array().expect("entries") {
+        let root = e["routine"]["display"].as_str().unwrap();
+        for d in e["entryDiagnostics"].as_array().into_iter().flatten() {
+            if d["kind"] == "temp-state-incoherent" {
+                f.push(format!(
+                    "{root}: temp-state-incoherent {}",
+                    d["reason"].as_str().unwrap_or("?")
+                ));
+            }
+        }
+    }
+}
+
+/// Run `check` on both modes (after the shared `no_incoherence` check); panic
+/// with every collected failure.
 fn each_mode(check: impl Fn(&Value, &mut Vec<String>)) {
     let mut failures = Vec::new();
     for (mode, doc) in docs() {
         let mut f = Vec::new();
+        no_incoherence(doc, &mut f);
         check(doc, &mut f);
         failures.extend(f.into_iter().map(|m| format!("[{mode}] {m}")));
     }
@@ -304,6 +324,9 @@ fn check_mode(single_app: bool) {
 /// write in the message's terminal routine has a `tempState` part ≠
 /// known(true). Mutation: `temp_state: None` in `OrderingEffectInput`
 /// (`digest.rs:3136`) → "RecUiTemp: WRITE_PENDING_AT_UI on a known(true) write".
+/// Stated limit: `terminal()` reads the FIRST viaPath only, and an effect with
+/// unavailable evidence has no terminal, so a physical write without a witness
+/// cannot make the general rule fire; the named rows above hold regardless.
 #[test]
 fn a1a_ordering_filter_agrees_with_temp_state() {
     each_mode(|doc, f| {
@@ -379,22 +402,11 @@ fn a1a_ordering_filter_agrees_with_temp_state() {
 ///
 /// GREEN before #69: the diagnostic kind does not exist yet, so this test cannot
 /// be red on the base; it pins the post-fix state (D4) and is the named red of
-/// the mutation above.
+/// the mutation above. The check itself is `no_incoherence`, which `each_mode`
+/// runs for every test; this test is that check on its own.
 #[test]
 fn a1b_no_temp_state_incoherence() {
-    each_mode(|doc, f| {
-        for e in doc["payload"]["entries"].as_array().expect("entries") {
-            let root = e["routine"]["display"].as_str().unwrap();
-            for d in e["entryDiagnostics"].as_array().into_iter().flatten() {
-                if d["kind"] == "temp-state-incoherent" {
-                    f.push(format!(
-                        "{root}: temp-state-incoherent {}",
-                        d["reason"].as_str().unwrap_or("?")
-                    ));
-                }
-            }
-        }
-    });
+    each_mode(|_, _| {});
 }
 
 /// The snapshot's write facts per routine display:
@@ -835,14 +847,6 @@ fn a2e_recursion_cycles_mixes_guards() {
             }
             if has_label(e) {
                 f.push(format!("{name}: label present"));
-            }
-            // "known(true)" must be the effect's class, not a `class-absent`
-            // fallback that renders an nt effect's L4 rows (D4).
-            if e["entryDiagnostics"]
-                .as_array()
-                .is_some_and(|d| d.iter().any(|x| x["kind"] == "temp-state-incoherent"))
-            {
-                f.push(format!("{name}: temp-state-incoherent"));
             }
         };
         let kt_with_source = |name: &str, f: &mut Vec<String>| {

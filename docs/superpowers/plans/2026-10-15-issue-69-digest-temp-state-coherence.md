@@ -698,7 +698,7 @@ If a row is still red, read its quoted lines: a D1/D3 defect is fixed here (this
     3. in `cross_edge`, map `Known(true)` to `Unknown` on intra-SCC edges → `CycA: label present`;
     4. skip ordinary facts of recursive members in `fact_cone_for_scc` → `CycQTemp: label missing`;
     5. drop use (a) for the routine's own entries (skip `subject`'s `ResolvedEntry`s in `inherited_facts_by_bfs`) → `RecH: no DB_INSERT`;
-    6. restore sibling producers in `inherited_facts_by_bfs` → `SibP2: label present`;
+    6. restore sibling producers in `inherited_facts_by_bfs` → `SibP2: temp-state-incoherent class-absent` (no label is reachable after D3);
     7. skip use (a) for root-SCC members → `RootCyc1: no DB_INSERT`;
     8. cap proof enumeration at revisit-free ROUTINE paths → `PermMix: nt evidence unavailable`;
     9. drop `edge_reqs` in `cross_edge` (pass `&[]`) → `GuardFwdFalse: DB_INSERT present`;

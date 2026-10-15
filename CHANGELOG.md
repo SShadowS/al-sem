@@ -75,7 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`no-l4-row` | `class-absent`). digest `schemaVersion` 1.6.0, prove 1.4.0 (additive).
   Goldens moved: the `schemaVersion` line of 21 digest and 19 prove files under
   `tests/cli-b-goldens/`, nothing else. Pinned by `a1b_no_temp_state_incoherence`,
-  `a2b_one_effect_per_class` and the two `digest_cli::tests::temp_join_*` unit tests.
+  `a2b_one_effect_per_class` and the two `digest_cli::tests::temp_join_*` unit tests. Every
+  `cli_digest_temp_state` test fails on any `temp-state-incoherent` item (the `class-absent`
+  fallback would otherwise hide a wrong class from a test that reads the rendered value). The
+  text output shows the diagnostic's `reason=` and `op=`. `alsem prove` is unchanged: it
+  still treats only `evidence-unavailable` as an incomplete witness (the spec is silent).
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
