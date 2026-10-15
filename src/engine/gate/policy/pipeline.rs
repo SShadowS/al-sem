@@ -27,10 +27,10 @@ use crate::engine::gate::policy::policy_loader::{
     BUNDLED_DEFAULT_POLICY_YAML, LoadResult, load_policy_from_file, load_policy_from_string,
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
-use crate::engine::gate::run::analyzer_diagnostic_lines;
-use crate::engine::l5::detector_context::build_detector_context;
+use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
+use crate::engine::l5::detector_context::build_detector_context_with;
 use crate::engine::root_classification::classify_roots;
-use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+use crate::program::model::workspace::ModelRoutine;
 
 /// How the effective policy was resolved.
 enum ResolvedPolicy {
@@ -170,6 +170,8 @@ pub struct PolicyCheckOptions<'a> {
     pub deterministic: bool,
     pub strict: bool,
     pub driver_version: &'a str,
+    /// `--single-app`: the workspace alone; default (#70) the cross-app base.
+    pub single_app: bool,
 }
 
 /// `runPolicyCheck`. Exit: 0 on success ALWAYS (no fail-on gate); non-zero only on
@@ -189,22 +191,29 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
-    // Engine-switch S6.6: the program-backed model (program calls and events).
-    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
-        Some(r) => r,
-        None => {
+    // #70: the cross-app base by default (rules see a dependency's table names and
+    // the facts its code adds), the workspace alone under `--single-app`.
+    let target = match AnalysisTarget::build(
+        opts.workspace,
+        &model_id,
+        opts.single_app,
+        "al-sem policy check",
+    ) {
+        Ok(t) => t,
+        Err(e) => {
             return PolicyCheckOutcome {
                 text: None,
                 exit_code: 1,
-                stderr_lines: vec!["al-sem policy check: workspace did not resolve".to_string()],
+                stderr_lines: vec![e],
                 out_path: None,
             };
         }
     };
+    let resolved = target.resolved();
 
     // analyzeWorkspace diagnostics (run the default detector set so detector-stage
     // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
@@ -249,15 +258,28 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             // (`gate/events.rs`, `l5/digest_cli.rs`, `l5/prove.rs`) reads only
             // coverage / spans / the derived substrate, and folding it into `ALL`
             // would re-materialize ~10.9 GB of cone Vecs on all of them.
-            let ctx = build_detector_context(
-                &resolved,
+            let ctx = build_detector_context_with(
+                resolved,
                 crate::engine::l5::registry::substrate::ALL
                     | crate::engine::l5::registry::substrate::RAW_INHERITED_FACTS,
+                target.cross_app_inputs(),
             );
             let root_classifications = classify_roots(&resolved.workspace);
             let ws = &resolved.workspace;
+            // #70: rules evaluate WORKSPACE routines only; the dependency routines
+            // stay in the model for lookup (tables, objects, inherited facts).
+            let routines: std::borrow::Cow<[ModelRoutine]> =
+                if ws.routines.iter().all(|r| target.is_primary_routine(r)) {
+                    std::borrow::Cow::Borrowed(&ws.routines)
+                } else {
+                    ws.routines
+                        .iter()
+                        .filter(|r| target.is_primary_routine(r))
+                        .cloned()
+                        .collect()
+                };
             let model = PolicyModel::new(
-                &ws.routines,
+                &routines,
                 &ws.objects,
                 &ws.tables,
                 &ctx.event_graph.events,
@@ -275,10 +297,16 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
         }
     };
 
+    let dependencies = target.dependencies();
     let text = match opts.format {
-        "json" => format_policy_json(&result, opts.driver_version, opts.deterministic),
+        "json" => format_policy_json(
+            &result,
+            &dependencies,
+            opts.driver_version,
+            opts.deterministic,
+        ),
         "sarif" => format_policy_sarif(&result, opts.driver_version),
-        _ => format_policy_human(&result),
+        _ => dependencies.prefix_human(format_policy_human(&result)),
     };
 
     // Exit 0 always; stderr = analyzer diagnostics (after writing output).

@@ -27,7 +27,7 @@
 //! blind bless) with `REGEN_TEMP_GOLDENS=1 cargo test -p al-call-hierarchy
 //! --test l4_summary_differential` (CDO digest additionally needs `CDO_WS`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use al_sem::engine::l4::summary::RoutineSummary;
@@ -81,8 +81,15 @@ fn assert_parity_with_leaves(name: &str, leaves: &HashMap<String, RoutineSummary
     let (routines, graph, scc, fields, ub) = fixtures::build(name);
     // The `_core` fn also returns the roles cap-hit diagnostics, which are
     // irrelevant here (and empty on every fixture — roles converge).
-    let (new, _diags) =
-        compute_summaries_v2_with_leaves_core(&routines, &graph, &scc, &ub, &fields, leaves);
+    let (new, _diags) = compute_summaries_v2_with_leaves_core(
+        &routines,
+        &graph,
+        &scc,
+        &ub,
+        &fields,
+        leaves,
+        &HashSet::new(),
+    );
     // `canonical()` serializes `new.values()` sorted by `routine_id`, dropping the
     // map key — so before relying on it, check the key IS the value's
     // `routine_id` for every entry. This makes the value-only comparison below
@@ -293,6 +300,7 @@ fn cdo_whole_program_v2_matches_frozen_digest() {
         &calls.upgraded_bindings,
         &field_index,
         &leaf_summaries,
+        &HashSet::new(),
     );
 
     // Same key↔routine_id invariant as `assert_parity_with_leaves` — see its
@@ -885,7 +893,13 @@ mod reverse_index_differential {
             // The BUNDLE entry point, not the materializing `_core` shim — the
             // compact rows are what the index transposes.
             let (bundle, _map, _diags) = compute_summaries_v2_bundle_with_leaves(
-                &routines, &graph, &scc, &ub, &fields, &leaves,
+                &routines,
+                &graph,
+                &scc,
+                &ub,
+                &fields,
+                &leaves,
+                &HashSet::new(),
             );
             let oracle = Oracle::build(&bundle, &graph, &scc);
 
@@ -935,8 +949,15 @@ mod reverse_index_differential {
         let name = "fixed_leaf_in_scc";
         let (routines, graph, scc, fields, ub) = super::fixtures::build(name);
         let leaves = super::fixtures::fixed_leaf_in_scc_leaves();
-        let (bundle, _map, _diags) =
-            compute_summaries_v2_bundle_with_leaves(&routines, &graph, &scc, &ub, &fields, &leaves);
+        let (bundle, _map, _diags) = compute_summaries_v2_bundle_with_leaves(
+            &routines,
+            &graph,
+            &scc,
+            &ub,
+            &fields,
+            &leaves,
+            &HashSet::new(),
+        );
 
         // Premise: Tarjan really did see ONE cycle here.
         assert_eq!(scc.sccs.len(), 1, "the fixture is a single 3-member cycle");
@@ -1073,6 +1094,7 @@ fn cdo_reverse_index_matches_slow_oracle() {
         &calls.upgraded_bindings,
         &field_index,
         &leaf_summaries,
+        &HashSet::new(),
     );
 
     let oracle = diff::Oracle::build(&bundle, &graph, &scc);

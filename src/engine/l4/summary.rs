@@ -891,6 +891,7 @@ fn run_and_project(resolved: &Model) -> Vec<PRoutineSummaryCore> {
         &calls.upgraded_bindings,
         &field_index,
         &no_leaves,
+        &std::collections::HashSet::new(),
     );
 
     let map = build_routine_stable_map(&ws.routines);

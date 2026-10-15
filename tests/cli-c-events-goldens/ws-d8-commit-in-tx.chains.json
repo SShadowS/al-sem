@@ -2,6 +2,10 @@
   "al_sem_version": "cli-c-v1",
   "generated_at": "0",
   "kind": "events.chains",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
   "summary": {
     "totalRoots": 1,
     "rootsWithEvents": 1,

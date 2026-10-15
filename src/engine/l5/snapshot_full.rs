@@ -31,6 +31,7 @@ use crate::engine::ids::{
 use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
 use crate::engine::l5::snapshot::compose_snapshot_from_base;
 use crate::program::model::workspace::Model;
+use crate::program::resolve::semantic_golden::{ClosureErrorKind, dependency_closure_entries};
 
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
@@ -783,7 +784,10 @@ pub struct SnapshotInput {
 }
 
 /// Walk the workspace for the inputs that contribute to snapshot identity:
-///   app.json → "app-json"; .alpackages/*.app → "dep-package";
+///   app.json → "app-json"; every dependency-closure `.app` the loader reads
+///   (own and ancestor `.alpackages`) → "dep-package", keyed
+///   `.alpackages/x.app` / `../.alpackages/y.app`; a closure entry that
+///   cannot be listed or read → "dep-package-unreadable";
 ///   roots.config.json (if loaded) → "roots-config";
 ///   al-sem.coverage.yaml (if present) → "policy".
 /// Paths workspace-relative, forward-slash normalized. Sorted by (kind|path).
@@ -802,23 +806,28 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
         });
     }
 
-    // .alpackages/*.app.
-    let alpackages = workspace_dir.join(".alpackages");
-    if alpackages.is_dir()
-        && let Ok(entries) = std::fs::read_dir(&alpackages)
-    {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("app")
-                && let Some(hash) = hash_file(&p)
-            {
-                out.push(SnapshotInput {
-                    kind: "dep-package".into(),
-                    path: rel(workspace_dir, &p),
-                    content_hash: hash,
-                });
-            }
+    // The dependency closure the loader reads (own AND ancestor caches, up to
+    // the git boundary), from the one shared discovery. An unreadable entry
+    // fingerprints by its stable category, never by its OS message, so the
+    // same failure fingerprints the same wherever the tree lives.
+    let unreadable = |key: String, kind: ClosureErrorKind| SnapshotInput {
+        kind: "dep-package-unreadable".into(),
+        path: key,
+        content_hash: crate::engine::ids::sha256_bytes_hex(kind.as_str().as_bytes()),
+    };
+    let closure = dependency_closure_entries(workspace_dir);
+    for (key, path) in closure.entries {
+        match hash_file(&path) {
+            Some(hash) => out.push(SnapshotInput {
+                kind: "dep-package".into(),
+                path: key,
+                content_hash: hash,
+            }),
+            None => out.push(unreadable(key, ClosureErrorKind::ReadFailed)),
         }
+    }
+    for (key, kind, _os_message) in closure.errors {
+        out.push(unreadable(key, kind));
     }
 
     // roots.config.json — included iff it loads+validates (al-sem reads
@@ -1573,6 +1582,43 @@ fn write_insertion_json(v: &CborValue, indent: usize, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #70 row 2e: one discovery for the loader, the closure digest and the
+    /// fingerprint. Over a hand-built tree (a repository root holding an
+    /// ancestor cache with `b.app`, the workspace below it with its own cache
+    /// holding `a.app`), the `dep-package` input paths are exactly the closure
+    /// keys: `.alpackages/a.app` (byte-equal to the pre-#70 own-cache path) and
+    /// `../.alpackages/b.app`.
+    ///
+    /// Mutation: a second private walk that drifts (e.g. drops ancestors) ->
+    /// `../.alpackages/b.app` missing.
+    #[test]
+    fn derive_inputs_uses_the_closure_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join(".alpackages")).unwrap();
+        std::fs::write(repo.join(".alpackages").join("b.app"), b"ancestor package").unwrap();
+        let ws = repo.join("ws");
+        std::fs::create_dir_all(ws.join(".alpackages")).unwrap();
+        std::fs::write(ws.join(".alpackages").join("a.app"), b"own package").unwrap();
+        std::fs::write(ws.join("app.json"), b"{}").unwrap();
+
+        let mut got: Vec<String> = derive_inputs(&ws)
+            .into_iter()
+            .filter(|i| i.kind == "dep-package")
+            .map(|i| i.path)
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            // Byte order: `../` sorts before `.a`.
+            vec![
+                "../.alpackages/b.app".to_string(),
+                ".alpackages/a.app".to_string()
+            ]
+        );
+    }
 
     /// ⟨task 4⟩ The RE-6 member tie-break, pinned where it lives.
     ///

@@ -9,7 +9,14 @@
 //!
 //! The events JSON is an **insertion-order** envelope (NOT the `DocumentEnvelope`
 //! which sorts keys alphabetically). Keys are emitted exactly as TS does them via
-//! `JSON.stringify({al_sem_version, generated_at, kind, summary, entries|chains}, undefined, 2)`.
+//! `JSON.stringify({al_sem_version, generated_at, kind, summary, entries|chains}, undefined, 2)`,
+//! plus (#70) a `dependencies` statement right after `kind`.
+//!
+//! ## Model
+//!
+//! Cross-app by default (#70): the base `alsem analyze` builds, so a workspace
+//! subscriber to a dependency event is seen. `--single-app` analyses the workspace
+//! alone.
 //!
 //! We build the JSON by hand using a tiny ordered-value tree — no `#[derive(Serialize)]`
 //! on the engine structs.
@@ -17,7 +24,8 @@
 //! ## Scope
 //!
 //! `--scope primary` (default): keep only entries where the publisher OR any resolved
-//! subscriber is a primary (non-dep) routine. `--scope all`: keep everything.
+//! subscriber is a primary (non-dep) routine. `--scope all`: keep everything, which
+//! cross-app includes events between dependency routines only.
 //!
 //! ## Determinism
 //!
@@ -25,13 +33,13 @@
 //! the caller rather than the live version. Used by every differential test.
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use crate::engine::gate::run::analyzer_diagnostic_lines;
-use crate::engine::l5::detector_context::build_detector_context;
+use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
+use crate::engine::l5::detector_context::build_detector_context_with;
 use crate::engine::l5::event_flow::{
     ChainNode, ChainReport, ChainWalkOptions, FanoutCoverage, FanoutReport, Scope,
     compute_chain_report, compute_fanout_report,
 };
-use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+use crate::program::resolve::full::LoadedDependencies;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -142,6 +150,7 @@ fn chain_node_to_jv(node: &ChainNode) -> Jv {
 /// No trailing newline — matches `JSON.stringify(..., undefined, 2)`.
 pub fn format_fanout_json(
     report: &FanoutReport,
+    dependencies: &LoadedDependencies,
     driver_version: &str,
     deterministic: bool,
 ) -> String {
@@ -174,6 +183,10 @@ pub fn format_fanout_json(
         ("al_sem_version".to_string(), Jv::s(driver_version)),
         ("generated_at".to_string(), Jv::s(&generated_at)),
         ("kind".to_string(), Jv::s("events.fanout")),
+        (
+            "dependencies".to_string(),
+            Jv::from_json(&dependencies.to_json()),
+        ),
         ("summary".to_string(), summary),
         ("entries".to_string(), entries),
     ]);
@@ -184,6 +197,7 @@ pub fn format_fanout_json(
 /// Serialize the chain report to the insertion-order JSON envelope.
 pub fn format_chains_json(
     report: &ChainReport,
+    dependencies: &LoadedDependencies,
     driver_version: &str,
     deterministic: bool,
 ) -> String {
@@ -213,6 +227,10 @@ pub fn format_chains_json(
         ("al_sem_version".to_string(), Jv::s(driver_version)),
         ("generated_at".to_string(), Jv::s(&generated_at)),
         ("kind".to_string(), Jv::s("events.chains")),
+        (
+            "dependencies".to_string(),
+            Jv::from_json(&dependencies.to_json()),
+        ),
         ("summary".to_string(), summary),
         ("chains".to_string(), chains),
     ]);
@@ -342,6 +360,8 @@ pub struct EventsFanoutOptions<'a> {
     pub driver_version: &'a str,
     pub deterministic: bool,
     pub strict: bool,
+    /// `--single-app`: the workspace alone; default (#70) the cross-app base.
+    pub single_app: bool,
 }
 
 /// Run the fanout pipeline: load the workspace, compute indexes, compute the
@@ -360,14 +380,20 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
         }
     };
 
-    // Engine-switch S6.5: the program-backed model (program calls and events).
-    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
-        Some(r) => r,
-        None => {
+    // #70: the cross-app base by default (a workspace subscriber to a dependency
+    // event is BC's main events case), the workspace alone under `--single-app`.
+    let target = match AnalysisTarget::build(
+        opts.workspace,
+        &model_id,
+        opts.single_app,
+        "al-sem events fanout",
+    ) {
+        Ok(t) => t,
+        Err(e) => {
             return EventsRunResult {
                 text: String::new(),
                 exit_code: 1,
-                stderr_lines: vec!["al-sem events fanout: workspace did not resolve".to_string()],
+                stderr_lines: vec![e],
             };
         }
     };
@@ -376,7 +402,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // diagnostics (e.g. `d43-event-ishandled-skip`). events-fanout.ts emits these
     // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
     // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {
@@ -392,7 +418,11 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // reads `sum.coverage.as_ref().map(|c| c.inherited_status)` and NOTHING else
     // off the summary (`l5/event_flow.rs`'s `capabilityComposition` roll-up) —
     // coverage is composed under every output mode. No fact Vec is touched.
-    let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
+    let ctx = build_detector_context_with(
+        target.resolved(),
+        crate::engine::l5::registry::substrate::ALL,
+        target.cross_app_inputs(),
+    );
     let ix = &ctx.event_flow_indexes;
 
     let mut report = compute_fanout_report(&ctx.event_graph, ix, &ctx.summaries, opts.scope);
@@ -438,9 +468,15 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
         _ => {} // "warn" (default): pass through unchanged.
     }
 
+    let dependencies = target.dependencies();
     let text = match opts.format {
-        "json" => format_fanout_json(&report, opts.driver_version, opts.deterministic),
-        _ => format_fanout_human(&report),
+        "json" => format_fanout_json(
+            &report,
+            &dependencies,
+            opts.driver_version,
+            opts.deterministic,
+        ),
+        _ => dependencies.prefix_human(format_fanout_human(&report)),
     };
 
     // stderr ordering mirrors al-sem: coverage-incomplete lines are written DURING
@@ -474,6 +510,8 @@ pub struct EventsChainsOptions<'a> {
     pub driver_version: &'a str,
     pub deterministic: bool,
     pub strict: bool,
+    /// `--single-app`: the workspace alone; default (#70) the cross-app base.
+    pub single_app: bool,
 }
 
 /// Run the chains pipeline: load the workspace, compute indexes, walk chains,
@@ -492,19 +530,24 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
         }
     };
 
-    // Engine-switch S6.5: the program-backed model (program calls and events).
-    let resolved = match assemble_and_resolve_workspace_program(opts.workspace, &model_id, false) {
-        Some(r) => r,
-        None => {
+    // #70: cross-app by default, as `run_events_fanout`.
+    let target = match AnalysisTarget::build(
+        opts.workspace,
+        &model_id,
+        opts.single_app,
+        "al-sem events chains",
+    ) {
+        Ok(t) => t,
+        Err(e) => {
             return EventsRunResult {
                 text: String::new(),
                 exit_code: 1,
-                stderr_lines: vec!["al-sem events chains: workspace did not resolve".to_string()],
+                stderr_lines: vec![e],
             };
         }
     };
 
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {
@@ -520,7 +563,11 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`. The
     // chain report reads ONLY `ctx.event_flow_indexes`; `ctx.summaries` is never
     // consulted on this path at all.
-    let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
+    let ctx = build_detector_context_with(
+        target.resolved(),
+        crate::engine::l5::registry::substrate::ALL,
+        target.cross_app_inputs(),
+    );
     let ix = &ctx.event_flow_indexes;
 
     let walk_opts = ChainWalkOptions {
@@ -530,9 +577,15 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
 
     let report = compute_chain_report(ix, &walk_opts, opts.scope);
 
+    let dependencies = target.dependencies();
     let text = match opts.format {
-        "json" => format_chains_json(&report, opts.driver_version, opts.deterministic),
-        _ => format_chains_human(&report),
+        "json" => format_chains_json(
+            &report,
+            &dependencies,
+            opts.driver_version,
+            opts.deterministic,
+        ),
+        _ => dependencies.prefix_human(format_chains_human(&report)),
     };
 
     EventsRunResult {
@@ -637,7 +690,7 @@ mod tests {
         );
 
         // JSON rendering must contain `"cycleDetected": true`.
-        let json = format_chains_json(&report, "test-v1", true);
+        let json = format_chains_json(&report, &LoadedDependencies::default(), "test-v1", true);
         assert!(
             json.contains("\"cycleDetected\": true"),
             "json output must contain '\"cycleDetected\": true'; got:\n{json}"
@@ -669,7 +722,7 @@ mod tests {
         );
 
         // JSON: must contain `"depthTruncated": true`.
-        let json = format_chains_json(&report, "test-v1", true);
+        let json = format_chains_json(&report, &LoadedDependencies::default(), "test-v1", true);
         assert!(
             json.contains("\"depthTruncated\": true"),
             "json must contain '\"depthTruncated\": true'; got:\n{json}"
@@ -692,17 +745,19 @@ mod tests {
         let summaries: HashMap<String, crate::engine::l5::full_summary::FullRoutineSummary> =
             HashMap::new();
         let report = compute_fanout_report(&event_graph, &ix, &summaries, Scope::All);
-        let json = format_fanout_json(&report, "test-v1", true);
+        let json = format_fanout_json(&report, &LoadedDependencies::default(), "test-v1", true);
 
         // Top-level key order.
         let al_pos = json.find("\"al_sem_version\"").expect("al_sem_version");
         let gen_pos = json.find("\"generated_at\"").expect("generated_at");
         let kind_pos = json.find("\"kind\"").expect("kind");
+        let deps_pos = json.find("\"dependencies\"").expect("dependencies");
         let summ_pos = json.find("\"summary\"").expect("summary");
         let ent_pos = json.find("\"entries\"").expect("entries");
         assert!(al_pos < gen_pos, "al_sem_version before generated_at");
         assert!(gen_pos < kind_pos, "generated_at before kind");
-        assert!(kind_pos < summ_pos, "kind before summary");
+        assert!(kind_pos < deps_pos, "kind before dependencies");
+        assert!(deps_pos < summ_pos, "dependencies before summary");
         assert!(summ_pos < ent_pos, "summary before entries");
     }
 
@@ -718,16 +773,18 @@ mod tests {
         let ix = build_event_flow_indexes(&event_graph, &routines, &dep_ids);
         let walk_opts = ChainWalkOptions::default();
         let report = compute_chain_report(&ix, &walk_opts, Scope::All);
-        let json = format_chains_json(&report, "test-v1", true);
+        let json = format_chains_json(&report, &LoadedDependencies::default(), "test-v1", true);
 
         let al_pos = json.find("\"al_sem_version\"").expect("al_sem_version");
         let gen_pos = json.find("\"generated_at\"").expect("generated_at");
         let kind_pos = json.find("\"kind\"").expect("kind");
+        let deps_pos = json.find("\"dependencies\"").expect("dependencies");
         let summ_pos = json.find("\"summary\"").expect("summary");
         let chains_pos = json.find("\"chains\"").expect("chains");
         assert!(al_pos < gen_pos);
         assert!(gen_pos < kind_pos);
-        assert!(kind_pos < summ_pos);
+        assert!(kind_pos < deps_pos);
+        assert!(deps_pos < summ_pos);
         assert!(summ_pos < chains_pos);
     }
 }

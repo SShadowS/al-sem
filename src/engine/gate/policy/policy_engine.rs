@@ -176,8 +176,9 @@ impl<'a> PolicyModel<'a> {
 }
 
 /// `runPolicyEngine(model, policy, {scope})`. Scope filtering is applied by the
-/// caller-built `routines` list (which already excludes dependency routines for
-/// scope=primary); the policy fixtures are source-only so every routine is primary.
+/// caller-built `routines` list: `run_policy_check` passes the workspace's routines
+/// only, so a cross-app model's dependency routines are never evaluated (#70) and
+/// every counter counts workspace routines.
 pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
     let mut findings: Vec<Finding> = Vec::new();
     let mut rule_summaries: Vec<RuleRunSummary> = Vec::new();

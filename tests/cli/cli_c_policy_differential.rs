@@ -131,6 +131,7 @@ fn check_text(fixture: &str, format: &str, no_policy: bool) -> String {
         deterministic: true,
         strict: false,
         driver_version: ALSEM_VERSION,
+        single_app: false,
     };
     let outcome = run_policy_check(&opts);
     assert_eq!(

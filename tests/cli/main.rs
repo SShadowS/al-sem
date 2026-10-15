@@ -18,6 +18,9 @@ mod regen;
 #[path = "../common/temp_state_probe.rs"]
 mod temp_state_probe;
 
+#[path = "../common/dep_dispatch_fixture.rs"]
+mod dep_dispatch_fixture;
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that
@@ -51,12 +54,14 @@ mod cli_digest_changed_spans;
 mod cli_digest_query_dependencies;
 mod cli_digest_temp_state;
 mod cli_envelope_detector_set;
+mod cli_events_policy_dependencies;
 mod cli_graph_export;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_stderr_logger;
+mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;
 mod d1_downgraded_to_info_oracle;
 mod gate_prsummary_differential;

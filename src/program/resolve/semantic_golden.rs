@@ -234,6 +234,99 @@ pub struct MintMetadata {
 /// the goldens are re-stamped (`mint-goldens --restamp`).
 pub const CLOSURE_SCHEME: &str = "closure-v2";
 
+/// Why a closure entry could not be used. The stable [`Self::as_str`] marker is
+/// what a fingerprint hashes; the OS message (machine paths, OS wording) never is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureErrorKind {
+    /// An `.alpackages` folder could not be listed.
+    ListingFailed,
+    /// A discovered `.app` could not be read (e.g. it is a directory).
+    ReadFailed,
+    /// A discovered cache folder is not `<ancestor of the workspace>/.alpackages`,
+    /// so it has no relative key (keyed by its own path instead).
+    OutsideWalk,
+}
+
+impl ClosureErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ListingFailed => "listing-failed",
+            Self::ReadFailed => "read-failed",
+            Self::OutsideWalk => "outside-walk",
+        }
+    }
+}
+
+/// The dependency closure the loader reads, keyed by path relative to the
+/// workspace (`.alpackages/x.app`, `../.alpackages/y.app`), sorted by key.
+/// `errors` holds every folder that could not be listed (keyed
+/// `../.alpackages/`) and every `.app` that could not be opened as a file
+/// (keyed like an entry), with the OS message. A failure never drops another,
+/// readable entry.
+#[derive(Debug, Default)]
+pub struct ClosureEntries {
+    pub entries: Vec<(String, PathBuf)>,
+    pub errors: Vec<(String, ClosureErrorKind, String)>,
+}
+
+/// The ONE closure discovery behind [`dependency_closure_digest`] and the
+/// workspace fingerprint's `dep-package` inputs, built on
+/// [`crate::dependencies::discover_app_files`] (the loader's own walk).
+#[must_use]
+pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
+    // How many levels above `workspace_root` a cache folder sits (0 = its own).
+    // Every discovered folder should be `<ancestor>/.alpackages`; one that is
+    // not is an explicit `OutsideWalk` error, never silently keyed as the own cache.
+    let folder_key = |folder: &Path| -> Result<String, (String, ClosureErrorKind, String)> {
+        folder
+            .parent()
+            .and_then(|owner| workspace_root.ancestors().position(|a| a == owner))
+            .map(|ups| format!("{}.alpackages/", "../".repeat(ups)))
+            .ok_or_else(|| {
+                (
+                    folder.display().to_string(),
+                    ClosureErrorKind::OutsideWalk,
+                    "not an ancestor's .alpackages".to_string(),
+                )
+            })
+    };
+    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
+    let mut out = ClosureEntries::default();
+    for (folder, e) in unreadable {
+        match folder_key(&folder) {
+            Ok(key) => out
+                .errors
+                .push((key, ClosureErrorKind::ListingFailed, e.to_string())),
+            Err(err) => out.errors.push(err),
+        }
+    }
+    for f in files {
+        let key = match folder_key(&f.folder) {
+            Ok(folder) => format!(
+                "{folder}{}",
+                f.path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            Err(err) => {
+                out.errors.push(err);
+                continue;
+            }
+        };
+        match std::fs::File::open(&f.path).and_then(|h| h.metadata()) {
+            Ok(m) if m.is_file() => out.entries.push((key, f.path)),
+            Ok(_) => out
+                .errors
+                .push((key, ClosureErrorKind::ReadFailed, "not a file".to_string())),
+            Err(e) => out
+                .errors
+                .push((key, ClosureErrorKind::ReadFailed, e.to_string())),
+        }
+    }
+    out.entries.sort_by(|a, b| a.0.cmp(&b.0));
+    out.errors.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// SHA-256 over the dependency symbol closure the resolver ACTUALLY loads (#29):
 /// every `.app` file [`crate::dependencies::discover_app_files`] finds, in every
 /// scanned `.alpackages` (the workspace's own AND each ancestor's, up to the git
@@ -246,31 +339,15 @@ pub const CLOSURE_SCHEME: &str = "closure-v2";
 /// closure, never `None`. `Err` when a cache folder cannot be listed or a file
 /// cannot be read: a probe failure is not an empty closure.
 pub fn dependency_closure_digest(workspace_root: &Path) -> Result<String, String> {
-    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
-    if let Some((folder, e)) = unreadable.first() {
-        return Err(format!("cannot list {}: {e}", folder.display()));
+    let closure = dependency_closure_entries(workspace_root);
+    if let Some((key, kind, message)) = closure.errors.first() {
+        return Err(format!("{} {key}: {message}", kind.as_str()));
     }
-    let mut keyed: Vec<(String, PathBuf)> = Vec::with_capacity(files.len());
-    for f in files {
-        // How many levels above `workspace_root` the cache sits (0 = its own).
-        let owner = f.folder.parent().unwrap_or(&f.folder);
-        let ups = workspace_root
-            .ancestors()
-            .position(|a| a == owner)
-            .ok_or_else(|| format!("{} is not an ancestor cache", f.folder.display()))?;
-        let name = f
-            .path
-            .file_name()
-            .ok_or_else(|| format!("no file name: {}", f.path.display()))?
-            .to_string_lossy();
-        keyed.push((format!("{}.alpackages/{name}", "../".repeat(ups)), f.path));
-    }
-    if keyed.is_empty() {
+    if closure.entries.is_empty() {
         return Ok(format!("{CLOSURE_SCHEME}:empty"));
     }
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
     let mut hasher = Sha256::new();
-    for (key, path) in &keyed {
+    for (key, path) in &closure.entries {
         let bytes =
             std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         hasher.update((key.len() as u64).to_le_bytes());
@@ -2512,6 +2589,21 @@ codeunit 50808 "EvSub4"
     /// into an ANCESTOR cache (inside the git boundary) changes it -- the swap
     /// the old workspace-only digest missed -- while a non-`.app` file and a
     /// cache above the boundary do not.
+    /// #70: the digest's error names the OS reason after the category and key.
+    /// Hand-stated: a directory named `x.app` (opening it fails on Windows, or
+    /// opens as a non-file elsewhere).
+    #[test]
+    fn closure_digest_error_carries_the_reason() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".alpackages").join("x.app")).unwrap();
+        let err = dependency_closure_digest(tmp.path()).unwrap_err();
+        let reason = err
+            .strip_prefix("read-failed .alpackages/x.app: ")
+            .unwrap_or_else(|| panic!("{err}"));
+        assert!(!reason.is_empty(), "{err}");
+    }
+
     #[test]
     fn issue29_closure_digest_covers_ancestor_caches_and_only_apps() {
         let tmp = tempfile::tempdir().expect("tempdir");

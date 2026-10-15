@@ -2,6 +2,23 @@
   "al_sem_version": "cli-c-v1",
   "generated_at": "0",
   "kind": "policy.check",
+  "dependencies": {
+    "apps": [
+      {
+        "appId": "8874ed3a-0643-4247-9ced-7a7002f7135d",
+        "name": "System",
+        "source": "missing",
+        "version": "26.0.0.0"
+      },
+      {
+        "appId": "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+        "name": "System Application",
+        "source": "missing",
+        "version": "26.0.0.0"
+      }
+    ],
+    "mode": "crossApp"
+  },
   "policySource": "disabled",
   "policyVersion": 0,
   "ruleSummaries": [],

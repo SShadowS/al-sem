@@ -373,6 +373,119 @@ fn dependency_routines_never_become_changed_roots() {
     }
 }
 
+/// #70 row 3a: a dependency PUBLISHER the workspace raises is solved, so the L4
+/// store follows its dispatch exactly as digest's cone does. On the
+/// `tests/common/dep_dispatch_fixture.rs` workspace, cross-app
+/// `query effects --routine RaiseDep` lists exactly two rows, each
+/// `tempState: known(false)`:
+///   - `Insert` into the dependency's `Customer`, origin `HandleDep`, anchored in
+///     a `dep:` file;
+///   - `Insert` into `Ws Flag`, origin `HandleInWs`, anchored in `ws:src/Work.al`.
+///
+/// Hand-stated precondition: the dependency is loaded `embedded`.
+///
+/// Mutation: make dependency publishers fixed leaves again (today's predicate in
+/// `build_cross_app_base`) -> `effects: []` (probe E6).
+#[test]
+fn dependency_publisher_dispatch_reaches_the_store() {
+    use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};
+    let dir = tempfile::tempdir().unwrap();
+    write_own(dir.path(), "");
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let (q, code) = json(&["query", "effects", &ws, "--routine", "RaiseDep"]);
+    assert_eq!(code, 0, "{q}");
+    assert_eq!(
+        app_sources(&q),
+        vec![(XDEP.to_string(), "embedded".to_string())],
+        "precondition: {q}"
+    );
+    let mut rows: Vec<(String, String, String, String, String)> = q["payload"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let file = e["origin"]["anchor"]["file"].as_str().unwrap_or("");
+            let unit = if file.starts_with(&format!("dep:{XDEP}:")) {
+                "dep"
+            } else {
+                file
+            };
+            (
+                e["op"].as_str().unwrap_or("").to_string(),
+                e["tableName"].as_str().unwrap_or("").to_string(),
+                e["origin"]["routine"]["display"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                unit.to_string(),
+                e["tempState"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    let row = |t: &str, r: &str, u: &str| {
+        (
+            "Insert".to_string(),
+            t.to_string(),
+            r.to_string(),
+            u.to_string(),
+            "known(false)".to_string(),
+        )
+    };
+    assert_eq!(
+        rows,
+        vec![
+            row("Customer", "HandleDep", "dep"),
+            row("Ws Flag", "HandleInWs", "ws:src/Work.al"),
+        ],
+        "{q}"
+    );
+}
+
+/// #70: cross-app digest's transaction spans see the dependency's writes. A
+/// workspace routine calls the dependency's `Outer()` (whose `Inner()` inserts
+/// `Customer`) and then runs its OWN `Commit()`; that COMMIT's
+/// `transactionContext` is `span-has-known-writes`.
+///
+/// Hand-stated precondition: the dependency is loaded `embedded`.
+///
+/// Discrimination (2026-10-15): `run_digest_pipeline` passing `None` instead of
+/// `target.cross_app_inputs()` to `compute_tx_context_map` fails this test with
+/// `["span-has-no-known-writes"]`; restored, it passes.
+#[test]
+fn cross_app_commit_span_sees_dependency_writes() {
+    use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};
+    let dir = tempfile::tempdir().unwrap();
+    write_own(
+        dir.path(),
+        "codeunit 50172 \"Ws Commit\"\n{\n    procedure CommitAfterDep()\n    var\n        Lib: Codeunit \"Dep Lib\";\n    begin\n        Lib.Outer();\n        Commit();\n    end;\n}\n",
+    );
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let (doc, code) = json(&["digest", &ws, "--file", "src/Extra.al"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        app_sources(&doc),
+        vec![(XDEP.to_string(), "embedded".to_string())],
+        "precondition: {doc}"
+    );
+    let entry = doc["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["routine"]["display"] == "CommitAfterDep")
+        .unwrap_or_else(|| panic!("no CommitAfterDep entry: {doc}"));
+    let own: Vec<&str> = entry["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["type"] == "COMMIT" && f["provenance"] == "direct")
+        .map(|f| f["transactionContext"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(own, vec!["span-has-known-writes"], "{entry}");
+}
+
 /// The no-dependency contract: on every digest and query golden workspace (none
 /// has a `.alpackages`), cross-app output equals `--single-app` output apart
 /// from `payload.dependencies.mode`; human output is byte-equal.

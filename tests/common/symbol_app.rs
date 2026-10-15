@@ -38,7 +38,10 @@ fn write_app(
     let mut bytes = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
-        let opts = zip::write::SimpleFileOptions::default();
+        // A fixed timestamp keeps the `.app` bytes a pure function of the inputs; the
+        // default stamps the current time, so two builds seconds apart differed (#70 2h).
+        let opts =
+            zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default());
         zip.start_file("NavxManifest.xml", opts).unwrap();
         zip.write_all(manifest.as_bytes()).unwrap();
         zip.start_file("SymbolReference.json", opts).unwrap();

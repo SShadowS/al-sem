@@ -27,7 +27,7 @@
 //! runs over the ACYCLIC SCC condensation; within a recursive SCC the BFS visits
 //! each member at most once.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::combined_graph::{CombinedGraph, TypedEdge, build_combined_graph};
@@ -3246,8 +3246,18 @@ pub struct R3a5CrossAppBase {
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
     pub upgraded_bindings: HashMap<String, Vec<crate::program::model::calls::UpgradedBinding>>,
     pub event_graph: EventGraph,
-    /// Fixed-leaf (dep) RETAINED summaries.
+    /// Fixed-leaf (dep) RETAINED summaries: every source-bearing dependency
+    /// routine with no out-edge in [`Self::graph`].
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
+    /// Source-bearing dependency routines WITH an out-edge (an event publisher's
+    /// subscriber dispatch, #70): solved for their db-effect rows, but their
+    /// parameter roles stay the leaf's: the five path-sensitive fields
+    /// (`requiresLoadedAtEntry`, `requiredLoadedFieldsAtEntry`,
+    /// `mutatesBeforeLoad`, `dirtyAtExit`, `currentLoadedFieldsAtExit`) unknown,
+    /// the body-local ones (`persistsCurrentRecord`, `writesFields`,
+    /// `validatesParam`, …) from the publisher's own body, exactly as for every
+    /// dependency leaf. Role composition does not follow the dispatch edges.
+    pub fixed_roles: HashSet<String>,
     /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
     /// `direct-call` typed edges); also folded into [`Self::graph`].
     pub injected_typed_edges: Vec<TypedEdge>,
@@ -3277,6 +3287,22 @@ impl R3a5CrossAppBase {
     pub fn objects(&self) -> &Vec<crate::program::model::workspace::ModelObject> {
         &self.resolved.workspace.objects
     }
+
+    /// What every cross-app detector context takes from this base; the ONE
+    /// constructor, so its callers cannot drift.
+    pub(crate) fn cross_app_inputs(
+        &self,
+    ) -> crate::engine::l5::detector_context::CrossAppInputs<'_> {
+        crate::engine::l5::detector_context::CrossAppInputs {
+            dep_routine_ids: &self.dep_routine_ids,
+            leaf_summaries: &self.leaf_summaries,
+            fixed_roles: &self.fixed_roles,
+            injected_typed_edges: &self.injected_typed_edges,
+            declared_dependencies: &self.declared_dependencies,
+            app_versions: &self.resolved_app_versions,
+            friends: &self.friends,
+        }
+    }
 }
 
 /// The cross-app L4 BASE (engine-switch S7.4): every intermediate the R3a-5
@@ -3290,9 +3316,15 @@ impl R3a5CrossAppBase {
 /// flipped on, and a source-parsing one (r4); each also re-parsed every `.app`
 /// twice more (`build_dep_artifact_l4`, `recover_dep_retained`) for facts the model
 /// now carries itself. Kept contracts:
-/// - a source-bearing dependency routine is a FIXED solver leaf holding its own
-///   direct dbEffects (`base_intraprocedural_summary`), so a workspace caller does
-///   not inherit what the dependency routine's own callees write;
+/// - a source-bearing dependency routine with no out-edge in the combined graph
+///   is a FIXED solver leaf holding its own direct dbEffects
+///   (`base_intraprocedural_summary`), so a workspace caller does not inherit
+///   what the dependency routine's own callees write (those calls are cut from
+///   the combined graph). The only out-edges a dependency routine keeps are an
+///   event publisher's subscriber dispatches (#70): such a publisher is solved,
+///   so the store follows its dispatch as the cone does, but it keeps the leaf's
+///   parameter roles (`fixed_roles`: the five path-sensitive fields unknown, the
+///   body-local fields from its own body, as for every dependency leaf);
 /// - a symbol-only dependency routine is no leaf: its summary is the `opaque-body`
 ///   self-uncertainty;
 /// - every routine's direct capability facts and coverage come from
@@ -3404,15 +3436,24 @@ pub(crate) fn build_cross_app_base(
         ws.routines.iter().map(|r| (r.id.clone(), r)).collect();
     let mut leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
         HashMap::new();
+    let mut fixed_roles: HashSet<String> = HashSet::new();
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
     let mut direct_coverage: HashMap<String, (String, Vec<String>)> = HashMap::new();
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     for r in &ws.routines {
         if dep_routine_ids.contains(&r.id) && r.body_available {
-            leaf_summaries.insert(
-                r.id.clone(),
-                base_intraprocedural_summary(r, &routines_by_id, &field_index),
-            );
+            let has_out_edge = graph
+                .edges_by_from
+                .get(&r.id)
+                .is_some_and(|e| !e.is_empty());
+            if has_out_edge {
+                fixed_roles.insert(r.id.clone());
+            } else {
+                leaf_summaries.insert(
+                    r.id.clone(),
+                    base_intraprocedural_summary(r, &routines_by_id, &field_index),
+                );
+            }
         }
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
@@ -3442,6 +3483,7 @@ pub(crate) fn build_cross_app_base(
         upgraded_bindings,
         event_graph: event_graph.clone(),
         leaf_summaries,
+        fixed_roles,
         injected_typed_edges,
         direct_full,
         direct_coverage,
@@ -3490,6 +3532,7 @@ pub fn project_r3a5_cross_app(
         &base.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
+        &base.fixed_roles,
     );
     // ⟨C1 Task 3⟩ `RawOnly` — this projection path consumes the RAW cone (its
     // exact `sort_inherited` byte order IS the R3a-5 golden surface, Global
@@ -4262,5 +4305,260 @@ mod pd_uses_tests {
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].0.witness_operation_id.as_deref(), Some("H/op1"));
         assert_eq!(picks[0].1.callsite.as_deref(), Some("cs1"));
+    }
+}
+
+/// #70 row 3c: a solved dependency publisher keeps UNKNOWN parameter roles.
+#[cfg(test)]
+mod issue70_publisher_roles_tests {
+    use super::*;
+    use crate::engine::l4::effect_lattice::EffectPresence;
+    use crate::engine::l4::summary::FieldList;
+    use std::io::Write;
+
+    const WS_GUID: &str = "aaaa7071-0000-0000-0000-000000000070";
+    const DEP_GUID: &str = "bbbb7071-0000-0000-0000-000000000070";
+
+    const DEP_AL: &str = r#"codeunit 12 "Dep Rec Lib"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnDepRec(var Rec: Record Customer)
+    begin
+    end;
+}
+
+codeunit 13 "Dep Rec Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnDepRec', '', false, false)]
+    local procedure HandleRec(var Rec: Record Customer)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+    const WS_AL: &str = r#"codeunit 50180 "Ws Fwd"
+{
+    procedure Fwd(var Rec: Record Customer)
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.OnDepRec(Rec);
+    end;
+}
+"#;
+
+    /// The workspace (`Fwd` only) and its embedded-source dependency, written
+    /// as `tests/common/symbol_app.rs` does (40-byte header + zip).
+    fn write_fixture(ws: &std::path::Path) {
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(
+            ws.join("app.json"),
+            format!(
+                r#"{{"id":"{WS_GUID}","name":"Ws71","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XRec","publisher":"probe","version":"1.0.0.0"}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(ws.join("src/Fwd.al"), WS_AL).unwrap();
+
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP_GUID}" Name="XRec" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
+        );
+        let rec_param = r#"{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}"#;
+        let symbols = format!(
+            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":12,"Name":"Dep Rec Lib","Methods":[{{"Name":"OnDepRec","Parameters":[{rec_param}],"Attributes":[{{"Name":"IntegrationEvent","Arguments":[{{"Value":"False"}},{{"Value":"False"}}]}}]}}]}},{{"Id":13,"Name":"Dep Rec Sub","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XRec","Publisher":"probe","Version":"1.0.0.0"}}"#
+        );
+        let customer = "table 18 Customer\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n";
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut bytes);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, text) in [
+                ("NavxManifest.xml", manifest.as_str()),
+                ("SymbolReference.json", symbols.as_str()),
+                ("src/Customer.al", customer),
+                ("src/Lib.al", DEP_AL),
+            ] {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(text.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let pkgs = ws.join(".alpackages");
+        std::fs::create_dir_all(&pkgs).unwrap();
+        let mut out = std::fs::File::create(pkgs.join("probe_XRec_1.0.0.0.app")).unwrap();
+        out.write_all(&[0u8; 40]).unwrap();
+        out.write_all(bytes.get_ref()).unwrap();
+    }
+
+    fn routine_id(base: &R3a5CrossAppBase, name: &str) -> String {
+        let ids: Vec<&ModelRoutine> = base
+            .ws_routines()
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(ids.len(), 1, "{name}: {}", ids.len());
+        ids[0].id.clone()
+    }
+
+    /// The five path-sensitive role fields of a CORE role, as
+    /// (requiresLoadedAtEntry, requiredLoadedFieldsAtEntry, mutatesBeforeLoad,
+    /// dirtyAtExit, currentLoadedFieldsAtExit).
+    fn five(
+        r: &crate::engine::l4::summary::RecordRoleSummary,
+    ) -> (
+        EffectPresence,
+        FieldList,
+        EffectPresence,
+        EffectPresence,
+        FieldList,
+    ) {
+        (
+            r.requires_loaded_at_entry,
+            r.required_loaded_fields_at_entry.clone(),
+            r.mutates_before_load,
+            r.dirty_at_exit,
+            r.current_loaded_fields_at_exit.clone(),
+        )
+    }
+
+    /// The same five fields of a PROJECTED role (`project_r3a5_cross_app`).
+    fn five_projected(r: &crate::engine::l4::summary::PRecordRoleSummary) -> [String; 5] {
+        let v = serde_json::to_value(r).unwrap();
+        [
+            "requiresLoadedAtEntry",
+            "requiredLoadedFieldsAtEntry",
+            "mutatesBeforeLoad",
+            "dirtyAtExit",
+            "currentLoadedFieldsAtExit",
+        ]
+        .map(|k| v[k].as_str().unwrap_or("<not a string>").to_string())
+    }
+
+    /// Row 3c. A dependency publisher `OnDepRec(var Rec: Record Customer)` whose
+    /// dependency subscriber `HandleRec` does `Rec.Modify()`, and a workspace
+    /// forwarder `Fwd(var Rec)` whose body is ONLY `Lib.OnDepRec(Rec)`.
+    /// Hand-stated expectations, checked through the production paths that
+    /// expose each fact:
+    ///   (i)   DB rows, through the store `cross_app_db_effect_bundle` builds:
+    ///         `OnDepRec` has its subscriber's `Modify` row;
+    ///   (ii)  parameter roles, through the detector context analyze uses
+    ///         (`build_detector_context_with` + the base's cross-app inputs,
+    ///         `ctx.parameter_roles_by_routine`);
+    ///   (iii) roles, through `project_r3a5_cross_app`.
+    /// In (ii) and (iii): `OnDepRec`'s five path-sensitive role fields are all
+    /// unknown; `Fwd`'s entry fields (`requiresLoadedAtEntry`,
+    /// `requiredLoadedFieldsAtEntry`, `mutatesBeforeLoad`) are unknown, its exit
+    /// fields keep the walker's behaviour (`dirtyAtExit: no`,
+    /// `currentLoadedFieldsAtExit: full`).
+    ///
+    /// Mutations: (a) the solver writes back roles for `fixed_roles` members ->
+    /// concrete roles -> fails; (b) an EMPTY `fixed_roles` only at the
+    /// detector-context call -> (ii) fails while (iii) passes.
+    ///
+    /// (ii) takes its inputs from `base.cross_app_inputs()`, the one
+    /// constructor every cross-app caller uses, so mutation (b) reaches it.
+    #[test]
+    fn dependency_publisher_roles_stay_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        let publisher = routine_id(&base, "OnDepRec");
+        let fwd = routine_id(&base, "Fwd");
+        assert!(
+            base.dep_routine_ids.contains(&publisher),
+            "precondition: OnDepRec is a dependency routine"
+        );
+        let mut failures: Vec<String> = Vec::new();
+
+        // (i) DB rows through the store.
+        let bundle = crate::engine::l4::effect_query_cli::cross_app_db_effect_bundle(&base);
+        let ops: Vec<String> = bundle
+            .routine_ix(&publisher)
+            .map(|ix| bundle.db_effects(ix).map(|e| e.op.to_string()).collect())
+            .unwrap_or_default();
+        if !ops.iter().any(|op| op.eq_ignore_ascii_case("modify")) {
+            failures.push(format!(
+                "(i) OnDepRec has no subscriber Modify row in the store: {ops:?}"
+            ));
+        }
+
+        let all_unknown = (
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+            EffectPresence::Unknown,
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+        );
+        let fwd_want = (
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+            EffectPresence::Unknown,
+            EffectPresence::No,
+            FieldList::Full,
+        );
+
+        // (ii) The detector context analyze uses.
+        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            crate::engine::l5::registry::substrate::ALL,
+            Some(base.cross_app_inputs()),
+        );
+        for (name, id, want) in [
+            ("OnDepRec", &publisher, &all_unknown),
+            ("Fwd", &fwd, &fwd_want),
+        ] {
+            match ctx.parameter_roles_by_routine.get(id).map(|v| v.as_slice()) {
+                Some([role]) => {
+                    if &five(role) != want {
+                        failures.push(format!("(ii) {name}: want {want:?}, got {:?}", five(role)));
+                    }
+                }
+                other => failures.push(format!("(ii) {name}: want one role, got {other:?}")),
+            }
+        }
+
+        // (iii) project_r3a5_cross_app.
+        let proj = project_r3a5_cross_app(&ws, "r0", "issue70");
+        let u = "unknown".to_string();
+        for (name, want) in [
+            (
+                "OnDepRec",
+                [u.clone(), u.clone(), u.clone(), u.clone(), u.clone()],
+            ),
+            (
+                "Fwd",
+                [
+                    u.clone(),
+                    u.clone(),
+                    u.clone(),
+                    "no".to_string(),
+                    "full".to_string(),
+                ],
+            ),
+        ] {
+            let stable = base
+                .ws_routines()
+                .iter()
+                .find(|r| r.name == name)
+                .map(|r| r.stable_routine_id.clone())
+                .unwrap();
+            match proj.summaries.iter().find(|s| s.routine_id == stable) {
+                Some(s) => match s.parameter_roles.as_slice() {
+                    [role] => {
+                        if five_projected(role) != want {
+                            failures.push(format!(
+                                "(iii) {name}: want {want:?}, got {:?}",
+                                five_projected(role)
+                            ));
+                        }
+                    }
+                    other => failures.push(format!("(iii) {name}: want one role, got {other:?}")),
+                },
+                None => failures.push(format!("(iii) {name}: no projected summary")),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

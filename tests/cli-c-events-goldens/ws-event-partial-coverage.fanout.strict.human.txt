@@ -1,2 +1,3 @@
+dependencies: System (missing), System Application (missing)
 Event fanout report  (1 publishers, 1 events, 0 hot)
 

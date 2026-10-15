@@ -199,9 +199,11 @@ impl QuerySubstrate {
 }
 
 /// The L4 db-effect store over `alsem analyze`'s cross-app base (#66): its
-/// combined graph and SCC, every source-bearing dependency routine a FIXED
-/// leaf. The cross-app twin of [`build_db_effect_bundle`]; `query` and
-/// `digest` both read it in cross-app mode, so their `tempState` agrees (#65).
+/// combined graph and SCC, every source-bearing dependency routine without an
+/// out-edge a FIXED leaf, and a dependency publisher solved through its
+/// subscriber dispatch (#70). The cross-app twin of [`build_db_effect_bundle`];
+/// `query` and `digest` both read it in cross-app mode, so their `tempState`
+/// agrees (#65).
 pub fn cross_app_db_effect_bundle(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> SummaryBundle {
@@ -212,6 +214,7 @@ pub fn cross_app_db_effect_bundle(
         &base.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
+        &base.fixed_roles,
     )
     .0
 }
@@ -252,6 +255,7 @@ pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, Su
         &calls.upgraded_bindings,
         &field_index,
         &no_leaves,
+        &std::collections::HashSet::new(),
     );
     (graph, scc, bundle)
 }
@@ -782,9 +786,7 @@ pub fn render_query_touches(
 /// Human output names the loaded dependency apps on its first line, only when
 /// there are some (a workspace with no dependency reads the same in both modes).
 fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
-    if let Some(line) = deps.human_line() {
-        r.human_text = format!("{line}\n{}", r.human_text);
-    }
+    r.human_text = deps.prefix_human(r.human_text);
     r
 }
 

@@ -3,10 +3,12 @@
 //! Three formats over a [`PolicyRunResult`]:
 //!   - `json`: the `policy.check` envelope (insertion-order) with a POLICY-SPECIFIC
 //!     Finding serializer (insertion-order, `fingerprint` LAST, optionals
-//!     skip-if-none). NOT the gate stable projection.
+//!     skip-if-none). NOT the gate stable projection. A `dependencies` statement
+//!     follows `kind` (#70).
 //!   - `sarif`: reuses the gate SARIF shape (driver + rules + results), fingerprints
-//!     skip-if-none.
-//!   - `human`: literal TAB-indented summary + findings list.
+//!     skip-if-none. No dependencies statement (no consumer reads one).
+//!   - `human`: literal TAB-indented summary + findings list (the caller prepends
+//!     the dependencies line).
 
 use crate::engine::gate::ordered_json::{Jv, serialize_jv};
 use crate::engine::gate::policy::policy_engine::PolicyRunResult;
@@ -208,6 +210,7 @@ fn rule_summary_to_jv(s: &RuleRunSummary) -> Jv {
 /// `formatPolicy(result, { format: "json", deterministic, alsemVersion })`.
 pub fn format_policy_json(
     result: &PolicyRunResult,
+    dependencies: &crate::program::resolve::full::LoadedDependencies,
     driver_version: &str,
     deterministic: bool,
 ) -> String {
@@ -221,6 +224,10 @@ pub fn format_policy_json(
         ("al_sem_version".to_string(), Jv::s(driver_version)),
         ("generated_at".to_string(), Jv::s(&generated_at)),
         ("kind".to_string(), Jv::s("policy.check")),
+        (
+            "dependencies".to_string(),
+            Jv::from_json(&dependencies.to_json()),
+        ),
         ("policySource".to_string(), Jv::s(&result.policy_source)),
         ("policyVersion".to_string(), Jv::Num(result.policy_version)),
         (

@@ -1,0 +1,466 @@
+[
+ {
+  "id": "R1-01",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Acceptance 3b",
+  "line": null,
+  "severity": "important",
+  "text": "3b cannot fail under mutation (i) alone after the leaf fix; reinstating the leaf bug is not an independent proof. Assert both inserts, their tempStates and no temp-state-incoherent.",
+  "disposition": "fixed",
+  "evidence": "Spec row 3b rewritten: exact two inserts, tempState known(false), no temp-state-incoherent, parts equal to query; the discriminating break is reinstating publisher leaves; the 'single-app store' mutation is recorded as an explicit relaxation for panel approval (the builders coincide once publishers are solved).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Design §3",
+  "line": null,
+  "severity": "important",
+  "text": "'Emptying leaf_summaries is a no-op' is false for full summaries: leaves keep unknown parameter roles that solving replaces (summary_runner.rs:546-568, :738-774).",
+  "disposition": "fixed",
+  "evidence": "Verified. Spec §3: the no-op claim is restricted to DB-effect rows; leaf_summaries is KEPT, deletion is out of scope; the predicate's parameter-role effect on analyze is stated and measured (CDO analyze findings by detector, every moved finding triaged).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Design §1 policy",
+  "line": null,
+  "severity": "important",
+  "text": "Dropping dependency findings after evaluation still inflates routinesEvaluated/matched/skipped/findingsEmitted; capability-only rules still evaluate dependency routines.",
+  "disposition": "fixed",
+  "evidence": "Spec §1: the evaluated routine population is filtered to the primary app BEFORE evaluation (lookup data kept). Row 1c adds a fourth assertion: rule-summary counts equal the --single-app run's on the dependency-free twin; no dep:-anchored finding. | Superseded detail (R2-02): the counts are hand-stated per mode, not compared to a single-app twin.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Acceptance 1f / golden plan",
+  "line": null,
+  "severity": "important",
+  "text": "Policy (and r0-corpus) fixtures declare platform, so cross-app LoadedDependencies emits source:missing System rows and a human dependencies line; 'apps: []' and 'no human golden moves' are wrong.",
+  "disposition": "fixed",
+  "evidence": "Verified: full.rs:2160-2167 pushes missing rows; human_line prints when apps non-empty; 24 r0-corpus fixtures and the cli-c-policy fixtures declare platform. Spec §1 states it; row 1f compares the statement separately and everything else byte-equal, plus a no-declaration test; golden plan: JSON gains dependencies (apps [] or a missing System row), platform fixtures' human goldens gain one line; manifest.json excluded. | Round 2: astra re-raised (single-app uses LoadedDependencies::default(); platform adds System AND System Application). Fixed: row 1f asserts each mode's statement independently (single-app apps []; cross-app both missing rows iff platform); §1 and the golden plan name both rows and the exact human line.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Design §2 failure shape",
+  "line": null,
+  "severity": "important",
+  "text": "Result<Vec,String> loses readable entries when any cache fails; a single sentinel can mask a readable swap; no structured error keys.",
+  "disposition": "fixed",
+  "evidence": "Spec §2: dependency_closure_entries returns {entries, errors} keyed by the same ../-relative keys; readable entries never dropped; derive_inputs emits dep-package-unreadable per error; the closure digest keeps returning Err (stamps unchanged). New test 2f: swap beside an unreadable cache. | Round 2: astra re-raised (an .alpackages FILE is skipped by is_dir() before read_dir, dependencies.rs:365-367). Fixed: test 2f uses a directory named broken.app inside a discovered cache (a real read failure) and asserts the dep-package-unreadable precondition first.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "astra",
+  "round": 1,
+  "file": "src/dependencies.rs:351-378",
+  "line": null,
+  "severity": "important",
+  "text": "find_all_alpackages_folders ascends from project_root.parent() without checking project_root/.git, so a repository-root workspace reads caches above it.",
+  "disposition": "fixed",
+  "evidence": "Verified at dependencies.rs:356-378. Spec §2: fix once in the helper (no ascent when project_root/.git exists); loader change for that layout is a pre-existing bug, CHANGELOG Fixed; CDO unaffected. New test 2g (unit + CLI; .git as directory and as file; nested case still ascends).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-07",
+  "source": "astra",
+  "round": 1,
+  "file": "spec Goal 2 / §2",
+  "line": null,
+  "severity": "minor",
+  "text": "'Fingerprint changes iff the closure-v2 digest changes' is unconditional; other inputs also count; no literal closure-v2 tag.",
+  "disposition": "fixed",
+  "evidence": "Spec §2 restated with the other inputs held constant; the literal-tag deviation is named for panel approval; zero golden churn is called a consequence, not the proof.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-08",
+  "source": "flash",
+  "round": 1,
+  "file": "spec Design §1 (events/policy build)",
+  "line": null,
+  "severity": "important",
+  "text": "The spec must mandate policy's demanded = ALL | RAW_INHERITED_FACTS in cross-app mode, or inherited-fact matching silently breaks.",
+  "disposition": "fixed",
+  "evidence": "Spec §1: demanded stays the caller's per mode (events ALL, policy ALL|RAW_INHERITED_FACTS); row 1c adds an inherited-fact test whose mutation is dropping RAW_INHERITED_FACTS.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-10",
+  "source": "flash",
+  "round": 1,
+  "file": "spec Design §1 dependencies statement",
+  "line": null,
+  "severity": "minor",
+  "text": "dependencies must sit at the same relative key position in format_fanout_json, format_chains_json and format_policy_json.",
+  "disposition": "fixed",
+  "evidence": "Spec §1 states it.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-11",
+  "source": "flash",
+  "round": 1,
+  "file": "spec Design §3 predicate",
+  "line": null,
+  "severity": "minor",
+  "text": "Treat an empty edge vector as no out-edge.",
+  "disposition": "fixed",
+  "evidence": "Spec §3: graph.edges_by_from.get(&id).map_or(true, |e| e.is_empty()).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R2-01",
+  "source": "astra",
+  "round": 2,
+  "file": "spec Design §3 parameter roles",
+  "line": null,
+  "severity": "important",
+  "text": "Solving a dependency publisher replaces unknown roles with falsely concrete ones: role composition ignores synthetic dispatch edges (combined_graph.rs:332-340 has no callsite).",
+  "disposition": "fixed",
+  "evidence": "Spec §3: dependency publishers are solved for effect ROWS only; a fixed_roles set keeps their parameter roles at the leaf's unknown values for the whole solve; the precision claim is removed; the pre-existing workspace-publisher gap is filed as a discovery. New test 3c (mutation: write back roles for fixed_roles members).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R2-02",
+  "source": "astra",
+  "round": 2,
+  "file": "spec Acceptance 1c fourth assertion",
+  "line": null,
+  "severity": "important",
+  "text": "Count equality against a dependency-free single-app twin is not a valid primary-scope oracle; the counts legitimately differ per mode.",
+  "disposition": "fixed",
+  "evidence": "Row 1c: routinesEvaluated equals the hand-stated workspace routine count in both modes; matched/skipped/findingsEmitted asserted against hand-stated per-mode values; mutation: evaluating dependency routines makes routinesEvaluated exceed the stated count. | Round 3: astra re-raised (Design §1 still said counts equal the single-app run's). Fixed: §1 now states the hand-stated routinesEvaluated and per-mode matched/skipped/emitted expectations, matching row 1c.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R2-03",
+  "source": "astra",
+  "round": 2,
+  "file": "spec Acceptance 1c inherited test",
+  "line": null,
+  "severity": "important",
+  "text": "'capability.inherited…' is not a supported predicate field, and dropping RAW_INHERITED_FACTS panics rather than yielding 0 findings.",
+  "disposition": "fixed",
+  "evidence": "Row 1c third assertion: rule with facts: inherited + capability.op: insert (predicate_fields.rs:177-281); expects exit 0 and one finding; the mutation's failure is a panic / non-zero exit (full_summary.rs:107-116).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R2-04",
+  "source": "astra",
+  "round": 2,
+  "file": "spec Design §2 unreadable inputs",
+  "line": null,
+  "severity": "important",
+  "text": "contentHash = sha256(message) makes fingerprints depend on machine paths and OS wording.",
+  "disposition": "fixed",
+  "evidence": "Spec §2: contentHash = sha256 of a stable category (listing-failed / read-failed); the message stays out of the fingerprint. New test 2h: the same tree in two temp dirs fingerprints equal.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R3-01",
+  "source": "astra",
+  "round": 3,
+  "file": "spec Design §3 / Acceptance 3c",
+  "line": null,
+  "severity": "important",
+  "text": "fixed_roles is not carried through analyze's independent detector-context solve; a test through the base alone can pass while analyze still gets concrete roles.",
+  "disposition": "fixed",
+  "evidence": "Spec §3: fixed_roles is stored on R3a5CrossAppBase, added to CrossAppInputs via the shared cross_app_inputs() constructor, and used by every cross-app solve (detector context and the base's own store/r3a5 solve). Row 3c checks both production paths, plus a forwarding workspace caller; mutation (b) empties it only at the detector-context solve and must fail path (ii). | Round 4: astra re-raised (cross_app_db_effect_bundle returns DB rows only). Fixed: row 3c checks rows through the bundle and roles through ctx.parameter_roles_by_routine (detector context) and project_r3a5_cross_app; mutation (b) confined to the detector-context call, (iii) must still pass.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R3-02",
+  "source": "astra",
+  "round": 3,
+  "file": "spec Acceptance 1f mutation",
+  "line": null,
+  "severity": "minor",
+  "text": "Removing the found.is_none() filter cannot fail on fixtures whose ledger rows are all missing.",
+  "disposition": "fixed",
+  "evidence": "Row 1f's mutation is now 'omit the missing-row append loop'; the filter is covered by 1a/1b, whose fixture has a found embedded dependency and asserts apps exactly.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R4-01",
+  "source": "astra",
+  "round": 4,
+  "file": "spec Acceptance 3c forwarder",
+  "line": null,
+  "severity": "important",
+  "text": "'The forwarder also has unknown roles' is too broad: the walker does not propagate unknown exit fields (cfg_walker.rs:1340-1368), so requiring the whole unknown shape would reject the intended implementation.",
+  "disposition": "fixed",
+  "evidence": "Row 3c: the forwarder's body is only the publisher call; requires_loaded_at_entry, mutates_before_load and required_loaded_fields_at_entry are unknown; its exit fields keep the walker's existing values (dirtyAtExit no, currentLoadedFieldsAtExit full); the publisher's five path-sensitive fields are asserted unknown separately.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "astra",
+  "round": "final-1",
+  "file": "src/dependencies.rs:413-425",
+  "line": null,
+  "severity": "important",
+  "text": "Canonical-path dedup keeps the first directory entry before sorting; two .app symlinks to one package give an iteration-order-dependent fingerprint key.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: discover_app_files sorts each cache's .app files by name (keep_first_by_name) before canonical dedup, own-cache/ancestor precedence kept. Test dependencies::tests::alias_dedup_keeps_the_first_name_in_any_listing_order (hand-stated pairs, two listing orders; real symlinks need admin on Windows); removing the sort fails it. rf2.md.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "astra",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:1625",
+  "line": null,
+  "severity": "important",
+  "text": "The cross-app tx-context fix has no discriminating test (RaiseDep has no COMMIT).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: test cli_digest_query_dependencies::cross_app_commit_span_sees_dependency_writes (workspace CommitAfterDep: Lib.Outer(); Commit()) asserts transactionContext span-has-known-writes cross-app; passing None at that call fails it (left span-has-no-known-writes). rf2.md.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "astra",
+  "round": "final-1",
+  "file": "CHANGELOG.md:24-25",
+  "line": null,
+  "severity": "minor",
+  "text": "The missing-app.json error does not name --single-app; the commands fail earlier computing the modelInstanceId.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 6593d90f: CHANGELOG states a missing app.json fails in both modes with 'could not compute modelInstanceId'; other cross-app build failures name --single-app.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/dependencies.rs:363",
+  "line": null,
+  "severity": "important",
+  "text": "The new own-.git early return diverges from the Go wrapper's DiscoverPackageCachePaths, which the doc says this function mirrors.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: find_all_alpackages_folders' doc states the stop at a repository-root workspace is the loader's contract and that the Go wrapper does not yet match; the wrapper is filed as a discovery (ledger Discoveries #3).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "CHANGELOG.md:26",
+  "line": null,
+  "severity": "minor",
+  "text": "A CDO_PLACEHOLDER line is committed in the Added entry.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 6593d90f: the placeholder is replaced with the measured CDO numbers and the policy triage summary.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l4/capability_cone.rs:3444",
+  "line": null,
+  "severity": "important",
+  "text": "fixed_roles publishers keep body-local role fields (persistsCurrentRecord, writesFields, validatesParam) from their own body; docs/CHANGELOG say 'unknown'.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: the fixed_roles docs (capability_cone.rs, summary_runner.rs), the CHANGELOG Fixed entry and the spec now say only the five path-sensitive fields stay unknown; body-local fields come from the publisher's own body, exactly as for every dependency leaf today. No behaviour change.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/gate/run.rs:1125",
+  "line": null,
+  "severity": "minor",
+  "text": "events/policy run the default detector set cross-app for stderr diagnostics, then build a second cross-app context.",
+  "disposition": "deferred",
+  "evidence": "Cost only, no correctness effect. Measured on CDO: cross-app events/policy take about 22-24 s (single-app 4 s), stated in the CHANGELOG. Sharing one context between the diagnostics run and the report is a follow-up optimisation.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-08",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:1560",
+  "line": null,
+  "severity": "minor",
+  "text": "digest duplicates the new AnalysisTarget::build / dependencies() inline.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: run_digest_pipeline uses AnalysisTarget::build and target.dependencies(); error strings byte-identical; digest goldens did not move (hook OK).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-09",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/gate/policy/pipeline.rs:606",
+  "line": null,
+  "severity": "minor",
+  "text": "The primary filter deep-clones workspace routines.",
+  "disposition": "deferred",
+  "evidence": "Cost only; CDO policy check cross-app measured at 24.2 s total. A borrowed slice is a follow-up optimisation; accepted by the Tasks 3+4 reviewer as cheap.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-10",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/semantic_golden.rs:1684-1709",
+  "line": null,
+  "severity": "important",
+  "text": "dependency_closure_digest's Err text lost the OS reason; folder_key's unwrap_or(0) silently keys a non-ancestor folder as the own cache.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 1b0cf26f: ClosureEntries.errors carry (key, kind, os_message); dependency_closure_digest returns Err('<kind> <key>: <message>'); the fingerprint still hashes only the kind; folder_key's silent unwrap_or(0) became an explicit error. Test semantic_golden::tests::closure_digest_error_carries_the_reason (empty message fails it). The OutsideWalk branch is unreachable through discover_app_files (stated limit).",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-11",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/semantic_golden.rs:1684",
+  "line": null,
+  "severity": "minor",
+  "text": "dependency_closure_entries opens each .app to check readability, then callers read it again (double I/O).",
+  "disposition": "deferred",
+  "evidence": "Cost only (one extra open per package); correctness is unaffected and the fingerprint must classify unreadable packages. Folding the check into the read is a follow-up.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F2-01",
+  "source": "astra",
+  "round": "final-2",
+  "file": "CHANGELOG.md:32-34",
+  "line": null,
+  "severity": "minor",
+  "text": "The CHANGELOG triage summary attributes all seven policy false positives to path-insensitive reachability; one is a table-name exemption mismatch.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 955b843e: the CHANGELOG lists 6 reachability/transaction-boundary causes (4 Guided Experience IsPrimarySetup, 1 early exit, 1 non-modal page) and 1 * Setup name-exemption gap; counts unchanged.",
+  "hash": "9984dc70ff69e4fd208d48a553ad8c3d2de135e1cb07b8846f92c3a4f25ac106",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ }
+]

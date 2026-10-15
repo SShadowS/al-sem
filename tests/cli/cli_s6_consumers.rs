@@ -207,6 +207,7 @@ fn events_follow_the_program_engines_event_graph() {
         driver_version: "s6",
         deterministic: true,
         strict: false,
+        single_app: true,
     });
     let v: serde_json::Value = serde_json::from_str(&fanout.text).expect("json");
     let counts: Vec<i64> = v
@@ -228,6 +229,7 @@ fn events_follow_the_program_engines_event_graph() {
         driver_version: "s6",
         deterministic: true,
         strict: false,
+        single_app: true,
     });
     assert!(
         chains.text.contains("\"kind\": \"subscriber\""),
@@ -286,6 +288,7 @@ codeunit 50622 "S6 Pol Sub"
         deterministic: true,
         strict: false,
         driver_version: "s6",
+        single_app: true,
     });
     let text = out.text.expect("policy output");
     let v: serde_json::Value = serde_json::from_str(&text).expect("json");

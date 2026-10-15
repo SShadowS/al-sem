@@ -28,7 +28,7 @@ use crate::engine::l4::effect_query_cli::{
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
-use crate::engine::l5::detector_context::build_detector_context;
+use crate::engine::l5::detector_context::{CrossAppInputs, build_detector_context_with};
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
 use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
@@ -38,7 +38,6 @@ use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
-use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
@@ -519,13 +518,17 @@ const TX_UNKNOWN: TransactionContext = "unknown";
 /// Compute the transaction-context map: `commit_operation_id → TransactionContext`.
 /// Uses the full detector-context substrate (combined graph → summaries → spans).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
-fn compute_tx_context_map(resolved: &Model) -> HashMap<String, TransactionContext> {
+fn compute_tx_context_map(
+    resolved: &Model,
+    cross: Option<CrossAppInputs<'_>>,
+) -> HashMap<String, TransactionContext> {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
     // `RAW_INHERITED_FACTS`. This path reads ONLY `ctx.transaction_spans`, and
     // `compute_transaction_spans` sources its `writes_tables` / `publishes_events`
     // from `ctx.cone_derived` (Task 2) and its completeness from
     // `reachable_coverage` — never from a fact Vec.
-    let ctx = build_detector_context(resolved, crate::engine::l5::registry::substrate::ALL);
+    let ctx =
+        build_detector_context_with(resolved, crate::engine::l5::registry::substrate::ALL, cross);
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
     for span in &ctx.transaction_spans {
         if span.seed_kind != SeedKind::ExplicitCommit {
@@ -1553,30 +1556,9 @@ pub fn run_digest_pipeline(
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    let target = if single_app {
-        // Engine-switch S6.2: the program-backed model (program calls and events).
-        let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
-            .ok_or_else(|| "digest: workspace did not resolve".to_string())?;
-        AnalysisTarget::SingleApp(Box::new(resolved))
-    } else {
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(workspace, &model_id)
-            .ok_or_else(|| {
-            "digest: the cross-app model could not be built \
-                 (--single-app analyses the workspace alone)"
-                .to_string()
-        })?;
-        AnalysisTarget::CrossApp(Box::new(base))
-    };
+    let target = AnalysisTarget::build(workspace, &model_id, single_app, "digest")?;
     let resolved = target.resolved();
-    let dependencies = match &target {
-        AnalysisTarget::SingleApp(_) => {
-            crate::program::resolve::full::LoadedDependencies::default()
-        }
-        AnalysisTarget::CrossApp(base) => crate::program::resolve::full::LoadedDependencies {
-            cross_app: true,
-            apps: base.loaded_apps.clone(),
-        },
-    };
+    let dependencies = target.dependencies();
 
     // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
     // shared helper (no second full-snapshot composition just to fish it out) (#19).
@@ -1618,7 +1600,7 @@ pub fn run_digest_pipeline(
 
     // Compute transaction context map (for COMMIT effects).
     // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
-    let tx_ctx_map = compute_tx_context_map(resolved);
+    let tx_ctx_map = compute_tx_context_map(resolved, target.cross_app_inputs());
 
     // Compute S4 ordering effects for the changed roots alone (each root's pass is
     // independent, so this equals computing every reportable root and filtering).
@@ -1685,10 +1667,7 @@ pub fn run_digest_pipeline(
 
     // Human. The dependencies line appears only when apps were loaded, so a
     // workspace with no dependency reads the same in both modes.
-    let mut human_text = format_digest_human(&entries);
-    if let Some(line) = dependencies.human_line() {
-        human_text = format!("{line}\n{human_text}");
-    }
+    let human_text = dependencies.prefix_human(format_digest_human(&entries));
 
     Ok(DigestRunResult {
         json_text,

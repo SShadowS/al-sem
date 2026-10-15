@@ -885,6 +885,8 @@ pub fn build_detector_context(resolved: &Model, demanded: u32) -> DetectorContex
 pub(crate) struct CrossAppInputs<'b> {
     pub dep_routine_ids: &'b BTreeSet<String>,
     pub leaf_summaries: &'b HashMap<String, crate::engine::l4::summary::RoutineSummary>,
+    /// Dependency publishers solved for rows only (`R3a5CrossAppBase::fixed_roles`).
+    pub fixed_roles: &'b std::collections::HashSet<String>,
     pub injected_typed_edges: &'b [crate::engine::l4::combined_graph::TypedEdge],
     pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
     pub app_versions: &'b HashMap<String, String>,
@@ -905,6 +907,8 @@ pub(crate) fn build_detector_context_with<'a>(
     let no_leaves: HashMap<String, crate::engine::l4::summary::RoutineSummary> = HashMap::new();
     let dep_routine_ids = cross.as_ref().map_or(&no_deps, |c| c.dep_routine_ids);
     let leaf_summaries = cross.as_ref().map_or(&no_leaves, |c| c.leaf_summaries);
+    let no_fixed_roles = std::collections::HashSet::new();
+    let fixed_roles = cross.as_ref().map_or(&no_fixed_roles, |c| c.fixed_roles);
     // TRANSACTION_SPANS folds over the summaries map, so demand summaries whenever
     // either bit is set (see `compute_transaction_spans`).
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
@@ -1388,6 +1392,7 @@ pub(crate) fn build_detector_context_with<'a>(
                 &calls.upgraded_bindings,
                 &field_index,
                 leaf_summaries,
+                fixed_roles,
             );
         drop(_summaries_span);
         // ⟨substrate census⟩ `ALSEM_SUMMARIES_CENSUS=1` — the phase split inside the
