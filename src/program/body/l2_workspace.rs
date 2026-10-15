@@ -91,7 +91,7 @@ fn build_proutine(
     oi: usize,
     ir_routine: &al_syntax::ir::RoutineDecl,
     object_type: &str,
-    object_number: i64,
+    object_key: &str,
     stable_object_id: &str,
     source_table_name: Option<&str>,
     app_guid: &str,
@@ -136,7 +136,7 @@ fn build_proutine(
     let routine_id = scope::compute_routine_id(
         app_guid,
         object_type,
-        object_number,
+        object_key,
         kind,
         &rname,
         enclosing_member.as_deref(),
@@ -216,7 +216,7 @@ pub fn ir_features_for_named_routine(
         let Some(object_type) = ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
-        let object_number = o.id.unwrap_or(0);
+        let object_key = ir_walk::ir_object_key(o);
         let (_subtype, _page_type, source_table_name, _icb) =
             ir_walk::ir_object_metadata(o, object_type);
         for r in &o.routines {
@@ -229,7 +229,7 @@ pub fn ir_features_for_named_routine(
             let routine_id = scope::compute_routine_id(
                 app_guid,
                 object_type,
-                object_number,
+                &object_key,
                 kind,
                 &r.name,
                 enclosing_member.as_deref(),
@@ -277,10 +277,10 @@ fn project_file(
         let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
-        let object_number = o.id.unwrap_or(0);
+        let object_key = crate::program::body::ir_walk::ir_object_key(o);
         let name = o.name.clone();
 
-        let internal_object_id = encode_object_id(app_guid, object_type, object_number);
+        let internal_object_id = encode_object_id(app_guid, object_type, &object_key);
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (object_subtype, page_type, source_table_name, inherent_commit_behavior) =
@@ -313,7 +313,7 @@ fn project_file(
                 oi,
                 ir_routine,
                 object_type,
-                object_number,
+                &object_key,
                 &stable_object_id,
                 source_table_name.as_deref(),
                 app_guid,
@@ -456,8 +456,8 @@ pub fn project_named_routine(
         let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
             continue;
         };
-        let object_number = o.id.unwrap_or(0);
-        let internal_object_id = encode_object_id(app_guid, object_type, object_number);
+        let object_key = crate::program::body::ir_walk::ir_object_key(o);
+        let internal_object_id = encode_object_id(app_guid, object_type, &object_key);
         let stable_object_id = to_stable_object_id(&internal_object_id);
 
         let (_, _, source_table_name, _) =
@@ -472,7 +472,7 @@ pub fn project_named_routine(
                 oi,
                 ir_routine,
                 object_type,
-                object_number,
+                &object_key,
                 &stable_object_id,
                 source_table_name.as_deref(),
                 app_guid,

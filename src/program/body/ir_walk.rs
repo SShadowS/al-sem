@@ -2654,6 +2654,13 @@ pub fn ir_object_type(kind: &al_syntax::ir::ObjectKind) -> Option<&'static str> 
     })
 }
 
+/// A source object's id segment ([`crate::engine::ids::object_key`]): its number,
+/// or its LOGICAL name (the IR keeps a quoted name's inner `""`, unescaped here) when
+/// it has none. The one derivation every source-side id producer uses (#83).
+pub fn ir_object_key(o: &al_syntax::ir::ObjectDecl) -> String {
+    crate::engine::ids::object_key(o.id, &super::scope::unescape_al_identifier(&o.name))
+}
+
 // ---- object metadata (subtype / pageType / sourceTable / inherentCommit) ----
 
 /// Object metadata from the IR's properties — mirrors `extract_object_metadata`.

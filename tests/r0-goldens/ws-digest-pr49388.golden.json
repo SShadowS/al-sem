@@ -25,7 +25,7 @@
       "signatureFingerprint": "c0786fa0208baea2b18bc4166be99fc4b8efb7627a87214915928ef7b7200f63"
     },
     {
-      "stableObjectId": "33333333-3333-3333-3333-333333333333:Interface:0",
+      "stableObjectId": "33333333-3333-3333-3333-333333333333:Interface:@iimportprocessor",
       "name": "IImportProcessor",
       "kind": "Interface",
       "signatureFingerprint": "0eb7973e058c3a5892f98f9a79bae68c12b869fdd21b491eb80c1b241c43ee77"

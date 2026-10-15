@@ -363,6 +363,7 @@ mod tests {
             app_guid: app_guid.to_string(),
             object_type: "Codeunit".to_string(),
             object_number,
+            object_key: object_number.to_string(),
             name: format!("Obj{object_number}"),
             source_table_name: None,
             extends_target_name: None,

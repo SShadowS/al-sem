@@ -56,6 +56,7 @@ mod cli_digest_temp_state;
 mod cli_envelope_detector_set;
 mod cli_events_policy_dependencies;
 mod cli_graph_export;
+mod cli_numberless_object_ids;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_query_differential;

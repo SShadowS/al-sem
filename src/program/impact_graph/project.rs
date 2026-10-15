@@ -9,7 +9,7 @@ use al_syntax::ir::ObjectKind;
 use super::facts::{RunTarget, SourceFacts};
 use super::{Edge, Node};
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{Access, ObjectNode, ObjectRef, RoutineNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
@@ -311,11 +311,7 @@ impl<'a> Builder<'a> {
         Some(ObjectNodeId {
             app: key.app,
             kind,
-            key: if key.object_number != 0 {
-                ObjKey::Id(key.object_number)
-            } else {
-                ObjKey::Name(key.object_name_lc.as_str().into())
-            },
+            key: key.object_node_key(),
         })
     }
 
@@ -1110,7 +1106,7 @@ mod tests {
     use super::*;
     use crate::program::graph::ObjectIndex;
     use crate::program::impact_graph::{ObjectFacts, RoutineFacts};
-    use crate::program::node::AppRegistry;
+    use crate::program::node::{AppRegistry, ObjKey};
     use crate::program::node_extract::{AbiParams, PageControlKind, PageControlNode};
     use crate::program::resolve::edge::{
         CanonicalSpan, Edge as EngineEdge, Evidence, OpenWorldReason, Route, SetCompleteness,

@@ -26,12 +26,12 @@
       "objectType": "Enum"
     },
     {
-      "stableObjectId": "22222222-2222-2222-2222-222222222222:Interface:0",
+      "stableObjectId": "22222222-2222-2222-2222-222222222222:Interface:@iempty",
       "name": "IEmpty",
       "objectType": "Interface"
     },
     {
-      "stableObjectId": "22222222-2222-2222-2222-222222222222:Interface:0",
+      "stableObjectId": "22222222-2222-2222-2222-222222222222:Interface:@iprocessor",
       "name": "IProcessor",
       "objectType": "Interface"
     }

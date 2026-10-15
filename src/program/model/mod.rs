@@ -27,16 +27,24 @@ use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
 
 /// The model's object id for a program object (`encode_object_id`'s
-/// `"{app guid}/{type}/{number}"`; a numberless object has number 0, as the model
-/// writes it).
+/// `"{app guid}/{type}/{object key}"`), the same string the model writes for it.
+///
+/// A name key is the FOLDED name: on a source object the folded raw name (inner
+/// `""` kept), so it is unescaped here to the folded logical name the model keys
+/// on; on an ABI object already the folded logical name (see the #83 spec's Limits
+/// for a logical name that itself holds `""`).
 pub fn model_object_id(graph: &ProgramGraph, id: &ObjectNodeId) -> String {
+    use crate::engine::ids::object_key;
     let guid = &graph.apps.resolve(id.app).guid;
     let ty = crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Unknown");
-    let number = match id.key {
-        ObjKey::Id(n) => n,
-        ObjKey::Name(_) => 0,
+    let key = match &id.key {
+        ObjKey::Id(n) => object_key(Some(*n), ""),
+        ObjKey::Name(n) => object_key(
+            None,
+            &crate::program::body::scope::unescape_al_identifier(n),
+        ),
     };
-    crate::engine::ids::encode_object_id(guid, ty, number)
+    crate::engine::ids::encode_object_id(guid, ty, &key)
 }
 
 /// A routine outside the model, named in the model's terms:

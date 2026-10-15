@@ -11,7 +11,7 @@
       "objectType": "Codeunit"
     },
     {
-      "stableObjectId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Interface:0",
+      "stableObjectId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff:Interface:@neg%20ilog",
       "name": "Neg ILog",
       "objectType": "Interface"
     }
