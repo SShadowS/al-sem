@@ -177,6 +177,9 @@ pub enum ChangedRootsDiagnostic {
         file: String,
     },
     DiffParseError {
+        /// The file the error belongs to (a hunk-header error, #72); `None`
+        /// for a truncated hunk or a header error whose section names no path.
+        file: Option<String>,
         detail: String,
     },
 }
@@ -423,9 +426,25 @@ pub fn resolve_changed_roots(
         let parsed = parse_unified_diff(diff_text);
         for err in &parsed.errors {
             diagnostics.push(ChangedRootsDiagnostic::DiffParseError {
+                file: None,
                 detail: err.clone(),
             });
         }
+        for fe in &parsed.file_errors {
+            diagnostics.push(ChangedRootsDiagnostic::DiffParseError {
+                file: Some(fe.path.clone()),
+                detail: fe.detail.clone(),
+            });
+        }
+        // A file with a hunk-header error gives no diff-derived roots, in ANY of
+        // its records: the dropped hunk's changes are unknown, so whole-file roots
+        // would hide the error (#72). Keyed by the normalized path, the key
+        // `spans.of_file` matches with.
+        let poisoned: std::collections::HashSet<String> = parsed
+            .file_errors
+            .iter()
+            .map(|fe| normalize_input(&fe.path))
+            .collect();
         for diff_file in &parsed.files {
             if diff_file.kind == DiffFileKind::Deleted {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileDeleted {
@@ -440,9 +459,13 @@ pub fn resolve_changed_roots(
                 });
                 continue;
             }
+            if poisoned.contains(&normalize_input(&diff_file.path)) {
+                continue;
+            }
 
             if diff_file.hunks.is_empty() {
-                // Rename (or mode change) with no content — every declaration.
+                // Rename (or mode change) with no content — every declaration. A
+                // file whose hunk header was rejected never gets here (poisoned above).
                 hits.extend_from_slice(ixs);
                 continue;
             }
@@ -1254,8 +1277,11 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
             m.insert("kind".into(), "diff-file-deleted".into());
             m.insert("file".into(), file.clone().into());
         }
-        ChangedRootsDiagnostic::DiffParseError { detail } => {
+        ChangedRootsDiagnostic::DiffParseError { file, detail } => {
             m.insert("kind".into(), "diff-parse-error".into());
+            if let Some(file) = file {
+                m.insert("file".into(), file.clone().into());
+            }
             m.insert("detail".into(), detail.clone().into());
         }
     }

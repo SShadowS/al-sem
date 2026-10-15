@@ -1,0 +1,506 @@
+[
+  {
+    "id": "R1-A01",
+    "source": "astra",
+    "round": 1,
+    "file": "tests/cli/cli_digest_changed_spans.rs",
+    "line": 1637,
+    "severity": "important",
+    "text": "The finalize-time no-hunk rule breaks hunkless_modified_file_takes_every_declaration (mode lines + ---/+++ pair, no hunk, expects exit 0 and both roots), which the design does not list.",
+    "disposition": "fixed",
+    "evidence": "Verified: test at :1635-1660 feeds exactly that input; #71 plan Review Focus 2 (docs/superpowers/plans/2026-10-14-issue-71-digest-routine-spans.md:31) and CHANGELOG.md:121 make it a deliberate decision. Design now DROPS the no-hunk rule (input is not a malformed header, outside #72's acceptance); the test stays unchanged and is listed as a regression guard.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A02",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 432,
+    "severity": "important",
+    "text": "A per-record malformed flag can be bypassed by a second record for the same path; rejected-body lines can also open records for unrelated files.",
+    "disposition": "fixed",
+    "evidence": "Verified by probes P13 (same-path reopen roots the whole file) and P14 (git section: rejected body's ---/+++ lines open subscriber.al and posting.al's next hunk attaches to it, HandlePosted rooted). Design: veto by normalize_input(path) across all records (poisoned set built before matching), and after a header error in a diff --git section skip every line until the next diff --git. Residual plain diff -u ambiguity (P14b) stated as a limit with reason: no file boundary exists to tell a rejected body pair from a real next file. Tests: malformed_record_poisons_every_record_of_its_path (both orders), rejected_hunk_body_never_opens_a_file.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A03",
+    "source": "astra",
+    "round": 1,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 519,
+    "severity": "important",
+    "text": "Ignoring malformed @@ when current_file is None leaves a rename section (rename from/to, no pair) + @@ garbage as an unpoisoned hunkless rename that roots every declaration.",
+    "disposition": "fixed",
+    "evidence": "Verified by probe P12 (whole file, no diag, exit 0); rename paths are stored at :519-525 and the record is pushed at :533-544/:578-585 without current_file. Design: 'inside a file section' covers diff --git/---/rename seen; header errors with no open record go to pending_header_errors, moved into the next record the section emits (+++ record or the hunkless-rename record); preamble @@ stays ignored. Tests: malformed_header_in_a_rename_section_gives_no_roots, preamble_hunk_header_is_not_an_error.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-A04",
+    "source": "astra",
+    "round": 1,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 88,
+    "severity": "important",
+    "text": "Two stated mutations (restore silent ignore; drop the malformed mark on the range error) are masked by the finalize-time no-hunk fallback.",
+    "disposition": "fixed",
+    "evidence": "True for the old design: the no-hunk rule was a second path to the same error/no-roots outcome. The rule is dropped, so no redundant path remains; additionally every new test asserts exactly one diff-parse-error, its file and its class-specific detail, and each header-error class is also run with a valid root-producing hunk in the same record (before and after). Mutation predictions corrected in the matrix; actual red/green runs to be recorded during implementation.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F01",
+    "source": "flash",
+    "round": 1,
+    "file": "tests/cli/cli_digest_changed_spans.rs",
+    "line": 1635,
+    "severity": "critical",
+    "text": "The 'pair with no hunk' rule breaks hunkless_modified_file_takes_every_declaration, pinned by #71 Review Focus 2, and the design never mentions it.",
+    "disposition": "fixed",
+    "evidence": "Same as R1-A01. Decision written down: keep #71's decision (default per coordinator); the source does not show the #71 rationale is wrong, only that real git never emits the shape, which makes it a policy choice, not a malformed header. Rule dropped; test unchanged; listed in the 'Existing tests the change touches' table.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F02",
+    "source": "flash",
+    "round": 1,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 94,
+    "severity": "important",
+    "text": "The 'regressions held' list was written from memory, not a sweep.",
+    "disposition": "fixed",
+    "evidence": "Swept every parse_unified_diff / DiffParseError / .errors use in src and tests, every diff literal in tests/ and diff_parser.rs tests, every @@ literal failing the grammar (only the parse_hunk_header oracle inputs at diff_parser.rs:734-747), and the one --diff golden. Affected tests listed explicitly: out_of_range_hunk_header_is_a_parse_error (CLI) and out_of_range_hunk_header_is_an_error_not_a_panic (unit) change; all others named as unchanged.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F03",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 179,
+    "severity": "minor",
+    "text": "The file link is a text prefix; make it a structured file field on DiffParseError.",
+    "disposition": "fixed",
+    "evidence": "Settled at the root cause: the parser now stores header errors on the record (DiffFile.header_errors), so the consumer knows the file; DiffParseError becomes { file: Option<String>, detail } projected with an optional 'file' key like the other per-file kinds. Tests assert diag.file == 'src/posting.al'. No golden carries diff-parse-error.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F04",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 731,
+    "severity": "minor",
+    "text": "Implementation site left open, so the parser-level test change is unclear.",
+    "disposition": "fixed",
+    "evidence": "Picked caller-side: parse_hunk_header stays the pure grammar oracle; malformed_hunk_headers_rejected stays unchanged; new parse_unified_diff-level test malformed_hunk_header_is_an_error_of_its_file.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F05",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 404,
+    "severity": "minor",
+    "text": "In a format-patch series an unindented commit-message line starting with @@ poisons the previous patch's last file.",
+    "disposition": "deferred",
+    "evidence": "Verified: nothing finalizes on From/Subject or the bare --- separator (:433 needs '--- '). Recorded as a stated limit in the ledger; a mail-boundary rule is a separate enhancement. git log -p indents messages, so it is safe.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F06",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1631,
+    "severity": "minor",
+    "text": "Malformed file A + good file B gives exit 0 with an under-approximation the design does not state.",
+    "disposition": "fixed",
+    "evidence": "Stated under 'Limits and failure shapes': a diff-parse-error with a file means that file's changes are missing and the digest is incomplete; exit code unchanged (the acceptance asks for no roots from that file).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R1-F07",
+    "source": "flash",
+    "round": 1,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 548,
+    "severity": "minor",
+    "text": "Line references slightly off: the let-chain is at :548-562, not :553-561.",
+    "disposition": "fixed",
+    "evidence": "Verified (sed of :545-563). Citation corrected in the Design root cause.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A01",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 56,
+    "severity": "important",
+    "text": "In a git section, skipping to the next diff --git also swallows the +++ that would create the record; the pending error becomes global (file None) and a second healthy section for the same path escapes the veto.",
+    "disposition": "fixed",
+    "evidence": "Verified against source: records are created only at +++ (diff_parser.rs:452-511) and diff --git (:528-550) extracts no path. Probe P16 (astra's counterexample) roots the whole file at base. Fix at the root cause: the parser keeps section_dest from the diff --git b-side (new git_header_dest helper), overwritten by rename to, independent of record creation; pending header errors resolve at section close to the emitted record's path, else section_dest, into DiffParseResult.file_errors; the consumer vetoes every file_errors path. Test git_section_error_before_plus_header_vetoes_its_path, both section orders; mutation: no section_dest from diff --git -> no file, PostSalesDoc rooted.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-A02",
+    "source": "astra",
+    "round": 2,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 148,
+    "severity": "minor",
+    "text": "Tests do not discriminate the normalized-path veto (raw path would pass) or skip-state resumption (skip-to-EOF would pass).",
+    "disposition": "fixed",
+    "evidence": "normalize_input lowercases (digest_cli.rs:101-103) and probe P15 shows src/Posting.al matches the workspace file. malformed_record_poisons_every_record_of_its_path now includes malformed src/Posting.al + healthy src/posting.al in both orders (mutation: veto by raw path -> PostSalesDoc). New rejected_body_skip_resumes_at_next_git_section: P14 + a real diff --git section for subscriber.al, exactly [HandlePosted] and one error naming posting.al (mutation: never clear the skip state -> no roots).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F01",
+    "source": "flash",
+    "round": 2,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 432,
+    "severity": "minor",
+    "text": "In plain diff -u, a pending error after '--- a/x.al' with no +++ moves into the next file's +++ record, naming the wrong file and vetoing it.",
+    "disposition": "fixed",
+    "evidence": "Verified: a --- with no open record finalizes nothing (:432-441). Fixed rather than stated: a --- line closes the section when a record is open OR pending errors exist, resolving them to the previous section_dest (x.al, set by its ---). Test plain_section_error_stays_with_its_file; mutation: do not close at --- with pending errors -> error names subscriber.al and HandlePosted is vetoed.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F02",
+    "source": "flash",
+    "round": 2,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 149,
+    "severity": "minor",
+    "text": "The path-veto test uses the same spelling in both records, so a raw-path veto stays green.",
+    "disposition": "fixed",
+    "evidence": "Same fix as R2-A02: case-differing cases (src/Posting.al vs src/posting.al) in both orders, precondition P15, mutation 'veto by raw path' must turn red.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R2-F03",
+    "source": "flash",
+    "round": 2,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 56,
+    "severity": "minor",
+    "text": "(nit) 'pending errors go to the +++ record' can never happen in a git section because the skip state drops the +++; say which case it covers.",
+    "disposition": "fixed",
+    "evidence": "Design now says it: in a git section a header error never meets a later +++, so resolution to the +++ record happens only for an error after +++ (record open) or in plain diff -u; no test is written for the impossible git case. The plain-diff row in the matrix is marked 'plain diff -u only'.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-A01",
+    "source": "astra",
+    "round": 3,
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 110,
+    "severity": "important",
+    "text": "unquote_path decodes each octal escape to its own char (n as char) instead of collecting bytes and decoding UTF-8, so an escaped \\303\\251 becomes Ã© and a literal-UTF-8 section of the same file escapes the veto (and the diagnostic names the wrong file).",
+    "disposition": "fixed",
+    "evidence": "Verified at diff_parser.rs:110-120 (result.push(n as char)). Probe P17: a HEALTHY git diff of workspace file src/é.al with git's default quoted names already gives diff-file-unmatched (file src/Ã©.al), exit 2, no roots at base — a pre-existing defect the new veto would inherit. Fix at the root cause: unquote_path builds a Vec<u8> (octal escape = one byte; add \\a \\b \\f \\v) and decodes with String::from_utf8_lossy; it is the one decoder for ---/+++ paths, rename from/to and git_header_dest. CLI test escaped_and_literal_spellings_of_one_file_share_the_veto (escaped malformed + literal healthy and the reverse, both orders, plus healthy escaped alone as precondition); unit test unquote_path_octal_escapes_are_utf8_bytes. Mutation: per-escape char decoding -> escaped healthy unmatched, error names src/Ã©.al, literal section rooted. CHANGELOG gets a Fixed line for P17.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "R3-A02",
+    "source": "astra",
+    "round": 3,
+    "file": ".agent/issue-72/ledger.md",
+    "line": 180,
+    "severity": "important",
+    "text": "P16 does not discriminate use of the git-header destination helper: its --- line sets section_dest, so deleting the diff --git call leaves it green; the helper unit test pins the function, not the use.",
+    "disposition": "fixed",
+    "evidence": "Agreed by reading the rules: in P16 the --- line (before the error) sets section_dest when None. P16's mutation prediction corrected in the matrix (its discriminating mutation is 'drop section_dest entirely'; it stays as the skipped-+++ regression). New production CLI test git_header_names_the_file_of_an_immediate_header_error: diff --git then @@ garbage @@ immediately (no ---/+++/rename), plus a healthy same-path section, both orders (mutation: delete the git_header_dest call -> no file, PostSalesDoc rooted); and a distinct-name case diff --git a/src/old.al b/src/posting.al, both orders (mutation: take the a side -> error names src/old.al, PostSalesDoc rooted).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-01",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "important",
+    "text": "the `+++` destination update has no test that can fail",
+    "disposition": "fixed",
+    "evidence": "Verified: no test covered the `+++` arm's destination update (diff_parser.rs:629, now `section.dest = current_file...`). New CLI test added_file_header_error_names_its_plus_side: `--- /dev/null` + `+++ b/src/posting.al` + `@@ garbage @@` gives one diff-parse-error with file src/posting.al, no roots, exit 2 (precondition: the pair alone roots both routines). Proof 21: line deleted -> file Null, red at :1178; restored -> 40/40 green.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-02",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "other new branches that no test pins",
+    "disposition": "fixed",
+    "evidence": "Global fallback pinned: malformed_hunk_header_is_an_error_of_its_file gains the unsplittable `diff --git a/x y.al b/z w.al` + `@@ garbage @@` case (errors.len()==1, file_errors empty); proof 23 (drop the dest-less error -> left 0 right 1). The `git` reset on a `---` close is now part of Section::close (one reset for every close, CR-07); it and the `rename from` in_section mark matter only for non-git input (git always writes a section header first). Both are listed in the ledger as deliberately unpinned.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-03",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "two destination assignments always repeat a value already set",
+    "disposition": "refuted",
+    "evidence": "True for git output, not for all input. In a section with `rename from/to` but no `diff --git`, a `---` with pending errors closes the section (destination reset) while pending_rename_to survives; a later header error then resolves at end of input, where the :728 assignment names the hunkless rename record's path instead of the `---` path. The two lines implement the Design rule 'superseded by the record's path when the section emits a record' at the two places that emit that record, so they stay. Ledger notes that in git output only the `rename to` assignment carries the behaviour.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-04",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "on mixed input, a git section with no record leaks its state into the next plain section",
+    "disposition": "deferred",
+    "evidence": "Verified by trace. The realistic trigger, merge-time `git diff` (`diff --cc`), is fixed by FR1-F01: those lines now close the section. The residual needs hand-concatenated input: a hunkless git section followed by a plain `---` with no section header. Section bookkeeping cannot tell it apart: a mode-only git section (`diff --git`, `old mode`, `new mode`) followed by such a `---` is line-for-line the shape of a git section with its own pair; only comparing paths could, and that fails for renames and unsplittable names. Same class as the stated plain `diff -u` limits (P14b, R1-F05); recorded as a limit in the ledger.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-05",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "the new named escapes change the meaning of quoted non-git paths",
+    "disposition": "fixed",
+    "evidence": "Accepted the change (it matches git's C quoting). CHANGELOG Fixed entry now says: a quoted path is decoded as git's C quoting, escapes are UTF-8 bytes, a non-UTF-8 name degrades to U+FFFD, and an escape git never writes is kept as text (FR1-F02).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-06",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "a test comment contradicts the corrected `git_header_dest` doc",
+    "disposition": "fixed",
+    "evidence": "Comment in git_header_dest_names reworded to 'for a non-rename, git writes them only when both sides are equal'; the unequal rename case `a/src/old name.al b/src/new.al` -> None added next to it. git_header_dest's doc says the same.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "CR-07",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "see final-code-review.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "the section-close sequence is written out three times",
+    "disposition": "fixed",
+    "evidence": "The five loose variables became `Section { pending, dest, git, skip }` with `close(file_errors, errors)`, which resolves the pending errors and resets every field; the `---`, section-header and end-of-input closes all call it (the four-argument resolve closure is gone). `in_section` stays separate because the Design never clears it. Behaviour-preserving: all 40 CLI and 32 diff_parser tests green, task gate green.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-A01",
+    "source": "astra",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 198,
+    "severity": "important",
+    "text": "git_header_dest does not handle a quoted a-side token containing spaces followed by an unquoted b-side; it returns None, the error goes global and a healthy section for the destination escapes the veto.",
+    "disposition": "fixed",
+    "evidence": "Verified: rest `\"a/src/old\\303\\251 name.al\" b/src/posting.al` did not end with a quote, had two spaces and an off-centre middle, so git_header_dest returned None. Fix: new escape-aware quoted_token_len (quoted_b_start now reuses it); a rest that starts with a quote takes the b-token after the closing quote and one space. Tests: git_header_dest_names (the exact header, plus an escaped \\\" and a space in the quoted a-name before an unquoted b-name with a space) and the CLI git_header_names_the_file_of_an_immediate_header_error gains the quoted case, both orders (file src/posting.al, no roots, exit 2). Proof 22: branch made unreachable -> CLI red on that case, unit left None; restored -> green.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-F01",
+    "source": "flash",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "diff --cc / diff --combined lines are not section boundaries; a skip started by a @@@ header in merge-diff output can swallow every later file without a diagnostic.",
+    "disposition": "fixed",
+    "evidence": "Verified by trace (y.al swallowed). section_header_dest now treats `diff --cc <path>` and `diff --combined <path>` as section headers, sharing the `diff --git` arm: the section closes, its destination is the path, and it counts as a git section, so a `@@@` skip ends at the next section header (chosen over flash's git=false: the combined body has no trustworthy length either). Test combined_diff_headers_are_section_boundaries (binary git section, two combined sections with `@@@`, a healthy git section): file_errors [x.al, y.al], z.al hunk intact. Proof 24: cc/combined not matched -> left [x.al], red.",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  },
+  {
+    "id": "FR1-F02",
+    "source": "flash",
+    "round": "final-1",
+    "file": "src/engine/l5/diff_parser.rs",
+    "line": 110,
+    "severity": "minor",
+    "text": "Pre-existing: the octal-escape arm accepts digits 8/9 and values above ÿ, then silently drops them (git never writes them).",
+    "disposition": "fixed",
+    "evidence": "Cheap and safe: the octal arm now accepts only 0-7 (`\\8` falls to the unknown-escape arm and is kept as text), and a value above \\377 is kept as text instead of dropped. Unit assertions for `\\8`, `\\18` and `\\777` in unquote_path_octal_escapes_are_utf8_bytes. Proofs 25 (digits back to is_ascii_digit -> `\\18` dropped, red) and 26 (out-of-range dropped again -> \"ab\", red).",
+    "hash": "",
+    "reviews": {
+      "astra": "accepted",
+      "flash": "accepted",
+      "gpt-6.1-sol": "accepted",
+      "opus-5.5": "accepted"
+    }
+  }
+]

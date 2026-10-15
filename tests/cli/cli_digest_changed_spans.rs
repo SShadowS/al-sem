@@ -692,6 +692,8 @@ rename to src/posting.al
         vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
         "{doc}"
     );
+    // #72: a clean rename is not poisoned by the header-error rule.
+    assert!(diags(&doc).is_empty(), "{doc}");
 }
 
 /// Final panel (code-review): deleting a routine's FIRST (or only) attribute line
@@ -1085,25 +1087,525 @@ fn orphan_plus_header_keeps_the_current_file() {
     assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{doc}");
 }
 
-/// Final panel (astra): a hunk header whose range does not fit in i32 is a
-/// `diff-parse-error`, not a panic, and opens no hunk. The file then has no
-/// hunk, so (like a hunkless rename) every declaration of it is a root.
+/// Final panel (astra, #71): a hunk header whose range does not fit in i32 is a
+/// `diff-parse-error`, not a panic, and opens no hunk. #72: the error names its
+/// file and the file gives NO roots (it used to take every declaration, like a
+/// hunkless rename, which hid the error behind a whole-file root set), also when
+/// the record holds a valid hunk too.
 ///
-/// Mutation: drop the range check -> `attempt to add with overflow` in a debug
-/// build (the process exits 101, no JSON).
+/// Mutations: drop the header-error mark on the range error -> both roots, exit 0;
+/// drop the range check -> `attempt to add with overflow` in a debug build (the
+/// process exits 101, no JSON).
 #[test]
 fn out_of_range_hunk_header_is_a_parse_error() {
     let dir = tempfile::tempdir().unwrap();
     d8_workspace(dir.path(), &d8_posting());
-    let diff = "--- a/src/posting.al\n+++ b/src/posting.al\n@@ -1,1 +2147483647,0 @@\n-x\n";
-    let (doc, code) = digest(dir.path(), &[], Some(diff));
-    assert_eq!(code, 0, "{doc}");
-    assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{doc}");
+    let bad = "@@ -1,1 +2147483647,0 @@\n-x\n";
+    for diff in [
+        format!("{POSTING_PAIR}{bad}"),
+        format!("{POSTING_PAIR}{bad}{VALID_19}"),
+        format!("{POSTING_PAIR}{VALID_19}{bad}"),
+    ] {
+        let (doc, code) = digest(dir.path(), &[], Some(&diff));
+        let e = the_parse_error(&doc);
+        assert_eq!(e["file"], "src/posting.al", "{diff}: {doc}");
+        assert!(
+            e["detail"]
+                .as_str()
+                .unwrap()
+                .contains("hunk at +2147483647 has an invalid line range"),
+            "{diff}: {doc}"
+        );
+        assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+        assert_eq!(code, 2, "{diff}: {doc}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #72: a malformed hunk header is a parse error of its file, never whole-file
+// roots. Ledger: `.agent/issue-72/ledger.md` (Design, Acceptance matrix).
+// ---------------------------------------------------------------------------
+
+/// `--- a/src/posting.al` / `+++ b/src/posting.al`.
+const POSTING_PAIR: &str = "--- a/src/posting.al\n+++ b/src/posting.al\n";
+
+/// A body changing line 9 (inside `PostSalesDoc`, lines 3-16): 3 old, 3 new lines.
+const LINE9_BODY: &str = "         Header.Get('001');
+-        Header.\"Status Posted\" := false;
++        Header.\"Status Posted\" := true;
+         Header.Modify();
+";
+
+/// A valid hunk adding new line 21 (inside `OnAfterPostSalesDoc`, lines 19-21).
+const VALID_19: &str = "@@ -19,2 +19,3 @@
+     procedure OnAfterPostSalesDoc(Header: Record \"Sales Header\")
+     begin
++        Message('x');
+";
+
+/// The malformed header lines of the acceptance (the out-of-range one is in
+/// `out_of_range_hunk_header_is_a_parse_error`).
+const MALFORMED: [&str; 5] = [
+    "@@ garbage @@",
+    "@@ -x,y +a,b @@",
+    "@@ -8,3 +8,3x @@",
+    "@@ -8,3 @@",
+    "@@@ -8,3 -8,3 +8,3 @@@",
+];
+
+/// A one-line line-9 change of `path` in its own `diff --git` section.
+fn git_line9(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\n{}",
+        one_line_diff(path, 9, "        Header.\"Status Posted\" := true;")
+    )
+}
+
+/// The one `diff-parse-error` of `doc` (asserts there is exactly one).
+fn the_parse_error(doc: &Value) -> Value {
+    let errs: Vec<Value> = diags(doc)
+        .into_iter()
+        .filter(|d| d["kind"] == "diff-parse-error")
+        .collect();
+    assert_eq!(errs.len(), 1, "exactly one diff-parse-error: {doc}");
+    errs[0].clone()
+}
+
+/// Asserts `doc` holds exactly one `diff-parse-error`, naming `file`, whose
+/// detail is a malformed-header error.
+fn assert_malformed_error_of(doc: &Value, file: &str, ctx: &str) {
+    let e = the_parse_error(doc);
+    assert_eq!(e["file"], file, "{ctx}: {doc}");
+    assert!(
+        e["detail"]
+            .as_str()
+            .unwrap()
+            .contains("malformed hunk header"),
+        "{ctx}: {doc}"
+    );
+}
+
+/// #72 acceptance. A malformed hunk header gives one `diff-parse-error` naming
+/// its file, and that file gives no roots: alone, and with a valid hunk in the
+/// same record before or after it.
+///
+/// Precondition: the same body under `@@ -8,3 +8,3 @@` gives `["PostSalesDoc"]`
+/// and no diagnostic; the valid hunk alone gives `["OnAfterPostSalesDoc"]`; a
+/// git section heading after the closing `@@` is valid.
+/// Mutations: (a) delete the poisoned-path `continue` -> `OnAfterPostSalesDoc`
+/// (mixed) / both routines (alone); (b) ignore a non-matching `@@` line again ->
+/// zero errors; (c) treat the heading form as malformed -> precondition red.
+#[test]
+fn malformed_hunk_header_gives_parse_error_and_no_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+
+    for good in [
+        "@@ -8,3 +8,3 @@",
+        "@@ -8,3 +8,3 @@ procedure PostSalesDoc()",
+    ] {
+        let (doc, code) = digest(
+            ws,
+            &[],
+            Some(&format!("{POSTING_PAIR}{good}\n{LINE9_BODY}")),
+        );
+        assert_eq!(code, 0, "precondition {good}: {doc}");
+        assert_eq!(
+            roots(&doc),
+            vec!["PostSalesDoc"],
+            "precondition {good}: {doc}"
+        );
+        assert!(diags(&doc).is_empty(), "precondition {good}: {doc}");
+    }
+    let (doc, code) = digest(ws, &[], Some(&format!("{POSTING_PAIR}{VALID_19}")));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["OnAfterPostSalesDoc"],
+        "precondition: {doc}"
+    );
+
+    for header in MALFORMED {
+        let bad = format!("{header}\n{LINE9_BODY}");
+        for diff in [
+            format!("{POSTING_PAIR}{bad}"),
+            format!("{POSTING_PAIR}{bad}{VALID_19}"),
+            format!("{POSTING_PAIR}{VALID_19}{bad}"),
+        ] {
+            let (doc, code) = digest(ws, &[], Some(&diff));
+            assert_malformed_error_of(&doc, "src/posting.al", &diff);
+            assert!(
+                roots(&doc).is_empty(),
+                "{diff}: no root from the file: {doc}"
+            );
+            assert_eq!(code, 2, "{diff}: {doc}");
+        }
+    }
+}
+
+/// #72 (code review CR-01). In a new file's section (`--- /dev/null`), only the
+/// `+++` line names the file, so a header error after it names that path.
+///
+/// Precondition: the pair alone (a hunkless added file) roots both routines.
+/// Mutation: do not set the section's path from the `+++` record -> the error
+/// has no `file`, and the hunkless record roots both routines.
+#[test]
+fn added_file_header_error_names_its_plus_side() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let pair = "--- /dev/null\n+++ b/src/posting.al\n";
+    let (doc, code) = digest(ws, &[], Some(pair));
+    assert_eq!(code, 0, "precondition: {doc}");
     assert_eq!(
         roots(&doc),
         vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
-        "{doc}"
+        "precondition: {doc}"
     );
+
+    let diff = format!("{pair}@@ garbage @@\n{LINE9_BODY}");
+    let (doc, code) = digest(ws, &[], Some(&diff));
+    assert_malformed_error_of(&doc, "src/posting.al", &diff);
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #72. The error poisons only its own file: posting.al malformed, subscriber.al
+/// valid (line 9, inside `HandlePosted`), in both orders.
+///
+/// Precondition: the subscriber hunk alone gives `["HandlePosted"]`.
+/// Mutations: attach the error with no file (or to the next record) -> the
+/// `file` assertion; poison the whole diff on any error -> `HandlePosted` missing.
+#[test]
+fn malformed_hunk_poisons_only_its_own_file() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let sub = one_line_diff("src/subscriber.al", 9, "        x");
+    let (doc, code) = digest(ws, &[], Some(&sub));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "precondition: {doc}");
+
+    let bad = format!("{POSTING_PAIR}@@ garbage @@\n{LINE9_BODY}");
+    for diff in [format!("{bad}{sub}"), format!("{sub}{bad}")] {
+        let (doc, code) = digest(ws, &[], Some(&diff));
+        assert_malformed_error_of(&doc, "src/posting.al", &diff);
+        assert_eq!(roots(&doc), vec!["HandlePosted"], "{diff}: {doc}");
+        assert_eq!(code, 0, "{diff}: {doc}");
+    }
+}
+
+/// #72. A malformed record vetoes EVERY record of its path (plain `diff -u`), by
+/// the normalized path: the same spelling in both orders, and a malformed
+/// `src/Posting.al` with a healthy `src/posting.al` in both orders.
+///
+/// Precondition: the good record alone gives `["PostSalesDoc"]`; `src/Posting.al`
+/// with a valid hunk alone gives `["PostSalesDoc"]` (matching is case-insensitive).
+/// Mutations: veto per record -> `PostSalesDoc`; veto by the raw path ->
+/// `PostSalesDoc` in the case-differing cases.
+#[test]
+fn malformed_record_poisons_every_record_of_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let text = "        Header.\"Status Posted\" := true;";
+    let good = one_line_diff("src/posting.al", 9, text);
+    for alone in [good.clone(), one_line_diff("src/Posting.al", 9, text)] {
+        let (doc, code) = digest(ws, &[], Some(&alone));
+        assert_eq!(code, 0, "precondition {alone}: {doc}");
+        assert_eq!(
+            roots(&doc),
+            vec!["PostSalesDoc"],
+            "precondition {alone}: {doc}"
+        );
+    }
+
+    for spelling in ["src/posting.al", "src/Posting.al"] {
+        let bad = format!("--- a/{spelling}\n+++ b/{spelling}\n@@ garbage @@\n{LINE9_BODY}");
+        for diff in [format!("{bad}{good}"), format!("{good}{bad}")] {
+            let (doc, code) = digest(ws, &[], Some(&diff));
+            assert_malformed_error_of(&doc, spelling, &diff);
+            assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+            assert_eq!(code, 2, "{diff}: {doc}");
+        }
+    }
+}
+
+/// #72 (astra R2-A01). A git section whose header error comes before its `+++`
+/// (so the section emits no record) still vetoes its path, in both section
+/// orders.
+///
+/// Precondition: the healthy section alone gives `["PostSalesDoc"]`.
+/// Mutation: resolve pending errors only from records (no section destination)
+/// -> the error has no `file` and `PostSalesDoc` is rooted.
+#[test]
+fn git_section_error_before_plus_header_vetoes_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let healthy = git_line9("src/posting.al");
+    let (doc, code) = digest(ws, &[], Some(&healthy));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "precondition: {doc}");
+
+    let bad = "diff --git a/src/posting.al b/src/posting.al
+--- a/src/posting.al
+@@ garbage @@
++++ b/src/posting.al
+";
+    for diff in [format!("{bad}{healthy}"), format!("{healthy}{bad}")] {
+        let (doc, code) = digest(ws, &[], Some(&diff));
+        assert_malformed_error_of(&doc, "src/posting.al", &diff);
+        assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+        assert_eq!(code, 2, "{diff}: {doc}");
+    }
+}
+
+/// #72 (astra R3-A02). The `diff --git` line's b-side path names the file of a
+/// header error that comes before any `---`/`+++`/rename line, and that is the
+/// path the veto uses: same names, distinct names (`a/src/old.al
+/// b/src/posting.al`), and a quoted a-name holding a space before an unquoted
+/// b-name, each with a healthy `src/posting.al` section in both orders.
+///
+/// Precondition: the healthy section alone gives `["PostSalesDoc"]`.
+/// Mutations: delete the `git_header_dest` call at `diff --git` -> no `file`,
+/// `PostSalesDoc` rooted; take the a-side name -> the error names `src/old.al`,
+/// `PostSalesDoc` rooted; drop the quoted a-token scan -> the quoted case has
+/// no `file`, `PostSalesDoc` rooted.
+#[test]
+fn git_header_names_the_file_of_an_immediate_header_error() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let healthy = git_line9("src/posting.al");
+    let (doc, code) = digest(ws, &[], Some(&healthy));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "precondition: {doc}");
+
+    for git in [
+        "diff --git a/src/posting.al b/src/posting.al",
+        "diff --git a/src/old.al b/src/posting.al",
+        // astra FR1-A01: a quoted a-token with a space, unquoted b-token.
+        "diff --git \"a/src/old\\303\\251 name.al\" b/src/posting.al",
+    ] {
+        let bad = format!("{git}\n@@ garbage @@\n{LINE9_BODY}");
+        for diff in [format!("{bad}{healthy}"), format!("{healthy}{bad}")] {
+            let (doc, code) = digest(ws, &[], Some(&diff));
+            assert_malformed_error_of(&doc, "src/posting.al", &diff);
+            assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+            assert_eq!(code, 2, "{diff}: {doc}");
+        }
+    }
+}
+
+/// #72 (astra R3-A01). Git quotes a non-ASCII name with octal escapes of its
+/// UTF-8 BYTES (`"b/src/\303\251.al"` is `src/é.al`). One decoder serves every
+/// path spelling, so an escaped and a literal section of one file share the
+/// veto, in both spellings and both orders.
+///
+/// Precondition: the healthy escaped section alone gives `["PostSalesDoc"]`
+/// (red at base: each escape decoded as its own char gives `src/Ã©.al`,
+/// `diff-file-unmatched`, exit 2); the healthy literal section alone gives
+/// `["PostSalesDoc"]`.
+/// Mutation: decode each octal escape as its own char again -> the escaped
+/// section is unmatched, the error names `src/Ã©.al` and the literal healthy
+/// section is rooted.
+#[test]
+fn escaped_and_literal_spellings_of_one_file_share_the_veto() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    let src = corpus("ws-d8-commit-in-tx");
+    write(
+        &ws.join("app.json"),
+        &std::fs::read_to_string(src.join("app.json")).unwrap(),
+    );
+    write(
+        &ws.join("src/subscriber.al"),
+        &std::fs::read_to_string(src.join("src/subscriber.al"))
+            .unwrap()
+            .replace('\r', ""),
+    );
+    write(&ws.join("src/\u{e9}.al"), &d8_posting());
+
+    let escaped = "\"a/src/\\303\\251.al\" \"b/src/\\303\\251.al\"";
+    let esc_pair = "--- \"a/src/\\303\\251.al\"\n+++ \"b/src/\\303\\251.al\"\n";
+    let literal = "a/src/\u{e9}.al b/src/\u{e9}.al";
+    let lit_pair = "--- a/src/\u{e9}.al\n+++ b/src/\u{e9}.al\n";
+    let hunk = "@@ -9 +9 @@\n-x\n+y\n";
+    let healthy_esc = format!("diff --git {escaped}\n{esc_pair}{hunk}");
+    let healthy_lit = format!("diff --git {literal}\n{lit_pair}{hunk}");
+    let bad_esc = format!("diff --git {escaped}\n{esc_pair}@@ garbage @@\n{LINE9_BODY}");
+    let bad_lit = format!("diff --git {literal}\n{lit_pair}@@ garbage @@\n{LINE9_BODY}");
+
+    for alone in [&healthy_esc, &healthy_lit] {
+        let (doc, code) = digest(ws, &[], Some(alone));
+        assert!(diags(&doc).is_empty(), "precondition {alone}: {doc}");
+        assert_eq!(
+            roots(&doc),
+            vec!["PostSalesDoc"],
+            "precondition {alone}: {doc}"
+        );
+        assert_eq!(code, 0, "precondition {alone}: {doc}");
+    }
+
+    for diff in [
+        format!("{bad_esc}{healthy_lit}"),
+        format!("{healthy_lit}{bad_esc}"),
+        format!("{bad_lit}{healthy_esc}"),
+        format!("{healthy_esc}{bad_lit}"),
+    ] {
+        let (doc, code) = digest(ws, &[], Some(&diff));
+        assert_malformed_error_of(&doc, "src/\u{e9}.al", &diff);
+        assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+        assert_eq!(code, 2, "{diff}: {doc}");
+    }
+}
+
+/// The P14 input: a git section whose rejected hunk's body holds a `---`/`+++`
+/// pair for `src/subscriber.al` and a valid header after it.
+const P14: &str = "diff --git a/src/posting.al b/src/posting.al
+--- a/src/posting.al
++++ b/src/posting.al
+@@ garbage @@
+--- a/src/subscriber.al
++++ b/src/subscriber.al
+@@ -9,1 +9,1 @@
+-x
++y
+";
+
+/// #72 (astra R1-A02). In a git section, the body of a rejected hunk has no
+/// trustworthy length, so nothing up to the next `diff --git` line is read: its
+/// `---`/`+++` lines open no file and its later hunks attach to none.
+///
+/// Precondition: the same lines after a VALID header with matching counts read
+/// `--- …`/`+++ …` as body (#71), so the later hunk attaches to posting.al.
+/// Mutation: drop the skip-until-`diff --git` state -> `HandlePosted` root.
+#[test]
+fn rejected_hunk_body_never_opens_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let valid = P14.replace("@@ garbage @@", "@@ -9,1 +9,1 @@");
+    let (doc, code) = digest(ws, &[], Some(&valid));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "precondition: {doc}");
+    assert!(diags(&doc).is_empty(), "precondition: {doc}");
+
+    let (doc, code) = digest(ws, &[], Some(P14));
+    assert_malformed_error_of(&doc, "src/posting.al", P14);
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #72 (astra R2-A02). The skip state ends at the next `diff --git` line: P14
+/// followed by a real subscriber.al section gives exactly `["HandlePosted"]` and
+/// one error naming posting.al.
+///
+/// Precondition: the subscriber section alone gives `["HandlePosted"]`.
+/// Mutation: never clear the skip state -> no roots, exit 2.
+#[test]
+fn rejected_body_skip_resumes_at_next_git_section() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let sub = git_line9("src/subscriber.al");
+    let (doc, code) = digest(ws, &[], Some(&sub));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "precondition: {doc}");
+
+    let diff = format!("{P14}{sub}");
+    let (doc, code) = digest(ws, &[], Some(&diff));
+    assert_malformed_error_of(&doc, "src/posting.al", &diff);
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "{doc}");
+    assert_eq!(code, 0, "{doc}");
+}
+
+/// #72 (flash R2-F01, plain `diff -u` only). A pending header error stays with
+/// its file: a `---` line with pending errors closes the section, so the error
+/// never moves into the next file's record.
+///
+/// Precondition: the subscriber pair alone gives `["HandlePosted"]`.
+/// Mutation: do not close the section at a `---` with pending errors -> the error
+/// names subscriber.al and `HandlePosted` is vetoed.
+#[test]
+fn plain_section_error_stays_with_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    let sub = one_line_diff("src/subscriber.al", 9, "        x");
+    let (doc, code) = digest(ws, &[], Some(&sub));
+    assert_eq!(code, 0, "precondition: {doc}");
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "precondition: {doc}");
+
+    let diff = format!("--- a/src/posting.al\n@@ garbage @@\n{sub}");
+    let (doc, code) = digest(ws, &[], Some(&diff));
+    assert_malformed_error_of(&doc, "src/posting.al", &diff);
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "{doc}");
+    assert_eq!(code, 0, "{doc}");
+}
+
+/// #72 (astra R1-A03). A malformed header in a rename section with no `---`/`+++`
+/// pair names the rename target and gives no roots (it used to take the whole
+/// file, as a clean rename does).
+///
+/// Precondition: the same rename without the `@@` line gives both roots.
+/// Mutation: resolve pending errors without the rename record / `rename to`
+/// destination -> no `file`, both roots. Only the second case discriminates:
+/// in the first, the `diff --git` line already names the target. In the
+/// second, git writes the names unquoted, with spaces and unequal, so the
+/// `diff --git` line cannot be split and only `rename to` names the file.
+#[test]
+fn malformed_header_in_a_rename_section_gives_no_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let ws = dir.path();
+    for old in ["src/old.al", "src/old name.al"] {
+        let rename = format!(
+            "diff --git a/{old} b/src/posting.al
+similarity index 100%
+rename from {old}
+rename to src/posting.al
+"
+        );
+        let (doc, code) = digest(ws, &[], Some(&rename));
+        assert_eq!(code, 0, "precondition: {doc}");
+        assert_eq!(
+            roots(&doc),
+            vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
+            "precondition: {doc}"
+        );
+
+        let diff = format!("{rename}@@ garbage @@\n");
+        let (doc, code) = digest(ws, &[], Some(&diff));
+        assert_malformed_error_of(&doc, "src/posting.al", &diff);
+        assert!(roots(&doc).is_empty(), "{doc}");
+        assert_eq!(code, 2, "{doc}");
+    }
+}
+
+/// #72. An `@@` line before any file section (a preamble, e.g. a `format-patch`
+/// commit message) is not an error: there is no file it could belong to.
+/// Regression guard (green before the fix too).
+///
+/// Mutation: report sectionless `@@` lines -> one `diff-parse-error`.
+#[test]
+fn preamble_hunk_header_is_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    let diff = format!(
+        "@@ garbage @@\n{}",
+        one_line_diff(
+            "src/posting.al",
+            9,
+            "        Header.\"Status Posted\" := true;"
+        )
+    );
+    let (doc, code) = digest(dir.path(), &[], Some(&diff));
+    assert!(diags(&doc).is_empty(), "{doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    assert_eq!(code, 0, "{doc}");
 }
 
 // ---------------------------------------------------------------------------
