@@ -426,6 +426,19 @@ enter it and `R` gets nothing; `A` falls through again and reaches `Q`.
   "ready"; flash accepted all 41, "ready". **FINAL PANEL CONVERGED**, against ledger sha256
   `e5c692d6…5099`. Two minors stay `deferred` with rationale, each accepted by both reviewers
   (F1-02, which became D2, and F1-09).
+- Step 13, PR #102, CI round 1: **`test` failed** (GitGuardian and claude-review passed). The only
+  failure was `perf_bounds::release_checks::compute_summaries_v2_within_bound`:
+  `compute_summaries_v2_bundle(1000): median=235.07ms bound=230ms samples=[171.45, 263.20, 153.79,
+  302.98, 235.07]ms` (run 38722822098). Diagnosis: runner noise, not this change. (1) The timed
+  section is `sub.solve()` (the L4 solve) on a substrate assembled BEFORE timing
+  (`tests/perf_bounds.rs:1118-1135`), so lowering is not timed. (2) The corpus generator writes
+  every `[IntegrationEvent]`/`[EventSubscriber]` directly above its procedure, with no comment,
+  pragma or `#if` between them (`tests/perf_support/mod.rs:238-247`). So the lowered model, and
+  with it the solve's input, is identical before and after #80. (3) The same test passed in this
+  branch's own `ci-steps all` at `a92c1cc1` (log line 3413), and on `master`'s last 5 CI runs.
+  (4) The samples vary 2x within one run (153 → 303 ms). No code change is justified. Raising
+  the bound would hide a real regression later. `ci_fix` charged: this ledger entry is the
+  fix commit, re-running CI on an unchanged code tree, and steps 9-12 are repeated.
 - Step 11: `git fetch origin`. `origin/master` is still `1b6f1c38`, so there was no rebase and
   `rebase_regate` was not charged. B = `1b6f1c3886f1eecbf70791b3d32c7e5e4c117c0a`, H =
   `a92c1cc1cb5228d4f0741a57a7c36605ee0e895c`.
