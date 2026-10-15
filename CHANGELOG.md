@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback would otherwise hide a wrong class from a test that reads the rendered value). The
   text output shows the diagnostic's `reason=` and `op=`. `alsem prove` is unchanged: it
   still treats only `evidence-unavailable` as an incomplete witness (the spec is silent).
+- Measured on the CDO baseline (`bc3ccb18`, release-fast, against master before #69), #69 as
+  a whole: `aldump --program-call-graph-stats` is byte-identical (unknown 0). Detectors only
+  lose tables, never gain a write: `alsem analyze` cross-app default findings 2292 -> 2293
+  at `--scope primary` and 27106 -> 26954 at `--scope all` (d43 -139 +1, d44 -14; d9, d8 and
+  d50 `affectedTables` shrink; the opt-in set 399 -> 394 / 418 -> 413, d45 -4 +1, d49 -2).
+  Every change is a `Validate`/`Copy`/`TransferFields` no longer counted as a write, a
+  write now known temporary, or d45's per-publisher cap letting a hidden table in.
+  `temp-state-incoherent`: 0 over 16,764 DB_INSERT/DB_MODIFY/DB_DELETE effects (5,512 roots).
+  Cost: peak RSS of `alsem analyze` unchanged (2827..2838 MB before, 2830..2835 now), the
+  digest probe 6446..6488 -> 5297..5333 MB, wall time +6.5% (analyze) and +4.3% (digest);
+  the solve holds 125.0 MB (analyze) and 195.8 MB (digest probe), 4.2% and 2.9% of peak.
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
