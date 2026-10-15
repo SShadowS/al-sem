@@ -226,6 +226,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem digest --file` and `--diff` now match a workspace file whatever spelling names it
+  (#76). Before, `./src/x.al`, `src/./x.al` and `src//x.al` gave `file-unmatched` (exit 2),
+  and a diff written by `diff -u ./…` matched nothing, because the path comparison only
+  stripped the scheme, turned `\` into `/` and lowercased. `normalize_input`, the one
+  function every digest path comparison goes through (`--file`, diff paths and the set of
+  files a malformed hunk header vetoes), now also drops every `.` segment and every empty
+  segment except a leading root `/` or UNC `//`. It stays purely lexical. Limits: a rooted
+  path (`/src/x.al`) and a `..` segment (`src/../src/x.al`) still do not match, on purpose,
+  since `..` after a symlink need not name the parent. The pre-existing `\` -> `/` mapping
+  now also drops `.` and empty segments, so on POSIX a file whose name contains a literal
+  `\` (e.g. `src\.\x.al`) keys like `src/x.al`; such names are outside this guarantee.
+  Diagnostics still echo the spelling the user gave. No golden moved.
 - `workspaceFingerprint` now covers the whole dependency closure the loader reads (#70):
   every `.app` in the workspace's own and each ancestor `.alpackages` up to the `.git`
   boundary, from the same discovery the loader and the closure digest use. Before, it

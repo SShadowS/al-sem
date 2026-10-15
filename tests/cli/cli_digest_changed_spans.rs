@@ -1330,6 +1330,33 @@ fn malformed_record_poisons_every_record_of_its_path() {
             assert_eq!(code, 2, "{diff}: {doc}");
         }
     }
+
+    // #76 T4: the veto keys by the same normalization, so a `./` spelling and the
+    // plain one share it, in both directions and both record orders.
+    // Mutation: normalize the poison set with the old function -> `PostSalesDoc`
+    // when the malformed record is `./src/posting.al` and the healthy one is not.
+    let dotted = one_line_diff("./src/posting.al", 9, text);
+    let (doc, code) = digest(ws, &[], Some(&dotted));
+    assert_eq!(code, 0, "precondition {dotted}: {doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["PostSalesDoc"],
+        "precondition {dotted}: {doc}"
+    );
+    for (bad_spelling, healthy) in [
+        ("./src/posting.al", good.clone()),
+        ("src/posting.al", dotted.clone()),
+    ] {
+        let bad =
+            format!("--- a/{bad_spelling}\n+++ b/{bad_spelling}\n@@ garbage @@\n{LINE9_BODY}");
+        for diff in [format!("{bad}{healthy}"), format!("{healthy}{bad}")] {
+            let (doc, code) = digest(ws, &[], Some(&diff));
+            assert_malformed_error_of(&doc, bad_spelling, &diff);
+            assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+            assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{diff}: {doc}");
+            assert_eq!(code, 2, "{diff}: {doc}");
+        }
+    }
 }
 
 /// #72 (astra R2-A01). A git section whose header error comes before its `+++`
@@ -2250,4 +2277,89 @@ fn interface_object_rows_carry_declaration_only_routines() {
         !model.workspace.routines.iter().any(|r| r.name == "Bar"),
         "the Interface skip stays"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #76: any spelling of a workspace-relative path names the same file.
+// Ledger: `.agent/issue-76/ledger.md` (Design, tests T1, T1n, T3, T4).
+// ---------------------------------------------------------------------------
+
+/// The sorted stable ids of the digest entries.
+fn entry_ids(doc: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = entries(doc)
+        .iter()
+        .map(|e| e["routine"]["stableId"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// #76 T1 (acceptance). `--file` with `./`, `.\`, a `.` segment, `\` separators
+/// or a doubled `/` gives the same entries as `src/posting.al`: its 2 routines.
+///
+/// Mutation: drop the `.`-segment skipping -> `./src/posting.al` and
+/// `src/./posting.al` give `file-unmatched`, exit 2.
+#[test]
+fn file_spellings_resolve_to_the_same_routines() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    let (base, code) = digest(&ws, &["--file", "src/posting.al"], None);
+    assert_eq!(code, 0, "precondition: {base}");
+    assert_eq!(
+        roots(&base),
+        vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
+        "precondition: the 2 routines of posting.al: {base}"
+    );
+    let base_ids = entry_ids(&base);
+    assert_eq!(base_ids.len(), 2, "precondition: {base}");
+
+    for spelling in [
+        "./src/posting.al",
+        "src/./posting.al",
+        "src\\posting.al",
+        ".\\src\\posting.al",
+        "src//posting.al",
+    ] {
+        let (doc, code) = digest(&ws, &["--file", spelling], None);
+        assert_eq!(code, 0, "{spelling}: {doc}");
+        assert_eq!(entry_ids(&doc), base_ids, "{spelling}: {doc}");
+        assert!(diags(&doc).is_empty(), "{spelling}: {doc}");
+    }
+}
+
+/// #76 T1n (negative controls). A rooted path and a `..` climb still name no
+/// workspace file: exit 2, no entries, one `file-unmatched` with the original
+/// spelling.
+///
+/// Mutation: drop the leading empty segment too -> `/src/posting.al` matches.
+#[test]
+fn rooted_and_climbing_spellings_still_do_not_match() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    for spelling in ["/src/posting.al", "src/../src/posting.al"] {
+        let (doc, code) = digest(&ws, &["--file", spelling], None);
+        assert_eq!(code, 2, "{spelling}: {doc}");
+        assert!(entries(&doc).is_empty(), "{spelling}: {doc}");
+        let d = diags(&doc);
+        assert_eq!(d.len(), 1, "{spelling}: {doc}");
+        assert_eq!(d[0]["kind"], "file-unmatched", "{spelling}: {doc}");
+        assert_eq!(d[0]["file"], spelling, "{spelling}: {doc}");
+    }
+}
+
+/// #76 T3. A diff whose headers spell the path `./src/posting.al` (as
+/// `diff -u ./…` writes them) or `a/./src/posting.al` matches the file by hunk:
+/// line 9 roots only `PostSalesDoc`.
+///
+/// Mutation: bypass `normalize_input` for the diff lookup -> `diff-file-unmatched`.
+#[test]
+fn diff_path_spellings_match_by_hunk() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    let text = "        Header.\"Status Posted\" := true;";
+    let plain =
+        format!("--- ./src/posting.al\n+++ ./src/posting.al\n@@ -9,1 +9,1 @@\n-{text} \n+{text}\n");
+    for diff in [plain, one_line_diff("./src/posting.al", 9, text)] {
+        let (doc, code) = digest(&ws, &[], Some(&diff));
+        assert_eq!(code, 0, "{diff}: {doc}");
+        assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{diff}: {doc}");
+        assert!(diags(&doc).is_empty(), "{diff}: {doc}");
+    }
 }
