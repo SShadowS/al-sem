@@ -37,7 +37,10 @@ pub struct ParamSpec {
 pub struct CanonicalRoutineKey {
     pub app_guid: String,
     pub object_type: String,
-    pub object_number: i64,
+    /// The object segment, from [`object_key`]: the decimal number, or `@` + the
+    /// encoded name for an object without one. Hashed verbatim, so a numbered
+    /// object hashes the same bytes it always did.
+    pub object_key: String,
     pub routine_kind: String,
     pub routine_name: String,
     pub normalized_signature_hash: String,
@@ -125,10 +128,54 @@ pub fn is_lower_hex(b: u8) -> bool {
     b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
 }
 
-/// Internal object id: `"{appGuid}/{objectType}/{objectNumber}"`, no
-/// normalization (appGuid casing kept verbatim).
-pub fn encode_object_id(app_guid: &str, object_type: &str, object_number: i64) -> String {
-    format!("{app_guid}/{object_type}/{object_number}")
+/// The object segment of an object id: the decimal number when the object has one;
+/// else `@` followed by the percent-encoded, folded logical name (#83).
+///
+/// Every object id, routine-id key and fingerprint object part takes its segment
+/// from here, so a numberless object (Interface, ControlAddIn, a numbered kind
+/// whose number did not parse) no longer shares `0` with every other one in its app.
+/// - `Some(n)` is `n.to_string()`: byte-identical to the ids before #83.
+/// - `None` keeps only the bytes `a-z` and `0-9` of the folded name and writes every
+///   other UTF-8 byte as `%XX` (uppercase hex). The segment therefore never holds
+///   `/`, `:`, `#`, space or `"` (consumers split on them), never parses as a number
+///   (`@` is not a digit), and the encoding is reversible, so two names never collide.
+///
+/// `logical_name` is the object's LOGICAL name (outer quotes stripped, inner `""`
+/// unescaped); it is ignored when `number` is `Some`.
+pub fn object_key(number: Option<i64>, logical_name: &str) -> String {
+    use std::fmt::Write;
+    match number {
+        Some(n) => n.to_string(),
+        None => {
+            let folded = al_syntax::fold_identifier(logical_name);
+            let mut out = String::with_capacity(folded.len() + 1);
+            out.push('@');
+            for b in folded.bytes() {
+                if b.is_ascii_lowercase() || b.is_ascii_digit() {
+                    out.push(char::from(b));
+                } else {
+                    // Writing to a `String` cannot fail.
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+            out
+        }
+    }
+}
+
+/// The ABI zero rule: an ABI object numbered `0` has no number. SymbolReference.json
+/// carries no `Id` for Interface, ControlAddIn or DotNetPackage, the parser stores
+/// that as `0`, and AL object numbers start at 1. The one statement of this rule —
+/// the graph's ABI keying and the dependency projection both read it.
+pub fn abi_object_number(n: i64) -> Option<i64> {
+    (n != 0).then_some(n)
+}
+
+/// Internal object id: `"{appGuid}/{objectType}/{objectKey}"`, no
+/// normalization (appGuid casing kept verbatim). `object_key` comes from
+/// [`object_key`].
+pub fn encode_object_id(app_guid: &str, object_type: &str, object_key: &str) -> String {
+    format!("{app_guid}/{object_type}/{object_key}")
 }
 
 /// Stable object id: replace every `/` in the internal id with `:`.
@@ -221,7 +268,7 @@ pub fn routine_signature_fingerprint(
 }
 
 /// Canonical routine key hash: `sha256_of_strings` over the 6 ordered parts
-/// `[appGuid, objectType, objectNumber, routineKind, routineName_lower,
+/// `[appGuid, objectType, objectKey, routineKind, routineName_lower,
 /// normalizedSignatureHash]`, plus a CONDITIONAL 7th part —
 /// `enclosing_member_lower` — appended only when the routine has an enclosing
 /// member ([`CanonicalRoutineKey::enclosing_member`]).
@@ -251,7 +298,7 @@ pub fn encode_canonical_routine_key(key: &CanonicalRoutineKey) -> String {
     let mut parts = vec![
         key.app_guid.clone(),
         key.object_type.clone(),
-        key.object_number.to_string(),
+        key.object_key.clone(),
         key.routine_kind.clone(),
         key.routine_name.to_lowercase(),
         key.normalized_signature_hash.clone(),
@@ -451,7 +498,7 @@ mod tests {
         CanonicalRoutineKey {
             app_guid: "11111111-2222-3333-4444-555555555555".to_string(),
             object_type: "Page".to_string(),
-            object_number: 50811,
+            object_key: "50811".to_string(),
             routine_kind: "trigger".to_string(),
             routine_name: "OnAction".to_string(),
             normalized_signature_hash: sha256_hex("onaction():"),
@@ -520,7 +567,7 @@ mod tests {
         let six_part = sha256_of_strings(&[
             key.app_guid.clone(),
             key.object_type.clone(),
-            key.object_number.to_string(),
+            key.object_key.clone(),
             key.routine_kind.clone(),
             key.routine_name.to_lowercase(),
             key.normalized_signature_hash.clone(),
@@ -632,6 +679,47 @@ mod tests {
             sha256_hex(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    // -- the object key (#83, T1) ---------------------------------------------
+
+    /// A numbered object keeps its number byte for byte; a numberless one gets `@`
+    /// + its folded name, with every byte other than `a-z`/`0-9` percent-encoded.
+    #[test]
+    fn object_key_vectors() {
+        assert_eq!(object_key(Some(50811), "x"), "50811");
+        assert_eq!(object_key(None, "IFoo"), "@ifoo");
+        assert_eq!(object_key(None, "ifoo"), "@ifoo");
+        assert_eq!(object_key(None, "Sales Line"), "@sales%20line");
+        assert_eq!(object_key(None, "My/If:#x"), "@my%2Fif%3A%23x");
+        // All digits: `@` keeps it from ever parsing as object 123.
+        assert_eq!(object_key(None, "123"), "@123");
+        assert_eq!(object_key(None, "a.b_c-d%@"), "@a%2Eb%5Fc%2Dd%25%40");
+        assert_eq!(object_key(None, "Ø \"Q\" If"), "@%C3%B8%20%22q%22%20if");
+        assert_eq!(object_key(None, "ø \"Q\" If"), "@%C3%B8%20%22q%22%20if");
+    }
+
+    /// No numberless key holds a byte a consumer splits on, and none parses as a
+    /// number: the object id stays three `/`-parts and the stable id three `:`-parts.
+    #[test]
+    fn object_key_never_holds_a_separator() {
+        for name in ["My/If:#x", "a b\"c", "Ø \"Q\" /:#%@ If", "123", ""] {
+            let key = object_key(None, name);
+            assert!(
+                !key.contains(['/', ':', '#', ' ', '"']),
+                "{name:?} -> {key}"
+            );
+            assert!(key.parse::<i64>().is_err(), "{name:?} -> {key}");
+            let id = to_stable_object_id(&encode_object_id("g", "Interface", &key));
+            assert_eq!(id.split(':').count(), 3, "{id}");
+            assert_eq!(id.split(':').nth(2), Some(key.as_str()), "{id}");
+        }
+    }
+
+    #[test]
+    fn abi_object_number_reads_zero_as_absent() {
+        assert_eq!(abi_object_number(0), None);
+        assert_eq!(abi_object_number(7), Some(7));
     }
 
     // -- localeCompare oracle: ICU order for the snapshot sort-key alphabet --

@@ -151,14 +151,17 @@ fn extract_from_ir(file: &al_syntax::ir::AlFile, app_guid: &str, out: &mut Ident
         let Some(object_type) = object_type_label_ir(obj.kind) else {
             continue;
         };
-        let object_number = obj.id.unwrap_or(0);
         // `strip_quotes` is idempotent on an already-unquoted IR name; applying it
         // keeps parity with al-sem's `extractObjectName` regardless.
         let name = strip_quotes(&obj.name).to_string();
 
-        let internal_object_id = encode_object_id(app_guid, object_type, object_number);
+        let key = crate::program::body::ir_walk::ir_object_key(obj);
+        let internal_object_id = encode_object_id(app_guid, object_type, &key);
         let stable_object_id = to_stable_object_id(&internal_object_id);
-        let signature_fingerprint = object_signature_fingerprint(object_type, object_number, &name);
+        // The fingerprint hashes the name too, so it was never shared; its number
+        // input stays `0` for a numberless object (no golden moves for it, #83).
+        let signature_fingerprint =
+            object_signature_fingerprint(object_type, obj.id.unwrap_or(0), &name);
 
         out.objects.push(ObjectIdentity {
             stable_object_id: stable_object_id.clone(),

@@ -315,6 +315,15 @@ fn push_route_items(
     }
 }
 
+/// An ABI object's graph key as text ([`AbiRoutineKey::object_node_key`]): its
+/// number, or its folded name when the ABI gives none.
+fn abi_object_key_text(key: &AbiRoutineKey) -> String {
+    match key.object_node_key() {
+        crate::program::node::ObjKey::Id(n) => n.to_string(),
+        crate::program::node::ObjKey::Name(s) => s.to_string(),
+    }
+}
+
 /// The `RouteTarget::AbiSymbol` fallback item — mirrors legacy's
 /// external-definition-found shape (`src/handlers.rs:348-363`: a detail
 /// string naming the source app, plus `data: {"external": true, "app":
@@ -331,11 +340,7 @@ fn abi_symbol_item(snap: &LspSnapshot, key: &AbiRoutineKey) -> CallHierarchyItem
         .try_resolve(key.app)
         .map(|id| id.name.as_str())
         .unwrap_or("external");
-    let object_display = if key.object_number != 0 {
-        format!("{} {}", key.object_type, key.object_number)
-    } else {
-        format!("{} {}", key.object_type, key.object_name_lc)
-    };
+    let object_display = format!("{} {}", key.object_type, abi_object_key_text(key));
     let detail = format!("{object_display}.{} (from {app_name})", key.routine_name_lc);
     let uri = abi_symbol_uri(key, app_name);
 
@@ -475,9 +480,14 @@ fn dep_source_uri(snap: &LspSnapshot, app: AppRef, virtual_path: &str) -> Uri {
 /// (e.g. `ReportExtension`) fails `parse_al_preview_uri`'s type-anchor scan
 /// entirely — a PRE-EXISTING schema gap inherited from legacy, not something
 /// this conformance fix closes.
+///
+/// The `Id` segment is the object's graph key ([`abi_object_key_text`]): its
+/// number, or its folded name when it has none (#83), so two numberless objects
+/// never share `Id` `0`. `parse_al_preview_uri` skips the `Id` segment, so the
+/// round trip does not depend on it.
 fn abi_symbol_uri(key: &AbiRoutineKey, app_name: &str) -> Uri {
     let encode = |s: &str| utf8_percent_encode(s, SYNTH_URI_SEGMENT).to_string();
-    let id_segment = key.object_number.to_string();
+    let id_segment = abi_object_key_text(key);
     let name_segment = if key.object_name_lc.is_empty() {
         key.object_number.to_string()
     } else {
@@ -1305,6 +1315,17 @@ mod tests {
         let (_, _, name2) = crate::lsp::custom::parse_al_preview_uri(uri2.as_str())
             .expect("id-less object URI must also parse");
         assert_eq!(name2, "my ext object");
+
+        // #83: the Id segment is the graph key, so an id-less object carries its
+        // name there, not `0`, and the numbered one keeps its number.
+        assert_eq!(
+            uri2.as_str(),
+            "al-preview:///allang/Some%20Dep%20App/codeunit/my%20ext%20object/my%20ext%20object.dal"
+        );
+        assert_eq!(
+            uri.as_str(),
+            "al-preview:///allang/Some%20Dep%20App/codeunit/50100/50100.dal"
+        );
     }
 
     // ── URI case-insensitivity (Windows filesystems are case-insensitive) ──

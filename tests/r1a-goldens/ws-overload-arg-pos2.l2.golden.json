@@ -16,7 +16,7 @@
       "objectType": "Codeunit"
     },
     {
-      "stableObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:Interface:0",
+      "stableObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:Interface:@probe%20ilog",
       "name": "Probe ILog",
       "objectType": "Interface"
     },

@@ -1409,11 +1409,7 @@ impl<'a> Converter<'a> {
                 object: ObjectNodeId {
                     app: key.app,
                     kind: object_kind_from_abi_type(&key.object_type),
-                    key: if key.object_number != 0 {
-                        ObjKey::Id(key.object_number)
-                    } else {
-                        ObjKey::Name(key.object_name_lc.as_str().into())
-                    },
+                    key: key.object_node_key(),
                 },
                 name_lc: key.routine_name_lc.as_str().into(),
                 // ABI routines are object-level (`abi_ingest`).
@@ -1485,12 +1481,7 @@ impl<'a> Converter<'a> {
             // our own app): no external type to name.
             RouteTarget::AbiSymbol { key } if key.app == self.primary => Some(None),
             RouteTarget::AbiSymbol { key } => {
-                let okey = if key.object_number != 0 {
-                    ObjKey::Id(key.object_number)
-                } else {
-                    ObjKey::Name(key.object_name_lc.as_str().into())
-                };
-                Some(self.type_ref(&(key.app, key.object_type.clone(), okey)))
+                Some(self.type_ref(&(key.app, key.object_type.clone(), key.object_node_key())))
             }
             _ => None,
         }
@@ -1527,11 +1518,7 @@ impl<'a> Converter<'a> {
                 object: ObjectNodeId {
                     app: key.app,
                     kind: object_kind_from_abi_type(&key.object_type),
-                    key: if key.object_number != 0 {
-                        ObjKey::Id(key.object_number)
-                    } else {
-                        ObjKey::Name(key.object_name_lc.as_str().into())
-                    },
+                    key: key.object_node_key(),
                 },
                 name_lc: key.routine_name_lc.as_str().into(),
                 enclosing_member_lc: None,
@@ -1602,11 +1589,7 @@ impl<'a> Converter<'a> {
                     dependency.push(ObjectNodeId {
                         app: key.app,
                         kind: object_kind_from_abi_type(&key.object_type),
-                        key: if key.object_number != 0 {
-                            ObjKey::Id(key.object_number)
-                        } else {
-                            ObjKey::Name(key.object_name_lc.as_str().into())
-                        },
+                        key: key.object_node_key(),
                     });
                 }
                 // An implementer the resolver could not resolve: it is listed in
@@ -1654,10 +1637,8 @@ impl<'a> Converter<'a> {
         };
         let impls = implements(&[ObjectKind::Codeunit]);
         let reached = |o: &ObjectNode| {
-            callees
-                .iter()
-                .any(|t| t.object_id == self.model_object_id(&o.id))
-                || dependency.contains(&o.id)
+            let object_id = self.model_object_id(&o.id);
+            callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
         let meta = DispatchMeta {
             interface_name,

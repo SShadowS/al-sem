@@ -33,7 +33,9 @@ fn build_key(input: &Value) -> ids::CanonicalRoutineKey {
     ids::CanonicalRoutineKey {
         app_guid: input["appGuid"].as_str().unwrap().to_string(),
         object_type: input["objectType"].as_str().unwrap().to_string(),
-        object_number: input["objectNumber"].as_i64().unwrap(),
+        // Every committed vector names a numbered object, so its key is the number:
+        // the same bytes the hash always took (#83).
+        object_key: ids::object_key(Some(input["objectNumber"].as_i64().unwrap()), ""),
         routine_kind: input["routineKind"].as_str().unwrap().to_string(),
         routine_name: input["routineName"].as_str().unwrap().to_string(),
         normalized_signature_hash: input["normalizedSignatureHash"]
@@ -58,7 +60,7 @@ fn encode(kind: &str, input: &Value) -> String {
         "encodeObjectId" => ids::encode_object_id(
             input["appGuid"].as_str().unwrap(),
             input["objectType"].as_str().unwrap(),
-            input["objectNumber"].as_i64().unwrap(),
+            &ids::object_key(Some(input["objectNumber"].as_i64().unwrap()), ""),
         ),
         "toStableObjectId" => ids::to_stable_object_id(input["internalObjectId"].as_str().unwrap()),
         "canonicalRoutineSignature" => ids::canonical_routine_signature(

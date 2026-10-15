@@ -608,8 +608,8 @@ fn map_sub_id(internal: &str, map: &HashMap<String, String>) -> String {
     crate::engine::l4::summary::stable_sub_id(internal, map)
 }
 
-/// Project an internal ObjectId (`appGuid/Type/Num`) to StableObjectId
-/// (`appGuid:Type:Num`).
+/// Project an internal ObjectId (`appGuid/Type/Key`) to StableObjectId
+/// (`appGuid:Type:Key`); the key is the number, or `@name` for a numberless object.
 fn map_object_id(internal: &str) -> String {
     crate::engine::ids::to_stable_object_id(internal)
 }

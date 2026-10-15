@@ -76,7 +76,7 @@
       "objectType": "Codeunit"
     },
     {
-      "stableObjectId": "44444444-4444-4444-4444-444444444444:Interface:0",
+      "stableObjectId": "44444444-4444-4444-4444-444444444444:Interface:@iproveprocessor",
       "name": "IProveProcessor",
       "objectType": "Interface"
     },

@@ -943,6 +943,7 @@ mod tests {
             app_guid: "test-guid".to_string(),
             object_type: "Codeunit".to_string(),
             object_number: 50000,
+            object_key: "50000".to_string(),
             name: "TestCodeunit".to_string(),
             source_table_name: None,
             extends_target_name: None,

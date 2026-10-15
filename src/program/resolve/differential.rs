@@ -214,11 +214,7 @@ fn project_target(target: &RouteTarget, apps: &AppRegistry) -> Option<CanonicalT
         RouteTarget::AbiSymbol { key } => Some(CanonicalTarget {
             kind: 254,
             app: Some(app_guid(apps, key.app)),
-            object_lc: if key.object_number != 0 {
-                format!("{}", key.object_number)
-            } else {
-                key.object_name_lc.clone()
-            },
+            object_lc: obj_key_lc(&key.object_node_key()),
             routine_lc: Some(key.routine_name_lc.clone()),
         }),
     }

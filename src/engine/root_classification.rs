@@ -787,6 +787,7 @@ mod tests {
             app_guid: "app".to_string(),
             object_type: object_type.to_string(),
             object_number: 50100,
+            object_key: "50100".to_string(),
             name: "Obj".to_string(),
             source_table_name: None,
             extends_target_name: None,

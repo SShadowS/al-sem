@@ -1,0 +1,482 @@
+[
+ {
+  "id": "R1-01",
+  "source": "sol+opus",
+  "round": "spec-1",
+  "file": "src/engine/deps/symbol_reference.rs:267",
+  "line": null,
+  "severity": "important",
+  "text": "The ABI keeps only an i64 number (absent Id = 0), so P8 cannot pass None; a straight port leaves dependency interfaces colliding.",
+  "disposition": "fixed",
+  "evidence": "D2a: one helper ids::abi_object_number (0 => None) used by P8, abi_ingest.rs:421-425 and program_calls.rs:1530-1534,1580-1584 (the engine's existing zero convention, verified at abi_ingest.rs:421-425). T5 runs the real SymbolReference parser on Interfaces without Id and asserts '@<name>'.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "sol",
+  "round": "spec-1",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "important",
+  "text": "No test discriminates D3's normalisation (plain names), nor numbered kinds whose number did not parse.",
+  "disposition": "fixed",
+  "evidence": "T3 uses an interface named \"Ø \"\"Q\"\" /:#%@ If\" and pins the literal id from P1, P2, P3 and P5; T3b adds two overflowing-number codeunits with identical Run() and requires distinct object, internal and stable routine ids.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "sol",
+  "round": "spec-1",
+  "file": "tests/differential.rs:168",
+  "line": null,
+  "severity": "important",
+  "text": "Switching the harness back to id-only keys recreates the silent overwrite, and name is not compared.",
+  "disposition": "fixed",
+  "evidence": "D5: assert no duplicate stableObjectId per snapshot before building maps, key by id, compare name; discrimination: injected duplicate fails, changed name fails.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "sol",
+  "round": "spec-1",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "important",
+  "text": "Distinct ids change cardinality (identity table, contracts, routine indexes), not only id spelling; no end-to-end test.",
+  "disposition": "fixed",
+  "evidence": "T6 (identity table + contracts keep both interfaces with their names); measurement plan triages added rows separately from id substitutions; CDO probe counts logical identities, not physical rows.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "important",
+  "text": "Golden search only looked for Interface:0; added rows not expected; no CDO/DO findings/fingerprint measurement; no upgrade statement.",
+  "disposition": "fixed",
+  "evidence": "Regex [:/]0([#\"/]|::) over every golden dir: other hits are arity/index suffixes (Background lists them); added-row triage; CDO/DO findings count + fingerprint churn before/after; Upgrade note section. | Final round 1 (sol re-raised): measured with a temporary cross-app probe on CDO (assemble_and_resolve_cross_app_program, the analyze default; output $SCRATCH/83/probe-crossapp.txt; probe deleted, never committed). 172 numberless ModelObjects (130 Interface, 32 ControlAddIn) in 14 (app, kind) pairs: rows 172 = distinct ids 172 = distinct logical identities 172; the old scheme gave 14 ids; 0 ids with >1 logical identity, 0 identities with >1 id, 0 ids with >1 physical row.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/program/model/events.rs:384",
+  "line": null,
+  "severity": "important",
+  "text": "'A publisher always has a number' is false: ControlAddIn declares events, and every bound publisher (platform included) goes through model_object_id.",
+  "disposition": "fixed",
+  "evidence": "Non-goal removed; Background states event ids embed P3; measurement counts ObjKey::Name publishers and changed event ids on CDO/DO before/after. No golden holds '/0/event/' or ':Unknown:' (grep). | Final round 1 (sol re-raised): measured with a temporary cross-app probe on CDO (assemble_and_resolve_cross_app_program, the analyze default; output $SCRATCH/83/probe-crossapp.txt; probe deleted, never committed). 3622 bound subscriptions (platform included), 0 with an ObjKey::Name publisher; 0 of 9520 event symbols and 0 of 1087 event edges carry '/@'. Since an event id is encode_event_id(model_object_id(publisher), name) and model_object_id changed only for ObjKey::Name (numbered byte-identical: T1 vector, goldens), no event id changed.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-07",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Producer completeness rests on the map only.",
+  "disposition": "fixed",
+  "evidence": "grep for compute_routine_id( / CanonicalRoutineKey { / encode_object_id( over src and tests; every site listed in Background 'Routine ids' and D2.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-08",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/program/model/program_calls.rs:1655",
+  "line": null,
+  "severity": "important",
+  "text": "The P2=P3 join only sees codeunit implementers, so T3's interfaces never exercise it; no unescape/non-ASCII test; P3 vs P8 for dependency keys unverified.",
+  "disposition": "fixed",
+  "evidence": "T3 pins P1/P2/P3/P5 on a quoted, escaped, non-ASCII name; T3b's overflowing codeunit implements an interface and must not be not-found (exercises :1659); T5b pins P3 = P8 for a dependency interface call target. The ABI \"\" case is a stated limit. | Round 2 (sol re-raised): T5b now compares model_object_id of the dependency Interface graph node with its projected ModelObject.id directly (both asserted to exist); the existing ABI kind mismatches (DotNetPackage -> Codeunit at abi_ingest.rs:259-278; PermissionSetExtension/Profile/Entitlement -> Unknown at model/mod.rs:34, ir_walk.rs:2653) are stated in Limits, and D2a/D3's agreement claims are narrowed to the object segment / same-mapped kinds.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-09",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/engine/l5/snapshot.rs:1136",
+  "line": null,
+  "severity": "minor",
+  "text": "Keeping . _ - unencoded breaks ordinal==ICU order (M8).",
+  "disposition": "fixed",
+  "evidence": "pct keeps only a-z 0-9; M8 comment updated to name @ and %XX. | Round 2 (sol re-raised): the ordering contract is stated per output: the identity table stays ordinal (BTreeMap; M8's ICU-equivalence was an al-sem parity argument, retired) and its comment is rewritten; contracts stay locale_compare. T7 pins a mixed numbered/@ key in both outputs.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-10",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/engine/l5/fingerprint.rs:150",
+  "line": null,
+  "severity": "minor",
+  "text": "Fingerprint object part {type}/{number} still collides.",
+  "disposition": "fixed",
+  "evidence": "Object part becomes {type}/{object_key} (ModelObject.object_key); same bytes for numbered objects.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-11",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "tests/cli/cli_digest_changed_spans.rs:1765",
+  "line": null,
+  "severity": "minor",
+  "text": "decl_only_id doc and mutation note describe the old design; digest stableId change not announced.",
+  "disposition": "fixed",
+  "evidence": "D4: helper doc and mutation note rewritten; CHANGELOG states the value change.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-12",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "src/program/model/workspace.rs:2497",
+  "line": null,
+  "severity": "minor",
+  "text": "Test re-mints and other CanonicalRoutineKey callers not listed; ModelRoutine lacks the key.",
+  "disposition": "fixed",
+  "evidence": "Background lists every site; ModelObject gains object_key, read by the re-mint and fingerprint.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-13",
+  "source": "opus",
+  "round": "spec-1",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Unstated limits: empty/missing name gets '@' and collides; tables with an unparseable number still collide via encode_table_id.",
+  "disposition": "fixed",
+  "evidence": "Both in Limits; table ids in Non-goals.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-01",
+  "source": "sol",
+  "round": "spec-2",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "T5b's observable (external call target) names implementer routines, not the Interface declaration.",
+  "disposition": "fixed",
+  "evidence": "T5b rewritten: model_object_id(dep Interface node) == projected dependency ModelObject.id, both asserted to exist (raised by sol under R1-08).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-02",
+  "source": "opus",
+  "round": "spec-2",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Dependency ModelObjects get no object_key (ProjectedObject has none).",
+  "disposition": "fixed",
+  "evidence": "ProjectedObject gains object_key set by P8; dep_object_to_l3 copies it; T5b asserts it equals the id's last segment.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-03",
+  "source": "opus",
+  "round": "spec-2",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "T3b's tree-sitter precondition checks the CST, not the lowering.",
+  "disposition": "fixed",
+  "evidence": "T3b asserts al_syntax::parse(...) gives kind Codeunit and id None in-test.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-04",
+  "source": "opus",
+  "round": "spec-2",
+  "file": "docs/superpowers/specs/2026-10-15-issue-83-numberless-object-ids-design.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Events measurement wording refers to a removed non-goal.",
+  "disposition": "fixed",
+  "evidence": "Reworded: a non-zero count is triaged for publisher/subscriber consistency.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "opus",
+  "round": "final-1",
+  "file": "src/program/graphify_export.rs:774",
+  "line": null,
+  "severity": "minor",
+  "text": "abi_id_str still mints the number: two numberless dependency interfaces with the same method share one graphify node id.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: obj_key_str(&key.object_node_key()); numbered unchanged; test abi_id_str_keys_a_numberless_object_by_name, proof graphify_export.rs:1542. | Final round 2 (sol re-raised: the slug is lossy, 'I Foo'/'I-Foo' still collide): fixed at the root in 10809ef8 - obj_key_str keys every ObjKey::Name by engine::ids::object_key(None, name) (injective), so al:obj:, al:rtn: and al:abi: ids no longer slug a numberless object's name; numbered ids unchanged. The test gains 'i foo'/'i-foo', 'i foo'/'i_foo', 'øx'/'åx' collision cases. RED on the slug code at graphify_export.rs:1543; proof: a break that keeps '@' but slugs the name fails at :1550 ('\"i foo\" and \"i-foo\" must not share an id'); restored, 10 graphify tests pass; --lib 2038.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "opus",
+  "round": "final-1",
+  "file": "CHANGELOG.md:236",
+  "line": null,
+  "severity": "minor",
+  "text": "Fingerprint object part described as a map; d33 limit missing.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: reworded; Limits gain the d33 join and the P3/P8 '\"\"' mismatch.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "sol",
+  "round": "final-1",
+  "file": "src/engine/deps/projection.rs:214",
+  "line": null,
+  "severity": "minor",
+  "text": "Comments claim every dependency routine id stays byte-identical.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: qualified to numbered objects; numberless ids move on purpose.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/mod.rs:43",
+  "line": null,
+  "severity": "minor",
+  "text": "model_object_id unescapes every ObjKey::Name, wrong for an ABI node whose logical name contains \"\" (P3 != P8).",
+  "disposition": "deferred",
+  "evidence": "The spec's stated limit (D3, Limits; accepted by both reviewers in spec round 3); the trigger is a dependency object whose logical name contains a doubled quote (source \"A\"\"\"\"B\"), unknown in real code (0 in the CDO probe's 172). The root fix (F1-05) changes resolver lookup keys and is filed as discovery D2; now also in CHANGELOG Limits.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/node_extract.rs:647",
+  "line": null,
+  "severity": "minor",
+  "text": "Altitude: source ObjKey::Name keeps the raw escaped name while ABI keys hold the logical name; the unescape belongs where the key is built.",
+  "disposition": "deferred",
+  "evidence": "Agreed as the right depth, but it changes the resolver's object lookup keys at 6+ construction/lookup sites (node_extract, graph.rs:229/318, index.rs:1188, receiver.rs:3759/3885) - a resolver change outside #83's id-encoding scope (spec Non-goals). Filed as discovery D2 with acceptance.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l4/combined_graph.rs:488",
+  "line": null,
+  "severity": "minor",
+  "text": "objects_by_type_number / SymbolTable::by_type_number still collide numberless objects at type/0, last wins.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: numberless objects are not indexed by number (no caller looks up 0 on purpose: record_types.rs:112, object_run_target_object); tests numberless_objects_are_not_found_by_number_zero (proof symbol_table.rs:157) and numberless_objects_are_not_an_object_run_target_by_number_zero (proof combined_graph.rs:1084).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "tests/differential.rs:283",
+  "line": null,
+  "severity": "minor",
+  "text": "objects_by_id panics on two rows with one stableObjectId, where the old (id, name) key compared both.",
+  "disposition": "refuted",
+  "evidence": "By design (spec D5, finding R1-03, accepted by both reviewers): the old composite key is exactly what hid a stale golden (the collision #83 fixes). The corpus is ours; a duplicate id in an R0 fixture is a fixture or engine defect and must fail loudly, with the id named in the panic, not be compared under a weaker key.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-08",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/snapshot.rs:1182",
+  "line": null,
+  "severity": "minor",
+  "text": "Per-site M8 notes still claim single-case/ordinal-safe; the module doc only asks readers to reinterpret them.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: every per-site note reads 'ordinal (M8 contract)'; the reinterpretation sentence is gone.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-09",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/edge.rs:70",
+  "line": null,
+  "severity": "minor",
+  "text": "Six copies of the ABI zero rule building an ObjKey.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: ObjKey::from_abi (node.rs:84-93) on abi_object_number, used by abi_object_node_id, object_node_key, abi_check, resolve/differential, lsp/handlers. abi_ingest.rs:306/:490 build no ObjKey and call abi_object_number directly.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-10",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/mod.rs:41",
+  "line": null,
+  "severity": "minor",
+  "text": "object_key(Some(n), \"\") passes a dummy name.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: ObjKey::Id(n) => n.to_string().",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-11",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/program_calls.rs:1642",
+  "line": null,
+  "severity": "minor",
+  "text": "reached recomputes model_object_id per callee.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: computed once per implementer.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-12",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/lsp/handlers.rs:479",
+  "line": null,
+  "severity": "minor",
+  "text": "abi_symbol_uri reads the raw number while abi_symbol_item uses the zero rule.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e8cb5a9c: both use abi_object_key_text(key) via object_node_key; a numberless URI Id segment is the folded name; parse_al_preview_uri skips the Id segment, so the round-trip holds; abi_symbol_uri_conforms_to_legacys_parse_al_preview_uri checks both URIs (proof handlers.rs:1321).",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-01",
+  "source": "opus",
+  "round": "final-2",
+  "file": "CHANGELOG.md:259",
+  "line": null,
+  "severity": "minor",
+  "text": "The graphify CHANGELOG line over-claims distinct ids while the segment is a lossy slug (and names the wrong command: al:abi: ids come from aldump --graphify-export, not alsem graph).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 10809ef8: the code is now injective (F1-01) and the CHANGELOG line names aldump --graphify-export and states the object-key segment.",
+  "hash": "",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]

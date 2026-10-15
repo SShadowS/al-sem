@@ -81,6 +81,18 @@ pub enum ObjKey {
     Name(SharedStr),
 }
 
+impl ObjKey {
+    /// The key of an ABI (dependency) object: its number, or its folded name
+    /// `name_lc` when the ABI gives none (the ABI zero rule,
+    /// [`crate::engine::ids::abi_object_number`]).
+    pub fn from_abi(number: i64, name_lc: &str) -> ObjKey {
+        match crate::engine::ids::abi_object_number(number) {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(name_lc.into()),
+        }
+    }
+}
+
 /// Serde "remote" mirror of `al_syntax::ir::ObjectKind` (T3 Task 11 — `LspSnapshot`'s
 /// `ItemData { node: RoutineNodeId }` JSON round-trip through `CallHierarchyItem.data`
 /// needs `RoutineNodeId`'s whole identity chain to be `Serialize`/`Deserialize`).
