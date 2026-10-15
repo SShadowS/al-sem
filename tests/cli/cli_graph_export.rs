@@ -714,3 +714,121 @@ fn graph_export_golden() {
         .replace('\r', "");
     assert_eq!(got, want, "golden drifted: {}", path.display());
 }
+
+/// A tempdir copy of `tests/r0-corpus/ws-d8-commit-in-tx` whose `app.json` is
+/// `app_json` (`None`: no `app.json` at all). Keep the `TempDir` alive.
+fn d8_copy(app_json: Option<&str>) -> tempfile::TempDir {
+    let src = repo_root()
+        .join("tests")
+        .join("r0-corpus")
+        .join("ws-d8-commit-in-tx");
+    let dir = tempfile::tempdir().expect("tempdir");
+    for f in ["posting.al", "subscriber.al"] {
+        let text = std::fs::read_to_string(src.join("src").join(f)).expect("read fixture");
+        write(&dir.path().join("src").join(f), &text);
+    }
+    if let Some(text) = app_json {
+        write(&dir.path().join("app.json"), text);
+    }
+    dir
+}
+
+/// Run `alsem <args>` and return (exit code, stdout, stderr).
+fn run_alsem(args: &[&std::ffi::OsStr]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .output()
+        .expect("spawn alsem");
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn graph_of(ws: &Path) -> (i32, String, String) {
+    run_alsem(&["graph".as_ref(), ws.as_os_str()])
+}
+
+fn digest_of(ws: &Path) -> (i32, String, String) {
+    run_alsem(&[
+        "digest".as_ref(),
+        ws.as_os_str(),
+        "--file".as_ref(),
+        "src/posting.al".as_ref(),
+    ])
+}
+
+const NO_ID: &str = "could not compute modelInstanceId";
+
+/// #73: `graph` applies the gate's identity rule — an `app.json` whose `id` is
+/// missing, empty or not a string is rejected, not exported with an empty id.
+#[test]
+fn graph_rejects_an_app_json_without_an_id() {
+    for app_json in [
+        r#"{"name":"x"}"#,
+        r#"{"id":"","name":"x"}"#,
+        r#"{"id":5,"name":"x"}"#,
+    ] {
+        let ws = d8_copy(Some(app_json));
+        let (code, stdout, stderr) = graph_of(ws.path());
+        assert_eq!(code, 1, "{app_json}: exit; stderr={stderr}");
+        assert!(
+            stdout.is_empty(),
+            "{app_json}: stdout must be empty: {stdout}"
+        );
+        assert!(
+            stderr.contains(&format!("al-sem graph: {NO_ID}")),
+            "{app_json}: stderr={stderr:?}"
+        );
+    }
+}
+
+/// #73: `graph` and a gate leaf (`digest`) agree on which workspaces have an
+/// identity. A consistency check; T1 carries the discrimination.
+#[test]
+fn graph_and_digest_agree_on_workspace_identity() {
+    let valid = d8_copy(Some(
+        &std::fs::read_to_string(
+            repo_root()
+                .join("tests")
+                .join("r0-corpus")
+                .join("ws-d8-commit-in-tx")
+                .join("app.json"),
+        )
+        .expect("read app.json"),
+    ));
+    for (name, (code, _, stderr)) in [
+        ("graph", graph_of(valid.path())),
+        ("digest", digest_of(valid.path())),
+    ] {
+        assert_eq!(code, 0, "{name} on the valid fixture: stderr={stderr}");
+    }
+    let no_id = d8_copy(Some(r#"{"name":"x"}"#));
+    for (name, (code, _, stderr)) in [
+        ("graph", graph_of(no_id.path())),
+        ("digest", digest_of(no_id.path())),
+    ] {
+        assert_eq!(code, 1, "{name} on an id-less app.json: stderr={stderr}");
+        assert!(stderr.contains(NO_ID), "{name}: stderr={stderr:?}");
+    }
+}
+
+/// #73: a missing or unparseable `app.json` fails in the build first and keeps
+/// its existing error; the id check never sees it.
+#[test]
+fn graph_keeps_its_errors_for_a_missing_or_unparseable_app_json() {
+    for (app_json, want) in [
+        (None, "al-sem graph: snapshot build failed: read"),
+        (
+            Some("not json"),
+            "al-sem graph: snapshot build failed: parse",
+        ),
+    ] {
+        let ws = d8_copy(app_json);
+        let (code, _, stderr) = graph_of(ws.path());
+        assert_eq!(code, 1, "{app_json:?}: stderr={stderr}");
+        assert!(stderr.contains(want), "{app_json:?}: stderr={stderr:?}");
+        assert!(!stderr.contains(NO_ID), "{app_json:?}: stderr={stderr:?}");
+    }
+}
