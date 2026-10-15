@@ -222,8 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predicate (`is_bfs_carrier`: ordinary direct facts only, same temp class). Before, such a
   write had `evidence: unavailable`, no viaPaths and `ORDERING_UNKNOWN`. A path's identity
   is its edges plus its terminal, so two writes reached through the same calls stay two
-  paths. Only distinct proofs count toward the path cap, and the cap keeps the first paths
-  of the global order (a capped witness is a prefix of the uncapped one). A routine id
+  paths. Only distinct proofs count toward the path cap, and a capped proof set is a prefix
+  of the uncapped one in the global order. Ordinary BFS paths are still capped in discovery
+  order, as before #69, so a capped whole witness need not be a prefix. A routine id
   declared twice (two `#if` arms) is one producer, not two. `alsem fingerprint` takes the
   same proofs.
 - `viaPaths` are deduplicated by projected path on an effect's first fact too, not only on
