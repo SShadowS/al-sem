@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Digest `stableId` values of #71's declaration-only roots change once (#83). With a unique
+  object id (see Fixed) the id no longer folds the object name in as a member: it is
+  `{guid}:Interface:@ifoo#{hash}`, the shape the dependency side gives the same method. The
+  digest schema version does not change. **Upgrade note:** a stored baseline or gate
+  snapshot that holds a numberless object id (`…:Interface:0`, `…:ControlAddIn:0`), a
+  dependency interface routine id, or a declaration-only id reports those objects as removed
+  and re-added once. Numbered ids are unchanged.
 - `prove`, `fingerprint` and `diff` stay single-app (#70). Their output is a capability
   snapshot, and the cross-app snapshot does not yet follow calls made inside dependency
   code: on a workspace routine that calls a dependency routine which calls another that
@@ -226,6 +233,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An object without a number now gets a unique object id (#83). Interface and ControlAddIn
+  have no number, and a numbered kind whose number does not parse has none either; every
+  such object was `…:<Kind>:0`, so two of one kind in one app shared an id, and every map
+  keyed by it (identity table, contracts, fingerprints, detector context, root
+  classification, policy, HTML) kept only one of them. The key is now `@` + the folded name,
+  percent-encoded outside `a-z 0-9` (`…:Interface:@iprocessor`), from every producer: R0, the
+  model, the program graph, R1a and the dependency projection
+  (`engine::ids::object_key`). Two dependency interfaces without `Id` that declare a method
+  of the same signature no longer share routine ids, and a finding fingerprint's object part
+  uses the key, not `{type}/{number}`. Numbered ids do not change. The identity table stays
+  ordinal and the contracts stay `locale_compare`, so a numbered and a numberless object of
+  one kind list in a different order in each. The differential harness now fails on two
+  object rows with one id. **Limits:** an object with an empty name gets `@` and can still
+  collide; a table whose number does not parse still collides (`encode_table_id`); a
+  dependency object whose name contains `""` gets a different id in the graph than in the
+  model; existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
+  Profile, Entitlement) are unchanged.
 - `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
   `could not compute modelInstanceId`), as every gate-backed command does for that case; before,
   it exported the graph with an empty app id and exited 0 (#73). A missing or unparseable

@@ -21,14 +21,16 @@
 //! - M1: no `HashMap`/`HashSet` iteration reaches an emitted array / sort key /
 //!   hash input. Every output `Vec` is explicitly `sort_by`'d; lookups go through
 //!   `HashMap` but emission iterates a sorted `Vec` or the routine list.
-//! - M8 (localeCompare audit): al-sem sorts the derivers with `String.localeCompare`,
-//!   which is NOT ordinal `str::cmp` for mixed-case ASCII. EVERY sort site here is
-//!   ORDINAL-SAFE: the discriminating characters are single-case (lowercase guids +
-//!   lowercase hex hashes, fixed lowercase op/kind labels, capitalized-but-uniform
-//!   object-type segments `Codeunit`/`Table`/...). No sort key can differ at a
-//!   mixed-case position, so ordinal `cmp` == localeCompare for the corpus. This
-//!   matches the established R3a* sort sites (which already byte-match
-//!   localeCompare-sorted goldens). The 5-fixture differential is the arbiter.
+//! - M8 (sort contract): every sort site in this module is ORDINAL (`str::cmp` /
+//!   `BTreeMap` key order), and that is the contract. It once rested on a claim that
+//!   ordinal equals al-sem's `String.localeCompare` for these keys; al-sem is retired
+//!   and that parity is no longer a goal. The claim is also no longer true: a
+//!   numberless object's key is `@` + a percent-encoded name (`%XX`,
+//!   `engine::ids::object_key`), and `@` sorts AFTER a digit ordinally but before it
+//!   under `locale_compare`, so `…:Codeunit:1` < `…:Codeunit:@a` here while the
+//!   full snapshot's contracts (`snapshot_full.rs`, `locale_compare`) list `…:@a`
+//!   first. Each output keeps its own order; nothing relies on the two agreeing
+//!   (pinned by `cli_numberless_object_ids`'s T7).
 //! - M9: the edge-id present-only predicate is exact (`Option::is_some`; an empty
 //!   string IS kept).
 
@@ -1133,15 +1135,16 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
 // ---------------------------------------------------------------------------
 // deriveIdentityTable — objects + tables + routines → parallel sorted arrays.
 //
-// M8: sorted by stableId. stableIds are `<guid>:<ObjectType>:<num>[#<lowerhex>]`
-// or `<guid>:Table:<num>` — discriminating positions are single-case (lowercase
-// guid/hex, uniform-case object-type segment), so ordinal cmp == localeCompare.
+// M8: sorted by stableId, ORDINAL (the contract). stableIds are
+// `<guid>:<ObjectType>:<key>[#<lowerhex>]` or `<guid>:Table:<num>`, where `<key>`
+// is the object number, or `@` + the percent-encoded (`%XX`) folded name for an
+// object without one.
 // ---------------------------------------------------------------------------
 
 fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
     let ws = &resolved.workspace;
-    // id → display name, deduped. BTreeMap keeps deterministic key order (M1) and
-    // gives the sorted-by-id pairing al-sem produces (its `Map` + `.sort()`).
+    // id → display name, deduped. BTreeMap keeps deterministic, ordinal key order
+    // (M1, M8).
     let mut pairs: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
 
     for obj in &ws.objects {
@@ -1154,8 +1157,7 @@ fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
         pairs.insert(r.stable_routine_id.clone(), r.name.clone());
     }
 
-    // BTreeMap iteration is ordinal-sorted by key — matches al-sem's `.sort()`
-    // (ordinal-safe per M8 above).
+    // BTreeMap iteration is ordinal-sorted by key (M8).
     let stable_ids: Vec<String> = pairs.keys().cloned().collect();
     let display_names: Vec<String> = pairs.values().cloned().collect();
     SnapshotIdentityTable {
