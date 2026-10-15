@@ -184,6 +184,67 @@ impl AnalysisTarget {
             AnalysisTarget::CrossApp(b) => &b.resolved,
         }
     }
+
+    /// Build the model `alsem events` / `alsem policy check` read (#70): the
+    /// workspace alone (`single_app`), or the cross-app base `alsem analyze`
+    /// builds by default. `command` prefixes the error line.
+    pub fn build(
+        workspace: &Path,
+        model_instance_id: &str,
+        single_app: bool,
+        command: &str,
+    ) -> Result<AnalysisTarget, String> {
+        if single_app {
+            crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                workspace,
+                model_instance_id,
+                false,
+            )
+            .map(|r| AnalysisTarget::SingleApp(Box::new(r)))
+            .ok_or_else(|| format!("{command}: workspace did not resolve"))
+        } else {
+            crate::engine::l4::capability_cone::build_cross_app_base(workspace, model_instance_id)
+                .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
+                .ok_or_else(|| {
+                    format!(
+                        "{command}: the cross-app model could not be built \
+                         (--single-app analyses the workspace alone)"
+                    )
+                })
+        }
+    }
+
+    /// What a detector context adds for this target: the cross-app inputs, or none.
+    pub(crate) fn cross_app_inputs(
+        &self,
+    ) -> Option<crate::engine::l5::detector_context::CrossAppInputs<'_>> {
+        match self {
+            AnalysisTarget::SingleApp(_) => None,
+            AnalysisTarget::CrossApp(b) => Some(b.cross_app_inputs()),
+        }
+    }
+
+    /// The dependencies statement (#66): none single-app, the loaded apps cross-app.
+    #[must_use]
+    pub fn dependencies(&self) -> crate::program::resolve::full::LoadedDependencies {
+        match self {
+            AnalysisTarget::SingleApp(_) => Default::default(),
+            AnalysisTarget::CrossApp(b) => crate::program::resolve::full::LoadedDependencies {
+                cross_app: true,
+                apps: b.loaded_apps.clone(),
+            },
+        }
+    }
+
+    /// Whether `r` belongs to the workspace app (#70): every routine single-app;
+    /// cross-app, the routines that are not the base's dependency routines.
+    #[must_use]
+    pub fn is_primary_routine(&self, r: &crate::program::model::workspace::ModelRoutine) -> bool {
+        match self {
+            AnalysisTarget::SingleApp(_) => true,
+            AnalysisTarget::CrossApp(b) => !b.dep_routine_ids.contains(&r.id),
+        }
+    }
 }
 
 /// The model `alsem analyze`'s detectors read, plus the program build's coverage.
@@ -1054,17 +1115,18 @@ pub fn compute_analyzer_diagnostics(
     analyzer_diagnostics_of_run(ws_path, resolved, &run)
 }
 
-/// [`compute_analyzer_diagnostics`] as `<severity>: <message>` lines, the
-/// stderr form `alsem events` and `alsem policy` print (and match `error:`
-/// against under `--strict`).
-pub fn analyzer_diagnostic_lines(
-    ws_path: &Path,
-    resolved: &crate::program::model::workspace::Model,
-) -> Vec<String> {
-    compute_analyzer_diagnostics(ws_path, resolved)
-        .iter()
-        .map(|d| format!("{}: {}", d.severity, d.message))
-        .collect()
+/// The target's analyzer diagnostics ([`compute_analyzer_diagnostics`] or, for a
+/// cross-app base, [`compute_analyzer_diagnostics_cross_app`]) as
+/// `<severity>: <message>` lines, the stderr form `alsem events` and
+/// `alsem policy` print (and match `error:` against under `--strict`).
+pub fn analyzer_diagnostic_lines(ws_path: &Path, target: &AnalysisTarget) -> Vec<String> {
+    match target {
+        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(ws_path, r),
+        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(ws_path, b),
+    }
+    .iter()
+    .map(|d| format!("{}: {}", d.severity, d.message))
+    .collect()
 }
 
 /// [`compute_analyzer_diagnostics`] for a cross-app base (`alsem digest`'s

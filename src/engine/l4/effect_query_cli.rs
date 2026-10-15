@@ -785,9 +785,7 @@ pub fn render_query_touches(
 /// Human output names the loaded dependency apps on its first line, only when
 /// there are some (a workspace with no dependency reads the same in both modes).
 fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
-    if let Some(line) = deps.human_line() {
-        r.human_text = format!("{line}\n{}", r.human_text);
-    }
+    r.human_text = deps.prefix_human(r.human_text);
     r
 }
 

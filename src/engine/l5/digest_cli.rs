@@ -1685,10 +1685,7 @@ pub fn run_digest_pipeline(
 
     // Human. The dependencies line appears only when apps were loaded, so a
     // workspace with no dependency reads the same in both modes.
-    let mut human_text = format_digest_human(&entries);
-    if let Some(line) = dependencies.human_line() {
-        human_text = format!("{line}\n{human_text}");
-    }
+    let human_text = dependencies.prefix_human(format_digest_human(&entries));
 
     Ok(DigestRunResult {
         json_text,

@@ -20,9 +20,27 @@ pub enum Jv {
     /// Insertion-order object — keys emitted in push order.
     Obj(Vec<(String, Jv)>),
     Arr(Vec<Jv>),
+    /// A JSON literal written verbatim (`null`, a number serde_json printed).
+    Raw(String),
 }
 
 impl Jv {
+    /// A `serde_json::Value`, keys in its own map order.
+    pub fn from_json(v: &serde_json::Value) -> Jv {
+        use serde_json::Value;
+        match v {
+            Value::String(s) => Jv::Str(s.clone()),
+            Value::Bool(b) => Jv::Bool(*b),
+            Value::Array(a) => Jv::Arr(a.iter().map(Jv::from_json).collect()),
+            Value::Object(m) => Jv::Obj(
+                m.iter()
+                    .map(|(k, v)| (k.clone(), Jv::from_json(v)))
+                    .collect(),
+            ),
+            Value::Null | Value::Number(_) => Jv::Raw(v.to_string()),
+        }
+    }
+
     /// String value from a `&str`.
     pub fn s(s: &str) -> Jv {
         Jv::Str(s.to_string())
@@ -67,6 +85,7 @@ pub fn write_jv(v: &Jv, buf: &mut String, indent: usize) {
         Jv::Str(s) => escape_into(s, buf),
         Jv::Num(n) => buf.push_str(&n.to_string()),
         Jv::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
+        Jv::Raw(s) => buf.push_str(s),
         Jv::Obj(pairs) => {
             if pairs.is_empty() {
                 buf.push_str("{}");

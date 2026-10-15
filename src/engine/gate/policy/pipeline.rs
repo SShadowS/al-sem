@@ -204,7 +204,9 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // analyzeWorkspace diagnostics (run the default detector set so detector-stage
     // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &resolved);
+    let target = crate::engine::gate::run::AnalysisTarget::SingleApp(Box::new(resolved));
+    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
+    let resolved = target.resolved();
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {

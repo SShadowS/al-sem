@@ -353,6 +353,12 @@ struct EventsFanoutCli {
     /// Exit 1 if any analyzer error-severity diagnostic.
     #[arg(long, default_value_t = false)]
     strict: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so a dependency's events are seen, at more
+    /// memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `EventsChainsCli` — arguments for `alsem events chains <ws>`.
@@ -392,6 +398,12 @@ struct EventsChainsCli {
     /// Exit 1 if any analyzer error-severity diagnostic.
     #[arg(long, default_value_t = false)]
     strict: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so a dependency's events are seen, at more
+    /// memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `DiffCli` — arguments for `alsem diff <old> <new>`.
@@ -1367,6 +1379,7 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         driver_version: &version,
         deterministic: f.deterministic,
         strict: f.strict,
+        single_app: f.single_app,
     };
 
     let result = run_events_fanout(&opts);
@@ -1439,6 +1452,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         driver_version: &version,
         deterministic: c.deterministic,
         strict: c.strict,
+        single_app: c.single_app,
     };
 
     let result = run_events_chains(&opts);

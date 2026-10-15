@@ -123,6 +123,7 @@ macro_rules! events_differential {
                     driver_version: ALSEM_VERSION,
                     deterministic: true,
                     strict: false,
+                    single_app: false,
                 };
                 let result = run_events_fanout(&opts);
                 let golden =
@@ -141,6 +142,7 @@ macro_rules! events_differential {
                     driver_version: ALSEM_VERSION,
                     deterministic: true,
                     strict: false,
+                    single_app: false,
                 };
                 let result = run_events_fanout(&opts);
                 let golden = golden_or_regen(&format!("{fixture_stem}.fanout.json"), &result.text);
@@ -160,6 +162,7 @@ macro_rules! events_differential {
                     driver_version: ALSEM_VERSION,
                     deterministic: true,
                     strict: false,
+                    single_app: false,
                 };
                 let result = run_events_chains(&opts);
                 let golden =
@@ -180,6 +183,7 @@ macro_rules! events_differential {
                     driver_version: ALSEM_VERSION,
                     deterministic: true,
                     strict: false,
+                    single_app: false,
                 };
                 let result = run_events_chains(&opts);
                 let golden = golden_or_regen(&format!("{fixture_stem}.chains.json"), &result.text);
@@ -259,6 +263,7 @@ fn events_ws_event_fanout_scope_all() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_fanout(&opts);
         let golden = golden_or_regen("ws-event-fanout.scope-all.fanout.human.txt", &result.text);
@@ -275,6 +280,7 @@ fn events_ws_event_fanout_scope_all() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_fanout(&opts);
         let golden = golden_or_regen("ws-event-fanout.scope-all.fanout.json", &result.text);
@@ -293,6 +299,7 @@ fn events_ws_event_fanout_scope_all() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_chains(&opts);
         let golden = golden_or_regen("ws-event-fanout.scope-all.chains.human.txt", &result.text);
@@ -311,6 +318,7 @@ fn events_ws_event_fanout_scope_all() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_chains(&opts);
         let golden = golden_or_regen("ws-event-fanout.scope-all.chains.json", &result.text);
@@ -337,6 +345,7 @@ fn events_ws_event_d45_deep_max_depth_1() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_chains(&opts);
         let golden = golden_or_regen(
@@ -358,6 +367,7 @@ fn events_ws_event_d45_deep_max_depth_1() {
             driver_version: ALSEM_VERSION,
             deterministic: true,
             strict: false,
+            single_app: false,
         };
         let result = run_events_chains(&opts);
         let golden = golden_or_regen("ws-event-d45-deep.max-depth-1.chains.json", &result.text);
@@ -394,6 +404,7 @@ fn run_partial_fanout(policy: &str, format: &str) -> al_sem::engine::gate::event
         driver_version: ALSEM_VERSION,
         deterministic: true,
         strict: false,
+        single_app: false,
     };
     run_events_fanout(&opts)
 }
@@ -571,7 +582,7 @@ fn coverage_policy_native_oracle() {
         assert_eq!(report.coverage_partial_events, 1);
         assert_eq!(report.total_events, 2);
         // JSON sanity: entries has exactly the complete one, summary unchanged.
-        let json = format_fanout_json(&report, "test-v1", true);
+        let json = format_fanout_json(&report, &Default::default(), "test-v1", true);
         assert!(json.contains("\"coveragePartialEvents\": 1"));
         assert!(json.contains("EVT-OK"));
         assert!(!json.contains("EVT-PARTIAL"));
@@ -587,7 +598,7 @@ fn coverage_policy_native_oracle() {
                 capability_composition: "complete",
             };
         }
-        let json = format_fanout_json(&report, "test-v1", true);
+        let json = format_fanout_json(&report, &Default::default(), "test-v1", true);
         // Both entries now all-complete (glyph [✓✓✓] in human).
         assert!(!json.contains("\"partial\""), "ignore removes all partials");
         assert!(
@@ -713,7 +724,7 @@ fn cycle_native_oracle() {
     );
 
     // JSON: must contain `"cycleDetected": true`.
-    let json = format_chains_json(&report, "test-v1", true);
+    let json = format_chains_json(&report, &Default::default(), "test-v1", true);
     assert!(
         json.contains("\"cycleDetected\": true"),
         "json must contain '\"cycleDetected\": true'; got:\n{json}"

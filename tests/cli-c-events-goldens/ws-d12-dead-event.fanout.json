@@ -2,6 +2,10 @@
   "al_sem_version": "cli-c-v1",
   "generated_at": "0",
   "kind": "events.fanout",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
   "summary": {
     "totalPublishers": 1,
     "totalEvents": 1,

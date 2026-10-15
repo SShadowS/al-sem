@@ -2138,8 +2138,9 @@ pub fn build_cross_app_program(
 /// dependency (`appId`, `name`, `publisher`, `version`, `source`), plus one
 /// `source: "missing"` row per declared dependency the ledger did not find, sorted
 /// by name then appId. The ONE producer of `alsem graph`'s `meta.apps` and of the
-/// `dependencies.apps` statement in `alsem digest` / `alsem query` (#66), so the
-/// three cannot describe the same build differently.
+/// `dependencies.apps` statement in `alsem digest` / `alsem query` (#66) and
+/// `alsem events` / `alsem policy check` (#70), so they cannot describe the same
+/// build differently.
 #[must_use]
 pub fn loaded_apps(ctx: &ProgramContext, coverage: &FreshCoverage) -> Vec<serde_json::Value> {
     let snap = ctx.snapshot();
@@ -2182,10 +2183,10 @@ fn source_label(tier: Option<crate::snapshot::TrustTier>) -> &'static str {
     }
 }
 
-/// How `alsem digest` / `alsem query` loaded dependencies (#66): `crossApp` (the
-/// default, the same model `alsem analyze` builds) with the apps it loaded, or
-/// `singleApp` (`--single-app`) with none. Rendered as the payload's
-/// `dependencies` object.
+/// How `alsem digest` / `alsem query` (#66) and `alsem events` / `alsem policy
+/// check` (#70) loaded dependencies: `crossApp` (the default, the same model
+/// `alsem analyze` builds) with the apps it loaded, or `singleApp`
+/// (`--single-app`) with none. Rendered as the output's `dependencies` object.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedDependencies {
     pub cross_app: bool,
@@ -2221,6 +2222,15 @@ impl LoadedDependencies {
             })
             .collect();
         Some(format!("dependencies: {}", names.join(", ")))
+    }
+
+    /// `text` with [`Self::human_line`] as its first line, when there is one.
+    #[must_use]
+    pub fn prefix_human(&self, text: String) -> String {
+        match self.human_line() {
+            Some(line) => format!("{line}\n{text}"),
+            None => text,
+        }
     }
 }
 
