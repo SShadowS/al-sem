@@ -236,7 +236,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository-relative and resolves only with that prefix stripped: there is no workspace-first
   step, so `src/x.al` is unmatched under `--diff-prefix Cloud`. A rooted, empty, drive (`C:`) or
   `..` value is rejected. A repository file outside the workspace stays `diff-file-unmatched`
-  (`--diff`) or `file-unmatched` (`--file`). A deleted file is still `diff-file-deleted`, except
+  (`--diff`) or `file-unmatched` (`--file`), except that by default (no `--diff-prefix`) one whose
+  path also names a workspace file resolves to that workspace file. A deleted file is still `diff-file-deleted`, except
   that under `--diff-prefix` a deleted file outside the prefix is `diff-file-unmatched`. The
   digest document lists the prefixes that resolved at least one path in
   `changed.pathPrefixesUsed` (omitted when none did).

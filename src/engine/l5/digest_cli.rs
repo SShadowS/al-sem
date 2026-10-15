@@ -2012,6 +2012,9 @@ mod tests {
     #[test]
     fn workspace_repo_prefixes_follow_a_symlink() {
         let tmp = tempfile::tempdir().unwrap();
+        if skip_if_git_at_or_above(tmp.path()) {
+            return;
+        }
         let ws = mkdir(tmp.path(), "repo/Cloud");
         git_dir(&tmp.path().join("repo"));
         let link = tmp.path().join("link");
