@@ -1,0 +1,689 @@
+[
+ {
+  "id": "R1-01",
+  "source": "astra+flash",
+  "round": 1,
+  "file": "ledger.md Design / Not delivered",
+  "line": null,
+  "severity": "important",
+  "text": "An attribute carried out of an #if arm loses that arm's build context, so an #if group inside its arguments is read under the routine's context: '#if not X [EventSubscriber(..., #if X 'OnA' #else 'OnB' #endif ...)] #endif procedure H' binds OnA, a value no build has. A whole-attribute union cannot justify impossible positional values; carry each attribute's context and use it when lowering arguments (not deferrable).",
+  "disposition": "fixed",
+  "evidence": "Verified: lower/mod.rs:1432-1441 reads args with the routine's preproc_context; conditional_list_arm (:1215-1218) takes the first live arm; CST in $SCRATCH/s12_r1_shapes.cst.txt (probe P9d). Ledger: Design 'Data' (entries carry a guard) and 'Attaching and lowering' (args read under guard ∪ arm syms), test A14 + A12 target variant, Not delivered rewritten (no longer defers argument context).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger.md Design step 4",
+  "line": null,
+  "severity": "important",
+  "text": "The context-free join does not compose: '[A]; #if X P #endif; #if X R #endif; Q' attaches A to R although every X build already consumed A at P. Leftovers need guards (including the implicit-else guard) intersected with later arms before consumption or merging.",
+  "disposition": "fixed",
+  "evidence": "Verified against the round-1 rule (fall-through re-seeded A unguarded into the second #if X arm). CST in $SCRATCH/s12_r1_shapes.cst.txt (probe P9c). Ledger: Design 'The rule' step 4 (admission under each entry's guard, fall-through extends the guard with falls_through), 'Why the guard fixes P9c', test A13.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "astra+flash",
+  "round": 1,
+  "file": "ledger.md Golden license",
+  "line": null,
+  "severity": "important",
+  "text": "The CDO plan measures only call-graph stats, while regained attributes also feed detector body facts (TryFunction) and the event graph (d43/d44/d45, cdo-compiler-anon audit); the 44-routine population and 'primaryScoped byte-identical' are unproven (dependency publishers/subscribers can move primary edges; census omitted #define/#undef). Add before/after alsem analyze at both scopes and cdo-gate; treat counts as hypotheses and trace every move.",
+  "disposition": "fixed",
+  "evidence": "Verified: is_primary_scope tests only the caller (src/program/resolve/full.rs:311-314); TryFunction read at src/program/body/control_context.rs:446 and operation_order.rs:655. Census re-run with #define/#undef ($SCRATCH/census-r1.txt, identical site list). Base alsem analyze recorded (probe P20b). Ledger: probes P19, P20b, P23; Golden license rewritten (hypotheses, trace every move, cdo-gate as branch gate).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger.md Acceptance matrix",
+  "line": null,
+  "severity": "important",
+  "text": "No planned test catches the context defects (correlated sequential wrappers, carried conditional arguments) or a wrong skip path when ctx decides an arm true; tests should assert subscriber targets, not only attribute names.",
+  "disposition": "fixed",
+  "evidence": "Ledger Acceptance matrix: A7 extended (known-false), new A7b (known-true), A13 (correlated wrappers), A14 (carried conditional args), A15 (split-header arm), A12 target variant (FireB reaches COMMIT, FireA does not); every EventSubscriber test asserts args[2].",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "flash",
+  "round": 1,
+  "file": "ledger.md Assumption probes P15/P16",
+  "line": null,
+  "severity": "minor",
+  "text": "P15 wrongly said fields/actions/controls/reports have no attribute syntax: attribute_item is admitted in fields_body, _field_branch_items, keys_body, _key_branch_items, _action_element, dataset_body and parameter_list. P16 listed 3 wrappers that can hold an attribute_item; there are 10.",
+  "disposition": "fixed",
+  "evidence": "Verified by walking tree-sitter-al/src/grammar.json: rules admitting attribute_item = _action_element, _body_element, _field_branch_items, _key_branch_items, _procedure_header, dataset_body, fields_body, keys_body, parameter_list, preproc_conditional_dataset; wrappers reaching it = plain, _actions, _controladdin, _dataset, _fields, _keys, _layout_mixed, _query, _report, _xmlport (all single-chain). Ledger probes P15 and P16 rewritten.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger.md Assumption probes P19",
+  "line": null,
+  "severity": "minor",
+  "text": "P19's System Application subtotal is wrong: four affected routines, not three.",
+  "disposition": "fixed",
+  "evidence": "Verified: $SCRATCH/census.txt line 10, routines_losing_attrs 4 (SharePointClient 522, 533; SystemInitializationImpl 30; GuidedExperienceImpl 1113). Ledger probe P19 corrected; 'heuristic estimate' wording kept.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-07",
+  "source": "astra+flash",
+  "round": 1,
+  "file": "ledger.md Acceptance matrix A11",
+  "line": null,
+  "severity": "important",
+  "text": "A11's cross-object dangling-attribute case cannot fail under the stated mutation (returning the _-arm recursion's leftovers): each object is a separate top-level collect_routines call. Use a same-object nested-body case, e.g. a table whose fields_body ends with an attribute followed by a procedure.",
+  "disposition": "fixed",
+  "evidence": "Verified: lower/mod.rs:84 (one lower_object per object) and :219-228 (one top-level collect_routines). CST of the table case: $SCRATCH/s12_r1_shapes.cst.txt (fields_section{field_declaration, attribute_item}, procedure). Ledger A11: table case added as the discriminating one; cross-object case kept as a regression check, stated as non-discriminating.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-08",
+  "source": "flash",
+  "round": 1,
+  "file": "ledger.md Design step 4",
+  "line": null,
+  "severity": "minor",
+  "text": "Re-deriving 'no arm decided true' duplicates the taken logic inside preproc_branches (lower/mod.rs:1163-1170); two copies can drift. Expose it from one helper, and update collect_routines' doc ('resetting on any other node').",
+  "disposition": "fixed",
+  "evidence": "Verified: taken is local to preproc_branches (:1163-1170) and not returned. Ledger Design 'The chain logic, one source': preproc_chain returns branches + falls_through, preproc_branches becomes a wrapper; doc rewrite of :783-802 stated in 'The rule'.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-09",
+  "source": "astra",
+  "round": 1,
+  "file": "spec-briefing-r1.md",
+  "line": null,
+  "severity": "minor",
+  "text": "Review coverage limit: the scratch directory could not be enumerated, so exhaustive coverage of the probe artifacts is unverified; supply an explicit artifact manifest.",
+  "disposition": "fixed",
+  "evidence": "Ledger Claim section: 'Artifact manifest' table listing every $SCRATCH file the ledger relies on (s01-s13 inputs and CST dumps, census script/outputs, reproducer workspaces, digest outputs, CDO base measurements, build logs). | Attempt 2, round 1: astra re-raised it, because the manifest named digest-arms-*.json at paths that no longer existed after the move to $SCRATCH/a1/. Fixed: the manifest and P9b/P17 now use the a1/ prefix, and every attempt-2 file is listed (base.sh, base.out, s14, a1/ panel files).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "R1-10",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger.md Design keep-set",
+  "line": null,
+  "severity": "minor",
+  "text": "Confirmation: the seven emitted named extras are appropriate pairing-preserving nodes; keep the explicit set rather than Class::Trivia.",
+  "disposition": "fixed",
+  "evidence": "No change required: Design 'The rule' step 2 keeps the explicit seven-kind set (grammar.js:539-547), and probe P13 records why Class::Trivia would miss pragma/region/define/undef.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-01",
+  "source": "flash",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Design / Attaching and lowering; lower/mod.rs:231-247,:1364",
+  "line": null,
+  "severity": "minor",
+  "text": "The split-header arm filter in lower_object must compute arm_symbols(r, arm, source); state it explicitly.",
+  "disposition": "fixed",
+  "evidence": "Ledger 'Attaching and lowering' now names arm_symbols(r, a, source) (:1364), computed in the lower_object loop before the arm's attribute list is built.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-02",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Design / chain logic + rule 4; lower/mod.rs:1166-1186",
+  "line": null,
+  "severity": "important",
+  "text": "Contradictory literal guards are not rejected: '[A] #if X P #elif not X R #endif Q' gives a fall-through {X:false, X:true} that reaches Q; '#if X [A] #elif X [B] #endif' admits the impossible arm 2.",
+  "disposition": "fixed",
+  "evidence": "Verified: preproc_branches (:1171-1178) accumulates assume_preproc literals with no consistency check. Ledger: a new 'Contradictory symbol sets' paragraph; consistent(a,b)->Option joins every guard (admission, arm-own entries, fall-through); a None join kills the path; routine collection is unchanged. Two new shape rows; test A16 with mutation 'consistent never returns None'. | Final round 1: astra re-raised it, because consistent(a, b) copied `a` unchecked, so an in-node attribute in an outer #if X around a split header's #if not X arm got a contradictory guard. Fixed in 8350785a: consistent validates both operands; in-node attribute guards are built via consistent(&preproc_context, &[]); tests consistent_rejects_a_contradictory_first_operand and contradictory_context_in_node_attribute_attaches_nothing, with proofs in rf1.md.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-03",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Design / Attaching and lowering; lower/mod.rs:1215-1222",
+  "line": null,
+  "severity": "important",
+  "text": "conditional_list_arm recurses into a nested group with the unchanged ctx, discarding the chosen arm's symbols, so a nested argument group can read a value no build has ('Never').",
+  "disposition": "fixed",
+  "evidence": "Verified at :1221 (recursion passes ctx). Ledger: a new 'Nested argument groups' bullet; the fix recurses with consistent(ctx, chosen_arm_syms). The shape parses ($SCRATCH/s14_nested_args.cst.txt: nested preproc_conditional_attribute_args, 0 ERROR). Test A18; CDO hypothesis widened to cover routines with nested groups. | Round 2: astra re-raised it: live does not imply consistent ('#if Y and not Y' is live under an empty ctx), so the fallback to ctx is wrong. Fixed: conditional_list_arm picks the first arm that is live AND consistent with the running context, with no fallback; a group with no consistent arm adds nothing.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-04",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Design / Admission, After the wrapper, Deduplication",
+  "line": null,
+  "severity": "important",
+  "text": "Pending entries grow 2^N over N consecutive pragma-only #if/#else wrappers with distinct symbols; lowering-time dedup is too late.",
+  "disposition": "fixed",
+  "evidence": "Ledger: 'After the wrapper (bounded)' merges entries per attribute node with guard = intersection, so pending holds at most one entry per attribute_item; lowering-time dedup is removed ('No duplicates'). The over-approximation is stated in Not delivered. Test A17 (40 wrappers, mutation run under timeout); A9's mutation is updated to 'append instead of merge'. | Round 2 (A2-R2-01): the always-merge-by-intersection was replaced. Entries keep exact per-path guards (exact duplicates removed); only past PENDING_PATH_CAP=64 entries for one node do they collapse, grouped by argument selection, with the selection pinned. A17 now mutates the cap. | Round 3: bounded by exact projection plus a loud cap; A17's mutation is now 'drop the projection' (the cap fires and P gets []).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-05",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Acceptance matrix A6",
+  "line": null,
+  "severity": "minor",
+  "text": "A6 mutation (b) cannot make MixedBefore lose Scope: implicit fall-through rescues it.",
+  "disposition": "fixed",
+  "evidence": "Ledger A6: adds MixedBeforeElse ('[Scope] #if X [A] #else [B] #endif P' -> scope,a,b), the only A6 shape that discriminates (b); the false claim is corrected and the shapes rescued by fall-through are named.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-06",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "lower/mod.rs:5628-5646; ledger.md P21",
+  "line": null,
+  "severity": "minor",
+  "text": "An existing unit test, attribute_separated_by_comment_is_not_attached_today, asserts the bug; P21 missed it (AL in an escaped Rust string).",
+  "disposition": "fixed",
+  "evidence": "Verified at :5633. Ledger: P21 corrected; A1 now renames and flips that test (asserts IntegrationEvent with origin row 2); the golden license notes that this is a test expectation, not a golden.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R1-07",
+  "source": "astra",
+  "round": 1,
+  "attempt": 2,
+  "file": "ledger.md Design rule 4, last bullet",
+  "line": null,
+  "severity": "minor",
+  "text": "Walking content before #if / after #endif of a validated single-chain wrapper is removable.",
+  "disposition": "fixed",
+  "evidence": "Ledger rule 4: that content is not walked (it is empty for every attribute-capable single-chain wrapper, P16).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R2-01",
+  "source": "astra",
+  "round": 2,
+  "attempt": 2,
+  "file": "ledger.md Design / After the wrapper; Attaching",
+  "line": null,
+  "severity": "important",
+  "text": "Merging every node's entries by guard intersection can replace the only realizable reading: '[ES(#if X and Y OnA #else OnB)] #if X #if Y P #endif #endif H' -> both of H's paths select OnB, but the empty intersection reads OnA.",
+  "disposition": "fixed",
+  "evidence": "Ledger 'After the wrapper': exact per-path guards; a collapse only past PENDING_PATH_CAP, grouped by argument selection with the selection pinned (bounded by the attribute's own arm combinations); dedup per (node, selection) at attachment. Test A19 (s15 P/H parses, 0 ERROR) and an A12 merge variant; Not delivered states the over-cap limit and that the cap trigger depth is unmeasured. | Round 3: astra re-raised it: a selection pinned at collapse under-attaches once a later arm (e.g. #if not Y) would refine it. Fixed by REMOVING collapse and pinning: guards are projected onto the symbols that later conditions and the attribute's own argument groups mention (exact: nothing else reads them), and above 64 distinct relevant guards the attribute is dropped with a SyntaxIssue (A22). No silent approximation remains.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R2-02",
+  "source": "astra",
+  "round": 2,
+  "attempt": 2,
+  "file": "lower/mod.rs:1430-1444; ledger.md Nested argument groups",
+  "line": null,
+  "severity": "important",
+  "text": "Sibling argument groups are chosen independently, so a publisher/event pair that no build declares can be read (PubA + OnB).",
+  "disposition": "fixed",
+  "evidence": "Verified: :1441 calls conditional_list_arm per group with the same unchanged preproc_context; the only other caller is key_members :512. Ledger: one running context per positional list (&mut Vec), extended by each chosen arm, with consistent-arm selection. Test A20 asserts the full pair (s15 H2 parses).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R2-03",
+  "source": "astra",
+  "round": 2,
+  "attempt": 2,
+  "file": "ledger.md Acceptance matrix A7b, A13",
+  "line": null,
+  "severity": "minor",
+  "text": "The consistent() check masks A7b's and A13's stated mutations.",
+  "disposition": "fixed",
+  "evidence": "Ledger: A7b's mutation is now falls_through = Some(vec![]) whenever there is no #else, ignoring taken; A13's mutation drops the entry's guard from both liveness and the inside guard. Each states why the narrower mutation is masked. A9 and A17 mutations were restated for the revised algorithm.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R2-04",
+  "source": "astra",
+  "round": 2,
+  "attempt": 2,
+  "file": "ledger.md Design / merge order",
+  "line": null,
+  "severity": "minor",
+  "text": "Arm leftovers then fall-through can reverse source order ('[Scope] #if X P [NonDebuggable] #endif Q' -> nondebuggable, scope).",
+  "disposition": "fixed",
+  "evidence": "Ledger: a new 'Order' bullet: a routine takes its entries sorted by the attribute node's start byte (stable). Test A21 (s15 P3/Q3 parses).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R3-01",
+  "source": "astra",
+  "round": 3,
+  "attempt": 2,
+  "file": "ledger.md Design / pending-entry equality",
+  "line": null,
+  "severity": "important",
+  "text": "Once entries carry pinned selections, 'same node AND same guard' is not an exact duplicate: two collapsed entries with equal widened guards but different pinned selections merge and one realizable subscription is lost.",
+  "disposition": "fixed",
+  "evidence": "Pinning is removed entirely (see A2-R2-01's evidence): entries are (node, projected guard) and carry no other state, so that pair is the entry's whole identity. Ledger 'After the wrapper' says so explicitly.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R3-02",
+  "source": "astra",
+  "round": 3,
+  "attempt": 2,
+  "file": "lower/mod.rs:882-889 vs :229-247; ledger.md Attaching",
+  "line": null,
+  "severity": "important",
+  "text": "Deduplicating per (node, selection) when the collected routine takes its entries drops a guard that the split-header arm filter in lower_object still needs: [Scope] + pragma-only #if X/#else + split P(I)/P(T) loses Scope on P(T).",
+  "disposition": "fixed",
+  "evidence": "Verified: collect_routines pushes the routine with its pending entries (:882-889) before lower_object's per-header-arm loop (:229-247). Ledger: collect_routines passes all exact entries; filtering, selection and dedup run per header arm after consistent(g, arm_symbols). Test A23 (s16 P2 parses, 0 ERROR).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R3-03",
+  "source": "astra",
+  "round": 3,
+  "attempt": 2,
+  "file": "ledger.md Golden license / CDO hypothesis",
+  "line": null,
+  "severity": "minor",
+  "text": "The change population misses sibling-correlated and self-contradictory positional readings, in keys as well as attributes.",
+  "disposition": "fixed",
+  "evidence": "Ledger CDO hypothesis: the population is attribute pairing (P19) plus every positional-list reading conditional_list_arm makes differently (nested, sibling-shared symbol, contradictory arm) in routine attributes and object keys, measured before the change by a scan of preproc_conditional_attribute_args / preproc_conditional_field_list_items in CDO and its .alpackages sources.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R4-01",
+  "source": "astra",
+  "round": 4,
+  "attempt": 2,
+  "file": "ledger.md Design / Data, Admission",
+  "line": null,
+  "severity": "minor",
+  "text": "Projection invalidates the stated invariant g ⊇ ctx used to justify that an admitted arm is always walked.",
+  "disposition": "fixed",
+  "evidence": "Ledger 'Data' now says only an UNPROJECTED guard contains ctx. 'Admission' proves the walk over retained symbols instead: arm liveness reads only the chain's own condition symbols, which projection keeps, so liveness under projected g equals liveness under the unprojected guard (⊇ ctx).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R4-02",
+  "source": "astra",
+  "round": 4,
+  "attempt": 2,
+  "file": "ledger.md Acceptance matrix A9",
+  "line": null,
+  "severity": "minor",
+  "text": "A9's standalone shape no longer discriminates removal of the attachment-time dedup: projection merges {X:true}/{X:false} first when X occurs nowhere later.",
+  "disposition": "fixed",
+  "evidence": "Ledger A9: the input adds a later '#if X procedure Z() … #endif' so X stays relevant and two distinct entries reach P; the masking without it is stated.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "A2-R4-03",
+  "source": "astra",
+  "round": 4,
+  "attempt": 2,
+  "file": "ledger.md Design hard bound; Not delivered",
+  "line": null,
+  "severity": "minor",
+  "text": "'More than 64 guards needs 7 independent symbols' is false: partial assignments over 5 symbols can exceed 64.",
+  "disposition": "fixed",
+  "evidence": "Ledger: the threshold is described only as more than 64 distinct projected guards, in both Design and Not delivered; the 7-symbol claim is removed (grep finds no 'at least 7' left).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "code-review",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:244 (lower_object split-header arm filter)",
+  "line": null,
+  "severity": "important",
+  "text": "The split-header arm filter checks only consistent(guard, arm_symbols), not that the arm is reachable under the guard: '#if not (X or Y) [ES] #endif' + split '#if X or Y P(a) #else P(b)' gives the subscriber to P(a).",
+  "disposition": "fixed",
+  "evidence": "Verified (arm_symbols of 'X or Y' is empty). Fixed in 8350785a: arm_live (own condition not decided false, no earlier arm decided true under the guard, the same rule as chain_shape) filters the arms. Test guarded_attribute_skips_an_unreachable_split_header_arm; break .filter(arm_live) -> true fails ('a' gets EventSubscriber). C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-al-call-hierarchy/cc1781f3-fe4e-414a-aea6-4919dc8d314c/scratchpad/80/rf1.md",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "code-review",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1771; src/program/resolve/event.rs:302",
+  "line": null,
+  "severity": "minor",
+  "text": "One attribute reaching a routine by paths with different argument selections yields two AttributeIrs with the same name and origin; publisher_include_sender uses .find() (the first wins), and a subscriber could be counted twice downstream.",
+  "disposition": "deferred",
+  "evidence": "By design: union-read of per-build readings is the spec (Design 'Deduplication, per header arm'; accepted by both reviewers since R1). Each copy is a real build's attribute. Consumer handling (which reading wins, duplicate-event dedup) is a separate consumer concern; filed as a discovery (D2). Minor, not blocking.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "code-review+astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1784",
+  "line": null,
+  "severity": "minor",
+  "text": "The '#if inside attribute arguments' SyntaxIssue is pushed once per selected copy, contrary to the comment.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: issues deduped by GROUP node id per routine (reported HashSet), message unchanged. Test attribute_arg_group_issue_is_reported_once (red: 2 vs 1); break reported.insert(..) || true fails.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "code-review+astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1090, :1182-1185, :219",
+  "line": null,
+  "severity": "important",
+  "text": "settle_pending runs and rebuilds the whole remaining condition-symbol suffix set on every wrapper even with nothing pending (quadratic), and the condition index walks every object's CST eagerly.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: early return on empty pending; CondIndex built lazily (OnceCell) on the first non-empty settle; relevance = per-symbol LAST occurrence >= wrapper end (one map per object) or inside the attribute's range (sorted slice). Behaviour-identical: full suite + goldens green.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1045-1048, :1447",
+  "line": null,
+  "severity": "important",
+  "text": "One full PreprocChain (with cloned branch contents) per incoming entry: N attributes x M procedures quadratic.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: chain_shape (directives only: per-arm syms/live + fall-through) runs per entry; chain_contents is grouped once; preproc_branches = zip of both (DRY); PreprocChain removed. Behaviour-identical: suite + goldens green. | Final round 2: astra re-raised it (chain_shape still enumerated all children per entry, Θ(N·M) time). Fixed in a92c1cc1: chain_parts walks the wrapper once into (directives, contents); chain_shape reads only the shared directive slice per guard. Scaling test attribute_flow_scales_linearly part A (20000 attributes x 20000 procedures) passes in ~1.4 s; reintroducing the per-entry walk times out at 120 s (rf2.md).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1750-1763",
+  "line": null,
+  "severity": "minor",
+  "text": "Attachment dedup uses a Vec with linear contains (quadratic in attributes per routine).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: seen is a HashSet; selected stays the ordered output.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1486-1505",
+  "line": null,
+  "severity": "minor",
+  "text": "conditional_list_arm clones and re-searches the whole running context per group.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: join_into(run, syms) checks and appends only the chosen arm's literals in place. | Final round 2: astra re-raised it (linear searches in join and condition lookup). Fixed in a92c1cc1: struct Run { index: HashMap } per positional list, decide_preproc_by(lookup) with decide_preproc delegating (one implementation).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-08",
+  "source": "astra",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1467; CHANGELOG",
+  "line": null,
+  "severity": "minor",
+  "text": "The 'same build can take' guarantee overstates the literals-only running context: a group chosen under 'X or Y' records nothing, so a later 'not X and not Y' group can still pair (PubA/OnB).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: the conditional_list_arm doc and the CHANGELOG state the literals-only limit; test sibling_groups_under_a_disjunction_are_not_correlated pins it (mutation: record both literals for a true 'or' -> fails).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-09",
+  "source": "code-review",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:877",
+  "line": null,
+  "severity": "minor",
+  "text": "#define/#undef are now kept in an attribute run, but guards do not apply them, so '[A] #define X #if not X P #endif Q' can give A to P too.",
+  "disposition": "deferred",
+  "evidence": "Matches the lowerer's existing treatment: #define/#undef never affect any #if decision in the lowerer (routine collection also walks the #if not X arm as live). The attribute follows the same union-read; before, it was dropped entirely (an under-attachment). Stated in Not delivered. Minor, not blocking.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F1-10",
+  "source": "code-review",
+  "round": "final-1",
+  "attempt": 2,
+  "file": "CHANGELOG.md:220",
+  "line": null,
+  "severity": "minor",
+  "text": "The CHANGELOG's lowerer-test count and labels were wrong.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8350785a: the CHANGELOG states 30 lowerer tests with the exact labels (count from git diff master new test fns).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F2-01",
+  "source": "astra",
+  "round": "final-2",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1048-1051, :1468",
+  "line": null,
+  "severity": "important",
+  "text": "= F1-05 re-raise: per-entry chain_shape still enumerated all named children (Θ(N attributes × M children) time).",
+  "disposition": "fixed",
+  "evidence": "Fixed in a92c1cc1 (chain_parts once per wrapper; chain_shape over the shared directive slice). Scaling test part A; break -> timeout 120 s; fixed 1.4 s. rf2.md.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F2-02",
+  "source": "astra",
+  "round": "final-2",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1582, :1587, :1631",
+  "line": null,
+  "severity": "minor",
+  "text": "= F1-07 re-raise: the running context is still searched linearly per join and per condition lookup.",
+  "disposition": "fixed",
+  "evidence": "Fixed in a92c1cc1 (Run index + decide_preproc_by; slice decide_preproc delegates).",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F2-03",
+  "source": "astra",
+  "round": "final-2",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:1565-1566",
+  "line": null,
+  "severity": "important",
+  "text": "consistent's first-operand validation is quadratic per join, cubic over N wrappers with a long single-path guard.",
+  "disposition": "fixed",
+  "evidence": "Fixed in a92c1cc1: one HashMap<&str,bool> validates both operands, first occurrences appended in order (byte-identical output). Scaling test part B (16000-symbol guard, 300 known-true wrappers) passes in ~3.4 s; reintroducing the nested scan times out at 120 s. Contradiction tests still green.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ },
+ {
+  "id": "F2-04",
+  "source": "astra",
+  "round": "final-2",
+  "attempt": 2,
+  "file": "crates/al-syntax/src/lower/mod.rs:248, :1682",
+  "line": null,
+  "severity": "minor",
+  "text": "arm_live materializes all routine children per outer entry (Θ(N×M)).",
+  "disposition": "fixed",
+  "evidence": "Fixed in a92c1cc1: split_conditions(r) once per routine in lower_object (nothing for an unsplit routine); arm_live iterates only those conditions.",
+  "hash": "e5c692d6f7035344e531308a7c9f725a1404865adb9c1f0ecae78851e61c5099",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted"
+  }
+ }
+]
