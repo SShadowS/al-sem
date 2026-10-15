@@ -1270,6 +1270,7 @@ mod tests {
             app_guid: app.to_string(),
             object_type: object_type.to_string(),
             object_number: number,
+            object_key: number.to_string(),
             name: name.to_string(),
             source_table_name: None,
             extends_target_name: None,

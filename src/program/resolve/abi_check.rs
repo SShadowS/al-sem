@@ -99,11 +99,11 @@ impl RawAbiIndex {
                     .to_ascii_lowercase();
                 // Same key convention as ingest_abi / make_routine_route:
                 // non-zero id → (number, ""); name-only → (0, lowercase_name).
-                let (object_number, object_name_lc) = if obj.object_number != 0 {
-                    (obj.object_number, String::new())
-                } else {
-                    (0i64, obj.name.fold_identifier())
-                };
+                let (object_number, object_name_lc) =
+                    match crate::engine::ids::abi_object_number(obj.object_number) {
+                        Some(n) => (n, String::new()),
+                        None => (0i64, obj.name.fold_identifier()),
+                    };
 
                 for routine in &obj.routines {
                     let (routine_kind, event_kind) = map_kind(routine);

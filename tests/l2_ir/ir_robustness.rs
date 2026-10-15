@@ -235,7 +235,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
     let rid = compute_routine_id(
         "a",
         "Report",
-        50100,
+        "50100",
         "trigger",
         &trig.name,
         trig_member.as_deref(),
@@ -273,7 +273,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
     let rid2 = compute_routine_id(
         "a",
         "Report",
-        50100,
+        "50100",
         "procedure",
         &helper.name,
         ir_walk::ir_enclosing_member(helper).as_deref(),

@@ -36,11 +36,16 @@ use std::sync::Arc;
 /// A workspace object (the L3-relevant subset of al-sem's `ObjectDecl`).
 #[derive(Debug, Clone)]
 pub struct ModelObject {
-    /// Internal object id: `${appGuid}/${objectType}/${objectNumber}`.
+    /// Internal object id: `${appGuid}/${objectType}/${objectKey}`.
     pub id: String,
     pub app_guid: String,
     pub object_type: String,
+    /// `0` when the object has no number; the id uses [`Self::object_key`].
     pub object_number: i64,
+    /// The id's object segment ([`crate::engine::ids::object_key`]): the number, or
+    /// `@` + the encoded name for an object without one. Set by the producer that
+    /// minted the id, never re-parsed from it (#83).
+    pub object_key: String,
     pub name: String,
     /// Page / PageExtension `SourceTable` (unquoted), else None.
     pub source_table_name: Option<String>,
@@ -110,8 +115,8 @@ pub struct ModelObject {
 #[derive(Debug, Clone)]
 pub struct ModelDeclarationOnlyRoutine {
     pub name: String,
-    /// `{stableObjectId}#{64 hex}`, the signature hash folded with the declaring
-    /// object's NAME (every unnumbered object shares `<guid>:<Kind>:0`).
+    /// `{stableObjectId}#{signature hash}` with no member: the object id is unique
+    /// per object since #83 (`<guid>:<Kind>:@<name>`, `engine::ids::object_key`).
     pub stable_routine_id: String,
     pub source_anchor: crate::program::body::features::PAnchor,
     pub declaration_start_line: u32,
@@ -788,9 +793,12 @@ fn project_ir(
         };
         // Object metadata driven entirely by the owned IR (the loop iterates IR objects
         // — no tree-sitter CST walk).
+        // `object_number` is the number FIELD (`0` when absent); every id takes the
+        // object KEY, which is unique for a numberless object too (#83).
         let object_number = o.id.unwrap_or(0);
+        let object_key = crate::program::body::ir_walk::ir_object_key(o);
         let name = o.name.clone();
-        let object_id = encode_object_id(app_guid, object_type, object_number);
+        let object_id = encode_object_id(app_guid, object_type, &object_key);
 
         // Read an object-level property value from the IR (lowercased name match).
         let ir_prop = |name_lc: &str| -> Option<String> {
@@ -910,13 +918,13 @@ fn project_ir(
         let source_anchor = Some(anchor_from_origin(&o.origin, source_unit_id, cols));
 
         // #71: Interface / ControlAddIn procedure declarations, carried on the object
-        // row (the routine loop below still skips these kinds). The id folds in the
-        // object NAME: every unnumbered object shares the object id `<guid>/<Kind>/0`.
+        // row (the routine loop below still skips these kinds). Since #83 the object id
+        // is unique per object (`<guid>/<Kind>/@<name>`), so the id is the plain
+        // `{stableObjectId}#{signature hash}` with no member: the same shape a
+        // dependency's ABI gives the same interface's method.
         let declaration_only_routines: Vec<ModelDeclarationOnlyRoutine> =
             if object_type == "Interface" || object_type == "ControlAddIn" {
                 let stable_object_id = to_stable_object_id(&object_id);
-                // The LOGICAL object name: the IR keeps a quoted name's inner `""`.
-                let logical_name = crate::program::body::scope::unescape_al_identifier(&name);
                 // Like the routine loop: only the routines `population` names.
                 routine_ixs
                     .iter()
@@ -932,7 +940,7 @@ fn project_ir(
                             stable_routine_id: to_stable_routine_id_from_parts(
                                 &stable_object_id,
                                 &hash,
-                                Some(&logical_name),
+                                None,
                             ),
                             source_anchor: anchor_from_origin(&r.origin, source_unit_id, cols),
                             declaration_start_line: declaration_start_line(r),
@@ -948,6 +956,7 @@ fn project_ir(
             app_guid: app_guid.to_string(),
             object_type: object_type.to_string(),
             object_number,
+            object_key: object_key.clone(),
             name: name.clone(),
             source_table_name: source_table_name.clone(),
             extends_target_name,
@@ -1034,7 +1043,7 @@ fn project_ir(
                 let rid = crate::program::body::scope::compute_routine_id(
                     app_guid,
                     object_type,
-                    object_number,
+                    &object_key,
                     kind_for_id,
                     &rname,
                     enclosing_member.as_deref(),
@@ -2842,7 +2851,14 @@ page 50813 "CP3 Wizard"
                         &crate::engine::ids::CanonicalRoutineKey {
                             app_guid: r.app_guid.clone(),
                             object_type: r.object_type.clone(),
-                            object_number: r.object_number,
+                            object_key: resolved
+                                .workspace
+                                .objects
+                                .iter()
+                                .find(|o| o.id == r.object_id)
+                                .expect("a routine's object is in the model")
+                                .object_key
+                                .clone(),
                             routine_kind: r.kind.clone(),
                             routine_name: r.name.clone(),
                             normalized_signature_hash: r.normalized_signature_hash.clone(),
@@ -3145,7 +3161,7 @@ page 50814 "CP4 Wizard"
         let raw_escaped_id = crate::program::body::scope::compute_routine_id(
             APP_GUID,
             "Page",
-            50814,
+            "50814",
             "trigger",
             "OnValidate",
             Some(r#"Be""ta"#),

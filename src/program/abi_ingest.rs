@@ -410,7 +410,7 @@ pub fn load_symbol_reference(unit: &AppUnit) -> Option<Arc<SymbolReferenceAbi>> 
 }
 
 /// The graph id of an ABI object of app `app`: by number, or by folded name when it
-/// has none.
+/// has none (the ABI zero rule, [`crate::engine::ids::abi_object_number`]).
 pub(crate) fn abi_object_node_id(
     app: AppRef,
     abi_obj: &crate::engine::deps::symbol_reference::AbiObject,
@@ -418,10 +418,9 @@ pub(crate) fn abi_object_node_id(
     ObjectNodeId {
         app,
         kind: object_kind_from_abi_type(&abi_obj.object_type),
-        key: if abi_obj.object_number != 0 {
-            ObjKey::Id(abi_obj.object_number)
-        } else {
-            ObjKey::Name(abi_obj.name.fold_identifier().into())
+        key: match crate::engine::ids::abi_object_number(abi_obj.object_number) {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(abi_obj.name.fold_identifier().into()),
         },
     }
 }

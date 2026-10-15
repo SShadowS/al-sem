@@ -17,12 +17,10 @@
 //!
 //! ## Comparison rules
 //!
-//! - Objects are matched by `(stableObjectId, name)`, routines by
-//!   `stableRoutineId`. `stableObjectId` alone is not unique: `Interface`/
-//!   `ControlAddIn` objects carry no grammar-level object number, so every
-//!   such object in an app synthesizes the SAME `stableObjectId`
-//!   (`objectNumber = 0`) — `name` disambiguates (AL forbids two same-kind
-//!   objects sharing both an id and a name).
+//! - Objects are matched by `stableObjectId`, routines by `stableRoutineId`.
+//!   Object ids are unique (#83: a numberless object's id carries its name), and
+//!   two object rows with one id in either snapshot is a hard failure, never a
+//!   silently dropped row.
 //! - Every field is compared for equality: objects compare `name`, `kind`,
 //!   `signatureFingerprint`; routines compare those plus `normalizedSignatureHash`
 //!   and `canonicalSignatureText`.
@@ -165,41 +163,20 @@ fn diff_snapshots(
 ) -> Vec<Divergence> {
     let mut out = Vec::new();
 
-    // --- Objects, keyed by (stableObjectId, name). ---
+    // --- Objects, keyed by stableObjectId, one-to-one. ---
     //
-    // `stableObjectId` alone is NOT a safe join key: `Interface`/`ControlAddIn`
-    // objects carry no grammar-level object number (AL never assigns one), so
-    // `engine::snapshot::extract_from_ir` synthesizes `objectNumber = 0` for
-    // EVERY interface/control-add-in in an app — any two such objects in the
-    // same app collide on the exact same `stableObjectId`
-    // (`"{appGuid}:Interface:0"`). Collecting straight into a
-    // `BTreeMap<&str, &ObjectIdentity>` keyed by that non-unique id used to
-    // silently drop every colliding entry but the last (`BTreeMap::insert`
-    // overwrites on a repeated key), so `ws-interface-dispatch`'s two
-    // interfaces (`IEmpty`, `IProcessor`) were never both compared — only
-    // whichever sorted last (`IProcessor`) was ever checked, letting the
-    // committed golden's `IEmpty` row sit silently wrong (it held a stale
-    // copy of `IProcessor`'s `signatureFingerprint`) while `cargo test --test
-    // differential` reported green. Regenerating exposed this: the freshly
-    // computed snapshot is fully deterministic (verified across repeated
-    // fresh-process regens) and simply differs from the stale golden — this
-    // was never engine nondeterminism, only a masked comparison. Keying by
-    // `(stableObjectId, name)` — AL forbids two same-kind objects sharing both
-    // an id AND a name — disambiguates every collision case and lets each
-    // object be compared independently.
-    let golden_objs: BTreeMap<(&str, &str), &ObjectIdentity> = golden
-        .objects
-        .iter()
-        .map(|o| ((o.stable_object_id.as_str(), o.name.as_str()), o))
-        .collect();
-    let rust_objs: BTreeMap<(&str, &str), &ObjectIdentity> = rust
-        .objects
-        .iter()
-        .map(|o| ((o.stable_object_id.as_str(), o.name.as_str()), o))
-        .collect();
+    // Every object id is unique since #83 (a numberless object's id carries its
+    // name, `engine::ids::object_key`). Before that every Interface/ControlAddIn of
+    // an app shared `"{appGuid}:Interface:0"`, and a map keyed by that id kept only
+    // the last of them, so `ws-interface-dispatch`'s `IEmpty` row was never
+    // compared. The duplicate check below makes such a collision a hard failure
+    // instead of a silently dropped row, so the id alone is a safe key and `name`
+    // is compared like any other field.
+    let golden_objs = objects_by_id(fixture, "golden", golden);
+    let rust_objs = objects_by_id(fixture, "rust", rust);
 
-    for ((id, name), g) in &golden_objs {
-        match rust_objs.get(&(*id, *name)) {
+    for (id, g) in &golden_objs {
+        match rust_objs.get(id) {
             None => out.push(Divergence {
                 fixture: fixture.to_string(),
                 path: format!("objects[{:?}]:MISSING_IN_RUST", id),
@@ -207,8 +184,7 @@ fn diff_snapshots(
                 rust_value: "<absent>".to_string(),
             }),
             Some(r) => {
-                // (name is part of the map key, so a hit guarantees name equality —
-                // no per-field name comparison needed.)
+                push_field(&mut out, fixture, &obj_path(id, "name"), &g.name, &r.name);
                 push_field(&mut out, fixture, &obj_path(id, "kind"), &g.kind, &r.kind);
                 push_field(
                     &mut out,
@@ -220,8 +196,8 @@ fn diff_snapshots(
             }
         }
     }
-    for ((id, name), r) in &rust_objs {
-        if !golden_objs.contains_key(&(*id, *name)) {
+    for (id, r) in &rust_objs {
+        if !golden_objs.contains_key(id) {
             out.push(Divergence {
                 fixture: fixture.to_string(),
                 path: format!("objects[{:?}]:EXTRA_IN_RUST", id),
@@ -292,6 +268,26 @@ fn diff_snapshots(
     // Stable order for human-readable reporting.
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+/// One snapshot's objects keyed by `stableObjectId`. Two rows with one id is a
+/// hard failure naming the id: a map would keep only the last of them and hide the
+/// other from the comparison (#83).
+fn objects_by_id<'a>(
+    fixture: &str,
+    side: &str,
+    snap: &'a IdentitySnapshot,
+) -> BTreeMap<&'a str, &'a ObjectIdentity> {
+    let mut map = BTreeMap::new();
+    for o in &snap.objects {
+        if map.insert(o.stable_object_id.as_str(), o).is_some() {
+            panic!(
+                "{fixture}: the {side} snapshot has two object rows with stableObjectId {:?}",
+                o.stable_object_id
+            );
+        }
+    }
+    map
 }
 
 fn obj_path(id: &str, field: &str) -> String {

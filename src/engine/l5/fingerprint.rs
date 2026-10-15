@@ -160,7 +160,10 @@ impl<'a> FingerprintIndex<'a> {
             .or_else(|| self.objects_by_id.get(enclosing));
 
         let obj_part = match obj {
-            Some(o) => format!("{}/{}", o.object_type, o.object_number),
+            // The object KEY: the number for a numbered object (the same bytes as
+            // before #83), `@name` for one without, so two numberless objects of one
+            // kind no longer share an object part.
+            Some(o) => format!("{}/{}", o.object_type, o.object_key),
             None => String::new(),
         };
         let routine_name = routine.map(|r| r.name.clone()).unwrap_or_default();
@@ -357,6 +360,7 @@ mod tests {
             app_guid: "app".to_string(),
             object_type: object_type.to_string(),
             object_number,
+            object_key: object_number.to_string(),
             name: format!("Obj{object_number}"),
             source_table_name: None,
             extends_target_name: None,
