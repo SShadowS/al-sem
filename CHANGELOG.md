@@ -21,9 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dependencies: …` line when apps were loaded (a fixture that declares `platform` lists
   System and System Application as `missing`); SARIF is unchanged, since no consumer reads
   a statement there. In cross-app mode `events --scope all` also lists events between
-  dependency routines only. When the cross-app model cannot be built (no `app.json`), the
-  commands fail and name `--single-app`.
-  CDO: CDO_PLACEHOLDER
+  dependency routines only. A workspace without `app.json` fails in both modes with
+  `could not compute modelInstanceId`; any other failure to build the cross-app model names
+  `--single-app`.
+  CDO (`U:/Git/DO-cdo-baseline/Cloud`, release-fast, before = single-app): `events fanout`
+  4.5 s → 22.8 s and 188 → 248 events (3 hot, 6 with partial coverage); `events chains`
+  4.2 s → 22.2 s, 188 → 248 roots; `policy check` 4.2 s → 24.2 s, 7 → 18 findings
+  (`no-commit-in-event-subscribers` 4 → 10, `no-http-from-table-triggers` 0 → 4,
+  `install-codeunit-no-business-data-writes` 3 → 4; `routinesEvaluated` unchanged, 5479
+  workspace routines). Of the 16 new or changed policy findings, 9 were triaged real and 7
+  false positives, all from the engine's path-insensitive reachability (4 of them a Guided
+  Experience commit that runs only for `IsPrimarySetup = true`), not from the cross-app
+  plumbing. `--single-app` output is identical to the old default apart from the
+  `dependencies` key. `alsem analyze` findings, `--program-call-graph-stats` and the CDO
+  fingerprint are byte-identical before and after this change.
 - `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
   states and links over the snapshot's typed edges, in stable routine ids (#69 D2).
   `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries, distinct
