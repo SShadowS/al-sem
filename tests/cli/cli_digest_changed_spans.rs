@@ -2346,8 +2346,9 @@ fn rooted_and_climbing_spellings_still_do_not_match() {
 }
 
 /// #76 T3. A diff whose headers spell the path `./src/posting.al` (as
-/// `diff -u ./…` writes them) or `a/./src/posting.al` matches the file by hunk:
-/// line 9 roots only `PostSalesDoc`.
+/// `diff -u --label ./src/posting.al` writes them; plain `diff -u` appends a tab
+/// and a timestamp, which the parser does not strip) or `a/./src/posting.al`
+/// matches the file by hunk: line 9 roots only `PostSalesDoc`.
 ///
 /// Mutation: bypass `normalize_input` for the diff lookup -> `diff-file-unmatched`.
 #[test]

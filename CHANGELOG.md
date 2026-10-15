@@ -226,10 +226,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `alsem digest --file` and `--diff` now match a workspace file whatever spelling names it
-  (#76). Before, `./src/x.al`, `src/./x.al` and `src//x.al` gave `file-unmatched` (exit 2),
-  and a diff written by `diff -u ./…` matched nothing, because the path comparison only
-  stripped the scheme, turned `\` into `/` and lowercased. `normalize_input`, the one
+- `alsem digest --file` and `--diff` now match a workspace-relative file spelled with `./`,
+  `.` segments, a doubled `/` or `\` (#76). Before, `./src/x.al`, `src/./x.al` and
+  `src//x.al` gave `file-unmatched` (exit 2), and a diff whose headers name the file
+  `./src/x.al` (e.g. `a/./src/x.al`, or `diff -u --label ./src/x.al`) matched nothing,
+  because the path comparison only stripped the scheme, turned `\` into `/` and lowercased.
+  A trailing `/` is ignored too (`src/x.al/` matches). Plain `diff -u` headers that carry a
+  tab and a timestamp are still not parsed: the timestamp stays in the path (a separate,
+  pre-existing parser limit). `normalize_input`, the one
   function every digest path comparison goes through (`--file`, diff paths and the set of
   files a malformed hunk header vetoes), now also drops every `.` segment and every empty
   segment except a leading root `/` or UNC `//`. It stays purely lexical. Limits: a rooted
