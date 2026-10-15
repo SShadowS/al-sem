@@ -1,0 +1,274 @@
+[
+ {
+  "id": "R1-01",
+  "source": "sol",
+  "round": 1,
+  "file": "ledger Design S08",
+  "line": null,
+  "severity": "important",
+  "text": "The row-only S08 update leaves #64 inconsistent: S08's code unspecified, and the live design still says graph accepts id-less manifests.",
+  "disposition": "fixed",
+  "evidence": "S08 deleted and graph added to S43 (CONFIGURATION_ERROR); \u00a76.5, \u00a77 item 6, D3 and the \u00a73 measurement updated in #64's draft; every edited line listed in the Timeline.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "sol",
+  "round": 1,
+  "file": "ledger P3",
+  "line": null,
+  "severity": "minor",
+  "text": "P3 overstated: engine/snapshot.rs has its own reader; the named unit test is not in source_text.rs.",
+  "disposition": "fixed",
+  "evidence": "P3 corrected: the gate uses source_text::read_root_app_guid (model_instance_id.rs:29,75-76); engine/snapshot.rs has a separate reader with the same rule and the named test.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "opus",
+  "round": 1,
+  "file": "ledger Design (check placement)",
+  "line": null,
+  "severity": "important",
+  "text": "Checking the id before the build changes the error for missing/unparseable app.json too (breaks #64 S40-S42 classifications).",
+  "disposition": "fixed",
+  "evidence": "The check now runs AFTER build_cross_app_program returns Ok; missing or unparseable app.json keep the builder's read/parse errors; new T3 pins it (mutation: move the check before the build).",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "opus",
+  "round": 1,
+  "file": "ledger S08 paragraph",
+  "line": null,
+  "severity": "important",
+  "text": "Editing only S08 leaves three other places in #64's draft stating the opposite; S43 already covers the case.",
+  "disposition": "fixed",
+  "evidence": "Same as R1-01: S08 deleted, graph added to S43, \u00a76.5, \u00a77 item 6 and D3 updated, lines listed.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "opus",
+  "round": 1,
+  "file": "ledger S08 paragraph",
+  "line": null,
+  "severity": "minor",
+  "text": "The edit lives in an untracked file of another worktree; post a comment on #64 for a durable record.",
+  "disposition": "refuted",
+  "evidence": "The flow may not comment on issues (only the executor publishes, and only on its own PR). The durable record is this committed ledger, which lists every edited line of #64's draft. | Final round 1: sol re-raised (the ledger is not in the reviewed commit). The ledger and register are committed at step 12 (freeze) on this branch, before the PR is created; .gitignore tracks .agent/issue-*/ledger.md. The PR body carries the ledger too.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "opus",
+  "round": 1,
+  "file": "ledger T1/T2",
+  "line": null,
+  "severity": "minor",
+  "text": "T2 adds no discrimination; no non-string id case.",
+  "disposition": "fixed",
+  "evidence": "T1 adds \"id\": 5; T2 is stated as a consistency check only.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-07",
+  "source": "opus",
+  "round": 1,
+  "file": "ledger acceptance (CHANGELOG)",
+  "line": null,
+  "severity": "minor",
+  "text": "The CHANGELOG entry text is not given.",
+  "disposition": "fixed",
+  "evidence": "Design gives the full CHANGELOG ### Fixed text.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-01",
+  "source": "opus",
+  "round": 2,
+  "file": "ledger.md Design/T3",
+  "line": null,
+  "severity": "minor",
+  "text": "The spec does not say where the check goes; placed after the coverage warning, stderr would start with a warning.",
+  "disposition": "fixed",
+  "evidence": "Design: the check runs immediately after build_cross_app_program(...)? returns, before any projection work or stderr output.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-02",
+  "source": "opus",
+  "round": 2,
+  "file": "ledger.md Design/T3",
+  "line": null,
+  "severity": "minor",
+  "text": "Design says the #64 edits happen 'after the merge decision' while the Timeline shows them done.",
+  "disposition": "fixed",
+  "evidence": "Design now says the edits were made in spec round 1, lines listed in the Timeline.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-03",
+  "source": "opus",
+  "round": 2,
+  "file": "ledger.md Design/T3",
+  "line": null,
+  "severity": "minor",
+  "text": "T3 only asserts a negative, which any error would pass.",
+  "disposition": "fixed",
+  "evidence": "T3 also asserts stderr contains 'al-sem graph: snapshot build failed: read' / '... parse' as today.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "opus",
+  "round": "final-1",
+  "file": "final diff",
+  "line": null,
+  "severity": "minor",
+  "text": "The ledger (the claimed durable record) is not in the reviewed commit.",
+  "disposition": "refuted",
+  "evidence": "By process: the ledger and findings.json are committed at freeze (step 12) on this branch before the PR, and the PR body is the ledger; same answer as R1-05.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/impact_graph/mod.rs:196",
+  "line": null,
+  "severity": "important",
+  "text": "Re-reading app.json after the build is a race: the id validated can differ from the id exported.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 6b4d30ae: the check is ctx.snapshot().workspace_app.guid.is_empty(), the exported value, under the same rule (snapshot.rs:199-208 sets guid to '' when id is missing, not a string or empty). T1 re-proved.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/impact_graph/mod.rs:196",
+  "line": null,
+  "severity": "minor",
+  "text": "The check re-implements a fact the snapshot already holds (extra I/O, two sources of truth).",
+  "disposition": "fixed",
+  "evidence": "Same change as F1-02.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "CHANGELOG.md:229",
+  "line": null,
+  "severity": "minor",
+  "text": "'like every gate-backed command' over-claims: missing/unparseable app.json still give graph's own error.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 6b4d30ae: the entry says 'as every gate-backed command does for that case', states that missing/unparseable app.json keep graph's own error (still different from the gate's), and that the rejection comes after the build.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "tests/cli/cli_graph_export.rs:781",
+  "line": null,
+  "severity": "minor",
+  "text": "T1's starts_with breaks if the build writes a warning to stderr first.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 6b4d30ae: contains.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/impact_graph/mod.rs:194",
+  "line": null,
+  "severity": "minor",
+  "text": "The id is checked only after the full build, so a large id-less workspace fails late.",
+  "disposition": "deferred",
+  "evidence": "Deliberate (spec R1-03/R2-01): the check runs after the build so missing/unparseable app.json keep their errors, and it checks the exported value (F1-02). An id-less app.json is a rare configuration error; the late failure is stated in the CHANGELOG. A pre-build fast path would need a second parse of app.json, the race F1-02 removes.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "tests/cli/cli_graph_export.rs:737",
+  "line": null,
+  "severity": "minor",
+  "text": "New run_alsem/graph_of helpers duplicate run_graph; d8_copy hard-codes the fixture file list.",
+  "disposition": "deferred",
+  "evidence": "Test-only; the new tests assert only exit codes and stderr (no meta.engine), so the missing version override has no effect; folding helpers is a cosmetic follow-up.",
+  "hash": "a14b7cf75dd14aa73ebb9854fd1fb059f276812f89a941c5b141fdc2ddc6412c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
