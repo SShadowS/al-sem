@@ -191,6 +191,14 @@ impl ImpactGraph {
 pub fn export_workspace(workspace_root: &Path) -> Result<ImpactGraph, String> {
     let (ctx, report, coverage) =
         crate::program::resolve::full::build_cross_app_program(workspace_root)?;
+    // The gate's identity rule (#73): checked after the build, so a missing or
+    // unparseable `app.json` keeps the build's `read`/`parse` error.
+    if crate::source_text::read_root_app_guid(workspace_root).is_none() {
+        return Err(format!(
+            "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
+            workspace_root.display()
+        ));
+    }
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
     let facts = extract_source_facts(graph, &index, &ctx.all_units());

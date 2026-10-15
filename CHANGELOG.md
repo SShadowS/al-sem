@@ -226,6 +226,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
+  `could not compute modelInstanceId`), like every gate-backed command; before, it exported the
+  graph with an empty app id and exited 0 (#73). A missing or unparseable `app.json` keeps its
+  existing error. The LSP and `aldump` are unchanged.
 - `alsem digest --file` and `--diff` now match a workspace-relative file spelled with `./`,
   `.` segments, a doubled `/` or `\` (#76). Before, `./src/x.al`, `src/./x.al` and
   `src//x.al` gave `file-unmatched` (exit 2), and a diff whose headers name the file
