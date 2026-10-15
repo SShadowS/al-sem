@@ -1010,7 +1010,8 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// its base summary's parameter roles (a fixed leaf's: path-sensitive fields
 /// unknown) for the whole solve, because role composition does not follow the
 /// synthetic event-dispatch edges a dependency publisher is solved through.
-/// Empty everywhere but the cross-app base.
+/// Empty everywhere but the cross-app solves: the base, the db-effect bundle and
+/// the digest's transaction spans.
 pub fn compute_summaries_v2_bundle_with_leaves(
     routines: &[ModelRoutine],
     graph: &CombinedGraph,

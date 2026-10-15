@@ -28,7 +28,7 @@ use crate::engine::l4::effect_query_cli::{
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
-use crate::engine::l5::detector_context::build_detector_context;
+use crate::engine::l5::detector_context::{CrossAppInputs, build_detector_context_with};
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
 use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
@@ -519,13 +519,17 @@ const TX_UNKNOWN: TransactionContext = "unknown";
 /// Compute the transaction-context map: `commit_operation_id → TransactionContext`.
 /// Uses the full detector-context substrate (combined graph → summaries → spans).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
-fn compute_tx_context_map(resolved: &Model) -> HashMap<String, TransactionContext> {
+fn compute_tx_context_map(
+    resolved: &Model,
+    cross: Option<CrossAppInputs<'_>>,
+) -> HashMap<String, TransactionContext> {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
     // `RAW_INHERITED_FACTS`. This path reads ONLY `ctx.transaction_spans`, and
     // `compute_transaction_spans` sources its `writes_tables` / `publishes_events`
     // from `ctx.cone_derived` (Task 2) and its completeness from
     // `reachable_coverage` — never from a fact Vec.
-    let ctx = build_detector_context(resolved, crate::engine::l5::registry::substrate::ALL);
+    let ctx =
+        build_detector_context_with(resolved, crate::engine::l5::registry::substrate::ALL, cross);
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
     for span in &ctx.transaction_spans {
         if span.seed_kind != SeedKind::ExplicitCommit {
@@ -1618,7 +1622,7 @@ pub fn run_digest_pipeline(
 
     // Compute transaction context map (for COMMIT effects).
     // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
-    let tx_ctx_map = compute_tx_context_map(resolved);
+    let tx_ctx_map = compute_tx_context_map(resolved, target.cross_app_inputs());
 
     // Compute S4 ordering effects for the changed roots alone (each root's pass is
     // independent, so this equals computing every reportable root and filtering).
