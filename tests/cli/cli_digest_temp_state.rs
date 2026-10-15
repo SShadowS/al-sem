@@ -18,8 +18,14 @@
 //! claim before it panics, so one red run shows all of them.
 //!
 //! Stated limit (#66): the probe has no dependency, so the two modes' stores are
-//! equal here; nothing in this file tells the cross-app store (with dependency
-//! leaves) from the single-app one.
+//! equal on it. #70 adds `cross_app_digest_reads_the_cross_app_store`, which runs
+//! on a workspace that raises a dependency PUBLISHER
+//! (`tests/common/dep_dispatch_fixture.rs`) and pins that digest and query agree
+//! on the dependency dispatch, with temp state. It cannot tell WHICH builder made
+//! digest's cross-app store: digest holds no single-app model in cross-app mode,
+//! and `build_db_effect_bundle(base.resolved)` over the base's edges equals the
+//! cross-app store once dependency publishers are solved (spec row 3b, a stated
+//! relaxation).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -1161,4 +1167,127 @@ fn a3_state_only_ops_are_not_db_writes() {
         f.sort();
         f.dedup();
     });
+}
+
+// ---------------------------------------------------------------------------
+// #70 row 3b — digest's cross-app store follows a dependency publisher.
+// ---------------------------------------------------------------------------
+
+/// `(table, origin routine, tempState)` of each DB_INSERT in a digest entry:
+/// the origin is the last viaPath hop's `toDisplay` (the dispatch target).
+fn digest_insert_parts(e: &Value) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = of_type(e, "DB_INSERT")
+        .iter()
+        .map(|x| {
+            let origin = via_paths(x)
+                .first()
+                .and_then(|p| p.last())
+                .and_then(|h| h["toDisplay"].as_str())
+                .unwrap_or("")
+                .to_string();
+            (
+                x["detail"]["resourceDisplay"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                origin,
+                temp_state(x).unwrap_or("<absent>").to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// #70 row 3b. On `tests/common/dep_dispatch_fixture.rs`, the cross-app digest
+/// entry of `RaiseDep` (which raises the dependency's `OnDepEvent`) has EXACTLY
+/// the two dispatch inserts, each `detail.tempState == known(false)`:
+/// `Customer` from the dependency's `HandleDep`, `Ws Flag` from the workspace's
+/// `HandleInWs`; no `temp-state-incoherent` item; and the same
+/// `(table, origin, tempState)` parts as `query effects RaiseDep` (cross-app).
+/// `--single-app` has neither insert (the precondition that the dependency
+/// matters: `Lib.OnDepEvent()` does not resolve there).
+///
+/// Mutation: reinstate dependency publishers as fixed leaves (the defect) ->
+/// `tempState` absent and the query empty -> fails. Stated relaxation (spec 3b):
+/// which builder produced the store is not observable here.
+#[test]
+fn cross_app_digest_reads_the_cross_app_store() {
+    use crate::dep_dispatch_fixture::write_own;
+    let tmp = tempfile::tempdir().unwrap();
+    write_own(tmp.path(), "");
+    let ws = tmp.path();
+    let run = |single_app: bool| -> Value {
+        let r = run_digest_pipeline(
+            ws,
+            None,
+            Some(vec!["RaiseDep".to_string()]),
+            None,
+            "cli-b-v1",
+            true,
+            None,
+            single_app,
+        )
+        .expect("digest runs");
+        serde_json::from_str(&r.json_text).expect("digest json")
+    };
+    let mut failures = Vec::new();
+
+    let cross = run(false);
+    no_incoherence(&cross, &mut failures);
+    let e = entry(&cross, "RaiseDep");
+    let want = vec![
+        (
+            "Customer".to_string(),
+            "HandleDep".to_string(),
+            "known(false)".to_string(),
+        ),
+        (
+            "Ws Flag".to_string(),
+            "HandleInWs".to_string(),
+            "known(false)".to_string(),
+        ),
+    ];
+    let got = digest_insert_parts(e);
+    if got != want {
+        failures.push(format!(
+            "RaiseDep digest inserts: want {want:?}, got {got:?}"
+        ));
+    }
+
+    let model_id = compute_gate_model_instance_id(ws).expect("model id");
+    let substrate = QuerySubstrate::build(ws, &model_id, false).expect("query substrate");
+    let q = render_query_effects(&substrate, "RaiseDep", "t", true);
+    let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
+    let mut query_parts: Vec<(String, String, String)> = qdoc["payload"]["effects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["op"] == "Insert")
+        .map(|x| {
+            (
+                x["tableName"].as_str().unwrap_or("").to_string(),
+                x["origin"]["routine"]["display"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                x["tempState"].as_str().unwrap_or("<absent>").to_string(),
+            )
+        })
+        .collect();
+    query_parts.sort();
+    if query_parts != got {
+        failures.push(format!(
+            "RaiseDep: digest parts {got:?} != query effects parts {query_parts:?}"
+        ));
+    }
+
+    let single = run(true);
+    let single_inserts = digest_insert_parts(entry(&single, "RaiseDep"));
+    if !single_inserts.is_empty() {
+        failures.push(format!(
+            "precondition: --single-app RaiseDep has no insert, got {single_inserts:?}"
+        ));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

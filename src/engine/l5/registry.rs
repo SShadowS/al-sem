@@ -451,14 +451,7 @@ pub(crate) fn run_detectors_cross_app(
         crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             demanded,
-            Some(crate::engine::l5::detector_context::CrossAppInputs {
-                dep_routine_ids: &base.dep_routine_ids,
-                leaf_summaries: &base.leaf_summaries,
-                injected_typed_edges: &base.injected_typed_edges,
-                declared_dependencies: &base.declared_dependencies,
-                app_versions: &base.resolved_app_versions,
-                friends: &base.friends,
-            }),
+            Some(base.cross_app_inputs()),
         )
     };
     let summarize_diagnostics: Vec<Diagnostic> = ctx

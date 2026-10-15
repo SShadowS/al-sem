@@ -22,7 +22,7 @@
 //! a pass. There is no trace oracle for this fixpoint (roles convergence is
 //! checked by [`roles_change_key`], not a per-pass fingerprint sequence).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::combined_graph::CombinedGraph;
 use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_scc_db_effects};
@@ -1005,6 +1005,12 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// (`settled`-successor reads) is UNCHANGED by this (see `effect_store.rs`'s
 /// module doc for why materialized `Vec<DbEffect>` feed-forward survives
 /// through A2).
+///
+/// `fixed_roles` (#70): routines solved for their db-effect ROWS only. Each keeps
+/// its base summary's parameter roles (a fixed leaf's: path-sensitive fields
+/// unknown) for the whole solve, because role composition does not follow the
+/// synthetic event-dispatch edges a dependency publisher is solved through.
+/// Empty everywhere but the cross-app base.
 pub fn compute_summaries_v2_bundle_with_leaves(
     routines: &[ModelRoutine],
     graph: &CombinedGraph,
@@ -1012,6 +1018,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
     leaf_summaries: &HashMap<String, RoutineSummary>,
+    fixed_roles: &HashSet<String>,
 ) -> (
     SummaryBundle,
     HashMap<String, RoutineSummary>,
@@ -1117,6 +1124,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         body_avail_by_id: &body_avail_by_id,
         stable_map: &stable_map,
         leaf_summaries,
+        fixed_roles,
         uncertainty_edges_by_from: &uncertainty_edges_by_from,
     };
 
@@ -1313,6 +1321,7 @@ pub fn compute_summaries_v2_with_leaves_core(
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
     leaf_summaries: &HashMap<String, RoutineSummary>,
+    fixed_roles: &HashSet<String>,
 ) -> (HashMap<String, RoutineSummary>, Vec<SummarizeDiagnostic>) {
     let (bundle, mut map, diagnostics) = compute_summaries_v2_bundle_with_leaves(
         routines,
@@ -1321,6 +1330,7 @@ pub fn compute_summaries_v2_with_leaves_core(
         upgraded_bindings,
         fields,
         leaf_summaries,
+        fixed_roles,
     );
     for (id, summary) in map.iter_mut() {
         if let Some(rix) = bundle.routine_ix(id)
@@ -1357,6 +1367,7 @@ pub fn compute_summaries_v2(
         upgraded_bindings,
         fields,
         &no_leaves,
+        &HashSet::new(),
     )
 }
 
@@ -1393,6 +1404,7 @@ pub fn compute_summaries_v2_bundle(
         upgraded_bindings,
         fields,
         &no_leaves,
+        &HashSet::new(),
     )
 }
 
@@ -1409,6 +1421,9 @@ pub struct SccComputeCtx<'a> {
     pub body_avail_by_id: &'a HashMap<String, bool>,
     pub stable_map: &'a HashMap<String, String>,
     pub leaf_summaries: &'a HashMap<String, RoutineSummary>,
+    /// Members that keep their base roles (see
+    /// [`compute_summaries_v2_bundle_with_leaves`]).
+    pub fixed_roles: &'a HashSet<String>,
     /// `graph.uncertainty_edges` indexed by source routine id (indices into
     /// `graph.uncertainty_edges`, pushed in GLOBAL order) — an O(1) per-routine
     /// lookup of "this routine's uncertainty edges" instead of scanning the whole
@@ -1429,6 +1444,29 @@ pub struct SummarizeDiagnostic {
     pub severity: String,
     pub stage: String,
     pub message: String,
+}
+
+/// One member's roles for a pass: [`compose_roles_only`], or, for a
+/// `fixed_roles` member, its base roles unchanged (#70).
+fn member_roles(
+    ctx: &SccComputeCtx,
+    routine: &ModelRoutine,
+    base_roles: &[RecordRoleSummary],
+    snapshot: &HashMap<String, RoutineSummary>,
+    final_map: &HashMap<String, RoutineSummary>,
+) -> Vec<RecordRoleSummary> {
+    if ctx.fixed_roles.contains(&routine.id) {
+        return base_roles.iter().map(clone_role).collect();
+    }
+    compose_roles_only(
+        routine,
+        base_roles,
+        snapshot,
+        final_map,
+        ctx.upgraded_bindings,
+        ctx.graph,
+        ctx.body_avail_by_id,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1558,14 +1596,12 @@ fn run_one_scc_roles(
             .map(|b| b.parameter_roles.as_slice())
             .unwrap_or(&[]);
         let empty_snapshot: HashMap<String, RoutineSummary> = HashMap::new();
-        let roles = compose_roles_only(
+        let roles = member_roles(
+            ctx,
             routine,
             base_roles,
             &empty_snapshot,
             predecessor_final_map,
-            ctx.upgraded_bindings,
-            ctx.graph,
-            ctx.body_avail_by_id,
         );
         return RolesSccOut::converged(vec![(id.clone(), roles)]);
     }
@@ -1663,14 +1699,12 @@ fn run_one_scc_roles(
                 .get(id)
                 .map(|b| b.parameter_roles.as_slice())
                 .unwrap_or(&[]);
-            let next_roles = compose_roles_only(
+            let next_roles = member_roles(
+                ctx,
                 routine,
                 base_roles,
                 &snapshot,             // FROZEN: all reads from the prior pass
                 predecessor_final_map, // settled summaries for already-processed SCCs
-                ctx.upgraded_bindings,
-                ctx.graph,
-                ctx.body_avail_by_id,
             );
             let next_key = roles_change_key(id, &next_roles, ctx.stable_map);
             let member_changed = key_cache.get(id) != Some(&next_key);

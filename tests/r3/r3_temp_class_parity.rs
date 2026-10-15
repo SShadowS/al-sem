@@ -177,6 +177,7 @@ pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) 
         &resolved.calls.upgraded_bindings,
         &fields,
         &HashMap::new(),
+        &std::collections::HashSet::new(),
     );
     (bundle, dropped)
 }

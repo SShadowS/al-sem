@@ -199,8 +199,9 @@ impl QuerySubstrate {
 }
 
 /// The L4 db-effect store over `alsem analyze`'s cross-app base (#66): its
-/// combined graph and SCC, every source-bearing dependency routine a FIXED
-/// leaf. The cross-app twin of [`build_db_effect_bundle`]; `query` and
+/// combined graph and SCC, every source-bearing dependency routine without an
+/// out-edge a FIXED leaf, and a dependency publisher solved through its
+/// subscriber dispatch (#70). The cross-app twin of [`build_db_effect_bundle`]; `query` and
 /// `digest` both read it in cross-app mode, so their `tempState` agrees (#65).
 pub fn cross_app_db_effect_bundle(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
@@ -212,6 +213,7 @@ pub fn cross_app_db_effect_bundle(
         &base.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
+        &base.fixed_roles,
     )
     .0
 }
@@ -252,6 +254,7 @@ pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, Su
         &calls.upgraded_bindings,
         &field_index,
         &no_leaves,
+        &std::collections::HashSet::new(),
     );
     (graph, scc, bundle)
 }

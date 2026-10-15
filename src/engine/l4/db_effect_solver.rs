@@ -3332,6 +3332,7 @@ pub(crate) mod tests {
             &upgraded_bindings,
             &fields,
             &leaf_summaries,
+            &HashSet::new(),
         );
 
         // Feed solve_side_facts the same inputs the surrounding Task-8
