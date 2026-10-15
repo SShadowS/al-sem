@@ -1483,8 +1483,13 @@ fn frame_bound(entry: &ConeFactEntry) -> bool {
 /// state is `parameter-dependent` in its owner's frame. Producers never enter a
 /// shared cone; [`super::pd_solve::solve`] resolves them in every routine that
 /// reaches them.
+///
+/// The test is the temp state alone, like digest's `is_pd_snap`, so the cone
+/// and the witness BFS can never disagree on what a producer is. Every table
+/// fact carries its operation id (`direct_facts_for_routine`); the producer
+/// collection in `compose_inherited_cones` `expect`s it.
 fn is_producer(f: &CapabilityFact) -> bool {
-    fact_pd_index(f).is_some() && f.witness_operation_id.is_some()
+    fact_pd_index(f).is_some()
 }
 
 /// A routine's raw direct facts deduplicated by [`inherited_fact_key`]
@@ -2340,6 +2345,12 @@ fn compose_inherited_cones(
 
     // #69 D1: the producers (raw direct facts, in node order) leave the shared
     // cone and are resolved per routine by the transitive producer solve.
+    // A producer's identity is `(owner, operation_id)`: `g.nodes` repeats a
+    // routine id once per declaration (two `#if` arms, one id), and each repeat
+    // reads the same `direct_raw` entry, so a repeat must not make a second
+    // producer (the solve keys states by producer, so its states would be
+    // twins).
+    let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
     let producers: Vec<super::pd_solve::Producer> = g
         .nodes
         .iter()
@@ -2349,14 +2360,19 @@ fn compose_inherited_cones(
                 .into_iter()
                 .flatten()
                 .filter(|f| is_producer(f))
-                .map(move |f| super::pd_solve::Producer {
-                    fact: Arc::new(f.clone()),
-                    owner: Arc::from(id.as_str()),
-                    operation_id: f
+                .map(move |f| {
+                    let op = f
                         .witness_operation_id
-                        .clone()
-                        .expect("a producer has a witness operation id"),
+                        .as_deref()
+                        .expect("a producer has a witness operation id");
+                    (id.as_str(), op, f)
                 })
+        })
+        .filter(|&(id, op, _)| seen.insert((id, op)))
+        .map(|(id, op, f)| super::pd_solve::Producer {
+            fact: Arc::new(f.clone()),
+            owner: Arc::from(id),
+            operation_id: op.to_string(),
         })
         .collect();
     let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);

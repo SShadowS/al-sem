@@ -29,7 +29,7 @@ use crate::engine::ids::{
     sha256_hex,
 };
 use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
-use crate::engine::l5::snapshot::compose_snapshot;
+use crate::engine::l5::snapshot::compose_snapshot_from_base;
 use crate::program::model::workspace::Model;
 
 mod to_cbor;
@@ -66,8 +66,9 @@ pub fn workspace_fingerprint_of(workspace_dir: &std::path::Path, driver_version:
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).
-    let core = compose_snapshot(resolved);
+    // One base (cone + producer solve) for the core and the permission facts.
     let base = build_r3a3_source_only_base(resolved);
+    let core = compose_snapshot_from_base(resolved, &base);
 
     let inputs = derive_inputs(opts.workspace_dir);
     let workspace_fingerprint = compute_workspace_fingerprint(&inputs, opts.driver_version);

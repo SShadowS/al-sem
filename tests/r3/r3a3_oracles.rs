@@ -270,7 +270,11 @@ fn oracle_r3a3_inherited_keys_trace_to_a_direct_producer() {
         let mut state_keys: HashMap<&str, HashSet<String>> = HashMap::new();
         for st in snap.pd_solution.states.iter().filter(|st| !st.seed) {
             let p = &snap.capability_facts[st.producer_fact];
-            let local = st.producer_operation_id.rsplit('/').next().unwrap_or("");
+            let op = p
+                .witness_operation_id
+                .as_deref()
+                .expect("a producer fact has its operation id");
+            let local = op.rsplit('/').next().unwrap_or("");
             let projected_op = format!("{}/{local}", p.subject);
             let base = producer_bases
                 .get(projected_op.as_str())

@@ -846,8 +846,10 @@ pub type EdgeIx = usize;
 pub type RoutineId = String;
 
 /// #69 D2: the producer solve in snapshot ids. A state says: in `routine`'s
-/// frame, the producer's write has temp state `temp_state` and happens only
-/// under `reqs`.
+/// frame, the producer's write has temp state `temp_state`. Guards are not
+/// carried: the solve already dropped every contradicted state, and a proof
+/// reads only links. The producer's operation id is
+/// `capability_facts[producer_fact].witness_operation_id`.
 #[derive(Debug, Clone, Default)]
 pub struct PdArena {
     pub states: Vec<StateNode>,
@@ -860,19 +862,13 @@ pub struct PdArena {
 
 #[derive(Debug, Clone)]
 pub struct StateNode {
-    /// The producer's `operation_id`.
-    pub producer_operation_id: String,
     /// Index into `CapabilitySnapshot::capability_facts` of the producer's
     /// owner-direct fact (its `extra` carries the raw parameter-dependent state).
     pub producer_fact: usize,
     pub temp_state: crate::engine::l4::effect_lattice::TempStateKind,
     pub routine: RoutineId,
-    /// Guard requirements in `routine`'s frame: `(param index, value)`.
-    pub reqs: Vec<(u32, bool)>,
     /// True only for the seed (the producer's owner, its own frame).
     pub seed: bool,
-    /// Shortest link-path length to the seed (seed = 0).
-    pub dist: usize,
     /// Range into `PdArena::links`.
     pub links: std::ops::Range<usize>,
 }
@@ -1092,25 +1088,31 @@ fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
 pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
-    use crate::engine::perf_trace as pt;
     let base = {
-        let _s = pt::span("snapshot", "snapshot.r3a3_base");
+        let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
         build_r3a3_source_only_base(resolved)
     };
-    let _s = pt::span("snapshot", "snapshot.derive");
+    compose_snapshot_from_base(resolved, &base)
+}
+
+/// [`compose_snapshot`] over an already-built source-only base, for a caller
+/// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
+/// runs the whole cone and the producer solve, so it is built once.
+pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> CapabilitySnapshot {
+    let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
     let identities = derive_identity_table(resolved);
-    let capability_facts = derive_capability_facts(&base);
-    let typed_edges = derive_typed_edges(&base);
-    let operation_index = derive_operation_evidence(&base);
-    let callsite_index = derive_callsite_evidence(&base);
-    let callsite_resolutions = derive_callsite_resolutions(&base, &typed_edges);
-    let analysis_gaps = derive_analysis_gaps(&base);
-    let coverage = derive_coverage(&base);
-    let event_declarations = derive_event_declarations(&base);
-    let root_classifications = derive_root_classifications(resolved, &base);
-    let routine_order_frames = derive_routine_order_frames(&base);
-    let pd_solution = derive_pd_arena(&base, &typed_edges, &capability_facts);
+    let capability_facts = derive_capability_facts(base);
+    let typed_edges = derive_typed_edges(base);
+    let operation_index = derive_operation_evidence(base);
+    let callsite_index = derive_callsite_evidence(base);
+    let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges);
+    let analysis_gaps = derive_analysis_gaps(base);
+    let coverage = derive_coverage(base);
+    let event_declarations = derive_event_declarations(base);
+    let root_classifications = derive_root_classifications(resolved, base);
+    let routine_order_frames = derive_routine_order_frames(base);
+    let pd_solution = derive_pd_arena(base, &typed_edges, &capability_facts);
 
     CapabilitySnapshot {
         identities,
@@ -1498,13 +1500,10 @@ fn derive_pd_arena(
         }
         out.by_routine.entry(routine.clone()).or_default().push(ix);
         out.states.push(StateNode {
-            producer_operation_id: producer.operation_id.clone(),
             producer_fact,
             temp_state: s.t.to_kind(),
             routine,
-            reqs: s.reqs.clone(),
             seed: s.seed,
-            dist: s.dist,
             links: start..out.links.len(),
         });
     }
@@ -1517,18 +1516,10 @@ fn derive_pd_arena(
 }
 
 /// The bytes a `PdArena` retains, counted like `pd_solve::solve_bytes`: every
-/// `Vec` and hash table at its capacity, plus string and `reqs` heap.
+/// `Vec` and hash table at its capacity, plus string heap.
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;
-    let state_heap: usize = a
-        .states
-        .iter()
-        .map(|s| {
-            s.producer_operation_id.capacity()
-                + s.routine.capacity()
-                + s.reqs.capacity() * size_of::<(u32, bool)>()
-        })
-        .sum();
+    let state_heap: usize = a.states.iter().map(|s| s.routine.capacity()).sum();
     let by_routine: usize = a
         .by_routine
         .iter()

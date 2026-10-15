@@ -51,17 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
   A link indexes the arena's table of distinct edges, and a resolved entry borrows its
   first-hop edge from the graph, instead of each owning a clone of the edge and its five
-  strings. On CDO `alsem analyze` the solve's bytes fell from 951.6 MB (old counter, which
-  left out `Vec` slack and table overhead) to 125.0 MB (new counter, which includes them):
-  984,412 links share 15,172 edges. The analyzer drops the arena once the cone is built.
+  strings: on CDO `alsem analyze`, 984,412 links share 15,172 edges, and the solve holds
+  119.2 MiB (counted at capacity, with `Vec` slack and table overhead). The analyzer drops the
+  arena once the cone is built.
 - `alsem digest` frees the snapshot (with its solve arena), the ordering entries and the L4
   store as soon as the digest query is done, before the envelope's detector run and the
-  JSON projection. CDO digest probe (the first 200 files) peak RSS: 6446..6488 MB before
-  #69, 5297..5333 MB now; output byte-identical (#69 D1.4).
+  JSON projection. CDO digest probe (the first 200 files) peak RSS: 6446..6488 MiB before
+  #69, 5297..5333 MiB now; output byte-identical (#69 D1.4).
 - `viaPathsTruncated` now also means a non-empty path set is not known to be complete: a
   state or depth limit cut the witness enumeration (BFS or proofs). Such effects can move
-  from `conditional` to `unknown` conditionality, and ordering chains report `capped`
-  (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`, or a limit hit
+  from `conditional` to `unknown` conditionality, ordering chains report `capped`, and
+  `alsem prove`'s witness-truncated check (any effect's `viaPathsTruncated`) fires, so a
+  prove answer can move to `unknown` (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`, or a limit hit
   that found nothing) are not folded; they are decided over the proofs and the BFS together.
 - `FingerprintIndexesPub` gains `pd_solution`, `typed_edges` and `capability_facts`, and
   `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` accepts an inherited key from an
@@ -78,8 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `a2b_one_effect_per_class` and the two `digest_cli::tests::temp_join_*` unit tests. Every
   `cli_digest_temp_state` test fails on any `temp-state-incoherent` item (the `class-absent`
   fallback would otherwise hide a wrong class from a test that reads the rendered value). The
-  text output shows the diagnostic's `reason=` and `op=`. `alsem prove` is unchanged: it
-  still treats only `evidence-unavailable` as an incomplete witness (the spec is silent).
+  text output shows the diagnostic's `reason=` and `op=`. `alsem prove` shows the same
+  `tempState` value (one shared builder) but carries no entry diagnostics, so it does not
+  show `temp-state-incoherent`, and it does not count it as an incomplete witness: the
+  diagnostic is about the rendered `tempState`, which no prove obligation reads (prove still
+  treats only `evidence-unavailable`, and `viaPathsTruncated`, as an incomplete witness).
 - Measured on the CDO baseline (`bc3ccb18`, release-fast, against master before #69), #69 as
   a whole: `aldump --program-call-graph-stats` is byte-identical (unknown 0). Detectors only
   lose tables, never gain a write: `alsem analyze` cross-app default findings 2292 -> 2293
@@ -88,9 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every change is a `Validate`/`Copy`/`TransferFields` no longer counted as a write, a
   write now known temporary, or d45's per-publisher cap letting a hidden table in.
   `temp-state-incoherent`: 0 over 16,764 DB_INSERT/DB_MODIFY/DB_DELETE effects (5,512 roots).
-  Cost: peak RSS of `alsem analyze` unchanged (2827..2838 MB before, 2830..2835 now), the
-  digest probe 6446..6488 -> 5297..5333 MB, wall time +6.5% (analyze) and +4.3% (digest);
-  the solve holds 125.0 MB (analyze) and 195.8 MB (digest probe), 4.2% and 2.9% of peak.
+  Cost: peak RSS of `alsem analyze` unchanged (2827..2838 MiB before, 2830..2835 now), the
+  digest probe 6446..6488 -> 5297..5333 MiB, wall time +6.5% (analyze) and +4.3% (digest);
+  the solve holds 119.2 MiB (analyze) and 186.7 MiB (digest probe), 4.2% and 2.9% of peak.
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -190,7 +194,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Validate`, `Copy` and `TransferFields` are no longer reported as database writes, on
   temporary and real records alike (#69). They copy or assign values in memory and never
-  write the record's own table (`Validate`'s `OnValidate` writes stay separate effects).
+  write the record's own table. The `OnValidate` trigger's own writes are not inherited by
+  the caller in the capability cone (the typed graph has no implicit-trigger edges, a
+  stated non-goal), so a caller of `Validate` now shows no write for that statement; L4
+  still follows the trigger.
   Everything that reads the capability `modify` fact (digest/prove, fingerprints, diff, policy,
   the d43/d44/d45 write sets) inherits this. Goldens moved: 9 `tests/r1a-goldens/` and 9
   `tests/r3a3-goldens/` fixtures plus the R3a-3 manifest matrix (`modify` 134 -> 109).
@@ -215,7 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predicate (`is_bfs_carrier`: ordinary direct facts only, same temp class). Before, such a
   write had `evidence: unavailable`, no viaPaths and `ORDERING_UNKNOWN`. A path's identity
   is its edges plus its terminal, so two writes reached through the same calls stay two
-  paths. `alsem fingerprint` takes the same proofs.
+  paths. Only distinct proofs count toward the path cap, and the cap keeps the first paths
+  of the global order (a capped witness is a prefix of the uncapped one). A routine id
+  declared twice (two `#if` arms) is one producer, not two. `alsem fingerprint` takes the
+  same proofs.
 - `viaPaths` are deduplicated by projected path on an effect's first fact too, not only on
   a merge; equal projected paths keep the least restrictive conditionality (#69 D3).
 - A kt and an nt DB effect never share an occurrence id: a kt DB effect's canonical key

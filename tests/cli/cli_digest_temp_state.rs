@@ -236,11 +236,14 @@ fn summary(e: &Value) -> String {
 /// #65 values plus A4 (spec "Values come from `query effects`' store"): every
 /// digest value is one `query effects` reports for the same routine, in the
 /// same mode. Mutation: render "unknown" for every row in `for_effect` →
-/// "TempOnly: digest says unknown".
+/// "TempOnly: digest says unknown". Every check only collects its failure, so
+/// the fixed values above cannot stop the run before the subset check, and
+/// both modes report.
 #[test]
 fn digest_db_effects_carry_query_effects_temp_state() {
-    check_mode(true);
-    check_mode(false);
+    let mut failures = check_mode(true);
+    failures.extend(check_mode(false));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
@@ -260,31 +263,34 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-fn check_mode(single_app: bool) {
-    let doc = &docs()[if single_app { 0 } else { 1 }].1;
-    assert_eq!(doc["schemaVersion"], "1.6.0");
+/// The failures of one mode, each prefixed with the mode.
+fn check_mode(single_app: bool) -> Vec<String> {
+    let (mode, doc) = &docs()[if single_app { 0 } else { 1 }];
+    let mut failures = Vec::new();
+    if doc["schemaVersion"] != "1.6.0" {
+        failures.push(format!("schemaVersion {} != 1.6.0", doc["schemaVersion"]));
+    }
 
     // Every DB_INSERT in the routine has the expected value.
-    let expect_inserts = |name: &str, want: &str| {
+    for (name, want) in [
+        ("TempOnly", "known(true)"),
+        ("ViaHelperTemp", "known(true)"),
+        ("ViaRecursionTemp", "known(true)"),
+        ("RealWrite", "known(false)"),
+        ("ViaHelperReal", "known(false)"),
+        ("ViaRecursionReal", "known(false)"),
+        ("Helper", "parameter-dependent(0)"),
+        ("Forward", "parameter-dependent(0)"),
+    ] {
         let e = entry(doc, name);
         let inserts = of_type(e, "DB_INSERT");
-        assert!(
-            !inserts.is_empty(),
-            "{name}: no DB_INSERT in {}",
-            summary(e)
-        );
-        for x in inserts {
-            assert_eq!(temp_state(x), Some(want), "{name}: {}", summary(e));
+        if inserts.is_empty() {
+            failures.push(format!("{name}: no DB_INSERT in {}", summary(e)));
         }
-    };
-    expect_inserts("TempOnly", "known(true)");
-    expect_inserts("ViaHelperTemp", "known(true)");
-    expect_inserts("ViaRecursionTemp", "known(true)");
-    expect_inserts("RealWrite", "known(false)");
-    expect_inserts("ViaHelperReal", "known(false)");
-    expect_inserts("ViaRecursionReal", "known(false)");
-    expect_inserts("Helper", "parameter-dependent(0)");
-    expect_inserts("Forward", "parameter-dependent(0)");
+        if inserts.iter().any(|x| temp_state(x) != Some(want)) {
+            failures.push(format!("{name}: want {want}, got {}", summary(e)));
+        }
+    }
 
     // Cross-command contract: every digest value is one `query effects` reports
     // for the same routine.
@@ -292,7 +298,6 @@ fn check_mode(single_app: bool) {
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let substrate = QuerySubstrate::build(ws, &model_id, single_app).expect("query substrate");
-    let mut failures = Vec::new();
     for e in doc["payload"]["entries"].as_array().expect("entries") {
         let name = e["routine"]["display"].as_str().unwrap();
         let db = db_effects(e);
@@ -313,7 +318,10 @@ fn check_mode(single_app: bool) {
             }
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures
+        .into_iter()
+        .map(|m| format!("[{mode}] {m}"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -610,7 +618,8 @@ fn a2b_one_effect_per_class() {
 /// `HelperUi(Row); HelperUi(Buffer)`. Precondition asserted: the kt effect's
 /// path has 2 hops. Neither class's path contains the other's call site.
 /// Mutation: make the depth-0 class test class-agnostic →
-/// "HelperUiBothDeep: kt path contains Row callsite".
+/// "HelperUiBothDeep: kt path contains Row callsite". Mutation: `enumerate_proofs`
+/// finds no proof → "HelperUiBothDeep: known(true) effect has no viaPath".
 #[test]
 fn a2c_depth_two_proof_real_call_first() {
     let a = line_of("bothdeep-a");
@@ -629,6 +638,17 @@ fn a2c_depth_two_proof_real_call_first() {
                 "HelperUiBothDeep: want one kt and one nt DB_INSERT ({})",
                 summary(e)
             ));
+        }
+        // The path checks below loop over viaPaths, so an effect with none
+        // would pass them all: each effect must keep its witness.
+        for x in kt.iter().chain(&nt) {
+            let ts = temp_state(x).unwrap_or("-");
+            if via_paths(x).is_empty() {
+                f.push(format!("HelperUiBothDeep: {ts} effect has no viaPath"));
+            }
+            if evidence_kind(x) != "source" {
+                f.push(format!("HelperUiBothDeep: {ts} evidence unavailable"));
+            }
         }
         // Class-agnostic half of "neither contains the other's call site": no
         // single effect's paths go through both A's Row and A's Buffer call.

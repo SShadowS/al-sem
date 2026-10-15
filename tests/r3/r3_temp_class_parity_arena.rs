@@ -8,17 +8,9 @@
 //! Routines are enumerated from L4's side AND the solve's side, so a routine
 //! missing from either side is a failure, not a skip.
 //!
-//! Written against the design spec's named API (D2):
-//! `CapabilitySnapshot.pd_solution: PdArena { states: Vec<StateNode>,
-//! links: Vec<(StateIx, EdgeIx)>, by_routine: HashMap<RoutineId, Vec<StateIx>> }`.
-//! ASSUMED (the spec names the type and its three fields, not `StateNode`'s
-//! fields): a state exposes its producer's `operation_id` and its temp state
-//! `t` as a `TempStateKind`, `RoutineId` is the snapshot's stable routine id,
-//! and `StateIx` indexes `states`. Adjust the three accessor lines below to
-//! the landed names; the comparison itself does not change.
-//!
-//! RED before #69 for a reason that is not the defect: `pd_solution` does not
-//! exist yet, so this file does not compile until D2 lands.
+//! Reads the snapshot's `pd_solution` (spec D2): a state's producer operation
+//! id is its producer fact's `witness_operation_id`, and its `t` is a
+//! `TempStateKind`.
 //!
 //! Mutation (spec A5): skip transitions across intra-SCC edges in the solve →
 //! "Compare 1: RecUi2 ∅ != L4 {nt}". RecUi2 reaches the producer in RecUi1
@@ -60,13 +52,17 @@ fn compare_producers(
         for &ix in ixs {
             let state = &arena.states[ix];
             // Supported ops on BOTH sides: a producer can be a read (`Get`).
-            let verb = snap.capability_facts[state.producer_fact].op.as_str();
+            let fact = &snap.capability_facts[state.producer_fact];
+            let verb = fact.op.as_str();
             if !matches!(verb, "insert" | "modify" | "delete") {
                 *skipped.entry(format!("{label}:{verb}")).or_default() += 1;
                 continue;
             }
-            let op = state.producer_operation_id.clone(); // ASSUMED field
-            let t = &state.temp_state; // ASSUMED field (TempStateKind)
+            let op = fact
+                .witness_operation_id
+                .clone()
+                .expect("a producer fact has its operation id");
+            let t = &state.temp_state;
             producers.insert(op.clone());
             solve
                 .entry(routine.clone())

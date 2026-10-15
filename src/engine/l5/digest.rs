@@ -762,6 +762,8 @@ fn dispatch_object_type(f: &Fact) -> Option<&str> {
 
 /// A raw producer: a direct fact whose temp state is parameter-dependent. Its
 /// class at a caller comes from the producer solve, never from the fact (#69 D1).
+/// Mirrors the cone's `capability_cone::is_producer` (the temp state alone), so
+/// a fact the cone keeps out of every shared cone is never a BFS carrier.
 fn is_pd_snap(d: &Fact) -> bool {
     matches!(
         fact_temp_state_of(d),
@@ -797,9 +799,24 @@ struct ProofOutcome {
 /// FIRST edge has `f`'s first-hop callsite (the witness's first-hop contract).
 /// Each proof is a complete path from `root`, so it holds in `root`'s frame by
 /// construction. Breadth-first by length; a path never revisits a STATE (it may
-/// revisit a routine). Limits as the BFS: `cap` paths, `MAX_DEPTH` edges,
-/// `MAX_STATES` expansions.
+/// revisit a routine). Limits as the BFS: `MAX_DEPTH` edges, `MAX_STATES`
+/// expansions.
+///
+/// The cap. A proof's identity is its edge sequence plus its producer fact (its
+/// terminal), and only distinct proofs count toward `cap`. Once `cap` are found,
+/// the rest of that LENGTH is still enumerated: the caller picks the first `cap`
+/// of the combined set in its own global order, and every proof left out is
+/// longer than all of those, so the capped result is a prefix of the uncapped
+/// one. Partial paths are parent-linked nodes, so a push costs one node, never
+/// a copy of the path.
 fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) -> ProofOutcome {
+    /// A partial path's last state, and its parent node plus the edge between
+    /// them (`None` at the root state).
+    struct Node {
+        state: StateIx,
+        parent: Option<(usize, EdgeIx)>,
+        len: usize,
+    }
     let mut out = ProofOutcome::default();
     let (Some(first_cs), Some(root_states)) = (
         f.witness_callsite_id.as_deref(),
@@ -808,8 +825,7 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
         return out;
     };
     let kt = is_known_temp_snap(f);
-    // A partial path: its states (root first) and the edges between them.
-    let mut queue: std::collections::VecDeque<(Vec<StateIx>, Vec<EdgeIx>)> = root_states
+    let mut nodes: Vec<Node> = root_states
         .iter()
         .filter(|&&s| {
             let st = &idx.pd.states[s];
@@ -817,14 +833,25 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
                 && (st.temp_state == TempStateKind::Known(true)) == kt
                 && fact_equivalent(&idx.capability_facts[st.producer_fact], f)
         })
-        .map(|&s| (vec![s], Vec::new()))
+        .map(|&s| Node {
+            state: s,
+            parent: None,
+            len: 0,
+        })
         .collect();
+    let mut queue: std::collections::VecDeque<usize> = (0..nodes.len()).collect();
+    let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
+        std::collections::HashSet::new();
+    // The length at which the `cap`-th distinct proof was found.
+    let mut cut_len: Option<usize> = None;
     let mut popped = 0usize;
     let mut depth_exceeded = false;
-    while out.paths.len() < cap {
-        let Some((states, edges)) = queue.pop_front() else {
+    while let Some(&ni) = queue.front() {
+        let len = nodes[ni].len;
+        if cut_len.is_some_and(|cut| len > cut) {
             break;
-        };
+        }
+        queue.pop_front();
         popped += 1;
         if popped > MAX_STATES {
             out.diagnostics.push((
@@ -834,30 +861,52 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
             out.incomplete = true;
             break;
         }
-        if edges.len() > MAX_DEPTH {
+        if len > MAX_DEPTH {
             depth_exceeded = true;
             continue;
         }
-        let st = &idx.pd.states[*states.last().expect("a path has its root state")];
+        let st = &idx.pd.states[nodes[ni].state];
         if st.seed {
-            out.paths.push((edges, st.producer_fact));
+            let mut edges = Vec::with_capacity(len);
+            let mut cur = ni;
+            while let Some((parent, e)) = nodes[cur].parent {
+                edges.push(e);
+                cur = parent;
+            }
+            edges.reverse();
+            if seen.insert((edges.clone(), st.producer_fact)) {
+                out.paths.push((edges, st.producer_fact));
+                if out.paths.len() >= cap {
+                    cut_len.get_or_insert(len);
+                }
+            }
             continue;
         }
         for &(callee, e) in &idx.pd.links[st.links.clone()] {
-            if edges.is_empty() && edge_callsite_id(&idx.typed_edges[e]) != Some(first_cs) {
+            if len == 0 && edge_callsite_id(&idx.typed_edges[e]) != Some(first_cs) {
                 continue;
             }
-            if states.contains(&callee) {
+            let mut cur = Some(ni);
+            let mut revisits = false;
+            while let Some(c) = cur {
+                if nodes[c].state == callee {
+                    revisits = true;
+                    break;
+                }
+                cur = nodes[c].parent.map(|(parent, _)| parent);
+            }
+            if revisits {
                 continue;
             }
-            let mut next_states = states.clone();
-            next_states.push(callee);
-            let mut next_edges = edges.clone();
-            next_edges.push(e);
-            queue.push_back((next_states, next_edges));
+            nodes.push(Node {
+                state: callee,
+                parent: Some((ni, e)),
+                len: len + 1,
+            });
+            queue.push_back(nodes.len() - 1);
         }
     }
-    if out.paths.len() >= cap && !queue.is_empty() {
+    if cut_len.is_some() && !queue.is_empty() {
         out.truncated = true;
     }
     if depth_exceeded {
@@ -1313,11 +1362,12 @@ fn reconstruct_witness_paths<'i>(
         // When it fails, the combined path set is empty: the effect gets
         // `terminal-not-found`, `unknown` conditionality and no ordered op.
         //
-        // UNMEASURED REGRESSION VECTOR ⟨review N9⟩: the class check can only push
-        // a terminal DEEPER, across `MAX_DEPTH` / `MAX_STATES` / `HARD_PATH_CAP`.
-        // The fixture corpus shows none, but the `incomplete` /
-        // `terminal-not-found` counts on a real workspace were never compared
-        // before and after, and no CDO-gated ratchet covers the witness layer.
+        // Regression vector: the class check can only push a terminal DEEPER,
+        // across `MAX_DEPTH` / `MAX_STATES` / `HARD_PATH_CAP`. The fixture corpus
+        // shows none. Measured on CDO (#69): digest's `evidence-unavailable`
+        // entry diagnostics went 43005 (master) -> 41746. Still
+        // unmeasured: the `terminal-not-found` count alone, and no CDO-gated
+        // ratchet covers the witness layer.
         let directs: &[&Fact] = idx
             .direct_facts_by_routine
             .get(routine)
@@ -1428,7 +1478,13 @@ fn reconstruct_witness_paths<'i>(
     truncated |= proofs.truncated;
     incomplete |= proofs.incomplete;
     limit_hit |= proofs.incomplete;
-    diagnostics.extend(proofs.diagnostics);
+    // The BFS and the proofs report a limit with the same `(kind, detail)`; one
+    // witness lists it once.
+    for d in proofs.diagnostics {
+        if !diagnostics.contains(&d) {
+            diagnostics.push(d);
+        }
+    }
     if found.is_empty() && proofs.paths.is_empty() && !incomplete {
         // terminal-not-found, over the COMBINED set (#69 D3): the BFS alone
         // finding nothing is normal for a producer-origin fact.
@@ -5397,19 +5453,16 @@ codeunit 50101 "T7b Temp Classes"
         links: std::ops::Range<usize>,
     ) -> crate::engine::l5::snapshot::StateNode {
         crate::engine::l5::snapshot::StateNode {
-            producer_operation_id: "op0".to_string(),
             producer_fact: 0,
             temp_state,
             routine: routine.to_string(),
-            reqs: Vec::new(),
             seed,
-            dist: 0,
             links,
         }
     }
 
-    /// Review Focus 5: the owner's seed is never a proof carrier for the
-    /// owner's own fact (that fact is direct and takes Case A).
+    /// The owner's seed is never a proof carrier for the owner's own fact
+    /// (that fact is direct and takes Case A).
     #[test]
     fn seed_state_is_not_a_proof_carrier() {
         let mut snap = empty_snapshot();
@@ -5531,5 +5584,314 @@ codeunit 50101 "T7b Temp Classes"
         assert_eq!(all.len(), 1);
         assert_eq!(conds, vec![UNCONDITIONAL]);
         assert!(!truncated);
+    }
+
+    /// Only DISTINCT proofs count toward the cap (#69 D3: dedup before the
+    /// cap). Hand-stated precondition: every state has a twin (two producers of
+    /// one fact, as a duplicated producer makes), so each proof is found twice.
+    /// `Root → A → H` is short, `Root → A → B → H` longer. Counting twins, cap 2
+    /// is spent on the short proof twice and the longer one is lost.
+    #[test]
+    fn twin_proofs_count_once_toward_the_cap() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "H",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        // 0: Root → A, 1: A → H, 2: A → B, 3: B → H.
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "H", "cs-a1"),
+            call_edge("A", "B", "cs-a2"),
+            call_edge("B", "H", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        // Even states are one producer's, odd states its twin's.
+        arena.states = vec![
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("B", real.clone(), false, 0..1),
+            state("B", real.clone(), false, 1..2),
+            state("A", real.clone(), false, 2..4),
+            state("A", real.clone(), false, 4..6),
+            state("Root", real.clone(), false, 6..7),
+            state("Root", real, false, 7..8),
+        ];
+        arena.links = vec![
+            (0, 3),
+            (1, 3),
+            (0, 1),
+            (2, 2),
+            (1, 1),
+            (3, 2),
+            (4, 0),
+            (5, 0),
+        ];
+        for (r, ixs) in [
+            ("H", [0, 1]),
+            ("B", [2, 3]),
+            ("A", [4, 5]),
+            ("Root", [6, 7]),
+        ] {
+            arena.by_routine.insert(r.to_string(), ixs.to_vec());
+        }
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let out = enumerate_proofs("Root", &f, &idx, 2);
+        assert_eq!(out.paths, vec![(vec![0, 1], 0), (vec![0, 2, 3], 0)]);
+        assert!(!out.truncated && !out.incomplete);
+    }
+
+    /// A capped witness is a PREFIX of the uncapped one (#69 D3: the cap
+    /// applies in the global order). Hand-stated precondition: two root states
+    /// share the first hop, and the FIRST root state's proof goes through the
+    /// later edge (`cs-z` to `Hz`), so a cap taken in enumeration order keeps
+    /// the proof the global order puts second.
+    #[test]
+    fn capped_proofs_are_a_prefix_of_the_uncapped_set() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![
+            insert_fact(
+                "Hz",
+                "direct",
+                Some("opz"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+            insert_fact(
+                "Hb",
+                "direct",
+                Some("opb"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+        ];
+        // 0: Root → A, 1: A → Hz, 2: A → Hb.
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "Hz", "cs-z"),
+            call_edge("A", "Hb", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        let of = |producer_fact, s| crate::engine::l5::snapshot::StateNode { producer_fact, ..s };
+        arena.states = vec![
+            of(
+                0,
+                state("Hz", TempStateKind::ParameterDependent(0), true, 0..0),
+            ),
+            of(
+                1,
+                state("Hb", TempStateKind::ParameterDependent(0), true, 0..0),
+            ),
+            of(0, state("A", real.clone(), false, 0..1)),
+            of(1, state("A", real.clone(), false, 1..2)),
+            of(0, state("Root", real.clone(), false, 2..3)),
+            of(1, state("Root", real, false, 3..4)),
+        ];
+        arena.links = vec![(0, 1), (1, 2), (2, 0), (3, 0)];
+        for (r, ixs) in [("Hz", vec![0]), ("Hb", vec![1]), ("A", vec![2, 3])] {
+            arena.by_routine.insert(r.to_string(), ixs);
+        }
+        arena.by_routine.insert("Root".to_string(), vec![4, 5]);
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let paths = |cap| -> Vec<String> {
+            reconstruct_witness_paths(
+                "Root",
+                &f,
+                &idx,
+                cap,
+                &mut HopCache::default(),
+                &ValidNodesCache::default(),
+            )
+            .paths
+            .iter()
+            .map(|p| witness_hops_json(&p.hops))
+            .collect()
+        };
+        let all = paths(HARD_PATH_CAP);
+        assert_eq!(all.len(), 2, "precondition: two proofs");
+        assert!(all[0].contains("cs-b"), "precondition: {all:?}");
+        assert_eq!(paths(1), all[..1]);
+    }
+
+    /// When the BFS and the proofs both pass `MAX_DEPTH`, the witness lists
+    /// `depth-exceeded` once. Hand-stated precondition: a 69-edge chain
+    /// `R0 → … → R69` whose last routine holds both an ordinary carrier (the
+    /// BFS's terminal) and the producer (the proof's seed).
+    #[test]
+    fn a_limit_hit_by_bfs_and_proofs_is_listed_once() {
+        const N: usize = 69;
+        let mut snap = empty_snapshot();
+        let last = format!("R{N}");
+        snap.capability_facts = vec![
+            insert_fact(
+                &last,
+                "direct",
+                Some("op0"),
+                None,
+                SnapTempState::ParameterDependent { parameter_index: 0 },
+            ),
+            insert_fact(
+                &last,
+                "direct",
+                Some("op1"),
+                None,
+                SnapTempState::Known { value: false },
+            ),
+        ];
+        // Edge i: R{i} → R{i+1}. State j sits at R{N-j}; state 0 is the seed.
+        snap.typed_edges = (0..N)
+            .map(|i| call_edge(&format!("R{i}"), &format!("R{}", i + 1), &format!("c{i}")))
+            .collect();
+        let arena = &mut snap.pd_solution;
+        arena.states.push(state(
+            &last,
+            TempStateKind::ParameterDependent(0),
+            true,
+            0..0,
+        ));
+        for j in 1..=N {
+            arena.states.push(state(
+                &format!("R{}", N - j),
+                TempStateKind::Known(false),
+                false,
+                j - 1..j,
+            ));
+            arena.links.push((j - 1, N - j));
+        }
+        for j in 0..=N {
+            arena.by_routine.insert(format!("R{}", N - j), vec![j]);
+        }
+        let f = insert_fact(
+            "R0",
+            "inherited",
+            None,
+            Some("c0"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        assert!(
+            enumerate_proofs("R0", &f, &idx, HARD_PATH_CAP)
+                .diagnostics
+                .iter()
+                .any(|(k, _)| k == "depth-exceeded"),
+            "precondition: the proofs pass MAX_DEPTH"
+        );
+        let out = reconstruct_witness_paths(
+            "R0",
+            &f,
+            &idx,
+            HARD_PATH_CAP,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        );
+        let depth = out
+            .diagnostics
+            .iter()
+            .filter(|(k, _)| k == "depth-exceeded")
+            .count();
+        assert_eq!(depth, 1, "{:?}", out.diagnostics);
+    }
+
+    /// A routine id declared twice (two `#if` arms) is ONE producer: the solve
+    /// seeds it once, and its short and its longer proof both survive cap 2.
+    #[test]
+    fn duplicated_declaration_is_one_producer() {
+        let src = r#"
+table 50410 "Dup Tab"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+}
+
+codeunit 50410 DupProducer
+{
+    procedure Root()
+    var
+        Row: Record "Dup Tab";
+    begin
+        A(Row);
+    end;
+
+    procedure A(var R: Record "Dup Tab")
+    begin
+        H(R);
+        B(R);
+    end;
+
+    procedure B(var R: Record "Dup Tab")
+    begin
+        H(R);
+    end;
+
+#if CLEAN25
+    procedure H(var R: Record "Dup Tab")
+    begin
+        R.Insert();
+    end;
+#else
+    procedure H(var R: Record "Dup Tab")
+    begin
+        R.Insert();
+    end;
+#endif
+}
+"#;
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("DupProducer.al".to_string(), src.to_string())],
+                "00000000-0000-0000-0000-00000000d1a2",
+            );
+        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == n)
+                .collect()
+        };
+        let h = named("H");
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 1, "H's insert is one producer");
+        let root = &named("Root")[0].stable_routine_id;
+        let f = snap
+            .capability_facts
+            .iter()
+            .find(|f| &f.subject == root && f.provenance != "direct" && f.op == "insert")
+            .expect("Root inherits H's insert");
+        let idx = build_fingerprint_indexes(&snap);
+        let out = reconstruct_witness_paths(
+            root,
+            f,
+            &idx,
+            2,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        );
+        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
+        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
     }
 }

@@ -85,6 +85,10 @@ pub struct ConeArena {
 /// guard requirements are its state's (`ConeState::reqs`).
 #[derive(Debug, Clone)]
 pub struct ResolvedEntry<'g> {
+    /// The spec's D1.3 tuple names it, and it is the entry's only way back to
+    /// its state's `reqs` (the tuple's `reqs` live there, not in a copy). No
+    /// walk reads guards from an entry today: a guarded entry is folded as
+    /// present, the sound direction.
     pub state: StateIx,
     /// The producer's raw fact with `temp_state = t` and
     /// `witness_operation_id` = the producer's op. One `Arc` per
@@ -225,7 +229,7 @@ pub(crate) fn solve<'g>(
         producers,
         ..Default::default()
     };
-    // Review Focus 1: a workspace without producers pays nothing.
+    // A workspace without producers pays nothing.
     if arena.producers.is_empty() {
         return (arena, HashMap::new());
     }
@@ -614,8 +618,8 @@ mod tests {
         );
     }
 
-    /// Review Focus 2: an event subscriber's parameters are the publisher's BY
-    /// NAME, not by position.
+    /// An event subscriber's parameters are the publisher's BY NAME, not by
+    /// position.
     #[test]
     fn cross_edge_event_dispatch_maps_by_name() {
         let mut publisher = pd_routine("Pub");
@@ -671,8 +675,8 @@ mod tests {
         );
     }
 
-    /// Review Focus 3: a cycle that forwards the `var` parameter ends with
-    /// ONE state per routine (the same tuple is never pushed twice). This pins
+    /// A cycle that forwards the `var` parameter ends with ONE state per
+    /// routine (the same tuple is never pushed twice). This pins
     /// the state-level dedup, not termination as such.
     #[test]
     fn solve_cycle_has_one_state_per_tuple() {
