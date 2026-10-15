@@ -1,0 +1,326 @@
+[
+ {
+  "id": "R1-01",
+  "source": "astra+flash",
+  "round": 1,
+  "file": "ledger Design",
+  "line": null,
+  "severity": "important",
+  "text": "Dropping leading empty segments makes /src/posting.al match a workspace file, contradicting 'absolute paths still do not match'; a drive prefix could be cancelled away.",
+  "disposition": "fixed",
+  "evidence": "Design: only . segments and NON-leading empty segments are dropped; a leading / or // keeps its root; a drive prefix stays; .. is not cancelled. Negative test T1n (/src/posting.al and src/../src/posting.al stay unmatched, original spelling kept); its mutation drops the leading empty segment.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-02",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger Design ..",
+  "line": null,
+  "severity": "important",
+  "text": "'..' cancellation is not equivalent to the same file (symlinks), and with the pre-existing backslash mapping can collide distinct POSIX files.",
+  "disposition": "fixed",
+  "evidence": "Design: '..' is no longer cancelled (out of scope, stated limit). Rounds 2-3: astra re-raised that the clean-up WIDENS the pre-existing literal-backslash alias (a POSIX file named src\\.\\x.al now keys like src/x.al). Fixed in the ledger: P4 is scoped to names without a literal backslash; Design and Not delivered state the widened alias and put such names outside the guarantee; no 'not widened' claim remains.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "re-raised",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-03",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger T2",
+  "line": null,
+  "severity": "important",
+  "text": "T2's stated mutation survives its discriminator (a/../../x.al).",
+  "disposition": "fixed",
+  "evidence": "T2 rewritten with hand-stated pairs incl. src/../x.al -> src/../x.al; mutation 'cancel ..' turns it into x.al and fails.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-04",
+  "source": "flash",
+  "round": 1,
+  "file": "ledger Design order",
+  "line": null,
+  "severity": "minor",
+  "text": "Clarify the order: strip scheme, segments, lowercase.",
+  "disposition": "fixed",
+  "evidence": "Design states the order explicitly.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-05",
+  "source": "flash",
+  "round": 1,
+  "file": "ledger T1",
+  "line": null,
+  "severity": "minor",
+  "text": "T1 should assert no file-unmatched diagnostics.",
+  "disposition": "fixed",
+  "evidence": "T1 asserts an empty changedRootsDiagnostics for every spelling.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-06",
+  "source": "astra",
+  "round": 1,
+  "file": "ledger T3 / digest_cli.rs:442-461",
+  "line": null,
+  "severity": "minor",
+  "text": "The poisoned-file set has its own normalisation path; a healthy-path diff test does not pin it.",
+  "disposition": "fixed",
+  "evidence": "New T4 extends the existing veto test with mixed ./src and src spellings in both orders.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "accepted",
+   "flash": "accepted",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-01",
+  "source": "opus",
+  "round": 4,
+  "file": "ledger.md Design/tests",
+  "line": null,
+  "severity": "minor",
+  "text": "Empty-segment rule is ambiguous: 'except a leading one' contradicts the T2 pair //srv/x.al -> //srv/x.al, and does not say whether 'leading' is counted before or after . is dropped (.//src/x.al).",
+  "disposition": "fixed",
+  "evidence": "Design: the run of empty segments at RAW index 0 (before . is dropped) is kept, at most 2; T2 adds .//src/x.al -> src/x.al and ///src/x.al -> //src/x.al.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-02",
+  "source": "opus",
+  "round": 4,
+  "file": "ledger.md Design/tests",
+  "line": null,
+  "severity": "minor",
+  "text": "What a trailing / does is unstated; under the rule src/posting.al/ matches the file.",
+  "disposition": "fixed",
+  "evidence": "Design states a trailing / is dropped (deliberate leniency); T2 adds src/x.al/ -> src/x.al.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-03",
+  "source": "opus",
+  "round": 4,
+  "file": "ledger.md Design/tests",
+  "line": null,
+  "severity": "minor",
+  "text": "T4's mutation fails only one mixed direction; in the reverse direction a broken diff lookup also passes unless the diagnostics are pinned exactly.",
+  "disposition": "fixed",
+  "evidence": "T4 now says the mutation fails only the bad=./src direction, asserts diag_kinds == ['diff-parse-error'] in every case, and asserts the precondition that a healthy ./src/posting.al record alone gives roots == ['PostSalesDoc'].",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-04",
+  "source": "opus",
+  "round": 4,
+  "file": "ledger.md Design/tests",
+  "line": null,
+  "severity": "minor",
+  "text": "T3 is too loose: no header form, no hunk, no expected roots.",
+  "disposition": "fixed",
+  "evidence": "T3 now gives both header forms (--- ./src/... and a/./src/... b/./src/...), a line-9 hunk, and expects exit 0, roots == ['PostSalesDoc'] and empty diagnostics.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R4-05",
+  "source": "opus",
+  "round": 4,
+  "file": "ledger.md Design/tests",
+  "line": null,
+  "severity": "minor",
+  "text": "T1 omits .\\src\\posting.al, PowerShell's tab-completion spelling, which needs both the backslash mapping and the . drop.",
+  "disposition": "fixed",
+  "evidence": "T1 adds .\\src\\posting.al; T2 adds .\\SRC\\x.al -> src/x.al.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-01",
+  "source": "opus+sol",
+  "round": "final-1",
+  "file": "CHANGELOG.md:229-231; tests/cli/cli_digest_changed_spans.rs T3 doc",
+  "line": null,
+  "severity": "important",
+  "text": "The CHANGELOG (and T3's doc comment) present plain `diff -u ./...` output as fixed, but its headers carry a TAB + timestamp that the parser keeps in the path, so it still gives diff-file-unmatched.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 04c00852: the CHANGELOG names the matched forms (a/./src/x.al, diff -u --label ./src/x.al) and states that plain diff -u timestamped headers are still not parsed (pre-existing parser limit, filed as Discovery 1); T3's doc comment and the ledger T3 line say the same.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-02",
+  "source": "opus+code-review",
+  "round": "final-1",
+  "file": "CHANGELOG.md:229",
+  "line": null,
+  "severity": "minor",
+  "text": "The headline 'whatever spelling names it' is broader than the change (rooted paths, ..), and the trailing-/ leniency is not mentioned.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 04c00852: headline names the spellings (./, . segments, doubled /, \\); 'A trailing / is ignored too (src/x.al/ matches)' added.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-03",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:99-107",
+  "line": null,
+  "severity": "minor",
+  "text": "The doc comment says a UNC // root is kept, but a path made only of slashes ('/' or '//') keys as '/'; the stated rule holds only when a segment follows.",
+  "disposition": "fixed",
+  "evidence": "Fixed in daab14ad: the doc comment states the rule exactly (leading empty run of the raw split, at most 2; /src/x.al and //srv/x.al keep their root; a slash-only path keys as '/', which names no file). Behaviour unchanged (the converged rule).",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-05",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:464,471",
+  "line": null,
+  "severity": "minor",
+  "text": "Each diff record runs normalize_input twice (lookup and the poisoned check).",
+  "disposition": "fixed",
+  "evidence": "Fixed in daab14ad: the key is computed once and used for both; cli_digest_changed_spans 43 passed.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-06",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/engine/l5/digest_cli.rs:133",
+  "line": null,
+  "severity": "minor",
+  "text": "--changed ./src/x.al run from the workspace root is auto-detected as a diff file (it exists), giving exit 2 with no diagnostic; #76 covers --file and --diff only.",
+  "disposition": "deferred",
+  "evidence": "Pre-existing behaviour of the --changed auto-detection (an existing path is taken as a diff file), not a path-spelling issue and outside #76's Acceptance (--file). Filed as Discovery 2.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-07",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "tests/cli/cli_digest_changed_spans.rs:2288",
+  "line": null,
+  "severity": "minor",
+  "text": "The new entry_ids helper duplicates an inline stableId mapping used elsewhere in the file.",
+  "disposition": "deferred",
+  "evidence": "Test-only duplication; the older inline sites predate #76. Folding them into the helper is a cosmetic follow-up with no behaviour effect.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-04",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "tests/cli/cli_digest_changed_spans.rs:~1345",
+  "line": null,
+  "severity": "minor",
+  "text": "T4's second mixed pair does not discriminate old vs new normalisation (the ledger says so).",
+  "disposition": "refuted",
+  "evidence": "As stated in the ledger (R4-03): the mutation fails only the bad=./src direction; the reverse pair is kept as coverage of the veto path, not as a discriminator. No change.",
+  "hash": "3a23f7e41972c3255a0a98af180f43c595e1a33a4e5be8bf0d64eba75e0b192e",
+  "reviews": {
+   "astra": "unreviewed",
+   "flash": "unreviewed",
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]

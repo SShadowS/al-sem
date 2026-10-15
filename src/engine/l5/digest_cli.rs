@@ -96,9 +96,21 @@ fn strip_scheme(p: &str) -> String {
     p.replace('\\', "/")
 }
 
-/// Normalize an input path for comparison: strip scheme, forward-slash, lowercase.
+/// Normalize an input path for comparison: strip scheme, forward-slash, a
+/// lexical clean-up, lowercase. The clean-up drops every `.` segment and every
+/// empty segment except the leading empty run of the raw split (at most 2), so
+/// `./src/x.al`, `src/./x.al` and `src//x.al` all key as `src/x.al`, while
+/// `/src/x.al` and `//srv/x.al` keep their `/` or `//` root. A path made only of
+/// slashes keys as `/`, which names no file.
+/// `..` is never cancelled (a symlinked `link/..` need not be the parent), and
+/// a rooted path stays rooted, so neither matches a workspace file (#76).
 fn normalize_input(p: &str) -> String {
-    strip_scheme(p).to_lowercase()
+    let path = strip_scheme(p);
+    let root = path.split('/').take_while(|s| s.is_empty()).count().min(2);
+    let kept: Vec<&str> = std::iter::repeat_n("", root)
+        .chain(path.split('/').filter(|s| !s.is_empty() && *s != "."))
+        .collect();
+    kept.join("/").to_lowercase()
 }
 
 // ---------------------------------------------------------------------------
@@ -451,14 +463,15 @@ pub fn resolve_changed_roots(
                 });
                 continue;
             }
-            let ixs = spans.of_file(&normalize_input(&diff_file.path));
+            let key = normalize_input(&diff_file.path);
+            let ixs = spans.of_file(&key);
             if ixs.is_empty() {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched {
                     file: diff_file.path.clone(),
                 });
                 continue;
             }
-            if poisoned.contains(&normalize_input(&diff_file.path)) {
+            if poisoned.contains(&key) {
                 continue;
             }
 
@@ -1682,6 +1695,31 @@ mod tests {
 
     // The #6 resolveSelector-cascade + normalize_display_key unit tests now live
     // in `selector_index::tests` (shared implementation, shared tests).
+
+    // --- #76 normalize_input ----------------------------------------------
+
+    /// #76 T2. `.` segments and non-leading empty segments go; the leading
+    /// empty run (root, UNC) stays, at most 2; `..` is never cancelled.
+    /// Mutation: cancel `..` -> `src/../x.al` becomes `x.al`.
+    #[test]
+    fn normalize_input_drops_dot_and_empty_segments() {
+        for (input, expected) in [
+            ("./src/X.al", "src/x.al"),
+            ("src/./x.al", "src/x.al"),
+            ("src//x.al", "src/x.al"),
+            ("/src/x.al", "/src/x.al"),
+            ("//srv/x.al", "//srv/x.al"),
+            ("../x.al", "../x.al"),
+            ("src/../x.al", "src/../x.al"),
+            ("ws:src\\x.al", "src/x.al"),
+            (".//src/x.al", "src/x.al"),
+            ("///src/x.al", "//src/x.al"),
+            ("src/x.al/", "src/x.al"),
+            (".\\SRC\\x.al", "src/x.al"),
+        ] {
+            assert_eq!(normalize_input(input), expected, "{input}");
+        }
+    }
 
     // --- #12 autoDetectChanged --------------------------------------------
 
