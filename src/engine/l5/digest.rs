@@ -1188,6 +1188,9 @@ fn reconstruct_witness_paths<'i>(
     let mut state_count = 0usize;
     let mut truncated = false;
     let mut incomplete = false;
+    // Only the state and depth limits (#69 D3), set where they fire — not a copy of
+    // `incomplete`, which missing evidence and `terminal-not-found` also set.
+    let mut limit_hit = false;
     let mut depth_exceeded = false;
 
     // Reachability-directed pruning. A node can lie on a witness path to `fact`
@@ -1278,6 +1281,7 @@ fn reconstruct_witness_paths<'i>(
                 Some(format!("maxExpandedStates={MAX_STATES}")),
             ));
             incomplete = true;
+            limit_hit = true;
             break;
         }
         // depth check: arena[ni].depth is the number of hops to this node.
@@ -1419,12 +1423,12 @@ fn reconstruct_witness_paths<'i>(
             Some(format!("maxDepth={MAX_DEPTH}")),
         ));
         incomplete = true;
+        limit_hit = true;
     }
     truncated |= proofs.truncated;
     incomplete |= proofs.incomplete;
+    limit_hit |= proofs.incomplete;
     diagnostics.extend(proofs.diagnostics);
-    // Only the state and depth limits so far (#69 D3).
-    let limit_hit = incomplete;
     if found.is_empty() && proofs.paths.is_empty() && !incomplete {
         // terminal-not-found, over the COMBINED set (#69 D3): the BFS alone
         // finding nothing is normal for a producer-origin fact.
@@ -1586,6 +1590,8 @@ fn reconstruct_witness_paths<'i>(
         projected.push(ProjPath(proj));
     }
 
+    // Spec D3: only a NON-EMPTY path set is "not known complete".
+    let limit_hit = limit_hit && !paths.is_empty();
     WitnessOutcomeExt {
         paths,
         truncated,
@@ -2411,6 +2417,9 @@ fn detail_json(detail: &[(String, String)]) -> String {
 ///     `fact_equivalent`) and `table`'s `temp_state` (read directly in the loop for
 ///     the physical-write filter), plus every other extra field the (currently
 ///     unread-elsewhere) variants carry — over-included defensively.
+///   - `witness_callsite_id`, the temp class (in `extra`) and the `fact_equivalent`
+///     fields — also read by `enumerate_proofs` (#69 D3), which is why equal
+///     identities still have equal witnesses.
 ///   - `detail` (the computed `effect_detail_of` output) — folded into `dedupe_key`'s
 ///     grouping key, so two facts differing only in a detail field must NOT collapse.
 ///
@@ -3105,23 +3114,36 @@ fn digest_one_root<'i>(
             // Find existing in ordered effect_map.
             let existing_pos = effect_index.get(&key).copied();
 
+            // Merge (or, for a new effect, insert against nothing): combine
+            // (path, cond, json) triples, sort shortest-first + JSON tiebreak, dedupe
+            // exact dups by hops-JSON. Conds/jsons travel WITH their paths (#8).
+            // Delegates to `merge_normalize_via_paths`, the SAME helper the
+            // identity-duplicate normalization path above uses, so the two can never
+            // drift apart. ONE call serves both branches (#69 D3), so the
+            // truncation fold below cannot be dropped from only one of them.
+            let (existing_paths, existing_conds, existing_trunc): (
+                &[ProjPath],
+                &[crate::engine::l5::conditionality::EffectConditionality],
+                bool,
+            ) = match existing_pos {
+                Some(pos) => {
+                    let e = &effect_map[pos].1;
+                    (&e.all_paths, &e.all_path_conds, e.had_truncation)
+                }
+                None => (&[], &[], false),
+            };
+            let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
+                existing_paths,
+                existing_conds,
+                existing_trunc,
+                &projected_paths,
+                &path_conds,
+                outcome.truncated || outcome.limit_hit,
+                MAX_PATHS,
+            );
+
             let final_pos = if let Some(pos) = existing_pos {
-                // Merge: combine (path, cond, json) triples, sort shortest-first + JSON
-                // tiebreak, dedupe exact dups by hops-JSON. Conds/jsons travel WITH
-                // their paths (#8). Delegates to `merge_normalize_via_paths`, the SAME
-                // helper the identity-duplicate normalization path above uses, so the
-                // two can never drift apart.
-                let existing = &effect_map[pos].1;
-                let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
-                    &existing.all_paths,
-                    &existing.all_path_conds,
-                    existing.had_truncation,
-                    &projected_paths,
-                    &path_conds,
-                    outcome.truncated || outcome.limit_hit,
-                    MAX_PATHS,
-                );
-                let merged_temp = merge_temp_state(&existing.temp_state, &fact_temp_state);
+                let merged_temp = merge_temp_state(&effect_map[pos].1.temp_state, &fact_temp_state);
                 let acc = &mut effect_map[pos].1;
                 acc.via_paths = via;
                 acc.had_truncation = had_truncation;
@@ -3132,18 +3154,6 @@ fn digest_one_root<'i>(
                     .extend(fact.witness_operation_id.iter().cloned());
                 pos
             } else {
-                // The insert branch shares the merge's projected dedup-and-cap
-                // (#69 D3), so projected twins never show as duplicate viaPaths
-                // nor count toward `MAX_PATHS`.
-                let (via, had_truncation, all_paths, all_path_conds) = merge_normalize_via_paths(
-                    &[],
-                    &[],
-                    false,
-                    &projected_paths,
-                    &path_conds,
-                    outcome.truncated || outcome.limit_hit,
-                    MAX_PATHS,
-                );
                 let pos = effect_map.len();
                 effect_index.insert(key.clone(), pos);
                 effect_map.push((
@@ -4075,8 +4085,11 @@ pub struct WitnessOutcomePub {
 }
 
 /// Owned public version of the internal `FingerprintIndexes`.
-/// Borrowed fields are cloned so the caller doesn't hold a snapshot reference.
-pub struct FingerprintIndexesPub {
+/// The per-routine maps are cloned; the three #69 D3 fields (the solve, the
+/// typed edges, the fact table) are BORROWED from the snapshot — they are the
+/// graph-sized parts, and the proofs' edge/fact indexes must stay the same
+/// allocations the snapshot owns.
+pub struct FingerprintIndexesPub<'a> {
     pub stable_id_to_display: HashMap<String, String>,
     pub routine_display_by_id: HashMap<String, String>,
     pub outgoing_edges: HashMap<String, Vec<SnapshotGraphEdge>>,
@@ -4091,14 +4104,14 @@ pub struct FingerprintIndexesPub {
     /// #69 D3: the snapshot's producer solve, the typed edges its links index
     /// and the facts its states index — so fingerprint's witnesses take the
     /// same proofs digest's do.
-    pub pd_solution: PdArena,
-    pub typed_edges: Vec<SnapshotGraphEdge>,
-    pub capability_facts: Vec<crate::engine::l5::snapshot::SnapshotCapabilityFact>,
+    pub pd_solution: &'a PdArena,
+    pub typed_edges: &'a [SnapshotGraphEdge],
+    pub capability_facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
 }
 
 /// Build the public fingerprint indexes from a `CapabilitySnapshot`.
 /// Mirrors `buildFingerprintIndexes` (indexes.ts) but returns owned data.
-pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIndexesPub {
+pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIndexesPub<'_> {
     let private = build_fingerprint_indexes(snap);
     FingerprintIndexesPub {
         stable_id_to_display: private.stable_id_to_display,
@@ -4134,15 +4147,15 @@ pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIn
             .map(|(k, v)| (k, v.clone()))
             .collect(),
         event_display_by_id: private.event_display_by_id,
-        pd_solution: snap.pd_solution.clone(),
-        typed_edges: snap.typed_edges.clone(),
-        capability_facts: snap.capability_facts.clone(),
+        pd_solution: &snap.pd_solution,
+        typed_edges: &snap.typed_edges,
+        capability_facts: &snap.capability_facts,
     }
 }
 
 /// Adapter: convert a `FingerprintIndexesPub` to a borrowed `FingerprintIndexes`
 /// usable by the internal witness BFS helpers.
-fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
+fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintIndexes<'i> {
     // Build incoming_edges (reverse graph) from outgoing_edges — mirrors what
     // `build_fingerprint_indexes` does from `typed_edges`.  `FingerprintIndexesPub`
     // stores owned `SnapshotGraphEdge` values so we derive `to` from each edge.
@@ -4204,9 +4217,9 @@ fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
             .map(|(k, v)| (k.clone(), v))
             .collect(),
         event_display_by_id: idx.event_display_by_id.clone(),
-        pd: &idx.pd_solution,
-        typed_edges: &idx.typed_edges,
-        capability_facts: &idx.capability_facts,
+        pd: idx.pd_solution,
+        typed_edges: idx.typed_edges,
+        capability_facts: idx.capability_facts,
     }
 }
 
@@ -4217,7 +4230,7 @@ fn pub_idx_as_private(idx: &FingerprintIndexesPub) -> FingerprintIndexes<'_> {
 pub fn reconstruct_witness_paths_pub(
     root_id: &str,
     fact: &crate::engine::l5::snapshot::SnapshotCapabilityFact,
-    idx: &FingerprintIndexesPub,
+    idx: &FingerprintIndexesPub<'_>,
     cap: usize,
 ) -> WitnessOutcomePub {
     let private_idx = pub_idx_as_private(idx);
@@ -5420,6 +5433,37 @@ codeunit 50101 "T7b Temp Classes"
         let idx = build_fingerprint_indexes(&snap);
         let out = enumerate_proofs("R", &f, &idx, HARD_PATH_CAP);
         assert!(out.paths.is_empty(), "{:?}", out.paths);
+    }
+
+    /// The BFS carrier predicate (#69 D3) refuses a raw producer: a direct fact
+    /// whose own temp state is parameter-dependent never terminates the BFS for
+    /// an inherited fact of the same op and (non-temporary) class — it is a
+    /// proof's business. An ordinary known(false) direct fact still does.
+    #[test]
+    fn bfs_carrier_refuses_a_raw_producer() {
+        let pd = insert_fact(
+            "R",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        );
+        let ordinary = insert_fact(
+            "R",
+            "direct",
+            Some("op1"),
+            None,
+            SnapTempState::Known { value: false },
+        );
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs"),
+            SnapTempState::Known { value: false },
+        );
+        assert!(!is_bfs_carrier(&pd, &f));
+        assert!(is_bfs_carrier(&ordinary, &f));
     }
 
     /// A proof may revisit a routine but never a state: `Perm`'s two states

@@ -50,8 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `viaPathsTruncated` now also means a non-empty path set is not known to be complete: a
   state or depth limit cut the witness enumeration (BFS or proofs). Such effects can move
   from `conditional` to `unknown` conditionality, and ordering chains report `capped`
-  (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`) are not folded;
-  they are decided over the proofs and the BFS together.
+  (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`, or a limit hit
+  that found nothing) are not folded; they are decided over the proofs and the BFS together.
 - `FingerprintIndexesPub` gains `pd_solution`, `typed_edges` and `capability_facts`, and
   `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` accepts an inherited key from an
   ordinary direct fact or from the routine's own solve states, no longer a PD→kt rewrite

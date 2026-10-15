@@ -30,7 +30,7 @@ use al_sem::engine::l5::snapshot::{
 // Helpers — minimal builders for hand-built witness inputs.
 // ===========================================================================
 
-fn empty_idx() -> FingerprintIndexesPub {
+fn empty_idx() -> FingerprintIndexesPub<'static> {
     FingerprintIndexesPub {
         stable_id_to_display: HashMap::new(),
         routine_display_by_id: HashMap::new(),
@@ -41,9 +41,9 @@ fn empty_idx() -> FingerprintIndexesPub {
         callsite_by_id: HashMap::new(),
         operation_by_id: HashMap::new(),
         event_display_by_id: HashMap::new(),
-        pd_solution: Default::default(),
-        typed_edges: Vec::new(),
-        capability_facts: Vec::new(),
+        pd_solution: Box::leak(Box::default()),
+        typed_edges: &[],
+        capability_facts: &[],
     }
 }
 

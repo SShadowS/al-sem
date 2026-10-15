@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
+use al_sem::engine::l5::digest::{build_fingerprint_indexes_pub, reconstruct_witness_paths_pub};
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
 use al_sem::engine::l5::snapshot::{
     CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, compose_snapshot,
@@ -458,6 +459,54 @@ fn a2a_temp_call_site_keeps_its_witness() {
             }
         }
     });
+}
+
+/// A2h. `alsem fingerprint` takes the same proofs digest does: through the
+/// fingerprint indexes built from the snapshot, `HelperUiTemp`'s inherited
+/// known-temporary insert has one witness path ending at `HelperUi`'s insert.
+/// Mutations: `build_fingerprint_indexes_pub` hands over an empty solve
+/// (`pd_solution`), or an empty edge / fact table (`typed_edges` /
+/// `capability_facts`) → "no witness path" / index-out-of-bounds panic.
+#[test]
+fn a2h_fingerprint_witnesses_use_the_proofs() {
+    let tmp = write_workspace();
+    let ws = tmp.path();
+    let model_id = compute_gate_model_instance_id(ws).expect("model id");
+    let model = assemble_and_resolve_workspace_program(ws, &model_id, false).expect("model");
+    let snap = compose_snapshot(&model);
+    let idx = build_fingerprint_indexes_pub(&snap);
+    let display: BTreeMap<&str, &str> = snap
+        .identities
+        .stable_ids
+        .iter()
+        .map(String::as_str)
+        .zip(snap.identities.display_names.iter().map(String::as_str))
+        .collect();
+    let fact = snap
+        .capability_facts
+        .iter()
+        .find(|f| {
+            let name = display.get(f.subject.as_str()).copied().unwrap_or("");
+            name.rsplit('.').next() == Some("HelperUiTemp")
+                && f.op == "insert"
+                && matches!(
+                    &f.extra,
+                    Some(SnapCapabilityExtra::Table {
+                        temp_state: Some(SnapTempState::Known { value: true }),
+                        ..
+                    })
+                )
+        })
+        .expect("HelperUiTemp's known-temporary insert fact");
+    let out = reconstruct_witness_paths_pub(&fact.subject, fact, &idx, 256);
+    let diags: Vec<&str> = out.diagnostics.iter().map(|d| d.kind.as_str()).collect();
+    assert_eq!(out.paths.len(), 1, "no witness path ({diags:?})");
+    assert_eq!(out.paths[0].query_hops.len(), 1, "HelperUiTemp→HelperUi");
+    assert!(
+        out.paths[0].terminal_hop.is_some(),
+        "no terminal ({diags:?})"
+    );
+    assert!(!diags.contains(&"terminal-not-found"), "{diags:?}");
 }
 
 fn the_kt_insert<'a>(e: &'a Value, root: &str, f: &mut Vec<String>) -> Option<&'a Value> {
