@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An object without a number now gets a unique object id (#83). Interface and ControlAddIn
   have no number, and a numbered kind whose number does not parse has none either; every
   such object was `…:<Kind>:0`, so two of one kind in one app shared an id. The identity
-  table and the fingerprint object part (both pinned by tests) and every other map keyed by
-  the id kept only one of them, and the contracts carried duplicate ids. The key is now `@` + the folded name,
+  table and every map keyed by the id kept only one of them, the contracts carried duplicate
+  ids, and the fingerprint object part was shared by them (the identity table and the
+  fingerprint are pinned by tests). The key is now `@` + the folded name,
   percent-encoded outside `a-z 0-9` (`…:Interface:@iprocessor`), from every producer: R0, the
   model, the program graph, R1a and the dependency projection
   (`engine::ids::object_key`). Two dependency interfaces without `Id` that declare a method
@@ -32,10 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordinal and the contracts stay `locale_compare`, so a numbered and a numberless object of
   one kind list in a different order in each. The differential harness now fails on two
   object rows with one id. **Limits:** an object with an empty name gets `@` and can still
-  collide; a table whose number does not parse still collides (`encode_table_id`); a
-  dependency object whose name contains `""` gets a different id in the graph than in the
-  model; existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
+  collide; a table whose number does not parse still collides (`encode_table_id`), and d33's
+  object-id to table-id join (`engine/l5/detectors/mod.rs`) no longer matches it
+  (non-compiling input); a dependency object whose logical name contains `""` gets a
+  different id from the graph (`model_object_id`) than from the dependency projection;
+  existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
   Profile, Entitlement) are unchanged.
+- Lookups of an object by type and number (record typing's numeric `SourceTable`, an
+  unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
+  number for number `0` (#83).
+- `alsem graph` gives two dependency objects without a number distinct `al:abi:` node ids
+  (`…/interface/<name>#…`, not `…/interface/0#…`), and an LSP call-hierarchy item for such an
+  object carries its name in the `al-preview:` URI's id segment, not `0` (#83).
 - **`alsem diff` no longer reports a parameter appended to a `local` or `internal` event
   publisher as critical (#236).** For an `[IntegrationEvent]` or `[BusinessEvent]` publisher that
   is `local` or `internal` on both sides, adding parameters at the END is not a break

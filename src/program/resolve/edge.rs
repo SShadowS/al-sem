@@ -66,14 +66,10 @@ pub struct AbiRoutineKey {
 
 impl AbiRoutineKey {
     /// The graph key of this routine's object: its number, or its folded name when
-    /// the ABI gives none (the ABI zero rule, [`crate::engine::ids::abi_object_number`]),
-    /// as `abi_ingest` keys the object node.
+    /// the ABI gives none ([`crate::program::node::ObjKey::from_abi`]), as
+    /// `abi_ingest` keys the object node.
     pub fn object_node_key(&self) -> crate::program::node::ObjKey {
-        use crate::program::node::ObjKey;
-        match crate::engine::ids::abi_object_number(self.object_number) {
-            Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(self.object_name_lc.as_str().into()),
-        }
+        crate::program::node::ObjKey::from_abi(self.object_number, &self.object_name_lc)
     }
 }
 

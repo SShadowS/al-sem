@@ -2105,10 +2105,8 @@ impl<'a> Converter<'a> {
         };
         let impls = implements(&[ObjectKind::Codeunit]);
         let reached = |o: &ObjectNode| {
-            callees
-                .iter()
-                .any(|t| t.object_id == self.model_object_id(&o.id))
-                || dependency.contains(&o.id)
+            let object_id = self.model_object_id(&o.id);
+            callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
         let meta = DispatchMeta {
             interface_name,
