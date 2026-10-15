@@ -3855,6 +3855,8 @@ pub struct R3a3SourceBase {
     pub cones: HashMap<String, ConeResultPub>,
     /// Internal RoutineId → StableRoutineId.
     pub routine_to_stable: HashMap<String, String>,
+    /// The producer solve (#69 D1), internal ids; the snapshot maps it (D2).
+    pub pd_solution: super::pd_solve::ConeArena,
 }
 
 /// Assemble the RAW source-only cone/graph base (mirrors `project_r3a3`'s inline
@@ -3919,15 +3921,16 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     // ⟨C1 Task 3⟩ `RawOnly` — the snapshot/digest/prove derivers read the RAW
     // cone off this base and never touch `ConeOutcome::derived` (see
     // `project_r3a5_cross_app`). Raw bytes and ordering unchanged.
-    let cones = compose_cone_over_graph(
+    let ConeOutcome {
+        cones, pd_solution, ..
+    } = compose_cone_over_graph(
         &graph,
         &nodes,
         &direct_full,
         &direct_coverage,
         &ws.routines,
         ConeOutput::RawOnly,
-    )
-    .cones;
+    );
 
     let routine_to_stable: HashMap<String, String> = ws
         .routines
@@ -3943,6 +3946,7 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
         direct_full,
         cones,
         routine_to_stable,
+        pd_solution,
     }
 }
 

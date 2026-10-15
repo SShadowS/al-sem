@@ -1694,6 +1694,7 @@ mod tests {
             event_declarations: vec![],
             root_classifications: vec![],
             routine_order_frames: None,
+            pd_solution: Default::default(),
         }
     }
 

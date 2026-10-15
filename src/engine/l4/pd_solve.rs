@@ -375,7 +375,59 @@ pub(crate) fn solve(
                 reqs: s.reqs.clone(),
             });
     }
+    census(&arena, &resolved, &names, &reps);
     (arena, resolved)
+}
+
+/// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters. Bytes are the
+/// payload the solve owns: element sizes × lengths plus string and `reqs` heap,
+/// each interned routine name and each shared rep counted ONCE. Container
+/// overhead (hash tables, `Vec` slack) is not modeled.
+fn census(
+    arena: &ConeArena,
+    resolved: &ResolvedByRoutine,
+    names: &HashSet<Arc<str>>,
+    reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
+) {
+    use crate::engine::l5::detector_context::cones_census as cc;
+    use std::mem::size_of;
+    if !cc::enabled() {
+        return;
+    }
+    let entries = resolved.values().map(Vec::len).sum::<usize>();
+    let edge_heap = |e: &TypedOutEdge| {
+        e.to.len()
+            + e.kind.len()
+            + e.callsite.as_ref().map_or(0, String::len)
+            + e.event_id.as_ref().map_or(0, String::len)
+            + e.sort_key.len()
+    };
+    let fact = |f: &CapabilityFact| {
+        size_of::<CapabilityFact>() as u64 + super::cone_census::capability_fact_heap_bytes(f)
+    };
+    let mut bytes = names.iter().map(|n| n.len()).sum::<usize>() as u64;
+    for p in &arena.producers {
+        bytes += (size_of::<Producer>() + p.owner.len() + p.operation_id.len()) as u64;
+        bytes += fact(&p.fact);
+    }
+    for s in &arena.states {
+        // + its slot in `by_routine`.
+        bytes += (size_of::<ConeState>() + size_of::<StateIx>()) as u64;
+        bytes += (s.reqs.len() * size_of::<Req>()) as u64;
+    }
+    for l in &arena.links {
+        bytes += (size_of::<ConeLink>() + edge_heap(&l.edge)) as u64;
+    }
+    for e in resolved.values().flatten() {
+        bytes += (size_of::<ResolvedEntry>() + edge_heap(&e.first_hop)) as u64;
+        bytes += (e.reqs.len() * size_of::<Req>()) as u64;
+    }
+    bytes += reps.values().map(|r| fact(r)).sum::<u64>();
+    cc::add(&cc::PD_PRODUCERS, arena.producers.len() as u64);
+    cc::add(&cc::PD_STATES, arena.states.len() as u64);
+    cc::add(&cc::PD_LINKS, arena.links.len() as u64);
+    cc::add(&cc::PD_ENTRIES, entries as u64);
+    cc::add(&cc::PD_SOLVE_BYTES, bytes);
 }
 
 #[cfg(test)]

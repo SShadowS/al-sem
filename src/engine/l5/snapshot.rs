@@ -622,6 +622,14 @@ impl SnapshotGraphEdge {
         }
     }
 
+    /// The (internal) eventId of an event-dispatch edge.
+    fn event_id(&self) -> Option<&str> {
+        match self {
+            SnapshotGraphEdge::EventDispatch { event_id, .. } => Some(event_id),
+            _ => None,
+        }
+    }
+
     /// Public `from` accessor (R4-F Stage-4 ordering: typedEdge `.from`).
     pub fn edge_from(&self) -> &str {
         self.source_routine()
@@ -825,6 +833,48 @@ pub struct CapabilitySnapshot {
     /// (StableRoutineId → ScopeFrame[]); serialized in sorted-key order with
     /// declaration-ordered frame fields via `RoutineOrderFrames`.
     pub routine_order_frames: Option<RoutineOrderFrames>,
+    /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
+    /// serialized: the serialized snapshot moves only where fact values move.
+    pub pd_solution: PdArena,
+}
+
+/// Index into `PdArena::states`.
+pub type StateIx = usize;
+/// Index into `CapabilitySnapshot::typed_edges` (after its sort and filter).
+pub type EdgeIx = usize;
+/// Stable routine id (the snapshot's routine identity).
+pub type RoutineId = String;
+
+/// #69 D2: the producer solve in snapshot ids. A state says: in `routine`'s
+/// frame, the producer's write has temp state `temp_state` and happens only
+/// under `reqs`.
+#[derive(Debug, Clone, Default)]
+pub struct PdArena {
+    pub states: Vec<StateNode>,
+    /// Each state's incoming links, contiguous: `(callee state, edge)`, in edge
+    /// order. The edge is an out-edge of the state's routine.
+    pub links: Vec<(StateIx, EdgeIx)>,
+    /// Stable routine id → its states (seed included), in state order.
+    pub by_routine: HashMap<RoutineId, Vec<StateIx>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StateNode {
+    /// The producer's `operation_id`.
+    pub producer_operation_id: String,
+    /// Index into `CapabilitySnapshot::capability_facts` of the producer's
+    /// owner-direct fact (its `extra` carries the raw parameter-dependent state).
+    pub producer_fact: usize,
+    pub temp_state: crate::engine::l4::effect_lattice::TempStateKind,
+    pub routine: RoutineId,
+    /// Guard requirements in `routine`'s frame: `(param index, value)`.
+    pub reqs: Vec<(u32, bool)>,
+    /// True only for the seed (the producer's owner, its own frame).
+    pub seed: bool,
+    /// Shortest link-path length to the seed (seed = 0).
+    pub dist: usize,
+    /// Range into `PdArena::links`.
+    pub links: std::ops::Range<usize>,
 }
 
 /// Ordered routine-order-frames map. Entries are pre-sorted by StableRoutineId;
@@ -1060,6 +1110,7 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     let event_declarations = derive_event_declarations(&base);
     let root_classifications = derive_root_classifications(resolved, &base);
     let routine_order_frames = derive_routine_order_frames(&base);
+    let pd_solution = derive_pd_arena(&base, &typed_edges, &capability_facts);
 
     CapabilitySnapshot {
         identities,
@@ -1073,6 +1124,7 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
         event_declarations,
         root_classifications,
         routine_order_frames,
+        pd_solution,
     }
 }
 
@@ -1362,6 +1414,94 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
     }
 
     out.sort_by_key(|e| e.sort_key());
+    out
+}
+
+// ---------------------------------------------------------------------------
+// derivePdArena (#69 D2) — the cone's producer solve rewritten into snapshot
+// ids: routines → StableRoutineId, each link's cone edge → its index in the
+// sorted `typed_edges`, each producer → its owner-direct fact's index.
+// ---------------------------------------------------------------------------
+
+/// Edge identity shared by a cone `TypedOutEdge` and a snapshot edge:
+/// `(kind, stable from, stable to, callsite, event)`.
+type PdEdgeKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str);
+
+fn derive_pd_arena(
+    base: &R3a3SourceBase,
+    typed_edges: &[SnapshotGraphEdge],
+    capability_facts: &[SnapshotCapabilityFact],
+) -> PdArena {
+    use crate::engine::l5::detector_context::cones_census;
+    let cone = &base.pd_solution;
+    if cone.states.is_empty() {
+        return PdArena::default();
+    }
+    let map = &base.routine_to_stable;
+    let edge_ix: HashMap<PdEdgeKey, EdgeIx> = typed_edges
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, e)| {
+            let key = (
+                e.kind_str(),
+                e.source_routine(),
+                e.to_endpoint()?,
+                e.callsite_id().unwrap_or(""),
+                e.event_id().unwrap_or(""),
+            );
+            Some((key, ix))
+        })
+        .collect();
+    // (owner stable id, operation id) → the owner's direct fact.
+    let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
+    for (ix, f) in capability_facts.iter().enumerate() {
+        if let ("direct", Some(op)) = (f.provenance.as_str(), f.witness_operation_id.as_deref()) {
+            direct_fact_ix.entry((f.subject.as_str(), op)).or_insert(ix);
+        }
+    }
+
+    let mut out = PdArena::default();
+    for (ix, s) in cone.states.iter().enumerate() {
+        let producer = &cone.producers[s.producer];
+        let routine = stable_routine_id(&s.routine, map);
+        let owner = stable_routine_id(&producer.owner, map);
+        let producer_fact = *direct_fact_ix
+            .get(&(owner.as_str(), producer.operation_id.as_str()))
+            .expect("a producer is its owner's direct fact");
+        let start = out.links.len();
+        for l in &cone.links[s.links.clone()] {
+            let to = stable_routine_id(&l.edge.to, map);
+            let event = match l.edge.kind.as_str() {
+                "event-dispatch" => l.edge.event_id.as_deref().unwrap_or(""),
+                _ => "",
+            };
+            let key = (
+                l.edge.kind.as_str(),
+                routine.as_str(),
+                to.as_str(),
+                l.edge.callsite.as_deref().unwrap_or(""),
+                event,
+            );
+            match edge_ix.get(&key) {
+                Some(&e) => out.links.push((l.callee_state, e)),
+                None => {
+                    debug_assert!(false, "pd arena: cone edge {key:?} has no snapshot edge");
+                    cones_census::add_gated(&cones_census::PD_EDGE_UNMAPPED, 1);
+                }
+            }
+        }
+        out.by_routine.entry(routine.clone()).or_default().push(ix);
+        out.states.push(StateNode {
+            producer_operation_id: producer.operation_id.clone(),
+            producer_fact,
+            temp_state: s.t.to_kind(),
+            routine,
+            reqs: s.reqs.clone(),
+            seed: s.seed,
+            dist: s.dist,
+            links: start..out.links.len(),
+        });
+    }
     out
 }
 

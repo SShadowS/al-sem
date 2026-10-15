@@ -1668,6 +1668,7 @@ mod tests {
             event_declarations: Vec::new(),
             root_classifications: Vec::new(),
             routine_order_frames: None,
+            pd_solution: Default::default(),
         }
     }
 

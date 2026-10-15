@@ -6,6 +6,7 @@ mod regen;
 mod temp_state_probe;
 
 mod r3_temp_class_parity;
+mod r3_temp_class_parity_arena;
 
 mod r3a1_differential;
 mod r3a1_oracles;

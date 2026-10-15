@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
+  states and links over the snapshot's typed edges, in stable routine ids (#69 D2).
+  `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries and bytes,
+  and the solve links that found no snapshot edge.
+- A5 oracle: cone/L4 temp-class parity on a matched graph, per producer and reduced
+  (`tests/r3/r3_temp_class_parity*.rs`), plus a check that every arena link names the
+  snapshot edge of its hop.
 - `scripts/sweep-builds [--dry-run] [--days N]`: deletes Rust build output not used for N
   days (default 7) and output from toolchains no longer installed, in the main checkout and
   every `al-sem-issue-*` worktree, through `cargo-sweep` (`cargo install cargo-sweep`). It

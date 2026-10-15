@@ -2,7 +2,7 @@
 //! (`cli_digest_temp_state`, the digest acceptance matrix) and, from #69 Task 2,
 //! the `r3` umbrella (`r3_temp_class_parity`, the cone/L4 class-parity oracle A5).
 //!
-//! Every fixture routine is named in the #69 design spec's acceptance matrix
+//! Every fixture routine but `TwiceUi` is named in the #69 design spec's acceptance matrix
 //! (`docs/superpowers/specs/2026-10-14-issue-69-digest-temp-state-coherence-design.md`).
 //! `// @marker` comments name call sites the tests locate by LINE.
 //!
@@ -128,6 +128,14 @@ codeunit 50301 "Probe Writer"
     procedure ViaForwardUiReal()
     var Row: Record "Probe Row";
     begin ForwardUi(Row); end;
+
+    // Not in the acceptance matrix: two unguarded call sites into one callee
+    // reach ONE solve state through two links (#69 D2 arena link identity).
+    procedure TwiceUi(var X: Record "Probe Row")
+    begin
+        HelperUi(X);
+        HelperUi(X);
+    end;
 
     procedure CondTwice(var X: Record "Probe Row"; Flag: Boolean)
     begin
