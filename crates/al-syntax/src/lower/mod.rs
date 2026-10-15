@@ -216,14 +216,19 @@ fn lower_object(
     // `dataset_ctx` starts `false` (Task 1, dataitem-receivers plan) — it only ever
     // becomes `true` while descending a report/report-extension `dataset` section, and
     // is force-reset to `false` on entering `requestpage` (REQUESTPAGE ISOLATION).
+    let cond_syms = preproc_condition_symbols(node, source);
     let mut routine_nodes = Vec::new();
+    // Entries still pending at the object's end dangle and attach to nothing.
     collect_routines(
         node.named_children(),
         None,
         None,
         false,
         &[],
+        Vec::new(),
+        &cond_syms,
         source,
+        issues,
         &mut routine_nodes,
     );
     // A `#if`-split header yields one routine per arm (see `header_arms`).
@@ -233,7 +238,14 @@ fn lower_object(
         for arm in arms {
             routines.push(lower_routine(
                 r,
-                attr_items.clone(),
+                // ponytail: one copy per node, bare, until the per-arm guard filter and
+                // the (node, argument selection) dedup land (issue #80, Task 3).
+                attr_items
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, e)| attr_items[..*i].iter().all(|o| o.node.id() != e.node.id()))
+                    .map(|(_, e)| e.node)
+                    .collect(),
                 di_table.clone(),
                 member,
                 in_dataset_modify_context,
@@ -781,13 +793,35 @@ fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::Obje
     }
 }
 
-/// DFS collecting `(routine, attribute items, enclosing-dataitem-source-table,
-/// enclosing-member, in-dataset-modify-context)` 5-tuples. AL has no nested routines, so
-/// we do not descend into a routine once found. `attribute_item` nodes are SIBLINGS
-/// preceding the routine (grammar v2+); accumulate them and attach to the next routine,
-/// resetting on any other node. When the walk crosses into a report `dataitem(Name;
-/// "Source Table")`, the (innermost) dataitem's source table is threaded down so a
-/// dataitem trigger gets its implicit-`Rec` type.
+/// DFS collecting `(routine, pending attributes, enclosing-dataitem-source-table,
+/// enclosing-member, in-dataset-modify-context, build context)` tuples. AL has no nested
+/// routines, so we do not descend into a routine once found. When the walk crosses into
+/// a report `dataitem(Name; "Source Table")`, the (innermost) dataitem's source table is
+/// threaded down so a dataitem trigger gets its implicit-`Rec` type.
+///
+/// **Attributes (issue #80).** `attribute_item` nodes are SIBLINGS preceding the
+/// routine (grammar v2+). Each one waits in `pending` as a [`PendingAttr`]: the node and
+/// its GUARD, the build context under which it still waits (its `ctx`, plus every `#if`
+/// path it crossed; none when `ctx` contradicts itself, which no build reaches). The
+/// next routine takes every pending entry, sorted by start byte. The run survives:
+/// - the grammar's `extras` (`grammar.js:539-547`: comments, `#pragma`,
+///   `#region`/`#endregion`, `#define`/`#undef`), which cannot hold a routine;
+/// - a single-chain `#if` wrapper (one `#if` … `#endif`). Its arms are walked exactly
+///   as before (a live arm under `ctx` ∪ its symbols). An entry enters arm `k` when
+///   that arm is live under the entry's guard and its symbols are `consistent` with
+///   it (the join becomes the guard), and leaves the wrapper unconsumed by the
+///   no-arm-taken path (`PreprocChain::falls_through`) on the same terms. After the
+///   wrapper, `pending` is every arm's leftovers then the fall-through entries, settled
+///   by [`settle_pending`]: guards are projected onto the symbols a later condition or
+///   the attribute's own argument groups mention, exact duplicates are removed, and an
+///   attribute with more than [`PENDING_PATH_CAP`] paths is dropped with ONE
+///   `SyntaxIssue`.
+///
+/// Any other node (a section, a field, a `var` section, a multi-chain wrapper, …)
+/// ends the run: `pending` is cleared, and the node is walked with an empty run whose
+/// leftovers are discarded, so an attribute never leaves the body it is in. The
+/// function returns the entries still pending after `children`.
+/// `cond_syms` is [`preproc_condition_symbols`] of the whole object.
 ///
 /// `dataset_ctx` (Task 1, dataitem-receivers plan) tracks whether the walk is currently
 /// inside a report/report-extension `dataset` section: `true` on entering
@@ -808,20 +842,35 @@ fn collect_routines<'t>(
     member: Option<RawNode<'t>>,
     dataset_ctx: bool,
     ctx: &[(String, bool)],
+    mut pending: Vec<PendingAttr<'t>>,
+    cond_syms: &[(usize, String)],
     source: &str,
+    issues: &mut Vec<crate::ir::SyntaxIssue>,
     out: &mut Vec<(
         RawNode<'t>,
-        Vec<RawNode<'t>>,
+        Vec<PendingAttr<'t>>,
         Option<String>,
         Option<RawNode<'t>>,
         bool,
         Vec<(String, bool)>,
     )>,
-) {
-    let mut pending: Vec<RawNode<'t>> = Vec::new();
+) -> Vec<PendingAttr<'t>> {
     for child in children {
         match child.kind() {
-            RawKind::AttributeItem => pending.push(child),
+            RawKind::AttributeItem => {
+                if let Some(guard) = consistent(&[], ctx) {
+                    pending.push(PendingAttr { node: child, guard });
+                }
+            }
+            // The grammar's `extras` (`grammar.js:539-547`) may sit anywhere and can
+            // hold no routine, so they do not end an attribute run (#80).
+            RawKind::Comment
+            | RawKind::MultilineComment
+            | RawKind::Pragma
+            | RawKind::PreprocRegion
+            | RawKind::PreprocEndregion
+            | RawKind::PreprocDefine
+            | RawKind::PreprocUndef => {}
             RawKind::Procedure
             | RawKind::TriggerDeclaration
             | RawKind::InterfaceProcedure
@@ -874,6 +923,8 @@ fn collect_routines<'t>(
                 // dataitem-map fallback a context that does not exist.
                 let in_dataset_modify_context =
                     dataset_ctx && member.is_some_and(|m| m.kind() == RawKind::ModifyModification);
+                // Arms and fall-through return entries out of source order.
+                pending.sort_by_key(|e| e.node.byte_range().start);
                 out.push((
                     child,
                     std::mem::take(&mut pending),
@@ -900,7 +951,10 @@ fn collect_routines<'t>(
                     Some(child),
                     true,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -912,7 +966,10 @@ fn collect_routines<'t>(
                     member,
                     true,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -930,7 +987,10 @@ fn collect_routines<'t>(
                     member,
                     false,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -957,30 +1017,72 @@ fn collect_routines<'t>(
                     Some(child),
                     dataset_ctx,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
             // An object-level `#if` (`#if X procedure Foo(..) .. #else procedure
             // Foo(..) .. #endif`): each live branch's routines exist under that
-            // branch's symbols.
+            // branch's symbols. Pending attributes cross a single-chain wrapper by
+            // guard (see the doc above); any other wrapper ends the run.
             _ if is_preproc_wrapper(child) => {
-                pending.clear();
-                for (syms, live, branch) in preproc_branches(child, source, ctx) {
-                    if live {
-                        let inner: Vec<(String, bool)> =
-                            ctx.iter().cloned().chain(syms).collect();
-                        collect_routines(
-                            branch,
-                            dataitem_table,
-                            member,
-                            dataset_ctx,
-                            &inner,
-                            source,
-                            out,
-                        );
+                let single = is_single_chain(child);
+                let incoming = if single {
+                    std::mem::take(&mut pending)
+                } else {
+                    pending.clear();
+                    Vec::new()
+                };
+                // Each entry's own view of the chain: liveness under its guard.
+                let chains: Vec<PreprocChain> = incoming
+                    .iter()
+                    .map(|e| preproc_chain(child, source, &e.guard))
+                    .collect();
+                let branches = preproc_branches(child, source, ctx);
+                let last = branches.len() - 1;
+                for (k, (syms, live, branch)) in branches.into_iter().enumerate() {
+                    if !live {
+                        continue;
+                    }
+                    // Entry 0 (before `#if`) and the last group (after `#endif`) are
+                    // no arm; for a single chain both are empty (ledger P16).
+                    let arm = single && k != 0 && k != last;
+                    let admitted = if arm {
+                        incoming
+                            .iter()
+                            .zip(&chains)
+                            .filter_map(|(e, c)| admit(e, &c.branches[k]))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let inner: Vec<(String, bool)> = ctx.iter().cloned().chain(syms).collect();
+                    let left = collect_routines(
+                        branch,
+                        dataitem_table,
+                        member,
+                        dataset_ctx,
+                        &inner,
+                        admitted,
+                        cond_syms,
+                        source,
+                        issues,
+                        out,
+                    );
+                    if arm {
+                        pending.extend(left);
                     }
                 }
+                pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
+                    Some(PendingAttr {
+                        guard: consistent(&e.guard, &c.falls_through?)?,
+                        node: e.node,
+                    })
+                }));
+                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
             }
             _ => {
                 pending.clear();
@@ -1002,12 +1104,132 @@ fn collect_routines<'t>(
                     child_member,
                     dataset_ctx,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
         }
     }
+    pending
+}
+
+/// One attribute waiting for its routine (`collect_routines`), and its guard: the
+/// build context, projected by [`settle_pending`], under which it still waits.
+#[derive(Clone)]
+struct PendingAttr<'t> {
+    node: RawNode<'t>,
+    guard: Syms,
+}
+
+/// More distinct guards than this for one pending attribute: it is dropped, with a
+/// `SyntaxIssue` (see [`settle_pending`]).
+const PENDING_PATH_CAP: usize = 64;
+
+/// A wrapper with exactly one `#if` … `#endif` chain, the only shape an attribute
+/// crosses (ledger P16: every wrapper that can hold an attribute has it).
+fn is_single_chain(node: RawNode) -> bool {
+    let count = |k| {
+        node.named_children()
+            .iter()
+            .filter(|c| c.kind() == k)
+            .count()
+    };
+    count(RawKind::PreprocIf) == 1 && count(RawKind::PreprocEndif) == 1
+}
+
+/// Entry `e` admitted to an arm `(syms, live, _)` of its own chain view: the arm is
+/// live under `e`'s guard and its symbols agree with it; the join is the new guard.
+fn admit<'t>(
+    e: &PendingAttr<'t>,
+    (syms, live, _): &(Syms, bool, Vec<RawNode<'t>>),
+) -> Option<PendingAttr<'t>> {
+    if !live {
+        return None;
+    }
+    Some(PendingAttr {
+        node: e.node,
+        guard: consistent(&e.guard, syms)?,
+    })
+}
+
+/// Settle `pending` after a wrapper ending at byte `end`:
+/// 1. **Project** each guard onto the symbols that can still matter: those a
+///    `#if`/`#elif` condition starting at or after `end` mentions, or a condition
+///    inside the attribute itself (its argument groups). Nothing else reads a guard,
+///    so dropping the other literals changes no attachment and no reading, and keeps
+///    `pending` small (40 unrelated pragma-only wrappers leave one entry).
+/// 2. Remove exact duplicates (same node, same guard as a set), keeping the first.
+/// 3. **Cap**: an attribute with more than [`PENDING_PATH_CAP`] guards left is dropped
+///    with one `SyntaxIssue` at the attribute, never attached under a wrong guard.
+fn settle_pending(
+    pending: &mut Vec<PendingAttr>,
+    end: usize,
+    cond_syms: &[(usize, String)],
+    issues: &mut Vec<crate::ir::SyntaxIssue>,
+) {
+    let later = &cond_syms[cond_syms.partition_point(|(b, _)| *b < end)..];
+    for e in pending.iter_mut() {
+        let own = e.node.byte_range();
+        e.guard.retain(|(s, _)| {
+            later.iter().any(|(_, t)| t == s)
+                || cond_syms.iter().any(|(b, t)| own.contains(b) && t == s)
+        });
+        e.guard.sort();
+    }
+    let mut seen: Vec<(usize, Syms)> = Vec::new();
+    pending.retain(|e| {
+        let key = (e.node.id(), e.guard.clone());
+        let new = !seen.contains(&key);
+        if new {
+            seen.push(key);
+        }
+        new
+    });
+    let mut over: Vec<usize> = Vec::new();
+    for e in pending.iter() {
+        let id = e.node.id();
+        let paths = seen.iter().filter(|(n, _)| *n == id).count();
+        if paths > PENDING_PATH_CAP && !over.contains(&id) {
+            over.push(id);
+            issues.push(crate::ir::SyntaxIssue {
+                message: format!(
+                    "attribute reaches its routine through more than {PENDING_PATH_CAP} distinct `#if` paths; not attached"
+                ),
+                origin: origin_of(e.node),
+            });
+        }
+    }
+    pending.retain(|e| !over.contains(&e.node.id()));
+}
+
+/// Every `(start byte, symbol)` that a `#if`/`#elif` condition anywhere under
+/// `node` mentions (split headers and argument groups included), in byte order.
+/// Iterative: it walks routine bodies, whose expression trees can be deep.
+fn preproc_condition_symbols(node: RawNode, source: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    // Cheap pre-check: most objects have no `#if` at all.
+    if !node.text(source).contains("#if") {
+        return out;
+    }
+    let mut stack = vec![(node, false)];
+    while let Some((n, in_cond)) = stack.pop() {
+        if in_cond && n.kind() == RawKind::Identifier {
+            out.push((n.byte_range().start, n.text(source).trim().to_string()));
+            continue;
+        }
+        let cond = matches!(n.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
+            .then(|| n.field(FieldName::Condition))
+            .flatten()
+            .map(|c| c.id());
+        for c in n.named_children() {
+            stack.push((c, in_cond || Some(c.id()) == cond));
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The unquoted source-table name of a `report_dataitem(Name; "Source Table")` node
@@ -1158,9 +1380,24 @@ fn preproc_branches<'t>(
     source: &str,
     ctx: &[(String, bool)],
 ) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
+    preproc_chain(node, source, ctx).branches
+}
+
+/// [`preproc_branches`] plus the implicit "no arm taken" path of the chain.
+struct PreprocChain<'t> {
+    branches: Vec<(Syms, bool, Vec<RawNode<'t>>)>,
+    /// The symbols of the build that takes no arm (every `#if`/`#elif` condition
+    /// false): `Some` only when the chain has no `#else` and `ctx` decides no arm
+    /// true. Read for the LAST chain of the wrapper (a single-chain wrapper has one).
+    falls_through: Option<Syms>,
+}
+
+fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) -> PreprocChain<'t> {
     let mut out = vec![(Vec::new(), true, Vec::new())];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
+    let mut has_else = false;
+    let mut falls_through = None;
     for c in node.named_children() {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif => {
@@ -1179,6 +1416,7 @@ fn preproc_branches<'t>(
                 out.push((syms, live, Vec::new()));
             }
             RawKind::PreprocElse => {
+                has_else = true;
                 let mut syms = Vec::new();
                 for e in &earlier {
                     assume_preproc(*e, false, source, &mut syms);
@@ -1186,14 +1424,25 @@ fn preproc_branches<'t>(
                 out.push((syms, !taken, Vec::new()));
             }
             RawKind::PreprocEndif => {
+                falls_through = (!has_else && !taken).then(|| {
+                    let mut syms = Vec::new();
+                    for e in &earlier {
+                        assume_preproc(*e, false, source, &mut syms);
+                    }
+                    syms
+                });
                 earlier.clear();
                 taken = false;
+                has_else = false;
                 out.push((Vec::new(), true, Vec::new()));
             }
             _ => out.last_mut().expect("never empty").2.push(c),
         }
     }
-    out
+    PreprocChain {
+        branches: out,
+        falls_through,
+    }
 }
 
 /// The items of an `#if` group inside a POSITIONAL delimited list (grammar `main`

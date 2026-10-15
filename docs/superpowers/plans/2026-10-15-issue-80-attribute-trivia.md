@@ -131,16 +131,21 @@ temporary `attr_items.iter().map(|e| e.node)` until Task 3). Tests (step 6): A1 
 (Task 1 Step 3, moved here with its first reader). Produces `PendingAttr`,
 `PENDING_PATH_CAP`, the new `collect_routines` signature and output tuple.
 
-- [ ] **Step 1:** Run the task's tests and confirm the `red.md` failures.
-- [ ] **Step 2:** Make `pending: Vec<PendingAttr<'t>>`. `AttributeItem` pushes
+- [x] **Step 1:** Run the task's tests and confirm the `red.md` failures.
+- [x] **Step 2:** Make `pending: Vec<PendingAttr<'t>>`. `AttributeItem` pushes
   `PendingAttr { node: child, guard: ctx.to_vec() }`. Add the keep-set arm
   `RawKind::Comment | RawKind::MultilineComment | RawKind::Pragma | RawKind::PreprocRegion | RawKind::PreprocEndregion | RawKind::PreprocDefine | RawKind::PreprocUndef => {}`,
   with a comment citing `grammar.js:539-547` (the grammar's `extras`). The routine arm pushes the
   entries sorted by `node.start_byte()` (stable).
-- [ ] **Step 3:** Make `collect_routines` return the entries still pending at its end. Every `_`
+  *Done note:* the guard is `consistent(&[], ctx)` (ctx without duplicate literals), and the
+  attribute is not pushed when that is `None`. Inside an arm `ctx` is the outer ctx ∪ arm syms, so
+  this is the Design's "the arm's own attributes enter with `consistent(ctx, arm_syms)`, or
+  nothing". `PendingAttr` derives only `Clone`: `RawNode` has no `PartialEq`, so the dedup
+  compares `node.id()`.
+- [x] **Step 3:** Make `collect_routines` return the entries still pending at its end. Every `_`
   recursion and every section arm passes an EMPTY pending list and ignores the result, exactly as
   today.
-- [ ] **Step 4:** The wrapper arm, for `is_preproc_wrapper(child)` with exactly one `PreprocIf` and one
+- [x] **Step 4:** The wrapper arm, for `is_preproc_wrapper(child)` with exactly one `PreprocIf` and one
   `PreprocEndif` among its named children (otherwise clear and recurse as today). Walk each live arm
   of `preproc_chain(child, source, ctx)` once, with `ctx ∪ arm_syms` for routine collection, as today.
   The arm's input entries are:
@@ -152,21 +157,27 @@ temporary `attr_items.iter().map(|e| e.node)` until Task 3). Tests (step 6): A1 
   Skip entry 0 and the after-`#endif` group (never walked). After the wrapper,
   `pending` = the arm leftovers, plus each incoming entry whose own chain has `falls_through:
   Some(f)` and `consistent(&e.guard, &f)` is `Some`, with that join as its guard.
-- [ ] **Step 5:** Projection. Right after the wrapper, with `end = child.end_byte()`, keep a literal
+- [x] **Step 5:** Projection. Right after the wrapper, with `end = child.end_byte()`, keep a literal
   `(s, v)` of an entry's guard only if `s` is in `cond_syms` at some `start_byte >= end`, or `s` is
   mentioned by a condition inside `e.node`'s own byte range (also from `cond_syms`). Then remove
   exact duplicates `(node, guard)` (compare the guard as a sorted set).
-- [ ] **Step 6:** Cap. If any node has more than `PENDING_PATH_CAP` entries, remove all of that node's
+- [x] **Step 6:** Cap. If any node has more than `PENDING_PATH_CAP` entries, remove all of that node's
   entries and push one
   `SyntaxIssue { message: "attribute reaches its routine through more than 64 distinct `#if` paths; not attached".into(), origin: origin_of(node) }`
   per node, never per path.
-- [ ] **Step 7:** Rewrite the doc comment of `collect_routines`: the keep-set, the guarded path flow,
+- [x] **Step 7:** Rewrite the doc comment of `collect_routines`: the keep-set, the guarded path flow,
   projection and the cap (R1-08).
-- [ ] **Step 8:** The task's tests pass. All `lower::tests`, `--test l2_ir` and `--test
+- [x] **Step 8:** The task's tests pass. All `lower::tests`, `--test l2_ir` and `--test
   program_resolve_harness` stay green.
-- [ ] **Step 9:** Discrimination proofs with each row's mutation: A1-A5, A10 (delete the keep-set
+  *Done note:* A6's `MixedBefore` needs a dedup in Task 2. `CLEAN25` is read again later in the
+  same test object (`PragmaInIf`), so projection keeps both exact paths, and the routine receives
+  `[Scope]` twice. The temporary node map in `lower_object` therefore keeps ONE copy per attribute
+  node. That stands in for Task 3's (node, selection) dedup, which replaces it. As a side effect,
+  A9 and A23 already pass in Task 2. Task 3 still owns their proofs.
+- [x] **Step 9:** Discrimination proofs with each row's mutation: A1-A5, A10 (delete the keep-set
   arm), A2 (remove `MultilineComment`), A3 (remove `Pragma`; separately `PreprocRegion`), A6 (a) and
   (b), A7, A7b, A8 (a)(b)(c), A11 (a)(b), A13, A16, A17, A21, A22 (a)(b). Record each.
+  *Done note:* recorded in `scratchpad/80/t2.md` (the orchestrator copies them into the ledger).
 - [ ] **Step 10:** rustfmt, `check-diff`, then commit:
   `fix(al-syntax): attributes survive comments, pragmas and #if lines before their routine (#80)`.
 
