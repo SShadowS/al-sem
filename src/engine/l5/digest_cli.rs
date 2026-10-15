@@ -98,8 +98,10 @@ fn strip_scheme(p: &str) -> String {
 
 /// Normalize an input path for comparison: strip scheme, forward-slash, a
 /// lexical clean-up, lowercase. The clean-up drops every `.` segment and every
-/// empty segment except the leading empty run (a root `/` or UNC `//`, at most
-/// 2), so `./src/x.al`, `src/./x.al` and `src//x.al` all key as `src/x.al`.
+/// empty segment except the leading empty run of the raw split (at most 2), so
+/// `./src/x.al`, `src/./x.al` and `src//x.al` all key as `src/x.al`, while
+/// `/src/x.al` and `//srv/x.al` keep their `/` or `//` root. A path made only of
+/// slashes keys as `/`, which names no file.
 /// `..` is never cancelled (a symlinked `link/..` need not be the parent), and
 /// a rooted path stays rooted, so neither matches a workspace file (#76).
 fn normalize_input(p: &str) -> String {
@@ -461,14 +463,15 @@ pub fn resolve_changed_roots(
                 });
                 continue;
             }
-            let ixs = spans.of_file(&normalize_input(&diff_file.path));
+            let key = normalize_input(&diff_file.path);
+            let ixs = spans.of_file(&key);
             if ixs.is_empty() {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched {
                     file: diff_file.path.clone(),
                 });
                 continue;
             }
-            if poisoned.contains(&normalize_input(&diff_file.path)) {
+            if poisoned.contains(&key) {
                 continue;
             }
 
