@@ -715,10 +715,14 @@ fn app_slug(apps: &AppRegistry, app: AppRef) -> Option<String> {
     apps.try_resolve(app).map(|id| sanitize_slug(&id.name))
 }
 
+/// An object's key segment. A numbered object keeps its number. A numberless one is
+/// keyed by the engine's object key (`@` + the percent-encoded folded name,
+/// `engine::ids::object_key`), not a slug: the slug is lossy (`I Foo` and `I-Foo` both
+/// slug to `i-foo`), so two objects could share a node id (#83).
 fn obj_key_str(key: &ObjKey) -> String {
     match key {
         ObjKey::Id(n) => n.to_string(),
-        ObjKey::Name(s) => sanitize_slug(s),
+        ObjKey::Name(s) => crate::engine::ids::object_key(None, s),
     }
 }
 
@@ -1540,7 +1544,15 @@ mod tests {
         let one = abi_id_str(&key(0, "ifoo"), &apps);
         let two = abi_id_str(&key(0, "ibaz"), &apps);
         assert_ne!(one, two, "two numberless objects must not share an id");
-        assert_eq!(one, "al:abi:dep/interface/ifoo#bar/0");
+        assert_eq!(one, "al:abi:dep/interface/@ifoo#bar/0");
+        // Names a slug would merge (punctuation runs, non-ASCII letters) stay apart.
+        for (a_name, b_name) in [("i foo", "i-foo"), ("i foo", "i_foo"), ("øx", "åx")] {
+            assert_ne!(
+                abi_id_str(&key(0, a_name), &apps),
+                abi_id_str(&key(0, b_name), &apps),
+                "{a_name:?} and {b_name:?} must not share an id"
+            );
+        }
         assert_eq!(
             abi_id_str(&key(50100, ""), &apps),
             "al:abi:dep/interface/50100#bar/0"

@@ -256,9 +256,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lookups of an object by type and number (record typing's numeric `SourceTable`, an
   unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
   number for number `0` (#83).
-- `alsem graph` gives two dependency objects without a number distinct `al:abi:` node ids
-  (`…/interface/<name>#…`, not `…/interface/0#…`), and an LSP call-hierarchy item for such an
-  object carries its name in the `al-preview:` URI's id segment, not `0` (#83).
+- `aldump --graphify-export` keys an object without a number by the engine's object key in
+  its `al:obj:`, `al:rtn:` and `al:abi:` node ids (`…/interface/@i%20foo#…`). Before, a
+  dependency object's `al:abi:` id carried `0`, and the other ids carried a lossy slug, so
+  `I Foo` and `I-Foo` (or two dependency interfaces with a same-named method) shared a node.
+  An LSP call-hierarchy item for such a dependency object carries its folded name in the
+  `al-preview:` URI's id segment, not `0` (#83).
 - `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
   `could not compute modelInstanceId`), as every gate-backed command does for that case; before,
   it exported the graph with an empty app id and exited 0 (#73). A missing or unparseable
