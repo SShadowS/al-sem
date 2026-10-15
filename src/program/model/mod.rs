@@ -38,8 +38,7 @@ pub fn model_object_id(graph: &ProgramGraph, id: &ObjectNodeId) -> String {
     let guid = &graph.apps.resolve(id.app).guid;
     let ty = crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Unknown");
     let key = match &id.key {
-        // The name is ignored when the number is `Some`.
-        ObjKey::Id(n) => object_key(Some(*n), ""),
+        ObjKey::Id(n) => n.to_string(),
         ObjKey::Name(n) => object_key(
             None,
             &crate::program::body::scope::unescape_al_identifier(n),

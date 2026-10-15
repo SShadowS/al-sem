@@ -776,7 +776,7 @@ fn abi_id_str(key: &AbiRoutineKey, apps: &AppRegistry) -> String {
     format!(
         "al:abi:{app}/{}/{}#{}/{}",
         sanitize_slug(&key.object_type),
-        key.object_number,
+        obj_key_str(&key.object_node_key()),
         sanitize_slug(&key.routine_name_lc),
         key.params_count
     )
@@ -1516,5 +1516,34 @@ mod tests {
                 "may_fire key must be OMITTED (skip_serializing_if), not null: {v}"
             );
         }
+    }
+
+    /// #83: a dependency object without a number (an Interface: the ABI gives no
+    /// `Id`, stored as 0) is keyed by its name, so two such objects get two ids.
+    /// A numbered key keeps its number.
+    #[test]
+    fn abi_id_str_keys_a_numberless_object_by_name() {
+        use crate::program::resolve::edge::{AbiEventKind, AbiRoutineKind};
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&app_id("Dep"));
+        let key = |number: i64, name: &str| AbiRoutineKey {
+            app: a,
+            object_type: "interface".into(),
+            object_number: number,
+            object_name_lc: name.into(),
+            routine_name_lc: "bar".into(),
+            params_count: 0,
+            param_type_fp: 0,
+            routine_kind: AbiRoutineKind::Procedure,
+            event_kind: AbiEventKind::None,
+        };
+        let one = abi_id_str(&key(0, "ifoo"), &apps);
+        let two = abi_id_str(&key(0, "ibaz"), &apps);
+        assert_ne!(one, two, "two numberless objects must not share an id");
+        assert_eq!(one, "al:abi:dep/interface/ifoo#bar/0");
+        assert_eq!(
+            abi_id_str(&key(50100, ""), &apps),
+            "al:abi:dep/interface/50100#bar/0"
+        );
     }
 }

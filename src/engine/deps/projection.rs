@@ -213,9 +213,11 @@ fn abi_routine_to_routine(
         // Always `None`: a dependency ABI exposes procedures and event
         // publishers/subscribers, never member triggers, and it carries no member
         // wrapper to name one with. The conditional append in
-        // `encode_canonical_routine_key` therefore leaves every dep-side id
-        // byte-identical, which is what keeps the cross-app join symmetric with
-        // the source side by construction rather than by coincidence.
+        // `encode_canonical_routine_key` therefore appends nothing to a dep-side
+        // id, which is what keeps the cross-app join symmetric with the source
+        // side by construction rather than by coincidence. (The ids of a
+        // NUMBERED dep object are byte-identical to before; a numberless one's
+        // moved on purpose, #83.)
         enclosing_member: None,
     };
 
@@ -230,8 +232,9 @@ fn abi_routine_to_routine(
 
     let stable_object_id = to_stable_object_id(object_id);
     // `None` for the same reason as `canonical.enclosing_member` above — a dep ABI
-    // has no member triggers — so every dep-side STABLE id is byte-identical too and
-    // the cross-app stable-id join stays symmetric by construction.
+    // has no member triggers — so nothing is appended to a dep-side STABLE id either
+    // (byte-identical for a numbered object; a numberless one's moved on purpose,
+    // #83) and the cross-app stable-id join stays symmetric by construction.
     let stable_routine_id =
         ids::to_stable_routine_id_from_parts(&stable_object_id, &normalized_hash, None);
 

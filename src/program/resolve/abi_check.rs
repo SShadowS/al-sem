@@ -25,7 +25,7 @@ use crate::engine::deps::symbol_reference::{
     AbiEventKind as SrAbiEventKind, AbiRoutine, SymbolReferenceAbi,
 };
 use crate::program::abi_ingest::object_kind_from_abi_type;
-use crate::program::node::AppRef;
+use crate::program::node::{AppRef, ObjKey};
 use crate::program::resolve::edge::{
     AbiEventKind, AbiRoutineKey, AbiRoutineKind, Edge, RouteTarget,
 };
@@ -100,9 +100,9 @@ impl RawAbiIndex {
                 // Same key convention as ingest_abi / make_routine_route:
                 // non-zero id → (number, ""); name-only → (0, lowercase_name).
                 let (object_number, object_name_lc) =
-                    match crate::engine::ids::abi_object_number(obj.object_number) {
-                        Some(n) => (n, String::new()),
-                        None => (0i64, obj.name.fold_identifier()),
+                    match ObjKey::from_abi(obj.object_number, &obj.name.fold_identifier()) {
+                        ObjKey::Id(n) => (n, String::new()),
+                        ObjKey::Name(s) => (0i64, s.to_string()),
                     };
 
                 for routine in &obj.routines {
@@ -356,7 +356,6 @@ pub fn abi_ingestion_integrity_from_graph(
     graph: &crate::program::graph::ProgramGraph,
     raw_abi_index: &RawAbiIndex,
 ) -> AbiIntegrityReport {
-    use crate::program::node::ObjKey;
     use crate::program::resolve::edge::{AbiRoutineKey, AbiRoutineKind};
     use crate::snapshot::TrustTier;
 

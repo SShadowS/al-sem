@@ -30,10 +30,8 @@
 //!   under `locale_compare`, so `…:Codeunit:1` < `…:Codeunit:@a` here while the
 //!   full snapshot's contracts (`snapshot_full.rs`, `locale_compare`) list `…:@a`
 //!   first. Each output keeps its own order; nothing relies on the two agreeing
-//!   (pinned by `cli_numberless_object_ids`'s T7). The per-site `M8: … single-case
-//!   … ordinal-safe` notes below are that old parity argument: read each one as
-//!   "ordinal (the M8 contract)". A key that holds a stable object or routine id is
-//!   no longer single-case, because a numberless object's segment carries `@` and
+//!   (pinned by `cli_numberless_object_ids`'s T7). A key that holds a stable object
+//!   or routine id is not single-case: a numberless object's segment carries `@` and
 //!   uppercase `%XX`.
 //! - M9: the edge-id present-only predicate is exact (`Option::is_some`; an empty
 //!   string IS kept).
@@ -1179,8 +1177,7 @@ fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
 // `factKey`): subject|op|resourceKind|resourceId|confidence|provenance|
 // witnessCallsiteId|witnessOperationId.
 //
-// M8: all key components are single-case (stable ids lowercase-guid/hex, op/kind
-// fixed-lowercase labels, witness ids `r0/<lowerhex>/...`) → ordinal-safe.
+// Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn snapshot_fact(f: &CapabilityFact, subject: &str) -> SnapshotCapabilityFact {
@@ -1259,8 +1256,7 @@ fn derive_capability_facts(base: &R3a3SourceBase) -> Vec<SnapshotCapabilityFact>
 // — mirrors al-sem `engine/combined-graph.ts` typed-edge build. The edge-id is
 // computed over the STABLE-rewritten from/to (and the present identity fields).
 //
-// M8: the sort key is kind (fixed lowercase) | stable-from | stable-to | edgeId
-// (lowercase hex) → all single-case → ordinal-safe.
+// The sort key is kind | stable-from | stable-to | edgeId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
@@ -1571,7 +1567,7 @@ fn snap_combined_value_source(
 // CapabilityFact witnessOperationId (direct ∪ inherited). recordOperations
 // OVERWRITE operationSites for the same opId (richer displayText). Internal ids.
 //
-// Sort by operationId (al-sem). M8: operationId = `r0/<lowerhex>/opN` → ordinal-safe.
+// Sort by operationId (al-sem); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvidence> {
@@ -1673,7 +1669,7 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
         }
     }
 
-    // BTreeMap iteration = sorted-by-operationId (ordinal-safe, M8).
+    // BTreeMap iteration = sorted by operationId, ordinal (M8 contract).
     by_id.into_values().collect()
 }
 
@@ -1682,7 +1678,7 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
 // CapabilityFact witnessCallsiteId (direct ∪ inherited) OR as a typed-edge
 // callsiteId anchor. Internal ids. Sort by callsiteId.
 //
-// M8: callsiteId = `r0/<lowerhex>/csN` → ordinal-safe.
+// Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEvidence> {
@@ -1752,7 +1748,7 @@ fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEviden
 // Groups by callsiteId; skips implicit-trigger edges. Status mapping per al-sem
 // `callsite-resolutions.ts`. resolvedEdges = matching typed-edge edgeIds.
 //
-// Sort by (from|callsiteId). M8: both stable/internal single-case → ordinal-safe.
+// Sort by (from|callsiteId); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn map_dispatch_kind(dk: &str) -> &'static str {
@@ -2048,7 +2044,7 @@ fn classify_resolution(
 // adjacent. The source-only corpus has zero gaps (no parse-incomplete / no opaque
 // deps), so this is empty for the 5 fixtures — implemented faithfully regardless.
 //
-// M8: kind (fixed lowercase) | subject (stable id / guid, lowercase) → ordinal-safe.
+// Sort by kind | subject; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
@@ -2131,7 +2127,7 @@ fn is_dependency_role(_r: &ModelRoutine) -> bool {
 
 // ---------------------------------------------------------------------------
 // deriveCoverage — per-routine cone coverage, subject already stable on the cone.
-// Sort by subject. M8: stable routine id → ordinal-safe.
+// Sort by subject; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
@@ -2164,8 +2160,7 @@ fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
 
 // ---------------------------------------------------------------------------
 // deriveEventDeclarations — bipartite publisher/subscriber decls from the event
-// graph. Sort by (kind|routine|eventId). M8: kind fixed lowercase, routine/eventId
-// stable single-case → ordinal-safe.
+// graph. Sort by (kind|routine|eventId); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclaration> {
@@ -2248,7 +2243,7 @@ fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclarat
 // own declaration anchor (al-sem `classifyRoots`: `sourceAnchor:
 // routine.sourceAnchor`), with enclosingRoutineId = the routine's INTERNAL id.
 //
-// Sort by routineId. M8: stable routine id → ordinal-safe.
+// Sort by routineId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_root_classifications(
@@ -2291,13 +2286,13 @@ fn derive_root_classifications(
 // StableRoutineId, only routines with >=1 frame. Absent when none.
 //
 // Emitted as a serde_json Map with keys in sorted order (M1: explicit sort, no
-// HashMap iteration). M8: stable routine id keys → ordinal-safe.
+// HashMap iteration); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_routine_order_frames(base: &R3a3SourceBase) -> Option<RoutineOrderFrames> {
     use std::collections::BTreeMap;
-    // BTreeMap keyed by stable routine id → sorted key order (M8: stable id ⇒
-    // ordinal-safe; M1: BTreeMap iteration is sorted, not hash-ordered).
+    // BTreeMap keyed by stable routine id → sorted key order (ordinal, M8
+    // contract; M1: BTreeMap iteration is sorted, not hash-ordered).
     let mut entries: BTreeMap<String, Vec<ScopeFrame>> = BTreeMap::new();
     for r in &base.ws_routines {
         let order = compute_routine_order(r);
