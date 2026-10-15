@@ -2082,12 +2082,12 @@ fn model_routine_declaration_start_includes_attributes() {
     );
 }
 
-/// #71 attribute-start limits: (a) an attribute separated from its routine by a
-/// COMMENT is not claimed by `declaration_start_line` today (issue #80's lowerer
-/// bug drops it; a #80 fix moves this assertion on purpose); (b) a multi-line
-/// attribute's FIRST line is the declaration start.
+/// #71 attribute starts: (a) an attribute separated from its routine by a
+/// COMMENT is claimed by `declaration_start_line` (#80: the lowerer keeps an
+/// attribute across a comment, so the declaration starts at the attribute);
+/// (b) a multi-line attribute's FIRST line is the declaration start.
 #[test]
-fn declaration_start_line_attribute_limits() {
+fn declaration_start_line_claims_separated_and_multi_line_attributes() {
     let dir = tempfile::tempdir().unwrap();
     d8_workspace(dir.path(), &d8_posting());
     write(
@@ -2108,8 +2108,8 @@ fn declaration_start_line_attribute_limits() {
     let c = r("Commented");
     assert_eq!(
         (c.declaration_start_line, c.source_anchor.start_line),
-        (4, 4),
-        "#80: the comment-separated attribute is not claimed"
+        (2, 4),
+        "#80: the comment-separated attribute is claimed"
     );
     // 0-based: `[EventSubscriber(` row 8, its last line row 9, `procedure` row 10.
     let m = r("MultiLine");

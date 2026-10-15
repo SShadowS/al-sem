@@ -216,24 +216,43 @@ fn lower_object(
     // `dataset_ctx` starts `false` (Task 1, dataitem-receivers plan) — it only ever
     // becomes `true` while descending a report/report-extension `dataset` section, and
     // is force-reset to `false` on entering `requestpage` (REQUESTPAGE ISOLATION).
+    let cond_syms = CondIndex::new(node, source);
     let mut routine_nodes = Vec::new();
+    // Entries still pending at the object's end dangle and attach to nothing.
     collect_routines(
         node.named_children(),
         None,
         None,
         false,
         &[],
+        Vec::new(),
+        &cond_syms,
         source,
+        issues,
         &mut routine_nodes,
     );
-    // A `#if`-split header yields one routine per arm (see `header_arms`).
+    // A `#if`-split header yields one routine per arm (see `header_arms`). Each arm
+    // takes the pending entries whose guard a build of that arm can satisfy, read
+    // under that joined guard (`lower_routine` deduplicates them).
     let mut routines = Vec::new();
     for (r, attr_items, di_table, member, in_dataset_modify_context, ctx) in routine_nodes {
         let (arms, shared_from) = header_arms(r);
+        let conds = split_conditions(r);
         for arm in arms {
+            let a_syms = arm_symbols(r, &arm, source);
             routines.push(lower_routine(
                 r,
-                attr_items.clone(),
+                attr_items
+                    .iter()
+                    .filter_map(|e| {
+                        consistent(&e.guard, &a_syms)
+                            .filter(|_| arm_live(&conds, arm.start, source, &e.guard))
+                            .map(|guard| PendingAttr {
+                                node: e.node,
+                                guard,
+                            })
+                    })
+                    .collect(),
                 di_table.clone(),
                 member,
                 in_dataset_modify_context,
@@ -507,9 +526,10 @@ fn key_members(key: RawNode, source: &str) -> Vec<String> {
     let mut members = Vec::new();
     if let Some(list) = key.field(FieldName::Fields) {
         let mut items = Vec::new();
+        let mut run = Run::default();
         for m in list.named_children() {
             if m.kind() == RawKind::PreprocConditionalFieldListItems {
-                conditional_list_arm(m, source, &[], &mut items);
+                conditional_list_arm(m, source, &mut run, &mut items);
             } else {
                 items.push(m);
             }
@@ -780,13 +800,36 @@ fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::Obje
     }
 }
 
-/// DFS collecting `(routine, attribute items, enclosing-dataitem-source-table,
-/// enclosing-member, in-dataset-modify-context)` 5-tuples. AL has no nested routines, so
-/// we do not descend into a routine once found. `attribute_item` nodes are SIBLINGS
-/// preceding the routine (grammar v2+); accumulate them and attach to the next routine,
-/// resetting on any other node. When the walk crosses into a report `dataitem(Name;
-/// "Source Table")`, the (innermost) dataitem's source table is threaded down so a
-/// dataitem trigger gets its implicit-`Rec` type.
+/// DFS collecting `(routine, pending attributes, enclosing-dataitem-source-table,
+/// enclosing-member, in-dataset-modify-context, build context)` tuples. AL has no nested
+/// routines, so we do not descend into a routine once found. When the walk crosses into
+/// a report `dataitem(Name; "Source Table")`, the (innermost) dataitem's source table is
+/// threaded down so a dataitem trigger gets its implicit-`Rec` type.
+///
+/// **Attributes (issue #80).** `attribute_item` nodes are SIBLINGS preceding the
+/// routine (grammar v2+). Each one waits in `pending` as a [`PendingAttr`]: the node and
+/// its GUARD, the build context under which it still waits (its `ctx`, plus every `#if`
+/// path it crossed; none when `ctx` contradicts itself, which no build reaches). The
+/// next routine takes every pending entry, sorted by start byte. The run survives:
+/// - the grammar's `extras` (`grammar.js:539-547`: comments, `#pragma`,
+///   `#region`/`#endregion`, `#define`/`#undef`), which cannot hold a routine;
+/// - a single-chain `#if` wrapper (one `#if` … `#endif`). Its arms are walked exactly
+///   as before (a live arm under `ctx` ∪ its symbols). An entry enters arm `k` when
+///   that arm is live under the entry's guard and its symbols are `consistent` with
+///   it (the join becomes the guard), and leaves the wrapper unconsumed by the
+///   no-arm-taken path (`PreprocChain::falls_through`) on the same terms. After the
+///   wrapper, `pending` is every arm's leftovers then the fall-through entries, settled
+///   by [`settle_pending`]: guards are projected onto the symbols a later condition or
+///   the attribute's own argument groups mention, exact duplicates are removed, and an
+///   attribute with more than [`PENDING_PATH_CAP`] paths in the list being settled
+///   (one scope's `pending`, e.g. an inner arm's; not counted across the object)
+///   loses those paths, with ONE `SyntaxIssue`.
+///
+/// Any other node (a section, a field, a `var` section, a multi-chain wrapper, …)
+/// ends the run: `pending` is cleared, and the node is walked with an empty run whose
+/// leftovers are discarded, so an attribute never leaves the body it is in. The
+/// function returns the entries still pending after `children`.
+/// `cond_syms` is [`preproc_condition_symbols`] of the whole object.
 ///
 /// `dataset_ctx` (Task 1, dataitem-receivers plan) tracks whether the walk is currently
 /// inside a report/report-extension `dataset` section: `true` on entering
@@ -807,20 +850,35 @@ fn collect_routines<'t>(
     member: Option<RawNode<'t>>,
     dataset_ctx: bool,
     ctx: &[(String, bool)],
+    mut pending: Vec<PendingAttr<'t>>,
+    cond_syms: &CondIndex,
     source: &str,
+    issues: &mut Vec<crate::ir::SyntaxIssue>,
     out: &mut Vec<(
         RawNode<'t>,
-        Vec<RawNode<'t>>,
+        Vec<PendingAttr<'t>>,
         Option<String>,
         Option<RawNode<'t>>,
         bool,
         Vec<(String, bool)>,
     )>,
-) {
-    let mut pending: Vec<RawNode<'t>> = Vec::new();
+) -> Vec<PendingAttr<'t>> {
     for child in children {
         match child.kind() {
-            RawKind::AttributeItem => pending.push(child),
+            RawKind::AttributeItem => {
+                if let Some(guard) = consistent(&[], ctx) {
+                    pending.push(PendingAttr { node: child, guard });
+                }
+            }
+            // The grammar's `extras` (`grammar.js:539-547`) may sit anywhere and can
+            // hold no routine, so they do not end an attribute run (#80).
+            RawKind::Comment
+            | RawKind::MultilineComment
+            | RawKind::Pragma
+            | RawKind::PreprocRegion
+            | RawKind::PreprocEndregion
+            | RawKind::PreprocDefine
+            | RawKind::PreprocUndef => {}
             RawKind::Procedure
             | RawKind::TriggerDeclaration
             | RawKind::InterfaceProcedure
@@ -873,6 +931,8 @@ fn collect_routines<'t>(
                 // dataitem-map fallback a context that does not exist.
                 let in_dataset_modify_context =
                     dataset_ctx && member.is_some_and(|m| m.kind() == RawKind::ModifyModification);
+                // Arms and fall-through return entries out of source order.
+                pending.sort_by_key(|e| e.node.byte_range().start);
                 out.push((
                     child,
                     std::mem::take(&mut pending),
@@ -899,7 +959,10 @@ fn collect_routines<'t>(
                     Some(child),
                     true,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -911,7 +974,10 @@ fn collect_routines<'t>(
                     member,
                     true,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -929,7 +995,10 @@ fn collect_routines<'t>(
                     member,
                     false,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
@@ -956,30 +1025,76 @@ fn collect_routines<'t>(
                     Some(child),
                     dataset_ctx,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
             // An object-level `#if` (`#if X procedure Foo(..) .. #else procedure
             // Foo(..) .. #endif`): each live branch's routines exist under that
-            // branch's symbols.
+            // branch's symbols. Pending attributes cross a single-chain wrapper by
+            // guard (see the doc above); any other wrapper ends the run.
             _ if is_preproc_wrapper(child) => {
-                pending.clear();
-                for (syms, live, branch) in preproc_branches(child, source, ctx) {
-                    if live {
-                        let inner: Vec<(String, bool)> =
-                            ctx.iter().cloned().chain(syms).collect();
-                        collect_routines(
-                            branch,
-                            dataitem_table,
-                            member,
-                            dataset_ctx,
-                            &inner,
-                            source,
-                            out,
-                        );
+                // One walk of the wrapper's children: its directives (read once per
+                // pending entry below) and its branch contents.
+                let (directives, contents) = chain_parts(child);
+                let single = is_single_chain(&directives);
+                let incoming = if single {
+                    std::mem::take(&mut pending)
+                } else {
+                    pending.clear();
+                    Vec::new()
+                };
+                // Each entry's own view of the chain: liveness under its guard.
+                // Directives only: the branch contents are grouped once, above.
+                let chains: Vec<_> = incoming
+                    .iter()
+                    .map(|e| chain_shape(&directives, source, &in_syms(&e.guard)))
+                    .collect();
+                let (shape, _) = chain_shape(&directives, source, &in_syms(ctx));
+                let last = shape.len() - 1;
+                for (k, ((syms, live), branch)) in shape.into_iter().zip(contents).enumerate() {
+                    if !live {
+                        continue;
+                    }
+                    // Entry 0 (before `#if`) and the last group (after `#endif`) are
+                    // no arm; for a single chain both are empty (ledger P16).
+                    let arm = single && k != 0 && k != last;
+                    let admitted = if arm {
+                        incoming
+                            .iter()
+                            .zip(&chains)
+                            .filter_map(|(e, c)| admit(e, &c.0[k]))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let inner: Vec<(String, bool)> = ctx.iter().cloned().chain(syms).collect();
+                    let left = collect_routines(
+                        branch,
+                        dataitem_table,
+                        member,
+                        dataset_ctx,
+                        &inner,
+                        admitted,
+                        cond_syms,
+                        source,
+                        issues,
+                        out,
+                    );
+                    if arm {
+                        pending.extend(left);
                     }
                 }
+                pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
+                    Some(PendingAttr {
+                        guard: consistent(&e.guard, &c.1?)?,
+                        node: e.node,
+                    })
+                }));
+                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
             }
             _ => {
                 pending.clear();
@@ -1001,12 +1116,159 @@ fn collect_routines<'t>(
                     child_member,
                     dataset_ctx,
                     ctx,
+                    Vec::new(),
+                    cond_syms,
                     source,
+                    issues,
                     out,
                 );
             }
         }
     }
+    pending
+}
+
+/// One attribute waiting for its routine (`collect_routines`), and its guard: the
+/// build context, projected by [`settle_pending`], under which it still waits.
+#[derive(Clone)]
+struct PendingAttr<'t> {
+    node: RawNode<'t>,
+    guard: Syms,
+}
+
+/// More distinct guards than this for one attribute in one `pending` list being
+/// settled: those paths are dropped, with a `SyntaxIssue` (see [`settle_pending`]).
+const PENDING_PATH_CAP: usize = 64;
+
+/// A wrapper with exactly one `#if` … `#endif` chain, the only shape an attribute
+/// crosses (ledger P16: every wrapper that can hold an attribute has it).
+fn is_single_chain(directives: &[RawNode]) -> bool {
+    let count = |k| directives.iter().filter(|c| c.kind() == k).count();
+    count(RawKind::PreprocIf) == 1 && count(RawKind::PreprocEndif) == 1
+}
+
+/// Entry `e` admitted to an arm `(syms, live, _)` of its own chain view: the arm is
+/// live under `e`'s guard and its symbols agree with it; the join is the new guard.
+fn admit<'t>(e: &PendingAttr<'t>, (syms, live): &(Syms, bool)) -> Option<PendingAttr<'t>> {
+    if !live {
+        return None;
+    }
+    Some(PendingAttr {
+        node: e.node,
+        guard: consistent(&e.guard, syms)?,
+    })
+}
+
+/// Settle `pending` after a wrapper ending at byte `end`:
+/// 1. **Project** each guard onto the symbols that can still matter: those a
+///    `#if`/`#elif` condition starting at or after `end` mentions, or a condition
+///    inside the attribute itself (its argument groups). Nothing else reads a guard,
+///    so dropping the other literals changes no attachment and no reading, and keeps
+///    `pending` small (40 unrelated pragma-only wrappers leave one entry).
+/// 2. Remove exact duplicates (same node, same guard as a set), keeping the first.
+/// 3. **Cap**: an attribute with more than [`PENDING_PATH_CAP`] guards left in THIS
+///    `pending` list (the scope being settled, e.g. one arm's walk; not a count over
+///    the whole object) loses those paths, with one `SyntaxIssue` at the attribute; it
+///    is never attached under a wrong guard.
+fn settle_pending(
+    pending: &mut Vec<PendingAttr>,
+    end: usize,
+    cond: &CondIndex,
+    issues: &mut Vec<crate::ir::SyntaxIssue>,
+) {
+    use std::collections::{HashMap, HashSet};
+    if pending.is_empty() {
+        return;
+    }
+    let cond_syms = cond.get();
+    let at = |b: usize| cond_syms.syms.partition_point(|(s, _)| *s < b);
+    for e in pending.iter_mut() {
+        let own = e.node.byte_range();
+        let inside = &cond_syms.syms[at(own.start)..at(own.end)];
+        e.guard.retain(|(s, _)| {
+            cond_syms.last.get(s.as_str()).is_some_and(|l| *l >= end)
+                || inside.iter().any(|(_, t)| t == s)
+        });
+        e.guard.sort();
+    }
+    let mut seen: HashSet<(usize, Syms)> = HashSet::new();
+    pending.retain(|e| seen.insert((e.node.id(), e.guard.clone())));
+    let mut paths: HashMap<usize, usize> = HashMap::new();
+    for e in pending.iter() {
+        *paths.entry(e.node.id()).or_default() += 1;
+    }
+    let mut reported: HashSet<usize> = HashSet::new();
+    for e in pending.iter() {
+        let id = e.node.id();
+        if paths[&id] > PENDING_PATH_CAP && reported.insert(id) {
+            issues.push(crate::ir::SyntaxIssue {
+                message: format!(
+                    "attribute reaches its routine through more than {PENDING_PATH_CAP} distinct `#if` paths; those paths are not attached"
+                ),
+                origin: origin_of(e.node),
+            });
+        }
+    }
+    pending.retain(|e| paths[&e.node.id()] <= PENDING_PATH_CAP);
+}
+
+/// The condition symbols of an object ([`preproc_condition_symbols`]), plus each
+/// symbol's last start byte. Built on first use: most objects have no pending
+/// attribute at a wrapper and never need it.
+struct CondIndex<'a, 't> {
+    node: RawNode<'t>,
+    source: &'a str,
+    cell: std::cell::OnceCell<CondSyms>,
+}
+
+struct CondSyms {
+    /// `(start byte, symbol)` in byte order.
+    syms: Vec<(usize, String)>,
+    /// symbol -> start byte of its last occurrence.
+    last: std::collections::HashMap<String, usize>,
+}
+
+impl<'a, 't> CondIndex<'a, 't> {
+    fn new(node: RawNode<'t>, source: &'a str) -> Self {
+        Self {
+            node,
+            source,
+            cell: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &CondSyms {
+        self.cell.get_or_init(|| {
+            let syms = preproc_condition_symbols(self.node, self.source);
+            let last = syms.iter().map(|(b, s)| (s.clone(), *b)).collect();
+            CondSyms { syms, last }
+        })
+    }
+}
+
+/// Every `(start byte, symbol)` that a `#if`/`#elif` condition anywhere under
+/// `node` mentions (split headers and argument groups included), in byte order.
+/// Iterative: it walks routine bodies, whose expression trees can be deep.
+fn preproc_condition_symbols(node: RawNode, source: &str) -> Vec<(usize, String)> {
+    // No text pre-check: the scanner also accepts `# if` and `#IF`, so only the
+    // parsed tree can tell (issue #80 review).
+    let mut out = Vec::new();
+    let mut stack = vec![(node, false)];
+    while let Some((n, in_cond)) = stack.pop() {
+        if in_cond && n.kind() == RawKind::Identifier {
+            out.push((n.byte_range().start, n.text(source).trim().to_string()));
+            continue;
+        }
+        let cond = matches!(n.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
+            .then(|| n.field(FieldName::Condition))
+            .flatten()
+            .map(|c| c.id());
+        for c in n.named_children() {
+            stack.push((c, in_cond || Some(c.id()) == cond));
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The unquoted source-table name of a `report_dataitem(Name; "Source Table")` node
@@ -1147,25 +1409,84 @@ fn with_build_context<R>(extra: &[(String, bool)], ir: &mut Ir, f: impl FnOnce(&
     r
 }
 
+/// Symbol literals that a build path decides, in the form of a build context
+/// (`RoutineDecl::preproc_context`).
+type Syms = Vec<(String, bool)>;
+
 /// The children of a `#if` wrapper, grouped by branch. Each group carries the
 /// symbols its branch decides (its own condition true, every earlier condition of
 /// the chain false; nothing for content outside any branch) and whether it is live
 /// under `ctx`: a branch `ctx` decides false, or one after a branch `ctx` decides
 /// true, is dead. Directive nodes belong to no group.
-#[allow(clippy::type_complexity)]
 fn preproc_branches<'t>(
     node: RawNode<'t>,
     source: &str,
     ctx: &[(String, bool)],
-) -> Vec<(Vec<(String, bool)>, bool, Vec<RawNode<'t>>)> {
-    let mut out = vec![(Vec::new(), true, Vec::new())];
+) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
+    let (directives, contents) = chain_parts(node);
+    branches_of(&directives, contents, source, &in_syms(ctx))
+}
+
+/// [`preproc_branches`] over a wrapper already split by [`chain_parts`], with
+/// liveness read through `lookup`.
+fn branches_of<'t>(
+    directives: &[RawNode],
+    contents: Vec<Vec<RawNode<'t>>>,
+    source: &str,
+    lookup: &dyn Fn(&str) -> Option<bool>,
+) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
+    chain_shape(directives, source, lookup)
+        .0
+        .into_iter()
+        .zip(contents)
+        .map(|((syms, live), items)| (syms, live, items))
+        .collect()
+}
+
+/// One walk over the children of `node`: its directive nodes (`#if`/`#elif`/
+/// `#else`/`#endif`, the input of [`chain_shape`]) and the other children grouped by
+/// branch, aligned with [`chain_shape`]'s arms (entry 0 before the first directive,
+/// one per directive after it).
+fn chain_parts<'t>(node: RawNode<'t>) -> (Vec<RawNode<'t>>, Vec<Vec<RawNode<'t>>>) {
+    let mut directives = Vec::new();
+    let mut out = vec![Vec::new()];
+    for c in node.named_children() {
+        match c.kind() {
+            RawKind::PreprocIf
+            | RawKind::PreprocElif
+            | RawKind::PreprocElse
+            | RawKind::PreprocEndif => {
+                directives.push(c);
+                out.push(Vec::new());
+            }
+            _ => out.last_mut().expect("never empty").push(c),
+        }
+    }
+    (directives, out)
+}
+
+/// The directive walk of [`preproc_branches`], over a wrapper's `directives` only
+/// ([`chain_parts`]), with no branch contents: per arm its `(symbols, live under
+/// the context `lookup` reads)`, plus the symbols of the build that takes no arm
+/// (every `#if`/`#elif` condition false): `Some` only when the chain has no `#else`
+/// and the context decides no arm true. The fall-through is read for the LAST chain
+/// of the wrapper (a single-chain wrapper has one). It costs the directives, not the
+/// wrapper's children, so it runs once per pending attribute.
+fn chain_shape(
+    directives: &[RawNode],
+    source: &str,
+    lookup: &dyn Fn(&str) -> Option<bool>,
+) -> (Vec<(Syms, bool)>, Option<Syms>) {
+    let mut out = vec![(Vec::new(), true)];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
-    for c in node.named_children() {
+    let mut has_else = false;
+    let mut falls_through = None;
+    for &c in directives {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif => {
                 let cond = c.field(FieldName::Condition);
-                let d = cond.and_then(|e| decide_preproc(e, source, ctx));
+                let d = cond.and_then(|e| decide_preproc_by(e, source, lookup));
                 let live = !taken && d != Some(false);
                 taken |= d == Some(true);
                 let mut syms = Vec::new();
@@ -1176,52 +1497,143 @@ fn preproc_branches<'t>(
                     assume_preproc(e, true, source, &mut syms);
                     earlier.push(e);
                 }
-                out.push((syms, live, Vec::new()));
+                out.push((syms, live));
             }
             RawKind::PreprocElse => {
+                has_else = true;
                 let mut syms = Vec::new();
                 for e in &earlier {
                     assume_preproc(*e, false, source, &mut syms);
                 }
-                out.push((syms, !taken, Vec::new()));
+                out.push((syms, !taken));
             }
             RawKind::PreprocEndif => {
+                falls_through = (!has_else && !taken).then(|| {
+                    let mut syms = Vec::new();
+                    for e in &earlier {
+                        assume_preproc(*e, false, source, &mut syms);
+                    }
+                    syms
+                });
                 earlier.clear();
                 taken = false;
-                out.push((Vec::new(), true, Vec::new()));
+                has_else = false;
+                out.push((Vec::new(), true));
             }
-            _ => out.last_mut().expect("never empty").2.push(c),
+            _ => {}
         }
     }
-    out
+    (out, falls_through)
 }
 
 /// The items of an `#if` group inside a POSITIONAL delimited list (grammar `main`
 /// 8682cb5f, B7b-1: `key(PK; A #if X , B #endif , C)`, `[Attr(A, #if X B, #else C,
-/// #endif D)]`), as one build reads them: the first arm `ctx` does not decide
-/// false, the first-branch-wins policy of every split header. A union of the arms
-/// is no build at all and shifts every later position (an `[EventSubscriber]`'s
-/// event name is `args[2]`). A group nested in the chosen arm is read the same way;
-/// when every arm is decided false (an `#if` with no `#else`) the group adds
-/// nothing. Appends to `out` in document order.
+/// #endif D)]`), as one build reads them: the first arm that is live under `run`
+/// and consistent with it, the first-branch-wins policy of every split header. A
+/// union of the arms is no build at all and shifts every later position (an
+/// `[EventSubscriber]`'s event name is `args[2]`). A group nested in the chosen arm
+/// is read the same way; when every arm is decided false (an `#if` with no `#else`)
+/// the group adds nothing. Appends to `out` in document order.
+///
+/// `run` is the RUNNING context of the whole list: the caller starts it once per
+/// list and passes it to every group, and the chosen arm's symbols join it before
+/// that arm's items are read. So a nested group reads under the arm that holds it,
+/// and a later sibling group picks an arm the same build can take (issue #80). An
+/// arm whose symbols contradict `run` (`#if Y and not Y`, or `#if not X` after an
+/// earlier group chose `X`) is never picked.
+///
+/// LIMIT: `run` holds only symbol LITERALS. An arm chosen under a compound condition
+/// such as `X or Y` records none (neither is forced), so it does not constrain a
+/// later group under `not X and not Y`; the two arms can then pair although no build
+/// takes both (pinned by `sibling_groups_under_a_disjunction_are_not_correlated`).
 fn conditional_list_arm<'t>(
     group: RawNode<'t>,
     source: &str,
-    ctx: &[(String, bool)],
+    run: &mut Run,
     out: &mut Vec<RawNode<'t>>,
 ) {
     // Entry 0 is the content before `#if` and the last the content after `#endif`
     // (live, and empty in a list group), so a group with no live arm reads nothing.
-    let branches = preproc_branches(group, source, ctx);
-    let Some((_, _, items)) = branches.iter().skip(1).find(|(_, live, _)| *live) else {
+    // When no arm is consistent with `run`, `find_map` reaches that trailing entry
+    // (empty syms, so consistent; empty items), and the group reads nothing.
+    let (directives, contents) = chain_parts(group);
+    let branches = branches_of(&directives, contents, source, &|s| run.get(s));
+    // `Run::join` extends `run` in place, and only for the arm it returns.
+    let Some((_, _, items)) = branches
+        .into_iter()
+        .skip(1)
+        .filter(|(_, live, _)| *live)
+        .find(|(syms, _, _)| run.join(syms))
+    else {
         return;
     };
-    for &item in items {
+    for item in items {
         if item.kind() == group.kind() {
-            conditional_list_arm(item, source, ctx, out);
+            conditional_list_arm(item, source, run, out);
         } else if crate::schema::class_of(item.kind()) != crate::schema::Class::Trivia {
             out.push(item);
         }
+    }
+}
+
+/// `a ∪ b` in `a`'s order, then `b`'s new symbols; `None` when the two together give
+/// one symbol both values (inside either operand too), which no build does.
+/// Hashed: linear in the two lengths.
+fn consistent(a: &[(String, bool)], b: &[(String, bool)]) -> Option<Syms> {
+    use std::collections::hash_map::Entry;
+    let mut seen: std::collections::HashMap<&str, bool> =
+        std::collections::HashMap::with_capacity(a.len() + b.len());
+    let mut out: Syms = Vec::new();
+    for (s, v) in a.iter().chain(b) {
+        match seen.entry(s.as_str()) {
+            Entry::Occupied(w) if w.get() != v => return None,
+            Entry::Occupied(_) => {}
+            Entry::Vacant(slot) => {
+                slot.insert(*v);
+                out.push((s.clone(), *v));
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The running context of one positional list ([`conditional_list_arm`]), as a
+/// symbol index that every join and every condition lookup reads, so neither scans
+/// a list. Nothing reads its literals in order, so it keeps none.
+#[derive(Default)]
+struct Run {
+    index: std::collections::HashMap<String, bool>,
+}
+
+impl Run {
+    /// A context started from `syms` (a build guard: one literal per symbol; the
+    /// first wins, as a slice lookup reads it).
+    fn new(syms: &[(String, bool)]) -> Self {
+        let mut run = Self::default();
+        for (s, v) in syms {
+            run.index.entry(s.clone()).or_insert(*v);
+        }
+        run
+    }
+
+    fn get(&self, s: &str) -> Option<bool> {
+        self.index.get(s).copied()
+    }
+
+    /// [`consistent`] `(self, b)` written into `self`: `false` (and `self`
+    /// unchanged) when `b` contradicts itself or `self`. `self` is already
+    /// consistent, so only `b`'s literals are checked and appended.
+    fn join(&mut self, b: &[(String, bool)]) -> bool {
+        let Some(b) = consistent(b, &[]) else {
+            return false;
+        };
+        if b.iter().any(|(s, v)| self.get(s).is_some_and(|w| w != *v)) {
+            return false;
+        }
+        for (s, v) in b {
+            self.index.entry(s).or_insert(v);
+        }
+        true
     }
 }
 
@@ -1255,14 +1667,25 @@ fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(Strin
 /// Condition `cond` under decided symbols `syms`, three-valued: `None` when
 /// undecided.
 fn decide_preproc(cond: RawNode, source: &str, syms: &[(String, bool)]) -> Option<bool> {
+    decide_preproc_by(cond, source, &in_syms(syms))
+}
+
+/// A symbol lookup over decided symbols `syms` (the first literal wins).
+fn in_syms(syms: &[(String, bool)]) -> impl Fn(&str) -> Option<bool> + '_ {
+    move |t| syms.iter().find(|(s, _)| s == t).map(|(_, v)| *v)
+}
+
+/// [`decide_preproc`] with each symbol's decided value read through `lookup`.
+fn decide_preproc_by(
+    cond: RawNode,
+    source: &str,
+    lookup: &dyn Fn(&str) -> Option<bool>,
+) -> Option<bool> {
     let mut kids = structural_children(cond)
         .into_iter()
-        .map(|k| decide_preproc(k, source, syms));
+        .map(|k| decide_preproc_by(k, source, lookup));
     match cond.kind() {
-        RawKind::Identifier => {
-            let t = cond.text(source).trim();
-            syms.iter().find(|(s, _)| s == t).map(|(_, v)| *v)
-        }
+        RawKind::Identifier => lookup(cond.text(source).trim()),
         RawKind::PreprocParenthesizedExpression => kids.next().flatten(),
         RawKind::PreprocNotExpression => kids.next().flatten().map(|v| !v),
         RawKind::PreprocAndExpression => {
@@ -1303,6 +1726,94 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
     out
 }
 
+/// The `#if`/`#elif` conditions of a split routine header, each with the end byte
+/// of its directive, in order; empty for an unsplit routine (one arm, nothing to
+/// decide). Read once per routine, then by [`arm_live`] once per pending entry.
+fn split_conditions(node: RawNode) -> Vec<(RawNode, usize)> {
+    if !matches!(
+        node.kind(),
+        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
+    ) {
+        return Vec::new();
+    }
+    node.named_children()
+        .into_iter()
+        .filter(|c| matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif))
+        .filter_map(|c| Some((c.field(FieldName::Condition)?, c.byte_range().end)))
+        .collect()
+}
+
+/// The arm starting at byte `arm_start` of a split routine with header conditions
+/// `conds` ([`split_conditions`]) is reachable under `guard`: its own condition is
+/// not decided false, and no earlier condition of the chain is decided true (the
+/// rule [`chain_shape`] gives a wrapper arm's `live`).
+fn arm_live(
+    conds: &[(RawNode, usize)],
+    arm_start: usize,
+    source: &str,
+    guard: &[(String, bool)],
+) -> bool {
+    for &(cond, end) in conds {
+        if end > arm_start {
+            break;
+        }
+        let d = decide_preproc(cond, source, guard);
+        // The arm's own condition is dead when false, an earlier one when true.
+        if d == Some(end != arm_start) {
+            return false;
+        }
+    }
+    true
+}
+
+/// One argument list of an attribute as one build reads it.
+struct AttributeArgList<'t> {
+    /// The `#if` groups in the list (each gets a `SyntaxIssue` when lowered).
+    groups: Vec<RawNode<'t>>,
+    /// The positional arguments that build reads, in order.
+    items: Vec<RawNode<'t>>,
+}
+
+/// The argument lists of attribute `item` as the build `guard` reads them, before any
+/// lowering. H-8: a comment interleaved between args never occupies a positional slot
+/// (see `structural_children`'s doc: the `[EventSubscriber(...)]` silent-unregister
+/// case). An `#if` group among the args (grammar 8682cb5f) gives the args of the arm
+/// that build reads, for the same reason, with one running context per list started
+/// from `guard`.
+fn attribute_arg_selection<'t>(
+    item: RawNode<'t>,
+    guard: &[(String, bool)],
+    source: &str,
+) -> Vec<AttributeArgList<'t>> {
+    let Some(args_node) = item
+        .field(FieldName::Attribute)
+        .and_then(|c| c.field(FieldName::Arguments))
+    else {
+        return Vec::new();
+    };
+    args_node
+        .named_children()
+        .into_iter()
+        .filter(|l| l.kind() == RawKind::AttributeArgumentList)
+        .map(|list| {
+            let mut out = AttributeArgList {
+                groups: Vec::new(),
+                items: Vec::new(),
+            };
+            let mut run = Run::new(guard);
+            for arg in structural_children(list) {
+                if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
+                    out.groups.push(arg);
+                    conditional_list_arm(arg, source, &mut run, &mut out.items);
+                } else {
+                    out.items.push(arg);
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 // 7 pre-existing params + `in_dataset_modify_context`
 // (dataitem-receivers plan, Task 1) + the header arm; each is a distinct piece of
@@ -1310,7 +1821,7 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
 // site, mirrors `infer_receiver_type`'s identical precedent.
 fn lower_routine<'t>(
     node: RawNode<'t>,
-    mut attr_items: Vec<RawNode<'t>>,
+    mut attr_items: Vec<PendingAttr<'t>>,
     dataitem_source_table: Option<String>,
     member: Option<RawNode<'t>>,
     in_dataset_modify_context: bool,
@@ -1390,27 +1901,56 @@ fn lower_routine<'t>(
         node.kind(),
         RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
     );
-    if split {
-        // A split header's arm carries its own attributes inside the node.
-        attr_items.extend(
-            node.named_children()
-                .into_iter()
-                .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c)),
-        );
-    }
-
     // The builds this routine exists in: the object-level `#if` branches around
     // it, plus its own arm when its header is split.
     let mut preproc_context = object_ctx.to_vec();
     if split {
         preproc_context.extend(arm_symbols(node, arm, source));
+        // A split header's arm carries its own attributes inside the node; they are
+        // read under the routine's own context. A context that contradicts itself
+        // (an outer `#if X` around a `#if not X` arm) is no build: they attach nothing.
+        if let Some(guard) = consistent(&preproc_context, &[]) {
+            attr_items.extend(
+                node.named_children()
+                    .into_iter()
+                    .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
+                    .map(|c| PendingAttr {
+                        node: c,
+                        guard: guard.clone(),
+                    }),
+            );
+        }
+    }
+
+    // One attribute node can reach this routine by several build paths. Keep the
+    // first entry (source order) per (node, argument selection): paths that read the
+    // same arguments are one attribute, paths that read different ones are one per
+    // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId`. The
+    // `#if`-in-arguments `SyntaxIssue` is deduplicated apart from this, by group node
+    // (`reported`), so it is raised once per group however many selections keep it.
+    let mut seen: std::collections::HashSet<(usize, Vec<Vec<usize>>)> =
+        std::collections::HashSet::new();
+    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut selected = Vec::new();
+    for e in &attr_items {
+        let lists = attribute_arg_selection(e.node, &e.guard, source);
+        let key = (
+            e.node.id(),
+            lists
+                .iter()
+                .map(|l| l.items.iter().map(|n| n.id()).collect())
+                .collect(),
+        );
+        if seen.insert(key) {
+            selected.push((e.node, lists));
+        }
     }
 
     // Attributes: lowercased names (for classify_kind / control-context guards) +
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
     let mut attributes_parsed: Vec<crate::ir::AttributeIr> = Vec::new();
-    for item in attr_items {
+    for (item, lists) in selected {
         let Some(content) = item.field(FieldName::Attribute) else {
             continue;
         };
@@ -1420,33 +1960,20 @@ fn lower_routine<'t>(
         let raw_name = name_node.text(source).trim().to_string();
         attributes.push(raw_name.fold_identifier());
         let mut args = Vec::new();
-        if let Some(args_node) = content.field(FieldName::Arguments) {
-            for list in args_node.named_children() {
-                if list.kind() == RawKind::AttributeArgumentList {
-                    // H-8: a comment interleaved between args must never occupy a
-                    // positional slot — see `structural_children`'s doc (the
-                    // `[EventSubscriber(...)]` silent-unregister case this fixes).
-                    // An `#if` group among the args (grammar 8682cb5f) gives the
-                    // args of the arm this routine's build reads, for the same reason.
-                    let mut items = Vec::new();
-                    for arg in structural_children(list) {
-                        if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
-                            issues.push(SyntaxIssue {
-                                message: "`#if` inside attribute arguments — the first \
-                                          arm this routine's build does not rule out is \
-                                          read (the other arms are not modelled)"
-                                    .to_string(),
-                                origin: origin_of(arg),
-                            });
-                            conditional_list_arm(arg, source, &preproc_context, &mut items);
-                        } else {
-                            items.push(arg);
-                        }
-                    }
-                    for arg in items {
-                        args.push(lower_expr(arg, ir, issues, source, 0));
-                    }
+        for list in lists {
+            for group in list.groups {
+                if reported.insert(group.id()) {
+                    issues.push(SyntaxIssue {
+                        message: "`#if` inside attribute arguments — the first \
+                                  arm this routine's build does not rule out is \
+                                  read (the other arms are not modelled)"
+                            .to_string(),
+                        origin: origin_of(group),
+                    });
                 }
+            }
+            for arg in list.items {
+                args.push(lower_expr(arg, ir, issues, source, 0));
             }
         }
         attributes_parsed.push(crate::ir::AttributeIr {
@@ -5625,12 +6152,12 @@ pageextension 50117 PE extends P
         );
     }
 
-    /// #71 stated limit (issue #80, a known lowerer bug): an attribute separated
-    /// from its routine by a comment is NOT attached today, so the routine's
-    /// declaration span cannot reach it. A fix for #80 changes this test on
-    /// purpose.
+    /// #71 + #80: an attribute separated from its routine by a comment IS attached
+    /// (a comment is trivia between the two, not the end of the attribute run), and
+    /// it keeps its own origin, so the routine's declaration span reaches the
+    /// attribute's line (row 2), above the comment.
     #[test]
-    fn attribute_separated_by_comment_is_not_attached_today() {
+    fn attribute_separated_by_comment_is_attached() {
         let src = "codeunit 1 C\n{\n    [IntegrationEvent(false, false)]\n    // note\n    procedure P()\n    begin\n    end;\n}\n";
         let af = parse(src);
         let r = &af.objects[0].routines[0];
@@ -5640,10 +6167,17 @@ pageextension 50117 PE extends P
             .iter()
             .map(|a| a.name.as_str())
             .collect();
-        assert!(
-            names.is_empty(),
-            "#80: the comment drops the attribute: {names:?}"
+        assert_eq!(
+            names,
+            vec!["IntegrationEvent"],
+            "#80: the comment must not drop the attribute"
         );
+        let rows: Vec<u32> = r
+            .attributes_parsed
+            .iter()
+            .map(|a| a.origin.start.row)
+            .collect();
+        assert_eq!(rows, vec![2]);
     }
 
     /// #71: a multi-line attribute's origin starts at its FIRST line (`[`), so a
@@ -5661,5 +6195,1179 @@ pageextension 50117 PE extends P
             .collect();
         assert_eq!(rows, vec![(2, 3)]);
         assert_eq!(r.origin.start.row, 4);
+    }
+
+    // ---------------------------------------------------------------------
+    // #80: an attribute separated from its routine by a comment, a pragma or an
+    // `#if` line. Each test asserts the EXACT attribute-name list of every
+    // routine it names, and the event-name argument (`args[2]`) of every
+    // `[EventSubscriber]`.
+    // ---------------------------------------------------------------------
+
+    /// #80: the attribute names of every routine called `name` in object `obj`,
+    /// one list per routine (overloads and per-arm copies), in source order.
+    fn attrs_all(af: &crate::ir::AlFile, obj: usize, name: &str) -> Vec<Vec<String>> {
+        af.objects[obj]
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .map(|r| r.attributes_parsed.iter().map(|a| a.name.clone()).collect())
+            .collect()
+    }
+
+    /// #80: the attribute names of the ONE routine called `name` in object `obj`.
+    fn attrs(af: &crate::ir::AlFile, obj: usize, name: &str) -> Vec<String> {
+        let all = attrs_all(af, obj, name);
+        assert_eq!(all.len(), 1, "{name}: expected exactly one routine");
+        all.into_iter().next().unwrap()
+    }
+
+    /// #80: `(first parameter name, attribute names)` of every routine called `name`
+    /// in object `obj`, so two overloads (or two split-header arms) are told apart.
+    fn attrs_by_param(
+        af: &crate::ir::AlFile,
+        obj: usize,
+        name: &str,
+    ) -> Vec<(String, Vec<String>)> {
+        af.objects[obj]
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .map(|r| {
+                (
+                    r.params.first().map(|p| p.name.clone()).unwrap_or_default(),
+                    r.attributes_parsed.iter().map(|a| a.name.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// #80: the source text of argument `i` of every `[EventSubscriber]` on the ONE
+    /// routine called `name` in object `obj`, in attribute order.
+    fn subscriber_arg(
+        af: &crate::ir::AlFile,
+        src: &str,
+        obj: usize,
+        name: &str,
+        i: usize,
+    ) -> Vec<String> {
+        let rs: Vec<_> = af.objects[obj]
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(rs.len(), 1, "{name}: expected exactly one routine");
+        rs[0]
+            .attributes_parsed
+            .iter()
+            .filter(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
+            .map(|a| {
+                let id = *a
+                    .args
+                    .get(i)
+                    .unwrap_or_else(|| panic!("{name}: EventSubscriber has no args[{i}]"));
+                src[af.ir.expr(id).origin.byte.clone()].to_string()
+            })
+            .collect()
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A1 (#80): a line comment, `///` doc comments and a same-line trailing
+    /// comment between an attribute and its routine do not drop the attribute.
+    #[test]
+    fn attribute_survives_a_line_comment() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnFire', '', false, false)]
+    // note
+    local procedure Handler()
+    begin
+    end;
+
+    /// <summary>doc</summary>
+    [Scope('OnPrem')]
+    /// <summary>doc2</summary>
+    procedure DocComment()
+    begin
+    end;
+
+    [Scope('OnPrem')] // trailing
+    procedure TrailingComment()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "Handler"), names(&["EventSubscriber"]));
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "Handler", 2),
+            names(&["'OnFire'"])
+        );
+        assert_eq!(attrs(&af, 0, "DocComment"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "TrailingComment"), names(&["Scope"]));
+    }
+
+    /// A2 (#80): a one-line and a multi-line block comment do not drop the attribute.
+    #[test]
+    fn attribute_survives_a_block_comment() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnFire', '', false, false)]
+    /* note */
+    local procedure Handler()
+    begin
+        Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    /*
+       multi
+       line
+    */
+    procedure OnFire()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "Handler"), names(&["EventSubscriber"]));
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "Handler", 2),
+            names(&["'OnFire'"])
+        );
+        assert_eq!(attrs(&af, 0, "OnFire"), names(&["IntegrationEvent"]));
+    }
+
+    /// A3 (#80): `#pragma`, `#region`/`#endregion` and `#define`/`#undef` lines
+    /// (the grammar's extras) do not drop the attribute.
+    #[test]
+    fn attribute_survives_pragma_and_region_lines() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnFire', '', false, false)]
+#pragma warning disable AA0150
+    local procedure Handler()
+    begin
+    end;
+#pragma warning restore AA0150
+
+    [IntegrationEvent(false, false)]
+#region R
+    procedure OnFire()
+    begin
+    end;
+#endregion
+
+    [Scope('OnPrem')]
+#define FOO
+#undef FOO
+    procedure DefineUndef()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "Handler"), names(&["EventSubscriber"]));
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "Handler", 2),
+            names(&["'OnFire'"])
+        );
+        assert_eq!(attrs(&af, 0, "OnFire"), names(&["IntegrationEvent"]));
+        assert_eq!(attrs(&af, 0, "DefineUndef"), names(&["Scope"]));
+    }
+
+    /// A4 (#80): a 3-line attribute followed by a comment keeps all 6 arguments.
+    #[test]
+    fn multi_line_attribute_survives_a_comment() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit,
+        Codeunit::T, 'OnFire', '',
+        false, false)]
+    // c
+    local procedure Multi()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "Multi"), names(&["EventSubscriber"]));
+        let all: Vec<String> = (0..6)
+            .map(|i| subscriber_arg(&af, src, 0, "Multi", i).join("|"))
+            .collect();
+        assert_eq!(
+            all,
+            names(&[
+                "ObjectType::Codeunit",
+                "Codeunit::T",
+                "'OnFire'",
+                "''",
+                "false",
+                "false"
+            ])
+        );
+    }
+
+    /// A5 (#80): two attributes split by a comment are both kept, in source order.
+    #[test]
+    fn attributes_split_by_a_comment_are_both_kept_in_order() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+    // c
+    [NonDebuggable]
+    procedure TwoAttrs()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs(&af, 0, "TwoAttrs"),
+            names(&["Scope", "NonDebuggable"])
+        );
+    }
+
+    /// A6 (#80): an `#if` that wraps only attributes gives the routine every live
+    /// arm's attributes (union-read), plus any attribute written before the `#if`.
+    #[test]
+    fn if_wrapping_only_attributes_gives_every_live_arm() {
+        let src = r#"codeunit 50100 T
+{
+#if not CLEAN25
+    [Obsolete('x', '25.0')]
+#endif
+    procedure OnlyAttrs()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+#if not CLEAN25
+    [Obsolete('x', '25.0')]
+#endif
+    procedure MixedBefore()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+#if X
+    [NonDebuggable]
+#else
+    [Obsolete('x', '25.0')]
+#endif
+    procedure MixedBeforeElse()
+    begin
+    end;
+
+#if CLEAN25
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnA', '', false, false)]
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnB', '', false, false)]
+#endif
+    local procedure PerArm()
+    begin
+    end;
+
+#if A
+    [Scope('OnPrem')]
+#elif B
+    [NonDebuggable]
+#else
+    [Obsolete('x', '25.0')]
+#endif
+    procedure Elif()
+    begin
+    end;
+
+#if A
+#if B
+    [Scope('OnPrem')]
+#endif
+#endif
+    procedure Nested()
+    begin
+    end;
+
+#if A
+    // c
+    [Scope('OnPrem')]
+    /* d */
+#endif
+    procedure TriviaInArm()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+#if not CLEAN25
+#pragma warning disable AL0432
+#endif
+    procedure PragmaInIf()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+#if A
+#endif
+    procedure EmptyIf()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "OnlyAttrs"), names(&["Obsolete"]));
+        assert_eq!(attrs(&af, 0, "MixedBefore"), names(&["Scope", "Obsolete"]));
+        assert_eq!(
+            attrs(&af, 0, "MixedBeforeElse"),
+            names(&["Scope", "NonDebuggable", "Obsolete"])
+        );
+        assert_eq!(
+            attrs(&af, 0, "PerArm"),
+            names(&["EventSubscriber", "EventSubscriber"])
+        );
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "PerArm", 2),
+            names(&["'OnA'", "'OnB'"])
+        );
+        assert_eq!(
+            attrs(&af, 0, "Elif"),
+            names(&["Scope", "NonDebuggable", "Obsolete"])
+        );
+        assert_eq!(attrs(&af, 0, "Nested"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "TriviaInArm"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "PragmaInIf"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "EmptyIf"), names(&["Scope"]));
+    }
+
+    /// A7 (#80, negative control): an attribute in a dead arm attaches to nothing,
+    /// and a routine in a dead arm is not collected. Inside `#if X`, the inner
+    /// `#if not X` arm is dead, so `DeadArm` has no attribute. Inside `#if not X`,
+    /// `#if X procedure P` is dead (P is absent) and the attribute falls through to Q.
+    #[test]
+    fn if_attribute_in_a_dead_arm_is_not_attached() {
+        let src = r#"codeunit 50100 T
+{
+#if X
+#if not X
+    [Scope('OnPrem')]
+#endif
+    procedure DeadArm()
+    begin
+    end;
+#endif
+
+#if not X
+    [Scope('OnPrem')]
+#if X
+    procedure P()
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "DeadArm"), Vec::<String>::new());
+        assert!(attrs_all(&af, 0, "P").is_empty(), "P is in a dead arm");
+        assert_eq!(attrs(&af, 0, "Q"), names(&["Scope"]));
+    }
+
+    /// A7b (#80): inside `#if X`, `[A] #if X procedure P #endif procedure Q` — the
+    /// arm is decided TRUE, so no build falls through to Q: P has A, Q has nothing.
+    #[test]
+    fn fall_through_is_dead_when_an_arm_is_decided_true() {
+        let src = r#"codeunit 50100 T
+{
+#if X
+    [Scope('OnPrem')]
+#if X
+    procedure P()
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "Q"), Vec::<String>::new());
+    }
+
+    /// A8 (#80): an attribute before an `#if` that wraps the routine reaches the
+    /// routine in each arm. With an `#else` it does not leak to the next routine;
+    /// without one it also reaches the next routine (the no-arm-taken build).
+    #[test]
+    fn attribute_before_if_reaches_each_arm_and_does_not_leak() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+#if X
+    procedure P(I: Integer)
+    begin
+    end;
+#else
+    procedure P(T: Text)
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+#if X
+    procedure P2()
+    begin
+    end;
+#endif
+    procedure Q2()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("I".to_string(), names(&["Scope"])),
+                ("T".to_string(), names(&["Scope"]))
+            ]
+        );
+        assert_eq!(attrs(&af, 0, "Q"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "P2"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "Q2"), names(&["Scope"]));
+    }
+
+    /// A9 (#80): one attribute that reaches a routine by two `#if` paths (a
+    /// pragma-only `#if X/#else`) is attached ONCE. The later `#if X procedure Z`
+    /// keeps `X` relevant, so the two paths stay distinct up to `P`.
+    #[test]
+    fn attribute_reaching_a_routine_by_two_paths_is_attached_once() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+#if X
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+    procedure P()
+    begin
+    end;
+
+#if X
+    procedure Z()
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "Z"), Vec::<String>::new());
+    }
+
+    /// A10 (#80): a comment between an attribute and a trigger, and between an
+    /// attribute and an interface procedure, does not drop the attribute.
+    #[test]
+    fn attribute_survives_a_comment_before_a_trigger_and_an_interface_procedure() {
+        let src = r#"codeunit 50100 T
+{
+    [NonDebuggable]
+    // c
+    trigger OnRun()
+    begin
+    end;
+}
+
+interface I
+{
+    [Obsolete('x', '25.0')]
+    // c
+    procedure IProc();
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "OnRun"), names(&["NonDebuggable"]));
+        assert_eq!(attrs(&af, 1, "IProc"), names(&["Obsolete"]));
+    }
+
+    /// A11 (#80, negative controls): a `var` section still ends the attribute run;
+    /// an attribute dangling at the end of a table's `fields` body does not reach
+    /// the table's procedure; an attribute dangling at the end of one object does
+    /// not reach the next object.
+    #[test]
+    fn attribute_is_still_dropped_by_a_var_section_and_at_body_end() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+    var
+        G: Integer;
+
+    procedure AfterVar()
+    begin
+    end;
+}
+
+table 50100 Tb
+{
+    fields
+    {
+        field(1; A; Integer) { }
+        [Scope('OnPrem')]
+    }
+
+    procedure TP()
+    begin
+    end;
+}
+
+codeunit 50101 D1
+{
+    procedure P()
+    begin
+    end;
+
+    [Scope('OnPrem')]
+}
+
+codeunit 50102 D2
+{
+    procedure First()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "AfterVar"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 1, "TP"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 2, "P"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 3, "First"), Vec::<String>::new());
+    }
+
+    /// A13 (#80): `[A] #if X P #endif #if X R #endif Q`. A survives the first
+    /// wrapper only in the not-X build, so the second `#if X` arm (R) never sees
+    /// it, while P (X build) and Q (not-X build) both have it.
+    #[test]
+    fn fall_through_guard_blocks_a_later_arm_of_the_same_condition() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+#if X
+    procedure P()
+    begin
+    end;
+#endif
+#if X
+    procedure R()
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "R"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "Q"), names(&["Scope"]));
+    }
+
+    /// #80 review: the A13 shape spelled `# if`/`# endif` and `#IF`/`#ENDIF`, which
+    /// the grammar's scanner accepts. Projection must still see the second `X`
+    /// condition, or the `{X:false}` fall-through guard loses `X` and `R` gets `Scope`.
+    #[test]
+    fn projection_sees_spaced_and_upper_case_directives() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+# if X
+    procedure P()
+    begin
+    end;
+# endif
+#IF X
+    procedure R()
+    begin
+    end;
+#ENDIF
+    procedure Q()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "R"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "Q"), names(&["Scope"]));
+    }
+
+    /// A14 (#80): an attribute inside `#if not X`, carried to H across the
+    /// `#endif`, reads its `#if X 'OnA' #else 'OnB'` argument group under its own
+    /// arm (not-X), so H subscribes to 'OnB' only.
+    #[test]
+    fn carried_attribute_args_read_under_their_arm() {
+        let src = r#"codeunit 50100 T
+{
+#if not X
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T,
+#if X
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+#endif
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "H"), names(&["EventSubscriber"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'OnB'"]));
+    }
+
+    /// A15 (#80): an attribute inside `#if X` reaches only the `#if X` arm of the
+    /// following split header, `P(I)`, never the `#else` arm `P(T)`.
+    #[test]
+    fn guarded_attribute_reaches_only_its_split_header_arm() {
+        let src = r#"codeunit 50100 T
+{
+#if X
+    [Scope('OnPrem')]
+#endif
+#if X
+    procedure P(I: Integer)
+#else
+    procedure P(T: Text)
+#endif
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("I".to_string(), names(&["Scope"])),
+                ("T".to_string(), Vec::<String>::new())
+            ]
+        );
+    }
+
+    /// Final review F1 (#80): the guard `not (X or Y)` records `{X:false, Y:false}`,
+    /// but the split header's first arm (`#if X or Y`) records no literals, so a
+    /// literal-only check keeps it. That arm is unreachable under the guard (its
+    /// condition is decided false), so only the `#else` arm `P(b)` gets the attribute.
+    #[test]
+    fn guarded_attribute_skips_an_unreachable_split_header_arm() {
+        let src = r#"codeunit 50100 T
+{
+#if not (X or Y)
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnFire', '', false, false)]
+#endif
+#if X or Y
+    procedure P(a: Integer)
+#else
+    procedure P(b: Text)
+#endif
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("a".to_string(), Vec::<String>::new()),
+                ("b".to_string(), names(&["EventSubscriber"]))
+            ]
+        );
+    }
+
+    /// Final review F3/G7 (#80): an attribute with an `#if` group in its arguments
+    /// reaches H by two paths (`X` and `not X`) that read different arguments, so both
+    /// selections survive, but the group is reported ONCE.
+    #[test]
+    fn attribute_arg_group_issue_is_reported_once() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T,
+#if X
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+#if X
+#else
+#endif
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "H", 2),
+            names(&["'OnA'", "'OnB'"])
+        );
+        let n = af
+            .issues
+            .iter()
+            .filter(|i| i.message.starts_with("`#if` inside attribute arguments"))
+            .count();
+        assert_eq!(n, 1, "issues: {:?}", af.issues);
+    }
+
+    /// Final review G5 (#80): `consistent` validates BOTH operands, so a contradiction
+    /// inside the first one is not copied through.
+    #[test]
+    fn consistent_rejects_a_contradictory_first_operand() {
+        use super::consistent;
+        let x = |v| ("X".to_string(), v);
+        assert_eq!(consistent(&[x(true), x(false)], &[]), None);
+        assert_eq!(consistent(&[], &[x(true), x(false)]), None);
+        assert_eq!(consistent(&[x(true)], &[x(true)]), Some(vec![x(true)]));
+    }
+
+    /// Final review G5 (#80): inside `#if X`, a split header's `#if not X` arm is no
+    /// build, so the attribute inside that arm attaches nothing to it.
+    #[test]
+    fn contradictory_context_in_node_attribute_attaches_nothing() {
+        let src = r#"codeunit 50100 T
+{
+#if X
+#if not X
+    [Scope('OnPrem')]
+    procedure P(a: Integer)
+#else
+    procedure P(b: Text)
+#endif
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("a".to_string(), Vec::<String>::new()),
+                ("b".to_string(), Vec::<String>::new())
+            ]
+        );
+    }
+
+    /// Final review G6 (#80), a STATED LIMIT, not a goal: the running context records
+    /// only symbol LITERALS. The first group is chosen under `X or Y`, which records
+    /// none, so it does not constrain the second group (`not X and not Y`), and `H`
+    /// reads `'PubA'` with `'OnA'` although no build has both. If this test starts
+    /// failing because the context got smarter, update it and the CHANGELOG bullet.
+    #[test]
+    fn sibling_groups_under_a_disjunction_are_not_correlated() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T,
+#if X or Y
+        'PubA',
+#else
+        'PubB',
+#endif
+#if not X and not Y
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'PubA'"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 3), names(&["'OnA'"]));
+    }
+
+    /// Review round 2 (#80): the attribute flow scales linearly in two pathological
+    /// shapes. (1) Many attributes before one `#if X` wrapper holding many procedures:
+    /// each pending entry evaluates the wrapper's directives, never all its children.
+    /// (2) One attribute under a long single-path guard (`#if X0 and … and Xn`)
+    /// crossing many known-true `#if Xi` wrappers, with every `Xi` mentioned again
+    /// later (one `#if X0 or … or Xn` after the routine) so no literal is projected
+    /// away: each guard join is a hashed, linear check, not a nested scan. The sizes
+    /// make the quadratic forms take minutes in a debug build (measured: see the #80
+    /// review-fix report) against seconds now. Run on a big stack: the `and` and `or`
+    /// chains nest `n` deep.
+    #[test]
+    fn attribute_flow_scales_linearly() {
+        const ATTRS: usize = 20000;
+        const SYMS: usize = 16000;
+        const WRAPPERS: usize = 300;
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut a = String::from("codeunit 50100 T\n{\n");
+                for _ in 0..ATTRS {
+                    a.push_str("    [Scope('OnPrem')]\n");
+                }
+                a.push_str("#if X\n");
+                for i in 0..ATTRS {
+                    a.push_str(&format!(
+                        "    procedure P{i}(a: Integer)\n    begin\n    end;\n"
+                    ));
+                }
+                a.push_str("#endif\n    procedure Q(b: Integer)\n    begin\n    end;\n}\n");
+                let af = parse(&a);
+                assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+                let count = |af: &crate::ir::AlFile, name: &str| {
+                    attrs_by_param(af, 0, name)
+                        .into_iter()
+                        .map(|(_, v)| v.len())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(count(&af, "P0"), vec![ATTRS]);
+                assert_eq!(count(&af, "P1"), vec![0]);
+                assert_eq!(count(&af, "Q"), vec![ATTRS]);
+
+                let all: Vec<String> = (0..SYMS).map(|i| format!("X{i}")).collect();
+                let mut b = format!("codeunit 50100 T\n{{\n#if {}\n", all.join(" and "));
+                b.push_str("    [Scope('OnPrem')]\n");
+                for s in &all[..WRAPPERS] {
+                    b.push_str(&format!("#if {s}\n#endif\n"));
+                }
+                b.push_str("    procedure P(a: Integer)\n    begin\n    end;\n");
+                b.push_str(&format!("#if {}\n#endif\n#endif\n}}\n", all.join(" or ")));
+                let af = parse(&b);
+                assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+                assert_eq!(
+                    attrs_by_param(&af, 0, "P"),
+                    vec![("a".to_string(), vec!["Scope".to_string()])]
+                );
+            })
+            .expect("spawn")
+            .join()
+            .expect("test thread");
+    }
+
+    /// A16 (#80): a contradictory path (`#if X … #elif not X` falling through, or
+    /// an `#elif X` after `#if X`) describes no build, so it attaches nothing.
+    #[test]
+    fn contradictory_guard_paths_attach_nothing() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+#if X
+    procedure P()
+    begin
+    end;
+#elif not X
+    procedure R()
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+
+#if X
+    [Scope('OnPrem')]
+#elif X
+    [NonDebuggable]
+#endif
+    procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "R"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "Q"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "H"), names(&["Scope"]));
+    }
+
+    /// A17 (#80): 40 pragma-only `#if Xi/#else` wrappers over distinct symbols,
+    /// none read later, keep ONE pending entry, so the attribute still attaches
+    /// (no 2^40 path blow-up, no cap).
+    #[test]
+    fn many_pragma_only_wrappers_stay_bounded() {
+        let mut src = String::from("codeunit 50100 T\n{\n    [Scope('OnPrem')]\n");
+        for i in 1..=40 {
+            src.push_str(&format!(
+                "#if X{i}\n#pragma warning disable AA0001\n#else\n#pragma warning disable AA0002\n#endif\n"
+            ));
+        }
+        src.push_str("    procedure P()\n    begin\n    end;\n}\n");
+        let af = parse(&src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert!(
+            af.issues.iter().all(|i| !i.message.contains("64")),
+            "no path-cap issue expected"
+        );
+    }
+
+    /// A18 (#80): a nested argument group is read under the arm chosen for its
+    /// parent group: inside `#if Y`, the `#if not Y` arm is dead, so the reading
+    /// is 'OnA' (never 'Never', which no build has).
+    #[test]
+    fn nested_attribute_arg_group_reads_under_the_chosen_arm() {
+        let src = r#"codeunit 1 C
+{
+    [EventSubscriber(ObjectType::Codeunit, 1,
+#if Y
+#if not Y
+        'Never',
+#else
+        'OnA',
+#endif
+#else
+        'OnB',
+#endif
+        '', false, false)]
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "H"), names(&["EventSubscriber"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'OnA'"]));
+    }
+
+    /// A19 (#80): each exact path keeps its own argument reading. P exists only
+    /// under X and Y, so it reads 'OnA'; H is reached under {X, not Y} and {not X},
+    /// both of which read 'OnB', so H has exactly one subscriber, to 'OnB'.
+    #[test]
+    fn exact_paths_keep_their_argument_reading() {
+        let src = r#"codeunit 1 C
+{
+    [EventSubscriber(ObjectType::Codeunit, 1,
+#if X and Y
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+#if X
+#if Y
+    local procedure P()
+    begin
+    end;
+#endif
+#endif
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["EventSubscriber"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "P", 2), names(&["'OnA'"]));
+        assert_eq!(attrs(&af, 0, "H"), names(&["EventSubscriber"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'OnB'"]));
+    }
+
+    /// A20 (#80): sibling argument groups in one attribute share one running
+    /// context: choosing `Codeunit::PubA` (X) makes the event-name group choose its
+    /// X arm, 'OnA' — the pair one build really has.
+    #[test]
+    fn sibling_attribute_arg_groups_share_one_context() {
+        let src = r#"codeunit 1 C
+{
+    [EventSubscriber(ObjectType::Codeunit,
+#if X
+        Codeunit::PubA,
+#else
+        Codeunit::PubB,
+#endif
+#if not X
+        'OnB',
+#else
+        'OnA',
+#endif
+        '', false, false)]
+    local procedure H2()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "H2"), names(&["EventSubscriber"]));
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "H2", 1),
+            names(&["Codeunit::PubA"])
+        );
+        assert_eq!(subscriber_arg(&af, src, 0, "H2", 2), names(&["'OnA'"]));
+    }
+
+    /// A21 (#80): attributes keep source order on a routine even when one arrives
+    /// by fall-through and the other from inside a consumed arm.
+    #[test]
+    fn attributes_keep_source_order_across_a_consuming_arm() {
+        let src = r#"codeunit 1 C
+{
+    [Scope('OnPrem')]
+#if X
+    procedure P3()
+    begin
+    end;
+
+    [NonDebuggable]
+#endif
+    procedure Q3()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P3"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "Q3"), names(&["Scope", "NonDebuggable"]));
+    }
+
+    /// A22 (#80): seven pragma-only wrappers over X1..X7, then a routine guarded by
+    /// all seven. Every symbol stays relevant, so the attribute reaches P/Q through
+    /// more than 64 distinct paths. It is DROPPED, and loudly: exactly one
+    /// `SyntaxIssue` names the 64-path limit, at the attribute.
+    #[test]
+    fn too_many_relevant_paths_drops_with_a_syntax_issue() {
+        let src = r#"codeunit 1 C
+{
+    [Scope('OnPrem')]
+#if X1
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X2
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X3
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X4
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X5
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X6
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X7
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X1 and X2 and X3 and X4 and X5 and X6 and X7
+    procedure P()
+    begin
+    end;
+#endif
+    procedure Q()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "Q"), Vec::<String>::new());
+        let cap: Vec<_> = af
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("64"))
+            .collect();
+        assert_eq!(
+            cap.len(),
+            1,
+            "exactly one path-cap issue expected, issues: {:?}",
+            af.issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            (cap[0].origin.start.row, cap[0].origin.start.column),
+            (2, 4),
+            "the issue is at the attribute"
+        );
+    }
+
+    /// A23 (#80): deduplication runs per split-header arm AFTER the arm filter. The
+    /// pragma-only `#if X/#else` gives `[Scope]` two paths, {X} and {not X}; each
+    /// split-header arm keeps the matching one, so BOTH `P2(I)` and `P2(T)` have it.
+    #[test]
+    fn dedup_after_split_header_arm_filter() {
+        let src = r#"codeunit 1 C
+{
+    [Scope('OnPrem')]
+#if X
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+#if X
+    procedure P2(I: Integer)
+#else
+    procedure P2(T: Text)
+#endif
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P2"),
+            vec![
+                ("I".to_string(), names(&["Scope"])),
+                ("T".to_string(), names(&["Scope"]))
+            ]
+        );
     }
 }
