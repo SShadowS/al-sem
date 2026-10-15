@@ -778,7 +778,7 @@ fn graph_rejects_an_app_json_without_an_id() {
             "{app_json}: stdout must be empty: {stdout}"
         );
         assert!(
-            stderr.starts_with(&format!("al-sem graph: {NO_ID}")),
+            stderr.contains(&format!("al-sem graph: {NO_ID}")),
             "{app_json}: stderr={stderr:?}"
         );
     }

@@ -191,9 +191,12 @@ impl ImpactGraph {
 pub fn export_workspace(workspace_root: &Path) -> Result<ImpactGraph, String> {
     let (ctx, report, coverage) =
         crate::program::resolve::full::build_cross_app_program(workspace_root)?;
-    // The gate's identity rule (#73): checked after the build, so a missing or
-    // unparseable `app.json` keeps the build's `read`/`parse` error.
-    if crate::source_text::read_root_app_guid(workspace_root).is_none() {
+    // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
+    // Checked on the snapshot's own reading of it (`guid` is "" exactly when the
+    // `id` is missing, not a string, or empty, `snapshot.rs:199-208`), so the id
+    // checked is the id exported, with no second read. After the build, so a
+    // missing or unparseable `app.json` keeps the build's `read`/`parse` error.
+    if ctx.snapshot().workspace_app.guid.is_empty() {
         return Err(format!(
             "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
             workspace_root.display()
