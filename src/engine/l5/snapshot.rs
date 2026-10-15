@@ -1438,20 +1438,25 @@ fn derive_pd_arena(
         return PdArena::default();
     }
     let map = &base.routine_to_stable;
-    let edge_ix: HashMap<PdEdgeKey, EdgeIx> = typed_edges
-        .iter()
-        .enumerate()
-        .filter_map(|(ix, e)| {
-            let key = (
-                e.kind_str(),
-                e.source_routine(),
-                e.to_endpoint()?,
-                e.callsite_id().unwrap_or(""),
-                e.event_id().unwrap_or(""),
-            );
-            Some((key, ix))
-        })
-        .collect();
+    // The key must be unique: a duplicate makes the index ambiguous and
+    // silently points a link at the wrong edge (event-dispatch edges carry no
+    // call site, so only `derive_typed_edges` keeps them apart).
+    let mut edge_ix: HashMap<PdEdgeKey, EdgeIx> = HashMap::with_capacity(typed_edges.len());
+    for (ix, e) in typed_edges.iter().enumerate() {
+        let Some(to) = e.to_endpoint() else { continue };
+        let key = (
+            e.kind_str(),
+            e.source_routine(),
+            to,
+            e.callsite_id().unwrap_or(""),
+            e.event_id().unwrap_or(""),
+        );
+        let prev = edge_ix.insert(key, ix);
+        debug_assert!(
+            prev.is_none(),
+            "pd arena: snapshot edges {prev:?} and {ix} share the key {key:?}"
+        );
+    }
     // (owner stable id, operation id) → the owner's direct fact.
     let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
     for (ix, f) in capability_facts.iter().enumerate() {

@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use al_sem::engine::l5::snapshot::compose_snapshot;
+use al_sem::engine::l5::snapshot::{SnapCapabilityExtra, SnapTempState, compose_snapshot};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 use al_sem::program::model::workspace::Model;
 
@@ -38,7 +38,18 @@ use crate::temp_state_probe;
 /// routine stable id -> producer operation id -> classes.
 type Classes = BTreeMap<String, BTreeMap<String, BTreeSet<&'static str>>>;
 
-fn compare_producers(label: &str, resolved: &Model, guarded: &[&str], f: &mut Vec<String>) {
+/// Stated limit (spec A5): producers whose op is not insert/modify/delete
+/// (`Get` reads) are real solve producers, but L4 has no write row for them, so
+/// neither compare looks at them. `skipped` counts those states by verb, so the
+/// excluded population is visible and the filter cannot start swallowing
+/// writes unnoticed.
+fn compare_producers(
+    label: &str,
+    resolved: &Model,
+    guarded: &[&str],
+    f: &mut Vec<String>,
+    skipped: &mut BTreeMap<String, usize>,
+) {
     let snap = compose_snapshot(resolved);
     let arena = &snap.pd_solution;
     let names = display_by_id(resolved);
@@ -51,6 +62,7 @@ fn compare_producers(label: &str, resolved: &Model, guarded: &[&str], f: &mut Ve
             // Supported ops on BOTH sides: a producer can be a read (`Get`).
             let verb = snap.capability_facts[state.producer_fact].op.as_str();
             if !matches!(verb, "insert" | "modify" | "delete") {
+                *skipped.entry(format!("{label}:{verb}")).or_default() += 1;
                 continue;
             }
             let op = state.producer_operation_id.clone(); // ASSUMED field
@@ -62,6 +74,29 @@ fn compare_producers(label: &str, resolved: &Model, guarded: &[&str], f: &mut Ve
                 .entry(op)
                 .or_default()
                 .insert(class_of(t));
+        }
+    }
+
+    // The producer set comes from the snapshot's direct facts, not from the
+    // solve: a write producer the solve dropped entirely has no states and no
+    // L4 rows read, and would otherwise compare equal (both empty).
+    for fact in &snap.capability_facts {
+        if fact.provenance == "direct"
+            && matches!(fact.op.as_str(), "insert" | "modify" | "delete")
+            && matches!(
+                &fact.extra,
+                Some(SnapCapabilityExtra::Table {
+                    temp_state: Some(SnapTempState::ParameterDependent { .. }),
+                    ..
+                })
+            )
+            && let Some(op) = &fact.witness_operation_id
+            && !producers.contains(op)
+        {
+            f.push(format!(
+                "[{label}] producer {op} ({} in {}) has no solve state",
+                fact.op, fact.subject
+            ));
         }
     }
 
@@ -122,16 +157,25 @@ fn compare_producers(label: &str, resolved: &Model, guarded: &[&str], f: &mut Ve
 #[test]
 fn a5_cone_l4_class_parity_per_producer() {
     let mut f = Vec::new();
+    let mut skipped = BTreeMap::new();
     let tmp = temp_state_probe::write_workspace();
     let probe = assemble_and_resolve_workspace_with_program_calls(tmp.path()).expect("probe");
-    compare_producers("probe", &probe, GUARDED, &mut f);
+    compare_producers("probe", &probe, GUARDED, &mut f, &mut skipped);
     for dir in corpus_fixtures() {
         let label = dir.file_name().unwrap().to_string_lossy().to_string();
         if let Some(m) = assemble_and_resolve_workspace_with_program_calls(&dir) {
-            compare_producers(&label, &m, &[], &mut f);
+            compare_producers(&label, &m, &[], &mut f, &mut skipped);
         }
     }
     assert!(f.is_empty(), "{} mismatches:\n{}", f.len(), f.join("\n"));
+    // The excluded read producers are known to exist in these fixtures; if the
+    // count is zero the verb filter is no longer reaching them.
+    for ws in ["ws-d21", "ws-d40", "ws-d42"] {
+        assert!(
+            skipped.keys().any(|k| k.starts_with(&format!("{ws}:"))),
+            "no read producer skipped in {ws}: {skipped:?}"
+        );
+    }
 }
 
 /// #69 D2: every arena link `(callee state, edge)` of a state names a snapshot
