@@ -237,6 +237,7 @@ fn lower_object(
     let mut routines = Vec::new();
     for (r, attr_items, di_table, member, in_dataset_modify_context, ctx) in routine_nodes {
         let (arms, shared_from) = header_arms(r);
+        let conds = split_conditions(r);
         for arm in arms {
             let a_syms = arm_symbols(r, &arm, source);
             routines.push(lower_routine(
@@ -245,7 +246,7 @@ fn lower_object(
                     .iter()
                     .filter_map(|e| {
                         consistent(&e.guard, &a_syms)
-                            .filter(|_| arm_live(r, &arm, source, &e.guard))
+                            .filter(|_| arm_live(&conds, arm.start, source, &e.guard))
                             .map(|guard| PendingAttr {
                                 node: e.node,
                                 guard,
@@ -525,7 +526,7 @@ fn key_members(key: RawNode, source: &str) -> Vec<String> {
     let mut members = Vec::new();
     if let Some(list) = key.field(FieldName::Fields) {
         let mut items = Vec::new();
-        let mut run = Vec::new();
+        let mut run = Run::default();
         for m in list.named_children() {
             if m.kind() == RawKind::PreprocConditionalFieldListItems {
                 conditional_list_arm(m, source, &mut run, &mut items);
@@ -1036,7 +1037,10 @@ fn collect_routines<'t>(
             // branch's symbols. Pending attributes cross a single-chain wrapper by
             // guard (see the doc above); any other wrapper ends the run.
             _ if is_preproc_wrapper(child) => {
-                let single = is_single_chain(child);
+                // One walk of the wrapper's children: its directives (read once per
+                // pending entry below) and its branch contents.
+                let (directives, contents) = chain_parts(child);
+                let single = is_single_chain(&directives);
                 let incoming = if single {
                     std::mem::take(&mut pending)
                 } else {
@@ -1044,16 +1048,14 @@ fn collect_routines<'t>(
                     Vec::new()
                 };
                 // Each entry's own view of the chain: liveness under its guard.
-                // Directives only: the branch contents are grouped once, below.
+                // Directives only: the branch contents are grouped once, above.
                 let chains: Vec<_> = incoming
                     .iter()
-                    .map(|e| chain_shape(child, source, &e.guard))
+                    .map(|e| chain_shape(&directives, source, &in_syms(&e.guard)))
                     .collect();
-                let (shape, _) = chain_shape(child, source, ctx);
+                let (shape, _) = chain_shape(&directives, source, &in_syms(ctx));
                 let last = shape.len() - 1;
-                for (k, ((syms, live), branch)) in
-                    shape.into_iter().zip(chain_contents(child)).enumerate()
-                {
+                for (k, ((syms, live), branch)) in shape.into_iter().zip(contents).enumerate() {
                     if !live {
                         continue;
                     }
@@ -1092,7 +1094,8 @@ fn collect_routines<'t>(
                         node: e.node,
                     })
                 }));
-                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);            }
+                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
+            }
             _ => {
                 pending.clear();
                 // A named, non-object, non-`_body` node becomes the enclosing MEMBER for
@@ -1139,13 +1142,8 @@ const PENDING_PATH_CAP: usize = 64;
 
 /// A wrapper with exactly one `#if` … `#endif` chain, the only shape an attribute
 /// crosses (ledger P16: every wrapper that can hold an attribute has it).
-fn is_single_chain(node: RawNode) -> bool {
-    let count = |k| {
-        node.named_children()
-            .iter()
-            .filter(|c| c.kind() == k)
-            .count()
-    };
+fn is_single_chain(directives: &[RawNode]) -> bool {
+    let count = |k| directives.iter().filter(|c| c.kind() == k).count();
     count(RawKind::PreprocIf) == 1 && count(RawKind::PreprocEndif) == 1
 }
 
@@ -1425,51 +1423,70 @@ fn preproc_branches<'t>(
     source: &str,
     ctx: &[(String, bool)],
 ) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
-    chain_shape(node, source, ctx)
+    let (directives, contents) = chain_parts(node);
+    branches_of(&directives, contents, source, &in_syms(ctx))
+}
+
+/// [`preproc_branches`] over a wrapper already split by [`chain_parts`], with
+/// liveness read through `lookup`.
+fn branches_of<'t>(
+    directives: &[RawNode],
+    contents: Vec<Vec<RawNode<'t>>>,
+    source: &str,
+    lookup: &dyn Fn(&str) -> Option<bool>,
+) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
+    chain_shape(directives, source, lookup)
         .0
         .into_iter()
-        .zip(chain_contents(node))
+        .zip(contents)
         .map(|((syms, live), items)| (syms, live, items))
         .collect()
 }
 
-/// The children of `node` grouped by branch, aligned with [`chain_shape`]'s arms
-/// (entry 0 before the first directive, one per directive after it).
-fn chain_contents<'t>(node: RawNode<'t>) -> Vec<Vec<RawNode<'t>>> {
+/// One walk over the children of `node`: its directive nodes (`#if`/`#elif`/
+/// `#else`/`#endif`, the input of [`chain_shape`]) and the other children grouped by
+/// branch, aligned with [`chain_shape`]'s arms (entry 0 before the first directive,
+/// one per directive after it).
+fn chain_parts<'t>(node: RawNode<'t>) -> (Vec<RawNode<'t>>, Vec<Vec<RawNode<'t>>>) {
+    let mut directives = Vec::new();
     let mut out = vec![Vec::new()];
     for c in node.named_children() {
         match c.kind() {
             RawKind::PreprocIf
             | RawKind::PreprocElif
             | RawKind::PreprocElse
-            | RawKind::PreprocEndif => out.push(Vec::new()),
+            | RawKind::PreprocEndif => {
+                directives.push(c);
+                out.push(Vec::new());
+            }
             _ => out.last_mut().expect("never empty").push(c),
         }
     }
-    out
+    (directives, out)
 }
 
-/// The directive walk of [`preproc_branches`], with no branch contents: per arm its
-/// `(symbols, live under ctx)`, plus the symbols of the build that takes no arm
+/// The directive walk of [`preproc_branches`], over a wrapper's `directives` only
+/// ([`chain_parts`]), with no branch contents: per arm its `(symbols, live under
+/// the context `lookup` reads)`, plus the symbols of the build that takes no arm
 /// (every `#if`/`#elif` condition false): `Some` only when the chain has no `#else`
-/// and `ctx` decides no arm true. The fall-through is read for the LAST chain of the
-/// wrapper (a single-chain wrapper has one). Cheap enough to run once per pending
-/// attribute.
+/// and the context decides no arm true. The fall-through is read for the LAST chain
+/// of the wrapper (a single-chain wrapper has one). It costs the directives, not the
+/// wrapper's children, so it runs once per pending attribute.
 fn chain_shape(
-    node: RawNode,
+    directives: &[RawNode],
     source: &str,
-    ctx: &[(String, bool)],
+    lookup: &dyn Fn(&str) -> Option<bool>,
 ) -> (Vec<(Syms, bool)>, Option<Syms>) {
     let mut out = vec![(Vec::new(), true)];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
     let mut has_else = false;
     let mut falls_through = None;
-    for c in node.named_children() {
+    for &c in directives {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif => {
                 let cond = c.field(FieldName::Condition);
-                let d = cond.and_then(|e| decide_preproc(e, source, ctx));
+                let d = cond.and_then(|e| decide_preproc_by(e, source, lookup));
                 let live = !taken && d != Some(false);
                 taken |= d == Some(true);
                 let mut syms = Vec::new();
@@ -1532,20 +1549,21 @@ fn chain_shape(
 fn conditional_list_arm<'t>(
     group: RawNode<'t>,
     source: &str,
-    run: &mut Syms,
+    run: &mut Run,
     out: &mut Vec<RawNode<'t>>,
 ) {
     // Entry 0 is the content before `#if` and the last the content after `#endif`
     // (live, and empty in a list group), so a group with no live arm reads nothing.
     // When no arm is consistent with `run`, `find_map` reaches that trailing entry
     // (empty syms, so consistent; empty items), and the group reads nothing.
-    let branches = preproc_branches(group, source, run);
-    // `join_into` extends `run` in place, and only for the arm it returns.
+    let (directives, contents) = chain_parts(group);
+    let branches = branches_of(&directives, contents, source, &|s| run.get(s));
+    // `Run::join` extends `run` in place, and only for the arm it returns.
     let Some((_, _, items)) = branches
         .into_iter()
         .skip(1)
         .filter(|(_, live, _)| *live)
-        .find(|(syms, _, _)| join_into(run, syms))
+        .find(|(syms, _, _)| run.join(syms))
     else {
         return;
     };
@@ -1560,36 +1578,63 @@ fn conditional_list_arm<'t>(
 
 /// `a ∪ b` in `a`'s order, then `b`'s new symbols; `None` when the two together give
 /// one symbol both values (inside either operand too), which no build does.
+/// Hashed: linear in the two lengths.
 fn consistent(a: &[(String, bool)], b: &[(String, bool)]) -> Option<Syms> {
+    use std::collections::hash_map::Entry;
+    let mut seen: std::collections::HashMap<&str, bool> =
+        std::collections::HashMap::with_capacity(a.len() + b.len());
     let mut out: Syms = Vec::new();
     for (s, v) in a.iter().chain(b) {
-        match out.iter().find(|(t, _)| t == s) {
-            Some((_, w)) if w != v => return None,
-            Some(_) => {}
-            None => out.push((s.clone(), *v)),
+        match seen.entry(s.as_str()) {
+            Entry::Occupied(w) if w.get() != v => return None,
+            Entry::Occupied(_) => {}
+            Entry::Vacant(slot) => {
+                slot.insert(*v);
+                out.push((s.clone(), *v));
+            }
         }
     }
     Some(out)
 }
 
-/// [`consistent`] `(run, b)` written into `run`: `false` (and `run` unchanged) when
-/// `b` contradicts itself or `run`. `run` is already consistent, so only `b`'s
-/// literals are checked and appended, with no copy of `run`.
-fn join_into(run: &mut Syms, b: &[(String, bool)]) -> bool {
-    let Some(b) = consistent(b, &[]) else {
-        return false;
-    };
-    if b.iter()
-        .any(|(s, v)| run.iter().any(|(t, w)| t == s && w != v))
-    {
-        return false;
-    }
-    for (s, v) in b {
-        if !run.iter().any(|(t, _)| *t == s) {
-            run.push((s, v));
+/// The running context of one positional list ([`conditional_list_arm`]), as a
+/// symbol index that every join and every condition lookup reads, so neither scans
+/// a list. Nothing reads its literals in order, so it keeps none.
+#[derive(Default)]
+struct Run {
+    index: std::collections::HashMap<String, bool>,
+}
+
+impl Run {
+    /// A context started from `syms` (a build guard: one literal per symbol; the
+    /// first wins, as a slice lookup reads it).
+    fn new(syms: &[(String, bool)]) -> Self {
+        let mut run = Self::default();
+        for (s, v) in syms {
+            run.index.entry(s.clone()).or_insert(*v);
         }
+        run
     }
-    true
+
+    fn get(&self, s: &str) -> Option<bool> {
+        self.index.get(s).copied()
+    }
+
+    /// [`consistent`] `(self, b)` written into `self`: `false` (and `self`
+    /// unchanged) when `b` contradicts itself or `self`. `self` is already
+    /// consistent, so only `b`'s literals are checked and appended.
+    fn join(&mut self, b: &[(String, bool)]) -> bool {
+        let Some(b) = consistent(b, &[]) else {
+            return false;
+        };
+        if b.iter().any(|(s, v)| self.get(s).is_some_and(|w| w != *v)) {
+            return false;
+        }
+        for (s, v) in b {
+            self.index.entry(s).or_insert(v);
+        }
+        true
+    }
 }
 
 /// Record the symbol values that make preprocessor condition `cond` equal `value`,
@@ -1622,14 +1667,25 @@ fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(Strin
 /// Condition `cond` under decided symbols `syms`, three-valued: `None` when
 /// undecided.
 fn decide_preproc(cond: RawNode, source: &str, syms: &[(String, bool)]) -> Option<bool> {
+    decide_preproc_by(cond, source, &in_syms(syms))
+}
+
+/// A symbol lookup over decided symbols `syms` (the first literal wins).
+fn in_syms(syms: &[(String, bool)]) -> impl Fn(&str) -> Option<bool> + '_ {
+    move |t| syms.iter().find(|(s, _)| s == t).map(|(_, v)| *v)
+}
+
+/// [`decide_preproc`] with each symbol's decided value read through `lookup`.
+fn decide_preproc_by(
+    cond: RawNode,
+    source: &str,
+    lookup: &dyn Fn(&str) -> Option<bool>,
+) -> Option<bool> {
     let mut kids = structural_children(cond)
         .into_iter()
-        .map(|k| decide_preproc(k, source, syms));
+        .map(|k| decide_preproc_by(k, source, lookup));
     match cond.kind() {
-        RawKind::Identifier => {
-            let t = cond.text(source).trim();
-            syms.iter().find(|(s, _)| s == t).map(|(_, v)| *v)
-        }
+        RawKind::Identifier => lookup(cond.text(source).trim()),
         RawKind::PreprocParenthesizedExpression => kids.next().flatten(),
         RawKind::PreprocNotExpression => kids.next().flatten().map(|v| !v),
         RawKind::PreprocAndExpression => {
@@ -1670,28 +1726,41 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
     out
 }
 
-/// Arm `arm` of split routine `node` is reachable under `guard`: its own condition
-/// is not decided false, and no earlier condition of the chain is decided true (the
+/// The `#if`/`#elif` conditions of a split routine header, each with the end byte
+/// of its directive, in order; empty for an unsplit routine (one arm, nothing to
+/// decide). Read once per routine, then by [`arm_live`] once per pending entry.
+fn split_conditions(node: RawNode) -> Vec<(RawNode, usize)> {
+    if !matches!(
+        node.kind(),
+        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
+    ) {
+        return Vec::new();
+    }
+    node.named_children()
+        .into_iter()
+        .filter(|c| matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif))
+        .filter_map(|c| Some((c.field(FieldName::Condition)?, c.byte_range().end)))
+        .collect()
+}
+
+/// The arm starting at byte `arm_start` of a split routine with header conditions
+/// `conds` ([`split_conditions`]) is reachable under `guard`: its own condition is
+/// not decided false, and no earlier condition of the chain is decided true (the
 /// rule [`chain_shape`] gives a wrapper arm's `live`).
 fn arm_live(
-    node: RawNode,
-    arm: &std::ops::Range<usize>,
+    conds: &[(RawNode, usize)],
+    arm_start: usize,
     source: &str,
     guard: &[(String, bool)],
 ) -> bool {
-    for c in node.named_children() {
-        let end = c.byte_range().end;
-        if end > arm.start {
+    for &(cond, end) in conds {
+        if end > arm_start {
             break;
         }
-        if matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
-            && let Some(cond) = c.field(FieldName::Condition)
-        {
-            let d = decide_preproc(cond, source, guard);
-            // The arm's own condition is dead when false, an earlier one when true.
-            if d == Some(end != arm.start) {
-                return false;
-            }
+        let d = decide_preproc(cond, source, guard);
+        // The arm's own condition is dead when false, an earlier one when true.
+        if d == Some(end != arm_start) {
+            return false;
         }
     }
     true
@@ -1731,7 +1800,7 @@ fn attribute_arg_selection<'t>(
                 groups: Vec::new(),
                 items: Vec::new(),
             };
-            let mut run = guard.to_vec();
+            let mut run = Run::new(guard);
             for arg in structural_children(list) {
                 if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
                     out.groups.push(arg);
@@ -6949,6 +7018,67 @@ codeunit 50102 D2
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
         assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'PubA'"]));
         assert_eq!(subscriber_arg(&af, src, 0, "H", 3), names(&["'OnA'"]));
+    }
+
+    /// Review round 2 (#80): the attribute flow scales linearly in two pathological
+    /// shapes. (1) Many attributes before one `#if X` wrapper holding many procedures:
+    /// each pending entry evaluates the wrapper's directives, never all its children.
+    /// (2) One attribute under a long single-path guard (`#if X0 and … and Xn`)
+    /// crossing many known-true `#if Xi` wrappers, with every `Xi` mentioned again
+    /// later (one `#if X0 or … or Xn` after the routine) so no literal is projected
+    /// away: each guard join is a hashed, linear check, not a nested scan. The sizes
+    /// make the quadratic forms take minutes in a debug build (measured: see the #80
+    /// review-fix report) against seconds now. Run on a big stack: the `and` and `or`
+    /// chains nest `n` deep.
+    #[test]
+    fn attribute_flow_scales_linearly() {
+        const ATTRS: usize = 20000;
+        const SYMS: usize = 16000;
+        const WRAPPERS: usize = 300;
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut a = String::from("codeunit 50100 T\n{\n");
+                for _ in 0..ATTRS {
+                    a.push_str("    [Scope('OnPrem')]\n");
+                }
+                a.push_str("#if X\n");
+                for i in 0..ATTRS {
+                    a.push_str(&format!(
+                        "    procedure P{i}(a: Integer)\n    begin\n    end;\n"
+                    ));
+                }
+                a.push_str("#endif\n    procedure Q(b: Integer)\n    begin\n    end;\n}\n");
+                let af = parse(&a);
+                assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+                let count = |af: &crate::ir::AlFile, name: &str| {
+                    attrs_by_param(af, 0, name)
+                        .into_iter()
+                        .map(|(_, v)| v.len())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(count(&af, "P0"), vec![ATTRS]);
+                assert_eq!(count(&af, "P1"), vec![0]);
+                assert_eq!(count(&af, "Q"), vec![ATTRS]);
+
+                let all: Vec<String> = (0..SYMS).map(|i| format!("X{i}")).collect();
+                let mut b = format!("codeunit 50100 T\n{{\n#if {}\n", all.join(" and "));
+                b.push_str("    [Scope('OnPrem')]\n");
+                for s in &all[..WRAPPERS] {
+                    b.push_str(&format!("#if {s}\n#endif\n"));
+                }
+                b.push_str("    procedure P(a: Integer)\n    begin\n    end;\n");
+                b.push_str(&format!("#if {}\n#endif\n#endif\n}}\n", all.join(" or ")));
+                let af = parse(&b);
+                assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+                assert_eq!(
+                    attrs_by_param(&af, 0, "P"),
+                    vec![("a".to_string(), vec!["Scope".to_string()])]
+                );
+            })
+            .expect("spawn")
+            .join()
+            .expect("test thread");
     }
 
     /// A16 (#80): a contradictory path (`#if X … #elif not X` falling through, or

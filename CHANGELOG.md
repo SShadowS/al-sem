@@ -219,14 +219,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attached unconditionally (union-read, as for every undecided `#if`); a procedure written
   twice under `#if`/`#else` with the SAME signature still keeps only the first copy's
   subscriptions (a separate issue); an attribute followed by a `var` section, field, key or
-  dataitem is still dropped, as before. Tests: 30 lowerer tests (A1-A11 and
+  dataitem is still dropped, as before. Tests: 31 lowerer tests (A1-A11 and
   A13-A23, 22 in all, as A12 is the cli test; plus `fall_through_is_dead_when_an_arm_is_decided_true`
   (A7b), the renamed `attribute_separated_by_comment_is_attached`,
   `projection_sees_spaced_and_upper_case_directives`,
   `guarded_attribute_skips_an_unreachable_split_header_arm`,
   `attribute_arg_group_issue_is_reported_once`, `consistent_rejects_a_contradictory_first_operand`,
-  `contradictory_context_in_node_attribute_attaches_nothing` and
-  `sibling_groups_under_a_disjunction_are_not_correlated`) and the end-to-end
+  `contradictory_context_in_node_attribute_attaches_nothing`,
+  `sibling_groups_under_a_disjunction_are_not_correlated` and
+  `attribute_flow_scales_linearly`, which pins that the attribute flow stays linear: each
+  pending attribute reads a wrapper's directives, not all its children, and guard joins
+  are hashed) and the end-to-end
   `tests/cli/cli_attribute_trivia.rs` (`alsem digest` sees `COMMIT` through every separator
   kind). #71's two "#80 limit" tests now assert the attribute is claimed: a comment-separated
   attribute starts its routine's declaration span. CDO (`U:/Git/DO-cdo-baseline/Cloud`), before → after: `primaryScoped` byte-identical,
