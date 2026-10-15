@@ -340,7 +340,8 @@ pub fn find_alpackages_folder(project_root: &Path) -> Option<PathBuf> {
 /// Walking stops at the first of:
 ///   - filesystem root,
 ///   - eight ancestors deep (safety),
-///   - a directory containing `.git` (project boundary).
+///   - a directory containing `.git` (project boundary), the workspace itself
+///     included: a repository-root workspace reads only its own cache.
 ///
 /// This mirrors the Go wrapper's `DiscoverPackageCachePaths` so the
 /// dependency index that the wrapper relies on (for hover enrichment +
@@ -354,6 +355,13 @@ pub fn find_all_alpackages_folders(project_root: &Path) -> Vec<PathBuf> {
 
     if let Some(own) = find_alpackages_folder(project_root) {
         folders.push(own);
+    }
+
+    // The boundary holds at the workspace itself: a workspace that is its own
+    // repository root (`.git` as a directory or a worktree file) reads nothing
+    // above it.
+    if project_root.join(".git").exists() {
+        return folders;
     }
 
     let mut current = project_root.parent();
@@ -1629,6 +1637,61 @@ mod tests {
             folders.len() <= 9,
             "expected ≤ 9 (own + 8 ancestors), got {}",
             folders.len()
+        );
+    }
+
+    /// #70 row 2g: the `.git` boundary holds at the workspace itself. A
+    /// workspace that is its own repository root (`.git` as a directory, then as
+    /// a worktree FILE `gitdir: …`) with an `.alpackages` above it -> only its own
+    /// cache. A nested workspace (`.git` one level up) still reads that level's
+    /// cache, and nothing above it.
+    ///
+    /// Mutation: delete the `project_root/.git` check -> the above-root cache is
+    /// returned.
+    #[test]
+    fn own_git_root_stops_the_ascent() {
+        let canon = |v: &[PathBuf]| -> Vec<PathBuf> {
+            v.iter()
+                .map(|p| std::fs::canonicalize(p).unwrap())
+                .collect()
+        };
+        for git_as_file in [false, true] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let above = dir.path().join("above");
+            let project = above.join("ws");
+            std::fs::create_dir_all(above.join(".alpackages")).unwrap();
+            std::fs::create_dir_all(project.join(".alpackages")).unwrap();
+            if git_as_file {
+                std::fs::write(
+                    project.join(".git"),
+                    "gitdir: ../../elsewhere/.git/worktrees/ws\n",
+                )
+                .unwrap();
+            } else {
+                std::fs::create_dir_all(project.join(".git")).unwrap();
+            }
+            let folders = find_all_alpackages_folders(&project);
+            assert_eq!(
+                canon(&folders),
+                canon(&[project.join(".alpackages")]),
+                ".git as file: {git_as_file}"
+            );
+        }
+
+        // Nested: repo/.git, repo/.alpackages, repo/ws/.alpackages, and a cache
+        // above the repository that must stay out.
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("outer").join("repo");
+        let project = repo.join("ws");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join(".alpackages")).unwrap();
+        std::fs::create_dir_all(project.join(".alpackages")).unwrap();
+        std::fs::create_dir_all(dir.path().join("outer").join(".alpackages")).unwrap();
+        let folders = find_all_alpackages_folders(&project);
+        assert_eq!(
+            canon(&folders),
+            canon(&[project.join(".alpackages"), repo.join(".alpackages")]),
+            "nested workspace"
         );
     }
 }

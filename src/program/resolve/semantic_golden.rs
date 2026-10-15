@@ -234,6 +234,79 @@ pub struct MintMetadata {
 /// the goldens are re-stamped (`mint-goldens --restamp`).
 pub const CLOSURE_SCHEME: &str = "closure-v2";
 
+/// Why a closure entry could not be used. The stable [`Self::as_str`] marker is
+/// what a fingerprint hashes; the OS message (machine paths, OS wording) never is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureErrorKind {
+    /// An `.alpackages` folder could not be listed.
+    ListingFailed,
+    /// A discovered `.app` could not be read (e.g. it is a directory).
+    ReadFailed,
+}
+
+impl ClosureErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ListingFailed => "listing-failed",
+            Self::ReadFailed => "read-failed",
+        }
+    }
+}
+
+/// The dependency closure the loader reads, keyed by path relative to the
+/// workspace (`.alpackages/x.app`, `../.alpackages/y.app`), sorted by key.
+/// `errors` holds every folder that could not be listed (keyed
+/// `../.alpackages/`) and every `.app` that could not be opened as a file
+/// (keyed like an entry). A failure never drops another, readable entry.
+#[derive(Debug, Default)]
+pub struct ClosureEntries {
+    pub entries: Vec<(String, PathBuf)>,
+    pub errors: Vec<(String, ClosureErrorKind)>,
+}
+
+/// The ONE closure discovery behind [`dependency_closure_digest`] and the
+/// workspace fingerprint's `dep-package` inputs, built on
+/// [`crate::dependencies::discover_app_files`] (the loader's own walk).
+#[must_use]
+pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
+    // How many levels above `workspace_root` a cache folder sits (0 = its own).
+    // Every discovered folder is `<ancestor>/.alpackages`, so the fallback is
+    // unreachable.
+    let folder_key = |folder: &Path| {
+        let owner = folder.parent().unwrap_or(folder);
+        let ups = workspace_root
+            .ancestors()
+            .position(|a| a == owner)
+            .unwrap_or(0);
+        format!("{}.alpackages/", "../".repeat(ups))
+    };
+    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
+    let mut out = ClosureEntries::default();
+    for (folder, _) in unreadable {
+        out.errors
+            .push((folder_key(&folder), ClosureErrorKind::ListingFailed));
+    }
+    for f in files {
+        let key = format!(
+            "{}{}",
+            folder_key(&f.folder),
+            f.path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let is_file = std::fs::File::open(&f.path)
+            .and_then(|h| h.metadata())
+            .is_ok_and(|m| m.is_file());
+        if is_file {
+            out.entries.push((key, f.path));
+        } else {
+            out.errors.push((key, ClosureErrorKind::ReadFailed));
+        }
+    }
+    out.entries.sort_by(|a, b| a.0.cmp(&b.0));
+    out.errors.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// SHA-256 over the dependency symbol closure the resolver ACTUALLY loads (#29):
 /// every `.app` file [`crate::dependencies::discover_app_files`] finds, in every
 /// scanned `.alpackages` (the workspace's own AND each ancestor's, up to the git
@@ -246,31 +319,15 @@ pub const CLOSURE_SCHEME: &str = "closure-v2";
 /// closure, never `None`. `Err` when a cache folder cannot be listed or a file
 /// cannot be read: a probe failure is not an empty closure.
 pub fn dependency_closure_digest(workspace_root: &Path) -> Result<String, String> {
-    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
-    if let Some((folder, e)) = unreadable.first() {
-        return Err(format!("cannot list {}: {e}", folder.display()));
+    let closure = dependency_closure_entries(workspace_root);
+    if let Some((key, kind)) = closure.errors.first() {
+        return Err(format!("{} {key}", kind.as_str()));
     }
-    let mut keyed: Vec<(String, PathBuf)> = Vec::with_capacity(files.len());
-    for f in files {
-        // How many levels above `workspace_root` the cache sits (0 = its own).
-        let owner = f.folder.parent().unwrap_or(&f.folder);
-        let ups = workspace_root
-            .ancestors()
-            .position(|a| a == owner)
-            .ok_or_else(|| format!("{} is not an ancestor cache", f.folder.display()))?;
-        let name = f
-            .path
-            .file_name()
-            .ok_or_else(|| format!("no file name: {}", f.path.display()))?
-            .to_string_lossy();
-        keyed.push((format!("{}.alpackages/{name}", "../".repeat(ups)), f.path));
-    }
-    if keyed.is_empty() {
+    if closure.entries.is_empty() {
         return Ok(format!("{CLOSURE_SCHEME}:empty"));
     }
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
     let mut hasher = Sha256::new();
-    for (key, path) in &keyed {
+    for (key, path) in &closure.entries {
         let bytes =
             std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         hasher.update((key.len() as u64).to_le_bytes());
