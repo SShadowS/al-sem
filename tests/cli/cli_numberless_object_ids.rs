@@ -10,6 +10,9 @@
 //!   longer share an object id or routine ids.
 //! - T5b: in a cross-app model, the dependency interface's graph id (P3) equals its
 //!   projected `ModelObject` id (P8), whose `object_key` is the id's last segment.
+//! - T6: the full snapshot's identity table and contracts keep both interfaces.
+//! - T7: with a numbered and a numberless codeunit, the identity table stays
+//!   ordinal and the contracts stay `locale_compare`.
 
 use std::path::Path;
 
@@ -60,16 +63,10 @@ fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
     al_sem::program::inputs::InputSet::read(ws, &Default::default())
 }
 
-/// T3. The second interface's name holds every byte a consumer splits on, a
-/// doubled quote and a non-ASCII letter, so the encoding and the unescape are both
-/// exercised.
-///
-/// Discrimination (2026-10-15): `model_object_id` (P3) without the unescape gives
-/// `%22%22` for the doubled quote and fails the P3 assertion; restored, it passes.
-#[test]
-fn source_interfaces_get_distinct_ids_from_every_producer() {
-    let dir = tempfile::tempdir().unwrap();
-    let ws = dir.path();
+/// T3's workspace: two interfaces and one ControlAddIn, none numbered. The second
+/// interface's name holds every byte a consumer splits on, a doubled quote and a
+/// non-ASCII letter.
+fn t3_workspace(ws: &Path) {
     app_json(ws, "");
     write(
         &ws.join("src/IEmpty.Interface.al"),
@@ -83,10 +80,159 @@ fn source_interfaces_get_distinct_ids_from_every_producer() {
         &ws.join("src/MyAddIn.ControlAddIn.al"),
         "controladdin \"My Add In\"\n{\n}\n",
     );
-    let internal = sorted(vec![
+}
+
+/// The internal ids of T3's two interfaces, `IEmpty` first.
+fn t3_interface_ids() -> Vec<String> {
+    vec![
         format!("{GUID}/Interface/@iempty"),
         format!("{GUID}/Interface/@%C3%B8%20%22q%22%20%2F%3A%23%25%40%20if"),
-    ]);
+    ]
+}
+
+/// The full capability snapshot (`compose_full_snapshot`, the tree `prove`,
+/// `fingerprint` and `diff` serialize) of a single-app workspace, as JSON.
+fn full_snapshot(ws: &Path) -> serde_json::Value {
+    use al_sem::engine::l5::snapshot_full::{
+        FullSnapshotOptions, compose_full_snapshot, serialize_json,
+    };
+    let inputs = al_sem::program::inputs::InputSet::read(
+        ws,
+        &al_sem::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
+    let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &inputs, MI, true,
+    )
+    .expect("model");
+    let opts = FullSnapshotOptions {
+        inputs: &inputs,
+        driver_version: "t83",
+        deterministic: true,
+        roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
+    };
+    serde_json::from_str(&serialize_json(&compose_full_snapshot(&model, &opts))).unwrap()
+}
+
+/// The identity table's `(stableId, displayName)` pairs whose id starts with
+/// `prefix`, in table order.
+fn identities_with(snap: &serde_json::Value, prefix: &str) -> Vec<(String, String)> {
+    let ids = snap["identities"]["stableIds"].as_array().unwrap();
+    let names = snap["identities"]["displayNames"].as_array().unwrap();
+    assert_eq!(ids.len(), names.len(), "parallel arrays");
+    ids.iter()
+        .zip(names)
+        .map(|(i, n)| (i.as_str().unwrap(), n.as_str().unwrap()))
+        .filter(|(i, _)| i.starts_with(prefix))
+        .map(|(i, n)| (i.to_string(), n.to_string()))
+        .collect()
+}
+
+/// The object contracts' `stableId`s that start with `prefix`, in output order.
+fn contract_ids_with(snap: &serde_json::Value, prefix: &str) -> Vec<String> {
+    snap["contractFacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "object")
+        .map(|c| c["stableId"].as_str().unwrap().to_string())
+        .filter(|i| i.starts_with(prefix))
+        .collect()
+}
+
+/// T6. The two interfaces of T3's workspace both survive the full-snapshot path:
+/// the identity table (a map keyed by `stableId`) and the contracts each hold
+/// both, with distinct ids and each interface's own name.
+///
+/// Discrimination (2026-10-15): `object_key(None, …)` returning `"0"` again gives
+/// both interfaces `…:Interface:0`, the identity table keeps one row and the
+/// assertion fails; restored, it passes.
+#[test]
+fn full_snapshot_keeps_both_numberless_interfaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    t3_workspace(ws);
+    let snap = full_snapshot(ws);
+    let stable: Vec<String> = t3_interface_ids()
+        .iter()
+        .map(|i| i.replace('/', ":"))
+        .collect();
+
+    assert_eq!(
+        sorted_pairs(identities_with(&snap, &format!("{GUID}:Interface:"))),
+        sorted_pairs(vec![
+            (stable[0].clone(), "IEmpty".to_string()),
+            // The display name is the model's `name`, which keeps the source's
+            // doubled quote.
+            (stable[1].clone(), "Ø \"\"Q\"\" /:#%@ If".to_string()),
+        ]),
+        "identity table"
+    );
+    assert_eq!(
+        sorted(contract_ids_with(&snap, &format!("{GUID}:Interface:"))),
+        sorted(stable),
+        "contracts"
+    );
+}
+
+fn sorted_pairs(mut v: Vec<(String, String)>) -> Vec<(String, String)> {
+    v.sort();
+    v
+}
+
+/// T7. A numbered and a numberless codeunit in one app: the identity table is
+/// ordinal (`…:Codeunit:1` before `…:Codeunit:@a`, since `1` < `@` by byte), the
+/// contracts are `locale_compare` (`@` ranks before digits, so `…:@a` first).
+/// Each output keeps its own order contract; nothing relies on the two agreeing.
+///
+/// Discrimination (2026-10-15): sorting the identity table with `locale_compare`
+/// puts `…:@a` first and fails the identity-table assertion; sorting the
+/// contracts ordinally puts `…:1` first and fails the contracts assertion; each
+/// restored, it passes.
+#[test]
+fn mixed_object_keys_keep_each_outputs_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    app_json(ws, "");
+    write(
+        &ws.join("src/A.Codeunit.al"),
+        "codeunit 99999999999999999999 \"A\"\n{\n}\n",
+    );
+    write(&ws.join("src/B.Codeunit.al"), "codeunit 1 \"B\"\n{\n}\n");
+    let snap = full_snapshot(ws);
+    let numbered = format!("{GUID}:Codeunit:1");
+    let numberless = format!("{GUID}:Codeunit:@a");
+
+    assert_eq!(
+        identities_with(&snap, &format!("{GUID}:Codeunit:")),
+        vec![
+            (numbered.clone(), "B".to_string()),
+            (numberless.clone(), "A".to_string()),
+        ],
+        "identity table: ordinal"
+    );
+    assert_eq!(
+        contract_ids_with(&snap, &format!("{GUID}:Codeunit:")),
+        vec![numberless, numbered],
+        "contracts: locale_compare"
+    );
+}
+
+/// T3. The second interface's name holds every byte a consumer splits on, a
+/// doubled quote and a non-ASCII letter, so the encoding and the unescape are both
+/// exercised.
+///
+/// Discrimination (2026-10-15): `model_object_id` (P3) without the unescape gives
+/// `%22%22` for the doubled quote and fails the P3 assertion; restored, it passes.
+#[test]
+fn source_interfaces_get_distinct_ids_from_every_producer() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    t3_workspace(ws);
+    let internal = sorted(t3_interface_ids());
     let stable: Vec<String> = internal.iter().map(|i| i.replace('/', ":")).collect();
 
     // P1: the R0 identity snapshot.
