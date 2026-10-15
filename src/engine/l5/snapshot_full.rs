@@ -826,7 +826,7 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
             None => out.push(unreadable(key, ClosureErrorKind::ReadFailed)),
         }
     }
-    for (key, kind) in closure.errors {
+    for (key, kind, _os_message) in closure.errors {
         out.push(unreadable(key, kind));
     }
 

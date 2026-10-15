@@ -1007,8 +1007,10 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// through A2).
 ///
 /// `fixed_roles` (#70): routines solved for their db-effect ROWS only. Each keeps
-/// its base summary's parameter roles (a fixed leaf's: path-sensitive fields
-/// unknown) for the whole solve, because role composition does not follow the
+/// its base summary's parameter roles for the whole solve, as a fixed leaf's: the
+/// five path-sensitive fields unknown, the body-local fields
+/// (`persistsCurrentRecord`, `writesFields`, `validatesParam`, …) from its own
+/// body. Role composition does not follow the
 /// synthetic event-dispatch edges a dependency publisher is solved through.
 /// Empty everywhere but the cross-app solves: the base, the db-effect bundle and
 /// the digest's transaction spans.

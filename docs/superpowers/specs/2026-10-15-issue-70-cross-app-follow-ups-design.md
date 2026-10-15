@@ -176,17 +176,20 @@ composition walks source callsites and the routine's body; it does NOT compose t
 subscriber dispatches (`combined_graph.rs:332-340` creates dispatch edges with no callsite). So a
 solved publisher whose subscriber reads or dirties a forwarded record would report falsely
 concrete roles (no entry requirement, `dirtyAtExit: no`) (R2-01). Therefore: **a dependency
-publisher is solved for its effect ROWS only; its parameter roles stay the leaf's (unknown)
-values for the whole solve.** Mechanism: `build_cross_app_base` computes
+publisher is solved for its effect ROWS only; its parameter roles stay the leaf's values for
+the whole solve** (the five path-sensitive fields unknown; the body-local fields such as
+`persistsCurrentRecord`, `writesFields` and `validatesParam` from the publisher's own body,
+exactly as for every dependency leaf). Mechanism: `build_cross_app_base` computes
 `fixed_roles: HashSet<RoutineId>` (the dependency routines that have an out-edge) and stores it
 on `R3a5CrossAppBase` next to `leaf_summaries`. It travels through EVERY cross-app solve (R3-01):
 a new `CrossAppInputs.fixed_roles` field, filled by the shared `R3a5CrossAppBase::cross_app_inputs()`
 constructor (so the detector context used by analyze, events, policy and digest diagnostics
 gets it, `detector_context.rs:885-892, 1383-1391`), and the base's own solve in
 `cross_app_db_effect_bundle` / `project_r3a5_cross_app` (`capability_cone.rs:3430-3453,
-3486-3493`). For a routine in the set the solver keeps the initial unknown role facts and never
-replaces them (`summary_runner.rs:738-774` skips the role write-back for it), so callers composing
-through it see unknown roles, as today. Test 3c (below) pins both paths. The same gap exists for WORKSPACE
+3486-3493`). For a routine in the set the solver keeps the initial role facts (path-sensitive
+fields unknown, body-local fields from its body) and never replaces them
+(`summary_runner.rs:738-774` skips the role write-back for it), so callers composing through it
+see the leaf's roles, as today. Test 3c (below) pins both paths. The same gap exists for WORKSPACE
 publishers today (pre-existing, not introduced here): filed as a discovery, not fixed in #70. The
 change is still measured on CDO (analyze findings by detector, before and after, every moved
 finding triaged).

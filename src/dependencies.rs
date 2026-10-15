@@ -343,7 +343,11 @@ pub fn find_alpackages_folder(project_root: &Path) -> Option<PathBuf> {
 ///   - a directory containing `.git` (project boundary), the workspace itself
 ///     included: a repository-root workspace reads only its own cache.
 ///
-/// This mirrors the Go wrapper's `DiscoverPackageCachePaths` so the
+/// The workspace-is-a-repository-root stop (#70) is this loader's contract and
+/// is NOT yet in the Go wrapper's `DiscoverPackageCachePaths`
+/// (`claude-code-lsps/al-language-server-go/wrapper/project.go`), which still
+/// ascends from a workspace that has its own `.git`; the wrapper must be
+/// changed to match. Otherwise this mirrors `DiscoverPackageCachePaths` so the
 /// dependency index that the wrapper relies on (for hover enrichment +
 /// dependencyDocumentSymbol RPC) matches what AL LSP itself sees via
 /// the augmented `packageCachePaths`. Without this, monorepos that keep
@@ -418,15 +422,16 @@ pub fn discover_app_files(
                 continue;
             }
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("app") {
-                continue;
-            }
-            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            if !seen_paths.insert(canonical) {
-                continue;
-            }
+        let apps: Vec<(PathBuf, PathBuf)> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("app"))
+            .map(|path| {
+                let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                (path, canonical)
+            })
+            .collect();
+        for path in keep_first_by_name(apps, &mut seen_paths) {
             files.push(DiscoveredAppFile {
                 folder: folder.clone(),
                 path,
@@ -434,6 +439,23 @@ pub fn discover_app_files(
         }
     }
     (files, unreadable)
+}
+
+/// One cache folder's `.app` files as `(path, canonical path)`, sorted by file
+/// name, keeping the first path of each canonical path not already in `seen`.
+/// Sorting BEFORE the dedup makes the kept alias (and so the closure digest's
+/// key) independent of directory iteration order when two names reach one file.
+/// `seen` carries over from earlier folders, so an own-cache file still wins
+/// over the same file reached from an ancestor cache.
+fn keep_first_by_name(
+    mut apps: Vec<(PathBuf, PathBuf)>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    apps.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
+    apps.into_iter()
+        .filter(|(_, canonical)| seen.insert(canonical.clone()))
+        .map(|(path, _)| path)
+        .collect()
 }
 
 fn paths_equal(a: &Path, b: &Path) -> bool {
@@ -855,6 +877,40 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two names reaching one package keep the alphabetically first name,
+    /// whatever order the directory listing gave; a file `seen` from an earlier
+    /// (own) cache is not kept again. Hand-stated `(path, canonical)` pairs:
+    /// creating a symlink on the dev box needs admin rights.
+    #[test]
+    fn alias_dedup_keeps_the_first_name_in_any_listing_order() {
+        let pkg = PathBuf::from("/real/pkg.app");
+        let other = PathBuf::from("/real/other.app");
+        let pair = |name: &str, canon: &PathBuf| (PathBuf::from(name), canon.clone());
+        for listing in [
+            vec![
+                pair("b.app", &pkg),
+                pair("a.app", &pkg),
+                pair("c.app", &other),
+            ],
+            vec![
+                pair("c.app", &other),
+                pair("a.app", &pkg),
+                pair("b.app", &pkg),
+            ],
+        ] {
+            let mut seen = std::collections::HashSet::new();
+            assert_eq!(
+                keep_first_by_name(listing, &mut seen),
+                vec![PathBuf::from("a.app"), PathBuf::from("c.app")]
+            );
+        }
+        let mut seen: std::collections::HashSet<PathBuf> = [pkg.clone()].into_iter().collect();
+        assert_eq!(
+            keep_first_by_name(vec![pair("a.app", &pkg)], &mut seen),
+            Vec::<PathBuf>::new()
+        );
+    }
 
     /// The manifest-read warning must name the real cause, not just the
     /// outer context. A Ready-to-Run package naming a nested app it lacks

@@ -3251,8 +3251,12 @@ pub struct R3a5CrossAppBase {
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Source-bearing dependency routines WITH an out-edge (an event publisher's
     /// subscriber dispatch, #70): solved for their db-effect rows, but their
-    /// parameter roles stay the leaf's (unknown) values, because role
-    /// composition does not follow the dispatch edges.
+    /// parameter roles stay the leaf's: the five path-sensitive fields
+    /// (`requiresLoadedAtEntry`, `requiredLoadedFieldsAtEntry`,
+    /// `mutatesBeforeLoad`, `dirtyAtExit`, `currentLoadedFieldsAtExit`) unknown,
+    /// the body-local ones (`persistsCurrentRecord`, `writesFields`,
+    /// `validatesParam`, …) from the publisher's own body, exactly as for every
+    /// dependency leaf. Role composition does not follow the dispatch edges.
     pub fixed_roles: HashSet<String>,
     /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
     /// `direct-call` typed edges); also folded into [`Self::graph`].
@@ -3319,7 +3323,8 @@ impl R3a5CrossAppBase {
 ///   the combined graph). The only out-edges a dependency routine keeps are an
 ///   event publisher's subscriber dispatches (#70): such a publisher is solved,
 ///   so the store follows its dispatch as the cone does, but it keeps the leaf's
-///   unknown parameter roles (`fixed_roles`);
+///   parameter roles (`fixed_roles`: the five path-sensitive fields unknown, the
+///   body-local fields from its own body, as for every dependency leaf);
 /// - a symbol-only dependency routine is no leaf: its summary is the `opaque-body`
 ///   self-uncertainty;
 /// - every routine's direct capability facts and coverage come from

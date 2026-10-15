@@ -220,16 +220,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. An unreadable package or cache is a `dep-package-unreadable` input keyed by its
   relative path and hashed by its failure category, so a readable package beside it is
   still seen and the value does not depend on where the tree lives. Fingerprints without
-  an ancestor cache are unchanged (no golden moved).
+  an ancestor cache are unchanged (no golden moved). When two names in one cache reach the
+  same package (symlinks), discovery keeps the first name in sort order, not in directory
+  listing order, so the key is stable. The closure digest's error names the OS reason
+  again, and a cache folder that is not an ancestor's `.alpackages` is an explicit
+  `outside-walk` error instead of being keyed as the workspace's own cache.
 - A workspace that is itself a repository root (its own folder has `.git`, as a directory
   or a worktree file) no longer reads `.alpackages` caches above it (#70). The loader
   ascended from the parent without checking the workspace's own `.git`.
 - A dependency event publisher with subscribers now reaches the cross-app L4 store (#70).
   It was a fixed solver leaf, so its subscribers' writes were missing from `query effects`
   and digest's `tempState` while digest's cone kept them. It is now solved for its effect
-  rows, but keeps the leaf's unknown parameter roles (`fixed_roles`), because role
-  composition does not walk subscriber dispatches; callers composing through it see
-  unknown roles, as before.
+  rows, but keeps a dependency leaf's parameter roles (`fixed_roles`), because role
+  composition does not walk subscriber dispatches: the five path-sensitive role fields
+  (`requiresLoadedAtEntry`, `requiredLoadedFieldsAtEntry`, `mutatesBeforeLoad`,
+  `dirtyAtExit`, `currentLoadedFieldsAtExit`) stay unknown, and the body-local ones
+  (`persistsCurrentRecord`, `writesFields`, `validatesParam`, …) come from the publisher's
+  own body, exactly as for every dependency leaf today. Callers composing through it see
+  the same roles as before.
 - The lowerer no longer drops an attribute that is separated from its procedure or trigger
   by a comment, a pragma or an `#if` line (#80). Before, any node between `[EventSubscriber(…)]`
   and `local procedure Handler()` (a `// note` line, a `/* … */` block, `#pragma`, `#region`,

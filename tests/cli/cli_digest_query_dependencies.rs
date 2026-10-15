@@ -443,6 +443,49 @@ fn dependency_publisher_dispatch_reaches_the_store() {
     );
 }
 
+/// #70: cross-app digest's transaction spans see the dependency's writes. A
+/// workspace routine calls the dependency's `Outer()` (whose `Inner()` inserts
+/// `Customer`) and then runs its OWN `Commit()`; that COMMIT's
+/// `transactionContext` is `span-has-known-writes`.
+///
+/// Hand-stated precondition: the dependency is loaded `embedded`.
+///
+/// Discrimination (2026-10-15): `run_digest_pipeline` passing `None` instead of
+/// `target.cross_app_inputs()` to `compute_tx_context_map` fails this test with
+/// `["span-has-no-known-writes"]`; restored, it passes.
+#[test]
+fn cross_app_commit_span_sees_dependency_writes() {
+    use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};
+    let dir = tempfile::tempdir().unwrap();
+    write_own(
+        dir.path(),
+        "codeunit 50172 \"Ws Commit\"\n{\n    procedure CommitAfterDep()\n    var\n        Lib: Codeunit \"Dep Lib\";\n    begin\n        Lib.Outer();\n        Commit();\n    end;\n}\n",
+    );
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let (doc, code) = json(&["digest", &ws, "--file", "src/Extra.al"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        app_sources(&doc),
+        vec![(XDEP.to_string(), "embedded".to_string())],
+        "precondition: {doc}"
+    );
+    let entry = doc["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["routine"]["display"] == "CommitAfterDep")
+        .unwrap_or_else(|| panic!("no CommitAfterDep entry: {doc}"));
+    let own: Vec<&str> = entry["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["type"] == "COMMIT" && f["provenance"] == "direct")
+        .map(|f| f["transactionContext"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(own, vec!["span-has-known-writes"], "{entry}");
+}
+
 /// The no-dependency contract: on every digest and query golden workspace (none
 /// has a `.alpackages`), cross-app output equals `--single-app` output apart
 /// from `payload.dependencies.mode`; human output is byte-equal.

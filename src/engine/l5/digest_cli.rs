@@ -38,7 +38,6 @@ use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
-use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
@@ -1557,30 +1556,9 @@ pub fn run_digest_pipeline(
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
         .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    let target = if single_app {
-        // Engine-switch S6.2: the program-backed model (program calls and events).
-        let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
-            .ok_or_else(|| "digest: workspace did not resolve".to_string())?;
-        AnalysisTarget::SingleApp(Box::new(resolved))
-    } else {
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(workspace, &model_id)
-            .ok_or_else(|| {
-            "digest: the cross-app model could not be built \
-                 (--single-app analyses the workspace alone)"
-                .to_string()
-        })?;
-        AnalysisTarget::CrossApp(Box::new(base))
-    };
+    let target = AnalysisTarget::build(workspace, &model_id, single_app, "digest")?;
     let resolved = target.resolved();
-    let dependencies = match &target {
-        AnalysisTarget::SingleApp(_) => {
-            crate::program::resolve::full::LoadedDependencies::default()
-        }
-        AnalysisTarget::CrossApp(base) => crate::program::resolve::full::LoadedDependencies {
-            cross_app: true,
-            apps: base.loaded_apps.clone(),
-        },
-    };
+    let dependencies = target.dependencies();
 
     // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
     // shared helper (no second full-snapshot composition just to fish it out) (#19).
