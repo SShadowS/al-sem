@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` accepts an inherited key from an
   ordinary direct fact or from the routine's own solve states, no longer a PD→kt rewrite
   (#69 D3).
+- digest/prove `detail.tempState` is a per-operation join filtered to the effect's class
+  (#69 D4): each originating operation contributes only its L4 rows in the effect's temp
+  class (kt = `known(true)`); one with rows only in the other class contributes all of
+  them; one with no L4 row makes the field absent. Each failed operation is a new entry
+  diagnostic `temp-state-incoherent` with `factId`, `operationId` and `reason`
+  (`no-l4-row` | `class-absent`). digest `schemaVersion` 1.6.0, prove 1.4.0 (additive).
+  Goldens moved: the `schemaVersion` line of 21 digest and 19 prove files under
+  `tests/cli-b-goldens/`, nothing else. Pinned by `a1b_no_temp_state_incoherence`,
+  `a2b_one_effect_per_class` and the two `digest_cli::tests::temp_join_*` unit tests.
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -189,6 +198,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record's direct insert. Pinned by `a2a_temp_call_site_keeps_its_witness`,
   `a2d_all_paths_and_conditionality_kept`, `a2f_degraded_witnesses_never_share_an_occurrence`,
   `a2g_incompleteness_reaches_consumers` and three `digest::tests` unit tests.
+- The ordering engine's physical-write filter now grades a write the way `detail.tempState`
+  reports it (#69): a write that is temporary in the reporting routine's frame (through
+  recursion, cycles, a guard or a call-site buffer) no longer raises `WRITE_PENDING_AT_UI`,
+  and a routine reaching one write with a temporary and a real record gets one effect per
+  class. Pinned by `a1a_ordering_filter_agrees_with_temp_state`,
+  `a2c_depth_two_proof_real_call_first` and `a2e_recursion_cycles_mixes_guards`.
 - `alsem digest --diff` reads each hunk body line by line and stops when the header's old
   and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
   longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,

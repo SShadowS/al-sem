@@ -21,6 +21,7 @@ use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::{
     compute_analyzer_diagnostics, compute_analyzer_diagnostics_cross_app,
 };
+use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query_cli::{
     build_db_effect_bundle, cross_app_db_effect_bundle, temp_state_str,
 };
@@ -29,7 +30,9 @@ use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
-use crate::engine::l5::digest::{DigestEntryResult, compute_digest_effects_cli};
+use crate::engine::l5::digest::{
+    DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
+};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::{
@@ -566,6 +569,12 @@ pub struct EntryDiagnostic {
     pub kind: &'static str,
     pub effect_type: Option<String>,
     pub fact_subject: Option<String>,
+    /// `temp-state-incoherent` only (#69 D4): the effect's `factId`.
+    pub fact_id: Option<String>,
+    /// `temp-state-incoherent` only: the originating operation that failed the join.
+    pub operation_id: Option<String>,
+    /// `temp-state-incoherent` only: `no-l4-row` | `class-absent`.
+    pub reason: Option<&'static str>,
 }
 
 /// Query-level diagnostics (mirrors `DigestQueryDiagnostic` in digest-query.ts).
@@ -590,11 +599,88 @@ fn split_object_routine(display: &str) -> (&str, &str) {
     }
 }
 
+/// Why one originating operation failed the temp-state join (#69 D4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinProblem {
+    /// L4 has no row for the operation.
+    NoL4Row,
+    /// L4 has rows for the operation, but none in the effect's class.
+    ClassAbsent,
+}
+
+impl JoinProblem {
+    /// The `reason` of the `temp-state-incoherent` entry diagnostic.
+    pub fn reason(self) -> &'static str {
+        match self {
+            JoinProblem::NoL4Row => "no-l4-row",
+            JoinProblem::ClassAbsent => "class-absent",
+        }
+    }
+}
+
+/// One DB effect's L4 temp states, joined per originating operation (#69 D4).
+#[derive(Debug, Clone, Default)]
+pub struct TempJoin {
+    pub states: BTreeSet<TempStateKind>,
+    pub problems: Vec<(String, JoinProblem)>,
+}
+
+impl TempJoin {
+    /// The `detail.tempState` field: absent when any operation has no L4 row (never
+    /// invent a value) or nothing joined; else the distinct states rendered by
+    /// `temp_state_str`, sorted by their text and `,`-joined.
+    pub fn render(&self) -> Option<String> {
+        if self.states.is_empty()
+            || self
+                .problems
+                .iter()
+                .any(|(_, p)| *p == JoinProblem::NoL4Row)
+        {
+            return None;
+        }
+        let text: BTreeSet<String> = self.states.iter().map(temp_state_str).collect();
+        Some(text.into_iter().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// D4: per originating operation — no row → `NoL4Row`; rows but none in the
+/// effect's class (kt = `known(true)`) → `ClassAbsent`, and ALL its rows join;
+/// otherwise only its in-class rows join.
+pub fn join_temp_states(
+    effect_is_kt: bool,
+    op_ids: &[String],
+    rows: &[(&str, TempStateKind)],
+) -> TempJoin {
+    let mut j = TempJoin::default();
+    for op in op_ids {
+        let mine: Vec<&TempStateKind> = rows
+            .iter()
+            .filter(|(o, _)| o == op)
+            .map(|(_, t)| t)
+            .collect();
+        if mine.is_empty() {
+            j.problems.push((op.clone(), JoinProblem::NoL4Row));
+            continue;
+        }
+        let in_class: Vec<&TempStateKind> = mine
+            .iter()
+            .copied()
+            .filter(|t| (**t == TempStateKind::Known(true)) == effect_is_kt)
+            .collect();
+        if in_class.is_empty() {
+            j.problems.push((op.clone(), JoinProblem::ClassAbsent));
+            j.states.extend(mine.into_iter().cloned());
+        } else {
+            j.states.extend(in_class.into_iter().cloned());
+        }
+    }
+    j
+}
+
 /// The L4 db-effect store joined for digest effects (#65): a DB_* effect's
 /// `detail.tempState` is read from the SAME store and rendered by the SAME
-/// function as `alsem query effects`, never from the capability cone's own
-/// `temp_state` (which keeps a callee's stale `parameter-dependent(i)` in the
-/// caller's frame).
+/// function as `alsem query effects`, filtered per operation to the effect's
+/// class (#69 D4, [`join_temp_states`]).
 pub struct DbTempStates<'a> {
     bundle: &'a SummaryBundle,
     ix_by_stable: HashMap<&'a str, RoutineIx>,
@@ -614,28 +700,17 @@ impl<'a> DbTempStates<'a> {
         }
     }
 
-    /// The root's L4 temp states for these originating operations: sorted,
-    /// distinct, `,`-joined. `None` when there is no operation, or when any
-    /// operation has no L4 row (e.g. `Validate`, which L4 does not count as a
-    /// database touch) — absence never becomes an invented value.
-    fn for_effect(&self, root_stable: &str, op_ids: &[String]) -> Option<String> {
-        if op_ids.is_empty() {
-            return None;
-        }
-        let rix = *self.ix_by_stable.get(root_stable)?;
-        let rows: Vec<_> = self.bundle.db_effects(rix).collect();
-        let mut states = std::collections::BTreeSet::new();
-        for op in op_ids {
-            let mut found = false;
-            for e in rows.iter().filter(|e| e.operation_id == op) {
-                states.insert(temp_state_str(e.temp_state));
-                found = true;
-            }
-            if !found {
-                return None;
-            }
-        }
-        Some(states.into_iter().collect::<Vec<_>>().join(","))
+    /// The root's L4 rows for these originating operations, joined for an effect
+    /// of class `effect_is_kt` (a root L4 does not know has no rows).
+    fn for_effect(&self, root_stable: &str, op_ids: &[String], effect_is_kt: bool) -> TempJoin {
+        let rows: Vec<(&str, TempStateKind)> = self
+            .ix_by_stable
+            .get(root_stable)
+            .into_iter()
+            .flat_map(|&rix| self.bundle.db_effects(rix))
+            .map(|e| (e.operation_id, e.temp_state.clone()))
+            .collect();
+        join_temp_states(effect_is_kt, op_ids, &rows)
     }
 }
 
@@ -796,6 +871,9 @@ pub fn run_digest_query_full_from_entries(
                         kind: "evidence-unavailable",
                         effect_type: Some(eff.effect_type.clone()),
                         fact_subject: Some(eff.fact_subject.clone()),
+                        fact_id: None,
+                        operation_id: None,
+                        reason: None,
                     });
                 }
 
@@ -818,14 +896,32 @@ pub fn run_digest_query_full_from_entries(
                 };
 
                 // #65: the record's temp state, CLI layer only (the core `detail`
-                // feeds dedupe/factId and must not move).
+                // feeds dedupe/factId and must not move). #69 D4: joined per
+                // operation in the effect's class (its cone fact's class, frame-
+                // correct after D1); every failed join is a diagnostic.
                 let mut detail = eff.detail.clone();
                 if matches!(
                     eff.effect_type.as_str(),
                     "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
-                ) && let Some(ts) = temp_states.for_effect(rid, &eff.origin_operation_ids)
-                {
-                    detail.push(("tempState".to_string(), ts));
+                ) {
+                    let join = temp_states.for_effect(
+                        rid,
+                        &eff.origin_operation_ids,
+                        is_known_temp_state(eff.temp_state.as_ref()),
+                    );
+                    if let Some(ts) = join.render() {
+                        detail.push(("tempState".to_string(), ts));
+                    }
+                    for (op, problem) in join.problems {
+                        entry_diagnostics.push(EntryDiagnostic {
+                            kind: "temp-state-incoherent",
+                            effect_type: Some(eff.effect_type.clone()),
+                            fact_subject: Some(eff.fact_subject.clone()),
+                            fact_id: Some(eff.fact_id.clone()),
+                            operation_id: Some(op),
+                            reason: Some(problem.reason()),
+                        });
+                    }
                 }
 
                 full_effects.push(DigestEffectFull {
@@ -1039,6 +1135,15 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
             }
             if let Some(ref fs) = d.fact_subject {
                 dm.insert("factSubject".into(), fs.clone().into());
+            }
+            if let Some(ref id) = d.fact_id {
+                dm.insert("factId".into(), id.clone().into());
+            }
+            if let Some(ref op) = d.operation_id {
+                dm.insert("operationId".into(), op.clone().into());
+            }
+            if let Some(reason) = d.reason {
+                dm.insert("reason".into(), reason.into());
             }
             serde_json::Value::Object(dm)
         })
@@ -1256,7 +1361,10 @@ pub fn project_digest_document(
     // `payload.dependencies` {mode, apps} (#66).
     // 1.5.0: additive routine.declarationOnly, routine.anchors and the
     // "declaration-only" coverage reason (#71).
-    env.insert("schemaVersion".into(), "1.5.0".into());
+    // 1.6.0: `detail.tempState` is a per-operation join in the effect's class;
+    // additive `temp-state-incoherent` entry diagnostic with factId, operationId
+    // and reason (#69 D4).
+    env.insert("schemaVersion".into(), "1.6.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1568,5 +1676,80 @@ mod tests {
             r,
             ChangedAutoDetect::Routines(vec!["MyCodeunit::DoWork".into(), "Other".into()])
         );
+    }
+
+    // --- #69 D4: the per-operation temp-state join (acceptance row A4b) -----
+    //
+    // Hand-stated L4 rows `(operation id, temp state)`; no pipeline. Stated
+    // limit: `NoL4Row` cannot be produced through the pipeline without a cone/L4
+    // split, so this `--lib` test is its only pin.
+
+    fn ops(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A4b. op1 has a row in the effect's class (kt) and one outside it; op2 has
+    /// rows ONLY in the other class. states = op1's kt rows ∪ ALL of op2's rows,
+    /// with a `ClassAbsent(op2)` problem. Mutation: union the ops before
+    /// checking → "ClassAbsent not reported".
+    #[test]
+    fn temp_join_class_absent_contributes_all_rows() {
+        let rows = [
+            ("op1", TempStateKind::Known(true)),
+            ("op1", TempStateKind::Known(false)),
+            ("op2", TempStateKind::Known(false)),
+            ("op2", TempStateKind::ParameterDependent(0)),
+        ];
+        let join = join_temp_states(true, &ops(&["op1", "op2"]), &rows);
+        assert!(
+            join.problems
+                .iter()
+                .any(|(op, p)| op == "op2" && *p == JoinProblem::ClassAbsent),
+            "ClassAbsent not reported: {:?}",
+            join.problems
+        );
+        assert!(
+            !join.problems.iter().any(|(op, _)| op == "op1"),
+            "op1 is in class, no problem expected: {:?}",
+            join.problems
+        );
+        let want: BTreeSet<TempStateKind> = [
+            TempStateKind::Known(true),
+            TempStateKind::Known(false),
+            TempStateKind::ParameterDependent(0),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(join.states, want, "op1 filtered to kt, op2 all rows");
+        assert!(
+            !join.states.is_empty() && join.render().is_some(),
+            "a ClassAbsent op still renders the field"
+        );
+    }
+
+    /// A4b, precedence (R2-F05): op3 has no L4 row → the field is absent (never
+    /// invent a value) and `NoL4Row(op3)` is reported, even though op1 joins.
+    #[test]
+    fn temp_join_no_l4_row_makes_the_field_absent() {
+        let rows = [
+            ("op1", TempStateKind::Known(true)),
+            ("op2", TempStateKind::Known(false)),
+        ];
+        let join = join_temp_states(true, &ops(&["op1", "op2", "op3"]), &rows);
+        assert!(
+            join.problems
+                .iter()
+                .any(|(op, p)| op == "op3" && *p == JoinProblem::NoL4Row),
+            "NoL4Row not reported: {:?}",
+            join.problems
+        );
+        assert!(
+            join.problems
+                .iter()
+                .any(|(op, p)| op == "op2" && *p == JoinProblem::ClassAbsent),
+            "ClassAbsent not reported: {:?}",
+            join.problems
+        );
+        assert_eq!(join.render(), None, "NoL4Row: the field must be absent");
     }
 }

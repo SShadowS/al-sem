@@ -182,6 +182,19 @@ fn evidence_kind(eff: &Value) -> &str {
     eff["evidence"]["sourceKind"].as_str().unwrap_or("")
 }
 
+/// The routine that holds the effect's operation: the last hop's callee, or the
+/// root for a direct effect. `None` when an inherited effect has no path (its
+/// witness is unavailable), so its terminal is not observable.
+fn terminal<'a>(root: &'a str, eff: &'a Value) -> Option<&'a str> {
+    if eff["provenance"] == "direct" {
+        return Some(root);
+    }
+    via_paths(eff)
+        .first()
+        .and_then(|p| p.last())
+        .and_then(|h| h["toDisplay"].as_str())
+}
+
 fn summary(e: &Value) -> String {
     db_effects(e)
         .iter()
@@ -229,7 +242,7 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
 
 fn check_mode(single_app: bool) {
     let doc = &docs()[if single_app { 0 } else { 1 }].1;
-    assert_eq!(doc["schemaVersion"], "1.5.0");
+    assert_eq!(doc["schemaVersion"], "1.6.0");
 
     // Every DB_INSERT in the routine has the expected value.
     let expect_inserts = |name: &str, want: &str| {
@@ -286,6 +299,79 @@ fn check_mode(single_app: bool) {
 // ---------------------------------------------------------------------------
 // A1 — the ordering filter, `detail.tempState` and the cone agree.
 // ---------------------------------------------------------------------------
+
+/// A1a. For every entry with a UI_MESSAGE: `WRITE_PENDING_AT_UI` ⇔ some DB
+/// write in the message's terminal routine has a `tempState` part ≠
+/// known(true). Mutation: `temp_state: None` in `OrderingEffectInput`
+/// (`digest.rs:3136`) → "RecUiTemp: WRITE_PENDING_AT_UI on a known(true) write".
+#[test]
+fn a1a_ordering_filter_agrees_with_temp_state() {
+    each_mode(|doc, f| {
+        // The named rows first (they hold whatever the general rule says).
+        for (name, want_label) in [
+            ("RecUiTemp", false),
+            ("RecUiReal", true),
+            ("ViaForwardUiTemp", false),
+            ("ViaForwardUiReal", true),
+        ] {
+            let e = entry(doc, name);
+            if want_label && !has_label(e) {
+                f.push(format!(
+                    "{name}: WRITE_PENDING_AT_UI missing on a physical write"
+                ));
+            }
+            if !want_label && has_label(e) {
+                f.push(format!(
+                    "{name}: WRITE_PENDING_AT_UI on a known(true) write"
+                ));
+            }
+        }
+        if !of_type(entry(doc, "RecUiTemp"), "DB_INSERT")
+            .iter()
+            .any(|x| is_kt(x))
+        {
+            f.push(format!(
+                "RecUiTemp: precondition: no known(true) DB_INSERT ({})",
+                summary(entry(doc, "RecUiTemp"))
+            ));
+        }
+        for e in doc["payload"]["entries"].as_array().expect("entries") {
+            let root = e["routine"]["display"].as_str().unwrap();
+            for m in of_type(e, "UI_MESSAGE") {
+                let Some(term) = terminal(root, m) else {
+                    continue;
+                };
+                let labelled = m["guarantees"]
+                    .as_array()
+                    .is_some_and(|g| g.iter().any(|l| l == "WRITE_PENDING_AT_UI"));
+                let here: Vec<_> = db_effects(e)
+                    .into_iter()
+                    .filter(|d| terminal(root, d) == Some(term))
+                    .collect();
+                let physical = here.iter().any(|d| is_nt(d));
+                if labelled && !physical && here.iter().any(|d| temp_state(d).is_none()) {
+                    f.push(format!(
+                        "{root}: WRITE_PENDING_AT_UI on a write with no tempState (terminal {term}; {})",
+                        summary(e)
+                    ));
+                } else if labelled && !physical {
+                    f.push(format!(
+                        "{root}: WRITE_PENDING_AT_UI on a known(true) write (terminal {term}; {})",
+                        summary(e)
+                    ));
+                }
+                if !labelled && physical {
+                    f.push(format!(
+                        "{root}: WRITE_PENDING_AT_UI missing on a physical write (terminal {term}; {})",
+                        summary(e)
+                    ));
+                }
+            }
+        }
+        f.sort();
+        f.dedup();
+    });
+}
 
 /// A1b. No `temp-state-incoherent` diagnostic anywhere in the document.
 /// Mutation: put producers back into `fact_cone_for_scc` for recursive SCCs →
@@ -461,6 +547,123 @@ fn a2a_temp_call_site_keeps_its_witness() {
     });
 }
 
+/// A2b. One effect per class. `HelperUiBoth` (`HelperUi(Row); HelperUi(Buffer)`)
+/// has exactly 2 DB_INSERTs, known(true) and known(false), whose first hops are
+/// the Buffer and the Row call; the label is present. Mutations: (i) drop the
+/// class from `dedupe_key` → "HelperUiBoth: expected 2 DB_INSERT, got 1";
+/// (ii) drop D4's class filter → "HelperUiBoth: tempState known(false),known(true)".
+#[test]
+fn a2b_one_effect_per_class() {
+    let row = line_of("both-row");
+    let buffer = line_of("both-buffer");
+    each_mode(|doc, f| {
+        let e = entry(doc, "HelperUiBoth");
+        let ins = of_type(e, "DB_INSERT");
+        if ins.len() != 2 {
+            f.push(format!(
+                "HelperUiBoth: expected 2 DB_INSERT, got {} ({})",
+                ins.len(),
+                summary(e)
+            ));
+        }
+        for x in &ins {
+            let ts = temp_state(x).unwrap_or("-");
+            if ts != "known(true)" && ts != "known(false)" {
+                f.push(format!("HelperUiBoth: tempState {ts}"));
+                continue;
+            }
+            let want = if ts == "known(true)" { buffer } else { row };
+            for p in via_paths(x) {
+                let first = hop_lines(p).first().copied();
+                if first != Some(want) {
+                    f.push(format!(
+                        "HelperUiBoth: {ts} first hop at line {first:?}, want {want}"
+                    ));
+                }
+            }
+        }
+        let states: BTreeSet<_> = ins.iter().filter_map(|x| temp_state(x)).collect();
+        if !states.contains("known(true)") || !states.contains("known(false)") {
+            f.push(format!(
+                "HelperUiBoth: want known(true) and known(false), got {states:?}"
+            ));
+        }
+        if !has_label(e) {
+            f.push("HelperUiBoth: label missing".into());
+        }
+    });
+}
+
+/// A2c. Depth-2 proof, real call first: `HelperUiBothDeep` → `BothA` →
+/// `HelperUi(Row); HelperUi(Buffer)`. Precondition asserted: the kt effect's
+/// path has 2 hops. Neither class's path contains the other's call site.
+/// Mutation: make the depth-0 class test class-agnostic →
+/// "HelperUiBothDeep: kt path contains Row callsite".
+#[test]
+fn a2c_depth_two_proof_real_call_first() {
+    let a = line_of("bothdeep-a");
+    let row = line_of("botha-row");
+    let buffer = line_of("botha-buffer");
+    each_mode(|doc, f| {
+        let e = entry(doc, "HelperUiBothDeep");
+        let ins = of_type(e, "DB_INSERT");
+        let kt: Vec<_> = ins.iter().filter(|x| is_kt(x)).collect();
+        let nt: Vec<_> = ins
+            .iter()
+            .filter(|x| temp_state(x) == Some("known(false)"))
+            .collect();
+        if kt.len() != 1 || nt.len() != 1 {
+            f.push(format!(
+                "HelperUiBothDeep: want one kt and one nt DB_INSERT ({})",
+                summary(e)
+            ));
+        }
+        // Class-agnostic half of "neither contains the other's call site": no
+        // single effect's paths go through both A's Row and A's Buffer call.
+        for x in &ins {
+            let lines: BTreeSet<u64> = via_paths(x).iter().flat_map(|p| hop_lines(p)).collect();
+            if lines.contains(&row) && lines.contains(&buffer) {
+                f.push(format!(
+                    "HelperUiBothDeep: one {} effect's paths contain both the Row and the Buffer callsite",
+                    temp_state(x).unwrap_or("-")
+                ));
+            }
+        }
+        for x in kt {
+            for p in via_paths(x) {
+                let lines = hop_lines(p);
+                if lines.len() != 2 {
+                    f.push(format!(
+                        "HelperUiBothDeep: precondition: kt path has {} hops, want 2",
+                        lines.len()
+                    ));
+                }
+                if lines.contains(&row) {
+                    f.push("HelperUiBothDeep: kt path contains Row callsite".into());
+                }
+                if lines != [a, buffer] {
+                    f.push(format!(
+                        "HelperUiBothDeep: kt path lines {lines:?} != [{a}, {buffer}]"
+                    ));
+                }
+            }
+        }
+        for x in nt {
+            for p in via_paths(x) {
+                let lines = hop_lines(p);
+                if lines.contains(&buffer) {
+                    f.push("HelperUiBothDeep: nt path contains Buffer callsite".into());
+                }
+                if lines != [a, row] {
+                    f.push(format!(
+                        "HelperUiBothDeep: nt path lines {lines:?} != [{a}, {row}]"
+                    ));
+                }
+            }
+        }
+    });
+}
+
 /// A2h. `alsem fingerprint` takes the same proofs digest does: through the
 /// fingerprint indexes built from the snapshot, `HelperUiTemp`'s inherited
 /// known-temporary insert has one witness path ending at `HelperUi`'s insert.
@@ -593,6 +796,243 @@ fn a2d_all_paths_and_conditionality_kept() {
             }
         }
     });
+}
+
+/// A2e. Recursion, cycles, mixes and guards — one named red per claim (see the
+/// spec's matrix row A2e for each mutation).
+#[test]
+fn a2e_recursion_cycles_mixes_guards() {
+    let snap_preconditions = mixed_carrier_precondition();
+    each_mode(|doc, f| {
+        let kinds = |name: &str| -> (bool, bool) {
+            let e = entry(doc, name);
+            let ins = of_type(e, "DB_INSERT");
+            (ins.iter().any(|x| is_kt(x)), ins.iter().any(|x| is_nt(x)))
+        };
+        let kt_and_nt_labelled = |name: &str, f: &mut Vec<String>| {
+            let (kt, nt) = kinds(name);
+            if !kt {
+                f.push(format!(
+                    "{name}: no known(true) ({})",
+                    summary(entry(doc, name))
+                ));
+            }
+            if !nt {
+                f.push(format!(
+                    "{name}: no physical write ({})",
+                    summary(entry(doc, name))
+                ));
+            }
+            if !has_label(entry(doc, name)) {
+                f.push(format!("{name}: label missing"));
+            }
+        };
+        let kt_only_unlabelled = |name: &str, f: &mut Vec<String>| {
+            let e = entry(doc, name);
+            let ins = of_type(e, "DB_INSERT");
+            if ins.is_empty() || !ins.iter().all(|x| is_kt(x)) {
+                f.push(format!("{name}: want known(true) only ({})", summary(e)));
+            }
+            if has_label(e) {
+                f.push(format!("{name}: label present"));
+            }
+            // "known(true)" must be the effect's class, not a `class-absent`
+            // fallback that renders an nt effect's L4 rows (D4).
+            if e["entryDiagnostics"]
+                .as_array()
+                .is_some_and(|d| d.iter().any(|x| x["kind"] == "temp-state-incoherent"))
+            {
+                f.push(format!("{name}: temp-state-incoherent"));
+            }
+        };
+        let kt_with_source = |name: &str, f: &mut Vec<String>| {
+            let e = entry(doc, name);
+            let kt: Vec<_> = of_type(e, "DB_INSERT")
+                .into_iter()
+                .filter(|x| is_kt(x))
+                .collect();
+            if kt.is_empty() {
+                f.push(format!("{name}: no DB_INSERT ({})", summary(e)));
+            }
+            for x in kt {
+                if evidence_kind(x) != "source" {
+                    f.push(format!("{name}: evidence unavailable"));
+                }
+            }
+        };
+
+        kt_and_nt_labelled("MixedUiTemp", f);
+        kt_and_nt_labelled("TwoRecMix", f);
+        kt_only_unlabelled("TwoRecTemp", f);
+        kt_only_unlabelled("CycA", f);
+        kt_only_unlabelled("CallsCycA", f);
+        kt_and_nt_labelled("CycQTemp", f);
+        kt_with_source("RecH", f);
+        kt_only_unlabelled("SibP2", f);
+        kt_with_source("RootCyc1", f);
+
+        // PermMix: kt and nt; EVERY nt path enters PermUi twice (the swap), and
+        // no nt path has a single PermUi hop (R3-A01).
+        {
+            let e = entry(doc, "PermMix");
+            let (kt, _) = kinds("PermMix");
+            if !kt {
+                f.push(format!("PermMix: no known(true) ({})", summary(e)));
+            }
+            let nt: Vec<_> = of_type(e, "DB_INSERT")
+                .into_iter()
+                .filter(|x| is_nt(x))
+                .collect();
+            if nt.is_empty() {
+                f.push(format!("PermMix: no physical write ({})", summary(e)));
+            }
+            for x in nt {
+                if evidence_kind(x) != "source" {
+                    f.push("PermMix: nt evidence unavailable".into());
+                }
+                for p in path_strs("PermMix", x) {
+                    if p.matches("PermUi").count() != 2 {
+                        f.push(format!("PermMix: nt path {p} does not enter PermUi twice"));
+                    }
+                }
+            }
+        }
+
+        // SelfRecReal: the kt path is exactly SelfRecReal→SelfRecUi→SelfRecUi,
+        // plus an nt effect.
+        {
+            let e = entry(doc, "SelfRecReal");
+            let ins = of_type(e, "DB_INSERT");
+            let kt: Vec<_> = ins.iter().filter(|x| is_kt(x)).collect();
+            if kt.is_empty() {
+                f.push(format!("SelfRecReal: no known(true) ({})", summary(e)));
+            }
+            for x in kt {
+                let got = path_strs("SelfRecReal", x);
+                if got != ["SelfRecReal→SelfRecUi→SelfRecUi"] {
+                    f.push(format!(
+                        "SelfRecReal: kt viaPaths {got:?} != [SelfRecReal→SelfRecUi→SelfRecUi]"
+                    ));
+                }
+            }
+            if !ins.iter().any(|x| is_nt(x)) {
+                f.push(format!("SelfRecReal: no physical write ({})", summary(e)));
+            }
+        }
+
+        // Guards: a false Boolean drops the write; a true one keeps it.
+        for name in ["GuardFwdFalse", "GCycFalse", "GTFalse"] {
+            let e = entry(doc, name);
+            if !of_type(e, "DB_INSERT").is_empty() {
+                f.push(format!("{name}: DB_INSERT present ({})", summary(e)));
+            }
+            if has_label(e) {
+                f.push(format!("{name}: label present"));
+            }
+        }
+        for name in ["GuardFwdTrue", "GCycTrue"] {
+            let e = entry(doc, name);
+            if of_type(e, "DB_INSERT").is_empty() {
+                f.push(format!("{name}: no DB_INSERT"));
+            }
+            if !has_label(e) {
+                f.push(format!("{name}: label missing"));
+            }
+        }
+        {
+            let (kt, _) = kinds("GTTrue");
+            if !kt {
+                f.push(format!(
+                    "GTTrue: no known(true) DB_INSERT ({})",
+                    summary(entry(doc, "GTTrue"))
+                ));
+            }
+        }
+
+        // ForwardMix: the nt effect has exactly one viaPath
+        // (ForwardMix→Both→RealWriter) and the entry has no label.
+        {
+            let e = entry(doc, "ForwardMix");
+            let nt: Vec<_> = of_type(e, "DB_INSERT")
+                .into_iter()
+                .filter(|x| is_nt(x))
+                .collect();
+            if nt.len() != 1 {
+                f.push(format!(
+                    "ForwardMix: want one physical write ({})",
+                    summary(e)
+                ));
+            }
+            for x in nt {
+                let got = path_strs("ForwardMix", x);
+                if got != ["ForwardMix→Both→RealWriter"] {
+                    f.push(format!(
+                        "ForwardMix: nt viaPaths != [ForwardMix→Both→RealWriter] (got {got:?})"
+                    ));
+                }
+            }
+            if has_label(e) {
+                f.push("ForwardMix: label present".into());
+            }
+        }
+
+        // MixedCarrier: precondition (both kt contributors' first hop is the
+        // Wrap call, asserted on the snapshot graph below); one kt effect with
+        // exactly 2 viaPaths, MixedCarrier→Wrap→HelperUi (proof) and
+        // MixedCarrier→Wrap (the BFS terminal at `TempLocal.Insert`).
+        f.extend(snap_preconditions.iter().cloned());
+        {
+            let e = entry(doc, "MixedCarrier");
+            if let Some(x) = the_kt_insert(e, "MixedCarrier", f) {
+                let mut got = path_strs("MixedCarrier", x);
+                got.sort();
+                if got.len() != 2 {
+                    f.push(format!(
+                        "MixedCarrier: expected 2 viaPaths, got {} ({got:?})",
+                        got.len()
+                    ));
+                } else if got != ["MixedCarrier→Wrap", "MixedCarrier→Wrap→HelperUi"] {
+                    f.push(format!("MixedCarrier: viaPaths {got:?}"));
+                }
+            }
+        }
+    });
+}
+
+/// MixedCarrier's precondition, on the production snapshot graph: the root has
+/// exactly one outgoing typed edge, to `Wrap`, so both kt contributors share the
+/// root first hop whichever wins the cone's rep selection.
+fn mixed_carrier_precondition() -> Vec<String> {
+    let tmp = write_workspace();
+    let ws = tmp.path();
+    let model_id = compute_gate_model_instance_id(ws).expect("model id");
+    let model = assemble_and_resolve_workspace_program(ws, &model_id, false).expect("model");
+    let snap = compose_snapshot(&model);
+    let display: BTreeMap<&str, &str> = snap
+        .identities
+        .stable_ids
+        .iter()
+        .map(String::as_str)
+        .zip(snap.identities.display_names.iter().map(String::as_str))
+        .collect();
+    let short = |id: &str| {
+        let d = display.get(id).copied().unwrap_or(id);
+        d.rsplit('.').next().unwrap_or(d).to_string()
+    };
+    let out: Vec<String> = snap
+        .typed_edges
+        .iter()
+        .map(|e| serde_json::to_value(e).expect("edge json"))
+        .filter(|e| short(e["from"].as_str().unwrap_or("")) == "MixedCarrier")
+        .map(|e| e["to"].as_str().map(short).unwrap_or_default())
+        .collect();
+    if out == ["Wrap"] {
+        vec![]
+    } else {
+        vec![format!(
+            "MixedCarrier: precondition: root edges {out:?} != [Wrap]"
+        )]
+    }
 }
 
 /// A2g. Enumeration incompleteness reaches the consumers: `IncRoot` has one

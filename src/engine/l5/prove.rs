@@ -722,7 +722,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "prove".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
-    env.insert("schemaVersion".into(), "1.3.0".into());
+    // 1.4.0: effects' `detail.tempState` is digest's per-operation, class-
+    // filtered join (#69 D4).
+    env.insert("schemaVersion".into(), "1.4.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1222,6 +1224,9 @@ mod tests {
                 kind: "evidence-unavailable",
                 effect_type: Some("COMMIT".to_string()),
                 fact_subject: Some("some-fact".to_string()),
+                fact_id: None,
+                operation_id: None,
+                reason: None,
             }],
             false,
         );

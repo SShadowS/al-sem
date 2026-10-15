@@ -2528,8 +2528,8 @@ pub struct DigestEffectResult {
     pub temp_state: Option<SnapTempState>,
     /// The originating operation ids of every fact merged into this effect
     /// (sorted, distinct). The CLI joins them to the L4 db-effect store to
-    /// report `detail.tempState` (#65) — the same store `query effects` reads,
-    /// because the cone's `temp_state` above is not frame-correct.
+    /// report `detail.tempState` (#65) — the same store `query effects` reads —
+    /// filtered to the class of `temp_state` above (#69 D4).
     pub origin_operation_ids: Vec<String>,
     /// S4: per-effect scoped guarantees (attached by `compute_ordering`).
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
@@ -2727,7 +2727,7 @@ fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
 /// `known/true` signal. Absent, `Unknown` and parameter-dependent temp state all
 /// read as NOT known-temp, exactly as the L4 predicate treats them — so the
 /// class is TOTAL, never undefined.
-fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
+pub(crate) fn is_known_temp_state(ts: Option<&SnapTempState>) -> bool {
     crate::program::body::features::known_temp_suppresses(ts.and_then(SnapTempState::known_value))
 }
 

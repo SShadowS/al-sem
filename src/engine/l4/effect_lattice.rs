@@ -77,8 +77,9 @@ pub fn join_presence(a: EffectPresence, b: EffectPresence) -> EffectPresence {
 /// Derives `Hash` (added for `EffectUniverse`, `src/engine/l4/effect_universe.rs`)
 /// so the structured `EffectIdentity` — which embeds a `TempStateKind` — can be
 /// used as a `HashMap` key for interning; purely additive, no existing use site
-/// relies on `TempStateKind` NOT being `Hash`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// relies on `TempStateKind` NOT being `Hash`. `Ord` keys digest's per-op
+/// temp-state join set (#69 D4); the rendered order does not depend on it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TempStateKind {
     /// `{ kind: "known", value: bool }` — statically known true/false.
     Known(bool),
