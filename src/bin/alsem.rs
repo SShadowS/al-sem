@@ -619,8 +619,10 @@ struct DigestCli {
     /// Path to the AL workspace root.
     workspace: String,
 
-    /// Workspace-relative source file(s) to treat as changed.
-    /// May be repeated. Mutually exclusive with --order (rejected).
+    /// Source file(s) to treat as changed: workspace-relative, or relative to a
+    /// git work tree that contains the workspace. With --diff-prefix, every path
+    /// is repository-relative. May be repeated. Mutually exclusive with --order
+    /// (rejected).
     #[arg(long = "file", action = clap::ArgAction::Append)]
     file: Vec<String>,
 
@@ -633,9 +635,14 @@ struct DigestCli {
     diff: Option<String>,
 
     /// The workspace's path inside the repository the changed paths are relative
-    /// to (e.g. `Cloud` for a `git diff` run in `DO/` for `DO/Cloud`). Without it,
-    /// every `.git` at or above the workspace gives one. A path that names a
-    /// workspace file as written always wins.
+    /// to (e.g. `Cloud` for a `git diff` run in `DO/` for `DO/Cloud`). With it,
+    /// every path (--diff, --file, --changed) is repository-relative and resolves
+    /// only with this prefix stripped; a path without it is unmatched, and a
+    /// deleted file without it is `diff-file-unmatched`. Rejected (exit 1): an
+    /// empty value (`.`), a rooted one (`/x`, `\x`), one whose first segment
+    /// holds `:` (read as a drive, `C:/x`), and one with a `..` segment. Without
+    /// the flag, a path that names a workspace file wins, and otherwise every
+    /// `.git` at or above the workspace gives a prefix to strip.
     #[arg(long = "diff-prefix")]
     diff_prefix: Option<String>,
 

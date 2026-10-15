@@ -1,8 +1,10 @@
 //! #77: `alsem digest --diff`, `--file` and the `--changed` file lists accept a
 //! path written relative to a directory that contains the workspace (a `git diff`
-//! run in `DO/` for the workspace `DO/Cloud`). A path that names a workspace file
-//! as written wins; otherwise each repository prefix of the workspace (every
-//! `.git` at or above it, innermost first, or `--diff-prefix`) is stripped.
+//! run in `DO/` for the workspace `DO/Cloud`). Discovered: a path that names a
+//! workspace file as written wins; otherwise each repository prefix of the
+//! workspace (every `.git` at or above it, innermost first) is stripped. With
+//! `--diff-prefix`, every path is repository-relative and only that prefix is
+//! stripped.
 //!
 //! Every case spawns `CARGO_BIN_EXE_alsem digest`. Unless it says otherwise, the
 //! workspace is a copy of `ws-d8-commit-in-tx` at `<tmp>/repo/Cloud` with
@@ -150,6 +152,11 @@ fn diff_from_the_repo_root_resolves_like_a_workspace_diff() {
     let (base, code) = digest(&ws, &[], Some(&line8("src/posting.al")));
     assert_eq!(code, 0, "precondition: {base}");
     assert_eq!(roots(&base), vec!["PostSalesDoc"], "precondition: {base}");
+    // A workspace-relative path uses no prefix: the field is omitted.
+    assert!(
+        base["payload"]["changed"].get("pathPrefixesUsed").is_none(),
+        "{base}"
+    );
 
     let (doc, code) = digest(&ws, &[], Some(&line8("Cloud/src/posting.al")));
     assert!(
@@ -158,6 +165,11 @@ fn diff_from_the_repo_root_resolves_like_a_workspace_diff() {
     );
     assert_eq!(code, 0, "{doc}");
     assert_eq!(roots(&doc), roots(&base), "{doc}");
+    assert_eq!(
+        doc["payload"]["changed"]["pathPrefixesUsed"],
+        serde_json::json!(["cloud/"]),
+        "{doc}"
+    );
 }
 
 /// T1b. The literal reproducer: a copied workspace with no `.git` above it,
@@ -407,6 +419,82 @@ fn nested_git_entries_give_innermost_first_prefixes() {
         assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{path}: {doc}");
         assert!(diags(&doc).is_empty(), "{path}: {doc}");
     }
+}
+
+/// T9. An explicit `--diff-prefix` states the coordinate system: every path is
+/// repository-relative, so `src/posting.al` (outside `Cloud/`) is unmatched
+/// even though it names a workspace file as written.
+/// Mutation: keep the workspace-first step with the flag -> `PostSalesDoc`.
+#[test]
+fn explicit_diff_prefix_never_reads_a_path_as_workspace_relative() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("x/ws");
+    d8_copy(&ws);
+    if let Some(g) = git_at_or_above(&ws) {
+        eprintln!("SKIP: {} has a .git entry above the temp dir", g.display());
+        return;
+    }
+    let flag = ["--diff-prefix", "Cloud"];
+
+    let (doc, code) = digest(&ws, &flag, Some(&line8("src/posting.al")));
+    assert!(
+        !roots(&doc).contains(&"PostSalesDoc".to_string()),
+        "workspace-relative: {doc}"
+    );
+    assert!(
+        has_diag(&doc, "diff-file-unmatched", "src/posting.al"),
+        "workspace-relative: {doc}"
+    );
+    assert_eq!(code, 2, "workspace-relative: {doc}");
+
+    let (doc, code) = digest(&ws, &flag, Some(&line8("Cloud/src/posting.al")));
+    assert_eq!(
+        roots(&doc),
+        vec!["PostSalesDoc"],
+        "repository-relative: {doc}"
+    );
+    assert_eq!(code, 0, "repository-relative: {doc}");
+}
+
+/// A `diff --git` record deleting `path`.
+fn deleted(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\ndeleted file mode 100644\n--- a/{path}\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-x\n"
+    )
+}
+
+/// T10. Under `--diff-prefix Cloud`, a deleted record outside `Cloud/` is not the
+/// workspace's (`diff-file-unmatched`); one inside it is `diff-file-deleted`.
+/// Mutation: skip resolution for deleted records -> `OnPrem` is
+/// `diff-file-deleted`.
+#[test]
+fn deleted_records_outside_an_explicit_prefix_are_unmatched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = d8_repo(tmp.path());
+
+    let diff = format!(
+        "{}{}{}",
+        deleted("OnPrem/src/Old.al"),
+        deleted("Cloud/src/gone.al"),
+        line8("Cloud/src/posting.al")
+    );
+    let (doc, code) = digest(&ws, &["--diff-prefix", "Cloud"], Some(&diff));
+    assert_eq!(
+        diags(&doc),
+        vec![
+            (
+                "diff-file-unmatched".to_string(),
+                "OnPrem/src/Old.al".to_string()
+            ),
+            (
+                "diff-file-deleted".to_string(),
+                "Cloud/src/gone.al".to_string()
+            ),
+        ],
+        "{doc}"
+    );
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    assert_eq!(code, 0, "{doc}");
 }
 
 /// T8. `--diff-prefix` rejects a rooted, empty or `..` value: exit 1 with the

@@ -1913,7 +1913,8 @@ pub struct Model {
     /// discovered them (`rel_posix`, `NestedApps::Walk`; no dependency file),
     /// kept from the build so `digest` can tell a workspace file without walking
     /// the workspace again (#77). A superset of the files the rows come from,
-    /// which skip a nested app's folder (`select_program_files`).
+    /// which skip a nested app's folder (`select_program_files`). Read only by
+    /// `digest`.
     pub workspace_files: Vec<String>,
 }
 

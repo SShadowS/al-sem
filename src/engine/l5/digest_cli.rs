@@ -201,20 +201,39 @@ pub struct ChangedRootsResult {
     /// Per root id: indices into `spans.spans` of the declarations the input
     /// touched (the entry anchor is the last of them, #71).
     pub touched: HashMap<String, BTreeSet<usize>>,
+    /// The prefixes that resolved at least one changed path, sorted (#77).
+    pub path_prefixes_used: Vec<String>,
     pub spans: RoutineSpanIndex,
 }
 
 #[derive(Default)]
-pub struct ChangedInput {
+pub struct ChangedInput<'a> {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
-    /// The workspace's path below each directory a changed path may be relative
-    /// to, normalised, with a trailing `/`, tried in order (#77):
-    /// `--diff-prefix`, or [`workspace_repo_prefixes`].
-    pub repo_prefixes: Vec<String>,
+    /// How a changed path relates to the workspace (#77).
+    pub prefixes: PathPrefixes,
     /// The workspace's `.al` files ([`Model::workspace_files`]), as written.
-    pub workspace_files: Vec<String>,
+    pub workspace_files: &'a [String],
+}
+
+/// The workspace's path below each directory a changed path may be relative
+/// to, normalised, with a trailing `/` (#77).
+#[derive(Debug, Clone)]
+pub enum PathPrefixes {
+    /// [`workspace_repo_prefixes`]: a path naming a workspace file is that
+    /// file; any other is retried with each prefix stripped, in order.
+    Discovered(Vec<String>),
+    /// `--diff-prefix` ([`normalize_diff_prefix`]): every path is
+    /// repository-relative and resolves ONLY by stripping this prefix, so a
+    /// path without it has no key, even one that names a workspace file.
+    Explicit(String),
+}
+
+impl Default for PathPrefixes {
+    fn default() -> Self {
+        PathPrefixes::Discovered(Vec::new())
+    }
 }
 
 /// The validated `--diff-prefix` (#77): normalised like a changed path, with
@@ -259,11 +278,13 @@ pub fn workspace_repo_prefixes(workspace: &std::path::Path) -> Vec<String> {
 struct ChangedPaths<'a> {
     /// Normalised: every discovered workspace file, plus every file with spans.
     workspace_files: std::collections::HashSet<String>,
-    prefixes: &'a [String],
+    prefixes: &'a PathPrefixes,
+    /// The prefixes that resolved at least one path (`pathPrefixesUsed`).
+    used: BTreeSet<String>,
 }
 
 impl<'a> ChangedPaths<'a> {
-    fn new(input: &'a ChangedInput, spans: &RoutineSpanIndex) -> Self {
+    fn new(input: &'a ChangedInput<'_>, spans: &RoutineSpanIndex) -> Self {
         let workspace_files = input
             .workspace_files
             .iter()
@@ -272,22 +293,38 @@ impl<'a> ChangedPaths<'a> {
             .collect();
         ChangedPaths {
             workspace_files,
-            prefixes: &input.repo_prefixes,
+            prefixes: &input.prefixes,
+            used: BTreeSet::new(),
         }
     }
 
-    /// The span-index key of a changed path: the path itself if it names a
-    /// workspace file, else the first prefix-stripped form that does, else none.
-    fn resolve_changed_path(&self, raw: &str) -> Option<String> {
+    /// The span-index key of a changed path. Discovered: the path itself if it
+    /// names a workspace file, else the first prefix-stripped form that does.
+    /// Explicit: only the form with the prefix stripped. Else none.
+    fn resolve_changed_path(&mut self, raw: &str) -> Option<String> {
         let p = normalize_input(raw);
-        if self.workspace_files.contains(&p) {
-            return Some(p);
-        }
-        self.prefixes
-            .iter()
-            .filter_map(|pre| p.strip_prefix(pre.as_str()))
-            .find(|s| self.workspace_files.contains(*s))
-            .map(str::to_string)
+        let prefixes: &'a [String] = match self.prefixes {
+            PathPrefixes::Discovered(v) => {
+                if self.workspace_files.contains(&p) {
+                    return Some(p);
+                }
+                v
+            }
+            PathPrefixes::Explicit(pre) => std::slice::from_ref(pre),
+        };
+        let (pre, key) = prefixes.iter().find_map(|pre| {
+            p.strip_prefix(pre.as_str())
+                .filter(|s| self.workspace_files.contains(*s))
+                .map(|s| (pre, s.to_string()))
+        })?;
+        self.used.insert(pre.clone());
+        Some(key)
+    }
+
+    /// Is a path outside the `--diff-prefix` (never true when discovered)?
+    fn outside_explicit_prefix(&self, raw: &str) -> bool {
+        matches!(self.prefixes, PathPrefixes::Explicit(pre)
+            if !normalize_input(raw).starts_with(pre.as_str()))
     }
 }
 
@@ -470,7 +507,7 @@ pub fn resolve_changed_roots(
     // Selector indexes (5-form resolveSelector cascade).
     let selector_idx = build_selector_indexes(snap, primary_app_guid);
 
-    let paths = ChangedPaths::new(input, &spans);
+    let mut paths = ChangedPaths::new(input, &spans);
 
     // 1. File-based matching
     for file in input.files.iter().flatten() {
@@ -543,8 +580,13 @@ pub fn resolve_changed_roots(
             .collect();
         for diff_file in &parsed.files {
             if diff_file.kind == DiffFileKind::Deleted {
-                diagnostics.push(ChangedRootsDiagnostic::DiffFileDeleted {
-                    file: diff_file.path.clone(),
+                // Outside an explicit `--diff-prefix`, a deleted file is not the
+                // workspace's (#77).
+                let file = diff_file.path.clone();
+                diagnostics.push(if paths.outside_explicit_prefix(&file) {
+                    ChangedRootsDiagnostic::DiffFileUnmatched { file }
+                } else {
+                    ChangedRootsDiagnostic::DiffFileDeleted { file }
                 });
                 continue;
             }
@@ -600,6 +642,7 @@ pub fn resolve_changed_roots(
         roots: sorted,
         diagnostics,
         touched,
+        path_prefixes_used: paths.used.into_iter().collect(),
         spans,
     }
 }
@@ -1452,6 +1495,13 @@ pub fn project_digest_document(
         let rv: Vec<serde_json::Value> = routines.iter().map(|r| r.clone().into()).collect();
         changed.insert("routines".into(), serde_json::Value::Array(rv));
     }
+    // Omitted when empty, so a workspace-relative input reads as before (#77).
+    if !changed_input.path_prefixes_used.is_empty() {
+        changed.insert(
+            "pathPrefixesUsed".into(),
+            changed_input.path_prefixes_used.clone().into(),
+        );
+    }
 
     // entries
     let entries_val: Vec<serde_json::Value> = entries.iter().map(entry_to_value).collect();
@@ -1517,6 +1567,8 @@ pub struct ChangedInputContract {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_provided: bool,
+    /// [`ChangedRootsResult::path_prefixes_used`].
+    pub path_prefixes_used: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1629,7 +1681,9 @@ pub struct DigestRunResult {
 
 /// Run the full digest pipeline for a workspace.
 ///
-/// `changed_files` are workspace-relative paths (e.g. "src/Foo.al").
+/// `changed_files` are workspace-relative paths (e.g. "src/Foo.al"), or
+/// relative to a git work tree that contains the workspace; with `diff_prefix`
+/// every path is repository-relative (see below).
 /// `diff_text` is a unified diff string (for --diff).
 /// `alsem_ver` is the version string (e.g. "cli-b-v1").
 ///
@@ -1641,8 +1695,10 @@ pub struct DigestRunResult {
 /// from `payload.dependencies.mode` (a contract test).
 ///
 /// `diff_prefix` (`--diff-prefix`) is the workspace's path inside the repository
-/// the changed paths are relative to; `None` discovers the prefixes from the
-/// `.git` entries at or above the workspace ([`workspace_repo_prefixes`], #77).
+/// the changed paths are relative to: every path (`--diff`, `--file`,
+/// `--changed`) then resolves only with it stripped. `None` discovers the
+/// prefixes from the `.git` entries at or above the workspace
+/// ([`workspace_repo_prefixes`], #77), after a workspace-relative reading.
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
     workspace: &std::path::Path,
@@ -1656,9 +1712,9 @@ pub fn run_digest_pipeline(
     diff_prefix: Option<&str>,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
-    let repo_prefixes = match diff_prefix {
-        Some(p) => vec![normalize_diff_prefix(p)?],
-        None => workspace_repo_prefixes(workspace),
+    let prefixes = match diff_prefix {
+        Some(p) => PathPrefixes::Explicit(normalize_diff_prefix(p)?),
+        None => PathPrefixes::Discovered(workspace_repo_prefixes(workspace)),
     };
     // Assemble workspace
     let model_id = compute_gate_model_instance_id(workspace)
@@ -1680,8 +1736,8 @@ pub fn run_digest_pipeline(
         files: changed_files.clone(),
         routines: changed_routines.clone(),
         diff_text: diff_text.clone(),
-        repo_prefixes,
-        workspace_files: resolved.workspace_files.clone(),
+        prefixes,
+        workspace_files: &resolved.workspace_files,
     };
 
     let has_input = changed_files
@@ -1759,6 +1815,7 @@ pub fn run_digest_pipeline(
         files: changed_files,
         routines: changed_routines,
         diff_provided: diff_text.is_some(),
+        path_prefixes_used: changed_roots.path_prefixes_used.clone(),
     };
 
     // JSON
@@ -1831,13 +1888,18 @@ mod tests {
         p
     }
 
-    /// The `.git` entry at or above `dir`, if any.
-    fn git_above(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-        std::fs::canonicalize(dir)
+    /// True, after printing why, when `dir` or an ancestor holds a `.git`
+    /// entry: a test that needs no repository above `dir` then skips.
+    fn skip_if_git_at_or_above(dir: &std::path::Path) -> bool {
+        let git = std::fs::canonicalize(dir)
             .unwrap()
             .ancestors()
             .find(|a| a.join(".git").exists())
-            .map(std::path::Path::to_path_buf)
+            .map(std::path::Path::to_path_buf);
+        if let Some(g) = &git {
+            eprintln!("SKIP: {} holds a .git entry", g.display());
+        }
+        git.is_some()
     }
 
     /// #77 T8 (unit). Rooted, empty and `..` values are rejected; a relative one
@@ -1867,6 +1929,9 @@ mod tests {
     fn workspace_repo_prefixes_per_layout() {
         let tmp = tempfile::tempdir().unwrap();
         let t = tmp.path();
+        if skip_if_git_at_or_above(t) {
+            return;
+        }
 
         let top = mkdir(t, "top");
         git_dir(&top);
@@ -1905,8 +1970,7 @@ mod tests {
     fn workspace_repo_prefixes_without_git_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = mkdir(tmp.path(), "x/Cloud");
-        if let Some(g) = git_above(&ws) {
-            eprintln!("SKIP: {} has a .git entry above the temp dir", g.display());
+        if skip_if_git_at_or_above(&ws) {
             return;
         }
         assert_eq!(workspace_repo_prefixes(&ws), Vec::<String>::new());
@@ -1914,15 +1978,21 @@ mod tests {
 
     /// #77. A relative path (the test CWD is the crate root, a git work tree) is
     /// canonicalised before the walk, so `.` and a path through `..` work.
+    /// Skipped unless the crate root holds `.git` and nothing above it does: a
+    /// relative path needs the process CWD, which a tempdir cannot stand in
+    /// for without racing the other tests.
     /// Mutation: no canonicalisation (walk the path as given) -> `src/..` stays
     /// in the prefix.
     #[test]
     fn workspace_repo_prefixes_of_a_relative_path() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert!(
-            root.join(".git").exists(),
-            "precondition: crate root holds .git"
-        );
+        if !root.join(".git").exists() {
+            eprintln!("SKIP: the crate root {} holds no .git", root.display());
+            return;
+        }
+        if root.parent().is_some_and(skip_if_git_at_or_above) {
+            return;
+        }
         assert_eq!(
             workspace_repo_prefixes(std::path::Path::new(".")),
             Vec::<String>::new(),

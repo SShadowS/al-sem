@@ -228,14 +228,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `alsem digest --diff`, `--file` and the file lists of `--changed` now accept paths written
   relative to a directory that contains the workspace, such as a `git diff` run in `DO/` for the
-  workspace `DO/Cloud` (#77). A path that names no workspace file is retried with the workspace's
-  path below each enclosing git work tree's top level stripped, innermost first. The new
+  workspace `DO/Cloud` (#77). By default a path that names a workspace file as written wins, and
+  any other path is retried with the workspace's path below each enclosing git work tree's top
+  level stripped, innermost first. Discovery needs `.git` at or above the workspace. The new
   `--diff-prefix <path>` names the workspace's path inside the diff's repository instead (e.g.
-  `--diff-prefix Cloud`); a rooted, empty or `..` value is rejected. A path that names a workspace
-  file as written still wins. Discovery needs `.git` at or above the workspace; for a copied
-  workspace or another clone, pass `--diff-prefix`. A repository file outside the workspace whose
-  path names no workspace file stays `diff-file-unmatched` (`--diff`) or `file-unmatched`
-  (`--file`). Deleted files are still reported as `diff-file-deleted`.
+  `--diff-prefix Cloud`, for a copied workspace or another clone). With it, every path is
+  repository-relative and resolves only with that prefix stripped: there is no workspace-first
+  step, so `src/x.al` is unmatched under `--diff-prefix Cloud`. A rooted, empty, drive (`C:`) or
+  `..` value is rejected. A repository file outside the workspace stays `diff-file-unmatched`
+  (`--diff`) or `file-unmatched` (`--file`). A deleted file is still `diff-file-deleted`, except
+  that under `--diff-prefix` a deleted file outside the prefix is `diff-file-unmatched`. The
+  digest document lists the prefixes that resolved at least one path in
+  `changed.pathPrefixesUsed` (omitted when none did).
 - `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
   `could not compute modelInstanceId`), as every gate-backed command does for that case; before,
   it exported the graph with an empty app id and exited 0 (#73). A missing or unparseable
