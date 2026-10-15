@@ -231,20 +231,24 @@ fn lower_object(
         issues,
         &mut routine_nodes,
     );
-    // A `#if`-split header yields one routine per arm (see `header_arms`).
+    // A `#if`-split header yields one routine per arm (see `header_arms`). Each arm
+    // takes the pending entries whose guard a build of that arm can satisfy, read
+    // under that joined guard (`lower_routine` deduplicates them).
     let mut routines = Vec::new();
     for (r, attr_items, di_table, member, in_dataset_modify_context, ctx) in routine_nodes {
         let (arms, shared_from) = header_arms(r);
         for arm in arms {
+            let a_syms = arm_symbols(r, &arm, source);
             routines.push(lower_routine(
                 r,
-                // ponytail: one copy per node, bare, until the per-arm guard filter and
-                // the (node, argument selection) dedup land (issue #80, Task 3).
                 attr_items
                     .iter()
-                    .enumerate()
-                    .filter(|(i, e)| attr_items[..*i].iter().all(|o| o.node.id() != e.node.id()))
-                    .map(|(_, e)| e.node)
+                    .filter_map(|e| {
+                        consistent(&e.guard, &a_syms).map(|guard| PendingAttr {
+                            node: e.node,
+                            guard,
+                        })
+                    })
                     .collect(),
                 di_table.clone(),
                 member,
@@ -814,8 +818,9 @@ fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::Obje
 ///   wrapper, `pending` is every arm's leftovers then the fall-through entries, settled
 ///   by [`settle_pending`]: guards are projected onto the symbols a later condition or
 ///   the attribute's own argument groups mention, exact duplicates are removed, and an
-///   attribute with more than [`PENDING_PATH_CAP`] paths is dropped with ONE
-///   `SyntaxIssue`.
+///   attribute with more than [`PENDING_PATH_CAP`] paths in the list being settled
+///   (one scope's `pending`, e.g. an inner arm's; not counted across the object)
+///   loses those paths, with ONE `SyntaxIssue`.
 ///
 /// Any other node (a section, a field, a `var` section, a multi-chain wrapper, …)
 /// ends the run: `pending` is cleared, and the node is walked with an empty run whose
@@ -1124,8 +1129,8 @@ struct PendingAttr<'t> {
     guard: Syms,
 }
 
-/// More distinct guards than this for one pending attribute: it is dropped, with a
-/// `SyntaxIssue` (see [`settle_pending`]).
+/// More distinct guards than this for one attribute in one `pending` list being
+/// settled: those paths are dropped, with a `SyntaxIssue` (see [`settle_pending`]).
 const PENDING_PATH_CAP: usize = 64;
 
 /// A wrapper with exactly one `#if` … `#endif` chain, the only shape an attribute
@@ -1162,58 +1167,57 @@ fn admit<'t>(
 ///    so dropping the other literals changes no attachment and no reading, and keeps
 ///    `pending` small (40 unrelated pragma-only wrappers leave one entry).
 /// 2. Remove exact duplicates (same node, same guard as a set), keeping the first.
-/// 3. **Cap**: an attribute with more than [`PENDING_PATH_CAP`] guards left is dropped
-///    with one `SyntaxIssue` at the attribute, never attached under a wrong guard.
+/// 3. **Cap**: an attribute with more than [`PENDING_PATH_CAP`] guards left in THIS
+///    `pending` list (the scope being settled, e.g. one arm's walk; not a count over
+///    the whole object) loses those paths, with one `SyntaxIssue` at the attribute; it
+///    is never attached under a wrong guard.
 fn settle_pending(
     pending: &mut Vec<PendingAttr>,
     end: usize,
     cond_syms: &[(usize, String)],
     issues: &mut Vec<crate::ir::SyntaxIssue>,
 ) {
-    let later = &cond_syms[cond_syms.partition_point(|(b, _)| *b < end)..];
+    use std::collections::{HashMap, HashSet};
+    let at = |b: usize| cond_syms.partition_point(|(s, _)| *s < b);
+    let later: HashSet<&str> = cond_syms[at(end)..]
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect();
     for e in pending.iter_mut() {
         let own = e.node.byte_range();
-        e.guard.retain(|(s, _)| {
-            later.iter().any(|(_, t)| t == s)
-                || cond_syms.iter().any(|(b, t)| own.contains(b) && t == s)
-        });
+        let inside = &cond_syms[at(own.start)..at(own.end)];
+        e.guard
+            .retain(|(s, _)| later.contains(s.as_str()) || inside.iter().any(|(_, t)| t == s));
         e.guard.sort();
     }
-    let mut seen: Vec<(usize, Syms)> = Vec::new();
-    pending.retain(|e| {
-        let key = (e.node.id(), e.guard.clone());
-        let new = !seen.contains(&key);
-        if new {
-            seen.push(key);
-        }
-        new
-    });
-    let mut over: Vec<usize> = Vec::new();
+    let mut seen: HashSet<(usize, Syms)> = HashSet::new();
+    pending.retain(|e| seen.insert((e.node.id(), e.guard.clone())));
+    let mut paths: HashMap<usize, usize> = HashMap::new();
+    for e in pending.iter() {
+        *paths.entry(e.node.id()).or_default() += 1;
+    }
+    let mut reported: HashSet<usize> = HashSet::new();
     for e in pending.iter() {
         let id = e.node.id();
-        let paths = seen.iter().filter(|(n, _)| *n == id).count();
-        if paths > PENDING_PATH_CAP && !over.contains(&id) {
-            over.push(id);
+        if paths[&id] > PENDING_PATH_CAP && reported.insert(id) {
             issues.push(crate::ir::SyntaxIssue {
                 message: format!(
-                    "attribute reaches its routine through more than {PENDING_PATH_CAP} distinct `#if` paths; not attached"
+                    "attribute reaches its routine through more than {PENDING_PATH_CAP} distinct `#if` paths; those paths are not attached"
                 ),
                 origin: origin_of(e.node),
             });
         }
     }
-    pending.retain(|e| !over.contains(&e.node.id()));
+    pending.retain(|e| paths[&e.node.id()] <= PENDING_PATH_CAP);
 }
 
 /// Every `(start byte, symbol)` that a `#if`/`#elif` condition anywhere under
 /// `node` mentions (split headers and argument groups included), in byte order.
 /// Iterative: it walks routine bodies, whose expression trees can be deep.
 fn preproc_condition_symbols(node: RawNode, source: &str) -> Vec<(usize, String)> {
+    // No text pre-check: the scanner also accepts `# if` and `#IF`, so only the
+    // parsed tree can tell (issue #80 review).
     let mut out = Vec::new();
-    // Cheap pre-check: most objects have no `#if` at all.
-    if !node.text(source).contains("#if") {
-        return out;
-    }
     let mut stack = vec![(node, false)];
     while let Some((n, in_cond)) = stack.pop() {
         if in_cond && n.kind() == RawKind::Identifier {
@@ -1370,6 +1374,10 @@ fn with_build_context<R>(extra: &[(String, bool)], ir: &mut Ir, f: impl FnOnce(&
     r
 }
 
+/// Symbol literals that a build path decides, in the form of a build context
+/// (`RoutineDecl::preproc_context`).
+type Syms = Vec<(String, bool)>;
+
 /// The children of a `#if` wrapper, grouped by branch. Each group carries the
 /// symbols its branch decides (its own condition true, every earlier condition of
 /// the chain false; nothing for content outside any branch) and whether it is live
@@ -1447,12 +1455,12 @@ fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) ->
 
 /// The items of an `#if` group inside a POSITIONAL delimited list (grammar `main`
 /// 8682cb5f, B7b-1: `key(PK; A #if X , B #endif , C)`, `[Attr(A, #if X B, #else C,
-/// #endif D)]`), as one build reads them: the first arm `run` does not decide
-/// false, the first-branch-wins policy of every split header. A union of the arms
-/// is no build at all and shifts every later position (an `[EventSubscriber]`'s
-/// event name is `args[2]`). A group nested in the chosen arm is read the same way;
-/// when every arm is decided false (an `#if` with no `#else`) the group adds
-/// nothing. Appends to `out` in document order.
+/// #endif D)]`), as one build reads them: the first arm that is live under `run`
+/// and consistent with it, the first-branch-wins policy of every split header. A
+/// union of the arms is no build at all and shifts every later position (an
+/// `[EventSubscriber]`'s event name is `args[2]`). A group nested in the chosen arm
+/// is read the same way; when every arm is decided false (an `#if` with no `#else`)
+/// the group adds nothing. Appends to `out` in document order.
 ///
 /// `run` is the RUNNING context of the whole list: the caller starts it once per
 /// list and passes it to every group, and the chosen arm's symbols join it before
@@ -1468,6 +1476,8 @@ fn conditional_list_arm<'t>(
 ) {
     // Entry 0 is the content before `#if` and the last the content after `#endif`
     // (live, and empty in a list group), so a group with no live arm reads nothing.
+    // When no arm is consistent with `run`, `find_map` reaches that trailing entry
+    // (empty syms, so consistent; empty items), and the group reads nothing.
     let branches = preproc_branches(group, source, run);
     let Some((joined, items)) = branches
         .into_iter()
@@ -1486,10 +1496,6 @@ fn conditional_list_arm<'t>(
         }
     }
 }
-
-/// Symbol literals that a build path decides, in the form of a build context
-/// (`RoutineDecl::preproc_context`).
-type Syms = Vec<(String, bool)>;
 
 /// `a ∪ b` in `a`'s order, then `b`'s new symbols; `None` when they give one
 /// symbol both values, which no build does.
@@ -1583,6 +1589,54 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
     out
 }
 
+/// One argument list of an attribute as one build reads it.
+struct AttributeArgList<'t> {
+    /// The `#if` groups in the list (each gets a `SyntaxIssue` when lowered).
+    groups: Vec<RawNode<'t>>,
+    /// The positional arguments that build reads, in order.
+    items: Vec<RawNode<'t>>,
+}
+
+/// The argument lists of attribute `item` as the build `guard` reads them, before any
+/// lowering. H-8: a comment interleaved between args never occupies a positional slot
+/// (see `structural_children`'s doc: the `[EventSubscriber(...)]` silent-unregister
+/// case). An `#if` group among the args (grammar 8682cb5f) gives the args of the arm
+/// that build reads, for the same reason, with one running context per list started
+/// from `guard`.
+fn attribute_arg_selection<'t>(
+    item: RawNode<'t>,
+    guard: &[(String, bool)],
+    source: &str,
+) -> Vec<AttributeArgList<'t>> {
+    let Some(args_node) = item
+        .field(FieldName::Attribute)
+        .and_then(|c| c.field(FieldName::Arguments))
+    else {
+        return Vec::new();
+    };
+    args_node
+        .named_children()
+        .into_iter()
+        .filter(|l| l.kind() == RawKind::AttributeArgumentList)
+        .map(|list| {
+            let mut out = AttributeArgList {
+                groups: Vec::new(),
+                items: Vec::new(),
+            };
+            let mut run = guard.to_vec();
+            for arg in structural_children(list) {
+                if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
+                    out.groups.push(arg);
+                    conditional_list_arm(arg, source, &mut run, &mut out.items);
+                } else {
+                    out.items.push(arg);
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 // 7 pre-existing params + `in_dataset_modify_context`
 // (dataitem-receivers plan, Task 1) + the header arm; each is a distinct piece of
@@ -1590,7 +1644,7 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
 // site, mirrors `infer_receiver_type`'s identical precedent.
 fn lower_routine<'t>(
     node: RawNode<'t>,
-    mut attr_items: Vec<RawNode<'t>>,
+    mut attr_items: Vec<PendingAttr<'t>>,
     dataitem_source_table: Option<String>,
     member: Option<RawNode<'t>>,
     in_dataset_modify_context: bool,
@@ -1670,27 +1724,51 @@ fn lower_routine<'t>(
         node.kind(),
         RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
     );
-    if split {
-        // A split header's arm carries its own attributes inside the node.
-        attr_items.extend(
-            node.named_children()
-                .into_iter()
-                .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c)),
-        );
-    }
-
     // The builds this routine exists in: the object-level `#if` branches around
     // it, plus its own arm when its header is split.
     let mut preproc_context = object_ctx.to_vec();
     if split {
         preproc_context.extend(arm_symbols(node, arm, source));
+        // A split header's arm carries its own attributes inside the node; they are
+        // read under the routine's own context.
+        attr_items.extend(
+            node.named_children()
+                .into_iter()
+                .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
+                .map(|c| PendingAttr {
+                    node: c,
+                    guard: preproc_context.clone(),
+                }),
+        );
+    }
+
+    // One attribute node can reach this routine by several build paths. Keep the
+    // first entry (source order) per (node, argument selection): paths that read the
+    // same arguments are one attribute, paths that read different ones are one per
+    // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId` and no
+    // duplicate `SyntaxIssue`.
+    let mut seen: Vec<(usize, Vec<Vec<usize>>)> = Vec::new();
+    let mut selected = Vec::new();
+    for e in &attr_items {
+        let lists = attribute_arg_selection(e.node, &e.guard, source);
+        let key = (
+            e.node.id(),
+            lists
+                .iter()
+                .map(|l| l.items.iter().map(|n| n.id()).collect())
+                .collect(),
+        );
+        if !seen.contains(&key) {
+            seen.push(key);
+            selected.push((e.node, lists));
+        }
     }
 
     // Attributes: lowercased names (for classify_kind / control-context guards) +
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
     let mut attributes_parsed: Vec<crate::ir::AttributeIr> = Vec::new();
-    for item in attr_items {
+    for (item, lists) in selected {
         let Some(content) = item.field(FieldName::Attribute) else {
             continue;
         };
@@ -1700,34 +1778,18 @@ fn lower_routine<'t>(
         let raw_name = name_node.text(source).trim().to_string();
         attributes.push(raw_name.fold_identifier());
         let mut args = Vec::new();
-        if let Some(args_node) = content.field(FieldName::Arguments) {
-            for list in args_node.named_children() {
-                if list.kind() == RawKind::AttributeArgumentList {
-                    // H-8: a comment interleaved between args must never occupy a
-                    // positional slot — see `structural_children`'s doc (the
-                    // `[EventSubscriber(...)]` silent-unregister case this fixes).
-                    // An `#if` group among the args (grammar 8682cb5f) gives the
-                    // args of the arm this routine's build reads, for the same reason.
-                    let mut items = Vec::new();
-                    let mut run = preproc_context.clone();
-                    for arg in structural_children(list) {
-                        if arg.kind() == RawKind::PreprocConditionalAttributeArgs {
-                            issues.push(SyntaxIssue {
-                                message: "`#if` inside attribute arguments — the first \
-                                          arm this routine's build does not rule out is \
-                                          read (the other arms are not modelled)"
-                                    .to_string(),
-                                origin: origin_of(arg),
-                            });
-                            conditional_list_arm(arg, source, &mut run, &mut items);
-                        } else {
-                            items.push(arg);
-                        }
-                    }
-                    for arg in items {
-                        args.push(lower_expr(arg, ir, issues, source, 0));
-                    }
-                }
+        for list in lists {
+            for group in list.groups {
+                issues.push(SyntaxIssue {
+                    message: "`#if` inside attribute arguments — the first \
+                              arm this routine's build does not rule out is \
+                              read (the other arms are not modelled)"
+                        .to_string(),
+                    origin: origin_of(group),
+                });
+            }
+            for arg in list.items {
+                args.push(lower_expr(arg, ir, issues, source, 0));
             }
         }
         attributes_parsed.push(crate::ir::AttributeIr {
@@ -6537,6 +6599,36 @@ codeunit 50102 D2
     begin
     end;
 #endif
+    procedure Q()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(attrs(&af, 0, "P"), names(&["Scope"]));
+        assert_eq!(attrs(&af, 0, "R"), Vec::<String>::new());
+        assert_eq!(attrs(&af, 0, "Q"), names(&["Scope"]));
+    }
+
+    /// #80 review: the A13 shape spelled `# if`/`# endif` and `#IF`/`#ENDIF`, which
+    /// the grammar's scanner accepts. Projection must still see the second `X`
+    /// condition, or the `{X:false}` fall-through guard loses `X` and `R` gets `Scope`.
+    #[test]
+    fn projection_sees_spaced_and_upper_case_directives() {
+        let src = r#"codeunit 50100 T
+{
+    [Scope('OnPrem')]
+# if X
+    procedure P()
+    begin
+    end;
+# endif
+#IF X
+    procedure R()
+    begin
+    end;
+#ENDIF
     procedure Q()
     begin
     end;

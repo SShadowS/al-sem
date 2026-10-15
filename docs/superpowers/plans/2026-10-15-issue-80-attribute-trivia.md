@@ -189,23 +189,28 @@ temporary `attr_items.iter().map(|e| e.node)` until Task 3). Tests (step 6): A1 
 **Interfaces:** Consumes `PendingAttr`, `consistent`, the running-context `conditional_list_arm`.
 `lower_routine` takes `Vec<PendingAttr<'t>>` instead of `Vec<RawNode<'t>>`.
 
-- [ ] **Step 1:** Run the task's tests and confirm the `red.md` failures.
-- [ ] **Step 2:** In `lower_object`'s per-arm loop, compute `a_syms = arm_symbols(r, &arm, source)`.
+- [x] **Step 1:** Run the task's tests and confirm the `red.md` failures.
+- [x] **Step 2:** In `lower_object`'s per-arm loop, compute `a_syms = arm_symbols(r, &arm, source)`.
   Keep each entry whose `consistent(&e.guard, &a_syms)` is `Some`, replacing its guard with that join.
   For a non-split routine `a_syms` is empty.
-- [ ] **Step 3:** In `lower_routine`, an OUTER entry's argument list starts its running context from
+- [x] **Step 3:** In `lower_routine`, an OUTER entry's argument list starts its running context from
   the entry's guard (now `guard ∪ a_syms`). An in-node split-header attribute keeps
   `preproc_context` as today.
-- [ ] **Step 4:** Deduplication. For each entry, compute its selected argument NODES (the structural
+- [x] **Step 4:** Deduplication. For each entry, compute its selected argument NODES (the structural
   args with each `#if` group expanded by `conditional_list_arm`) BEFORE `lower_expr`. Keep the first
   entry, in start-byte order, per (node, selection). Lower only those, so there are no dead `ExprId`s
   and no duplicate "`#if` inside attribute arguments" `SyntaxIssue`s. Factor this so the selection is
   computed once and reused for lowering (DRY).
-- [ ] **Step 5:** The task's tests pass. All `lower::tests`, `--test l2_ir`, `--test
+- [x] **Step 5:** The task's tests pass. All `lower::tests`, `--test l2_ir`, `--test
   program_resolve_harness` and `--test r4` stay green.
-- [ ] **Step 6:** Discrimination proofs: A9 (skip the dedup), A14 (start from the routine's
+- [x] **Step 6:** Discrimination proofs: A9 (skip the dedup), A14 (start from the routine's
   `preproc_context`), A15 (skip the arm filter), A19 (merge entries by guard intersection), A23 (dedup
   in `collect_routines` before the arm filter). Record each.
+  *Done note:* recorded in `scratchpad/80/t3.md`. A19's "keep only the first entry per node" break
+  stays GREEN (both of `H`'s paths select `'OnB'`), so A19 is proven with the plan's intersection
+  merge. The A23 break deduplicates in `lower_object` before the arm filter (same effect as in
+  `collect_routines`). The review-pass fixes (text pre-check removed, hashed `settle_pending`, cap
+  scope wording) and the new test `projection_sees_spaced_and_upper_case_directives` land here too.
 - [ ] **Step 7:** rustfmt, `check-diff`, then commit:
   `fix(al-syntax): carried attributes are filtered per split-header arm and read under their own build path (#80)`.
 

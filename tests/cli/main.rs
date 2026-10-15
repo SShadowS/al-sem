@@ -36,6 +36,7 @@ mod cli_a_terminal_differential;
 mod cli_a_with_evidence;
 mod cli_analyze_coverage_ledger;
 mod cli_analyze_program_calls;
+mod cli_attribute_trivia;
 mod cli_b_diff_differential;
 mod cli_b_digest_differential;
 mod cli_b_digest_exit_oracles;
