@@ -9,8 +9,6 @@
 //! `RaiseDep()` calls `Lib.OnDepEvent()`, `TouchCust()` inserts `Customer`;
 //! `Ws Sub.HandleInWs` subscribes to `OnDepEvent` and inserts `Ws Flag`.
 
-#![allow(dead_code)]
-
 use std::path::Path;
 
 pub const WS_GUID: &str = "aaaa7070-0000-0000-0000-000000000070";

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `alsem events fanout`, `alsem events chains` and `alsem policy check` now load the
+  workspace's dependencies by default, the same cross-app model `alsem analyze` builds
+  (#70). A workspace subscriber to a dependency event is now reported (single-app saw 0
+  events for it), policy rules see a dependency's table names and the facts its code adds,
+  and the analyzer diagnostics on stderr come from the cross-app run. Only workspace
+  routines are evaluated by policy rules; the dependency routines stay in the model for
+  lookup. `--single-app` analyses the workspace alone, as before. JSON output carries a
+  top-level `dependencies` statement right after `kind` (`mode` `crossApp` / `singleApp`
+  and the loaded `apps`, as `digest` and `query` do since #66); human output starts with a
+  `dependencies: …` line when apps were loaded (a fixture that declares `platform` lists
+  System and System Application as `missing`); SARIF is unchanged, since no consumer reads
+  a statement there. In cross-app mode `events --scope all` also lists events between
+  dependency routines only. When the cross-app model cannot be built (no `app.json`), the
+  commands fail and name `--single-app`.
+  CDO: CDO_PLACEHOLDER
 - `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
   states and links over the snapshot's typed edges, in stable routine ids (#69 D2).
   `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries, distinct
@@ -47,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `prove`, `fingerprint` and `diff` stay single-app (#70). Their output is a capability
+  snapshot, and the cross-app snapshot does not yet follow calls made inside dependency
+  code: on a workspace routine that calls a dependency routine which calls another that
+  commits, it reports complete coverage and no commit. `prove may-commit` would then answer
+  `no`. `diff` compares fingerprint snapshots, so it keeps fingerprint's mode.
 - `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
   (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
   A link indexes the arena's table of distinct edges, and a resolved entry borrows its
@@ -193,6 +213,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `workspaceFingerprint` now covers the whole dependency closure the loader reads (#70):
+  every `.app` in the workspace's own and each ancestor `.alpackages` up to the `.git`
+  boundary, from the same discovery the loader and the closure digest use. Before, it
+  hashed only `<ws>/.alpackages`, so swapping a package in an ancestor cache did not change
+  it. An unreadable package or cache is a `dep-package-unreadable` input keyed by its
+  relative path and hashed by its failure category, so a readable package beside it is
+  still seen and the value does not depend on where the tree lives. Fingerprints without
+  an ancestor cache are unchanged (no golden moved).
+- A workspace that is itself a repository root (its own folder has `.git`, as a directory
+  or a worktree file) no longer reads `.alpackages` caches above it (#70). The loader
+  ascended from the parent without checking the workspace's own `.git`.
+- A dependency event publisher with subscribers now reaches the cross-app L4 store (#70).
+  It was a fixed solver leaf, so its subscribers' writes were missing from `query effects`
+  and digest's `tempState` while digest's cone kept them. It is now solved for its effect
+  rows, but keeps the leaf's unknown parameter roles (`fixed_roles`), because role
+  composition does not walk subscriber dispatches; callers composing through it see
+  unknown roles, as before.
 - The lowerer no longer drops an attribute that is separated from its procedure or trigger
   by a comment, a pragma or an `#if` line (#80). Before, any node between `[EventSubscriber(…)]`
   and `local procedure Handler()` (a `// note` line, a `/* … */` block, `#pragma`, `#region`,

@@ -288,6 +288,7 @@ codeunit 50622 "S6 Pol Sub"
         deterministic: true,
         strict: false,
         driver_version: "s6",
+        single_app: true,
     });
     let text = out.text.expect("policy output");
     let v: serde_json::Value = serde_json::from_str(&text).expect("json");

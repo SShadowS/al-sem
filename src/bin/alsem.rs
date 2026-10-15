@@ -262,6 +262,12 @@ struct PolicyCheckCli {
     /// Exit 1 if any analyzer error-severity diagnostic.
     #[arg(long, default_value_t = false)]
     strict: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so rules see a dependency's table names and
+    /// the facts its code adds, at more memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `PolicyExplainCli` — arguments for `alsem policy explain <rule>`.
@@ -839,6 +845,7 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         deterministic: c.deterministic,
         strict: c.strict,
         driver_version: &version,
+        single_app: c.single_app,
     };
 
     let outcome = run_policy_check(&opts);
