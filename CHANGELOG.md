@@ -21,9 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An object without a number now gets a unique object id (#83). Interface and ControlAddIn
   have no number, and a numbered kind whose number does not parse has none either; every
-  such object was `…:<Kind>:0`, so two of one kind in one app shared an id, and every map
-  keyed by it (identity table, contracts, fingerprints, detector context, root
-  classification, policy, HTML) kept only one of them. The key is now `@` + the folded name,
+  such object was `…:<Kind>:0`, so two of one kind in one app shared an id. The identity
+  table and the fingerprint object part (both pinned by tests) and every other map keyed by
+  the id kept only one of them, and the contracts carried duplicate ids. The key is now `@` + the folded name,
   percent-encoded outside `a-z 0-9` (`…:Interface:@iprocessor`), from every producer: R0, the
   model, the program graph, R1a and the dependency projection
   (`engine::ids::object_key`). Two dependency interfaces without `Id` that declare a method
