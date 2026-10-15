@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
   (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
+- `viaPathsTruncated` now also means a non-empty path set is not known to be complete: a
+  state or depth limit cut the witness enumeration (BFS or proofs). Such effects can move
+  from `conditional` to `unknown` conditionality, and ordering chains report `capped`
+  (#69 D3). Empty path sets (`terminal-not-found`, `first-hop-not-found`) are not folded;
+  they are decided over the proofs and the BFS together.
+- `FingerprintIndexesPub` gains `pd_solution`, `typed_edges` and `capability_facts`, and
+  `oracle_r3a3_inherited_keys_trace_to_a_direct_producer` accepts an inherited key from an
+  ordinary direct fact or from the routine's own solve states, no longer a PD→kt rewrite
+  (#69 D3).
 - `alsem digest --file` / `--diff` find changed roots by routine declaration SPAN: the
   first attached attribute line through the header, `var` section, body and `end;`. Before,
   a routine was matched only through the start lines of the operations and call sites the
@@ -165,6 +174,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class, so no detector or digest output moved). The gap test that pinned the old limit
   (`recursive_callee_write_through_var_param_stays_physical`) now asserts the opposite
   (`…_forwarded_var_param_is_temporary`).
+- Digest witnesses for writes a call site makes temporary keep their evidence,
+  conditionality and every via-path through the fact's first hop (#69 D3): the paths come
+  from the root's own solve states (proofs), and the BFS and fingerprint share one carrier
+  predicate (`is_bfs_carrier`: ordinary direct facts only, same temp class). Before, such a
+  write had `evidence: unavailable`, no viaPaths and `ORDERING_UNKNOWN`. A path's identity
+  is its edges plus its terminal, so two writes reached through the same calls stay two
+  paths. `alsem fingerprint` takes the same proofs.
+- `viaPaths` are deduplicated by projected path on an effect's first fact too, not only on
+  a merge; equal projected paths keep the least restrictive conditionality (#69 D3).
+- A kt and an nt DB effect never share an occurrence id: a kt DB effect's canonical key
+  ends in `|kt`, and the class is part of the effect's dedupe key (#69 D3). Golden moved:
+  `tests/cli-b-goldens/digest/ws-txn-d47-neg-temp.json`, one `factId` of a temporary
+  record's direct insert. Pinned by `a2a_temp_call_site_keeps_its_witness`,
+  `a2d_all_paths_and_conditionality_kept`, `a2f_degraded_witnesses_never_share_an_occurrence`,
+  `a2g_incompleteness_reaches_consumers` and three `digest::tests` unit tests.
 - `alsem digest --diff` reads each hunk body line by line and stops when the header's old
   and new line counts are used up. Header tests (`--- `, `+++ `, `diff --git`, `rename`) no
   longer apply inside a body, so a deleted line `--- x` or an added line `+++ y` is a change,

@@ -33,7 +33,7 @@ use al_sem::engine::l5::snapshot::{
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 use serde_json::Value;
 
-use crate::temp_state_probe::write_workspace;
+use crate::temp_state_probe::{probe_al, write_workspace};
 
 // ---------------------------------------------------------------------------
 // Running the pipeline (once per mode, shared by every test).
@@ -116,6 +116,69 @@ fn has_label(e: &Value) -> bool {
             .as_array()
             .is_some_and(|g| g.iter().any(|l| l == "WRITE_PENDING_AT_UI"))
     })
+}
+
+/// The 0-based line of the unique `// @marker` comment — the convention of a
+/// digest viaPath hop's `anchor.line`.
+fn line_of(marker: &str) -> u64 {
+    let tag = format!("// @{marker}");
+    let src = probe_al();
+    let hits: Vec<usize> = src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.trim_end().ends_with(&tag))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(hits.len(), 1, "marker {marker} must be unique: {hits:?}");
+    hits[0] as u64
+}
+
+fn is_kt(eff: &Value) -> bool {
+    temp_state(eff) == Some("known(true)")
+}
+
+fn is_nt(eff: &Value) -> bool {
+    temp_state(eff).is_some_and(|s| s.split(',').any(|p| p != "known(true)"))
+}
+
+fn has_guarantee(e: &Value, label: &str) -> bool {
+    effects(e).iter().any(|m| {
+        m["guarantees"]
+            .as_array()
+            .is_some_and(|g| g.iter().any(|l| l == label))
+    })
+}
+
+fn via_paths(eff: &Value) -> Vec<&Vec<Value>> {
+    eff["viaPaths"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_array).collect())
+        .unwrap_or_default()
+}
+
+/// A path as `A→B→C` routine displays.
+fn path_str(root: &str, path: &[Value]) -> String {
+    let mut s = root.to_string();
+    for hop in path {
+        s.push('→');
+        s.push_str(hop["toDisplay"].as_str().unwrap_or("?"));
+    }
+    s
+}
+
+fn path_strs(root: &str, eff: &Value) -> Vec<String> {
+    via_paths(eff).iter().map(|p| path_str(root, p)).collect()
+}
+
+/// The source lines of a path's hops (each hop's call-site anchor).
+fn hop_lines(path: &[Value]) -> Vec<u64> {
+    path.iter()
+        .filter_map(|h| h["anchor"]["line"].as_u64())
+        .collect()
+}
+
+fn evidence_kind(eff: &Value) -> &str {
+    eff["evidence"]["sourceKind"].as_str().unwrap_or("")
 }
 
 fn summary(e: &Value) -> String {
@@ -331,6 +394,220 @@ fn a1c_cone_values_are_frame_correct() {
         }
     }
     assert!(f.is_empty(), "{}", f.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// A2 — the witness of a write that becomes temporary at a call site.
+// ---------------------------------------------------------------------------
+
+/// A2a. A temporary call site keeps its witness, for Insert/Modify/Delete:
+/// source evidence at the producer's excerpt, the exact hop list, and no
+/// ORDERING_UNKNOWN. Mutation: skip depth-0 proof enumeration →
+/// "HelperUiTemp: evidence unavailable".
+#[test]
+fn a2a_temp_call_site_keeps_its_witness() {
+    each_mode(|doc, f| {
+        for (root, ty, excerpt, hops) in [
+            (
+                "HelperUiTemp",
+                "DB_INSERT",
+                "R.Insert",
+                "HelperUiTemp→HelperUi",
+            ),
+            (
+                "HelperModUiTemp",
+                "DB_MODIFY",
+                "R.Modify",
+                "HelperModUiTemp→HelperModUi",
+            ),
+            (
+                "HelperDelUiTemp",
+                "DB_DELETE",
+                "R.Delete",
+                "HelperDelUiTemp→HelperDelUi",
+            ),
+            (
+                "ViaForwardUiTemp",
+                "DB_INSERT",
+                "R.Insert",
+                "ViaForwardUiTemp→ForwardUi→HelperUi",
+            ),
+        ] {
+            let e = entry(doc, root);
+            let kt: Vec<_> = of_type(e, ty).into_iter().filter(|x| is_kt(x)).collect();
+            if kt.is_empty() {
+                f.push(format!("{root}: no known(true) {ty} ({})", summary(e)));
+                continue;
+            }
+            for x in kt {
+                if evidence_kind(x) != "source" {
+                    f.push(format!("{root}: evidence unavailable"));
+                } else if x["evidence"]["excerpt"] != excerpt {
+                    f.push(format!(
+                        "{root}: evidence excerpt {} != {excerpt}",
+                        x["evidence"]["excerpt"]
+                    ));
+                }
+                let got = path_strs(root, x);
+                if got != [hops] {
+                    f.push(format!("{root}: viaPaths {got:?} != [{hops}]"));
+                }
+            }
+            if has_guarantee(e, "ORDERING_UNKNOWN") {
+                f.push(format!("{root}: ORDERING_UNKNOWN present"));
+            }
+        }
+    });
+}
+
+fn the_kt_insert<'a>(e: &'a Value, root: &str, f: &mut Vec<String>) -> Option<&'a Value> {
+    let kt: Vec<_> = of_type(e, "DB_INSERT")
+        .into_iter()
+        .filter(|x| is_kt(x))
+        .collect();
+    if kt.len() != 1 {
+        f.push(format!(
+            "{root}: want exactly one known(true) DB_INSERT ({})",
+            summary(e)
+        ));
+    }
+    kt.first().copied()
+}
+
+/// A2d. All paths and conditionality are kept. `ViaCondTwiceTemp`: 2 viaPaths
+/// (both `CondTwice` call sites), unconditional-on-success. `HelperTwoTemp`:
+/// one cone fact, built by the INSERT branch alone; exactly ONE viaPath and
+/// unconditional-on-success (p1 conditional and p2 unconditional are distinct
+/// raw paths with equal projections). `CondOnlyTemp`: conditional, and
+/// `viaPathsTruncated == false`. Mutations: keep one link per state →
+/// "ViaCondTwiceTemp: expected 2 viaPaths"; dedup raw paths by edge sequence
+/// only / keep the first conditionality on an equal projected merge →
+/// "HelperTwoTemp: conditionality conditional"; skip the insert-branch
+/// normalization → "HelperTwoTemp: expected 1 viaPath, got 2"; fold the BFS's
+/// own `terminal-not-found` into `had_truncation` → "CondOnlyTemp: conditionality unknown".
+#[test]
+fn a2d_all_paths_and_conditionality_kept() {
+    let c1 = line_of("condtwice-1");
+    let c2 = line_of("condtwice-2");
+    each_mode(|doc, f| {
+        let e = entry(doc, "ViaCondTwiceTemp");
+        if let Some(x) = the_kt_insert(e, "ViaCondTwiceTemp", f) {
+            let paths = via_paths(x);
+            if paths.len() != 2 {
+                f.push(format!(
+                    "ViaCondTwiceTemp: expected 2 viaPaths, got {} ({:?})",
+                    paths.len(),
+                    path_strs("ViaCondTwiceTemp", x)
+                ));
+            }
+            let last: BTreeSet<u64> = paths
+                .iter()
+                .filter_map(|p| hop_lines(p).last().copied())
+                .collect();
+            if last != BTreeSet::from([c1, c2]) {
+                f.push(format!(
+                    "ViaCondTwiceTemp: CondTwice call sites {last:?} != {{{c1}, {c2}}}"
+                ));
+            }
+            if x["conditionality"] != "unconditional-on-success" {
+                f.push(format!(
+                    "ViaCondTwiceTemp: conditionality {}",
+                    x["conditionality"].as_str().unwrap_or("?")
+                ));
+            }
+        }
+
+        let e = entry(doc, "HelperTwoTemp");
+        if let Some(x) = the_kt_insert(e, "HelperTwoTemp", f) {
+            let n = via_paths(x).len();
+            if n != 1 {
+                f.push(format!("HelperTwoTemp: expected 1 viaPath, got {n}"));
+            }
+            if x["conditionality"] != "unconditional-on-success" {
+                f.push(format!(
+                    "HelperTwoTemp: conditionality {}",
+                    x["conditionality"].as_str().unwrap_or("?")
+                ));
+            }
+        }
+
+        let e = entry(doc, "CondOnlyTemp");
+        if let Some(x) = the_kt_insert(e, "CondOnlyTemp", f) {
+            if x["conditionality"] != "conditional" {
+                f.push(format!(
+                    "CondOnlyTemp: conditionality {}",
+                    x["conditionality"].as_str().unwrap_or("?")
+                ));
+            }
+            if x["viaPathsTruncated"] != false {
+                f.push("CondOnlyTemp: viaPathsTruncated true".into());
+            }
+        }
+    });
+}
+
+/// A2g. Enumeration incompleteness reaches the consumers: `IncRoot` has one
+/// short conditional proof and one longer than `MAX_DEPTH` under ONE root first
+/// hop; the kt effect has `viaPathsTruncated == true` and conditionality
+/// `unknown`. Mutation: drop the `incomplete` OR into `had_truncation` →
+/// "IncRoot: conditionality conditional".
+#[test]
+fn a2g_incompleteness_reaches_consumers() {
+    each_mode(|doc, f| {
+        let e = entry(doc, "IncRoot");
+        if let Some(x) = the_kt_insert(e, "IncRoot", f) {
+            if x["conditionality"] != "unknown" {
+                f.push(format!(
+                    "IncRoot: conditionality {}",
+                    x["conditionality"].as_str().unwrap_or("?")
+                ));
+            }
+            if x["viaPathsTruncated"] != true {
+                f.push("IncRoot: viaPathsTruncated false".into());
+            }
+        }
+    });
+}
+
+/// A2f. Degraded witnesses never share an occurrence: `DeepRoot` (68 hops, past
+/// `MAX_DEPTH`) has a kt and an nt DB_INSERT, both with unavailable evidence,
+/// with different `factId`s. Mutation: drop the `|kt` canonical suffix →
+/// "DeepRoot: factIds equal".
+#[test]
+fn a2f_degraded_witnesses_never_share_an_occurrence() {
+    each_mode(|doc, f| {
+        let e = entry(doc, "DeepRoot");
+        let ins = of_type(e, "DB_INSERT");
+        let kt: Vec<_> = ins.iter().filter(|x| is_kt(x)).collect();
+        let nt: Vec<_> = ins.iter().filter(|x| is_nt(x)).collect();
+        if ins.len() == 1 && kt.is_empty() && temp_state(ins[0]).is_some_and(|s| s.contains(',')) {
+            // Both classes in ONE effect: the kt and the nt write share an
+            // occurrence (one factId) — the defect itself.
+            f.push(format!(
+                "DeepRoot: factIds equal (kt and nt share one effect: {})",
+                summary(e)
+            ));
+            return;
+        }
+        if kt.len() != 1 || nt.len() != 1 {
+            f.push(format!(
+                "DeepRoot: want one kt and one nt DB_INSERT ({})",
+                summary(e)
+            ));
+            return;
+        }
+        for x in [kt[0], nt[0]] {
+            if evidence_kind(x) != "unavailable" {
+                f.push(format!(
+                    "DeepRoot: precondition: evidence {} (want unavailable)",
+                    evidence_kind(x)
+                ));
+            }
+        }
+        if kt[0]["factId"] == nt[0]["factId"] {
+            f.push("DeepRoot: factIds equal".into());
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

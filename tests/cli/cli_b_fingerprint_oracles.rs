@@ -41,6 +41,9 @@ fn empty_idx() -> FingerprintIndexesPub {
         callsite_by_id: HashMap::new(),
         operation_by_id: HashMap::new(),
         event_display_by_id: HashMap::new(),
+        pd_solution: Default::default(),
+        typed_edges: Vec::new(),
+        capability_facts: Vec::new(),
     }
 }
 

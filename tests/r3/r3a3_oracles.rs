@@ -37,6 +37,8 @@ use std::path::PathBuf;
 use al_sem::engine::l4::capability_cone::{
     PCapabilityFact, PRoutineConeCoverage, compute_r3a3_real_matrix, project_r3a3,
 };
+use al_sem::engine::l4::effect_lattice::TempStateKind;
+use al_sem::engine::l5::snapshot::compose_snapshot;
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
 
 fn repo_root() -> PathBuf {
@@ -84,11 +86,11 @@ fn discover_fixtures() -> Vec<String> {
 ///     the old 4-part mirror.
 ///   - `oracle_r3a3_inherited_keys_trace_to_a_direct_producer`: NOT inert here,
 ///     despite what an earlier draft of this comment said. With the class in the
-///     key, that oracle now asserts "every inherited fact traces to a SAME-CLASS
-///     direct producer" — which is exactly the soundness precondition issue 32's
-///     temp-class guards in `digest::reconstruct_witness_paths` rest on, made
-///     executable for free. It holds because `retag` copies `extra` through
-///     untouched; un-widen this mirror and the pin silently disappears while the
+///     key, that oracle asserts "every inherited fact traces to a SAME-CLASS
+///     ordinary direct producer, or to a same-class solve state of its own
+///     routine" — exactly the precondition of the digest witness's one carrier
+///     predicate (#69 D3, `digest::is_bfs_carrier` plus the root's proofs).
+///     Un-widen this mirror and the pin silently disappears while the
 ///     oracle keeps passing. Stated limit: it runs over the source-only fixture
 ///     corpus, so a cross-app scope mismatch between the cone's node set and
 ///     `snap.capability_facts` would still degrade witnesses undetected.
@@ -219,20 +221,28 @@ fn oracle_r3a3_inherited_factkey_dedup() {
 
 #[test]
 fn oracle_r3a3_inherited_keys_trace_to_a_direct_producer() {
-    // Invariant 2 + 5: every inheritedFactKey present in ANY routine's inherited set
-    // is produced as a DIRECT fact by at least one routine in the SAME fixture — the
-    // cone invents no key (every inherited fact descends from some direct emit).
-    // One rewrite is allowed: a `parameter-dependent` direct fact becomes
-    // `known/true` (`…|kt`) once a caller passes a temporary record for that
-    // param (`capability_cone::substitute_pd_entry`), so its `kt` twin counts
-    // as produced too.
+    // Invariant 2 + 5: every inheritedFactKey at routine R is produced by an
+    // ORDINARY direct fact of some routine in the SAME fixture, or by one of R's
+    // OWN non-seed producer-solve states (`CapabilitySnapshot::pd_solution`): the
+    // producer's key base with the state's temp class. The cone invents no key.
+    // This is the precondition of the digest witness (#69 D3): every inherited
+    // fact has a same-class ordinary producer below the root (a BFS carrier) or
+    // a same-class non-seed arena state AT the root (a proof). Raw producers
+    // (parameter-dependent direct facts) are not ordinary: their class at a
+    // caller comes only from the solve.
     let fixtures = discover_fixtures();
     for fx in &fixtures {
-        let summaries = rust_projection(fx);
+        let dir = corpus_dir().join(fx);
+        let Some(resolved) = assemble_and_resolve_workspace_with_program_calls(&dir) else {
+            continue;
+        };
+        let summaries = project_r3a3(&resolved).summaries;
+        let snap = compose_snapshot(&resolved);
         let mut direct_keys: HashSet<String> = HashSet::new();
+        // A raw producer's projected operation id -> its key without the class.
+        let mut producer_bases: HashMap<&str, String> = HashMap::new();
         for s in &summaries {
             for f in &s.capability_facts_direct {
-                let k = inherited_fact_key(f);
                 let is_pd = f
                     .extra
                     .as_ref()
@@ -240,19 +250,54 @@ fn oracle_r3a3_inherited_keys_trace_to_a_direct_producer() {
                     .and_then(|t| t.get("kind"))
                     .and_then(|k| k.as_str())
                     == Some("parameter-dependent");
-                if is_pd && let Some(base) = k.strip_suffix("|nt") {
-                    direct_keys.insert(format!("{base}|kt"));
+                let k = inherited_fact_key(f);
+                match (is_pd, f.witness_operation_id.as_deref()) {
+                    (false, _) => {
+                        direct_keys.insert(k);
+                    }
+                    (true, Some(op)) => {
+                        let base = k.strip_suffix("|nt").expect("a raw producer is nt");
+                        producer_bases.insert(op, base.to_string());
+                    }
+                    (true, None) => {}
                 }
-                direct_keys.insert(k);
             }
+        }
+        // routine stable id -> the keys its own non-seed states prove. The
+        // projection names an operation `{owner stable id}/{local op}`, the
+        // snapshot `…/{local op}` over its own source-unit id: bridge by the
+        // owner (the producer fact's subject) and the local op.
+        let mut state_keys: HashMap<&str, HashSet<String>> = HashMap::new();
+        for st in snap.pd_solution.states.iter().filter(|st| !st.seed) {
+            let p = &snap.capability_facts[st.producer_fact];
+            let local = st.producer_operation_id.rsplit('/').next().unwrap_or("");
+            let projected_op = format!("{}/{local}", p.subject);
+            let base = producer_bases
+                .get(projected_op.as_str())
+                .unwrap_or_else(|| {
+                    panic!("[{fx}] producer {projected_op} has no projected direct fact")
+                });
+            let class = if st.temp_state == TempStateKind::Known(true) {
+                "kt"
+            } else {
+                "nt"
+            };
+            state_keys
+                .entry(st.routine.as_str())
+                .or_default()
+                .insert(format!("{base}|{class}"));
         }
         for s in &summaries {
             for f in &s.capability_facts_inherited {
                 let k = inherited_fact_key(f);
+                let proved = state_keys
+                    .get(s.routine_id.as_str())
+                    .is_some_and(|ks| ks.contains(&k));
                 assert!(
-                    direct_keys.contains(&k),
-                    "[{fx}] {} inherited key `{k}` is produced by NO direct fact in the \
-                     fixture — the cone invented it",
+                    direct_keys.contains(&k) || proved,
+                    "[{fx}] {} inherited key `{k}` is produced by NO ordinary direct fact \
+                     in the fixture and by none of the routine's own solve states — the \
+                     cone invented it",
                     s.routine_id
                 );
             }
