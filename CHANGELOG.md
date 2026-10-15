@@ -30,9 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`no-commit-in-event-subscribers` 4 → 10, `no-http-from-table-triggers` 0 → 4,
   `install-codeunit-no-business-data-writes` 3 → 4; `routinesEvaluated` unchanged, 5479
   workspace routines). Of the 16 new or changed policy findings, 9 were triaged real and 7
-  false positives, all from the engine's path-insensitive reachability (4 of them a Guided
-  Experience commit that runs only for `IsPrimarySetup = true`), not from the cross-app
-  plumbing. `--single-app` output is identical to the old default apart from the
+  false positives, none from the cross-app plumbing: 6 come from existing reachability and
+  transaction-boundary limits (4 of them a Guided Experience commit that runs only for
+  `IsPrimarySetup = true`, 1 a commit an early exit makes unreachable, 1 a commit inside a page
+  started non-modally), and 1 from the `* Setup` table-name exemption, which does not cover a
+  feature-flag table. `--single-app` output is identical to the old default apart from the
   `dependencies` key. `alsem analyze` findings, `--program-call-graph-stats` and the CDO
   fingerprint are byte-identical before and after this change.
 - `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
