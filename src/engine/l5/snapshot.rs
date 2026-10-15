@@ -30,7 +30,11 @@
 //!   under `locale_compare`, so `…:Codeunit:1` < `…:Codeunit:@a` here while the
 //!   full snapshot's contracts (`snapshot_full.rs`, `locale_compare`) list `…:@a`
 //!   first. Each output keeps its own order; nothing relies on the two agreeing
-//!   (pinned by `cli_numberless_object_ids`'s T7).
+//!   (pinned by `cli_numberless_object_ids`'s T7). The per-site `M8: … single-case
+//!   … ordinal-safe` notes below are that old parity argument: read each one as
+//!   "ordinal (the M8 contract)". A key that holds a stable object or routine id is
+//!   no longer single-case, because a numberless object's segment carries `@` and
+//!   uppercase `%XX`.
 //! - M9: the edge-id present-only predicate is exact (`Option::is_some`; an empty
 //!   string IS kept).
 
