@@ -57,6 +57,7 @@ fn run_mode(single_app: bool) -> Value {
         true,
         None,
         single_app,
+        None,
     )
     .expect("digest runs");
     serde_json::from_str(&result.json_text).expect("digest json")
@@ -1227,6 +1228,7 @@ fn cross_app_digest_reads_the_cross_app_store() {
             true,
             None,
             single_app,
+            None,
         )
         .expect("digest runs");
         serde_json::from_str(&r.json_text).expect("digest json")

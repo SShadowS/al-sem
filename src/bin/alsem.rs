@@ -632,6 +632,13 @@ struct DigestCli {
     #[arg(long = "diff")]
     diff: Option<String>,
 
+    /// The workspace's path inside the repository the changed paths are relative
+    /// to (e.g. `Cloud` for a `git diff` run in `DO/` for `DO/Cloud`). Without it,
+    /// every `.git` at or above the workspace gives one. A path that names a
+    /// workspace file as written always wins.
+    #[arg(long = "diff-prefix")]
+    diff_prefix: Option<String>,
+
     /// Convenience alias — auto-detect: existing file path → --diff; comma-list with
     /// `.al` entries → --changed-files; else → --changed-routines.
     #[arg(long = "changed")]
@@ -1103,6 +1110,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         d.deterministic,
         d.max_paths,
         d.single_app,
+        d.diff_prefix.as_deref(),
     ) {
         Err(msg) => {
             // A DigestPipelineError (input/analyze phase) → write the message verbatim

@@ -1081,6 +1081,7 @@ mod tests {
             infra_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            workspace_files: vec![],
         }
     }
 

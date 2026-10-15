@@ -653,6 +653,14 @@ fn attach_program_calls_with(
         let _s = pt::span("b3", "b3.events");
         crate::program::model::events::program_event_graph(&ctx, &rows.workspace)
     };
+    let snap = ctx.snapshot();
+    let workspace_files: Vec<String> = snap
+        .apps
+        .iter()
+        .find(|u| u.id == snap.workspace_app)
+        .and_then(|u| u.source.as_ref())
+        .map(|s| s.files.iter().map(|f| f.virtual_path.clone()).collect())
+        .unwrap_or_default();
     {
         let _s = pt::span("b3", "b3.report_drop");
         drop(report);
@@ -668,6 +676,7 @@ fn attach_program_calls_with(
         infra_diagnostics: rows.infra_diagnostics,
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
+        workspace_files,
     };
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).

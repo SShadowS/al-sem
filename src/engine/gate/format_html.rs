@@ -1217,6 +1217,7 @@ mod tests {
             infra_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            workspace_files: vec![],
         };
         let coverage = AnalysisCoverage {
             source_units_total: 1,
@@ -1273,6 +1274,7 @@ mod tests {
             infra_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            workspace_files: vec![],
         };
         let coverage = AnalysisCoverage {
             source_units_total: 0,
