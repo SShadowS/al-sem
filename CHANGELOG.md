@@ -121,7 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hunkless_modified_file_takes_every_declaration`, `object_level_hunk_is_outside_routines`,
   `limits_are_pinned`) and `diff_parser::tests::attribute_only_deletion_runs`. Stated limits:
   an `#if`/`#else`/`#endif` line gives no root (pinned by `limits_are_pinned`); an attribute
-  separated from its routine by a comment, pragma or `#if` is not in the span (#80); the
+  separated from its routine by a comment, pragma or `#if` is not in the span (#80, since
+  fixed: see Fixed); the
   arms of an `#if`-split procedure header with DIFFERENT signatures share one span, so a
   change in either arm's header line makes both arms' ids roots (a safe over-approximation).
   Object-level changes (global `var`, fields, properties) still map to no routine (#79).
@@ -161,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Not fixed by #71, filed as issues: #76 (a `./src/x.al` spelling never matches), #77 (a
   diff made from a git root above the workspace), #78 (`objectDisplay` is always empty), #79
   (object-level changes map to no routine), #80 (an attribute separated by trivia is
-  dropped), #81 (an interface method change does not reach its implementers), #82 (the stale
+  dropped; since fixed), #81 (an interface method change does not reach its implementers), #82 (the stale
   Interface/ControlAddIn skip in the model), #83 (unnumbered objects share one object id).
 - `[profile.dev]` keeps line-table debug info only (`debug = "line-tables-only"`), and
   dependencies keep none. Full debug info had grown `target/debug/deps` to 19 GB of `.pdb`
@@ -192,6 +193,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The lowerer no longer drops an attribute that is separated from its procedure or trigger
+  by a comment, a pragma or an `#if` line (#80). Before, any node between `[EventSubscriber(…)]`
+  and `local procedure Handler()` (a `// note` line, a `/* … */` block, `#pragma`, `#region`,
+  `#define`) cleared the pending attributes, so the subscriber never bound and its effects
+  (a `Commit()` in the handler, for example) vanished from every caller of the event. Now:
+  - the grammar's extras (comment, block comment, `#pragma`, `#region`/`#endregion`,
+    `#define`/`#undef`) never end an attribute run;
+  - an `#if` that wraps only attributes gives the routine the attributes of every live arm, and
+    an attribute written before an `#if` that wraps the routine reaches each arm's routine. Each
+    pending attribute carries the symbols of its build path (its guard). It enters an arm only
+    when that arm is live and consistent with the guard, and falls through only when some build
+    takes no arm. So `[A] #if X P #endif #if X R #endif Q` gives `A` to `P` and `Q`, never to `R`;
+  - a carried attribute's own `#if` argument groups are read under its guard, so
+    `#if not X [EventSubscriber(…, #if X 'OnA' #else 'OnB' #endif …)] #endif H` subscribes `H`
+    to `OnB` only;
+  - one positional list (attribute arguments, key fields) is read with one running context: a
+    nested `#if` group and later sibling groups see the arms already chosen, and a
+    self-contradictory arm is never chosen;
+  - guards are projected onto the symbols that later conditions read, so the number of
+    pending paths stays bounded. An attribute that still reaches its routine by more than 64
+    distinct `#if` paths in one list is not attached, and a `SyntaxIssue` names it.
+  Stated limits: an attribute that reaches one procedure through different `#if` builds is
+  attached unconditionally (union-read, as for every undecided `#if`); a procedure written
+  twice under `#if`/`#else` with the SAME signature still keeps only the first copy's
+  subscriptions (a separate issue); an attribute followed by a `var` section, field, key or
+  dataitem is still dropped, as before. Tests: 25 lowerer tests (A1-A23 plus
+  `projection_sees_spaced_and_upper_case_directives`) and the end-to-end
+  `tests/cli/cli_attribute_trivia.rs` (`alsem digest` sees `COMMIT` through every separator
+  kind). #71's two "#80 limit" tests now assert the attribute is claimed: a comment-separated
+  attribute starts its routine's declaration span. CDO (`U:/Git/DO-cdo-baseline/Cloud`), before → after: `primaryScoped` byte-identical,
+  `--dependency-bodies-stats` byte-identical, and `alsem analyze` findings byte-identical at
+  `--scope primary` (2293) and `--scope all` (26954). `wholeProgram` total 46317 → 46328,
+  `honestEmpty` 28249 → 28258, `resolvedSource` 11566 → 11568, `unknown` 0 → 0. Every moved edge
+  is traced in a `--graphify-export` diff. 11 dependency procedures regain `[IntegrationEvent]`
+  (Base Application 4, Continia Delivery Network 5, System Application 2), each adding one
+  event-flow edge, and 4 regain `[EventSubscriber]`. Two of those subscribers give a
+  previously-empty publisher its first subscriber (System `OnCompanyOpen` →
+  `System Initialization Impl.Init`, and the `OpenRoleBasedSetupExperience` event →
+  `Guided Experience Impl.OpenRoleBasedSetupExperience`), which moves 2 edges from `honestEmpty` to
+  `resolvedSource`.
 - `alsem digest --diff`: a hunk header that is not a valid `@@ -a,b +c,d @@` line (e.g.
   `@@ garbage @@`, `@@ -8,3 @@`, a combined-diff `@@@` header) was silently ignored, so the
   file looked hunkless and EVERY declaration in it became a changed root, with no
