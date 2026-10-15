@@ -361,10 +361,9 @@ fn abi_symbol_item(snap: &LspSnapshot, key: &AbiRoutineKey) -> CallHierarchyItem
         .try_resolve(key.app)
         .map(|id| id.name.as_str())
         .unwrap_or("external");
-    let object_display = if key.object_number != 0 {
-        format!("{} {}", key.object_type, key.object_number)
-    } else {
-        format!("{} {}", key.object_type, key.object_name_lc)
+    let object_display = match crate::engine::ids::abi_object_number(key.object_number) {
+        Some(n) => format!("{} {n}", key.object_type),
+        None => format!("{} {}", key.object_type, key.object_name_lc),
     };
     let detail = format!("{object_display}.{} (from {app_name})", key.routine_name_lc);
     let uri = abi_symbol_uri(key, app_name);

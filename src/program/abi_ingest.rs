@@ -302,13 +302,12 @@ pub(crate) fn object_kind_from_abi_type(object_type: &str) -> ObjectKind {
 fn abi_table_fields(tables: &[AbiTable], object_number: i64, name: &str) -> Vec<FieldNode> {
     tables
         .iter()
-        .find(|t| {
-            if object_number != 0 {
-                t.object_number == object_number
-            } else {
-                t.name.eq_fold_identifier(name)
-            }
-        })
+        .find(
+            |t| match crate::engine::ids::abi_object_number(object_number) {
+                Some(n) => t.object_number == n,
+                None => t.name.eq_fold_identifier(name),
+            },
+        )
         .map(|t| {
             t.fields
                 .iter()
@@ -518,11 +517,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
         objects.push(ObjectNode {
             id: obj_id.clone(),
             name: abi_obj.name.as_str().into(),
-            declared_id: if abi_obj.object_number != 0 {
-                Some(abi_obj.object_number)
-            } else {
-                None
-            },
+            declared_id: crate::engine::ids::abi_object_number(abi_obj.object_number),
             extends_target: abi_obj.extends_target_name.as_deref().map(SharedStr::from),
             implements: abi_obj
                 .implemented_interfaces

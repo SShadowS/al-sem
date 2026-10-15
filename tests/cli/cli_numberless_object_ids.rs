@@ -79,6 +79,10 @@ fn source_interfaces_get_distinct_ids_from_every_producer() {
         &ws.join("src/Odd.Interface.al"),
         "interface \"Ø \"\"Q\"\" /:#%@ If\"\n{\n}\n",
     );
+    write(
+        &ws.join("src/MyAddIn.ControlAddIn.al"),
+        "controladdin \"My Add In\"\n{\n}\n",
+    );
     let internal = sorted(vec![
         format!("{GUID}/Interface/@iempty"),
         format!("{GUID}/Interface/@%C3%B8%20%22q%22%20%2F%3A%23%25%40%20if"),
@@ -128,6 +132,47 @@ fn source_interfaces_get_distinct_ids_from_every_producer() {
             .collect(),
     );
     assert_eq!(p5, stable, "P5 (R1a)");
+
+    // ControlAddIn is the other numberless kind: the same literal id from every
+    // producer that projects it.
+    let cai = format!("{GUID}/ControlAddIn/@my%20add%20in");
+    let cai_stable = cai.replace('/', ":");
+    let p1c: Vec<_> = r0
+        .objects
+        .iter()
+        .filter(|o| o.kind == "ControlAddIn")
+        .map(|o| o.stable_object_id.clone())
+        .collect();
+    assert_eq!(p1c, vec![cai_stable.clone()], "P1 ControlAddIn");
+    let p2c: Vec<_> = model
+        .workspace
+        .objects
+        .iter()
+        .filter(|o| o.object_type == "ControlAddIn")
+        .map(|o| o.id.clone())
+        .collect();
+    assert_eq!(p2c, vec![cai.clone()], "P2 ControlAddIn");
+    assert_eq!(
+        graph_ids(ctx.graph(), al_syntax::ir::ObjectKind::ControlAddIn, GUID),
+        vec![cai],
+        "P3 ControlAddIn"
+    );
+    let p5c: Vec<_> = l2
+        .objects
+        .iter()
+        .filter(|o| o.object_type == "ControlAddIn")
+        .map(|o| o.stable_object_id.clone())
+        .collect();
+    assert_eq!(p5c, vec![cai_stable], "P5 ControlAddIn");
+
+    // The model's `object_key` is the id's last segment, for every source object.
+    for o in &model.workspace.objects {
+        assert_eq!(
+            o.id.rsplit('/').next(),
+            Some(o.object_key.as_str()),
+            "{o:?}"
+        );
+    }
 }
 
 /// T3b. A numbered kind whose number does not parse (it overflows `i64`) has no
@@ -185,6 +230,13 @@ fn codeunits_without_a_parsed_number_get_distinct_ids() {
             .collect(),
     );
     assert_eq!(numberless, vec![id_a.clone(), id_b.clone()], "object ids");
+    for o in &model.workspace.objects {
+        assert_eq!(
+            o.id.rsplit('/').next(),
+            Some(o.object_key.as_str()),
+            "{o:?}"
+        );
+    }
 
     let run = |object_id: &str| {
         let v: Vec<_> = model
