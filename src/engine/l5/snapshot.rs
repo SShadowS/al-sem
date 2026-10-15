@@ -1475,16 +1475,17 @@ fn derive_pd_arena(
             .expect("a producer is its owner's direct fact");
         let start = out.links.len();
         for l in &cone.links[s.links.clone()] {
-            let to = stable_routine_id(&l.edge.to, map);
-            let event = match l.edge.kind.as_str() {
-                "event-dispatch" => l.edge.event_id.as_deref().unwrap_or(""),
+            let edge = &cone.edges[l.edge];
+            let to = stable_routine_id(&edge.to, map);
+            let event = match edge.kind.as_str() {
+                "event-dispatch" => edge.event_id.as_deref().unwrap_or(""),
                 _ => "",
             };
             let key = (
-                l.edge.kind.as_str(),
+                edge.kind.as_str(),
                 routine.as_str(),
                 to.as_str(),
-                l.edge.callsite.as_deref().unwrap_or(""),
+                edge.callsite.as_deref().unwrap_or(""),
                 event,
             );
             match edge_ix.get(&key) {
@@ -1507,7 +1508,37 @@ fn derive_pd_arena(
             links: start..out.links.len(),
         });
     }
+    if cones_census::enabled() {
+        let bytes = pd_arena_bytes(&out);
+        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, bytes);
+        cones_census::add(&cones_census::PD_SOLVE_BYTES, bytes);
+    }
     out
+}
+
+/// The bytes a `PdArena` retains, counted like `pd_solve::solve_bytes`: every
+/// `Vec` and hash table at its capacity, plus string and `reqs` heap.
+fn pd_arena_bytes(a: &PdArena) -> u64 {
+    use std::mem::size_of;
+    let state_heap: usize = a
+        .states
+        .iter()
+        .map(|s| {
+            s.producer_operation_id.capacity()
+                + s.routine.capacity()
+                + s.reqs.capacity() * size_of::<(u32, bool)>()
+        })
+        .sum();
+    let by_routine: usize = a
+        .by_routine
+        .iter()
+        .map(|(k, v)| k.capacity() + v.capacity() * size_of::<StateIx>())
+        .sum::<usize>()
+        + a.by_routine.capacity() * (size_of::<RoutineId>() + size_of::<Vec<StateIx>>() + 1);
+    (a.states.capacity() * size_of::<StateNode>()
+        + state_heap
+        + a.links.capacity() * size_of::<(StateIx, EdgeIx)>()
+        + by_routine) as u64
 }
 
 /// Project a combined-graph internal `ValueSource` (object-run targetIdSource)

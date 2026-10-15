@@ -410,12 +410,16 @@ pub(crate) mod cones_census {
     pub(crate) static MERGE_TIEBREAKS: AtomicU64 = AtomicU64::new(0);
     /// #69 D1.4: the producer solve (`l4::pd_solve::solve`), summed over every
     /// cone composition: producers, states, links, resolved (non-seed) entries,
-    /// and the solve's own bytes (each shared rep counted once).
+    /// the distinct edges the links cross, and the bytes the solve retains
+    /// (`pd_solve::solve_bytes`, plus every snapshot `PdArena` derived from a
+    /// solve, which `PD_SNAPSHOT_BYTES` also reports on its own).
     pub(crate) static PD_PRODUCERS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_STATES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_LINKS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_EDGES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_SOLVE_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
 
@@ -541,12 +545,14 @@ pub(crate) mod cones_census {
             MERGE_TIEBREAKS.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   pd_solve: producers={} states={} links={} entries={} solve_bytes={} edge_unmapped={}",
+            "[cones-census]   pd_solve: producers={} states={} links={} entries={} edges={} solve_bytes={} snapshot_bytes={} edge_unmapped={}",
             PD_PRODUCERS.load(Ordering::Relaxed),
             PD_STATES.load(Ordering::Relaxed),
             PD_LINKS.load(Ordering::Relaxed),
             PD_ENTRIES.load(Ordering::Relaxed),
+            PD_EDGES.load(Ordering::Relaxed),
             PD_SOLVE_BYTES.load(Ordering::Relaxed),
+            PD_SNAPSHOT_BYTES.load(Ordering::Relaxed),
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
         );
     }
@@ -1003,6 +1009,9 @@ pub(crate) fn build_detector_context_with<'a>(
         cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
         let mut cones = outcome.cones;
         cone_derived = outcome.derived;
+        // #69 D1.4: the detectors read the solve only through the cone; its
+        // arena (a snapshot input) is dead here.
+        drop(outcome.pd_solution);
         // ⟨C1 Task 4⟩ Both cone inputs are dead here; free them before the
         // summary assembly below rather than at this block's closing brace
         // (`nodes` is one more full copy of every routine id, `coverage_in` one

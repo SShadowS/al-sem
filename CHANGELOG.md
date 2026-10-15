@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `CapabilitySnapshot.pd_solution` (not serialized): the producer solve as an arena of
   states and links over the snapshot's typed edges, in stable routine ids (#69 D2).
-  `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries and bytes,
-  and the solve links that found no snapshot edge.
+  `ALSEM_CONES_CENSUS=1` reports the solve's producers, states, links, entries, distinct
+  edges and retained bytes (`solve_bytes`: the cone solve plus every snapshot arena, each
+  `Vec` and hash table at capacity, shared data counted once; `snapshot_bytes`: the
+  snapshot arenas alone), and the solve links that found no snapshot edge.
 - A5 oracle: cone/L4 temp-class parity on a matched graph, per producer and reduced
   (`tests/r3/r3_temp_class_parity*.rs`), plus a check that every arena link names the
   snapshot edge of its hop.
@@ -47,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `compose_cone_over_graph`'s `ConeOutcome` carries the producer solve as `pd_solution`
   (`pd_solve::ConeArena`: producers, states, links and a per-routine index; #69 D1).
+  A link indexes the arena's table of distinct edges, and a resolved entry borrows its
+  first-hop edge from the graph, instead of each owning a clone of the edge and its five
+  strings. On CDO `alsem analyze` the solve's bytes fell from 951.6 MB (old counter, which
+  left out `Vec` slack and table overhead) to 125.0 MB (new counter, which includes them):
+  984,412 links share 15,172 edges. The analyzer drops the arena once the cone is built.
+- `alsem digest` frees the snapshot (with its solve arena), the ordering entries and the L4
+  store as soon as the digest query is done, before the envelope's detector run and the
+  JSON projection. CDO digest probe (the first 200 files) peak RSS: 6446..6488 MB before
+  #69, 5297..5333 MB now; output byte-identical (#69 D1.4).
 - `viaPathsTruncated` now also means a non-empty path set is not known to be complete: a
   state or depth limit cut the witness enumeration (BFS or proofs). Such effects can move
   from `conditional` to `unknown` conditionality, and ordering chains report `capped`

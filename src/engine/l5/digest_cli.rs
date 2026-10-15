@@ -1593,6 +1593,14 @@ pub fn run_digest_pipeline(
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
+    // #69 D1.4: the query's inputs (the snapshot with its producer-solve arena,
+    // the S4 entries, the L4 store) are dead here. Free them before the
+    // envelope's detector run and the JSON projection, which set the peak.
+    drop(snap);
+    drop(all_s4_entries);
+    drop(temp_states);
+    drop(bundle);
+    drop(tx_ctx_map);
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 

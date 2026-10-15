@@ -1676,7 +1676,7 @@ fn inherited_facts_for_singleton<'g>(
     caller: Option<&ModelRoutine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
-    own: &'g [super::pd_solve::ResolvedEntry],
+    own: &'g [super::pd_solve::ResolvedEntry<'g>],
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
 ) -> Vec<CapabilityFact> {
@@ -1783,7 +1783,7 @@ fn inherited_facts_for_singleton<'g>(
         c_entries += 1;
         if candidate_wins(
             e.dist,
-            &e.first_hop,
+            e.first_hop,
             best.get(key.as_str()).map(|c| (c.dist, c.edge)),
         ) {
             c_wins += 1;
@@ -1792,7 +1792,7 @@ fn inherited_facts_for_singleton<'g>(
                 Best {
                     rep: &e.rep,
                     dist: e.dist,
-                    edge: &e.first_hop,
+                    edge: e.first_hop,
                 },
             );
         }
@@ -1889,7 +1889,7 @@ fn inherited_facts_by_bfs<'g>(
     direct: &'g RoutineDirectFacts,
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
-    own: &'g [super::pd_solve::ResolvedEntry],
+    own: &'g [super::pd_solve::ResolvedEntry<'g>],
 ) -> Vec<(&'g CapabilityFact, &'g TypedOutEdge)> {
     let my_scc = scc_id_by_routine.get(subject).copied();
     // key -> index into `picked`; `picked` keeps emission order.
@@ -1978,13 +1978,13 @@ fn inherited_facts_by_bfs<'g>(
         match seen.get(&key) {
             Some(&i) => {
                 let (_, d, hop) = picked[i];
-                if candidate_wins(e.dist, &e.first_hop, Some((d, hop))) {
-                    picked[i] = (&e.rep, e.dist, &e.first_hop);
+                if candidate_wins(e.dist, e.first_hop, Some((d, hop))) {
+                    picked[i] = (&e.rep, e.dist, e.first_hop);
                 }
             }
             None => {
                 seen.insert(key, picked.len());
-                picked.push((&e.rep, e.dist, &e.first_hop));
+                picked.push((&e.rep, e.dist, e.first_hop));
             }
         }
     }
@@ -4147,7 +4147,7 @@ mod pd_uses_tests {
     /// An own entry for subject `C`: a physical (known/false) insert into
     /// `app/Table/1`, reached through `cs1` at distance 1. No cone and no graph
     /// edge supplies it, so only the `own` merge can put it in the output.
-    fn own_entry() -> ResolvedEntry {
+    fn own_entry() -> ResolvedEntry<'static> {
         let rep = CapabilityFact {
             subject: "H".to_string(),
             op: "insert",
@@ -4169,13 +4169,12 @@ mod pd_uses_tests {
             state: 1,
             rep: Arc::new(rep),
             dist: 1,
-            first_hop: TypedOutEdge::new(
+            first_hop: Box::leak(Box::new(TypedOutEdge::new(
                 "H".to_string(),
                 "direct-call".to_string(),
                 Some("cs1".to_string()),
                 None,
-            ),
-            reqs: Vec::new(),
+            ))),
         }
     }
 

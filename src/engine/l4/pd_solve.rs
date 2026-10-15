@@ -52,12 +52,12 @@ pub struct ConeState {
 }
 
 /// A link: "this state is reached from `callee_state` across `edge`"
-/// (`edge` is an out-edge of this state's routine, `edge.to` is
-/// `callee_state`'s routine).
+/// (`edge` indexes `ConeArena::edges`; it is an out-edge of this state's
+/// routine, and its `to` is `callee_state`'s routine).
 #[derive(Debug, Clone)]
 pub struct ConeLink {
     pub callee_state: StateIx,
-    pub edge: TypedOutEdge,
+    pub edge: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -74,26 +74,29 @@ pub struct ConeArena {
     pub producers: Vec<Producer>,
     pub states: Vec<ConeState>,
     pub links: Vec<ConeLink>,
+    /// The distinct typed edges the links cross, ONE copy each (D1.4: a link
+    /// is an index, not a clone of the edge and its five strings).
+    pub edges: Vec<TypedOutEdge>,
     /// Internal routine id → its states (seed included), in state order.
     pub by_routine: HashMap<Arc<str>, Vec<StateIx>>,
 }
 
-/// D1.3: one non-seed state placed at its routine for uses (a) and (b).
+/// D1.3: one non-seed state placed at its routine for uses (a) and (b). Its
+/// guard requirements are its state's (`ConeState::reqs`).
 #[derive(Debug, Clone)]
-pub struct ResolvedEntry {
+pub struct ResolvedEntry<'g> {
     pub state: StateIx,
     /// The producer's raw fact with `temp_state = t` and
     /// `witness_operation_id` = the producer's op. One `Arc` per
     /// `(producer, t)`, shared by every state with that pair.
     pub rep: Arc<CapabilityFact>,
     pub dist: usize,
-    /// The edge of this state's shortest link (an out-edge of its routine).
-    pub first_hop: TypedOutEdge,
-    /// No walk reads this yet; the witness path (spec D3) will.
-    pub reqs: Vec<Req>,
+    /// The edge of this state's shortest link (an out-edge of its routine),
+    /// borrowed from the solved graph.
+    pub first_hop: &'g TypedOutEdge,
 }
 
-pub type ResolvedByRoutine = HashMap<Arc<str>, Vec<ResolvedEntry>>;
+pub type ResolvedByRoutine<'g> = HashMap<Arc<str>, Vec<ResolvedEntry<'g>>>;
 
 /// Publisher → subscriber: an event-dispatch edge whose both ends are known.
 /// The subscriber's parameters are the publisher's, by name (engine-switch S8).
@@ -212,12 +215,12 @@ fn rep_for(fact: &CapabilityFact, t: &TempState) -> CapabilityFact {
 /// The transitive product-state solve over the typed graph's INCOMING edges.
 /// Deterministic: producers are taken in the given order, incoming edges in
 /// `(sort_key, from)` order, and states are numbered in BFS order.
-pub(crate) fn solve(
+pub(crate) fn solve<'g>(
     producers: Vec<Producer>,
-    g: &TypedEdgeGraph,
+    g: &'g TypedEdgeGraph,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, FrameGuards>,
-) -> (ConeArena, ResolvedByRoutine) {
+) -> (ConeArena, ResolvedByRoutine<'g>) {
     let mut arena = ConeArena {
         producers,
         ..Default::default()
@@ -243,6 +246,9 @@ pub(crate) fn solve(
     type Key = (usize, Arc<str>, TempState, Vec<Req>);
     let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
     let mut raw_links: Vec<Vec<ConeLink>> = Vec::new();
+    // `ConeArena::edges` while solving: each distinct graph edge, by address.
+    let mut edges: Vec<&'g TypedOutEdge> = Vec::new();
+    let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
     let mut names: HashSet<Arc<str>> = HashSet::new();
     let mut intern = |s: &str| -> Arc<str> {
         if let Some(a) = names.get(s) {
@@ -321,24 +327,28 @@ pub(crate) fn solve(
                 Some(&ix) => ix,
                 None => push(&mut arena, &mut ix_of, &mut raw_links, key, false, dist + 1),
             };
+            let edge = *edge_ix.entry(std::ptr::from_ref(e)).or_insert_with(|| {
+                edges.push(e);
+                edges.len() - 1
+            });
             raw_links[ix].push(ConeLink {
                 callee_state: s,
-                edge: e.clone(),
+                edge,
             });
         }
         s += 1;
     }
+    drop(ix_of);
+    drop(edge_ix);
 
+    let key_of = |l: &ConeLink| edges[l.edge].sort_key.as_str();
     for (ix, mut links) in raw_links.into_iter().enumerate() {
         links.sort_by(|a, b| {
-            a.edge
-                .sort_key
-                .cmp(&b.edge.sort_key)
+            key_of(a)
+                .cmp(key_of(b))
                 .then(a.callee_state.cmp(&b.callee_state))
         });
-        links.dedup_by(|a, b| {
-            a.callee_state == b.callee_state && a.edge.sort_key == b.edge.sort_key
-        });
+        links.dedup_by(|a, b| a.callee_state == b.callee_state && key_of(a) == key_of(b));
         let start = arena.links.len();
         arena.links.extend(links);
         arena.states[ix].links = start..arena.links.len();
@@ -355,12 +365,11 @@ pub(crate) fn solve(
         if s.seed {
             continue;
         }
-        let first_hop = arena.links[s.links.clone()]
+        let first_hop = edges[arena.links[s.links.clone()]
             .iter()
             .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
             .expect("a non-seed state has a shortest link")
-            .edge
-            .clone();
+            .edge];
         let rep = reps
             .entry((s.producer, s.t.clone()))
             .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
@@ -372,17 +381,20 @@ pub(crate) fn solve(
                 rep: Arc::clone(rep),
                 dist: s.dist,
                 first_hop,
-                reqs: s.reqs.clone(),
             });
     }
+    arena.edges = edges.into_iter().cloned().collect();
+    // Growth slack is up to half of each pushed `Vec`; the solve is read-only
+    // from here on.
+    arena.states.shrink_to_fit();
+    arena.links.shrink_to_fit();
+    arena.by_routine.values_mut().for_each(Vec::shrink_to_fit);
+    resolved.values_mut().for_each(Vec::shrink_to_fit);
     census(&arena, &resolved, &names, &reps);
     (arena, resolved)
 }
 
-/// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters. Bytes are the
-/// payload the solve owns: element sizes × lengths plus string and `reqs` heap,
-/// each interned routine name and each shared rep counted ONCE. Container
-/// overhead (hash tables, `Vec` slack) is not modeled.
+/// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters.
 fn census(
     arena: &ConeArena,
     resolved: &ResolvedByRoutine,
@@ -390,44 +402,69 @@ fn census(
     reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
 ) {
     use crate::engine::l5::detector_context::cones_census as cc;
-    use std::mem::size_of;
     if !cc::enabled() {
         return;
     }
-    let entries = resolved.values().map(Vec::len).sum::<usize>();
-    let edge_heap = |e: &TypedOutEdge| {
-        e.to.len()
-            + e.kind.len()
-            + e.callsite.as_ref().map_or(0, String::len)
-            + e.event_id.as_ref().map_or(0, String::len)
-            + e.sort_key.len()
-    };
-    let fact = |f: &CapabilityFact| {
-        size_of::<CapabilityFact>() as u64 + super::cone_census::capability_fact_heap_bytes(f)
-    };
-    let mut bytes = names.iter().map(|n| n.len()).sum::<usize>() as u64;
-    for p in &arena.producers {
-        bytes += (size_of::<Producer>() + p.owner.len() + p.operation_id.len()) as u64;
-        bytes += fact(&p.fact);
-    }
-    for s in &arena.states {
-        // + its slot in `by_routine`.
-        bytes += (size_of::<ConeState>() + size_of::<StateIx>()) as u64;
-        bytes += (s.reqs.len() * size_of::<Req>()) as u64;
-    }
-    for l in &arena.links {
-        bytes += (size_of::<ConeLink>() + edge_heap(&l.edge)) as u64;
-    }
-    for e in resolved.values().flatten() {
-        bytes += (size_of::<ResolvedEntry>() + edge_heap(&e.first_hop)) as u64;
-        bytes += (e.reqs.len() * size_of::<Req>()) as u64;
-    }
-    bytes += reps.values().map(|r| fact(r)).sum::<u64>();
     cc::add(&cc::PD_PRODUCERS, arena.producers.len() as u64);
     cc::add(&cc::PD_STATES, arena.states.len() as u64);
     cc::add(&cc::PD_LINKS, arena.links.len() as u64);
-    cc::add(&cc::PD_ENTRIES, entries as u64);
-    cc::add(&cc::PD_SOLVE_BYTES, bytes);
+    cc::add(
+        &cc::PD_ENTRIES,
+        resolved.values().map(Vec::len).sum::<usize>() as u64,
+    );
+    cc::add(&cc::PD_EDGES, arena.edges.len() as u64);
+    cc::add(
+        &cc::PD_SOLVE_BYTES,
+        solve_bytes(arena, resolved, names, reps),
+    );
+}
+
+/// The bytes one solve retains: every `Vec` and hash table at its CAPACITY
+/// (hash tables as `capacity × (key + value + 1 control byte)`), plus string,
+/// `reqs` and fact heap. A shared allocation counts ONCE: each interned routine
+/// name, each rep, each edge in `ConeArena::edges`. A `ResolvedEntry`'s
+/// `first_hop` borrows the graph, which the solve does not own. Allocator
+/// per-allocation overhead is not modeled.
+pub(crate) fn solve_bytes(
+    arena: &ConeArena,
+    resolved: &ResolvedByRoutine,
+    names: &HashSet<Arc<str>>,
+    reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
+) -> u64 {
+    use std::mem::size_of;
+    fn vec<T>(v: &Vec<T>) -> usize {
+        v.capacity() * size_of::<T>()
+    }
+    fn map<K, V>(m: &HashMap<K, V>) -> usize {
+        m.capacity() * (size_of::<K>() + size_of::<V>() + 1)
+    }
+    // An `Arc` allocation's strong + weak counts.
+    const ARC: usize = 2 * size_of::<usize>();
+    let fact = |f: &CapabilityFact| {
+        (ARC + size_of::<CapabilityFact>()) as u64
+            + super::cone_census::capability_fact_heap_bytes(f)
+    };
+    let mut bytes = (names.iter().map(|n| ARC + n.len()).sum::<usize>()
+        + names.capacity() * (size_of::<Arc<str>>() + 1)) as u64;
+    bytes += vec(&arena.producers) as u64;
+    for p in &arena.producers {
+        bytes += (ARC + p.owner.len() + p.operation_id.capacity()) as u64 + fact(&p.fact);
+    }
+    bytes += vec(&arena.states) as u64;
+    bytes += arena.states.iter().map(|s| vec(&s.reqs)).sum::<usize>() as u64;
+    bytes += vec(&arena.links) as u64;
+    bytes += vec(&arena.edges) as u64;
+    for e in &arena.edges {
+        bytes += (e.to.capacity()
+            + e.kind.capacity()
+            + e.callsite.as_ref().map_or(0, String::capacity)
+            + e.event_id.as_ref().map_or(0, String::capacity)
+            + e.sort_key.capacity()) as u64;
+    }
+    bytes += (map(&arena.by_routine) + arena.by_routine.values().map(vec).sum::<usize>()) as u64;
+    bytes += (map(resolved) + resolved.values().map(vec).sum::<usize>()) as u64;
+    bytes += map(reps) as u64 + reps.values().map(|r| fact(r)).sum::<u64>();
+    bytes
 }
 
 #[cfg(test)]
@@ -683,12 +720,39 @@ mod tests {
         assert_eq!(s.t, TempState::Known(true));
         let sites: Vec<&str> = arena.links[s.links.clone()]
             .iter()
-            .map(|l| l.edge.callsite.as_deref().unwrap())
+            .map(|l| arena.edges[l.edge].callsite.as_deref().unwrap())
             .collect();
         assert_eq!(sites, vec!["cs1", "cs2"]);
         let entry = &resolved["C"][0];
         assert_eq!(entry.dist, 1);
         assert_eq!(entry.first_hop.callsite.as_deref(), Some("cs1"));
+    }
+
+    /// D1.4 sharing: two producers reached across the SAME graph edge store
+    /// that edge ONCE (`ConeArena::edges`), both links index it, and each
+    /// entry's `first_hop` is the graph's own edge, not a copy.
+    #[test]
+    fn solve_stores_each_crossed_edge_once() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let mut second = producer("H");
+        second.operation_id = "H/op2".to_string();
+        let (arena, resolved) = solve(vec![producer("H"), second], &g, &by_id, &HashMap::new());
+        assert_eq!(arena.by_routine["C"].len(), 2, "one state per producer");
+        assert_eq!(arena.edges.len(), 1, "the crossed edge is stored once");
+        let links: Vec<usize> = arena.by_routine["C"]
+            .iter()
+            .flat_map(|&s| arena.links[arena.states[s].links.clone()].iter())
+            .map(|l| l.edge)
+            .collect();
+        assert_eq!(links, vec![0, 0]);
+        assert_eq!(arena.edges[0].sort_key, g.outgoing["C"][0].sort_key);
+        assert_eq!(resolved["C"].len(), 2);
+        for e in &resolved["C"] {
+            assert!(std::ptr::eq(e.first_hop, &g.outgoing["C"][0]));
+        }
     }
 
     /// `frames` entry for `id`: usable guard params and `site -> reqs`.
