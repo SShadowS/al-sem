@@ -216,7 +216,7 @@ fn lower_object(
     // `dataset_ctx` starts `false` (Task 1, dataitem-receivers plan) — it only ever
     // becomes `true` while descending a report/report-extension `dataset` section, and
     // is force-reset to `false` on entering `requestpage` (REQUESTPAGE ISOLATION).
-    let cond_syms = preproc_condition_symbols(node, source);
+    let cond_syms = CondIndex::new(node, source);
     let mut routine_nodes = Vec::new();
     // Entries still pending at the object's end dangle and attach to nothing.
     collect_routines(
@@ -244,10 +244,12 @@ fn lower_object(
                 attr_items
                     .iter()
                     .filter_map(|e| {
-                        consistent(&e.guard, &a_syms).map(|guard| PendingAttr {
-                            node: e.node,
-                            guard,
-                        })
+                        consistent(&e.guard, &a_syms)
+                            .filter(|_| arm_live(r, &arm, source, &e.guard))
+                            .map(|guard| PendingAttr {
+                                node: e.node,
+                                guard,
+                            })
                     })
                     .collect(),
                 di_table.clone(),
@@ -848,7 +850,7 @@ fn collect_routines<'t>(
     dataset_ctx: bool,
     ctx: &[(String, bool)],
     mut pending: Vec<PendingAttr<'t>>,
-    cond_syms: &[(usize, String)],
+    cond_syms: &CondIndex,
     source: &str,
     issues: &mut Vec<crate::ir::SyntaxIssue>,
     out: &mut Vec<(
@@ -1042,13 +1044,16 @@ fn collect_routines<'t>(
                     Vec::new()
                 };
                 // Each entry's own view of the chain: liveness under its guard.
-                let chains: Vec<PreprocChain> = incoming
+                // Directives only: the branch contents are grouped once, below.
+                let chains: Vec<_> = incoming
                     .iter()
-                    .map(|e| preproc_chain(child, source, &e.guard))
+                    .map(|e| chain_shape(child, source, &e.guard))
                     .collect();
-                let branches = preproc_branches(child, source, ctx);
-                let last = branches.len() - 1;
-                for (k, (syms, live, branch)) in branches.into_iter().enumerate() {
+                let (shape, _) = chain_shape(child, source, ctx);
+                let last = shape.len() - 1;
+                for (k, ((syms, live), branch)) in
+                    shape.into_iter().zip(chain_contents(child)).enumerate()
+                {
                     if !live {
                         continue;
                     }
@@ -1059,7 +1064,7 @@ fn collect_routines<'t>(
                         incoming
                             .iter()
                             .zip(&chains)
-                            .filter_map(|(e, c)| admit(e, &c.branches[k]))
+                            .filter_map(|(e, c)| admit(e, &c.0[k]))
                             .collect()
                     } else {
                         Vec::new()
@@ -1083,12 +1088,11 @@ fn collect_routines<'t>(
                 }
                 pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
                     Some(PendingAttr {
-                        guard: consistent(&e.guard, &c.falls_through?)?,
+                        guard: consistent(&e.guard, &c.1?)?,
                         node: e.node,
                     })
                 }));
-                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
-            }
+                settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);            }
             _ => {
                 pending.clear();
                 // A named, non-object, non-`_body` node becomes the enclosing MEMBER for
@@ -1147,10 +1151,7 @@ fn is_single_chain(node: RawNode) -> bool {
 
 /// Entry `e` admitted to an arm `(syms, live, _)` of its own chain view: the arm is
 /// live under `e`'s guard and its symbols agree with it; the join is the new guard.
-fn admit<'t>(
-    e: &PendingAttr<'t>,
-    (syms, live, _): &(Syms, bool, Vec<RawNode<'t>>),
-) -> Option<PendingAttr<'t>> {
+fn admit<'t>(e: &PendingAttr<'t>, (syms, live): &(Syms, bool)) -> Option<PendingAttr<'t>> {
     if !live {
         return None;
     }
@@ -1174,20 +1175,22 @@ fn admit<'t>(
 fn settle_pending(
     pending: &mut Vec<PendingAttr>,
     end: usize,
-    cond_syms: &[(usize, String)],
+    cond: &CondIndex,
     issues: &mut Vec<crate::ir::SyntaxIssue>,
 ) {
     use std::collections::{HashMap, HashSet};
-    let at = |b: usize| cond_syms.partition_point(|(s, _)| *s < b);
-    let later: HashSet<&str> = cond_syms[at(end)..]
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let cond_syms = cond.get();
+    let at = |b: usize| cond_syms.syms.partition_point(|(s, _)| *s < b);
     for e in pending.iter_mut() {
         let own = e.node.byte_range();
-        let inside = &cond_syms[at(own.start)..at(own.end)];
-        e.guard
-            .retain(|(s, _)| later.contains(s.as_str()) || inside.iter().any(|(_, t)| t == s));
+        let inside = &cond_syms.syms[at(own.start)..at(own.end)];
+        e.guard.retain(|(s, _)| {
+            cond_syms.last.get(s.as_str()).is_some_and(|l| *l >= end)
+                || inside.iter().any(|(_, t)| t == s)
+        });
         e.guard.sort();
     }
     let mut seen: HashSet<(usize, Syms)> = HashSet::new();
@@ -1209,6 +1212,40 @@ fn settle_pending(
         }
     }
     pending.retain(|e| paths[&e.node.id()] <= PENDING_PATH_CAP);
+}
+
+/// The condition symbols of an object ([`preproc_condition_symbols`]), plus each
+/// symbol's last start byte. Built on first use: most objects have no pending
+/// attribute at a wrapper and never need it.
+struct CondIndex<'a, 't> {
+    node: RawNode<'t>,
+    source: &'a str,
+    cell: std::cell::OnceCell<CondSyms>,
+}
+
+struct CondSyms {
+    /// `(start byte, symbol)` in byte order.
+    syms: Vec<(usize, String)>,
+    /// symbol -> start byte of its last occurrence.
+    last: std::collections::HashMap<String, usize>,
+}
+
+impl<'a, 't> CondIndex<'a, 't> {
+    fn new(node: RawNode<'t>, source: &'a str) -> Self {
+        Self {
+            node,
+            source,
+            cell: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &CondSyms {
+        self.cell.get_or_init(|| {
+            let syms = preproc_condition_symbols(self.node, self.source);
+            let last = syms.iter().map(|(b, s)| (s.clone(), *b)).collect();
+            CondSyms { syms, last }
+        })
+    }
 }
 
 /// Every `(start byte, symbol)` that a `#if`/`#elif` condition anywhere under
@@ -1388,20 +1425,42 @@ fn preproc_branches<'t>(
     source: &str,
     ctx: &[(String, bool)],
 ) -> Vec<(Syms, bool, Vec<RawNode<'t>>)> {
-    preproc_chain(node, source, ctx).branches
+    chain_shape(node, source, ctx)
+        .0
+        .into_iter()
+        .zip(chain_contents(node))
+        .map(|((syms, live), items)| (syms, live, items))
+        .collect()
 }
 
-/// [`preproc_branches`] plus the implicit "no arm taken" path of the chain.
-struct PreprocChain<'t> {
-    branches: Vec<(Syms, bool, Vec<RawNode<'t>>)>,
-    /// The symbols of the build that takes no arm (every `#if`/`#elif` condition
-    /// false): `Some` only when the chain has no `#else` and `ctx` decides no arm
-    /// true. Read for the LAST chain of the wrapper (a single-chain wrapper has one).
-    falls_through: Option<Syms>,
+/// The children of `node` grouped by branch, aligned with [`chain_shape`]'s arms
+/// (entry 0 before the first directive, one per directive after it).
+fn chain_contents<'t>(node: RawNode<'t>) -> Vec<Vec<RawNode<'t>>> {
+    let mut out = vec![Vec::new()];
+    for c in node.named_children() {
+        match c.kind() {
+            RawKind::PreprocIf
+            | RawKind::PreprocElif
+            | RawKind::PreprocElse
+            | RawKind::PreprocEndif => out.push(Vec::new()),
+            _ => out.last_mut().expect("never empty").push(c),
+        }
+    }
+    out
 }
 
-fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) -> PreprocChain<'t> {
-    let mut out = vec![(Vec::new(), true, Vec::new())];
+/// The directive walk of [`preproc_branches`], with no branch contents: per arm its
+/// `(symbols, live under ctx)`, plus the symbols of the build that takes no arm
+/// (every `#if`/`#elif` condition false): `Some` only when the chain has no `#else`
+/// and `ctx` decides no arm true. The fall-through is read for the LAST chain of the
+/// wrapper (a single-chain wrapper has one). Cheap enough to run once per pending
+/// attribute.
+fn chain_shape(
+    node: RawNode,
+    source: &str,
+    ctx: &[(String, bool)],
+) -> (Vec<(Syms, bool)>, Option<Syms>) {
+    let mut out = vec![(Vec::new(), true)];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
     let mut has_else = false;
@@ -1421,7 +1480,7 @@ fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) ->
                     assume_preproc(e, true, source, &mut syms);
                     earlier.push(e);
                 }
-                out.push((syms, live, Vec::new()));
+                out.push((syms, live));
             }
             RawKind::PreprocElse => {
                 has_else = true;
@@ -1429,7 +1488,7 @@ fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) ->
                 for e in &earlier {
                     assume_preproc(*e, false, source, &mut syms);
                 }
-                out.push((syms, !taken, Vec::new()));
+                out.push((syms, !taken));
             }
             RawKind::PreprocEndif => {
                 falls_through = (!has_else && !taken).then(|| {
@@ -1442,15 +1501,12 @@ fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) ->
                 earlier.clear();
                 taken = false;
                 has_else = false;
-                out.push((Vec::new(), true, Vec::new()));
+                out.push((Vec::new(), true));
             }
-            _ => out.last_mut().expect("never empty").2.push(c),
+            _ => {}
         }
     }
-    PreprocChain {
-        branches: out,
-        falls_through,
-    }
+    (out, falls_through)
 }
 
 /// The items of an `#if` group inside a POSITIONAL delimited list (grammar `main`
@@ -1468,6 +1524,11 @@ fn preproc_chain<'t>(node: RawNode<'t>, source: &str, ctx: &[(String, bool)]) ->
 /// and a later sibling group picks an arm the same build can take (issue #80). An
 /// arm whose symbols contradict `run` (`#if Y and not Y`, or `#if not X` after an
 /// earlier group chose `X`) is never picked.
+///
+/// LIMIT: `run` holds only symbol LITERALS. An arm chosen under a compound condition
+/// such as `X or Y` records none (neither is forced), so it does not constrain a
+/// later group under `not X and not Y`; the two arms can then pair although no build
+/// takes both (pinned by `sibling_groups_under_a_disjunction_are_not_correlated`).
 fn conditional_list_arm<'t>(
     group: RawNode<'t>,
     source: &str,
@@ -1479,15 +1540,15 @@ fn conditional_list_arm<'t>(
     // When no arm is consistent with `run`, `find_map` reaches that trailing entry
     // (empty syms, so consistent; empty items), and the group reads nothing.
     let branches = preproc_branches(group, source, run);
-    let Some((joined, items)) = branches
+    // `join_into` extends `run` in place, and only for the arm it returns.
+    let Some((_, _, items)) = branches
         .into_iter()
         .skip(1)
         .filter(|(_, live, _)| *live)
-        .find_map(|(syms, _, items)| consistent(run, &syms).map(|j| (j, items)))
+        .find(|(syms, _, _)| join_into(run, syms))
     else {
         return;
     };
-    *run = joined;
     for item in items {
         if item.kind() == group.kind() {
             conditional_list_arm(item, source, run, out);
@@ -1497,11 +1558,11 @@ fn conditional_list_arm<'t>(
     }
 }
 
-/// `a ∪ b` in `a`'s order, then `b`'s new symbols; `None` when they give one
-/// symbol both values, which no build does.
+/// `a ∪ b` in `a`'s order, then `b`'s new symbols; `None` when the two together give
+/// one symbol both values (inside either operand too), which no build does.
 fn consistent(a: &[(String, bool)], b: &[(String, bool)]) -> Option<Syms> {
-    let mut out = a.to_vec();
-    for (s, v) in b {
+    let mut out: Syms = Vec::new();
+    for (s, v) in a.iter().chain(b) {
         match out.iter().find(|(t, _)| t == s) {
             Some((_, w)) if w != v => return None,
             Some(_) => {}
@@ -1509,6 +1570,26 @@ fn consistent(a: &[(String, bool)], b: &[(String, bool)]) -> Option<Syms> {
         }
     }
     Some(out)
+}
+
+/// [`consistent`] `(run, b)` written into `run`: `false` (and `run` unchanged) when
+/// `b` contradicts itself or `run`. `run` is already consistent, so only `b`'s
+/// literals are checked and appended, with no copy of `run`.
+fn join_into(run: &mut Syms, b: &[(String, bool)]) -> bool {
+    let Some(b) = consistent(b, &[]) else {
+        return false;
+    };
+    if b.iter()
+        .any(|(s, v)| run.iter().any(|(t, w)| t == s && w != v))
+    {
+        return false;
+    }
+    for (s, v) in b {
+        if !run.iter().any(|(t, _)| *t == s) {
+            run.push((s, v));
+        }
+    }
+    true
 }
 
 /// Record the symbol values that make preprocessor condition `cond` equal `value`,
@@ -1587,6 +1668,33 @@ fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec
         }
     }
     out
+}
+
+/// Arm `arm` of split routine `node` is reachable under `guard`: its own condition
+/// is not decided false, and no earlier condition of the chain is decided true (the
+/// rule [`chain_shape`] gives a wrapper arm's `live`).
+fn arm_live(
+    node: RawNode,
+    arm: &std::ops::Range<usize>,
+    source: &str,
+    guard: &[(String, bool)],
+) -> bool {
+    for c in node.named_children() {
+        let end = c.byte_range().end;
+        if end > arm.start {
+            break;
+        }
+        if matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
+            && let Some(cond) = c.field(FieldName::Condition)
+        {
+            let d = decide_preproc(cond, source, guard);
+            // The arm's own condition is dead when false, an earlier one when true.
+            if d == Some(end != arm.start) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// One argument list of an attribute as one build reads it.
@@ -1730,24 +1838,30 @@ fn lower_routine<'t>(
     if split {
         preproc_context.extend(arm_symbols(node, arm, source));
         // A split header's arm carries its own attributes inside the node; they are
-        // read under the routine's own context.
-        attr_items.extend(
-            node.named_children()
-                .into_iter()
-                .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
-                .map(|c| PendingAttr {
-                    node: c,
-                    guard: preproc_context.clone(),
-                }),
-        );
+        // read under the routine's own context. A context that contradicts itself
+        // (an outer `#if X` around a `#if not X` arm) is no build: they attach nothing.
+        if let Some(guard) = consistent(&preproc_context, &[]) {
+            attr_items.extend(
+                node.named_children()
+                    .into_iter()
+                    .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
+                    .map(|c| PendingAttr {
+                        node: c,
+                        guard: guard.clone(),
+                    }),
+            );
+        }
     }
 
     // One attribute node can reach this routine by several build paths. Keep the
     // first entry (source order) per (node, argument selection): paths that read the
     // same arguments are one attribute, paths that read different ones are one per
-    // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId` and no
-    // duplicate `SyntaxIssue`.
-    let mut seen: Vec<(usize, Vec<Vec<usize>>)> = Vec::new();
+    // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId`. The
+    // `#if`-in-arguments `SyntaxIssue` is deduplicated apart from this, by group node
+    // (`reported`), so it is raised once per group however many selections keep it.
+    let mut seen: std::collections::HashSet<(usize, Vec<Vec<usize>>)> =
+        std::collections::HashSet::new();
+    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut selected = Vec::new();
     for e in &attr_items {
         let lists = attribute_arg_selection(e.node, &e.guard, source);
@@ -1758,8 +1872,7 @@ fn lower_routine<'t>(
                 .map(|l| l.items.iter().map(|n| n.id()).collect())
                 .collect(),
         );
-        if !seen.contains(&key) {
-            seen.push(key);
+        if seen.insert(key) {
             selected.push((e.node, lists));
         }
     }
@@ -1780,13 +1893,15 @@ fn lower_routine<'t>(
         let mut args = Vec::new();
         for list in lists {
             for group in list.groups {
-                issues.push(SyntaxIssue {
-                    message: "`#if` inside attribute arguments — the first \
-                              arm this routine's build does not rule out is \
-                              read (the other arms are not modelled)"
-                        .to_string(),
-                    origin: origin_of(group),
-                });
+                if reported.insert(group.id()) {
+                    issues.push(SyntaxIssue {
+                        message: "`#if` inside attribute arguments — the first \
+                                  arm this routine's build does not rule out is \
+                                  read (the other arms are not modelled)"
+                            .to_string(),
+                        origin: origin_of(group),
+                    });
+                }
             }
             for arg in list.items {
                 args.push(lower_expr(arg, ir, issues, source, 0));
@@ -6695,6 +6810,145 @@ codeunit 50102 D2
                 ("T".to_string(), Vec::<String>::new())
             ]
         );
+    }
+
+    /// Final review F1 (#80): the guard `not (X or Y)` records `{X:false, Y:false}`,
+    /// but the split header's first arm (`#if X or Y`) records no literals, so a
+    /// literal-only check keeps it. That arm is unreachable under the guard (its
+    /// condition is decided false), so only the `#else` arm `P(b)` gets the attribute.
+    #[test]
+    fn guarded_attribute_skips_an_unreachable_split_header_arm() {
+        let src = r#"codeunit 50100 T
+{
+#if not (X or Y)
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T, 'OnFire', '', false, false)]
+#endif
+#if X or Y
+    procedure P(a: Integer)
+#else
+    procedure P(b: Text)
+#endif
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("a".to_string(), Vec::<String>::new()),
+                ("b".to_string(), names(&["EventSubscriber"]))
+            ]
+        );
+    }
+
+    /// Final review F3/G7 (#80): an attribute with an `#if` group in its arguments
+    /// reaches H by two paths (`X` and `not X`) that read different arguments, so both
+    /// selections survive, but the group is reported ONCE.
+    #[test]
+    fn attribute_arg_group_issue_is_reported_once() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T,
+#if X
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+#if X
+#else
+#endif
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            subscriber_arg(&af, src, 0, "H", 2),
+            names(&["'OnA'", "'OnB'"])
+        );
+        let n = af
+            .issues
+            .iter()
+            .filter(|i| i.message.starts_with("`#if` inside attribute arguments"))
+            .count();
+        assert_eq!(n, 1, "issues: {:?}", af.issues);
+    }
+
+    /// Final review G5 (#80): `consistent` validates BOTH operands, so a contradiction
+    /// inside the first one is not copied through.
+    #[test]
+    fn consistent_rejects_a_contradictory_first_operand() {
+        use super::consistent;
+        let x = |v| ("X".to_string(), v);
+        assert_eq!(consistent(&[x(true), x(false)], &[]), None);
+        assert_eq!(consistent(&[], &[x(true), x(false)]), None);
+        assert_eq!(consistent(&[x(true)], &[x(true)]), Some(vec![x(true)]));
+    }
+
+    /// Final review G5 (#80): inside `#if X`, a split header's `#if not X` arm is no
+    /// build, so the attribute inside that arm attaches nothing to it.
+    #[test]
+    fn contradictory_context_in_node_attribute_attaches_nothing() {
+        let src = r#"codeunit 50100 T
+{
+#if X
+#if not X
+    [Scope('OnPrem')]
+    procedure P(a: Integer)
+#else
+    procedure P(b: Text)
+#endif
+    begin
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(
+            attrs_by_param(&af, 0, "P"),
+            vec![
+                ("a".to_string(), Vec::<String>::new()),
+                ("b".to_string(), Vec::<String>::new())
+            ]
+        );
+    }
+
+    /// Final review G6 (#80), a STATED LIMIT, not a goal: the running context records
+    /// only symbol LITERALS. The first group is chosen under `X or Y`, which records
+    /// none, so it does not constrain the second group (`not X and not Y`), and `H`
+    /// reads `'PubA'` with `'OnA'` although no build has both. If this test starts
+    /// failing because the context got smarter, update it and the CHANGELOG bullet.
+    #[test]
+    fn sibling_groups_under_a_disjunction_are_not_correlated() {
+        let src = r#"codeunit 50100 T
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T,
+#if X or Y
+        'PubA',
+#else
+        'PubB',
+#endif
+#if not X and not Y
+        'OnA',
+#else
+        'OnB',
+#endif
+        '', false, false)]
+    local procedure H()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 2), names(&["'PubA'"]));
+        assert_eq!(subscriber_arg(&af, src, 0, "H", 3), names(&["'OnA'"]));
     }
 
     /// A16 (#80): a contradictory path (`#if X … #elif not X` falling through, or

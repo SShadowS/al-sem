@@ -209,8 +209,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `#if not X [EventSubscriber(…, #if X 'OnA' #else 'OnB' #endif …)] #endif H` subscribes `H`
     to `OnB` only;
   - one positional list (attribute arguments, key fields) is read with one running context: a
-    nested `#if` group and later sibling groups see the arms already chosen, and a
-    self-contradictory arm is never chosen;
+    nested `#if` group and later sibling groups see the literals of the arms already chosen,
+    and a self-contradictory arm is never chosen. A choice under a compound condition such as
+    `X or Y` records no literal, so it does not constrain later groups;
   - guards are projected onto the symbols that later conditions read, so the number of
     pending paths stays bounded. An attribute that still reaches its routine by more than 64
     distinct `#if` paths in one list is not attached, and a `SyntaxIssue` names it.
@@ -218,8 +219,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attached unconditionally (union-read, as for every undecided `#if`); a procedure written
   twice under `#if`/`#else` with the SAME signature still keeps only the first copy's
   subscriptions (a separate issue); an attribute followed by a `var` section, field, key or
-  dataitem is still dropped, as before. Tests: 25 lowerer tests (A1-A23 plus
-  `projection_sees_spaced_and_upper_case_directives`) and the end-to-end
+  dataitem is still dropped, as before. Tests: 30 lowerer tests (A1-A11 and
+  A13-A23, 22 in all, as A12 is the cli test; plus `fall_through_is_dead_when_an_arm_is_decided_true`
+  (A7b), the renamed `attribute_separated_by_comment_is_attached`,
+  `projection_sees_spaced_and_upper_case_directives`,
+  `guarded_attribute_skips_an_unreachable_split_header_arm`,
+  `attribute_arg_group_issue_is_reported_once`, `consistent_rejects_a_contradictory_first_operand`,
+  `contradictory_context_in_node_attribute_attaches_nothing` and
+  `sibling_groups_under_a_disjunction_are_not_correlated`) and the end-to-end
   `tests/cli/cli_attribute_trivia.rs` (`alsem digest` sees `COMMIT` through every separator
   kind). #71's two "#80 limit" tests now assert the attribute is claimed: a comment-separated
   attribute starts its routine's declaration span. CDO (`U:/Git/DO-cdo-baseline/Cloud`), before → after: `primaryScoped` byte-identical,
