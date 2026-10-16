@@ -1,4 +1,4 @@
---- SendAfterModify ---
+--- Codeunit D47 Sender::SendAfterModify ---
   coverage: complete
   [DB_MODIFY] direct
     evidence: ws:src/Sender.Codeunit.al:15 "Rec.Modify"

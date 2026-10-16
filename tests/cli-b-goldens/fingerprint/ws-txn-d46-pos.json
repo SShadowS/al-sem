@@ -206,7 +206,7 @@
         ],
         "routine": {
           "display": "OnInstallAppPerCompany",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit Install Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
         }
       },
@@ -359,7 +359,7 @@
         ],
         "routine": {
           "display": "DoSetup",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit Install Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
         }
       },
@@ -512,7 +512,7 @@
         ],
         "routine": {
           "display": "DoUpgrade",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit Upgrade Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
         }
       },
@@ -716,7 +716,7 @@
         ],
         "routine": {
           "display": "OnUpgradePerCompany",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit Upgrade Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
         }
       }

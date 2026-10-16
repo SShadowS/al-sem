@@ -434,10 +434,15 @@ pub fn resolve_routine_selector<'a>(
 /// effect origin or an ancestor reached through an event. No primary app identity
 /// keeps every routine.
 fn is_primary_routine(resolved: &Model, r: &ModelRoutine) -> bool {
+    is_primary_app_guid(resolved, &r.app_guid)
+}
+
+/// The one primary-app rule, shared by routines and objects.
+fn is_primary_app_guid(resolved: &Model, app_guid: &str) -> bool {
     resolved
         .primary_app
         .as_ref()
-        .is_none_or(|a| r.app_guid.eq_ignore_ascii_case(&a.app_guid))
+        .is_none_or(|a| app_guid.eq_ignore_ascii_case(&a.app_guid))
 }
 
 // ---------------------------------------------------------------------------
@@ -498,15 +503,51 @@ impl<'a> RoutineJoin<'a> {
             .unwrap_or("");
         RoutineRef {
             display: r.name.clone(),
-            object_display: format!("{} {}", r.object_type, object_name)
-                .trim()
-                .to_string(),
+            object_display: object_display(&r.object_type, object_name),
             stable_id: r.stable_routine_id.clone(),
             file: r.source_anchor.source_unit_id.clone(),
             line: r.source_anchor.start_line,
             column: r.source_anchor.start_column,
         }
     }
+}
+
+/// The one owner rule: `"<ObjectType> <ObjectName>"`, the bare type when the
+/// name is missing. `query effects`, digest, fingerprint and prove all print it
+/// (#78).
+pub fn object_display(object_type: &str, object_name: &str) -> String {
+    format!("{object_type} {object_name}").trim().to_string()
+}
+
+/// Stable routine id -> its owning object's display, for every workspace-app
+/// routine and Interface / ControlAddIn declaration (#78). The owner comes from
+/// the model, never the snapshot identity table: every unnumbered object shares
+/// `<guid>:<Kind>:0` there, and a tableextension stub can overwrite its table's
+/// name. Declaration-only rows read their declaring object directly. First row
+/// wins (the `#if` arms of one routine share a stable id and an owner).
+pub fn object_display_by_stable_routine_id(resolved: &Model) -> HashMap<String, String> {
+    let ws = &resolved.workspace;
+    let join = RoutineJoin::build(resolved);
+    let mut out: HashMap<String, String> = HashMap::new();
+    for r in ws
+        .routines
+        .iter()
+        .filter(|r| is_primary_routine(resolved, r))
+    {
+        out.entry(r.stable_routine_id.clone())
+            .or_insert_with(|| join.of(r).object_display);
+    }
+    let primary_objects = ws
+        .objects
+        .iter()
+        .filter(|o| is_primary_app_guid(resolved, &o.app_guid));
+    for o in primary_objects {
+        for d in &o.declaration_only_routines {
+            out.entry(d.stable_routine_id.clone())
+                .or_insert_with(|| object_display(&o.object_type, &o.name));
+        }
+    }
+    out
 }
 
 /// Where the db operation behind one effect actually LIVES.
@@ -1236,7 +1277,9 @@ fn render_query_effects_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::model::workspace::ModelTable;
+    use crate::program::model::workspace::{
+        ModelDeclarationOnlyRoutine, ModelEntities, ModelObject, ModelTable, RoutineVariables,
+    };
 
     fn table(app: &str, number: i64, name: &str, stub: bool) -> ModelTable {
         ModelTable {
@@ -1249,6 +1292,147 @@ mod tests {
             is_temporary: false,
             is_extension_stub: stub,
         }
+    }
+
+    fn anchor() -> crate::program::body::features::PAnchor {
+        crate::program::body::features::PAnchor {
+            source_unit_id: "ws:test".to_string(),
+            start_line: 0,
+            start_column: 0,
+            end_line: 0,
+            end_column: 0,
+            syntax_kind: "test".to_string(),
+        }
+    }
+
+    fn object(
+        app: &str,
+        object_type: &str,
+        number: i64,
+        name: &str,
+        decls: &[&str],
+    ) -> ModelObject {
+        ModelObject {
+            id: format!("{app}/{object_type}/{number}"),
+            app_guid: app.to_string(),
+            object_type: object_type.to_string(),
+            object_number: number,
+            name: name.to_string(),
+            source_table_name: None,
+            extends_target_name: None,
+            implements_interfaces: None,
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: None,
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: decls
+                .iter()
+                .map(|s| ModelDeclarationOnlyRoutine {
+                    name: (*s).to_string(),
+                    stable_routine_id: (*s).to_string(),
+                    source_anchor: anchor(),
+                    declaration_start_line: 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn routine(obj: &ModelObject, id: &str, stable: &str) -> ModelRoutine {
+        ModelRoutine {
+            id: id.to_string(),
+            stable_routine_id: stable.to_string(),
+            object_id: obj.id.clone(),
+            object_type: obj.object_type.clone(),
+            name: id.to_string(),
+            kind: "procedure".to_string(),
+            attributes_parsed: Vec::new(),
+            app_guid: obj.app_guid.clone(),
+            object_number: obj.object_number,
+            normalized_signature_hash: String::new(),
+            body_available: true,
+            parse_incomplete: false,
+            record_variables: Vec::new(),
+            record_operations: Vec::new(),
+            field_accesses: Vec::new(),
+            variables: RoutineVariables::default(),
+            parameters: Vec::new(),
+            access_modifier: None,
+            return_type: None,
+            call_sites: Vec::new(),
+            operation_sites: Vec::new(),
+            statement_tree: None,
+            loops: Vec::new(),
+            source_anchor: anchor(),
+            declaration_start_line: 0,
+            identifier_references: Vec::new(),
+            unreachable_statements: Vec::new(),
+            has_branching: false,
+            var_assignments: Vec::new(),
+            condition_references: Vec::new(),
+            enclosing_member: None,
+            originating_object: None,
+            enclosing_member_range: None,
+            entry_temp_guard_receiver: None,
+        }
+    }
+
+    /// #78: the owner map holds workspace-app rows only, a declaration-only row
+    /// reads its own object, and the first of two rows sharing a stable id wins.
+    /// The shared id is given by assignment, in objects with different names.
+    #[test]
+    fn object_display_map_filters_to_primary_and_first_row_wins() {
+        let alpha = object("ws", "Codeunit", 1, "Alpha", &[]);
+        let beta = object("ws", "Codeunit", 2, "Beta", &[]);
+        let ws_iface = object("ws", "Interface", 3, "WsIface", &["decl-ws"]);
+        let dep_cu = object("dep", "Codeunit", 4, "DepCu", &[]);
+        let dep_iface = object("dep", "Interface", 5, "DepIface", &["decl-dep"]);
+        let routines = vec![
+            routine(&alpha, "r-alpha", "s-alpha"),
+            routine(&dep_cu, "r-dep", "s-dep"),
+            routine(&alpha, "r-one", "s-shared"),
+            routine(&beta, "r-two", "s-shared"),
+        ];
+        let resolved = Model {
+            workspace: ModelEntities {
+                objects: vec![alpha, beta, ws_iface, dep_cu, dep_iface],
+                tables: Vec::new(),
+                routines,
+            },
+            root_classifications: Vec::new(),
+            primary_app: Some(crate::engine::gate::app_attribution::App {
+                app_guid: "ws".to_string(),
+                publisher: String::new(),
+                name: String::new(),
+                version: String::new(),
+            }),
+            infra_diagnostics: Vec::new(),
+            calls: Default::default(),
+            events: Default::default(),
+        };
+        let m = object_display_by_stable_routine_id(&resolved);
+        // (a) primary routine
+        assert_eq!(m.get("s-alpha").map(String::as_str), Some("Codeunit Alpha"));
+        // (b) dependency routine absent
+        assert!(!m.contains_key("s-dep"), "dependency routine leaked: {m:?}");
+        // (c) dependency declaration-only row absent
+        assert!(!m.contains_key("decl-dep"), "dependency decl leaked: {m:?}");
+        // (d) primary declaration-only row
+        assert_eq!(
+            m.get("decl-ws").map(String::as_str),
+            Some("Interface WsIface")
+        );
+        // (e) first row wins
+        assert_eq!(
+            m.get("s-shared").map(String::as_str),
+            Some("Codeunit Alpha")
+        );
     }
 
     fn resolved_id(r: Resolution<TableRef>) -> String {

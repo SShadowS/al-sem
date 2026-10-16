@@ -1,4 +1,4 @@
---- JustFetch ---
+--- Codeunit D47 Sender::JustFetch ---
   coverage: complete
   [HTTP] direct
     evidence: ws:src/Sender.Codeunit.al:11 "Client.Get"

@@ -62,7 +62,7 @@
         ],
         "routine": {
           "display": "MessageOnly",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D49 Sender",
           "stableId": "11111111-0000-0000-0000-0000000d4904:Codeunit:50000#840a858e760822ba41f6398bfd0574cb2a2aa32f3b8b06ede6c8c3c9a5250cb5"
         }
       }

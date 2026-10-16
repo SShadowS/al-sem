@@ -1,4 +1,4 @@
---- ModifyThenRunModal ---
+--- Codeunit D49 Sender::ModifyThenRunModal ---
   coverage: partial
   reasons: object-run-unresolved
   [DB_MODIFY] direct

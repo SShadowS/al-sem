@@ -101,7 +101,7 @@
             "sourceKind": "source"
           },
           "display": "GetThenError",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D51 NegSender",
           "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
         },
         "unresolved": [],

@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::MessageOnly  [public-procedure]
+Codeunit D49 Sender::MessageOnly  [public-procedure]
   coverage:   complete
   ui:         "<unknown>"
 

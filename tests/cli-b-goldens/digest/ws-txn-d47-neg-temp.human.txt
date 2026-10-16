@@ -1,4 +1,4 @@
---- SendAfterTempInsert ---
+--- Codeunit D47 Sender::SendAfterTempInsert ---
   coverage: complete
   [DB_INSERT] direct
     evidence: ws:src/Sender.Codeunit.al:14 "TempRec.Insert"

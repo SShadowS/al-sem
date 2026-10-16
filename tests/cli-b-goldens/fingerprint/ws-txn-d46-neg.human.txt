@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::RunSetup  [public-procedure]
+Codeunit Normal Handler::RunSetup  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d461/table/50000"
   reads:      TableData "11111111-0000-0000-0000-00000000d461/table/50000"

@@ -24,7 +24,9 @@
 use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l4::effect_query_cli::build_db_effect_bundle;
+use crate::engine::l4::effect_query_cli::{
+    build_db_effect_bundle, object_display_by_stable_routine_id,
+};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
@@ -971,8 +973,8 @@ pub fn run_prove_pipeline(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
-        &changed_roots.spans,
-        &changed_roots.touched,
+        &changed_roots,
+        &object_display_by_stable_routine_id(&resolved),
     );
 
     if query_full.entries.is_empty() {

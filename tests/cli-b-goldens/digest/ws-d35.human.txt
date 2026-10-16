@@ -1,28 +1,28 @@
---- OnBeforePrintSafe ---
+--- Codeunit D35 Demo::OnBeforePrintSafe ---
   coverage: complete
   [UI_MESSAGE] direct
     evidence: ws:src/Codeunit.al:20 "Message"
     via: 1 path(s)
 
---- OnAfterPostDirect ---
+--- Codeunit D35 Demo::OnAfterPostDirect ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:6 "commit"
     via: 1 path(s)
 
---- PersistAudit ---
+--- Codeunit D35 Demo::PersistAudit ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:31 "commit"
     via: 1 path(s)
 
---- NonSubscriberCommit ---
+--- Codeunit D35 Demo::NonSubscriberCommit ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:26 "commit"
     via: 1 path(s)
 
---- OnAfterValidateTransitive ---
+--- Codeunit D35 Demo::OnAfterValidateTransitive ---
   coverage: complete
   [COMMIT] transitive
     evidence: ws:src/Codeunit.al:31 "commit"

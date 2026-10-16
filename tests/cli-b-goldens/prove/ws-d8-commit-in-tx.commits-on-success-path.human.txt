@@ -1,4 +1,4 @@
---- HandlePosted ---
+--- Codeunit D8BadSubscriber::HandlePosted ---
   question: commits-on-success-path
   answer:   yes
   evidence: 1 effect(s)

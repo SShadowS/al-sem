@@ -57,7 +57,7 @@
             "sourceKind": "source"
           },
           "display": "SendOne",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D48 Sender",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
         },
         "unresolved": [],
@@ -141,7 +141,7 @@
             "sourceKind": "source"
           },
           "display": "ProcessAll",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D48 Loop Caller",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e"
         },
         "unresolved": [],
@@ -209,7 +209,7 @@
             "sourceKind": "source"
           },
           "display": "SendOne",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D48 Loop Caller",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
         },
         "unresolved": [],
@@ -277,7 +277,7 @@
             "sourceKind": "source"
           },
           "display": "DoSendOnce",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D48 Non Loop Caller",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9"
         },
         "unresolved": [],
@@ -327,7 +327,7 @@
             "sourceKind": "source"
           },
           "display": "ExportAll",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D48 File Loop",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d"
         },
         "unresolved": [

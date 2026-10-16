@@ -1,4 +1,4 @@
---- PostThenError ---
+--- Codeunit D51 Sender::PostThenError ---
   question: throws-error
   answer:   yes
   evidence: 1 effect(s)

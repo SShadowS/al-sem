@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::SendOnce  [public-procedure]
+Codeunit D48 Sender Neg::SendOnce  [public-procedure]
   coverage:   complete
   http:       "<unknown>"
 

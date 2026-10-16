@@ -1,11 +1,11 @@
---- DeadHelper ---
+--- Codeunit D14EntryPoints::DeadHelper ---
   coverage: complete
   (no effects)
 
---- LiveHelper ---
+--- Codeunit D14EntryPoints::LiveHelper ---
   coverage: complete
   (no effects)
 
---- OnRun ---
+--- Codeunit D14EntryPoints::OnRun ---
   coverage: complete
   (no effects)

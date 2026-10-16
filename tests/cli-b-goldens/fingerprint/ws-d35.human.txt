@@ -1,6 +1,6 @@
 Rendering 4 root classifications.
 
-::OnBeforePrintSafe  [event-subscriber]
+Codeunit D35 Demo::OnBeforePrintSafe  [event-subscriber]
   coverage:   complete
   ui:         "<unknown>"
 
@@ -14,7 +14,7 @@ Rendering 4 root classifications.
         call Message at ws:src/Codeunit.al:20:8
 
 
-::OnAfterPostDirect  [event-subscriber]
+Codeunit D35 Demo::OnAfterPostDirect  [event-subscriber]
   coverage:   complete
   commit:     yes
 
@@ -28,7 +28,7 @@ Rendering 4 root classifications.
         subscribe event
 
 
-::NonSubscriberCommit  [public-procedure]
+Codeunit D35 Demo::NonSubscriberCommit  [public-procedure]
   coverage:   complete
   commit:     yes
 
@@ -38,7 +38,7 @@ Rendering 4 root classifications.
         direct commit at ws:src/Codeunit.al:26:8
 
 
-::OnAfterValidateTransitive  [event-subscriber]
+Codeunit D35 Demo::OnAfterValidateTransitive  [event-subscriber]
   coverage:   complete
   commit:     yes
 
