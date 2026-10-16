@@ -23,7 +23,7 @@ use crate::program::model::workspace::Model;
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d13-cross-app-internal-call";
+pub(crate) const DETECTOR: &str = "d13-cross-app-internal-call";
 
 pub fn detect_d13(
     _resolved: &Model,

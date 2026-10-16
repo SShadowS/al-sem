@@ -19,7 +19,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCFNNode, PCallee};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d62-telemetry-before-success";
+pub(crate) const DETECTOR: &str = "d62-telemetry-before-success";
 
 const WRITE_OPS: &[&str] = &[
     "Insert",

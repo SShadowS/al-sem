@@ -22,7 +22,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d12-dead-integration-event";
+pub(crate) const DETECTOR: &str = "d12-dead-integration-event";
 
 pub fn detect_d12(
     _resolved: &crate::program::model::workspace::Model,

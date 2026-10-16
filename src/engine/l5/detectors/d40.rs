@@ -37,7 +37,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d40-transitive-load-missing";
+pub(crate) const DETECTOR: &str = "d40-transitive-load-missing";
 
 pub fn detect_d40(
     resolved: &Model,

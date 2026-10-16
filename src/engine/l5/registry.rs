@@ -312,6 +312,7 @@ impl std::error::Error for DetectorError {}
 /// `Err` degrades to a warning diagnostic while every other detector still runs,
 /// and unlike `catch_unwind` this works identically under `panic = "abort"`
 /// (`[profile.release]`, Cargo.toml), the profile every shipped binary uses.
+#[derive(Clone)]
 pub struct Detector {
     pub name: String,
     pub run: fn(&Model, &DetectorContext) -> Result<DetectorOutput, DetectorError>,

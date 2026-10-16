@@ -29,7 +29,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d11-modify-without-get";
+pub(crate) const DETECTOR: &str = "d11-modify-without-get";
 
 /// The recognized load ops — shared with the G-10 one-hop callee summary
 /// (`detectors::RECORD_LOAD_OPS`), so both stay in lockstep.

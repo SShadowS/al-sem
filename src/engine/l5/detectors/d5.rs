@@ -18,7 +18,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PLoop;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d5-set-based-opportunity";
+pub(crate) const DETECTOR: &str = "d5-set-based-opportunity";
 
 /// Ops that are allowed alongside a Modify without disqualifying the pattern.
 const ALLOWED_OTHER_OPS: &[&str] = &[

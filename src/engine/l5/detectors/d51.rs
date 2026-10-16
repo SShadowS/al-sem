@@ -21,7 +21,7 @@ use crate::engine::l5::ordering_facts::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d51-retry-side-effect-duplication";
+pub(crate) const DETECTOR: &str = "d51-retry-side-effect-duplication";
 
 fn detail_method(detail: &[(String, String)]) -> Option<&str> {
     detail

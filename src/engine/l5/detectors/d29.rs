@@ -24,7 +24,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::{AttributeInfo, find_attribute, string_arg};
 use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
-const DETECTOR: &str = "d29-subscriber-modify-on-event-record";
+pub(crate) const DETECTOR: &str = "d29-subscriber-modify-on-event-record";
 
 const MUTATING_OPS: &[&str] = &["Modify", "ModifyAll", "Delete", "DeleteAll"];
 

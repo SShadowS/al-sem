@@ -33,7 +33,7 @@ use crate::program::body::features::PAnchor;
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
-const DETECTOR: &str = "d37-validate-without-persist";
+pub(crate) const DETECTOR: &str = "d37-validate-without-persist";
 
 // ModifyAll is intentionally EXCLUDED — it does not persist R's current record
 // (see the module doc, d37 FN-1). Only Modify / Insert write R's Validate'd state.

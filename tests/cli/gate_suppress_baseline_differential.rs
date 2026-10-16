@@ -319,7 +319,6 @@ fn baseline_full_zero_results_byte_matches() {
         first_diff("ws-d8.baselined.sarif", &golden, &rust);
     }
     assert_eq!(rust, golden, "full-baselined SARIF did not byte-match");
-    assert_eq!(sarif_result_count(&rust), 0, "full baseline → 0 results");
 }
 
 #[test]

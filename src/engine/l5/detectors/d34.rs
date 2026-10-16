@@ -27,7 +27,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PLoop;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d34-commit-in-loop";
+pub(crate) const DETECTOR: &str = "d34-commit-in-loop";
 
 pub fn detect_d34(
     resolved: &Model,

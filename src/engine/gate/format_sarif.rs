@@ -1,15 +1,17 @@
-//! `format_sarif` — port of al-sem `src/cli/format-sarif.ts`.
+//! `format_sarif` — the SARIF 2.1.0 writer for `alsem analyze`.
 //!
-//! Emits SARIF 2.1.0 JSON whose object-key ORDER + 2-space pretty form byte-match
-//! `JSON.stringify(sarif, null, 2)`. The struct field declaration order below mirrors
-//! al-sem's object-literal construction order EXACTLY; `serde_json` serializes struct
-//! fields in declaration order, and `skip_serializing_if` reproduces the
-//! `undefined`-field omission (`logicalLocations` / `codeFlows` absent when empty).
+//! The output format is Rust-owned (goldens are baselines from this engine, not
+//! a copy of any other tool). `serde_json` writes struct fields in declaration
+//! order, so the struct field order below IS the JSON key order, in 2-space pretty
+//! form. `skip_serializing_if` leaves out `logicalLocations` / `codeFlows` when empty.
 //!
 //! The `tool.driver.rules` catalog is derived from the detector registry
 //! (`registered_detectors()`, default and opt-in alike): one rule per registered
 //! detector, carrying its `rule_name` and `short_description`, in natural
-//! detector-number order. A result's `ruleId` therefore always names a rule.
+//! detector-number order. A result's `ruleId` therefore always names a rule:
+//! the rule id is the registry entry's `name`, a result's `ruleId` is the
+//! detector module's `DETECTOR`, and the registry sets `name` from that same
+//! `DETECTOR` const, so the two cannot differ.
 //!
 //! Determinism: the `results` array preserves the pre-sorted `FindingSummary` order
 //! (the findings come pre-sorted out of `run_detectors`); no map iteration leaks in.
@@ -66,7 +68,7 @@ fn rules() -> Vec<SarifRule> {
 }
 
 // ---------------------------------------------------------------------------
-// SARIF document shape (key order = al-sem object-literal order).
+// SARIF document shape (key order = struct field order).
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -140,7 +142,7 @@ struct CodeFlow {
 }
 
 /// A SARIF result. Field order: ruleId, level, message, fingerprints, locations,
-/// [codeFlows] — exactly al-sem's `result_` insertion order.
+/// [codeFlows].
 #[derive(Serialize)]
 struct SarifResult {
     #[serde(rename = "ruleId")]

@@ -21,7 +21,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfide
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d35-commit-in-event-subscriber";
+pub(crate) const DETECTOR: &str = "d35-commit-in-event-subscriber";
 
 pub fn detect_d35(
     resolved: &Model,

@@ -27,7 +27,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, Sou
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d14-dead-routine";
+pub(crate) const DETECTOR: &str = "d14-dead-routine";
 
 /// Object types whose call graph the resolver does not fully model — property
 /// expressions (`Caption = MyCaption()`, action `OnAction`, layout bindings, …)

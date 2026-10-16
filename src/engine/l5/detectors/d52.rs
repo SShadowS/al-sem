@@ -26,7 +26,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d52-bulk-write-param-no-temp-guard";
+pub(crate) const DETECTOR: &str = "d52-bulk-write-param-no-temp-guard";
 
 const BULK_OPS: &[&str] = &["DeleteAll", "ModifyAll"];
 

@@ -31,7 +31,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PAnchor;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d61-ishandled-bypasses-critical-write";
+pub(crate) const DETECTOR: &str = "d61-ishandled-bypasses-critical-write";
 
 const CRITICAL_WRITE_OPS: &[&str] = &[
     "Insert",

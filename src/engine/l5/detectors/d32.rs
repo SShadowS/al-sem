@@ -33,7 +33,7 @@ use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::{Model, ModelParameter, ModelRoutine};
 
-const DETECTOR: &str = "d32-constant-boolean-parameter";
+pub(crate) const DETECTOR: &str = "d32-constant-boolean-parameter";
 
 /// `isBooleanLiteral` — matches exactly "true" or "false" (case-insensitive,
 /// after trimming). Returns the canonical lowercase form, or `None`.

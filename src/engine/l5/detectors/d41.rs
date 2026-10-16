@@ -23,7 +23,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{Model, ModelRecordOperation};
 
-const DETECTOR: &str = "d41-transitive-filter-loss";
+pub(crate) const DETECTOR: &str = "d41-transitive-filter-loss";
 
 const FILTER_SET_OPS: &[&str] = &["SetRange", "SetFilter"];
 const FILTER_SENSITIVE_OPS: &[&str] = &[

@@ -26,7 +26,7 @@ use crate::engine::l5::transaction_spans::SeedKind;
 use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
 
-const DETECTOR: &str = "d50-checked-run-implicit-commit";
+pub(crate) const DETECTOR: &str = "d50-checked-run-implicit-commit";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 
 /// RootKind values that make a commit-chain root UNTRUSTED for D50's medium tier.

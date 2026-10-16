@@ -30,7 +30,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PAnchor;
 use crate::program::model::workspace::{Model, ModelRecordOperation};
 
-const DETECTOR: &str = "d42-cross-call-wrong-setloadfields";
+pub(crate) const DETECTOR: &str = "d42-cross-call-wrong-setloadfields";
 
 /// Caller-side narrowed-load shape AT a callsite.
 enum Narrow {

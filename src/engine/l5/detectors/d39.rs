@@ -45,7 +45,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d39-record-left-dirty-across-chain";
+pub(crate) const DETECTOR: &str = "d39-record-left-dirty-across-chain";
 
 const PERSIST_OPS: &[&str] = &["Modify", "Insert", "Rename"];
 

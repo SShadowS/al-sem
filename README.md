@@ -91,7 +91,7 @@ Point any command at the directory containing `app.json`. Dependencies are read 
 |-------|---------------|
 | `d1-db-op-in-loop` | A database call runs once per loop iteration — including when the loop is in a *caller*, several procedures up |
 | `d3-missing-setloadfields` | A record is read, only a couple of its fields are used, and no `SetLoadFields` narrowed the read |
-| `d8-commit-in-transaction` | A `Commit` runs partway through a posting transaction, so a later failure leaves data half-written |
+| `d8-commit-in-transaction` | A `Commit` runs partway through a posting transaction, so a later failure leaves data half-written (opt-in) |
 | `d34-commit-in-loop` / `d35-commit-in-event-subscriber` | `Commit` inside a loop; `Commit` reachable from an event subscriber, where the publisher can no longer roll back |
 | `d11-modify-without-get` | `Modify` or `Validate` on a record variable that was never loaded first — nothing in the procedure, or anything it calls, ever read it |
 | `d12-dead-integration-event` | A published event nobody subscribes to |

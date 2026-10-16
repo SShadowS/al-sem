@@ -25,7 +25,7 @@ use crate::program::model::workspace::Model;
 
 use super::{anchor_of, group_and_cap};
 
-const DETECTOR: &str = "d44-event-multi-subscriber-overlap";
+pub(crate) const DETECTOR: &str = "d44-event-multi-subscriber-overlap";
 const D44_MAX_PER_EVENT: usize = 32;
 
 struct SubWrite {

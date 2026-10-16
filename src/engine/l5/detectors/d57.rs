@@ -23,7 +23,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PCallee;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d57-singleinstance-growing-state";
+pub(crate) const DETECTOR: &str = "d57-singleinstance-growing-state";
 
 const GROW_METHODS: &[&str] = &["Add", "Insert", "AddRange"];
 const CLEAR_METHODS: &[&str] = &[

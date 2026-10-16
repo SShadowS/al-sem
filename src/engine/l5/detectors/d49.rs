@@ -20,7 +20,7 @@ use crate::engine::l5::ordering_facts::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d49-uncommitted-write-before-ui";
+pub(crate) const DETECTOR: &str = "d49-uncommitted-write-before-ui";
 
 fn to_src(
     contract: Option<&crate::engine::l5::digest::ProjectedEvidence>,

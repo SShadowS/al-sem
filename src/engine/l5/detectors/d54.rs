@@ -25,7 +25,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d54-publish-in-tryfunction-cone";
+pub(crate) const DETECTOR: &str = "d54-publish-in-tryfunction-cone";
 const MAX_PER_TRY_ROUTINE: usize = 5;
 
 pub fn detect_d54(

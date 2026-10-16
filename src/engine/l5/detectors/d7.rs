@@ -31,7 +31,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PAnchor;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d7-recursive-event-expansion";
+pub(crate) const DETECTOR: &str = "d7-recursive-event-expansion";
 
 /// State for the recursive Tarjan SCC (faithful port of d7's inline `tarjanSCC`).
 struct Tarjan<'a> {
