@@ -26,7 +26,7 @@ use crate::program::model::workspace::Model;
 
 use super::{anchor_of, group_and_cap};
 
-const DETECTOR: &str = "d45-event-transitive-table-exposure";
+pub(crate) const DETECTOR: &str = "d45-event-transitive-table-exposure";
 const D45_MAX_DEPTH: usize = 4;
 const D45_MAX_NODES: usize = 256;
 const D45_MAX_PER_PUBLISHER: usize = 16;

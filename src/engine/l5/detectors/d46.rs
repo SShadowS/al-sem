@@ -27,7 +27,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCallSite, POperationSite};
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d46-commit-in-lifecycle";
+pub(crate) const DETECTOR: &str = "d46-commit-in-lifecycle";
 
 /// The standard interprocedural budget shared by D1/D2's walk_evidence callers.
 const BOUNDS: WalkBounds = WalkBounds {

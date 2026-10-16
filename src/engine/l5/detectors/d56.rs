@@ -49,7 +49,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d56-clone-before-write-in-loop";
+pub(crate) const DETECTOR: &str = "d56-clone-before-write-in-loop";
 
 const CURSOR_OPS: &[&str] = &["FindSet", "Find", "FindFirst", "Next"];
 const WRITE_BACK_OPS: &[&str] = &["Modify", "Delete"];

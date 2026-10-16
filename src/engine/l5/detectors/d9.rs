@@ -19,7 +19,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d9-transaction-span-summary";
+pub(crate) const DETECTOR: &str = "d9-transaction-span-summary";
 const MIN_INTERESTING_ROUTINES: usize = 2;
 const MIN_INTERESTING_TABLES: usize = 2;
 

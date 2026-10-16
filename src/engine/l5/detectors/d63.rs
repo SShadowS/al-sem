@@ -20,7 +20,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfide
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d63-html-concat-injection";
+pub(crate) const DETECTOR: &str = "d63-html-concat-injection";
 
 /// Does the literal contain an HTML-tag-ish `<x` / `</x` sequence?
 fn html_tagish(lit: &str) -> bool {

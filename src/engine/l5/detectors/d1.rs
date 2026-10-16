@@ -106,7 +106,7 @@ use std::cell::RefCell;
 #[cfg(test)]
 use std::rc::Rc;
 
-const DETECTOR: &str = "d1-db-op-in-loop";
+pub(crate) const DETECTOR: &str = "d1-db-op-in-loop";
 
 /// The OLD path-walker's depth/node budget for the interprocedural call-chain
 /// walk. Kept only for the `#[cfg(test)]` shadow oracle (`detect_d1_premerge`) —

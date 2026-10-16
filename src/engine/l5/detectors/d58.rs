@@ -17,7 +17,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PCallee;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d58-query-filter-after-open";
+pub(crate) const DETECTOR: &str = "d58-query-filter-after-open";
 
 pub fn detect_d58(
     resolved: &Model,

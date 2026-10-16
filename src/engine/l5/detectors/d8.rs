@@ -24,7 +24,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d8-commit-in-transaction";
+pub(crate) const DETECTOR: &str = "d8-commit-in-transaction";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
 
 /// `isTransactionManaging` — name matches `^(Post|Apply|Release)[A-Z]` OR writes ≥3

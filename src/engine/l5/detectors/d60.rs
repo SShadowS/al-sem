@@ -26,7 +26,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCFNNode, PLoop};
 use crate::program::model::workspace::{Model, ModelRecordOperation};
 
-const DETECTOR: &str = "d60-upgrade-loop-should-be-datatransfer";
+pub(crate) const DETECTOR: &str = "d60-upgrade-loop-should-be-datatransfer";
 
 /// The only ops the loop's DRIVER record may perform for the loop to be a
 /// DataTransfer candidate: the `Modify` being replaced, the `Next` advance

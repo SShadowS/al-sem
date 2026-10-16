@@ -22,7 +22,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d10-self-modifying-loop";
+pub(crate) const DETECTOR: &str = "d10-self-modifying-loop";
 
 // Rename moves the driving record to a new key, the strongest self-modify.
 const MUTATING_OPS: &[&str] = &[

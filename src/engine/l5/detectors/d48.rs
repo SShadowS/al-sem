@@ -42,7 +42,7 @@ use crate::engine::l5::path_walker::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const DETECTOR: &str = "d48-io-in-loop";
+pub(crate) const DETECTOR: &str = "d48-io-in-loop";
 
 const BOUNDS: WalkBounds = WalkBounds {
     max_depth: 20,

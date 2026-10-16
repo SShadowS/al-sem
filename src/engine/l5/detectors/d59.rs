@@ -14,7 +14,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
+pub(crate) const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
 
 /// Guard-name heuristic. Deny-list first (IsHandled is the sanctioned
 /// handshake), then permission/skip-shaped prefixes and substrings.

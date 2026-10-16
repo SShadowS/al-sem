@@ -22,7 +22,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d36-late-setloadfields";
+pub(crate) const DETECTOR: &str = "d36-late-setloadfields";
 
 const LOAD_OPS: &[&str] = &["Get", "FindFirst", "FindLast", "FindSet", "Find", "Next"];
 

@@ -20,7 +20,7 @@ use crate::program::model::workspace::Model;
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d16-obsolete-routine-call";
+pub(crate) const DETECTOR: &str = "d16-obsolete-routine-call";
 
 pub fn detect_d16(
     _resolved: &Model,

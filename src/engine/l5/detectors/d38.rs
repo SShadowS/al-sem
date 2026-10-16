@@ -25,7 +25,7 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d38-subscriber-to-obsolete-event";
+pub(crate) const DETECTOR: &str = "d38-subscriber-to-obsolete-event";
 
 pub fn detect_d38(
     _resolved: &Model,

@@ -49,7 +49,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d64-api-page-write-surface";
+pub(crate) const DETECTOR: &str = "d64-api-page-write-surface";
 
 fn object_anchor(o: &crate::program::model::workspace::ModelObject) -> SourceAnchor {
     match &o.source_anchor {

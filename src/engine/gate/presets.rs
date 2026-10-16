@@ -73,11 +73,7 @@ pub fn select_detectors(names: &[String]) -> Result<Vec<Detector>, String> {
     let mut out: Vec<Detector> = Vec::new();
     for name in names {
         match all.iter().find(|d| &d.name == name) {
-            Some(d) => out.push(Detector {
-                name: d.name.clone(),
-                run: d.run,
-                requires: d.requires,
-            }),
+            Some(d) => out.push(d.clone()),
             None => return Err(format!("Unknown detector: {name}")),
         }
     }

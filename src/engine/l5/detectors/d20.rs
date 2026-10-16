@@ -15,7 +15,7 @@ use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfide
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d20-unreachable-after-exit";
+pub(crate) const DETECTOR: &str = "d20-unreachable-after-exit";
 
 /// `EXIT_DESCRIPTION` — the human label for each exit kind.
 fn kind_label(exit_kind: &str) -> &'static str {

@@ -26,7 +26,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PExpressionInfo;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d4-repeated-lookup-in-loop";
+pub(crate) const DETECTOR: &str = "d4-repeated-lookup-in-loop";
 
 /// `isStringLikeLiteral` (`model/expression.ts`): a `string_literal` or
 /// `quoted_identifier`.

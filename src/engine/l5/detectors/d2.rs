@@ -51,7 +51,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::table_display::{DescribeOp, describe_table};
 use crate::program::model::workspace::{Model, ModelRoutine, ModelTable};
 
-const DETECTOR: &str = "d2-event-fanout-in-loop";
+pub(crate) const DETECTOR: &str = "d2-event-fanout-in-loop";
 
 const BOUNDS: WalkBounds = WalkBounds {
     max_depth: 20,

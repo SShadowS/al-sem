@@ -23,7 +23,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PExpressionInfo;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d18-constant-filter-in-loop";
+pub(crate) const DETECTOR: &str = "d18-constant-filter-in-loop";
 
 const FILTER_OPS: &[&str] = &["SetRange", "SetFilter"];
 

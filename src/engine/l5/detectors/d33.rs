@@ -31,7 +31,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d33-unfiltered-bulk-write";
+pub(crate) const DETECTOR: &str = "d33-unfiltered-bulk-write";
 
 const BULK_OPS: &[&str] = &["DeleteAll", "ModifyAll"];
 

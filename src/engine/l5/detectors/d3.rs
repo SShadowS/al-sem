@@ -28,7 +28,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCallSite, PCallee};
 use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
 
-const DETECTOR: &str = "d3-missing-setloadfields";
+pub(crate) const DETECTOR: &str = "d3-missing-setloadfields";
 
 /// Retrieval ops `deriveLoadStates` yields a state for.
 const RETRIEVAL_OPS: &[&str] = &["FindSet", "FindFirst", "FindLast", "Get"];

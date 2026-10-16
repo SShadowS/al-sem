@@ -37,7 +37,7 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d43-event-ishandled-skip";
+pub(crate) const DETECTOR: &str = "d43-event-ishandled-skip";
 
 // ===========================================================================
 // DispatchSite substrate (port of al-sem engine/dispatch-sites.ts)

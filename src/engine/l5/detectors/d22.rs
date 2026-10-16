@@ -24,7 +24,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d22-flowfield-without-calcfields";
+pub(crate) const DETECTOR: &str = "d22-flowfield-without-calcfields";
 
 pub fn detect_d22(
     resolved: &Model,

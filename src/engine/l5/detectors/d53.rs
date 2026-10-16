@@ -20,7 +20,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::Model;
 
-const DETECTOR: &str = "d53-ignored-tryfunction-result";
+pub(crate) const DETECTOR: &str = "d53-ignored-tryfunction-result";
 
 pub fn detect_d53(
     resolved: &Model,

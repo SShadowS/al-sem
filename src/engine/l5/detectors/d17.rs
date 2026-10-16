@@ -22,7 +22,7 @@ use crate::program::model::workspace::Model;
 
 use super::anchor_of;
 
-const DETECTOR: &str = "d17-min-version-drift";
+pub(crate) const DETECTOR: &str = "d17-min-version-drift";
 
 /// Parse a version segment like JS `parseInt(x, 10) || 0`.
 ///
