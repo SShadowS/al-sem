@@ -365,20 +365,26 @@ fn is_trigger_hop(hop: &Value, trigger: &str, line: u64, column: u64) -> bool {
         && hop["anchor"]["column"] == column
 }
 
-/// `root` has a `ty` effect on `resource_id` with a viaPath whose FIRST hop is
-/// an `implicit-trigger` hop into `trigger` anchored at (line, column), and the
-/// effect's conditionality is `cond`.
-#[allow(clippy::too_many_arguments)]
-fn expect_trigger_effect(
-    doc: &Value,
-    f: &mut Vec<String>,
-    root: &str,
-    ty: &str,
-    resource_id: &str,
-    trigger: &str,
-    (line, column): (u64, u64),
-    cond: &str,
-) {
+/// What a root's trigger effect must look like (see [`expect_trigger_effect`]).
+struct Want<'a> {
+    ty: &'a str,
+    resource_id: &'a str,
+    trigger: &'a str,
+    at: (u64, u64),
+    cond: &'a str,
+}
+
+/// `root` has a `want.ty` effect on `want.resource_id` with a viaPath whose
+/// FIRST hop is an `implicit-trigger` hop into `want.trigger` anchored at
+/// `want.at`, and the effect's conditionality is `want.cond`.
+fn expect_trigger_effect(doc: &Value, f: &mut Vec<String>, root: &str, want: &Want) {
+    let Want {
+        ty,
+        resource_id,
+        trigger,
+        at: (line, column),
+        cond,
+    } = *want;
     let e = entry(doc, root);
     let hits = effects_on(e, ty, resource_id);
     if hits.is_empty() {
@@ -513,7 +519,18 @@ fn a1_digest_follows_the_implicit_trigger() {
                 "conditional",
             ),
         ] {
-            expect_trigger_effect(doc, f, root, "DB_INSERT", resource, trigger, at, cond);
+            expect_trigger_effect(
+                doc,
+                f,
+                root,
+                &Want {
+                    ty: "DB_INSERT",
+                    resource_id: resource,
+                    trigger,
+                    at,
+                    cond,
+                },
+            );
         }
     });
 }
@@ -872,11 +889,13 @@ fn a5_forwarded_receiver_binds_through_the_parameter() {
             doc,
             &mut f,
             "V",
-            "DB_MODIFY",
-            TRIG_ROW_ID,
-            "OnValidate",
-            (83, 8),
-            "unconditional-on-success",
+            &Want {
+                ty: "DB_MODIFY",
+                resource_id: TRIG_ROW_ID,
+                trigger: "OnValidate",
+                at: (83, 8),
+                cond: "unconditional-on-success",
+            },
         );
     }
     assert!(f.is_empty(), "{}", f.join("\n"));
@@ -994,11 +1013,13 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
         &doc,
         &mut f,
         "ValidateDep",
-        "DB_INSERT",
-        DEP_LOG_ID,
-        "OnValidate",
-        (6, 8),
-        "unconditional-on-success",
+        &Want {
+            ty: "DB_INSERT",
+            resource_id: DEP_LOG_ID,
+            trigger: "OnValidate",
+            at: (6, 8),
+            cond: "unconditional-on-success",
+        },
     );
     assert!(f.is_empty(), "{}", f.join("\n"));
 }
