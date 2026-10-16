@@ -262,6 +262,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Writes and other effects of implicit table and field triggers now reach their callers in the capability cone, the snapshot, digest, prove and fingerprint (#96). Before, `prove ValidateIt "writes-table:Log Row"` answered **no** for a routine whose `Validate` fires an `OnValidate` that inserts into Log Row, and digest showed no effect for it, although L4's `query effects` already listed the write. The typed edge graph skipped implicit-trigger edges, a byte-parity leftover from al-sem with no stated reason. What changed:
+  - **The typed graph** now carries `{kind: "implicit-trigger", operationId, triggerKind, fires}`. `fires` is `always` for Validate/Rename and literal-true RunTrigger, and `maybe` otherwise, including ModifyAll/DeleteAll.
+  - **The cone** keys trigger edges and PD links by the firing record operation.
+  - **The snapshot** has an `ImplicitTrigger` edge.
+  - **Digest** gives the trigger hop its op anchor and makes it conditional from the op's control context and `fires`.
+  - **A table or table-extension trigger's `Rec`** now takes the caller's record temp state: it is parameter-dependent on the receiver, bound from the firing operation in L4 and in the cone. So a trigger fired on a temporary record no longer counts as a physical write; before, L4 already reported it as one.
+  - **The model** no longer drops the program engine's `ModifyAll`/`DeleteAll` → `OnModify`/`OnDelete` edges.
+
+  CDO's `--program-call-graph-stats` is unchanged. The goldens moved only by the predicted shapes, triaged line by line: r1a, ir-l2, r3a1, r3a2 and r3a3; the r3a1/r3a3 manifest matrices; the synthetic l4 collision fixture, rewritten to the real trigger shape. A trigger-first inherited fact now carries `witnessFirstHopOperationId`.
+
 - `alsem analyze --format sarif` now describes every detector in `tool.driver.rules`
   (#87). The list was written by hand and held only 21 of the 54 detectors, so a finding
   from any of the other 33 (for example `d19-unused-parameter` or `d34-commit-in-loop`)

@@ -1005,12 +1005,14 @@ impl<'a> SpineCtx<'a> {
                         loop_stack: loop_stack.clone(),
                         source_anchor: anchor.clone(),
                         in_until_condition: self.in_until,
-                        // RunTrigger literal arg of a mutating op (Modify/Delete/
-                        // DeleteAll → arg 0; ModifyAll → arg 2) — Some(bool) iff that
-                        // arg is a boolean literal. L5/d29 input (serde-skipped).
+                        // RunTrigger literal arg of a trigger-firing op (Insert/
+                        // Modify/Delete/DeleteAll → arg 0; ModifyAll → arg 2) —
+                        // Some(bool) iff that arg is a boolean literal. L5/d29 input
+                        // and the typed `implicit-trigger` edge's `fires`
+                        // (serde-skipped).
                         run_trigger: {
                             let idx = match *op_type {
-                                "Modify" | "Delete" | "DeleteAll" => Some(0),
+                                "Insert" | "Modify" | "Delete" | "DeleteAll" => Some(0),
                                 "ModifyAll" => Some(2),
                                 _ => None,
                             };
@@ -2083,11 +2085,15 @@ pub fn ir_record_variables(
         // A table (extension) PROCEDURE runs on the record it is called on, so its
         // `Rec` is as temporary as the caller's receiver: parameter-dependent on
         // the reserved receiver index, substituted at each call site from
-        // `PCallSite::receiver_temp_state`. Triggers keep `Known(false)`: the
-        // platform invokes them, and no call site carries their receiver.
-        let rec_temp_state = if matches!(o.kind, ObjectKind::Table | ObjectKind::TableExtension)
-            && routine.kind == al_syntax::ir::RoutineKind::Procedure
-        {
+        // `PCallSite::receiver_temp_state`. A table (extension) TRIGGER is the
+        // same (#96): it runs on the record of the operation that fires it
+        // (`T.Validate(F, …)`, `T.Insert(true)`), so its `Rec` is
+        // parameter-dependent too, and each `implicit-trigger` edge binds the
+        // receiver index to that operation's own temp state. A trigger the
+        // platform fires (no caller edge) stays a root with a PD `Rec`, exactly
+        // like an uncalled table procedure. Every other object kind keeps
+        // `Known(false)`.
+        let rec_temp_state = if matches!(o.kind, ObjectKind::Table | ObjectKind::TableExtension) {
             ts_param_dependent(super::features::RECEIVER_PARAM_INDEX)
         } else {
             ts_known(false)
@@ -2891,5 +2897,114 @@ codeunit 50002 C
             .map(|r| (r.identifier.as_str(), r.condition_kind.as_str()))
             .collect();
         assert_eq!(got, [("plain", "if"), ("paren", "if"), ("name", "if")]);
+    }
+
+    /// #96: `Insert`'s RunTrigger literal is captured, like Modify/Delete's (the
+    /// typed `implicit-trigger` edge's `fires` reads it).
+    #[test]
+    fn insert_run_trigger_literal_is_captured() {
+        const SRC: &str = r#"
+codeunit 50004 I
+{
+    procedure Caller(B: Boolean)
+    var
+        R: Record Customer;
+    begin
+        R.Insert(true);
+        R.Insert(false);
+        R.Insert(B);
+        R.Insert();
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+        let got: Vec<(&str, Option<bool>)> = features
+            .record_operations
+            .iter()
+            .map(|op| (op.op.as_str(), op.run_trigger))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Insert", Some(true)),
+                ("Insert", Some(false)),
+                ("Insert", None),
+                ("Insert", None),
+            ]
+        );
+    }
+
+    /// #96 D3.1: the implicit `Rec` of a table and a table-extension TRIGGER is
+    /// parameter-dependent on the receiver index (the firing op binds it), as a
+    /// table procedure's is. A page trigger's `Rec` stays `Known(false)`.
+    #[test]
+    fn table_trigger_rec_is_receiver_dependent() {
+        use crate::program::body::features::RECEIVER_PARAM_INDEX;
+        const SRC: &str = r#"
+table 50005 T
+{
+    fields
+    {
+        field(1; Amount; Decimal)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+    trigger OnInsert()
+    begin
+    end;
+    procedure P()
+    begin
+    end;
+}
+tableextension 50006 TX extends T
+{
+    trigger OnModify()
+    begin
+    end;
+}
+page 50007 Pg
+{
+    SourceTable = T;
+    trigger OnOpenPage()
+    begin
+    end;
+}
+"#;
+        let file = al_syntax::parse(SRC);
+        let mut got: Vec<(String, String, Option<u32>)> = Vec::new();
+        for (oi, o) in file.objects.iter().enumerate() {
+            for r in &o.routines {
+                let rec = super::ir_record_variables(&file, oi, r, "rid", Some("T"))
+                    .into_iter()
+                    .find(|v| v.name == "Rec")
+                    .expect("implicit Rec");
+                got.push((
+                    r.name.clone(),
+                    rec.temp_state.kind.clone(),
+                    rec.temp_state.parameter_index,
+                ));
+            }
+        }
+        let pd = || {
+            (
+                "parameter-dependent".to_string(),
+                Some(RECEIVER_PARAM_INDEX),
+            )
+        };
+        let want: Vec<(String, String, Option<u32>)> = [
+            ("OnValidate", pd()),
+            ("OnInsert", pd()),
+            ("P", pd()),
+            ("OnModify", pd()),
+            ("OnOpenPage", ("known".to_string(), None)),
+        ]
+        .into_iter()
+        .map(|(n, (k, i))| (n.to_string(), k, i))
+        .collect();
+        assert_eq!(got, want);
     }
 }

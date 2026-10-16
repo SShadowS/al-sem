@@ -337,8 +337,15 @@ fn op_name(call_text: &str) -> String {
     last.trim_matches('"').fold_identifier()
 }
 
+/// The record operations the program resolver emits an `ImplicitTrigger` edge
+/// for. `ModifyAll`/`DeleteAll` (with RunTrigger) fire `OnModify`/`OnDelete`
+/// once per row; leaving them out dropped those existing program edges from the
+/// model (#96).
 fn can_fire_trigger(op: &str) -> bool {
-    matches!(op, "insert" | "modify" | "delete" | "validate" | "rename")
+    matches!(
+        op,
+        "insert" | "modify" | "delete" | "modifyall" | "deleteall" | "validate" | "rename"
+    )
 }
 
 /// The model's source-unit spelling of program file `path` in `app` (engine-switch
@@ -1893,6 +1900,28 @@ pub(crate) fn build_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #96: every record op the program resolver emits an `ImplicitTrigger` edge
+    /// for passes the adapter's gate, the bulk `ModifyAll`/`DeleteAll` included
+    /// (`op_name` folds the call text to these spellings).
+    #[test]
+    fn can_fire_trigger_admits_the_resolver_ops() {
+        for op in [
+            "insert",
+            "modify",
+            "delete",
+            "modifyall",
+            "deleteall",
+            "validate",
+            "rename",
+        ] {
+            assert!(can_fire_trigger(op), "{op}");
+        }
+        for op in ["get", "findset", "calcfields", "testfield"] {
+            assert!(!can_fire_trigger(op), "{op}");
+        }
+        assert_eq!(op_name("T.ModifyAll(Amount, 0, true)"), "modifyall");
+    }
 
     const APP_JSON: &str = r#"{"id":"b3b3b3b3-0000-0000-0000-000000000001","name":"B3 Census","publisher":"T","version":"1.0.0.0"}"#;
 

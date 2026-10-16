@@ -60,6 +60,7 @@ fn fact(provenance: &str, op: &str, kind: &str) -> SnapshotCapabilityFact {
         witness_operation_id: None,
         witness_callsite_id: None,
         extra: None,
+        witness_first_hop_operation_id: None,
     }
 }
 

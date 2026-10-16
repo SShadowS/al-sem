@@ -8,6 +8,8 @@
 //!
 //! The two deep chains (`Deep0..Deep66`, `DeepF0..DeepF66`) are generated so a
 //! path longer than the digest witness's `MAX_DEPTH` (64) exists.
+//!
+//! `src/Trig.al` ([`TRIG_AL`]) holds the #96 implicit-trigger shapes.
 
 pub const APP_JSON: &str = r#"{
   "id": "65656565-0000-0000-0000-000000000065",
@@ -480,6 +482,54 @@ pub fn probe_al() -> String {
     s
 }
 
+/// #96 D7: the implicit-trigger shapes of the #96 acceptance rows A3/A4, in
+/// their own file so `Probe.al`'s marker lines do not move. A field `OnValidate`
+/// and `OnInsert` each modify their own `Rec`, reached through a temporary and
+/// a real receiver, and three ops of one routine (real, temporary, real) fire
+/// one trigger.
+pub const TRIG_AL: &str = r#"table 50390 "Probe Trig"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; Decimal)
+        {
+            trigger OnValidate()
+            begin Rec.Modify(); end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+
+    trigger OnInsert()
+    begin Rec.Modify(); end;
+}
+
+codeunit 50391 "Probe Trig Caller"
+{
+    procedure TrigTempValidate()
+    var TempT: Record "Probe Trig" temporary;
+    begin TempT.Validate(Amount, 1); end;
+
+    procedure TrigTempInsert()
+    var TempT: Record "Probe Trig" temporary;
+    begin TempT.Insert(true); end;
+
+    procedure TrigRealValidate()
+    var T: Record "Probe Trig";
+    begin T.Validate(Amount, 1); end;
+
+    procedure TrigMixedValidate()
+    var
+        T: Record "Probe Trig";
+        TempT: Record "Probe Trig" temporary;
+    begin
+        T.Validate(Amount, 1);
+        TempT.Validate(Amount, 2);
+        T.Validate(Amount, 3);
+    end;
+}
+"#;
+
 pub fn write_workspace() -> tempfile::TempDir {
     let tmp = tempfile::Builder::new()
         .prefix("alsem-69-")
@@ -489,5 +539,6 @@ pub fn write_workspace() -> tempfile::TempDir {
     std::fs::create_dir_all(root.join("src")).expect("create src dir");
     std::fs::write(root.join("app.json"), APP_JSON).expect("write app.json");
     std::fs::write(root.join("src").join("Probe.al"), probe_al()).expect("write al source");
+    std::fs::write(root.join("src").join("Trig.al"), TRIG_AL).expect("write trigger source");
     tmp
 }

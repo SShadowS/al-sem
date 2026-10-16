@@ -920,8 +920,8 @@
             "recordVariableName": "Rec",
             "recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
             "tempState": {
-              "kind": "known",
-              "value": false
+              "kind": "parameter-dependent",
+              "parameterIndex": 4294967295
             },
             "fieldArguments": [
               "\"Entry No.\""
@@ -951,8 +951,8 @@
             "id": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
             "name": "Rec",
             "tempState": {
-              "kind": "known",
-              "value": false
+              "kind": "parameter-dependent",
+              "parameterIndex": 4294967295
             },
             "isParameter": false
           }
@@ -995,8 +995,8 @@
             "kind": "table",
             "recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
             "tempState": {
-              "kind": "known",
-              "value": false
+              "kind": "parameter-dependent",
+              "parameterIndex": 4294967295
             },
             "opSubtype": "TestField"
           }

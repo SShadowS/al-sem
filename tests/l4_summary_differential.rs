@@ -1696,37 +1696,45 @@ mod fixtures {
         (vec![a, callee], g, s, FieldIndex::new(), HashMap::new())
     }
 
-    /// `a` reaches `b`'s SAME `ParameterDependent(0)` effect via TWO
-    /// callsites of DIFFERENT edge kinds — `"direct"` (`via_for_edge_kind`
-    /// -> `"inherited"`, rank 0) and `"implicit-trigger"` (rank 3) — both
-    /// forwarding `b`'s param 0 to `a`'s own param 0, so BOTH substitute to
-    /// the IDENTICAL produced identity on `a`. Exercises
+    /// `a` reaches `b`'s SAME receiver-dependent effect via TWO edges of
+    /// DIFFERENT kinds — `"direct"` (`via_for_edge_kind` -> `"inherited"`,
+    /// rank 0) and `"implicit-trigger"` (rank 3) — and BOTH substitute to the
+    /// IDENTICAL produced identity on `a`, `ParameterDependent(0)`. Exercises
     /// `attribute_pd_substituted_via`'s max-rank merge on the PD-substitution
     /// path specifically (spec item: "two callsites producing the same PD
     /// state at different ranks"). `reversed` controls edge insertion order
     /// — both orderings must reach the SAME old-solver-verified result (spec
     /// item: "first-transition rank-0 then a later-transition rank-2/3").
+    ///
+    /// The shapes are the REAL ones (#96, D3.2): `b`'s op runs on its implicit
+    /// `Rec`, `PD(RECEIVER_PARAM_INDEX)`, as a table trigger's does. A trigger
+    /// edge binds only that receiver, through the record operation that fires
+    /// it: its `callsite_id` (and `operation_id`) is `a`'s op `a/op1`, whose
+    /// temp state is `a`'s param 0. The direct edge is a method call on `a`'s
+    /// param 0 (its `receiver_temp_state` is PD(0)), so it binds the receiver
+    /// the same way. `a/op1` is a `Validate`, which is not a db effect, so `a`
+    /// owns no effect of its own.
     fn pd_substituted_via_collision(reversed: bool) -> FixtureOut {
+        use al_sem::program::body::features::RECEIVER_PARAM_INDEX;
+
         let mut b = routine("b");
-        b.record_operations
-            .push(record_op("b_op1", "Insert", "t2", Some(ts_pd(0))));
+        b.record_operations.push(record_op(
+            "b_op1",
+            "Insert",
+            "t2",
+            Some(ts_pd(RECEIVER_PARAM_INDEX)),
+        ));
 
         let mut a = routine("a");
-        a.call_sites.push(call_site(
-            "a_cs_direct",
-            "B",
-            vec![arg_binding(0, Some(ts_pd(0)))],
-        ));
-        a.call_sites.push(call_site(
-            "a_cs_trigger",
-            "B",
-            vec![arg_binding(0, Some(ts_pd(0)))],
-        ));
+        a.record_operations
+            .push(record_op("a/op1", "Validate", "t2", Some(ts_pd(0))));
+        let mut direct_cs = call_site("a_cs_direct", "B", Vec::new());
+        direct_cs.receiver_temp_state = Some(ts_pd(0));
+        a.call_sites.push(direct_cs);
 
-        let mut edges = vec![
-            edge("a", "b", "direct", Some("a_cs_direct")),
-            edge("a", "b", "implicit-trigger", Some("a_cs_trigger")),
-        ];
+        let mut trigger_edge = edge("a", "b", "implicit-trigger", Some("a/op1"));
+        trigger_edge.operation_id = Some("a/op1".to_string());
+        let mut edges = vec![edge("a", "b", "direct", Some("a_cs_direct")), trigger_edge];
         if reversed {
             edges.reverse();
         }

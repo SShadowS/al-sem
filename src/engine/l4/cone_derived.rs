@@ -845,6 +845,7 @@ mod tests {
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: None,
         }
     }
@@ -884,6 +885,8 @@ mod tests {
             target_object: None,
             object_type: None,
             target_id_source: None,
+            trigger_kind: None,
+            fires: None,
         }
     }
 

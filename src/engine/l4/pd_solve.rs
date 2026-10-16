@@ -26,7 +26,9 @@ use super::capability_cone::{
 };
 use super::param_guard::{FrameGuards, Req, across_edge, conjoin};
 use super::summary::TempState;
-use super::summary_runner::{event_param_temp_state, pd_temp_state_at_callsite};
+use super::summary_runner::{
+    event_param_temp_state, pd_temp_state_at_callsite, trigger_receiver_temp_state,
+};
 use crate::program::model::workspace::ModelRoutine;
 
 /// Index into `ConeArena::states`.
@@ -115,29 +117,43 @@ fn event_pair<'r>(
     }
 }
 
-/// The call site of an argument-binding edge. Only `direct-call` /
-/// `variable-typed-call` edges carry bindings keyed by the callee's parameter
-/// index (the typed twins of the L4 solver's `direct` / `method`).
+/// Where an edge binds the callee's parameters in the caller's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundSite<'e> {
+    /// A call site id: bindings keyed by the callee's parameter index.
+    Call(&'e str),
+    /// The record operation that fires an `implicit-trigger` edge
+    /// (`TypedOutEdge::operation_id`): it binds only the trigger's `Rec`.
+    Op(&'e str),
+}
+
+/// The bound site of an edge, the same allowlist as `substitute_pd_temp_state`
+/// (`summary_runner.rs`: `direct | method | implicit-trigger`):
+/// - `direct-call` / `variable-typed-call` (the typed twins of `direct` /
+///   `method`) bind at their call site;
+/// - `implicit-trigger` (#96 D3.3) binds at the record operation that fires the
+///   trigger. A table trigger's implicit `Rec` is `PD(RECEIVER_PARAM_INDEX)`, and
+///   the record it runs on is that op's receiver.
 ///
-/// This allowlist is a CONSERVATIVE SUBSET of `substitute_pd_temp_state`'s
-/// (`summary_runner.rs`: `direct | method | implicit-trigger`): the typed graph
-/// carries no `implicit-trigger` edges (`combined_graph.rs` skips them). Keep the
-/// two in step.
+/// Keep the two in step.
 fn bound_site<'e, 'r>(
     edge: &'e TypedOutEdge,
     caller: Option<&'r ModelRoutine>,
-) -> Option<(&'e str, &'r ModelRoutine)> {
-    let binds = matches!(edge.kind.as_str(), "direct-call" | "variable-typed-call");
-    match (edge.callsite.as_deref(), caller) {
-        (Some(cs), Some(caller)) if binds => Some((cs, caller)),
-        _ => None,
-    }
+) -> Option<(BoundSite<'e>, &'r ModelRoutine)> {
+    let caller = caller?;
+    let site = match edge.kind.as_str() {
+        "direct-call" | "variable-typed-call" => BoundSite::Call(edge.callsite.as_deref()?),
+        "implicit-trigger" => BoundSite::Op(edge.operation_id.as_deref()?),
+        _ => return None,
+    };
+    Some((site, caller))
 }
 
 /// The guard step shared by [`cross_edge`] and `capability_cone::substitute_entry`:
 /// carry callee-frame `reqs` across `edge` into the caller's frame
-/// ([`across_edge`] on call edges, the by-name re-anchor on event edges; any
-/// other edge kind drops them), then `conjoin` with `edge_reqs`, the
+/// ([`across_edge`] on call edges, the by-name re-anchor on event edges;
+/// `implicit-trigger` edges, explicitly, and any other edge kind drop them),
+/// then `conjoin` with `edge_reqs`, the
 /// requirements under which the caller makes this call. `None`: a
 /// contradiction, so the fact cannot happen through this edge.
 pub(crate) fn carry_reqs(
@@ -169,19 +185,29 @@ pub(crate) fn carry_reqs(
                 out = conjoin(&out, &[(i, v)])?;
             }
         }
-    } else if let Some((cs, caller)) = bound_site(edge, caller)
-        && let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs)
-    {
-        out = across_edge(reqs, cs, caller_frame)?;
+    } else if let Some((site, caller)) = bound_site(edge, caller) {
+        match site {
+            BoundSite::Call(cs) => {
+                if let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs) {
+                    out = across_edge(reqs, cs, caller_frame)?;
+                }
+            }
+            // A trigger has no argument list for a guard to re-anchor on, so
+            // its guards are dropped (#96 non-goal, OUTSTANDING:123): fewer
+            // requirements is the sound over-approximation.
+            BoundSite::Op(_) => {}
+        }
     }
     conjoin(&out, edge_reqs)
 }
 
 /// D1.2 transition over typed edge `caller → callee`. The temp map applies to
 /// PD only: `pd_temp_state_at_callsite` on `direct-call` /
-/// `variable-typed-call`, `event_param_temp_state` on `event-dispatch`,
-/// `Unknown` on any other kind. A known or unknown `t` transfers unchanged;
-/// `reqs` go through [`carry_reqs`]. `None`: the transition is contradicted.
+/// `variable-typed-call`, `trigger_receiver_temp_state` on `implicit-trigger`
+/// (the firing op's own temp state, the rule L4 applies), `event_param_temp_state`
+/// on `event-dispatch`, `Unknown` on any other kind. A known or unknown `t`
+/// transfers unchanged; `reqs` go through [`carry_reqs`]. `None`: the
+/// transition is contradicted.
 pub(crate) fn cross_edge(
     t: &TempState,
     reqs: &[Req],
@@ -197,7 +223,12 @@ pub(crate) fn cross_edge(
                 (Some((publisher, subscriber)), _) => {
                     event_param_temp_state(publisher, subscriber, *i)
                 }
-                (None, Some((cs, caller))) => pd_temp_state_at_callsite(caller, cs, *i),
+                (None, Some((BoundSite::Call(cs), caller))) => {
+                    pd_temp_state_at_callsite(caller, cs, *i)
+                }
+                (None, Some((BoundSite::Op(op), caller))) => {
+                    trigger_receiver_temp_state(caller, op, *i)
+                }
                 _ => TempState::Unknown,
             }
         }
@@ -463,6 +494,7 @@ pub(crate) fn solve_bytes(
             + e.kind.capacity()
             + e.callsite.as_ref().map_or(0, String::capacity)
             + e.event_id.as_ref().map_or(0, String::capacity)
+            + e.operation_id.as_ref().map_or(0, String::capacity)
             + e.sort_key.capacity()) as u64;
     }
     bytes += (map(&arena.by_routine) + arena.by_routine.values().map(vec).sum::<usize>()) as u64;
@@ -481,10 +513,11 @@ mod tests {
         CapabilityExtra, CapabilityFact, TypedEdgeGraph, TypedOutEdge,
     };
     use crate::engine::l4::db_effect_solver::tests::{
-        pd_arg_binding, pd_call_site, pd_routine, pd_ts_known, pd_ts_pd,
+        pd_arg_binding, pd_call_site, pd_record_op, pd_routine, pd_ts_known, pd_ts_pd,
     };
     use crate::engine::l4::param_guard::FrameGuards;
     use crate::engine::l4::summary::TempState;
+    use crate::program::body::features::RECEIVER_PARAM_INDEX;
     use crate::program::model::workspace::{ModelParameter, ModelRoutine};
 
     fn edge(kind: &str, callsite: Option<&str>, to: &str) -> TypedOutEdge {
@@ -492,6 +525,7 @@ mod tests {
             to.to_string(),
             kind.to_string(),
             callsite.map(str::to_string),
+            None,
             None,
         )
     }
@@ -536,6 +570,7 @@ mod tests {
             via: "self",
             witness_operation_id: Some(format!("{owner}/op1")),
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: None,
                 temp_state: Some(pd_ts_pd(0)),
@@ -672,6 +707,102 @@ mod tests {
                 &[]
             ),
             None
+        );
+    }
+
+    /// An `implicit-trigger` edge from `C` to `T`, fired by `C`'s op `op`.
+    fn trigger_edge(op: &str) -> TypedOutEdge {
+        TypedOutEdge::new(
+            "T".to_string(),
+            "implicit-trigger".to_string(),
+            None,
+            None,
+            Some(op.to_string()),
+        )
+    }
+
+    /// `C` with one Validate op per `(op id, temp state)`.
+    fn caller_with_ops(ops: &[(&str, crate::program::body::features::PTempState)]) -> ModelRoutine {
+        let mut c = pd_routine("C");
+        for (id, ts) in ops {
+            c.record_operations
+                .push(pd_record_op(id, "Validate", "app/Table/1", ts.clone()));
+        }
+        c
+    }
+
+    /// #96 D3.3: a trigger's `Rec` (PD(receiver)) binds to the FIRING op's own
+    /// temp state in the caller's frame, per op; anything else is Unknown, and
+    /// the caller's guards are dropped across the trigger edge.
+    #[test]
+    fn cross_edge_implicit_trigger_binds_the_firing_op() {
+        let c = caller_with_ops(&[
+            ("C/op1", pd_ts_known(true)),
+            ("C/op2", pd_ts_known(false)),
+            ("C/op3", pd_ts_pd(1)),
+        ]);
+        let rec = TempState::ParameterDependent(RECEIVER_PARAM_INDEX);
+        let cross = |t: &TempState, reqs: &[Req], op: &str| {
+            cross_edge(t, reqs, &trigger_edge(op), Some(&c), None, None, &[])
+        };
+        assert_eq!(
+            cross(&rec, &[], "C/op1"),
+            Some((TempState::Known(true), vec![]))
+        );
+        assert_eq!(
+            cross(&rec, &[], "C/op2"),
+            Some((TempState::Known(false), vec![]))
+        );
+        assert_eq!(
+            cross(&rec, &[], "C/op3"),
+            Some((TempState::ParameterDependent(1), vec![]))
+        );
+        assert_eq!(
+            cross(&rec, &[], "C/op9"),
+            Some((TempState::Unknown, vec![]))
+        );
+        assert_eq!(
+            cross(&TempState::ParameterDependent(0), &[], "C/op1"),
+            Some((TempState::Unknown, vec![]))
+        );
+        assert_eq!(
+            cross(&TempState::Known(false), &[(0, true)], "C/op1"),
+            Some((TempState::Known(false), vec![])),
+            "a trigger edge drops the callee's guards"
+        );
+    }
+
+    /// #96 D2: two ops of one caller that fire one trigger are two edges, so a
+    /// state reached through both keeps a link per op (the link dedup is by
+    /// sort key; without the op id in it the two would collapse).
+    #[test]
+    fn solve_keeps_a_link_per_trigger_op() {
+        let c = caller_with_ops(&[("C/op1", pd_ts_known(false)), ("C/op2", pd_ts_known(false))]);
+        let t = pd_routine("T");
+        let g = graph(vec![
+            ("C", trigger_edge("C/op2")),
+            ("C", trigger_edge("C/op1")),
+        ]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("T", &t)].into();
+        let mut p = producer("T");
+        Arc::make_mut(&mut p.fact).extra = Some(CapabilityExtra::Table {
+            record_variable_id: None,
+            temp_state: Some(pd_ts_pd(RECEIVER_PARAM_INDEX)),
+            op_subtype: None,
+        });
+        let (arena, resolved) = solve(vec![p], &g, &by_id, &HashMap::new());
+        let at_c = &arena.by_routine["C"];
+        assert_eq!(at_c.len(), 1, "both ops give one Known(false) state");
+        let s = &arena.states[at_c[0]];
+        assert_eq!(s.t, TempState::Known(false));
+        let ops: Vec<&str> = arena.links[s.links.clone()]
+            .iter()
+            .map(|l| arena.edges[l.edge].operation_id.as_deref().unwrap())
+            .collect();
+        assert_eq!(ops, vec!["C/op1", "C/op2"]);
+        assert_eq!(
+            resolved["C"][0].first_hop.operation_id.as_deref(),
+            Some("C/op1")
         );
     }
 

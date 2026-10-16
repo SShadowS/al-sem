@@ -327,17 +327,19 @@ pub struct PRecordOperation {
     #[serde(skip)]
     pub in_until_condition: bool,
     /// Detector-audit d29 FP-1: the literal `RunTrigger` argument of a mutating
-    /// op — `Modify([RunTrigger])` / `Delete([RunTrigger])` /
+    /// op — `Insert([RunTrigger])` / `Modify([RunTrigger])` / `Delete([RunTrigger])` /
     /// `DeleteAll([RunTrigger])` (arg 0) and `ModifyAll(Field, Value[, RunTrigger])`
     /// (arg 2). `Some(false)` ⇒ the canonical RunTrigger=false pattern that
     /// SUPPRESSES trigger re-firing (so no recursive-event loop); `Some(true)` ⇒
     /// triggers run; `None` ⇒ no literal arg captured / not a mutating op (the
     /// default — keeps the detector firing). Only `false` (an exact literal) is a
-    /// suppression signal.
+    /// suppression signal. The typed `implicit-trigger` edge's `fires` also reads
+    /// it (#96: `Some(true)` ⇒ the trigger always fires).
     ///
     /// INTERNAL-ONLY (`serde(skip)`, excluded from `PartialEq`): never serialized,
-    /// so every feature-level golden stays byte-identical and baseline vectors
-    /// deserialize it to `None`.
+    /// so every serde-based feature golden stays byte-identical and baseline
+    /// vectors deserialize it to `None`. The `Debug`-printed ir-l2 snapshot
+    /// (`tests/ir-l2-goldens/l2_features.snapshot`) does show it.
     #[serde(skip)]
     pub run_trigger: Option<bool>,
 }

@@ -22,17 +22,17 @@
 	"fixtureCount": 160,
 	"matrix": {
 		"routineCount": 595,
-		"routinesWithInheritedFacts": 139,
-		"factsWithMoreThan1HopWitness": 246,
+		"routinesWithInheritedFacts": 143,
+		"factsWithMoreThan1HopWitness": 252,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 23,
 		"provenanceDistribution": {
 			"direct": 595,
-			"inherited": 246
+			"inherited": 252
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 759,
+			"static": 765,
 			"unresolved": 81
 		},
 		"opDistribution": {
@@ -43,7 +43,7 @@
 			"insert": 78,
 			"modify": 109,
 			"publish": 95,
-			"read": 210,
+			"read": 216,
 			"send": 42,
 			"store-write": 1,
 			"subscribe": 122,
@@ -54,8 +54,9 @@
 			"write-blob": 2
 		},
 		"viaDistribution": {
-			"call": 192,
+			"call": 195,
 			"event-dispatch": 54,
+			"implicit-trigger": 3,
 			"self": 595
 		},
 		"directStatusDistribution": {
@@ -2635,24 +2636,24 @@
 			"goldenFile": "ws-implicit-trigger.r3a3.golden.json",
 			"matrix": {
 				"routineCount": 3,
-				"routinesWithInheritedFacts": 1,
-				"factsWithMoreThan1HopWitness": 1,
+				"routinesWithInheritedFacts": 2,
+				"factsWithMoreThan1HopWitness": 2,
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
-					"direct": 2,
-					"inherited": 1
+					"direct": 1,
+					"inherited": 2
 				},
 				"confidenceDistribution": {
 					"static": 3
 				},
 				"opDistribution": {
-					"modify": 2,
-					"read": 1
+					"read": 3
 				},
 				"viaDistribution": {
 					"call": 1,
-					"self": 2
+					"implicit-trigger": 1,
+					"self": 1
 				},
 				"directStatusDistribution": {
 					"complete": 3
@@ -2814,24 +2815,25 @@
 			"goldenFile": "ws-member-call-codeunit.r3a3.golden.json",
 			"matrix": {
 				"routineCount": 6,
-				"routinesWithInheritedFacts": 2,
-				"factsWithMoreThan1HopWitness": 4,
+				"routinesWithInheritedFacts": 4,
+				"factsWithMoreThan1HopWitness": 8,
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
 					"direct": 4,
-					"inherited": 4
+					"inherited": 8
 				},
 				"confidenceDistribution": {
-					"static": 8
+					"static": 12
 				},
 				"opDistribution": {
 					"commit": 3,
 					"insert": 4,
-					"read": 1
+					"read": 5
 				},
 				"viaDistribution": {
-					"call": 4,
+					"call": 6,
+					"implicit-trigger": 2,
 					"self": 4
 				},
 				"directStatusDistribution": {

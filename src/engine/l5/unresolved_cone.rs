@@ -264,29 +264,15 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
 }
 
 // ---------------------------------------------------------------------------
-// Edge accessors (replicate from digest.rs — no pub access there)
+// Edge accessors (the snapshot's public ones)
 // ---------------------------------------------------------------------------
 
 fn edge_from(e: &SnapshotGraphEdge) -> &str {
-    match e {
-        SnapshotGraphEdge::DirectCall { from, .. }
-        | SnapshotGraphEdge::VariableTypedCall { from, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { from, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { from, .. }
-        | SnapshotGraphEdge::ObjectRunUnresolved { from, .. }
-        | SnapshotGraphEdge::EventDispatch { from, .. } => from,
-    }
+    e.edge_from()
 }
 
 fn edge_to(e: &SnapshotGraphEdge) -> Option<&str> {
-    match e {
-        SnapshotGraphEdge::DirectCall { to, .. }
-        | SnapshotGraphEdge::VariableTypedCall { to, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { to, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { to, .. }
-        | SnapshotGraphEdge::EventDispatch { to, .. } => Some(to),
-        SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
-    }
+    e.edge_to()
 }
 
 #[cfg(test)]

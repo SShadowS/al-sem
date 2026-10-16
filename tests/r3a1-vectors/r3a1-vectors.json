@@ -144,6 +144,14 @@
             }
           },
           {
+            "kind": "implicit-trigger",
+            "from": "3a100000-0000-0000-0000-00000000003a:Codeunit:50104#ff8da84c77349428b25e1edab4d26ad266901e573b3ecb3b2812179e9f9bf083",
+            "to": "3a100000-0000-0000-0000-00000000003a:Table:50000#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",
+            "operationId": "3a100000-0000-0000-0000-00000000003a:Codeunit:50104#ff8da84c77349428b25e1edab4d26ad266901e573b3ecb3b2812179e9f9bf083/op0",
+            "triggerKind": "OnInsert",
+            "fires": "always"
+          },
+          {
             "kind": "event-dispatch",
             "from": "3a100000-0000-0000-0000-00000000003a:Codeunit:50102#fda4ceeed3bfa7f9c4c0acbdb6369db519c624846a22de694a874f1d3ded869d",
             "to": "3a100000-0000-0000-0000-00000000003a:Codeunit:50105#5d44286007386de3b2dc2d2a8b32b609e3ae99a7f46cd7600298d68d98b1a15e",
