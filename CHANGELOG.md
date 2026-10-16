@@ -75,13 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The cold dependency build (`build_dep_nodes`) lowers its peak memory (#84). Step 2b first
-  counts the nodes each SymbolOnly dependency will produce (`abi_ingest::abi_node_counts`,
-  which shares one ABI lookup, `load_abi`, with `ingest_abi`) and reserves the node lists once,
-  instead of growing them by doubling, then ingests app by app as before. Counting loads each
-  ABI through the `AbiCache`, so the ingest pass loads nothing again. `ingest_abi` sizes each
-  app's lists exactly, and the routine dedup works in place (`retain_mut`) with no second
-  list. The graph's contents and order do not change.
+- The cold dependency build (`build_dep_nodes`) lowers its peak memory (#84). Before step 2 it
+  counts the dependency layer's nodes once: the source summaries' objects, routines and routine
+  metadata (already in memory), plus the nodes each SymbolOnly dependency will produce
+  (`abi_ingest::abi_node_counts`, which shares one ABI lookup, `load_abi`, with `ingest_abi`).
+  It reserves the node lists once to those totals, instead of growing them by doubling, then
+  fills them in step 2 and step 2b as before. Counting loads each ABI through the `AbiCache`,
+  so the ingest pass loads nothing again. `ingest_abi` sizes each app's lists exactly. The
+  overload-preserving routine dedup works in place (`retain_mut`) with no second list, and
+  then trims the list's capacity to its pre-dedup length, as the old rebuild did. The graph's
+  contents and order do not change.
 - Every dependency moved to its newest release, and `Cargo.lock` is now committed so builds
   are reproducible. The trigger: on 2026-10-16 the `zip` maintainer yanked every release
   before 9.0.3 after three extraction advisories (GHSA-4v9h-p7m9-rh26, GHSA-vv5m-jxxh-4627,

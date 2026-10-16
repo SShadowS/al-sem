@@ -200,10 +200,29 @@ fn build_dep_nodes(
     // S10.2), so every later clone of a tier value shares it. `dep_meta`'s
     // entries are kept in parse order and become a column beside the sorted
     // rows below (S10.3), keeping the map's last-wins rule.
+    //
+    // Count first, then reserve once (issue #84): growing the lists by
+    // doubling, file by file in step 2 and app by app in step 2b, left the
+    // routine buffer at up to twice its content for the layer's lifetime,
+    // with the old and new blocks both live during each realloc. The totals
+    // are the source summaries' lengths (already in memory) plus the
+    // SymbolOnly ABIs' node counts. Counting loads each ABI through
+    // `abi_cache`, which keeps it, so step 2b's ingest hits the cache and
+    // loads nothing again.
+    let (abi_object_total, abi_routine_total) = snap
+        .apps
+        .iter()
+        .filter(|unit| unit.source.is_none())
+        .map(|unit| crate::program::abi_ingest::abi_node_counts(unit, abi_cache))
+        .fold((0, 0), |(o, r), (uo, ur)| (o + uo, r + ur));
+    let source_files = || summaries.iter().flat_map(|unit| &unit.files);
+    let object_total = abi_object_total + source_files().map(|f| f.objects.len()).sum::<usize>();
+    let routine_total = abi_routine_total + source_files().map(|f| f.routines.len()).sum::<usize>();
+    let meta_total = source_files().map(|f| f.routine_meta.len()).sum();
     let mut pool = StrPool::default();
-    let mut objects: Vec<ObjectNode> = Vec::new();
-    let mut routines: Vec<RoutineNode> = Vec::new();
-    let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::new();
+    let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_total);
+    let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_total);
+    let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::with_capacity(meta_total);
     let mut recovered: Vec<String> = Vec::new();
     for unit in summaries {
         for mut file in unit.files {
@@ -227,19 +246,7 @@ fn build_dep_nodes(
     recovered.sort();
 
     // ── Step 2b: ingest SymbolOnly dep ABI nodes ─────────────────────────────
-    // Count first, then reserve once (issue #84): growing the lists by
-    // doubling app by app left the routine buffer at up to twice its content,
-    // with the old and new blocks both live during each realloc. Counting
-    // loads each ABI through `abi_cache`, which keeps it, so the ingest loop
-    // below hits the cache and loads nothing again.
-    let (abi_object_total, abi_routine_total) = snap
-        .apps
-        .iter()
-        .filter(|unit| unit.source.is_none())
-        .map(|unit| crate::program::abi_ingest::abi_node_counts(unit, abi_cache))
-        .fold((0, 0), |(o, r), (uo, ur)| (o + uo, r + ur));
-    objects.reserve_exact(abi_object_total);
-    routines.reserve_exact(abi_routine_total);
+    // Fills the rest of the capacity reserved before step 2.
     let mut abi_ingest_errors: Vec<AbiIngestError> = Vec::new();
     for unit in &snap.apps {
         if unit.source.is_some() {
@@ -785,9 +792,13 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
     // Pass 2 runs in place (issue #84): a second, rebuilt list would hold a
     // copy of every survivor while the original buffer is still live.
     // `retain_mut` visits each entry exactly once, in order, and keeps the
-    // order of the survivors, so the n-th call takes the n-th verdict. The
-    // buffer keeps its capacity, as the rebuilt list's `with_capacity(len)`
-    // did.
+    // order of the survivors, so the n-th call takes the n-th verdict.
+    // `retain_mut` keeps whatever capacity came in, growth slack included;
+    // `shrink_to(pre_len)` afterwards trims it to the pre-dedup length,
+    // exactly the rebuilt list's `with_capacity(len)`. It does nothing when
+    // the list was reserved exactly (the dependency layer), and it trims the
+    // doubling slack of the workspace path's `extract_nodes`.
+    let pre_len = routines.len();
     assert_eq!(verdicts.len(), routines.len(), "one verdict per routine");
     assert_eq!(contexts.len(), routines.len(), "one context per routine");
     let mut decisions = verdicts.into_iter().zip(contexts);
@@ -819,6 +830,7 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         }
         true
     });
+    routines.shrink_to(pre_len);
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,24 +1998,28 @@ codeunit 50301 "Preproc Dup Sig"
         }
     }
 
-    /// D2: step 2b over seeded SymbolOnly units interleaved with unseeded,
-    /// failing ones. The layer's nodes, the ingest errors (in unit order),
-    /// the number of real loads, and the routine buffer's capacity are all
-    /// stated literally. The raw routine total (3 + 2 = 5) is off the
-    /// doubling path, so the capacity equals it only when step 2b reserved
-    /// the exact total once and the dedup kept that buffer in place.
+    /// D2: the up-front reservation over a source dependency (step 2) and
+    /// seeded SymbolOnly units interleaved with unseeded, failing ones
+    /// (step 2b). The layer's nodes, the ingest errors (in unit order), the
+    /// number of real loads, and both buffers' capacities are all stated
+    /// literally. The raw totals (objects 1 + 2 + 1 = 4, routines
+    /// 2 + 3 + 2 = 7) are off the doubling path. The object list's dedup
+    /// keeps its capacity, so the object capacity equals 4 only when one
+    /// reservation before step 2 counted both steps. The routine capacity
+    /// equals the pre-dedup length 7 (the dedup's `shrink_to`, see D4).
     #[test]
     fn dep_nodes_count_first_keeps_contents_errors_and_exact_capacity() {
         let app_id = |name: &str| AppId {
             guid: format!("guid-{name}"),
             ..layer_split_app_id(name)
         };
-        let (ws, s1, u1, s2, u2) = (
+        let (ws, s1, u1, s2, u2, src) = (
             app_id("Ws"),
             app_id("S1"),
             app_id("U1"),
             app_id("S2"),
             app_id("U2"),
+            app_id("Src"),
         );
         let cache = AbiCache::new();
         let seed = |id: &AppId, json: &str| {
@@ -2033,6 +2049,15 @@ codeunit 50301 "Preproc Dup Sig"
                 symbol_only_unit(&u1, Some("Z:/issue84/missing-u1.app")),
                 symbol_only_unit(&s2, None),
                 symbol_only_unit(&u2, Some("Z:/issue84/missing-u2.app")),
+                // A source dependency: its nodes come through step 2.
+                layer_split_source_unit(
+                    &src,
+                    TrustTier::EmbeddedSource,
+                    vec![(
+                        "Src.Codeunit.al",
+                        "codeunit 9 Src\n{\n    procedure X1()\n    begin\n    end;\n\n    procedure X2()\n    begin\n    end;\n}\n",
+                    )],
+                ),
             ],
             workspace_app: ws.clone(),
             world: World::Closed,
@@ -2050,6 +2075,7 @@ codeunit 50301 "Preproc Dup Sig"
                 dep_obj_id(AppRef(1), 1),
                 dep_obj_id(AppRef(1), 2),
                 dep_obj_id(AppRef(3), 5),
+                dep_obj_id(AppRef(5), 9),
             ]
         );
         assert_eq!(
@@ -2064,6 +2090,8 @@ codeunit 50301 "Preproc Dup Sig"
                 (dep_obj_id(AppRef(1), 2), "q".to_string()),
                 (dep_obj_id(AppRef(3), 5), "r1".to_string()),
                 (dep_obj_id(AppRef(3), 5), "r2".to_string()),
+                (dep_obj_id(AppRef(5), 9), "x1".to_string()),
+                (dep_obj_id(AppRef(5), 9), "x2".to_string()),
             ]
         );
         assert_eq!(
@@ -2082,12 +2110,46 @@ codeunit 50301 "Preproc Dup Sig"
             2,
             "each unseeded unit is loaded exactly once"
         );
-        // Relies on std's current exact `reserve_exact` (the docs promise
-        // only "at least" that capacity).
+        // Relies on std's current exact `with_capacity` and `shrink_to` (the
+        // docs promise only "at least" that capacity).
+        assert_eq!(
+            layer.dep_objects.capacity(),
+            4,
+            "one reservation before step 2 covers the source and ABI object totals"
+        );
         assert_eq!(
             layer.dep_routines.capacity(),
-            5,
-            "step 2b reserves the exact raw routine total, and the dedup keeps that buffer"
+            7,
+            "the routine list ends at its raw (pre-dedup) total, as master's rebuild did"
+        );
+    }
+
+    /// D4: the in-place dedup trims growth slack to the pre-dedup length,
+    /// the capacity master's `with_capacity(len)` rebuild had. The list is
+    /// hand-built with twice the room it needs (as `extract_nodes`'s
+    /// doubling leaves the workspace list) and carries one exact duplicate,
+    /// so the survivors (3) are fewer than the pre-dedup length (4).
+    #[test]
+    fn in_place_dedup_trims_slack_to_the_pre_dedup_length() {
+        let obj = dep_obj_id(AppRef(0), 1);
+        let n = 4;
+        let mut routines = Vec::with_capacity(2 * n);
+        routines.extend([
+            source_routine(&obj, "a", 1, "Integer", 10),
+            source_routine(&obj, "a", 1, "Integer", 10),
+            source_routine(&obj, "b", 0, "", 20),
+            source_routine(&obj, "c", 0, "", 30),
+        ]);
+        assert_eq!(routines.len(), n);
+        assert!(routines.capacity() >= 2 * n, "the fixture must carry slack");
+
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+
+        assert_eq!(routines.len(), 3, "the exact duplicate is dropped");
+        assert_eq!(
+            routines.capacity(),
+            n,
+            "the dedup trims to the pre-dedup length, not to the survivors or the slack"
         );
     }
 }
