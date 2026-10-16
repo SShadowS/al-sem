@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::SendAfterModify  [public-procedure]
+Codeunit D47 Sender::SendAfterModify  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-0000000d4701/table/50100"
   http:       "https://example.test/ping"

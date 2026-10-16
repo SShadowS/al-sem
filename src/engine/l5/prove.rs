@@ -23,6 +23,7 @@
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::AnalysisTarget;
+use crate::engine::l4::effect_query_cli::object_display_by_stable_routine_id;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
@@ -959,8 +960,8 @@ pub(crate) fn prove_pipeline_with(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
-        &changed_roots.spans,
-        &changed_roots.touched,
+        &changed_roots,
+        &object_display_by_stable_routine_id(&resolved),
     );
     // The bundle's only borrower is dead: release `l4` before the cone walk.
     drop(temp_states);

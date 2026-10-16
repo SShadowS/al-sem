@@ -82,7 +82,7 @@
         ],
         "routine": {
           "display": "ByParam",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit PT Writer",
           "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#0ac57cca433b45d89b3195745a0f2d12bd7417cb1b40f77024fe0a690e8df386"
         }
       },
@@ -184,7 +184,7 @@
         ],
         "routine": {
           "display": "TempOnly",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit PT Writer",
           "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
         }
       },
@@ -293,7 +293,7 @@
         ],
         "routine": {
           "display": "Mixed",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit PT Writer",
           "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
         }
       }

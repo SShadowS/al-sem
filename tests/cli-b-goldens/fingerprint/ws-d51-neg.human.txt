@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::GetThenError  [public-procedure]
+Codeunit D51 NegSender::GetThenError  [public-procedure]
   coverage:   complete
   http:       "https://api.example.test/orders"
   ui:         "<unknown>"

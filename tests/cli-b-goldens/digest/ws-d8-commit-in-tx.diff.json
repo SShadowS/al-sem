@@ -300,7 +300,7 @@
             "sourceKind": "source"
           },
           "display": "PostSalesDoc",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D8PostingChain",
           "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1"
         },
         "unresolved": [],

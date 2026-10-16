@@ -1,4 +1,4 @@
---- SendAfterModify ---
+--- Codeunit D47 Sender::SendAfterModify ---
   question: reaches-ui
   answer:   no
   obligations: all clear

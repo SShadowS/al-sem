@@ -69,7 +69,7 @@
         "sourceKind": "source"
       },
       "display": "CallerA",
-      "objectDisplay": "",
+      "objectDisplay": "Codeunit D1 Multi Caller",
       "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"

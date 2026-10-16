@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::effect_query_cli::temp_state_str;
+use crate::engine::l4::effect_query_cli::{object_display_by_stable_routine_id, temp_state_str};
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
@@ -617,14 +617,6 @@ pub struct DigestQueryFullResult {
     pub query_diagnostics: Vec<DigestQueryDiagnostic>,
 }
 
-fn split_object_routine(display: &str) -> (&str, &str) {
-    if let Some(idx) = display.rfind("::") {
-        (&display[..idx], &display[idx + 2..])
-    } else {
-        ("", display)
-    }
-}
-
 /// One `temp-state-incoherent` diagnostic per failed join, carrying the effect's
 /// `factId` and the failed operation (#69 D4).
 fn incoherence_diagnostics(
@@ -762,16 +754,19 @@ impl<'a> DbTempStates<'a> {
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
-/// produce DigestEntryFull for each root (order:false path).
+/// produce DigestEntryFull for each root (order:false path). `changed` supplies
+/// the declaration spans and the touched declarations (#71); `roots` may be a
+/// subset of `changed.roots` (prove passes one).
 pub fn run_digest_query_full_from_entries(
     snap: &CapabilitySnapshot,
     roots: &[String],
     base_entries: &[DigestEntryResult],
     tx_ctx_map: &HashMap<String, TransactionContext>,
     temp_states: &DbTempStates<'_>,
-    spans: &RoutineSpanIndex,
-    touched: &HashMap<String, BTreeSet<usize>>,
+    changed: &ChangedRootsResult,
+    object_display_by_id: &HashMap<String, String>,
 ) -> DigestQueryFullResult {
+    let (spans, touched) = (&changed.spans, &changed.touched);
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
 
     // Coverage map
@@ -812,6 +807,10 @@ pub fn run_digest_query_full_from_entries(
 
     let mut out: Vec<DigestEntryFull> = Vec::new();
 
+    // The owning object comes from the model index, never the identity table
+    // (#78); `""` when the id is absent, never an invented name.
+    let owner_of = |rid: &str| object_display_by_id.get(rid).cloned().unwrap_or_default();
+
     for rid in roots {
         // Routine anchor at the declaration (#71): the LAST touched declaration in
         // document order (a single-declaration id: that one). See the ledger's
@@ -837,7 +836,7 @@ pub fn run_digest_query_full_from_entries(
             out.push(DigestEntryFull {
                 routine_id: rid.clone(),
                 routine_display: display.clone(),
-                object_display: String::new(),
+                object_display: owner_of(rid),
                 routine_anchor,
                 routine_anchors,
                 coverage_status: "unknown".to_string(),
@@ -857,13 +856,12 @@ pub fn run_digest_query_full_from_entries(
 
         // Verify the routine exists in the snapshot. Missing display → emit
         // `root-not-in-snapshot` and skip (no entry). Mirrors digest-query.ts.
-        let Some(display_full) = display_by_id.get(rid.as_str()).copied() else {
+        let Some(rtn_display) = display_by_id.get(rid.as_str()).copied() else {
             query_diagnostics.push(DigestQueryDiagnostic::RootNotInSnapshot {
                 routine_id: rid.clone(),
             });
             continue;
         };
-        let (obj_display, rtn_display) = split_object_routine(display_full);
 
         // Coverage. Missing record → emit `no-coverage-record` but STILL build the
         // entry with status "unknown" (TS: covRec === undefined still produces an entry).
@@ -992,7 +990,7 @@ pub fn run_digest_query_full_from_entries(
         out.push(DigestEntryFull {
             routine_id: rid.clone(),
             routine_display: rtn_display.to_string(),
-            object_display: obj_display.to_string(),
+            object_display: owner_of(rid),
             routine_anchor,
             routine_anchors,
             coverage_status: cov_status.to_string(),
@@ -1665,8 +1663,8 @@ pub(crate) fn digest_pipeline_with(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
-        &changed_roots.spans,
-        &changed_roots.touched,
+        &changed_roots,
+        &object_display_by_stable_routine_id(resolved),
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;

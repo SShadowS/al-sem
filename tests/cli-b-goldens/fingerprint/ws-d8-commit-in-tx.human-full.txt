@@ -1,6 +1,6 @@
 Rendering 2 root classifications.
 
-::PostSalesDoc  [public-procedure]
+Codeunit D8PostingChain::PostSalesDoc  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d80a/table/50100"
   reads:      TableData "11111111-0000-0000-0000-00000000d80a/table/36"
@@ -58,7 +58,7 @@ Rendering 2 root classifications.
             → subscribe event
 
 
-::HandlePosted  [event-subscriber]
+Codeunit D8BadSubscriber::HandlePosted  [event-subscriber]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d80a/table/50100"
   commit:     yes

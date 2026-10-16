@@ -1,32 +1,32 @@
---- TransitiveCommit ---
+--- Codeunit D34 Demo::TransitiveCommit ---
   coverage: complete
   [COMMIT] transitive
     evidence: ws:src/Codeunit.al:47 "commit"
     via: 1 path(s)
 
---- DirectCommitInLoop ---
+--- Codeunit D34 Demo::DirectCommitInLoop ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:9 "commit"
     via: 1 path(s)
 
---- Persist ---
+--- Codeunit D34 Demo::Persist ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:47 "commit"
     via: 1 path(s)
 
---- DoWork ---
+--- Codeunit D34 Demo::DoWork ---
   coverage: complete
   (no effects)
 
---- NestedCommit ---
+--- Codeunit D34 Demo::NestedCommit ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:21 "commit"
     via: 1 path(s)
 
---- CommitAfterLoop ---
+--- Codeunit D34 Demo::CommitAfterLoop ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Codeunit.al:40 "commit"

@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::PostThenError  [public-procedure]
+Codeunit D51 Sender::PostThenError  [public-procedure]
   coverage:   complete
   http:       "https://api.example.test/orders"
   ui:         "<unknown>"

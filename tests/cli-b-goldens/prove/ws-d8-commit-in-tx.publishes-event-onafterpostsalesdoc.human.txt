@@ -1,4 +1,4 @@
---- PostSalesDoc ---
+--- Codeunit D8PostingChain::PostSalesDoc ---
   question: publishes-event:onafterpostsalesdoc
   answer:   yes
   evidence: 1 effect(s)

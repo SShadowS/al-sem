@@ -1,4 +1,4 @@
---- ModifyThenMessage ---
+--- Codeunit D49 Sender::ModifyThenMessage ---
   coverage: complete
   [DB_MODIFY] direct
     evidence: ws:src/Sender.Codeunit.al:13 "Rec.Modify"

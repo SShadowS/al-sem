@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::PostThenError  [job-queue-entrypoint, public-procedure] [config-asserted]
+Codeunit D51 Sender::PostThenError  [job-queue-entrypoint, public-procedure] [config-asserted]
   coverage:   complete
   http:       "https://api.example.test/orders"
   ui:         "<unknown>"
