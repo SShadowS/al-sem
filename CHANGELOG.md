@@ -265,10 +265,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name, and a tableextension stub can overwrite the name of the real table with its own number.
   An Interface or ControlAddIn method takes its owner from its own declaring object. The routine
   display is now the snapshot name unchanged, so a name that contains `::` is no longer cut.
-  Inherited limit:
-  two model objects with the same internal id (for example `#if`/`#else` declarations of one
-  type and number under different names) show one surviving name, as `query effects` already
-  does.
+  Inherited limit: two model objects with the same internal id (for example `#if`/`#else`
+  declarations of one type and number under different names) show one surviving name, as
+  `query effects` already does.
 - `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
   `could not compute modelInstanceId`), as every gate-backed command does for that case; before,
   it exported the graph with an empty app id and exited 0 (#73). A missing or unparseable

@@ -363,5 +363,8 @@ fn human_headers_name_the_owning_object() {
         "human",
     ]);
     assert_eq!(code, 0, "{prove}");
-    assert!(prove.contains(&header), "{prove}");
+    assert!(
+        prove.lines().any(|l| l == format!("--- {header} ---")),
+        "{prove}"
+    );
 }
