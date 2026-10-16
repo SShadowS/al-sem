@@ -1896,6 +1896,9 @@ mod tests {
 
     const APP_JSON: &str = r#"{"id":"b3b3b3b3-0000-0000-0000-000000000001","name":"B3 Census","publisher":"T","version":"1.0.0.0"}"#;
 
+    /// Where `model_text` puts `dependency_diagnostics`.
+    const DEPENDENCY_DIAGNOSTICS_AT: usize = 3;
+
     /// Everything a consumer reads from a model, as `Debug` text, minus
     /// `primary_app` (its name/publisher/version come from `app.json`, which the
     /// inline builder writes itself; the guid is compared).
@@ -1904,6 +1907,7 @@ mod tests {
             format!("{:?}", m.primary_app.as_ref().map(|a| &a.app_guid)),
             format!("{:?}", m.root_classifications),
             format!("{:?}", m.infra_diagnostics),
+            format!("{:?}", m.dependency_diagnostics),
             format!("{:?}", m.events),
         ];
         out.extend(m.workspace.objects.iter().map(|o| format!("{o:?}")));
@@ -1945,7 +1949,24 @@ mod tests {
             let guid = guid["id"].as_str().unwrap();
             let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
-            assert_eq!(model_text(&inline), model_text(&disk), "{}", ws.display());
+            let mut disk_text = model_text(&disk);
+            let inline_text = model_text(&inline);
+            // The inline builder writes an app.json with no dependencies, so it
+            // has no dependency ledger to warn about. A fixture that declares
+            // dependencies (or a platform/application, which add implicit ones)
+            // gets "is missing" warnings on disk, as none has a package here.
+            // Check that, then compare the field as the inline model has it.
+            assert_eq!(inline.dependency_diagnostics, [], "{}", ws.display());
+            let disk_deps = &disk.dependency_diagnostics;
+            assert!(
+                disk_deps.iter().all(|d| d.severity == "warning"
+                    && d.stage == "dependencies"
+                    && d.message.ends_with("is missing")),
+                "{}: {disk_deps:?}",
+                ws.display()
+            );
+            disk_text[DEPENDENCY_DIAGNOSTICS_AT] = inline_text[DEPENDENCY_DIAGNOSTICS_AT].clone();
+            assert_eq!(inline_text, disk_text, "{}", ws.display());
             compared += 1;
         }
         assert!(compared >= 20, "only {compared} fixtures compared");

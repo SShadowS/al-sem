@@ -15,10 +15,14 @@
 //! `fingerprint` and `prove` are single-app (vs `analyze --single-app`); `digest`,
 //! `events` and `policy` default to cross-app (vs plain `analyze`).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
+
+use crate::copy_dir;
 
 struct Fixture {
     corpus_dir: &'static str,
@@ -45,19 +49,6 @@ const MISSING: Fixture = Fixture {
 };
 
 const FIXTURES: [&Fixture; 2] = [&OLDER, &MISSING];
-
-fn copy_dir(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("mkdir");
-    for entry in std::fs::read_dir(src).expect("read_dir") {
-        let entry = entry.expect("dir entry");
-        let to = dst.join(entry.file_name());
-        if entry.file_type().expect("file type").is_dir() {
-            copy_dir(&entry.path(), &to);
-        } else {
-            std::fs::copy(entry.path(), &to).expect("copy");
-        }
-    }
-}
 
 /// The fixture copied into a tempdir. For (a) the `CodeunitRecLibA` dependency
 /// is set to exactly `2.0.0.0`.
@@ -139,6 +130,21 @@ fn analyze_messages(ws: &Path, single_app: bool) -> Vec<String> {
     json_dependency_messages(&alsem(ws, &args), "analyze")
 }
 
+/// `analyze_messages` once per (fixture, mode), shared by every row of that
+/// fixture/mode (the fixture content is the same in every tempdir copy).
+fn analyze_messages_cached(f: &Fixture, ws: &Path, single_app: bool) -> Vec<String> {
+    type Cache = Mutex<HashMap<(&'static str, bool), Vec<String>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .entry((f.corpus_dir, single_app))
+        .or_insert_with(|| analyze_messages(ws, single_app))
+        .clone()
+}
+
 /// The exact-message check, then equality with analyze in the same mode.
 fn assert_row(f: &Fixture, ws: &Path, what: &str, got: &[String], single_app: bool) {
     assert!(
@@ -149,7 +155,7 @@ fn assert_row(f: &Fixture, ws: &Path, what: &str, got: &[String], single_app: bo
     );
     assert_eq!(
         got,
-        analyze_messages(ws, single_app).as_slice(),
+        analyze_messages_cached(f, ws, single_app).as_slice(),
         "{what} on {}: dependency messages differ from analyze's (single_app={single_app})",
         f.corpus_dir
     );

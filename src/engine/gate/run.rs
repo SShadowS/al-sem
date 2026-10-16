@@ -1014,8 +1014,11 @@ fn range_extent_cmp(
 /// `--single-app` modes of events, policy and digest) pass a program-backed
 /// single-app model
 /// (`program_calls::assemble_and_resolve_workspace_program`), the kind
-/// `run_analyze` builds for `--single-app`, so every source agrees with
-/// `alsem analyze --single-app`'s. They
+/// `run_analyze` builds for `--single-app`. The workspace (1), dependency (2)
+/// and overlay (5) sources therefore agree with `alsem analyze --single-app`
+/// whatever detectors it runs; the detect (6) and summarize (3) sources agree
+/// only with an analyze run of the default detector set, since this function
+/// always runs the default set. They
 /// need not agree with plain `alsem analyze`, which is cross-app by default;
 /// the cross-app twin is [`compute_analyzer_diagnostics_cross_app`].
 ///

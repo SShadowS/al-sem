@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::copy_dir;
 use al_sem::engine::gate::diff::CoveragePolicy;
 use al_sem::engine::gate::diff::cli::{DiffCliOptions, WORKSPACE_MODE_NOTE, run_diff};
 
@@ -34,19 +35,6 @@ fn fixture_side(side: &str) -> PathBuf {
 
 fn diff_goldens_dir() -> PathBuf {
     repo_root().join("tests").join("cli-b-goldens").join("diff")
-}
-
-fn copy_dir(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("mkdir");
-    for entry in std::fs::read_dir(src).expect("read_dir") {
-        let entry = entry.expect("dir entry");
-        let to = dst.join(entry.file_name());
-        if entry.file_type().expect("file type").is_dir() {
-            copy_dir(&entry.path(), &to);
-        } else {
-            std::fs::copy(entry.path(), &to).expect("copy");
-        }
-    }
 }
 
 /// A clean workspace under `root/name`.

@@ -30,6 +30,20 @@ pub fn env_guard() -> MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Copy a directory tree (creating `dst`), for tests that edit a tempdir copy of a fixture.
+pub(crate) fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("mkdir");
+    for entry in std::fs::read_dir(src).expect("read_dir") {
+        let entry = entry.expect("dir entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy");
+        }
+    }
+}
+
 mod al2dump_smoke;
 mod aldump_smoke;
 mod cli_a_html_differential;

@@ -329,7 +329,7 @@ pub struct RunOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub detector_stats: Vec<DetectorStats>,
     /// The L4 "summarizeDiagnostics" source (TS-order slot 3 — see
-    /// `gate/run.rs`'s `compute_analyzer_diagnostics` doc) — presently just the
+    /// `gate/run.rs`'s `analyzer_diagnostics_of_run` doc) — presently just the
     /// JACOBI fixed-point cap-hit. Kept SEPARATE from `diagnostics` (the
     /// detect-stage source, slot 6) so the gate boundary can place each in its
     /// documented TS-concat position rather than collapsing both into "detect".

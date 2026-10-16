@@ -260,8 +260,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Before, only `analyze` showed them, so the other commands gave a
   smaller diagnostics list for the same workspace. They appear in each command's usual place
   (the JSON envelope's `diagnostics`, or `warning: …` lines on stderr), after the workspace
-  diagnostics. All commands now build their diagnostics through one shared function, so
-  `analyze`'s output is unchanged.
+  diagnostics. All commands that build a model now build their diagnostics through one shared
+  function, so `analyze`'s output is unchanged. `analyze`'s empty-output path (no model is
+  built) still reports only the workspace diagnostics, as before.
 - `alsem diff --strict` now does what its help says in workspace mode: when either workspace
   side has an error-severity analyzer diagnostic, it prints both sides' diagnostics to stderr
   (`<severity>: <message>`, old side first; one list when both arguments are the same
