@@ -227,6 +227,19 @@ fn build_dep_nodes(
     recovered.sort();
 
     // ── Step 2b: ingest SymbolOnly dep ABI nodes ─────────────────────────────
+    // Count first, then reserve once (issue #84): growing the lists by
+    // doubling app by app left the routine buffer at up to twice its content,
+    // with the old and new blocks both live during each realloc. Counting
+    // loads each ABI through `abi_cache`, which keeps it, so the ingest loop
+    // below hits the cache and loads nothing again.
+    let (abi_object_total, abi_routine_total) = snap
+        .apps
+        .iter()
+        .filter(|unit| unit.source.is_none())
+        .map(|unit| crate::program::abi_ingest::abi_node_counts(unit, abi_cache))
+        .fold((0, 0), |(o, r), (uo, ur)| (o + uo, r + ur));
+    objects.reserve_exact(abi_object_total);
+    routines.reserve_exact(abi_routine_total);
     let mut abi_ingest_errors: Vec<AbiIngestError> = Vec::new();
     for unit in &snap.apps {
         if unit.source.is_some() {
@@ -708,7 +721,8 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// collapses on.
 fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) {
     // Pass 1 decides, per entry, whether it survives and how it is marked
-    // (borrowing); pass 2 MOVES the survivors out, so nothing is cloned.
+    // (borrowing); pass 2 applies the verdicts in place, so nothing is
+    // cloned or copied into a second list.
     #[derive(Clone, Copy)]
     enum Verdict {
         Drop,
@@ -768,13 +782,24 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         }
         i = j;
     }
-    let mut out: Vec<RoutineNode> = Vec::with_capacity(routines.len());
-    for ((mut survivor, verdict), context) in routines.drain(..).zip(verdicts).zip(contexts) {
+    // Pass 2 runs in place (issue #84): a second, rebuilt list would hold a
+    // copy of every survivor while the original buffer is still live.
+    // `retain_mut` visits each entry exactly once, in order, and keeps the
+    // order of the survivors, so the n-th call takes the n-th verdict. The
+    // buffer keeps its capacity, as the rebuilt list's `with_capacity(len)`
+    // did.
+    assert_eq!(verdicts.len(), routines.len(), "one verdict per routine");
+    assert_eq!(contexts.len(), routines.len(), "one context per routine");
+    let mut decisions = verdicts.into_iter().zip(contexts);
+    routines.retain_mut(|survivor| {
+        let (verdict, context) = decisions
+            .next()
+            .expect("retain_mut visits each routine exactly once");
         if let Some(context) = context {
             survivor.preproc_context = context;
         }
         match verdict {
-            Verdict::Drop => continue,
+            Verdict::Drop => return false,
             Verdict::Keep => {}
             Verdict::KeepCollapsed => {
                 survivor.abi_overload_collapsed = true;
@@ -792,9 +817,8 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
             }
             Verdict::KeepAliased => survivor.source_overload_aliased = true,
         }
-        out.push(survivor);
-    }
-    *routines = out;
+        true
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1786,5 +1810,284 @@ codeunit 50301 "Preproc Dup Sig"
         let graph = build_program_graph_from_parsed(&snap, &cache, &parsed);
         let primary = graph.apps.find(&ws).unwrap();
         assert_eq!(dep_meta, old_frozen_tier(&graph, &parsed, primary));
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #84: in-place dedup (D1) and the count-first step 2b (D2).
+    // -----------------------------------------------------------------------
+
+    /// D1: the in-place dedup keeps the same survivors, in the same order,
+    /// with the same marks and build context as the drain-and-rebuild it
+    /// replaced. The list is hand-built and already sorted: each run of
+    /// exact duplicates (`Drop`) sits directly before a collapsed run and
+    /// before an aliased run, so a verdict iterator that fails to advance on
+    /// every element misaligns every later survivor.
+    #[test]
+    fn in_place_dedup_keeps_order_marks_and_context_intersection() {
+        let obj = dep_obj_id(AppRef(0), 1);
+        let ctx = |entries: &[(&str, bool)]| -> Box<[(String, bool)]> {
+            entries.iter().map(|(s, b)| (s.to_string(), *b)).collect()
+        };
+        let with = |mut r: RoutineNode, ret: &str, context: Box<[(String, bool)]>| {
+            r.return_type = Some(ret.into());
+            r.preproc_context = context;
+            r
+        };
+        let mut abi_b1 = abi_routine(&obj, "b", 1, 20);
+        abi_b1.abi_params = AbiParams::Complete(vec![]);
+        let mut routines = vec![
+            // Run "a": exact source duplicates whose build contexts differ.
+            with(
+                source_routine(&obj, "a", 1, "Integer", 10),
+                "A1",
+                ctx(&[("CLEAN", true), ("X", true)]),
+            ),
+            with(
+                source_routine(&obj, "a", 1, "Integer", 10),
+                "A2",
+                ctx(&[("CLEAN", true)]),
+            ),
+            // Run "b": two raw SymbolOnly entries sharing one id (collapse).
+            with(abi_b1, "B1", ctx(&[])),
+            with(abi_routine(&obj, "b", 1, 20), "B2", ctx(&[])),
+            // Run "c": exact source duplicates with one context.
+            with(
+                source_routine(&obj, "c", 1, "Text", 30),
+                "C1",
+                ctx(&[("Z", true)]),
+            ),
+            with(
+                source_routine(&obj, "c", 1, "Text", 30),
+                "C2",
+                ctx(&[("Z", true)]),
+            ),
+            // Run "d": source aliases, one id, two distinct keys.
+            with(source_routine(&obj, "d", 1, "Integer", 40), "D1", ctx(&[])),
+            with(source_routine(&obj, "d", 1, "Text", 40), "D2", ctx(&[])),
+            // Run "e": a plain single.
+            with(source_routine(&obj, "e", 0, "", 50), "E", ctx(&[])),
+        ];
+        assert!(
+            routines.is_sorted_by(|a, b| a.id <= b.id),
+            "the fixture must already be sorted, as step 4 leaves it"
+        );
+
+        let buffer_before = routines.as_ptr();
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(
+            routines.as_ptr(),
+            buffer_before,
+            "the dedup must reuse the buffer (in place), not build a second list"
+        );
+
+        let projection: Vec<_> = routines
+            .iter()
+            .map(|r| {
+                (
+                    r.id.name_lc.to_string(),
+                    r.id.sig_fp,
+                    r.param_sig_key.to_string(),
+                    r.return_type.as_ref().map(|s| s.to_string()),
+                    r.preproc_context.to_vec(),
+                    r.abi_overload_collapsed,
+                    r.source_overload_aliased,
+                    match r.abi_params {
+                        AbiParams::Complete(_) => "Complete",
+                        AbiParams::Missing => "Missing",
+                        AbiParams::CollapsedUntrusted => "CollapsedUntrusted",
+                    },
+                )
+            })
+            .collect();
+        let s = |v: &str| v.to_string();
+        assert_eq!(
+            projection,
+            vec![
+                (
+                    s("a"),
+                    10,
+                    s("Integer"),
+                    Some(s("A1")),
+                    vec![(s("CLEAN"), true)],
+                    false,
+                    false,
+                    "Missing"
+                ),
+                (
+                    s("b"),
+                    20,
+                    s(""),
+                    Some(s("B1")),
+                    vec![],
+                    true,
+                    false,
+                    "CollapsedUntrusted"
+                ),
+                (
+                    s("c"),
+                    30,
+                    s("Text"),
+                    Some(s("C1")),
+                    vec![(s("Z"), true)],
+                    false,
+                    false,
+                    "Missing"
+                ),
+                (
+                    s("d"),
+                    40,
+                    s("Integer"),
+                    Some(s("D1")),
+                    vec![],
+                    false,
+                    true,
+                    "Missing"
+                ),
+                (
+                    s("d"),
+                    40,
+                    s("Text"),
+                    Some(s("D2")),
+                    vec![],
+                    false,
+                    true,
+                    "Missing"
+                ),
+                (
+                    s("e"),
+                    50,
+                    s(""),
+                    Some(s("E")),
+                    vec![],
+                    false,
+                    false,
+                    "Missing"
+                ),
+            ]
+        );
+    }
+
+    /// A SymbolOnly dependency unit (no source) with an optional `.app` path.
+    fn symbol_only_unit(id: &AppId, app_path: Option<&str>) -> AppUnit {
+        AppUnit {
+            id: id.clone(),
+            provenance: Provenance {
+                app: id.clone(),
+                tier: TrustTier::SymbolOnly,
+                content_hash: String::new(),
+            },
+            source: None,
+            compilation: CompilationContext::default(),
+            declared_deps: vec![],
+            internals_visible_to: vec![],
+            abi: None,
+            app_path: app_path.map(std::path::PathBuf::from),
+            app_stamp: None,
+        }
+    }
+
+    /// D2: step 2b over seeded SymbolOnly units interleaved with unseeded,
+    /// failing ones. The layer's nodes, the ingest errors (in unit order),
+    /// the number of real loads, and the routine buffer's capacity are all
+    /// stated literally. The raw routine total (3 + 2 = 5) is off the
+    /// doubling path, so the capacity equals it only when step 2b reserved
+    /// the exact total once and the dedup kept that buffer in place.
+    #[test]
+    fn dep_nodes_count_first_keeps_contents_errors_and_exact_capacity() {
+        let app_id = |name: &str| AppId {
+            guid: format!("guid-{name}"),
+            ..layer_split_app_id(name)
+        };
+        let (ws, s1, u1, s2, u2) = (
+            app_id("Ws"),
+            app_id("S1"),
+            app_id("U1"),
+            app_id("S2"),
+            app_id("U2"),
+        );
+        let cache = AbiCache::new();
+        let seed = |id: &AppId, json: &str| {
+            let abi = crate::engine::deps::symbol_reference::parse_symbol_reference(json);
+            assert!(abi.error.is_none(), "{:?}", abi.error);
+            cache.seed(
+                &id.guid,
+                &id.name,
+                &id.publisher,
+                &id.version,
+                Arc::new(abi),
+            );
+        };
+        // S1: 3 routines over 2 objects; S2: 2 routines on 1 object.
+        seed(
+            &s1,
+            r#"{"Codeunits":[{"Id":1,"Name":"A","Methods":[{"Name":"P1","Parameters":[]},{"Name":"P2","Parameters":[]}]},{"Id":2,"Name":"B","Methods":[{"Name":"Q","Parameters":[]}]}]}"#,
+        );
+        seed(
+            &s2,
+            r#"{"Codeunits":[{"Id":5,"Name":"C","Methods":[{"Name":"R1","Parameters":[]},{"Name":"R2","Parameters":[]}]}]}"#,
+        );
+        let snap = AppSetSnapshot {
+            apps: vec![
+                layer_split_source_unit(&ws, TrustTier::Workspace, vec![]),
+                symbol_only_unit(&s1, None),
+                symbol_only_unit(&u1, Some("Z:/issue84/missing-u1.app")),
+                symbol_only_unit(&s2, None),
+                symbol_only_unit(&u2, Some("Z:/issue84/missing-u2.app")),
+            ],
+            workspace_app: ws.clone(),
+            world: World::Closed,
+        };
+
+        let layer = build_dep_layer(&snap, &cache, &parse_snapshot(&snap));
+
+        assert_eq!(
+            layer
+                .dep_objects
+                .iter()
+                .map(|o| o.id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                dep_obj_id(AppRef(1), 1),
+                dep_obj_id(AppRef(1), 2),
+                dep_obj_id(AppRef(3), 5),
+            ]
+        );
+        assert_eq!(
+            layer
+                .dep_routines
+                .iter()
+                .map(|r| (r.id.object.clone(), r.id.name_lc.to_string()))
+                .collect::<Vec<_>>(),
+            vec![
+                (dep_obj_id(AppRef(1), 1), "p1".to_string()),
+                (dep_obj_id(AppRef(1), 1), "p2".to_string()),
+                (dep_obj_id(AppRef(1), 2), "q".to_string()),
+                (dep_obj_id(AppRef(3), 5), "r1".to_string()),
+                (dep_obj_id(AppRef(3), 5), "r2".to_string()),
+            ]
+        );
+        assert_eq!(
+            layer
+                .abi_ingest_errors
+                .iter()
+                .map(|e| (e.app, e.message.split(".app:").next().unwrap()))
+                .collect::<Vec<_>>(),
+            vec![
+                (AppRef(2), "failed to read Z:/issue84/missing-u1"),
+                (AppRef(4), "failed to read Z:/issue84/missing-u2"),
+            ]
+        );
+        assert_eq!(
+            cache.parse_count.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "each unseeded unit is loaded exactly once"
+        );
+        // Relies on std's current exact `reserve_exact` (the docs promise
+        // only "at least" that capacity).
+        assert_eq!(
+            layer.dep_routines.capacity(),
+            5,
+            "step 2b reserves the exact raw routine total, and the dedup keeps that buffer"
+        );
     }
 }
