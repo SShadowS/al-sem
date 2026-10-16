@@ -97,7 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - The App Insights exporter is built through `SdkTracerProvider`; `service.name` on the
       resource keeps the `cloud_RoleName`.
     - Benches use `std::hint::black_box`.
-  - TLS: `reqwest` 0.13's rustls uses `aws-lc-rs` instead of `ring`.
+  - TLS stays on rustls with `ring`. reqwest 0.13's `rustls` feature defaults to
+    `aws-lc-rs`, whose C binds `strtol` to glibc 2.38's `__isoc23_strtol`, and the Linux
+    release binary then failed the glibc 2.34 floor. reqwest is built `rustls-no-provider`,
+    and the exporter installs the `ring` provider.
 - `prove`, `fingerprint` and `diff` stay single-app (#70). Their output is a capability
   snapshot, and the cross-app snapshot does not yet follow calls made inside dependency
   code: on a workspace routine that calls a dependency routine which calls another that

@@ -141,7 +141,13 @@ tokio = { version = "1", features = ["rt", "macros", "time", "sync"], optional =
 tracing = { version = "0.1", optional = true }
 tracing-opentelemetry = { version = "0.34", optional = true }
 lru = { version = "0.18", optional = true }
-reqwest = { version = "0.13", features = ["blocking", "rustls"], default-features = false, optional = true }
+# TLS through rustls on `ring`, as reqwest 0.12 had it. reqwest 0.13's `rustls`
+# feature brings `aws-lc-rs`, whose C is built with `_GNU_SOURCE` and binds
+# `strtol` to glibc 2.38's `__isoc23_strtol`: the Linux release binary then
+# fails the glibc 2.34 floor in build-and-deploy.yml. `rustls-no-provider` +
+# `rustls/ring` keeps the C-free crypto; the exporter installs the provider.
+reqwest = { version = "0.13", features = ["blocking", "rustls-no-provider"], default-features = false, optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
 
 [features]
 default = ["telemetry"]
@@ -155,6 +161,7 @@ telemetry = [
     "dep:tracing-opentelemetry",
     "dep:lru",
     "dep:reqwest",
+    "dep:rustls",
 ]
 # Exposes a counters-only runtime installer for integration tests so they can
 # assert on `record_*` calls without spinning up the real exporter. Implies

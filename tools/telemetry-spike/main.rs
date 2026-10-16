@@ -29,6 +29,8 @@ mod spike {
     use std::time::Duration;
 
     pub fn run(connection_string: &str) {
+        // reqwest is built `rustls-no-provider`; see the exporter.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http_client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))

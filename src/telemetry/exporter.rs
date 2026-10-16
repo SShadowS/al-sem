@@ -51,6 +51,19 @@ pub fn spawn(
         .expect("spawn telemetry thread")
 }
 
+/// The exporter's HTTP client. reqwest is built `rustls-no-provider` (see
+/// Cargo.toml), so `ring` is installed as the process crypto provider before the
+/// first client; `Err` means another provider is already installed, which serves
+/// as well.
+fn http_client() -> reqwest::blocking::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+}
+
 async fn run(
     config: ExporterConfig,
     mut rx: Receiver<EventEnvelope>,
@@ -60,11 +73,7 @@ async fn run(
     let _ = config.flush_interval; // Reserved for batch-mode upgrade later.
     let _ = config.batch_size;
 
-    let http_client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    let http_client = http_client();
 
     let exporter =
         match Exporter::new_from_connection_string(config.connection_string.clone(), http_client) {
@@ -212,5 +221,14 @@ mod tests {
             summary.observed_by_kind[crate::telemetry::events::LeafKind::ParserTreeError.index()],
             1
         );
+    }
+
+    /// The TLS client builds on the `ring` provider. Without the provider install,
+    /// reqwest's `rustls-no-provider` client cannot build and `Client::new()`
+    /// panics. Mutation: drop the `install_default()` line -> this test panics.
+    #[test]
+    fn http_client_builds_on_ring() {
+        let _client = http_client();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 }
