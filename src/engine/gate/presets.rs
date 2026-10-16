@@ -77,6 +77,8 @@ pub fn select_detectors(names: &[String]) -> Result<Vec<Detector>, String> {
                 name: d.name.clone(),
                 run: d.run,
                 requires: d.requires,
+                rule_name: d.rule_name,
+                short_description: d.short_description,
             }),
             None => return Err(format!("Unknown detector: {name}")),
         }
@@ -183,6 +185,21 @@ mod tests {
                 "resolve_preset({preset}) != PRESETS entry"
             );
         }
+    }
+
+    /// Issue #87 (T4): `--detector`/`--preset` rebuild each selected registry
+    /// entry, so the SARIF metadata must be copied from it, not defaulted.
+    #[test]
+    fn select_detectors_keeps_sarif_metadata() {
+        let selected = select_detectors(&["d19-unused-parameter".into()]).unwrap();
+        let registry = registered_detectors();
+        let entry = registry
+            .iter()
+            .find(|d| d.name == "d19-unused-parameter")
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].rule_name, entry.rule_name);
+        assert_eq!(selected[0].short_description, entry.short_description);
     }
 
     #[test]

@@ -115,6 +115,146 @@
               }
             },
             {
+              "id": "d18-constant-filter-in-loop",
+              "name": "ConstantFilterInLoop",
+              "shortDescription": {
+                "text": "Constant SetRange/SetFilter inside a loop"
+              }
+            },
+            {
+              "id": "d19-unused-parameter",
+              "name": "UnusedParameter",
+              "shortDescription": {
+                "text": "Procedure parameter never used in the body"
+              }
+            },
+            {
+              "id": "d20-unreachable-after-exit",
+              "name": "UnreachableAfterExit",
+              "shortDescription": {
+                "text": "Statement after an unconditional exit is unreachable"
+              }
+            },
+            {
+              "id": "d21-read-without-load",
+              "name": "ReadWithoutLoad",
+              "shortDescription": {
+                "text": "Read on a record variable that was never loaded"
+              }
+            },
+            {
+              "id": "d22-flowfield-without-calcfields",
+              "name": "FlowFieldWithoutCalcFields",
+              "shortDescription": {
+                "text": "FlowField read without prior CalcFields"
+              }
+            },
+            {
+              "id": "d29-subscriber-modify-on-event-record",
+              "name": "SubscriberModifyOnEventRecord",
+              "shortDescription": {
+                "text": "Subscriber modifies the event record, re-firing the same event"
+              }
+            },
+            {
+              "id": "d32-constant-boolean-parameter",
+              "name": "ConstantBooleanParameter",
+              "shortDescription": {
+                "text": "Boolean parameter passed the same literal at every call site"
+              }
+            },
+            {
+              "id": "d33-unfiltered-bulk-write",
+              "name": "UnfilteredBulkWrite",
+              "shortDescription": {
+                "text": "DeleteAll/ModifyAll without a narrowing filter"
+              }
+            },
+            {
+              "id": "d34-commit-in-loop",
+              "name": "CommitInLoop",
+              "shortDescription": {
+                "text": "Commit inside a loop"
+              }
+            },
+            {
+              "id": "d35-commit-in-event-subscriber",
+              "name": "CommitInEventSubscriber",
+              "shortDescription": {
+                "text": "Commit reachable from an event subscriber"
+              }
+            },
+            {
+              "id": "d36-late-setloadfields",
+              "name": "LateSetLoadFields",
+              "shortDescription": {
+                "text": "SetLoadFields placed after the record is loaded"
+              }
+            },
+            {
+              "id": "d37-validate-without-persist",
+              "name": "ValidateWithoutPersist",
+              "shortDescription": {
+                "text": "Validate with no later Modify or Insert to persist it"
+              }
+            },
+            {
+              "id": "d38-subscriber-to-obsolete-event",
+              "name": "SubscriberToObsoleteEvent",
+              "shortDescription": {
+                "text": "Event subscriber bound to an obsolete publisher"
+              }
+            },
+            {
+              "id": "d39-record-left-dirty-across-chain",
+              "name": "RecordLeftDirtyAcrossChain",
+              "shortDescription": {
+                "text": "Record changed by a helper is never persisted by the caller"
+              }
+            },
+            {
+              "id": "d40-transitive-load-missing",
+              "name": "TransitiveLoadMissing",
+              "shortDescription": {
+                "text": "Record passed unloaded to a callee that needs it loaded"
+              }
+            },
+            {
+              "id": "d41-transitive-filter-loss",
+              "name": "TransitiveFilterLoss",
+              "shortDescription": {
+                "text": "Callee resets filters the caller still relies on"
+              }
+            },
+            {
+              "id": "d42-cross-call-wrong-setloadfields",
+              "name": "CrossCallWrongSetLoadFields",
+              "shortDescription": {
+                "text": "Caller's SetLoadFields omits fields the callee needs"
+              }
+            },
+            {
+              "id": "d43-event-ishandled-skip",
+              "name": "EventIsHandledSkip",
+              "shortDescription": {
+                "text": "IsHandled subscriber skips the publisher's default write"
+              }
+            },
+            {
+              "id": "d44-event-multi-subscriber-overlap",
+              "name": "EventMultiSubscriberOverlap",
+              "shortDescription": {
+                "text": "Several subscribers of one event touch the same table"
+              }
+            },
+            {
+              "id": "d45-event-transitive-table-exposure",
+              "name": "EventTransitiveTableExposure",
+              "shortDescription": {
+                "text": "Tables written by an event's transitive subscriber chain"
+              }
+            },
+            {
               "id": "d46-commit-in-lifecycle",
               "name": "CommitInLifecycle",
               "shortDescription": {
@@ -154,6 +294,97 @@
               "name": "RetrySideEffectDuplication",
               "shortDescription": {
                 "text": "Write-direction external request before an escaping error — may duplicate on retry (advisory)"
+              }
+            },
+            {
+              "id": "d52-bulk-write-param-no-temp-guard",
+              "name": "BulkWriteParamNoTempGuard",
+              "shortDescription": {
+                "text": "Bulk write on a var record parameter with no temporary guard"
+              }
+            },
+            {
+              "id": "d53-ignored-tryfunction-result",
+              "name": "IgnoredTryFunctionResult",
+              "shortDescription": {
+                "text": "TryFunction result ignored"
+              }
+            },
+            {
+              "id": "d54-publish-in-tryfunction-cone",
+              "name": "PublishInTryFunctionCone",
+              "shortDescription": {
+                "text": "Event published inside a TryFunction's call cone"
+              }
+            },
+            {
+              "id": "d55-event-publish-in-loop",
+              "name": "EventPublishInLoop",
+              "shortDescription": {
+                "text": "Event published directly inside a loop"
+              }
+            },
+            {
+              "id": "d56-clone-before-write-in-loop",
+              "name": "CloneBeforeWriteInLoop",
+              "shortDescription": {
+                "text": "Record cloned before Modify/Delete inside a loop"
+              }
+            },
+            {
+              "id": "d57-singleinstance-growing-state",
+              "name": "SingleInstanceGrowingState",
+              "shortDescription": {
+                "text": "SingleInstance subscriber grows a global that is never cleared"
+              }
+            },
+            {
+              "id": "d58-query-filter-after-open",
+              "name": "QueryFilterAfterOpen",
+              "shortDescription": {
+                "text": "Query filter set after Open"
+              }
+            },
+            {
+              "id": "d59-integrationevent-var-boolean-guard",
+              "name": "IntegrationEventVarBooleanGuard",
+              "shortDescription": {
+                "text": "IntegrationEvent var Boolean parameter can bypass a guard"
+              }
+            },
+            {
+              "id": "d60-upgrade-loop-should-be-datatransfer",
+              "name": "UpgradeLoopShouldBeDataTransfer",
+              "shortDescription": {
+                "text": "Row-by-row Modify loop in upgrade code; use DataTransfer"
+              }
+            },
+            {
+              "id": "d61-ishandled-bypasses-critical-write",
+              "name": "IsHandledBypassesCriticalWrite",
+              "shortDescription": {
+                "text": "IsHandled lets a subscriber skip a critical record write"
+              }
+            },
+            {
+              "id": "d62-telemetry-before-success",
+              "name": "TelemetryBeforeSuccess",
+              "shortDescription": {
+                "text": "Feature usage logged before a step that can fail"
+              }
+            },
+            {
+              "id": "d63-html-concat-injection",
+              "name": "HtmlConcatInjection",
+              "shortDescription": {
+                "text": "HTML built by string concatenation (injection risk)"
+              }
+            },
+            {
+              "id": "d64-api-page-write-surface",
+              "name": "ApiPageWriteSurface",
+              "shortDescription": {
+                "text": "API page leaves OData write operations exposed"
               }
             }
           ]

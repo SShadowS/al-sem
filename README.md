@@ -85,7 +85,7 @@ Point any command at the directory containing `app.json`. Dependencies are read 
 
 ## What `alsem analyze` finds
 
-54 checks in total: 43 run by default, 11 more are opt-in. A sample of what they cover:
+54 checks in total: 40 run by default, 14 more are opt-in. A sample of what they cover:
 
 | Check | Plain English |
 |-------|---------------|
@@ -123,7 +123,7 @@ Useful flags:
 |------|--------------|
 | `--format terminal \| json \| sarif \| html \| pr-summary` | Default `auto`: terminal when you run it by hand, JSON when piped |
 | `--preset transaction-integrity` \| `--preset bcquality` | Run a themed bundle instead of the defaults |
-| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 11 opt-in checks; they're mutually exclusive |
+| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 14 opt-in checks; they're mutually exclusive |
 | `--min-severity high` | Drop everything below a severity |
 | `--group-by object \| routine \| table \| detector \| file` | Reorganize terminal output |
 | `--baseline al-sem.baseline.json` | Suppress findings listed in the file — adopt the tool on an old codebase without fixing 500 things first. `--update-baseline` rewrites it to the current state |

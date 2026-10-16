@@ -1242,6 +1242,8 @@ pub fn default_detectors() -> Vec<Detector> {
         Detector {
             name: "d1-db-op-in-loop".to_string(),
             run: d1::detect_d1,
+            rule_name: "DbOpInLoop",
+            short_description: "Database operation inside a loop",
             // summaries + uncertainties_by_node + closed_world_temp_params.
             requires: substrate::SUMMARIES
                 | substrate::CORE_SUMMARIES
@@ -1250,181 +1252,249 @@ pub fn default_detectors() -> Vec<Detector> {
         Detector {
             name: "d2-event-fanout-in-loop".to_string(),
             run: d2::detect_d2,
+            rule_name: "EventFanoutInLoop",
+            short_description: "Event raised inside a loop with DB-touching subscribers",
             // summaries + uncertainties_by_node.
             requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
         Detector {
             name: "d3-missing-setloadfields".to_string(),
             run: d3::detect_d3,
+            rule_name: "MissingSetLoadFields",
+            short_description: "Missing SetLoadFields before record retrieval",
             // parameter_roles_by_routine + closed_world_temp_params.
             requires: substrate::CORE_SUMMARIES | substrate::CLOSED_WORLD_TEMP,
         },
         Detector {
             name: "d4-repeated-lookup-in-loop".to_string(),
             run: d4::detect_d4,
+            rule_name: "RepeatedLookupInLoop",
+            short_description: "Repeated identical lookup inside a loop",
             requires: 0,
         },
         Detector {
             name: "d5-set-based-opportunity".to_string(),
             run: d5::detect_d5,
+            rule_name: "SetBasedOpportunity",
+            short_description: "Loop-and-Modify candidate for ModifyAll",
             requires: 0,
         },
         Detector {
             name: "d7-recursive-event-expansion".to_string(),
             run: d7::detect_d7,
+            rule_name: "RecursiveEventExpansion",
+            short_description: "Event subscriber chain forms a cycle",
             requires: 0,
         },
         Detector {
             name: "d9-transaction-span-summary".to_string(),
             run: d9::detect_d9,
+            rule_name: "TransactionSpanSummary",
+            short_description: "Transaction span summary (info)",
             requires: substrate::TRANSACTION_SPANS,
         },
         Detector {
             name: "d10-self-modifying-loop".to_string(),
             run: d10::detect_d10,
+            rule_name: "SelfModifyingLoop",
+            short_description: "Self-modifying loop",
             requires: substrate::CLOSED_WORLD_TEMP,
         },
         Detector {
             name: "d11-modify-without-get".to_string(),
             run: d11::detect_d11,
+            rule_name: "ModifyWithoutGet",
+            short_description: "Modify without prior Get",
             requires: 0,
         },
         Detector {
             name: "d12-dead-integration-event".to_string(),
             run: d12::detect_d12,
+            rule_name: "DeadIntegrationEvent",
+            short_description: "Integration event has no subscribers",
             requires: 0,
         },
         Detector {
             name: "d13-cross-app-internal-call".to_string(),
             run: d13::detect_d13,
+            rule_name: "CrossAppInternalCall",
+            short_description: "Cross-extension call into an internal procedure",
             requires: 0,
         },
         Detector {
             name: "d14-dead-routine".to_string(),
             run: d14::detect_d14,
+            rule_name: "DeadRoutine",
+            short_description: "Routine unreachable from any entry point",
             requires: 0,
         },
         Detector {
             name: "d16-obsolete-routine-call".to_string(),
             run: d16::detect_d16,
+            rule_name: "ObsoleteRoutineCall",
+            short_description: "Call to an obsolete routine",
             requires: 0,
         },
         Detector {
             name: "d18-constant-filter-in-loop".to_string(),
             run: d18::detect_d18,
+            rule_name: "ConstantFilterInLoop",
+            short_description: "Constant SetRange/SetFilter inside a loop",
             requires: 0,
         },
         Detector {
             name: "d19-unused-parameter".to_string(),
             run: d19::detect_d19,
+            rule_name: "UnusedParameter",
+            short_description: "Procedure parameter never used in the body",
             requires: 0,
         },
         Detector {
             name: "d20-unreachable-after-exit".to_string(),
             run: d20::detect_d20,
+            rule_name: "UnreachableAfterExit",
+            short_description: "Statement after an unconditional exit is unreachable",
             requires: 0,
         },
         Detector {
             name: "d21-read-without-load".to_string(),
             run: d21::detect_d21,
+            rule_name: "ReadWithoutLoad",
+            short_description: "Read on a record variable that was never loaded",
             requires: 0,
         },
         Detector {
             name: "d22-flowfield-without-calcfields".to_string(),
             run: d22::detect_d22,
+            rule_name: "FlowFieldWithoutCalcFields",
+            short_description: "FlowField read without prior CalcFields",
             requires: 0,
         },
         Detector {
             name: "d29-subscriber-modify-on-event-record".to_string(),
             run: d29::detect_d29,
+            rule_name: "SubscriberModifyOnEventRecord",
+            short_description: "Subscriber modifies the event record, re-firing the same event",
             requires: 0,
         },
         Detector {
             name: "d32-constant-boolean-parameter".to_string(),
             run: d32::detect_d32,
+            rule_name: "ConstantBooleanParameter",
+            short_description: "Boolean parameter passed the same literal at every call site",
             requires: 0,
         },
         Detector {
             name: "d33-unfiltered-bulk-write".to_string(),
             run: d33::detect_d33,
+            rule_name: "UnfilteredBulkWrite",
+            short_description: "DeleteAll/ModifyAll without a narrowing filter",
             requires: 0,
         },
         Detector {
             name: "d34-commit-in-loop".to_string(),
             run: d34::detect_d34,
+            rule_name: "CommitInLoop",
+            short_description: "Commit inside a loop",
             requires: substrate::SUMMARIES,
         },
         Detector {
             name: "d35-commit-in-event-subscriber".to_string(),
             run: d35::detect_d35,
+            rule_name: "CommitInEventSubscriber",
+            short_description: "Commit reachable from an event subscriber",
             requires: substrate::SUMMARIES,
         },
         Detector {
             name: "d36-late-setloadfields".to_string(),
             run: d36::detect_d36,
+            rule_name: "LateSetLoadFields",
+            short_description: "SetLoadFields placed after the record is loaded",
             requires: 0,
         },
         Detector {
             name: "d37-validate-without-persist".to_string(),
             run: d37::detect_d37,
+            rule_name: "ValidateWithoutPersist",
+            short_description: "Validate with no later Modify or Insert to persist it",
             // parameter_roles_by_routine (+ upgraded_bindings, always-built core).
             requires: substrate::CORE_SUMMARIES,
         },
         Detector {
             name: "d38-subscriber-to-obsolete-event".to_string(),
             run: d38::detect_d38,
+            rule_name: "SubscriberToObsoleteEvent",
+            short_description: "Event subscriber bound to an obsolete publisher",
             requires: 0,
         },
         Detector {
             name: "d39-record-left-dirty-across-chain".to_string(),
             run: d39::detect_d39,
+            rule_name: "RecordLeftDirtyAcrossChain",
+            short_description: "Record changed by a helper is never persisted by the caller",
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
         Detector {
             name: "d41-transitive-filter-loss".to_string(),
             run: d41::detect_d41,
+            rule_name: "TransitiveFilterLoss",
+            short_description: "Callee resets filters the caller still relies on",
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
         Detector {
             name: "d42-cross-call-wrong-setloadfields".to_string(),
             run: d42::detect_d42,
+            rule_name: "CrossCallWrongSetLoadFields",
+            short_description: "Caller's SetLoadFields omits fields the callee needs",
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
         Detector {
             name: "d43-event-ishandled-skip".to_string(),
             run: d43::detect_d43,
+            rule_name: "EventIsHandledSkip",
+            short_description: "IsHandled subscriber skips the publisher's default write",
             requires: substrate::SUMMARIES,
         },
         Detector {
             name: "d44-event-multi-subscriber-overlap".to_string(),
             run: d44::detect_d44,
+            rule_name: "EventMultiSubscriberOverlap",
+            short_description: "Several subscribers of one event touch the same table",
             requires: substrate::SUMMARIES,
         },
         // d52: BCQuality wave (bulk-write-param-no-temp-guard).
         Detector {
             name: "d52-bulk-write-param-no-temp-guard".to_string(),
             run: d52::detect_d52,
+            rule_name: "BulkWriteParamNoTempGuard",
+            short_description: "Bulk write on a var record parameter with no temporary guard",
             requires: substrate::CLOSED_WORLD_TEMP,
         },
         // d53: BCQuality wave (ignored-tryfunction-result).
         Detector {
             name: "d53-ignored-tryfunction-result".to_string(),
             run: d53::detect_d53,
+            rule_name: "IgnoredTryFunctionResult",
+            short_description: "TryFunction result ignored",
             requires: 0,
         },
         // d54: BCQuality wave (publish-in-tryfunction-cone).
         Detector {
             name: "d54-publish-in-tryfunction-cone".to_string(),
             run: d54::detect_d54,
+            rule_name: "PublishInTryFunctionCone",
+            short_description: "Event published inside a TryFunction's call cone",
             requires: 0,
         },
         // d55: BCQuality wave (event-publish-in-loop).
         Detector {
             name: "d55-event-publish-in-loop".to_string(),
             run: d55::detect_d55,
+            rule_name: "EventPublishInLoop",
+            short_description: "Event published directly inside a loop",
             requires: 0,
         },
         // d56: BCQuality wave (clone-before-write-in-loop). Re-promoted from
@@ -1434,30 +1504,40 @@ pub fn default_detectors() -> Vec<Detector> {
         Detector {
             name: "d56-clone-before-write-in-loop".to_string(),
             run: d56::detect_d56,
+            rule_name: "CloneBeforeWriteInLoop",
+            short_description: "Record cloned before Modify/Delete inside a loop",
             requires: 0,
         },
         // d57: BCQuality wave (singleinstance-growing-state).
         Detector {
             name: "d57-singleinstance-growing-state".to_string(),
             run: d57::detect_d57,
+            rule_name: "SingleInstanceGrowingState",
+            short_description: "SingleInstance subscriber grows a global that is never cleared",
             requires: 0,
         },
         // d58: BCQuality wave (query-filter-after-open).
         Detector {
             name: "d58-query-filter-after-open".to_string(),
             run: d58::detect_d58,
+            rule_name: "QueryFilterAfterOpen",
+            short_description: "Query filter set after Open",
             requires: 0,
         },
         // d59: BCQuality wave (integrationevent-var-boolean-guard).
         Detector {
             name: "d59-integrationevent-var-boolean-guard".to_string(),
             run: d59::detect_d59,
+            rule_name: "IntegrationEventVarBooleanGuard",
+            short_description: "IntegrationEvent var Boolean parameter can bypass a guard",
             requires: 0,
         },
         // d60: BCQuality wave (upgrade-loop-should-be-datatransfer).
         Detector {
             name: "d60-upgrade-loop-should-be-datatransfer".to_string(),
             run: d60::detect_d60,
+            rule_name: "UpgradeLoopShouldBeDataTransfer",
+            short_description: "Row-by-row Modify loop in upgrade code; use DataTransfer",
             requires: 0,
         },
     ]
@@ -1471,6 +1551,8 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d40-transitive-load-missing".to_string(),
             run: d40::detect_d40,
+            rule_name: "TransitiveLoadMissing",
+            short_description: "Record passed unloaded to a callee that needs it loaded",
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1478,6 +1560,8 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d46-commit-in-lifecycle".to_string(),
             run: d46::detect_d46,
+            rule_name: "CommitInLifecycle",
+            short_description: "Commit reachable from an Install/Upgrade codeunit trigger",
             // uncertainties_by_node (path walker).
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1485,12 +1569,16 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d47-io-unsafe-txn".to_string(),
             run: d47::detect_d47,
+            rule_name: "IoUnsafeTxn",
+            short_description: "External IO inside an open write transaction / before commit",
             requires: substrate::ORDERING_FACTS,
         },
         // d48: OPT-IN (io-in-loop, surfaced by transaction-integrity preset).
         Detector {
             name: "d48-io-in-loop".to_string(),
             run: d48::detect_d48,
+            rule_name: "IoInLoop",
+            short_description: "External IO (HTTP/FILE) inside a loop",
             // summaries + uncertainties_by_node.
             requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
@@ -1498,12 +1586,16 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d49-uncommitted-write-before-ui".to_string(),
             run: d49::detect_d49,
+            rule_name: "UncommittedWriteBeforeUi",
+            short_description: "DB write pending at a window-opening UI call (BC runtime error)",
             requires: substrate::ORDERING_FACTS,
         },
         // d50: OPT-IN (checked-run-implicit-commit, advisory info/medium).
         Detector {
             name: "d50-checked-run-implicit-commit".to_string(),
             run: d50::detect_d50,
+            rule_name: "CheckedRunImplicitCommit",
+            short_description: "Checked Codeunit.Run implicit commit within a posting span (advisory)",
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
@@ -1511,6 +1603,8 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d51-retry-side-effect-duplication".to_string(),
             run: d51::detect_d51,
+            rule_name: "RetrySideEffectDuplication",
+            short_description: "Write-direction external request before an escaping error — may duplicate on retry (advisory)",
             requires: substrate::ORDERING_FACTS,
         },
         // d17: OPT-IN since engine-switch S8.5 (min-version-drift). It knows the
@@ -1521,6 +1615,8 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d17-min-version-drift".to_string(),
             run: d17::detect_d17,
+            rule_name: "MinVersionDrift",
+            short_description: "Call into API newer than declared MinVersion",
             requires: 0,
         },
         // d8: OPT-IN since engine-switch S8 (owner decision 2026-10-07). It now
@@ -1531,6 +1627,8 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d8-commit-in-transaction".to_string(),
             run: d8::detect_d8,
+            rule_name: "CommitInTransaction",
+            short_description: "Commit inside a posting transaction span",
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
@@ -1543,30 +1641,40 @@ pub fn opt_in_detectors() -> Vec<Detector> {
         Detector {
             name: "d45-event-transitive-table-exposure".to_string(),
             run: d45::detect_d45,
+            rule_name: "EventTransitiveTableExposure",
+            short_description: "Tables written by an event's transitive subscriber chain",
             requires: substrate::SUMMARIES,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
         Detector {
             name: "d61-ishandled-bypasses-critical-write".to_string(),
             run: d61::detect_d61,
+            rule_name: "IsHandledBypassesCriticalWrite",
+            short_description: "IsHandled lets a subscriber skip a critical record write",
             requires: 0,
         },
         // d62: OPT-IN (BCQuality wave, telemetry-before-success).
         Detector {
             name: "d62-telemetry-before-success".to_string(),
             run: d62::detect_d62,
+            rule_name: "TelemetryBeforeSuccess",
+            short_description: "Feature usage logged before a step that can fail",
             requires: 0,
         },
         // d63: OPT-IN (BCQuality wave, html-concat-injection).
         Detector {
             name: "d63-html-concat-injection".to_string(),
             run: d63::detect_d63,
+            rule_name: "HtmlConcatInjection",
+            short_description: "HTML built by string concatenation (injection risk)",
             requires: 0,
         },
         // d64: OPT-IN (BCQuality wave, api-page-write-surface).
         Detector {
             name: "d64-api-page-write-surface".to_string(),
             run: d64::detect_d64,
+            rule_name: "ApiPageWriteSurface",
+            short_description: "API page leaves OData write operations exposed",
             requires: 0,
         },
     ]

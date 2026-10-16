@@ -252,6 +252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem analyze --format sarif` now describes every detector in `tool.driver.rules`
+  (#87). The list was written by hand and held only 21 of the 54 detectors, so a finding
+  from any of the other 33 (for example `d19-unused-parameter` or `d34-commit-in-loop`)
+  named a rule the document did not describe, and SARIF viewers showed it without a name
+  or description. Each detector's rule name and one-line description now live in the
+  detector registry, and the SARIF list is built from it, so a new detector cannot be
+  left out. The 21 existing rules keep their names and descriptions. The README's
+  detector counts are corrected to 40 default and 14 opt-in.
 - `alsem fingerprint`, `prove`, `digest`, `events fanout`, `events chains`, `policy check`
   and `diff --strict` (in the lines it prints when its gate fails) now report the dependency
   warnings `alsem analyze` reports (#91): a dependency that is missing, older than

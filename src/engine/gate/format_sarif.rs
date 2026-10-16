@@ -6,7 +6,10 @@
 //! fields in declaration order, and `skip_serializing_if` reproduces the
 //! `undefined`-field omission (`logicalLocations` / `codeFlows` absent when empty).
 //!
-//! The static `RULES[]` array is ported verbatim (21 rules) in the same order.
+//! The `tool.driver.rules` catalog is derived from the detector registry
+//! (`registered_detectors()`, default and opt-in alike): one rule per registered
+//! detector, carrying its `rule_name` and `short_description`, in natural
+//! detector-number order. A result's `ruleId` therefore always names a rule.
 //!
 //! Determinism: the `results` array preserves the pre-sorted `FindingSummary` order
 //! (the findings come pre-sorted out of `run_detectors`); no map iteration leaks in.
@@ -28,7 +31,7 @@ fn sarif_level(severity: &str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Static RULES[] — ported verbatim from format-sarif.ts (declaration order).
+// Rule catalog — one rule per registered detector (the registry is the source).
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -38,129 +41,28 @@ struct ShortDescription {
 
 #[derive(Serialize)]
 struct SarifRule {
-    id: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<&'static str>,
+    id: String,
+    name: &'static str,
     #[serde(rename = "shortDescription")]
     short_description: ShortDescription,
 }
 
-fn rule(id: &'static str, name: &'static str, text: &'static str) -> SarifRule {
-    SarifRule {
-        id,
-        name: Some(name),
-        short_description: ShortDescription { text },
-    }
-}
-
+/// Every registered detector as a SARIF rule, sorted by natural detector number
+/// (`d2` before `d10`). The registry's own order is not numeric, so the sort is
+/// explicit. Results carry only `ruleId` (no `ruleIndex`), so order is cosmetic.
 fn rules() -> Vec<SarifRule> {
-    vec![
-        rule(
-            "d1-db-op-in-loop",
-            "DbOpInLoop",
-            "Database operation inside a loop",
-        ),
-        rule(
-            "d2-event-fanout-in-loop",
-            "EventFanoutInLoop",
-            "Event raised inside a loop with DB-touching subscribers",
-        ),
-        rule(
-            "d3-missing-setloadfields",
-            "MissingSetLoadFields",
-            "Missing SetLoadFields before record retrieval",
-        ),
-        rule(
-            "d4-repeated-lookup-in-loop",
-            "RepeatedLookupInLoop",
-            "Repeated identical lookup inside a loop",
-        ),
-        rule(
-            "d5-set-based-opportunity",
-            "SetBasedOpportunity",
-            "Loop-and-Modify candidate for ModifyAll",
-        ),
-        rule(
-            "d7-recursive-event-expansion",
-            "RecursiveEventExpansion",
-            "Event subscriber chain forms a cycle",
-        ),
-        rule(
-            "d8-commit-in-transaction",
-            "CommitInTransaction",
-            "Commit inside a posting transaction span",
-        ),
-        rule(
-            "d9-transaction-span-summary",
-            "TransactionSpanSummary",
-            "Transaction span summary (info)",
-        ),
-        rule(
-            "d10-self-modifying-loop",
-            "SelfModifyingLoop",
-            "Self-modifying loop",
-        ),
-        rule(
-            "d11-modify-without-get",
-            "ModifyWithoutGet",
-            "Modify without prior Get",
-        ),
-        rule(
-            "d12-dead-integration-event",
-            "DeadIntegrationEvent",
-            "Integration event has no subscribers",
-        ),
-        rule(
-            "d13-cross-app-internal-call",
-            "CrossAppInternalCall",
-            "Cross-extension call into an internal procedure",
-        ),
-        rule(
-            "d14-dead-routine",
-            "DeadRoutine",
-            "Routine unreachable from any entry point",
-        ),
-        rule(
-            "d16-obsolete-routine-call",
-            "ObsoleteRoutineCall",
-            "Call to an obsolete routine",
-        ),
-        rule(
-            "d17-min-version-drift",
-            "MinVersionDrift",
-            "Call into API newer than declared MinVersion",
-        ),
-        rule(
-            "d46-commit-in-lifecycle",
-            "CommitInLifecycle",
-            "Commit reachable from an Install/Upgrade codeunit trigger",
-        ),
-        rule(
-            "d47-io-unsafe-txn",
-            "IoUnsafeTxn",
-            "External IO inside an open write transaction / before commit",
-        ),
-        rule(
-            "d48-io-in-loop",
-            "IoInLoop",
-            "External IO (HTTP/FILE) inside a loop",
-        ),
-        rule(
-            "d49-uncommitted-write-before-ui",
-            "UncommittedWriteBeforeUi",
-            "DB write pending at a window-opening UI call (BC runtime error)",
-        ),
-        rule(
-            "d50-checked-run-implicit-commit",
-            "CheckedRunImplicitCommit",
-            "Checked Codeunit.Run implicit commit within a posting span (advisory)",
-        ),
-        rule(
-            "d51-retry-side-effect-duplication",
-            "RetrySideEffectDuplication",
-            "Write-direction external request before an escaping error — may duplicate on retry (advisory)",
-        ),
-    ]
+    let mut rules: Vec<SarifRule> = crate::engine::l5::detectors::registered_detectors()
+        .into_iter()
+        .map(|d| SarifRule {
+            id: d.name,
+            name: d.rule_name,
+            short_description: ShortDescription {
+                text: d.short_description,
+            },
+        })
+        .collect();
+    rules.sort_by(|a, b| crate::engine::l5::registry::compare_natural(&a.id, &b.id));
+    rules
 }
 
 // ---------------------------------------------------------------------------
@@ -459,9 +361,176 @@ mod tests {
         assert_eq!(sarif_level("bogus"), "warning");
     }
 
+    /// Issue #87 (T1): the SARIF rule catalog is exactly the registry. Every
+    /// registered detector has a rule and every rule names a registered
+    /// detector; each rule carries its registry entry's name and description
+    /// (both non-empty); ids are unique; and the order is natural detector
+    /// number (`d2` before `d10`).
     #[test]
-    fn rules_count_is_21() {
-        assert_eq!(rules().len(), 21);
+    fn rules_are_the_registry() {
+        use crate::engine::l5::detectors::registered_detectors;
+        use crate::engine::l5::registry::compare_natural;
+        use std::collections::BTreeSet;
+
+        let registry = registered_detectors();
+        let rules = rules();
+        let rule_ids: BTreeSet<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        let reg_ids: BTreeSet<&str> = registry.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(rule_ids.len(), rules.len(), "duplicate rule ids");
+        assert_eq!(
+            rule_ids, reg_ids,
+            "SARIF rules and registered detectors differ"
+        );
+        for r in &rules {
+            let d = registry
+                .iter()
+                .find(|d| d.name == r.id)
+                .expect("rule names a registered detector");
+            assert_eq!(r.name, d.rule_name, "{}", r.id);
+            assert_eq!(r.short_description.text, d.short_description, "{}", r.id);
+            assert!(!d.rule_name.is_empty(), "{}: empty name", r.id);
+            assert!(!d.short_description.is_empty(), "{}: empty text", r.id);
+        }
+        for w in rules.windows(2) {
+            assert_eq!(
+                compare_natural(&w[0].id, &w[1].id),
+                std::cmp::Ordering::Less,
+                "rules out of order: {} before {}",
+                w[0].id,
+                w[1].id
+            );
+        }
+    }
+
+    /// Issue #87 (T2): the 21 rules the catalog listed before it was derived
+    /// from the registry keep their exact `(id, name, shortDescription)`, so a
+    /// careless rewrite of an old description is caught.
+    #[test]
+    fn pre_existing_rules_are_unchanged() {
+        const OLD: &[(&str, &str, &str)] = &[
+            (
+                "d1-db-op-in-loop",
+                "DbOpInLoop",
+                "Database operation inside a loop",
+            ),
+            (
+                "d2-event-fanout-in-loop",
+                "EventFanoutInLoop",
+                "Event raised inside a loop with DB-touching subscribers",
+            ),
+            (
+                "d3-missing-setloadfields",
+                "MissingSetLoadFields",
+                "Missing SetLoadFields before record retrieval",
+            ),
+            (
+                "d4-repeated-lookup-in-loop",
+                "RepeatedLookupInLoop",
+                "Repeated identical lookup inside a loop",
+            ),
+            (
+                "d5-set-based-opportunity",
+                "SetBasedOpportunity",
+                "Loop-and-Modify candidate for ModifyAll",
+            ),
+            (
+                "d7-recursive-event-expansion",
+                "RecursiveEventExpansion",
+                "Event subscriber chain forms a cycle",
+            ),
+            (
+                "d8-commit-in-transaction",
+                "CommitInTransaction",
+                "Commit inside a posting transaction span",
+            ),
+            (
+                "d9-transaction-span-summary",
+                "TransactionSpanSummary",
+                "Transaction span summary (info)",
+            ),
+            (
+                "d10-self-modifying-loop",
+                "SelfModifyingLoop",
+                "Self-modifying loop",
+            ),
+            (
+                "d11-modify-without-get",
+                "ModifyWithoutGet",
+                "Modify without prior Get",
+            ),
+            (
+                "d12-dead-integration-event",
+                "DeadIntegrationEvent",
+                "Integration event has no subscribers",
+            ),
+            (
+                "d13-cross-app-internal-call",
+                "CrossAppInternalCall",
+                "Cross-extension call into an internal procedure",
+            ),
+            (
+                "d14-dead-routine",
+                "DeadRoutine",
+                "Routine unreachable from any entry point",
+            ),
+            (
+                "d16-obsolete-routine-call",
+                "ObsoleteRoutineCall",
+                "Call to an obsolete routine",
+            ),
+            (
+                "d17-min-version-drift",
+                "MinVersionDrift",
+                "Call into API newer than declared MinVersion",
+            ),
+            (
+                "d46-commit-in-lifecycle",
+                "CommitInLifecycle",
+                "Commit reachable from an Install/Upgrade codeunit trigger",
+            ),
+            (
+                "d47-io-unsafe-txn",
+                "IoUnsafeTxn",
+                "External IO inside an open write transaction / before commit",
+            ),
+            (
+                "d48-io-in-loop",
+                "IoInLoop",
+                "External IO (HTTP/FILE) inside a loop",
+            ),
+            (
+                "d49-uncommitted-write-before-ui",
+                "UncommittedWriteBeforeUi",
+                "DB write pending at a window-opening UI call (BC runtime error)",
+            ),
+            (
+                "d50-checked-run-implicit-commit",
+                "CheckedRunImplicitCommit",
+                "Checked Codeunit.Run implicit commit within a posting span (advisory)",
+            ),
+            (
+                "d51-retry-side-effect-duplication",
+                "RetrySideEffectDuplication",
+                "Write-direction external request before an escaping error — may duplicate on retry (advisory)",
+            ),
+        ];
+        let rules = rules();
+        let mut last = None;
+        for (id, name, text) in OLD {
+            let pos = rules
+                .iter()
+                .position(|r| r.id == *id)
+                .unwrap_or_else(|| panic!("{id} missing from rules()"));
+            let r = &rules[pos];
+            assert_eq!(r.name, *name, "{id} name");
+            assert_eq!(r.short_description.text, *text, "{id} text");
+            // Their relative order is unchanged.
+            assert!(
+                last.is_none_or(|l| l < pos),
+                "{id} moved before its predecessor"
+            );
+            last = Some(pos);
+        }
     }
 
     #[test]

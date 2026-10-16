@@ -321,6 +321,11 @@ pub struct Detector {
     /// detector demands it. Over-inclusive is SAFE (just less skipping);
     /// under-inclusive is caught by the full-vs-minimal parity test.
     pub requires: u32,
+    /// The PascalCase SARIF rule name (`tool.driver.rules[].name`). Not derivable
+    /// from `name`: `d3-missing-setloadfields` is `MissingSetLoadFields`.
+    pub rule_name: &'static str,
+    /// A one-line summary (`tool.driver.rules[].shortDescription.text`).
+    pub short_description: &'static str,
 }
 
 /// The combined output of `run_detectors`.
@@ -846,6 +851,8 @@ mod tests {
             name: "probe".to_string(),
             run: dep_located_probe,
             requires: d13.requires,
+            rule_name: "Probe",
+            short_description: "test probe",
         };
         let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe), true);
         assert_eq!(out.findings.len(), 0);
@@ -927,6 +934,8 @@ mod tests {
             name: "probe".to_string(),
             run: ordering_facts_probe,
             requires: substrate::ORDERING_FACTS,
+            rule_name: "Probe",
+            short_description: "test probe",
         }];
 
         let (_findings, diagnostics, _stats, _idx) = run_each(&resolved, &ctx, &detectors);
@@ -958,6 +967,8 @@ mod tests {
             name: "reader".to_string(),
             run: ordering_facts_reader,
             requires: 0,
+            rule_name: "Reader",
+            short_description: "test reader",
         }];
 
         let (_findings, diagnostics, _stats, _idx) = run_each(&resolved, &ctx, &detectors);
@@ -1037,11 +1048,15 @@ mod tests {
                 name: "slow".to_string(),
                 run: ordering_slow,
                 requires: 0,
+                rule_name: "Slow",
+                short_description: "test slow",
             },
             Detector {
                 name: "fast".to_string(),
                 run: ordering_fast,
                 requires: 0,
+                rule_name: "Fast",
+                short_description: "test fast",
             },
         ];
 
@@ -1163,11 +1178,15 @@ mod tests {
                 name: "d-ok".to_string(),
                 run: ok_detector,
                 requires: substrate::ALL,
+                rule_name: "Ok",
+                short_description: "test ok",
             },
             Detector {
                 name: "d-err".to_string(),
                 run: err_detector,
                 requires: substrate::ALL,
+                rule_name: "Err",
+                short_description: "test err",
             },
         ];
         let out = run_detectors(&resolved, &detectors);
@@ -1202,11 +1221,15 @@ mod tests {
                 name: "d-ok".to_string(),
                 run: ok_detector,
                 requires: substrate::ALL,
+                rule_name: "Ok",
+                short_description: "test ok",
             },
             Detector {
                 name: "d-panic".to_string(),
                 run: panic_detector,
                 requires: substrate::ALL,
+                rule_name: "Panic",
+                short_description: "test panic",
             },
         ];
         let out = run_detectors(&resolved, &detectors);
