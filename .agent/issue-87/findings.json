@@ -1,0 +1,322 @@
+[
+  {
+    "id": "S1",
+    "source": "sol important 1 + opus important (presets)",
+    "round": 1,
+    "file": "src/engine/gate/presets.rs",
+    "line": 76,
+    "severity": "important",
+    "text": "presets.rs select_detectors() is production code that rebuilds a registry Detector for --detector/--preset; the design gave it placeholder metadata.",
+    "disposition": "fixed",
+    "evidence": "Design: select_detectors pushes d.clone() (#[derive(Clone)] on Detector, registry.rs:315, after CR2), so rule_name/short_description are carried with every field; the earlier T4 copy test was removed as it can no longer fail.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol important 2",
+    "round": 1,
+    "file": "tests/cli/gate_suppress_baseline_differential.rs",
+    "line": 308,
+    "severity": "important",
+    "text": "The full-baseline SARIF golden test has no regeneration branch, yet its golden carries the catalog; check-goldens --regen would leave it failing.",
+    "disposition": "fixed",
+    "evidence": "Design adds the same guarded REGEN_TEMP_GOLDENS branch the neighbouring partial-baseline test uses, so the regen script rewrites it; no hand-edited golden.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol minor 3",
+    "round": 1,
+    "file": "src/engine/gate/format_sarif.rs",
+    "line": 41,
+    "severity": "minor",
+    "text": "SarifRule.id is &'static str but the registry name is a String.",
+    "disposition": "fixed",
+    "evidence": "Design makes SarifRule.id an owned String.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol minor 4",
+    "round": 1,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "A text-diff 'additions only' check would reject the separator change after the old last rule.",
+    "disposition": "fixed",
+    "evidence": "Triage now compares parsed documents: old 21 identical and ordered, exactly 33 added, nothing outside tool.driver.rules changed.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol minor 5 + opus 7",
+    "round": 1,
+    "file": "src/engine/gate/format_sarif.rs",
+    "line": 9,
+    "severity": "minor",
+    "text": "Module/section docs describe a verbatim static 21-rule catalog; README.md:88 has stale default/opt-in counts (43/11 vs 40/14).",
+    "disposition": "fixed",
+    "evidence": "Design rewrites the format_sarif docs and corrects the README counts in the same change.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "opus 1/3/4",
+    "round": 1,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Line ranges were off (rules end at :164; registry runs to ~:1573); 8 of the 21 existing rules are opt-in (not just d8/d17); the registry order is non-numeric, so reuse compare_natural.",
+    "disposition": "fixed",
+    "evidence": "Probe rows and Design corrected; the sort uses registry.rs compare_natural. Round 2 (opus re-raised: the Design's Defect paragraph still said :1223-1470): now :1223-~1573.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N1",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The probe row claimed every detector module has a ONE-line //! header; d34 and d60 span several lines.",
+    "disposition": "fixed",
+    "evidence": "Row reworded: header summaries vary in length; each description is condensed by hand to one line.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N2",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "'Only analyze uses rules()' had no recorded probe of format_sarif() callers.",
+    "disposition": "fixed",
+    "evidence": "Probe row added: format_sarif( is called only at run.rs:645 and :791 (analyze) plus its own unit test.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N3",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The regen-gap audit of SARIF golden readers was manual and incomplete.",
+    "disposition": "fixed",
+    "evidence": "Probe row added from grep -rln sarif tests: only gate_sarif (regen via maybe_regen), gate_suppress_baseline (all regen except the full-baseline test = S2) and cli_b_diff (own catalog) read .sarif goldens. Round 3 (both re-raised: tests/cli/cli_c_policy_differential.rs also reads .sarif goldens): added to the row; it reads policy's own catalog and regenerates through check_or_regen, so no regen gap.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N4",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Every register entry shares one hash; unclear what it covers.",
+    "disposition": "fixed",
+    "evidence": "Convention: during the spec panel each entry's hash was the ledger revision it was last evaluated against (sha256 of ledger.md, 16 hex). From the final panel on, the reviewed artifact is the CODE, so every entry carries the code-diff hash: sha256 of `git diff master..HEAD -- . ':!.agent'`, 16 hex (currently 7f741e19e53a0d35). Ledger-only edits (F1, F2) do not change it; any code change does, and then every entry is re-marked.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N5",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The design said check-goldens --regen rewrites the golden without naming the mechanism.",
+    "disposition": "fixed",
+    "evidence": "Probe row: check-goldens --regen runs with REGEN_TEMP_GOLDENS=1 (tests/common/regen.rs); the new full-baseline regen branch gates on the same regen_mode().",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N6",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The check-goldens probe cited comment lines (:20-24,68) rather than the --regen code.",
+    "disposition": "fixed",
+    "evidence": "Now cites scripts/check-goldens:182-183, the --regen block that runs REGEN_TEMP_GOLDENS=1 cargo test.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/gate/format_sarif.rs",
+    "line": 12,
+    "severity": "important",
+    "text": "Result ruleId comes from each detector module's DETECTOR const while the registry repeats the id as a separate literal; they agree only by hand, so a rename re-creates #87 and T1/T3 would not catch it.",
+    "disposition": "fixed",
+    "evidence": "Every detector module's DETECTOR is now pub(crate) and each registry entry sets name: dNN::DETECTOR.to_string() (src/engine/l5/detectors/mod.rs); 54 literals verified equal before replacement. Proof: changing d19's DETECTOR moved the rules id and both result ruleIds together (fix-review.md).",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/gate/presets.rs",
+    "line": 76,
+    "severity": "minor",
+    "text": "select_detectors rebuilds Detector field by field; every field is Clone, so derive(Clone) + d.clone() removes the copy and the need for T4.",
+    "disposition": "fixed",
+    "evidence": "#[derive(Clone)] on Detector (registry.rs:315); select_detectors pushes d.clone() (presets.rs); T4 deleted as it can no longer fail.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/gate/format_sarif.rs",
+    "line": 54,
+    "severity": "minor",
+    "text": "rules() rebuilds and sorts 54 Detector values on every SARIF render; could be computed once (LazyLock).",
+    "disposition": "refuted",
+    "evidence": "rules() runs once per alsem analyze --format sarif process (src/engine/gate/run.rs:645,:791): 54 small allocations and one sort against a whole-program analysis that takes seconds. A LazyLock adds a static for no measurable gain.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review high",
+    "round": 1,
+    "file": "tests/cli/gate_suppress_baseline_differential.rs",
+    "line": 313,
+    "severity": "minor",
+    "text": "The 0-results assertion now appears twice in baseline_full_zero_results_byte_matches; remove the trailing copy.",
+    "disposition": "fixed",
+    "evidence": "Trailing duplicate assert removed; the early one before maybe_regen stays.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review high",
+    "round": 1,
+    "file": "README.md",
+    "line": 94,
+    "severity": "minor",
+    "text": "The 'What alsem analyze finds' table lists d8-commit-in-transaction with no opt-in marker, though d8 is opt-in since engine-switch S8.",
+    "disposition": "fixed",
+    "evidence": "README table: d8-commit-in-transaction cell ends '(opt-in)'; the other 10 listed ids checked against opt_in_detectors() are default.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/gate/format_sarif.rs",
+    "line": 1,
+    "severity": "minor",
+    "text": "Module doc still claims to be a port of al-sem format-sarif.ts that byte-matches JSON.stringify; the catalog now deliberately differs and al-sem is retired (Rust-owned output).",
+    "disposition": "fixed",
+    "evidence": "Module doc and SarifResult/section comments rewritten to describe the Rust-owned format; ruleId/rule id agreement now explained by the shared DETECTOR const.",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "sol final r1",
+    "round": 1,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 71,
+    "severity": "minor",
+    "text": "The acceptance matrix still presents T4 as current proof although it was deleted for CR2.",
+    "disposition": "fixed",
+    "evidence": "The acceptance matrix now says select_detectors keeps the metadata by derived Clone and T4 was deleted; proof (iii) is labelled historical; the CR1 proof was added as (v).",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "opus final r2",
+    "round": 2,
+    "file": ".agent/issue-87/ledger.md",
+    "line": 52,
+    "severity": "minor",
+    "text": "The probe row on Detector literals still describes presets.rs:76-80 as a field-by-field copy; and the proof table ran i, ii, iii, v, iv.",
+    "disposition": "fixed",
+    "evidence": "The probe row now says pre-CR2, now out.push(d.clone()) at presets.rs:76; proof (v) moved after (iv).",
+    "hash": "7f741e19e53a0d35",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
