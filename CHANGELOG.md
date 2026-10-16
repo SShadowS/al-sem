@@ -661,15 +661,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `alsem digest`, `alsem fingerprint` and `alsem prove` now name the object that owns each
   routine, for example `Table Customer` or `Interface IFoo` (#78). Before, `objectDisplay` was
   always `""` in all three (digest `routine.objectDisplay`, each fingerprint block, the prove
-  document), and the fingerprint human header printed `::Name`. The digest and prove human
-  headers now print `<owner>::<routine>` too, as the fingerprint header does. They split the snapshot's
-  routine name at `::`, and that name never holds the object. The owner now comes from the
+  document), and the fingerprint human header printed `::Name`. The cause: digest and
+  fingerprint split the snapshot's routine name at `::`, that name never holds the object, and
+  prove copied digest's result. All three human headers now print `<owner>::<routine>`, or the
+  bare routine when the owner is unknown, through one shared rule. The owner now comes from the
   model, with the same rule `alsem query effects` uses (`"<ObjectType> <ObjectName>"`). It does
   not come from the snapshot's identity table, which is not a safe object-name map: every
   Interface and ControlAddIn in an app shares one object id there, so they would all get one
-  name, and a tableextension can overwrite the name of the table it extends. An Interface or
-  ControlAddIn method takes its owner from its own declaring object. The routine display is now
-  the snapshot name unchanged, so a name that contains `::` is no longer cut. Inherited limit:
+  name, and a tableextension stub can overwrite the name of the real table with its own number.
+  An Interface or ControlAddIn method takes its owner from its own declaring object. The routine
+  display is now the snapshot name unchanged, so a name that contains `::` is no longer cut.
+  Inherited limit:
   two model objects with the same internal id (for example `#if`/`#else` declarations of one
   type and number under different names) show one surviving name, as `query effects` already
   does.

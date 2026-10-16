@@ -19,7 +19,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::effect_query_cli::{object_display_by_stable_routine_id, temp_state_str};
+use crate::engine::l4::effect_query_cli::{
+    object_display_by_stable_routine_id, owner_qualified, temp_state_str,
+};
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
@@ -756,7 +758,9 @@ impl<'a> DbTempStates<'a> {
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
 /// produce DigestEntryFull for each root (order:false path). `changed` supplies
 /// the declaration spans and the touched declarations (#71); `roots` may be a
-/// subset of `changed.roots` (prove passes one).
+/// subset of `changed.roots` (prove passes one). `object_display_by_id`: each
+/// root's owning object, from `object_display_by_stable_routine_id` (#78); `""`
+/// when absent.
 pub fn run_digest_query_full_from_entries(
     snap: &CapabilitySnapshot,
     roots: &[String],
@@ -1429,11 +1433,7 @@ pub fn format_digest_human(entries: &[DigestEntryFull]) -> String {
     }
     let mut lines: Vec<String> = Vec::new();
     for entry in entries {
-        let display = if !entry.object_display.is_empty() {
-            format!("{}::{}", entry.object_display, entry.routine_display)
-        } else {
-            entry.routine_display.clone()
-        };
+        let display = owner_qualified(&entry.object_display, &entry.routine_display);
         lines.push(format!("--- {} ---", display));
         lines.push(format!("  coverage: {}", entry.coverage_status));
         if !entry.coverage_reasons.is_empty() {

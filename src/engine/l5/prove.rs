@@ -23,7 +23,7 @@
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::AnalysisTarget;
-use crate::engine::l4::effect_query_cli::object_display_by_stable_routine_id;
+use crate::engine::l4::effect_query_cli::{object_display_by_stable_routine_id, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
@@ -735,11 +735,7 @@ pub fn format_prove_human(
     let mut lines: Vec<String> = Vec::new();
 
     // Routine header
-    let routine_header = if !object_display.is_empty() {
-        format!("{}::{}", object_display, routine_display)
-    } else {
-        routine_display.to_string()
-    };
+    let routine_header = owner_qualified(object_display, routine_display);
     lines.push(format!("--- {} ---", routine_header));
     lines.push(format!("  question: {}", question));
     lines.push(format!("  answer:   {}", prove_result.answer.as_str()));
