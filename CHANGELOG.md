@@ -671,10 +671,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name, and a tableextension stub can overwrite the name of the real table with its own number.
   An Interface or ControlAddIn method takes its owner from its own declaring object. The routine
   display is now the snapshot name unchanged, so a name that contains `::` is no longer cut.
-  Inherited limit:
-  two model objects with the same internal id (for example `#if`/`#else` declarations of one
-  type and number under different names) show one surviving name, as `query effects` already
-  does.
+  Inherited limit: two model objects with the same internal id (for example `#if`/`#else`
+  declarations of one type and number under different names) show one surviving name, as
+  `query effects` already does.
 - LSP watcher: each root now watches its root `app.json`, its workspace `.al-sem.json` (reloaded live), and the ancestor `.alpackages` folders the loader reads, registered before the first build; folder renames and moves, and files replaced without their own event, are reconciled; an overflow or a replaced root re-arms the root's watch, re-syncs the caches and reloads the config. Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git` created or removed at the root or an ancestor still need a server restart; a file replaced without its own event by one with the same length and modification time (and, on Unix, the same file id) is not re-read; a path whose watch cannot be registered is seen only once a 5 s retry succeeds; on Windows a folder event walks that folder's subtree (#221).
 - LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
 - **#156: `alsem diff` reported private changes as ABI breaks, and a changed signature as two
