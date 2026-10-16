@@ -312,3 +312,29 @@ fn t9_gate_runs_before_rename_overlay_load() {
     );
     assert_gate_failed(&out);
 }
+
+/// T10 (collection keeps non-error lines): an old side with only an `info`
+/// diagnostic (an `.al` file declaring no object) and a new side with the error
+/// print BOTH, the old side's info first. Mutations: collect only error lines, or
+/// drop the old side's lines -> the info line is missing.
+#[test]
+fn t10_non_error_lines_of_both_sides_are_printed_in_order() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let old = clean_ws(tmp.path(), "old");
+    std::fs::write(old.join("Empty.al"), "// no object here\n").expect("write Empty.al");
+    let new = error_ws(tmp.path(), "new");
+    let out = alsem_diff(&[&s(&old), &s(&new), "--strict", "--deterministic"]);
+    assert_gate_failed(&out);
+    let lines = stderr_lines(&out);
+    let info = lines
+        .iter()
+        .position(|l| {
+            l.starts_with("info: No object declaration found in") && l.contains("Empty.al")
+        })
+        .unwrap_or_else(|| panic!("the old side's info line; stderr={lines:?}"));
+    let error = lines
+        .iter()
+        .position(|l| l.starts_with(MULTI_APP_ERROR))
+        .unwrap_or_else(|| panic!("the new side's error line; stderr={lines:?}"));
+    assert!(info < error, "old side first; stderr={lines:?}");
+}
