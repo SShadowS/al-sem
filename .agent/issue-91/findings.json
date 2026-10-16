@@ -1,0 +1,434 @@
+[
+ {
+  "id": "S1",
+  "source": "sol 1",
+  "round": 1,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The root cause overgeneralized: cross-app consumers keep the coverage (build_cross_app_base copies it); the aggregation simply never reads it. Only single-app discards it.",
+  "disposition": "fixed",
+  "evidence": "Design now names the shared omission as the defect with two propagation paths (single-app discarded at program_calls.rs:704-705; cross-app kept but unread). Round 2 (sol re-raised: the probe row still said 'discards'): probe row rewritten to name both paths.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2",
+  "source": "sol 2 + opus minor (Model literal)",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 934,
+  "severity": "important",
+  "text": "attach_program_calls is not the only Model construction: the empty-output HTML path builds a Model literal (run.rs:~934-945) and HTML tests do too (format_html.rs:1209-1220,1265-1276); the 'only constructor' citation of mod.rs was wrong.",
+  "disposition": "fixed",
+  "evidence": "Design narrows the invariant to program-backed models (the attach functions) and gives every direct literal dependency_diagnostics: Vec::new(); empty-output paths keep computing only workspace diagnostics. Round 2 (sol re-raised: probe row and step 6 still unqualified): probe row now 'only constructors of PROGRAM-BACKED models; 3 literals get an empty Vec'; step 6 qualified.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3",
+  "source": "sol 5 + opus important 1",
+  "round": 1,
+  "file": "src/engine/l5/prove.rs",
+  "line": 893,
+  "severity": "important",
+  "text": "prove reports analyzer diagnostics too, but the matrix had no row for it.",
+  "disposition": "fixed",
+  "evidence": "T2 includes prove <ws> <id> may-commit (JSON default), compared with analyze --single-app.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4",
+  "source": "sol 5 + opus important 2",
+  "round": 1,
+  "file": "src/engine/gate/diff/cli.rs",
+  "line": 107,
+  "severity": "important",
+  "text": "diff prints analyzer lines only on a failing --strict gate and its envelope diagnostics stay empty, so a warning-only reproducer cannot show the fix through diff's output.",
+  "disposition": "fixed",
+  "evidence": "T4: a diff/cli.rs unit test asserts load_snapshot_from_workspace(fixture a, strict=true) returns the dependency warning line; diff's printing contract is unchanged.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5",
+  "source": "opus important 4 + sol 6",
+  "round": 1,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The 'only dependencies-stage lines' triage rule cannot be applied to stderr goldens (no stage there) and ignores the JSON array's formatting change.",
+  "disposition": "fixed",
+  "evidence": "Triage rule now: JSON may only add DIAG-dependencies warning records (+ the empty-array formatting change); stderr may only add 'warning: dependency …' lines, placed after workspace lines and before summarize/overlay/detect; all existing diagnostics, order, payloads and exit codes unchanged.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S6",
+  "source": "sol 7 + opus important 3 + opus minors (fixture, same mode)",
+  "round": 1,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The tests did not fully pin the acceptance: no older-version (the reproducer's) fixture; modes mixed (single-app commands vs default cross-app analyze); a hand-built model does not test coverage-to-model propagation; restoring analyze's inline block fails nothing.",
+  "disposition": "fixed",
+  "evidence": "T2 runs fixture (a) (ws-codeunit-rec with LibA declared above the packaged 1.0.0.0: 'is present only at version') and (b) (missingdep) through the binary, comparing each command with analyze in the SAME mode (single-app vs analyze --single-app; cross-app defaults vs default analyze); T3 pins the shared call by source text; breaks iii/iv pin propagation in each attach path. Round 2 (both re-raised: equality-only T2 cannot catch a shared break, since analyze loses the warning too): every T2 row now first asserts the EXACT expected message for its fixture, then equality with analyze in the same mode.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S7",
+  "source": "opus minor (fc moved)",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 287,
+  "severity": "minor",
+  "text": "In build_analysis_model, fc is moved into fresh before attach_program_calls runs.",
+  "disposition": "fixed",
+  "evidence": "Design: pass fresh.as_ref() (Ok in that branch) or borrow before the move.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S8",
+  "source": "opus minor (docs)",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 1089,
+  "severity": "minor",
+  "text": "Doc comments still say source (2) is not produced; docs/OUTSTANDING.md has an open entry for this gap.",
+  "disposition": "fixed",
+  "evidence": "Design corrects run.rs:1089-1104 and closes docs/OUTSTANDING.md:151-156.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S9",
+  "source": "opus minor (callers)",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 421,
+  "severity": "minor",
+  "text": "Callers of pub fn dependency_diagnostics outside run.rs were unchecked before moving it.",
+  "disposition": "fixed",
+  "evidence": "grep over src/tests/benches: no caller outside run.rs.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S10",
+  "source": "sol 3/4 notes",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 421,
+  "severity": "minor",
+  "text": "The move must keep the loop exactly (one entry may emit both an ingest-error and an older-version warning; unidentified packages last), and analyze must aggregate over its OWN detector run, not compute_analyzer_diagnostics.",
+  "disposition": "fixed",
+  "evidence": "Both stated in Design steps 3 and 5.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N1",
+  "source": "sol r2 + opus r2 (important)",
+  "round": 2,
+  "file": "src/bin/alsem.rs",
+  "line": 1045,
+  "severity": "important",
+  "text": "T2 ran digest without changed-root input; the binary rejects that (exit 1, no output) before the pipeline.",
+  "disposition": "fixed",
+  "evidence": "T2 runs digest <ws> --file <a fixture .al path> --format json and asserts the JSON envelope was written.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N2",
+  "source": "opus r2 minor",
+  "round": 2,
+  "file": "src/engine/l5/fingerprint_cli.rs",
+  "line": 383,
+  "severity": "minor",
+  "text": "fingerprint --routine takes the query path; the issue's reproducer is fingerprint <ws> --format json (the B0 envelope path).",
+  "disposition": "fixed",
+  "evidence": "T2's fingerprint row is now fingerprint <ws> --format json with no query flags.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N3",
+  "source": "opus r2 minor + sol r2 note",
+  "round": 2,
+  "file": "src/program/resolve/full.rs",
+  "line": 1945,
+  "severity": "minor",
+  "text": "The raised version for fixture (a) was unspecified; a non-numeric suffix parses to the same components and gives no warning.",
+  "disposition": "fixed",
+  "evidence": "Fixture (a) pins exactly 2.0.0.0, and every row asserts the concrete 'is present only at version 1.0.0.0' message.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "P1",
+  "source": "opus r3 minor",
+  "round": 3,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The last assumption-probe row still named only ws-preflight-missingdep (the 'is missing' branch), not the issue's older-version fixture (a).",
+  "disposition": "fixed",
+  "evidence": "Row now cites fixture (a) (ws-codeunit-rec, LibA 2.0.0.0 vs packaged 1.0.0.0, with the loader/ledger/version-compare evidence) and (b). Also per opus's note: digest's --file is a workspace-relative src/... path and the test asserts the envelope, not an exit code.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "P2",
+  "source": "opus r4 minor",
+  "round": 4,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The digest row's example path src/caller.al exists only in fixture (b), not in fixture (a).",
+  "disposition": "fixed",
+  "evidence": "The row now names src/Item.Table.al for (a) and src/caller.al for (b); both files exist.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C1",
+  "source": "code-review 1",
+  "round": 6,
+  "file": "src/engine/gate/run.rs",
+  "line": 787,
+  "severity": "minor",
+  "text": "When the model fails but the program build succeeds, analyze's empty-output path still reports only workspace diagnostics, dropping the dependency warnings; the CHANGELOG said all commands share one aggregation.",
+  "disposition": "fixed",
+  "evidence": "Ratified design keeps the empty-output paths unchanged (spec S2/sol r1 item 4); CHANGELOG now states analyze's empty-output path reports only workspace diagnostics, as before.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C2",
+  "source": "code-review 2",
+  "round": 6,
+  "file": "src/engine/gate/run.rs",
+  "line": 353,
+  "severity": "minor",
+  "text": "fresh.as_ref().expect relies on fresh/program being built together.",
+  "disposition": "refuted",
+  "evidence": "Both are produced by the one match ~10 lines above (Ok arm sets both, Err arm sets neither); the expect documents that local invariant. The suggested alternative re-clones FreshCoverage, which the T1 review removed.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C3",
+  "source": "code-review 3",
+  "round": 6,
+  "file": "src/program/resolve/full.rs",
+  "line": 1976,
+  "severity": "minor",
+  "text": "The unidentified-package message embeds an absolute path, now reaching deterministic fingerprint/digest/prove envelopes.",
+  "disposition": "deferred",
+  "evidence": "Pre-existing pattern: workspace diagnostics already embed absolute paths (the multi-app message, workspace_diagnostics.rs:52-64) in the same envelopes; no golden fixture has a corrupt package. Filed as a discovery (diagnostics should use workspace-relative paths in deterministic output).",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C4",
+  "source": "code-review 4",
+  "round": 6,
+  "file": "src/program/model/program_calls.rs",
+  "line": 1906,
+  "severity": "minor",
+  "text": "model_text omitted dependency_diagnostics, so the inline-vs-disk model test no longer compared the whole model.",
+  "disposition": "fixed",
+  "evidence": "model_text dumps the field; the test asserts inline has none and every disk entry is a warning/dependencies/'is missing' one, then compares the rest. Final round 1 (sol re-raised: .all() passes an empty list): the test now asserts non-empty warnings for every fixture declaring dependencies (or a platform/application) without .alpackages, and that at least one compared fixture does; break c4 (field emptied in assemble_and_resolve_workspace_program) fails it at program_calls.rs:1979 (ws-d1-dep-terminal).",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C5",
+  "source": "code-review 5",
+  "round": 6,
+  "file": "src/engine/l5/registry.rs",
+  "line": 332,
+  "severity": "minor",
+  "text": "Doc pointer to compute_analyzer_diagnostics's slot list is stale.",
+  "disposition": "fixed",
+  "evidence": "Now points to analyzer_diagnostics_of_run.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C6",
+  "source": "code-review 6",
+  "round": 6,
+  "file": "src/engine/gate/events.rs",
+  "line": 400,
+  "severity": "minor",
+  "text": "Comment listing events' diagnostic sources omitted the dependency warnings.",
+  "disposition": "fixed",
+  "evidence": "Comment updated.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C7",
+  "source": "code-review 7",
+  "round": 6,
+  "file": "tests/cli/cli_dependency_diagnostics.rs",
+  "line": 49,
+  "severity": "minor",
+  "text": "copy_dir duplicated across cli tests.",
+  "disposition": "fixed",
+  "evidence": "Hoisted to one pub(crate) helper in tests/cli/main.rs, used by both files (the lib-side copy in diff/cli.rs tests cannot be shared).",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C8",
+  "source": "code-review 8",
+  "round": 6,
+  "file": "tests/cli/cli_dependency_diagnostics.rs",
+  "line": 147,
+  "severity": "minor",
+  "text": "assert_row re-ran analyze per row (~12 redundant whole-program runs).",
+  "disposition": "fixed",
+  "evidence": "analyze messages cached once per (fixture, mode); every assertion kept.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C9",
+  "source": "code-review 9",
+  "round": 6,
+  "file": "src/engine/gate/run.rs",
+  "line": 1166,
+  "severity": "minor",
+  "text": "T3's include_str! source check is fragile.",
+  "disposition": "refuted",
+  "evidence": "Both spec reviewers required a source-level pin (S6): behaviour cannot tell the inline block from the shared call. It was hardened in the T1 review (cut at the next item, late anchor) and fails loudly, not silently.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "C10",
+  "source": "code-review 10",
+  "round": 6,
+  "file": "src/engine/gate/run.rs",
+  "line": 1017,
+  "severity": "minor",
+  "text": "compute_analyzer_diagnostics's doc claimed every source agrees with analyze --single-app, but it runs the default detector set.",
+  "disposition": "fixed",
+  "evidence": "Doc now: sources (1),(2),(5) agree regardless; (3),(6) only with a default-set analyze run.",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1",
+  "source": "opus final-1",
+  "round": 7,
+  "file": "src/engine/gate/run.rs",
+  "line": 1188,
+  "severity": "minor",
+  "text": "T3's 'late anchor' (detector_stats, ~line 526) is not late; a cut stopping after it would miss an inline aggregation added later in run_analyze_with_exit (ends ~749).",
+  "disposition": "fixed",
+  "evidence": "T3 now anchors on the function's last statement, Ok((output, exit_code, stderr_warning)).",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "G1",
+  "source": "opus final-2",
+  "round": 8,
+  "file": ".agent/issue-91/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Ledger bookkeeping: the c4 proof row sat after the 'Final:' paragraph (outside the Markdown table), and the Timeline omitted commit 5c7de0b3.",
+  "disposition": "fixed",
+  "evidence": "c4 row moved into the proofs table above 'Final:'; Timeline says 'Commit 5c7de0b3 for both.'",
+  "hash": "a0af0595b4f45093",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
