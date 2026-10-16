@@ -1924,6 +1924,7 @@ mod tests {
     fn the_inline_program_model_is_the_disk_model() {
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
         let mut compared = 0;
+        let mut warned = 0;
         for entry in std::fs::read_dir(&corpus).unwrap() {
             let ws = entry.unwrap().path();
             let Ok(app) = std::fs::read_to_string(ws.join("app.json")) else {
@@ -1945,8 +1946,16 @@ mod tests {
             if !single_app || files.is_empty() {
                 continue;
             }
-            let guid: serde_json::Value = serde_json::from_str(&app).unwrap();
-            let guid = guid["id"].as_str().unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&app).unwrap();
+            let guid = manifest["id"].as_str().unwrap();
+            // A fixture that declares dependencies, or a platform/application
+            // (implicit Microsoft ones), and ships no packages must get warnings.
+            let declares = manifest["dependencies"]
+                .as_array()
+                .is_some_and(|d| !d.is_empty())
+                || manifest.get("platform").is_some()
+                || manifest.get("application").is_some();
+            let must_warn = declares && !ws.join(".alpackages").exists();
             let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
             let mut disk_text = model_text(&disk);
@@ -1965,11 +1974,22 @@ mod tests {
                 "{}: {disk_deps:?}",
                 ws.display()
             );
+            assert!(
+                !must_warn || !disk_deps.is_empty(),
+                "{}: declares dependencies with no packages, so the disk model must warn",
+                ws.display()
+            );
+            warned += usize::from(must_warn);
             disk_text[DEPENDENCY_DIAGNOSTICS_AT] = inline_text[DEPENDENCY_DIAGNOSTICS_AT].clone();
             assert_eq!(inline_text, disk_text, "{}", ws.display());
             compared += 1;
         }
         assert!(compared >= 20, "only {compared} fixtures compared");
+        // The dependency-warning check above must actually bite somewhere.
+        assert!(
+            warned >= 1,
+            "no compared fixture declares a dependency without packages"
+        );
     }
 
     /// The inputs inline tests pass: an app id that is no hex GUID, files at the

@@ -1187,9 +1187,10 @@ mod tests {
             .min()
             .expect("an item after run_analyze_with_exit");
         let body = &body[..end + 1];
-        // A late anchor proves the cut did not stop early.
+        // An anchor from the function's last statement proves the cut did not
+        // stop early.
         assert!(
-            body.contains("detector_stats"),
+            body.contains("Ok((output, exit_code, stderr_warning))"),
             "the cut must reach run_analyze_with_exit's later code"
         );
         assert!(
