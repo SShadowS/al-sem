@@ -1,7 +1,8 @@
 //! The `diff` CLI orchestrator. Port of al-sem `src/cli/diff.ts`: input-kind
-//! detection, snapshot/workspace loading, the rename overlay, the `--strict`
-//! analyzer-diagnostic gate, format dispatch, `--out`, the ws-mode stderr note,
-//! and the exit gates (`--fail-on`, strict-coverage).
+//! detection, snapshot/workspace loading, the `--strict` analyzer-diagnostic gate
+//! (workspace-mode sides only, before the rename overlay; #89), the rename
+//! overlay, format dispatch, `--out`, the ws-mode stderr note, and the exit gates
+//! (`--fail-on`, strict-coverage).
 
 use std::path::Path;
 
@@ -40,6 +41,8 @@ pub struct DiffCliOptions<'a> {
     pub coverage_policy: CoveragePolicy,
     pub renames_path: Option<&'a str>,
     pub fail_on: Option<Severity>,
+    /// `--strict`: exit 1 on an error-severity analyzer diagnostic of either
+    /// workspace-mode side, before any output (#89). A no-op for snapshot inputs.
     pub strict: bool,
     pub deterministic: bool,
     pub driver_version: &'a str,
@@ -78,12 +81,18 @@ fn load_snapshot_from_path(path: &str) -> Result<CborValue, String> {
 }
 
 /// Compose a full snapshot tree by reanalyzing a workspace directory (ws-mode).
+/// Under `strict` it also returns that side's analyzer diagnostics as
+/// `<severity>: <message>` lines, the list `fingerprint --strict` gates on (#89);
+/// otherwise the lines are empty and no detector runs. `diff` stays single-app
+/// (#70). The model is dropped before the next side loads, so at most one is alive.
 fn load_snapshot_from_workspace(
     dir: &str,
     driver_version: &str,
     deterministic: bool,
-) -> Result<CborValue, String> {
+    strict: bool,
+) -> Result<(CborValue, Vec<String>), String> {
     use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
+    use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -93,13 +102,61 @@ fn load_snapshot_from_workspace(
     // Engine-switch S6.4: the program-backed model (program calls and events).
     let resolved = assemble_and_resolve_workspace_program(ws, &model_id, false)
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
+    let target = AnalysisTarget::SingleApp(Box::new(resolved));
+    let diag_lines = if strict {
+        analyzer_diagnostic_lines(ws, &target)
+    } else {
+        Vec::new()
+    };
     let opts = FullSnapshotOptions {
         workspace_dir: ws,
         driver_version,
         deterministic,
         roots_config_ignored: false,
     };
-    Ok(compose_full_snapshot(&resolved, &opts))
+    Ok((compose_full_snapshot(target.resolved(), &opts), diag_lines))
+}
+
+/// Load one side: a workspace (reanalyzed, with its strict diagnostic lines) or
+/// a snapshot file. Deserialization keeps only the snapshot payload, so a
+/// snapshot side contributes no analyzer diagnostics even when the envelope
+/// carried some.
+fn load_side(
+    arg: &str,
+    kind: InputKind,
+    opts: &DiffCliOptions,
+) -> Result<(CborValue, Vec<String>), String> {
+    match kind {
+        InputKind::Workspace => {
+            load_snapshot_from_workspace(arg, opts.driver_version, opts.deterministic, opts.strict)
+        }
+        _ => load_snapshot_from_path(arg).map(|s| (s, Vec::new())),
+    }
+}
+
+/// The strict gate's stderr (#89): the old side's lines, then the new side's in
+/// full, with no text dedupe across sides, because a path-free message shared by
+/// two revisions must still show the new side has it. When both sides are the
+/// same workspace, its list prints once.
+fn strict_gate_lines(old: Vec<String>, new: Vec<String>, same_workspace: bool) -> Vec<String> {
+    if same_workspace {
+        return old;
+    }
+    let mut lines = old;
+    lines.extend(new);
+    lines
+}
+
+/// Both arguments name one workspace directory, so its diagnostics would print
+/// twice under `--strict` (#89). Compared canonically; an unresolvable path is
+/// never "the same".
+fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind) -> bool {
+    old_kind == InputKind::Workspace
+        && new_kind == InputKind::Workspace
+        && matches!(
+            (std::fs::canonicalize(old), std::fs::canonicalize(new)),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 /// Run the diff command end-to-end. Returns a `DiffRunOutcome`; the bin maps it to
@@ -133,26 +190,37 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
     }
 
     // Load both snapshots.
-    let old_snap = match old_kind {
-        InputKind::Workspace => {
-            load_snapshot_from_workspace(opts.old_arg, opts.driver_version, opts.deterministic)
-        }
-        _ => load_snapshot_from_path(opts.old_arg),
-    };
-    let old_snap = match old_snap {
+    let (old_snap, old_diag_lines) = match load_side(opts.old_arg, old_kind, opts) {
         Ok(s) => s,
         Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
     };
-    let new_snap = match new_kind {
-        InputKind::Workspace => {
-            load_snapshot_from_workspace(opts.new_arg, opts.driver_version, opts.deterministic)
-        }
-        _ => load_snapshot_from_path(opts.new_arg),
-    };
-    let new_snap = match new_snap {
+    let (new_snap, new_diag_lines) = match load_side(opts.new_arg, new_kind, opts) {
         Ok(s) => s,
         Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
     };
+
+    // --strict (#89): an error-severity analyzer diagnostic on EITHER workspace
+    // side → its lines to stderr, no output, exit 1, and no ws-mode note, as
+    // `fingerprint`/`events`/`policy` print only the diagnostics. It runs before
+    // the rename overlay, the engine and every exit gate. Old side first, then
+    // the new side in full: a path-free message the two revisions share must
+    // still show the new side has it. Only when both arguments are the SAME
+    // workspace is its list printed once. Without an error the run continues
+    // unchanged and the warning/info lines are not printed. Diff reads no
+    // diagnostics from a snapshot file, so `--strict` is a no-op for that side.
+    let any_error = old_diag_lines
+        .iter()
+        .chain(&new_diag_lines)
+        .any(|l| l.starts_with("error:"));
+    if any_error {
+        let same = same_workspace(opts.old_arg, old_kind, opts.new_arg, new_kind);
+        return DiffRunOutcome {
+            output: None,
+            stderr_lines: strict_gate_lines(old_diag_lines, new_diag_lines, same),
+            exit_code: 1,
+            error_message: None,
+        };
+    }
 
     // Optional rename overlay.
     let rename_overlay = match opts.renames_path {
@@ -168,12 +236,9 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
         },
     };
 
-    // --strict: in snapshot-input mode there are no analyzer diagnostics to gate on,
-    // so `--strict` is a no-op here. (ws-mode analyzer-diagnostic collection — the
-    // `error → stderr + exit 1` gate — is the corpus-invisible follow-up; no golden
-    // exercises a ws-mode `--strict` run.) The envelope diagnostics channel stays
-    // empty, matching the snapshot-input goldens (`projectDiagnostics([])`).
-    let _ = opts.strict;
+    // The envelope diagnostics channel stays empty in both modes, matching the
+    // snapshot-input and ws-mode goldens (`projectDiagnostics([])`); the `--strict`
+    // gate above reads the analyzer diagnostics, the envelope does not (#89).
     let analyzer_diagnostics: Vec<CborValue> = Vec::new();
 
     // Run the engine.
@@ -227,5 +292,31 @@ fn early_error(msg: String, exit_code: u8) -> DiffRunOutcome {
         stderr_lines: Vec::new(),
         exit_code,
         error_message: Some(msg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|l| l.to_string()).collect()
+    }
+
+    /// #89: two different workspaces that share a path-free message both print
+    /// it, so the reader sees the NEW side has the error too. Mutation: drop
+    /// new-side lines equal to an old-side line -> the second assert fails.
+    #[test]
+    fn strict_gate_lines_keep_a_shared_line_from_two_workspaces() {
+        let old = v(&["error: cap hit", "warning: w"]);
+        let new = v(&["error: cap hit"]);
+        assert_eq!(
+            strict_gate_lines(old.clone(), new.clone(), true),
+            v(&["error: cap hit", "warning: w"])
+        );
+        assert_eq!(
+            strict_gate_lines(old, new, false),
+            v(&["error: cap hit", "warning: w", "error: cap hit"])
+        );
     }
 }
