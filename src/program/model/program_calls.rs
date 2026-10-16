@@ -627,12 +627,17 @@ pub fn resolved_calls_from_program(
 /// return the model with both. `alsem analyze` and
 /// [`assemble_and_resolve_workspace_program`] both use it, so a test cannot
 /// drift from the production path.
+///
+/// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
+/// go on the model (#91). It is required, so no program-backed model can be built
+/// without them.
 pub fn attach_program_calls(
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
+    coverage: &crate::program::resolve::full::FreshCoverage,
 ) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(rows, ctx, report, None)
+    attach_program_calls_with(rows, ctx, report, coverage, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
@@ -641,6 +646,7 @@ fn attach_program_calls_with(
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
+    coverage: &crate::program::resolve::full::FreshCoverage,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> crate::program::model::workspace::Model {
     use crate::engine::perf_trace as pt;
@@ -666,6 +672,7 @@ fn attach_program_calls_with(
         root_classifications: rows.root_classifications,
         primary_app: rows.primary_app,
         infra_diagnostics: rows.infra_diagnostics,
+        dependency_diagnostics: coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
@@ -701,7 +708,7 @@ pub fn assemble_and_resolve_workspace_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
-    let (ctx, report, _) =
+    let (ctx, report, coverage) =
         crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         workspace,
@@ -710,7 +717,7 @@ pub fn assemble_and_resolve_workspace_program(
         &ctx,
         &report.parenless_calls,
     )?;
-    Some(attach_program_calls(rows, ctx, report))
+    Some(attach_program_calls(rows, ctx, report, &coverage))
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -881,7 +888,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(rows, ctx, report, Some(&abi_rows))
+        attach_program_calls_with(rows, ctx, report, &coverage, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,
@@ -1889,6 +1896,9 @@ mod tests {
 
     const APP_JSON: &str = r#"{"id":"b3b3b3b3-0000-0000-0000-000000000001","name":"B3 Census","publisher":"T","version":"1.0.0.0"}"#;
 
+    /// Where `model_text` puts `dependency_diagnostics`.
+    const DEPENDENCY_DIAGNOSTICS_AT: usize = 3;
+
     /// Everything a consumer reads from a model, as `Debug` text, minus
     /// `primary_app` (its name/publisher/version come from `app.json`, which the
     /// inline builder writes itself; the guid is compared).
@@ -1897,6 +1907,7 @@ mod tests {
             format!("{:?}", m.primary_app.as_ref().map(|a| &a.app_guid)),
             format!("{:?}", m.root_classifications),
             format!("{:?}", m.infra_diagnostics),
+            format!("{:?}", m.dependency_diagnostics),
             format!("{:?}", m.events),
         ];
         out.extend(m.workspace.objects.iter().map(|o| format!("{o:?}")));
@@ -1913,6 +1924,7 @@ mod tests {
     fn the_inline_program_model_is_the_disk_model() {
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
         let mut compared = 0;
+        let mut warned = 0;
         for entry in std::fs::read_dir(&corpus).unwrap() {
             let ws = entry.unwrap().path();
             let Ok(app) = std::fs::read_to_string(ws.join("app.json")) else {
@@ -1934,14 +1946,50 @@ mod tests {
             if !single_app || files.is_empty() {
                 continue;
             }
-            let guid: serde_json::Value = serde_json::from_str(&app).unwrap();
-            let guid = guid["id"].as_str().unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&app).unwrap();
+            let guid = manifest["id"].as_str().unwrap();
+            // A fixture that declares dependencies, or a platform/application
+            // (implicit Microsoft ones), and ships no packages must get warnings.
+            let declares = manifest["dependencies"]
+                .as_array()
+                .is_some_and(|d| !d.is_empty())
+                || manifest.get("platform").is_some()
+                || manifest.get("application").is_some();
+            let must_warn = declares && !ws.join(".alpackages").exists();
             let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
-            assert_eq!(model_text(&inline), model_text(&disk), "{}", ws.display());
+            let mut disk_text = model_text(&disk);
+            let inline_text = model_text(&inline);
+            // The inline builder writes an app.json with no dependencies, so it
+            // has no dependency ledger to warn about. A fixture that declares
+            // dependencies (or a platform/application, which add implicit ones)
+            // gets "is missing" warnings on disk, as none has a package here.
+            // Check that, then compare the field as the inline model has it.
+            assert_eq!(inline.dependency_diagnostics, [], "{}", ws.display());
+            let disk_deps = &disk.dependency_diagnostics;
+            assert!(
+                disk_deps.iter().all(|d| d.severity == "warning"
+                    && d.stage == "dependencies"
+                    && d.message.ends_with("is missing")),
+                "{}: {disk_deps:?}",
+                ws.display()
+            );
+            assert!(
+                !must_warn || !disk_deps.is_empty(),
+                "{}: declares dependencies with no packages, so the disk model must warn",
+                ws.display()
+            );
+            warned += usize::from(must_warn);
+            disk_text[DEPENDENCY_DIAGNOSTICS_AT] = inline_text[DEPENDENCY_DIAGNOSTICS_AT].clone();
+            assert_eq!(inline_text, disk_text, "{}", ws.display());
             compared += 1;
         }
         assert!(compared >= 20, "only {compared} fixtures compared");
+        // The dependency-warning check above must actually bite somewhere.
+        assert!(
+            warned >= 1,
+            "no compared fixture declares a dependency without packages"
+        );
     }
 
     /// The inputs inline tests pass: an app id that is no hex GUID, files at the

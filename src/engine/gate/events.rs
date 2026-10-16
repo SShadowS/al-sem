@@ -398,8 +398,9 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
         }
     };
 
-    // `analyzeWorkspace` diagnostics: workspace + overlay + ALL default-detector
-    // diagnostics (e.g. `d43-event-ishandled-skip`). events-fanout.ts emits these
+    // `analyzeWorkspace` diagnostics: workspace + dependency-ledger warnings +
+    // overlay + ALL default-detector diagnostics (e.g. `d43-event-ishandled-skip`).
+    // events-fanout.ts emits these
     // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
     // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
     let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);

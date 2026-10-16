@@ -1903,6 +1903,12 @@ pub struct Model {
     /// `kinds-mismatch` warnings from `roots.config.json`). Propagated to the JSON
     /// envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+    /// The program build's dependency-ledger warnings
+    /// (`FreshCoverage::dependency_diagnostics`), in ledger order: missing,
+    /// older-than-declared, unreadable and unidentified dependency packages. Kept
+    /// on the model so every command's analyzer diagnostics carry them, as
+    /// `alsem analyze`'s do (#91). Empty for a model built without a program build.
+    pub dependency_diagnostics: Vec<crate::engine::l5::registry::Diagnostic>,
     /// The program engine's calls, adapted to the model's call shape
     /// (`program_calls::attach_program_calls`).
     pub calls: std::sync::Arc<super::calls::ResolvedCalls>,

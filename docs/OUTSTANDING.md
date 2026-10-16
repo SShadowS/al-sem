@@ -148,12 +148,14 @@ sizings marked pre-arc).
     d40/d41/d42/d53/d55/d61 and the by-var-argument helpers. Analysing every
     implementer is more complete; measure the finding delta before choosing.
 
-- [ ] **Dependency diagnostics for the other subcommands** (recorded 2026-10-06,
-  engine-switch S6). `alsem analyze` reports the dependency ledger's problems in
-  diagnostics slot (2) (S5.2b); `compute_analyzer_diagnostics` (events, policy,
-  digest, fingerprint, prove) does not, because
-  `assemble_and_resolve_workspace_program` drops the `FreshCoverage`. Keep it (e.g. on
-  the model next to `precomputed_events`) and emit the same warnings.
+- [x] **Dependency diagnostics for the other subcommands** — DONE 2026-10-16 (#91).
+  (Recorded 2026-10-06, engine-switch S6.) `alsem analyze` reported the dependency
+  ledger's problems in diagnostics slot (2) (S5.2b); `compute_analyzer_diagnostics`
+  (events, policy, digest, fingerprint, prove, diff) did not, because
+  `assemble_and_resolve_workspace_program` dropped the `FreshCoverage`. Now
+  `attach_program_calls` takes the build's coverage and keeps its warnings on the
+  model (`Model::dependency_diagnostics`), and analyze builds its diagnostics through
+  the same `analyzer_diagnostics_of_run` as every other command.
 
 - [ ] **B3 harness L3 comparisons** (recorded 2026-10-06, engine-switch S6.0). The
   adapter's receiver typing now comes from the program resolver (S6.0, done). What

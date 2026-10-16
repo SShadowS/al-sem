@@ -1936,6 +1936,51 @@ pub struct FreshCoverage {
     pub unbound_subscriptions: usize,
 }
 
+impl FreshCoverage {
+    /// One `dependencies`-stage warning per problem in the program build's dependency
+    /// ledger (engine-switch S5.2b, spec G14), in ledger (guid) order, then one per
+    /// package whose manifest could not be read. Missing and older dependencies do not
+    /// degrade the preflight on their own (a call into one is already an unknown
+    /// edge); an unreadable one does, there. It lives next to the ledger it reads, so
+    /// the model builders can keep it on the model without calling up into the gate
+    /// (#91).
+    pub fn dependency_diagnostics(&self) -> Vec<crate::engine::l5::registry::Diagnostic> {
+        let warn = |message: String| crate::engine::l5::registry::Diagnostic {
+            severity: "warning".to_string(),
+            stage: "dependencies".to_string(),
+            message,
+        };
+        let mut out = Vec::new();
+        for e in &self.ledger {
+            let what = format!(
+                "dependency \"{}\" ({}), declared by \"{}\" at version {}",
+                e.name, e.guid, e.declared_by, e.declared_version
+            );
+            match (&e.found, &e.unreadable) {
+                (None, Some(err)) => out.push(warn(format!("{what}, could not be read: {err}"))),
+                (None, None) => out.push(warn(format!("{what}, is missing"))),
+                (Some(f), _) => {
+                    if let Some(err) = &f.ingest_error {
+                        out.push(warn(format!("{what}, could not be read: {err}")));
+                    }
+                    if e.below_declared_version() {
+                        out.push(warn(format!(
+                            "{what}, is present only at version {}",
+                            f.version
+                        )));
+                    }
+                }
+            }
+        }
+        out.extend(
+            self.unidentified_packages
+                .iter()
+                .map(|p| warn(format!("dependency package could not be read: {p}"))),
+        );
+        out
+    }
+}
+
 /// One dependency in the primary app's reachable declared closure: what an app
 /// asked for, and what the snapshot holds for it (engine-switch S5.2, G14).
 #[derive(Debug, Clone, PartialEq, Eq)]

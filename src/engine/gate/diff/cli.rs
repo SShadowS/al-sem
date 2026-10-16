@@ -319,4 +319,57 @@ mod tests {
             v(&["error: cap hit", "warning: w", "error: cap hit"])
         );
     }
+
+    fn copy_dir(src: &Path, dst: &Path) {
+        std::fs::create_dir_all(dst).expect("mkdir");
+        for entry in std::fs::read_dir(src).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            let to = dst.join(entry.file_name());
+            if entry.file_type().expect("file type").is_dir() {
+                copy_dir(&entry.path(), &to);
+            } else {
+                std::fs::copy(entry.path(), &to).expect("copy");
+            }
+        }
+    }
+
+    /// #91: a workspace side's strict lines carry the program build's
+    /// dependency-ledger warnings, as `alsem analyze` reports them. diff prints
+    /// these lines only on a failing gate, so the loader is where they show.
+    /// The fixture is `tests/r0-corpus/ws-codeunit-rec` with its
+    /// `CodeunitRecLibA` dependency declared at 2.0.0.0 against the packaged
+    /// 1.0.0.0. Mutation: drop source (2) from `analyzer_diagnostics_of_run`, or
+    /// give the single-app model an empty `dependency_diagnostics` -> this fails.
+    #[test]
+    fn workspace_side_strict_lines_carry_the_dependency_warning() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws-codeunit-rec");
+        copy_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-codeunit-rec"),
+            &ws,
+        );
+        let app_json = ws.join("app.json");
+        let mut app: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&app_json).expect("read app.json"))
+                .expect("parse app.json");
+        let dep = app["dependencies"]
+            .as_array_mut()
+            .expect("dependencies")
+            .iter_mut()
+            .find(|d| d["name"] == "CodeunitRecLibA")
+            .expect("CodeunitRecLibA dependency");
+        dep["version"] = serde_json::Value::from("2.0.0.0");
+        std::fs::write(&app_json, app.to_string()).expect("write app.json");
+
+        let (_, lines) =
+            load_snapshot_from_workspace(ws.to_str().expect("utf-8 path"), "t", true, true)
+                .expect("workspace loads");
+        let want = "warning: dependency \"CodeunitRecLibA\" (eeee5555-0000-0000-0000-000000000005), \
+                    declared by \"CodeunitRec Probe\" at version 2.0.0.0, is present only at \
+                    version 1.0.0.0";
+        assert!(
+            lines.iter().any(|l| l == want),
+            "missing {want:?}; got {lines:?}"
+        );
+    }
 }

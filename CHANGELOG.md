@@ -252,6 +252,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem fingerprint`, `prove`, `digest`, `events fanout`, `events chains`, `policy check`
+  and `diff --strict` (in the lines it prints when its gate fails) now report the dependency
+  warnings `alsem analyze` reports (#91): a dependency that is missing, older than
+  declared, or unreadable, and a package whose manifest cannot be read. That includes the
+  implicit `System` and `System Application` dependencies when their packages are absent.
+  Before, only `analyze` showed them, so the other commands gave a
+  smaller diagnostics list for the same workspace. They appear in each command's usual place
+  (the JSON envelope's `diagnostics`, or `warning: …` lines on stderr), after the workspace
+  diagnostics. All commands that build a model now build their diagnostics through one shared
+  function, so `analyze`'s output is unchanged. `analyze`'s empty-output path (no model is
+  built) still reports only the workspace diagnostics, as before.
 - `alsem diff --strict` now does what its help says in workspace mode: when either workspace
   side has an error-severity analyzer diagnostic, it prints both sides' diagnostics to stderr
   (`<severity>: <message>`, old side first; one list when both arguments are the same
