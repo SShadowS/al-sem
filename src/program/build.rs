@@ -202,9 +202,12 @@ fn build_dep_nodes(
     // rows below (S10.3), keeping the map's last-wins rule.
     //
     // Count first, then reserve once (issue #84): growing the lists by
-    // doubling, file by file in step 2 and app by app in step 2b, left the
-    // routine buffer at up to twice its content for the layer's lifetime,
-    // with the old and new blocks both live during each realloc. The totals
+    // doubling, file by file in step 2 and app by app in step 2b, gave the
+    // routine buffer up to twice its content in pre-dedup capacity, and each
+    // doubling realloc held the old and new blocks live at once. That excess
+    // was transient: the step 4 dedup already trimmed the slack before the
+    // layer was kept, so the reservation removes the reallocs and their
+    // old+new overlap, not a lasting cost. The totals
     // are the source summaries' lengths (already in memory) plus the
     // SymbolOnly ABIs' node counts. Counting loads each ABI through
     // `abi_cache`, which keeps it, so step 2b's ingest hits the cache and
@@ -270,6 +273,20 @@ fn build_dep_nodes(
         objects.extend(abi_objects);
         routines.extend(abi_routines);
     }
+
+    // The count-first contract: steps 2 and 2b filled exactly the counted
+    // totals, and no list grew past its single reservation. `dep_meta` is
+    // reserved exactly too: step 2 extends it with `meta_total` entries.
+    debug_assert_eq!(
+        (objects.len(), routines.len(), dep_meta.len()),
+        (object_total, routine_total, meta_total),
+        "steps 2 and 2b must add exactly the counted (objects, routines, meta) totals"
+    );
+    debug_assert_eq!(
+        (objects.capacity(), routines.capacity(), dep_meta.capacity()),
+        (object_total, routine_total, meta_total),
+        "(objects, routines, meta) must hold exactly the one reservation made before step 2"
+    );
 
     // ── Step 4: sort for determinism, then dedup this (non-primary) population ──
     // Same non-primary app can appear as both a workspace-multi-app source
@@ -2002,11 +2019,14 @@ codeunit 50301 "Preproc Dup Sig"
     /// seeded SymbolOnly units interleaved with unseeded, failing ones
     /// (step 2b). The layer's nodes, the ingest errors (in unit order), the
     /// number of real loads, and both buffers' capacities are all stated
-    /// literally. The raw totals (objects 1 + 2 + 1 = 4, routines
-    /// 2 + 3 + 2 = 7) are off the doubling path. The object list's dedup
-    /// keeps its capacity, so the object capacity equals 4 only when one
-    /// reservation before step 2 counted both steps. The routine capacity
-    /// equals the pre-dedup length 7 (the dedup's `shrink_to`, see D4).
+    /// literally. The raw totals (objects 2 + 2 + 1 = 5, routines
+    /// 2 + 3 + 2 = 7) are off the doubling path: `ObjectNode` is large
+    /// enough that Vec's smallest non-zero capacity is 4, so growth gives
+    /// 4 or 8, never 5. The object list's dedup keeps its capacity, so the
+    /// object capacity equals 5 only when one reservation before step 2
+    /// counted both steps. The routine capacity equals the pre-dedup length
+    /// 7 (the dedup's `shrink_to`, see D4), which hides how it was reserved;
+    /// the `debug_assert`s at the end of step 2b check that in this test.
     #[test]
     fn dep_nodes_count_first_keeps_contents_errors_and_exact_capacity() {
         let app_id = |name: &str| AppId {
@@ -2053,10 +2073,15 @@ codeunit 50301 "Preproc Dup Sig"
                 layer_split_source_unit(
                     &src,
                     TrustTier::EmbeddedSource,
-                    vec![(
-                        "Src.Codeunit.al",
-                        "codeunit 9 Src\n{\n    procedure X1()\n    begin\n    end;\n\n    procedure X2()\n    begin\n    end;\n}\n",
-                    )],
+                    vec![
+                        (
+                            "Src.Codeunit.al",
+                            "codeunit 9 Src\n{\n    procedure X1()\n    begin\n    end;\n\n    procedure X2()\n    begin\n    end;\n}\n",
+                        ),
+                        // A second, routine-less object puts the object
+                        // total at 5, off Vec's growth path (4, 8).
+                        ("Src2.Codeunit.al", "codeunit 10 Src2\n{\n}\n"),
+                    ],
                 ),
             ],
             workspace_app: ws.clone(),
@@ -2076,6 +2101,7 @@ codeunit 50301 "Preproc Dup Sig"
                 dep_obj_id(AppRef(1), 2),
                 dep_obj_id(AppRef(3), 5),
                 dep_obj_id(AppRef(5), 9),
+                dep_obj_id(AppRef(5), 10),
             ]
         );
         assert_eq!(
@@ -2114,7 +2140,7 @@ codeunit 50301 "Preproc Dup Sig"
         // docs promise only "at least" that capacity).
         assert_eq!(
             layer.dep_objects.capacity(),
-            4,
+            5,
             "one reservation before step 2 covers the source and ABI object totals"
         );
         assert_eq!(

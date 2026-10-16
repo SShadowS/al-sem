@@ -149,10 +149,15 @@ fn report_bigs(root: usize, marks: &[&'static str], b0: isize) {
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
     let (mine, rest): (Vec<Big>, Vec<Big>) = all.into_iter().partition(|r| r.root == root);
-    // A plain move: no allocation under the lock.
-    *BIGS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = rest;
+    // Put the other roots' records back, AFTER any logged since the take, so
+    // none is lost. `extend` may allocate under the lock, so set the guard
+    // first: that allocation re-enters `log_big` unlogged and cannot try to
+    // take the lock this thread already holds.
+    let _ = IN.try_with(|g| g.set(true));
+    BIGS.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(rest);
+    let _ = IN.try_with(|g| g.set(false));
     let (rn, on) = (size_of::<RoutineNode>(), size_of::<ObjectNode>());
     println!(
         "Large-allocation log: {} request(s) with NEW size >= {} B during this build (live = net live heap after the request, relative to before this root's build; a realloc's old and new blocks are both live during the copy, so its transient is live + old)",

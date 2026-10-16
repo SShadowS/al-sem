@@ -27,4 +27,4 @@ Raw output of the issue #84 fix, same corpus and mode: `runs-issue-84/after/`. I
 
 The `model` mode destructures `Model`, which now includes `dependency_diagnostics` (added to master by #91); the probe did not compile without it.
 
-The probe's `Cargo.lock` is not tracked, so each run resolves dependencies fresh; the `backtrace` dependency is pinned in its `Cargo.toml`.
+The probe's direct `backtrace` dependency is pinned exactly (`=0.3.76`) in its `Cargo.toml`. Its transitive dependencies still resolve fresh on each run, because the probe's `Cargo.lock` is not tracked. It is not committed because the main checkout carries an untracked copy at that path, which a tracked file would collide with.
