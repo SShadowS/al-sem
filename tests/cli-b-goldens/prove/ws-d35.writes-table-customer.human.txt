@@ -1,4 +1,4 @@
---- OnBeforePrintSafe ---
+--- Codeunit D35 Demo::OnBeforePrintSafe ---
   question: writes-table:Customer
   answer:   no
   obligations: all clear

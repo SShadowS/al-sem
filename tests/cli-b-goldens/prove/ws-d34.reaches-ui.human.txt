@@ -1,4 +1,4 @@
---- DirectCommitInLoop ---
+--- Codeunit D34 Demo::DirectCommitInLoop ---
   question: reaches-ui
   answer:   no
   obligations: all clear

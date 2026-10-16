@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
+use crate::engine::l4::effect_query_cli::owner_qualified;
 use crate::engine::l5::digest::{
     FingerprintIndexesPub, HumanHop, ProjectedPath, QueryWitnessHop, TerminalHopInfo,
     build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
@@ -241,13 +242,6 @@ fn parse_object_id_from_routine(rid: &str) -> Option<String> {
     Some(rid[..hash_at].to_string())
 }
 
-fn split_object_routine(display: &str) -> (&str, &str) {
-    match display.rfind("::") {
-        Some(idx) => (&display[..idx], &display[idx + 2..]),
-        None => ("", display),
-    }
-}
-
 fn render_value_source(vs: &SnapValueSource) -> String {
     match vs {
         SnapValueSource::Literal { value } => value.clone(),
@@ -301,13 +295,15 @@ fn build_block(
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
     idx: &FingerprintIndexesPub<'_>,
     filters: &FingerprintFilters,
+    object_display_by_id: &HashMap<String, String>,
 ) -> FingerprintBlock {
-    let display_full = idx
+    let routine_display = idx
         .routine_display_by_id
         .get(rid)
         .cloned()
         .unwrap_or_else(|| rid.to_string());
-    let (object_display, routine_display) = split_object_routine(&display_full);
+    // The owner comes from the model index, never the identity table (#78).
+    let object_display = object_display_by_id.get(rid).cloned().unwrap_or_default();
     let object_id = parse_object_id_from_routine(rid);
 
     // Coverage record.
@@ -617,8 +613,8 @@ fn build_block(
     FingerprintBlock {
         routine_id: rid.to_string(),
         object_id,
-        object_display: object_display.to_string(),
-        routine_display: routine_display.to_string(),
+        object_display,
+        routine_display,
         kinds: root.kinds.clone(),
         classification_source: root.source.clone(),
         config_entry_id: root.config_entry_id.clone(),
@@ -646,10 +642,14 @@ fn build_block(
 /// in the JSON envelope). The `CapabilitySnapshot` carries no `inputsMetadata`
 /// of its own, so the caller (which resolved the workspace and knows both the
 /// flag and whether the file existed) computes and passes this in.
+///
+/// `object_display_by_id`: each block's owning object, from
+/// `object_display_by_stable_routine_id` over the model (#78).
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
     roots_config_ignored: bool,
+    object_display_by_id: &HashMap<String, String>,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
@@ -732,7 +732,7 @@ pub fn fingerprint_query(
     // Build blocks.
     let mut blocks: Vec<FingerprintBlock> = Vec::new();
     for root in root_pool {
-        let block = build_block(&root.routine_id, root, &idx, filters);
+        let block = build_block(&root.routine_id, root, &idx, filters, object_display_by_id);
         blocks.push(block);
     }
 
@@ -1522,9 +1522,8 @@ fn render_block(block: &FingerprintBlock, verbosity: &str, lines: &mut Vec<Strin
         _ => "",
     };
     lines.push(format!(
-        "{}::{}  [{}]{marker}",
-        block.object_display,
-        block.routine_display,
+        "{}  [{}]{marker}",
+        owner_qualified(&block.object_display, &block.routine_display),
         block.kinds.join(", ")
     ));
 
@@ -1691,7 +1690,7 @@ mod tests {
             include_inherited: true,
             witness_limit: WitnessLimit::Disabled,
         };
-        let result = fingerprint_query(&snap, &filters, false);
+        let result = fingerprint_query(&snap, &filters, false, &HashMap::new());
         assert_eq!(result.diagnostics.len(), 1);
         match &result.diagnostics[0] {
             FingerprintQueryDiagnostic::SelectorAmbiguous {

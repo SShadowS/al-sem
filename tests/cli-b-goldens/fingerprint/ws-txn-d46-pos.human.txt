@@ -1,6 +1,6 @@
 Rendering 4 root classifications.
 
-::OnInstallAppPerCompany  [install-codeunit]
+Codeunit Install Handler::OnInstallAppPerCompany  [install-codeunit]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
@@ -25,7 +25,7 @@ Rendering 4 root classifications.
           → direct Setup.Get at ws:src/InstallCU.al:30:15
 
 
-::DoSetup  [install-codeunit]
+Codeunit Install Handler::DoSetup  [install-codeunit]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
@@ -47,7 +47,7 @@ Rendering 4 root classifications.
         direct Setup.Get at ws:src/InstallCU.al:30:15
 
 
-::DoUpgrade  [upgrade-codeunit]
+Codeunit Upgrade Handler::DoUpgrade  [upgrade-codeunit]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   commit:     yes
@@ -68,7 +68,7 @@ Rendering 4 root classifications.
         direct Setup.Get at ws:src/UpgradeCU.al:13:11
 
 
-::OnUpgradePerCompany  [upgrade-codeunit]
+Codeunit Upgrade Handler::OnUpgradePerCompany  [upgrade-codeunit]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   commit:     yes

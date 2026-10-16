@@ -1815,6 +1815,8 @@ fn declaration_only_procedures_are_roots() {
         "(a) {id}"
     );
     assert_eq!(id, decl_only_id("Interface", "IFoo", "Bar"), "(a)");
+    // #78: the owner is the declaring object.
+    assert_eq!(e["routine"]["objectDisplay"], "Interface IFoo", "(a) {doc}");
     assert_eq!(e["effects"], Value::Array(Vec::new()));
     assert_eq!(e["coverage"]["status"], "unknown");
     assert_eq!(
@@ -1839,6 +1841,9 @@ fn declaration_only_procedures_are_roots() {
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);
     assert_eq!(code, 0, "(b) {doc}");
     assert_eq!(roots(&doc), vec!["Bar", "Baz"], "(b) {doc}");
+    for e in entries(&doc) {
+        assert_eq!(e["routine"]["objectDisplay"], "Interface IFoo", "(b) {doc}");
+    }
     assert_eq!(doc["payload"]["summary"]["rootsRequested"], 2, "(b) {doc}");
     assert_eq!(doc["payload"]["summary"]["rootsResolved"], 2, "(b) {doc}");
     assert!(diags(&doc).is_empty(), "(b) {doc}");
@@ -1876,6 +1881,34 @@ fn declaration_only_procedures_are_roots() {
         "(c) {doc}"
     );
     assert_ne!(got[0].1, got[1].1);
+    // #78: two interfaces sharing `<guid>/Interface/0` keep their own owners.
+    let mut owners: Vec<(String, String)> = entries(&doc)
+        .iter()
+        .map(|e| {
+            (
+                anchor(e).0,
+                e["routine"]["objectDisplay"]
+                    .as_str()
+                    .unwrap_or("<missing>")
+                    .to_string(),
+            )
+        })
+        .collect();
+    owners.sort();
+    assert_eq!(
+        owners,
+        vec![
+            (
+                "ws:src/IFoo.Interface.al".to_string(),
+                "Interface IFoo".to_string()
+            ),
+            (
+                "ws:src/IQux.Interface.al".to_string(),
+                "Interface IQux".to_string()
+            ),
+        ],
+        "(c) {doc}"
+    );
 
     // (d) the controladdin method.
     let (doc, code) = digest(
@@ -1894,6 +1927,10 @@ fn declaration_only_procedures_are_roots() {
         e["routine"]["stableId"],
         decl_only_id("ControlAddIn", "MyAddIn", "Init"),
         "(d)"
+    );
+    assert_eq!(
+        e["routine"]["objectDisplay"], "ControlAddIn MyAddIn",
+        "(d) {doc}"
     );
 
     // (e) an interface with no procedures declares no routine.

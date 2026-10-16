@@ -1,4 +1,4 @@
---- SendThenCommit ---
+--- Codeunit D47 Sender::SendThenCommit ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/Sender.Codeunit.al:18 "commit"

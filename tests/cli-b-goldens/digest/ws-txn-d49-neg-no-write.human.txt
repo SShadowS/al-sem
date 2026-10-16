@@ -1,4 +1,4 @@
---- MessageOnly ---
+--- Codeunit D49 Sender::MessageOnly ---
   coverage: complete
   [UI_MESSAGE] direct
     evidence: ws:src/Sender.Codeunit.al:8 "Message"

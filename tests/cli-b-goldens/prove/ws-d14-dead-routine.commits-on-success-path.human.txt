@@ -1,4 +1,4 @@
---- OnRun ---
+--- Codeunit D14EntryPoints::OnRun ---
   question: commits-on-success-path
   answer:   no
   obligations: all clear

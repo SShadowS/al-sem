@@ -196,7 +196,7 @@
             "sourceKind": "source"
           },
           "display": "SendThenCommit",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit D47 Sender",
           "stableId": "11111111-0000-0000-0000-0000000d4702:Codeunit:50000#ac74742b81f7f1f1ddeda902e79e314c6d65bb8e97f49257b6268d29e0cabe95"
         },
         "unresolved": [],

@@ -1,4 +1,4 @@
---- DirectCommitInLoop ---
+--- Codeunit D34 Demo::DirectCommitInLoop ---
   question: throws-error
   answer:   no
   obligations: all clear

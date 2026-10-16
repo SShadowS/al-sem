@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::JustFetch  [public-procedure]
+Codeunit D47 Sender::JustFetch  [public-procedure]
   coverage:   complete
   http:       "https://example.test/ping"
 

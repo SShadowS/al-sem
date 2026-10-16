@@ -206,7 +206,7 @@
         ],
         "routine": {
           "display": "RunSetup",
-          "objectDisplay": "",
+          "objectDisplay": "Codeunit Normal Handler",
           "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b"
         }
       }

@@ -29,6 +29,7 @@
 
 use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::l4::effect_query_cli::object_display_by_stable_routine_id;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
     format_fingerprint_human_verbosity, project_fingerprint_query_full,
@@ -477,7 +478,12 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         witness_limit,
     };
 
-    let result = fingerprint_query(&snap, &filters, roots_config_ignored);
+    let result = fingerprint_query(
+        &snap,
+        &filters,
+        roots_config_ignored,
+        &object_display_by_stable_routine_id(&resolved),
+    );
 
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
         .diagnostics

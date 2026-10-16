@@ -1,32 +1,32 @@
---- SendOne ---
+--- Codeunit D48 Sender::SendOne ---
   coverage: complete
   [HTTP] direct
     evidence: ws:src/D48Pos.Codeunit.al:14 "Client.Send"
     detail: method=Send
     via: 1 path(s)
 
---- ProcessAll ---
+--- Codeunit D48 Loop Caller::ProcessAll ---
   coverage: complete
   [HTTP] transitive
     evidence: ws:src/D48Pos.Codeunit.al:14 "Client.Send"
     detail: method=Send
     via: 1 path(s)
 
---- SendOne ---
+--- Codeunit D48 Loop Caller::SendOne ---
   coverage: complete
   [HTTP] transitive
     evidence: ws:src/D48Pos.Codeunit.al:14 "Client.Send"
     detail: method=Send
     via: 1 path(s)
 
---- DoSendOnce ---
+--- Codeunit D48 Non Loop Caller::DoSendOnce ---
   coverage: complete
   [HTTP] transitive
     evidence: ws:src/D48Pos.Codeunit.al:14 "Client.Send"
     detail: method=Send
     via: 1 path(s)
 
---- ExportAll ---
+--- Codeunit D48 File Loop::ExportAll ---
   coverage: complete
   [FILE] direct
     evidence: ws:src/D48Pos.Codeunit.al:72 "F.WriteAllText"
