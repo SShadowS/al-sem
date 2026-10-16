@@ -33,7 +33,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 // ---------------------------------------------------------------------------
 
 /// A resolved routine → routine combined edge (internal-id form).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct CombinedEdge {
     pub from: String,
     pub to: String,
@@ -48,7 +48,7 @@ pub struct CombinedEdge {
 }
 
 /// An uncertainty attached to a routine whose call site had no resolved target.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct UncertaintyEdge {
     pub from: String,
     pub uncertainty: Uncertainty,
@@ -56,7 +56,7 @@ pub struct UncertaintyEdge {
 
 /// The discriminated Uncertainty — kind + its single id reference (+ interfaceName
 /// for interface-open-world). Only the R3a-1-reachable variants are modelled.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct Uncertainty {
     pub kind: String,
     pub callsite_id: Option<String>,
@@ -67,7 +67,7 @@ pub struct Uncertainty {
 
 /// A typed `GraphEdge` (internal-id form). One flat struct over the discriminated
 /// union — only the fields legal for `kind` are populated (mirrors the TS union).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct TypedEdge {
     pub kind: String,
     pub from: String,
@@ -84,7 +84,7 @@ pub struct TypedEdge {
 }
 
 /// A ValueSource (internal form — table-field tableId is INTERNAL until projected).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -104,7 +104,7 @@ pub enum ValueSource {
 /// The internal combined graph: the assembled edges + uncertainty edges + the
 /// typed edges + the sorted node list. `edges` flattened (already per-`from`
 /// sorted via `edges_by_from` at assembly).
-#[derive(Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct CombinedGraph {
     /// Sorted internal routine ids.
     pub nodes: Vec<String>,

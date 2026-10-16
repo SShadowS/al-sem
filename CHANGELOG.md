@@ -75,6 +75,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every dependency moved to its newest release, and `Cargo.lock` is now committed so builds
+  are reproducible. The trigger: on 2026-10-16 the `zip` maintainer yanked every release
+  before 9.0.3 after three extraction advisories (GHSA-4v9h-p7m9-rh26, GHSA-vv5m-jxxh-4627,
+  GHSA-4684-h2q9-2vcp), and `zip = "2"` no longer resolved. al-sem never calls `extract`.
+  - Major moves: `zip` 2 -> 9, `tree-sitter` 0.26 -> 0.27, `salsa` 0.27.0 -> 0.28.5 (still
+    pinned exactly), `lsp-server` 0.7 -> 0.10, `string-interner` 0.17 -> 0.20, `phf`
+    0.11 -> 0.14, `notify` 7 -> 8, `dirs` 6 -> 7, `sha2` 0.10 -> 0.11, `hmac` 0.12 -> 0.13,
+    `roxmltree` 0.20 -> 0.21, `criterion` 0.5 -> 0.8, and the telemetry set together
+    (`opentelemetry`/`opentelemetry_sdk` 0.26 -> 0.33, `opentelemetry-application-insights`
+    0.36 -> 0.46, `tracing-opentelemetry` 0.27 -> 0.34, `reqwest` 0.12 -> 0.13, `lru`
+    0.12 -> 0.18, plus `opentelemetry-http` 0.33 for the blocking client).
+  - Code changes:
+    - salsa's `Update` derive is now `SalsaValue`.
+    - tree-sitter 0.27 ties `Node::kind` to the tree's lifetime, so `kind_str` reads the
+      kind name through one `'static` grammar handle.
+    - zip's `ZipFile` takes the reader type, and `name()` can fail. It fails only on a name
+      that is neither UTF-8 nor CP437; such an entry is skipped like an unreadable one.
+    - `hmac`'s `new_from_slice` moved to `KeyInit`.
+    - `sha2` digests no longer format as `{:x}`.
+    - The App Insights exporter is built through `SdkTracerProvider`; `service.name` on the
+      resource keeps the `cloud_RoleName`.
+    - Benches use `std::hint::black_box`.
+  - TLS: `reqwest` 0.13's rustls uses `aws-lc-rs` instead of `ring`.
 - `prove`, `fingerprint` and `diff` stay single-app (#70). Their output is a capability
   snapshot, and the cross-app snapshot does not yet follow calls made inside dependency
   code: on a workspace routine that calls a dependency routine which calls another that

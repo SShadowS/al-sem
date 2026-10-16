@@ -24,7 +24,8 @@ mod spike {
         KeyValue, global,
         trace::{Span, Tracer, TracerProvider as _},
     };
-    use opentelemetry_application_insights::new_pipeline_from_connection_string;
+    use opentelemetry_application_insights::Exporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use std::time::Duration;
 
     pub fn run(connection_string: &str) {
@@ -37,10 +38,11 @@ mod spike {
         // The spike runs synchronously without a tokio runtime, so it stays
         // on the SimpleSpanProcessor path. Timeouts on the HTTP client are
         // still applied so a hung connection can't wedge the spike.
-        let tracer_provider = new_pipeline_from_connection_string(connection_string)
-            .expect("valid connection string")
-            .with_client(http_client)
-            .build_simple();
+        let exporter = Exporter::new_from_connection_string(connection_string, http_client)
+            .expect("valid connection string");
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
 
         global::set_tracer_provider(tracer_provider.clone());
         let tracer = tracer_provider.tracer("al-call-hierarchy-spike");
@@ -95,10 +97,8 @@ mod spike {
         }
 
         log::info!("Spike: spans emitted, flushing");
-        for r in tracer_provider.force_flush() {
-            if let Err(e) = r {
-                log::error!("flush error: {:?}", e);
-            }
+        if let Err(e) = tracer_provider.force_flush() {
+            log::error!("flush error: {:?}", e);
         }
         std::thread::sleep(Duration::from_secs(2));
         log::info!("Spike: done. Check App Insights for arrived events.");

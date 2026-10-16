@@ -33,7 +33,8 @@ use al_sem::lsp::handlers::{self, ItemData};
 use al_sem::lsp::snapshot::LspSnapshot;
 use al_sem::lsp::updater::{ChangeEvent, Rung, Rung1Context, Updater};
 use al_sem::protocol::path_to_uri;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::path::Path;
 use tempfile::TempDir;
 

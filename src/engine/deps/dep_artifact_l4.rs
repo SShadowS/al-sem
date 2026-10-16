@@ -87,9 +87,14 @@ pub fn iterate_embedded_source(app_bytes: &[u8]) -> Vec<EmbeddedSourceFile> {
     // ingestion order matches al-sem's sorted keys exactly.
     let mut al_entries: Vec<(String, usize)> = Vec::new();
     for i in 0..archive.len() {
-        let name = match archive.by_index(i) {
-            Ok(f) => f.name().to_string(),
-            Err(_) => continue,
+        // zip 9: `name()` fails only on a name that is neither UTF-8 nor CP437;
+        // skip that entry as an unreadable one is skipped.
+        let name = match archive
+            .by_index(i)
+            .map(|f| f.name().map(|n| n.into_owned()))
+        {
+            Ok(Ok(n)) => n,
+            _ => continue,
         };
         // al-sem filter: `n.toLowerCase().endsWith(".al")`. The entry name is kept
         // verbatim (forward-slash form) as the relativePath.

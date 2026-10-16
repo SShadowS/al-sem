@@ -104,7 +104,7 @@ pub fn sha256_of_strings(parts: &[String]) -> String {
     hex_lower(&hasher.finalize())
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         out.push_str(&format!("{b:02x}"));

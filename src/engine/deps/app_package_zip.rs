@@ -63,7 +63,7 @@ pub fn read_ready_to_run_app<R: Read + Seek>(
 /// [`crate::capped_io::READY_TO_RUN_APP_CAP`] on the bytes it reads.
 fn with_ready_to_run_app<R: Read + Seek, T>(
     archive: &mut zip::ZipArchive<R>,
-    read: impl FnOnce(zip::read::ZipFile<'_>) -> anyhow::Result<T>,
+    read: impl FnOnce(zip::read::ZipFile<'_, R>) -> anyhow::Result<T>,
 ) -> anyhow::Result<Option<T>> {
     let manifest = match archive.by_name(READY_TO_RUN_MANIFEST) {
         Ok(f) => f,
@@ -230,7 +230,7 @@ pub fn read_large_entry<R: Read + Seek>(
         archive: &'a mut zip::ZipArchive<R>,
         name: &str,
         cap: u64,
-    ) -> anyhow::Result<zip::read::ZipFile<'a>> {
+    ) -> anyhow::Result<zip::read::ZipFile<'a, R>> {
         let entry = archive
             .by_name(name)
             .with_context(|| format!("{name} not found in app package"))?;
@@ -304,9 +304,14 @@ fn extract_entry_bytes(app_bytes: &[u8], suffix_lower: &str, cap: u64) -> Option
     let len = archive.len();
     for i in 0..len {
         // Read the name first (immutable view), then re-borrow to read bytes.
-        let name = match archive.by_index(i) {
-            Ok(f) => f.name().to_string(),
-            Err(_) => continue,
+        // zip 9: `name()` fails only on a name that is neither UTF-8 nor CP437;
+        // skip that entry as an unreadable one is skipped.
+        let name = match archive
+            .by_index(i)
+            .map(|f| f.name().map(|n| n.into_owned()))
+        {
+            Ok(Ok(n)) => n,
+            _ => continue,
         };
         let normalized = normalize_zip_entry_name(&name).to_lowercase();
         if normalized.ends_with(suffix_lower) {

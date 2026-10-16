@@ -355,7 +355,10 @@ pub fn dependency_closure_digest(workspace_root: &Path) -> Result<String, String
         hasher.update((bytes.len() as u64).to_le_bytes());
         hasher.update(&bytes);
     }
-    Ok(format!("{CLOSURE_SCHEME}:{:x}", hasher.finalize()))
+    Ok(format!(
+        "{CLOSURE_SCHEME}:{}",
+        crate::engine::ids::hex_lower(&hasher.finalize())
+    ))
 }
 
 /// Probe `workspace_root`'s git HEAD SHA + dirty state via the `git` CLI

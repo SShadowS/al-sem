@@ -23,7 +23,7 @@ members = ["crates/al-syntax", "crates/xtask"]
 al-syntax = { path = "crates/al-syntax" }
 
 # Parallelism
-rayon = "1.10"
+rayon = "1.12"
 
 # Global allocator for the `alsem` CLI ONLY (installed in `src/bin/alsem.rs`, not
 # in the library — the LSP server, the benches and every test keep the platform
@@ -37,17 +37,17 @@ mimalloc = "0.1"
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
 
 # LSP
-lsp-server = "0.7"
+lsp-server = "0.10"
 lsp-types = "0.97"
 
 # Data structures
-string-interner = "0.17"
-smallvec = "1.11"
+string-interner = "0.20"
+smallvec = "1.16"
 # Perfect-hash intrinsic built-in catalog (call-graph resolution phase 2). The AL
 # record + framework built-ins are COMPILER INTRINSICS (not in any .app
 # SymbolReference.json), so the catalog is a hand-built, data-driven asset kept
 # separate from the .app symbol pool. `macros` enables the compile-time phf_map!/phf_set!.
-phf = { version = "0.11", features = ["macros"] }
+phf = { version = "0.14", features = ["macros"] }
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
@@ -74,19 +74,21 @@ regex = "1"
 postcard = { version = "1", features = ["use-std"] }
 
 # Hashing (R0 identity encoders and snapshot content identity)
-sha2 = "0.10"
+sha2 = "0.11"
 blake3 = { version = "1" }
 # Keyed hashing (1B.3b Task 1: domain-separated anonymization of CDO goldens —
 # HMAC over sha2, NOT a fixed salt; see src/program/resolve/anon.rs).
-hmac = "0.12"
+hmac = "0.13"
 
 # File system
 walkdir = "2"
-notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
-# App package parsing
-zip = "2"
-roxmltree = "0.20"
+# App package parsing. zip 9 fixes three extraction advisories (GHSA-4v9h-p7m9-rh26,
+# GHSA-vv5m-jxxh-4627, GHSA-4684-h2q9-2vcp); its maintainer then yanked every
+# earlier release. We never call `extract`, but the older versions no longer resolve.
+zip = "9"
+roxmltree = "0.21"
 # Large dependency entries (a Ready-to-Run package's nested app, a
 # SymbolReference.json) are decompressed into an anonymous temp file instead of
 # one big heap buffer; a read-only memory map of that file does not count
@@ -95,7 +97,7 @@ tempfile = "3"
 memmap2 = "0.9"
 
 # Home directory (cross-platform)
-dirs = "6"
+dirs = "7"
 
 # Logging
 log = "0.4"
@@ -116,35 +118,37 @@ flate2 = { version = "1", default-features = false, features = ["zlib-ng"] }
 # Error handling
 anyhow = "1"
 
-# Incremental query framework (L4 incrementality, Phase R3b). PINNED to the
-# current stable crates.io release (the new-Salsa `#[salsa::db]` / `#[salsa::input]`
+# Incremental query framework (L4 incrementality, Phase R3b). PINNED exactly (moved
+# 0.27.0 -> 0.28.5 on 2026-10-16) to a stable crates.io release (the new-Salsa `#[salsa::db]` / `#[salsa::input]`
 # / `#[salsa::tracked]` / `#[salsa::interned]` API). The interning + cycle-handling
 # behavior differs materially across Salsa versions — keep this pinned.
-salsa = "=0.27.0"
+salsa = "=0.28.5"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
 # Telemetry pipeline (only pulled in when the `telemetry` feature is on).
-# Versions pinned to match opentelemetry-application-insights 0.36, which
-# depends on opentelemetry/opentelemetry_sdk 0.26 (NOT 0.27 — using 0.27 here
+# Versions move as ONE set: opentelemetry-application-insights 0.46 depends on
+# opentelemetry / opentelemetry_sdk / opentelemetry-http 0.33, and
+# tracing-opentelemetry 0.34 is the bridge for opentelemetry 0.33. A mismatch
 # pulls a second copy of the crate and breaks the trait bounds at the
-# global::set_tracer_provider call site). tracing-opentelemetry 0.27 is the
-# bridge version that targets opentelemetry 0.26.
-opentelemetry = { version = "0.26", optional = true }
-opentelemetry_sdk = { version = "0.26", features = ["rt-tokio-current-thread"], optional = true }
-opentelemetry-application-insights = { version = "0.36", features = ["reqwest-blocking-client"], optional = true }
+# global::set_tracer_provider call site.
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio-current-thread"], optional = true }
+opentelemetry-http = { version = "0.33", features = ["reqwest-blocking"], optional = true }
+opentelemetry-application-insights = { version = "0.46", optional = true }
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"], optional = true }
 tracing = { version = "0.1", optional = true }
-tracing-opentelemetry = { version = "0.27", optional = true }
-lru = { version = "0.12", optional = true }
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false, optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
+lru = { version = "0.18", optional = true }
+reqwest = { version = "0.13", features = ["blocking", "rustls"], default-features = false, optional = true }
 
 [features]
 default = ["telemetry"]
 telemetry = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
+    "dep:opentelemetry-http",
     "dep:opentelemetry-application-insights",
     "dep:tokio",
     "dep:tracing",
@@ -158,7 +162,7 @@ telemetry = [
 test-runtime = ["telemetry"]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 # Dual-run parity harness (owned-syntax-IR migration): integration tests link only
 # the crate + dev-deps, so the IR crate + a dir walker are listed here too.
 al-syntax = { path = "crates/al-syntax" }
@@ -167,7 +171,7 @@ walkdir = "2"
 # `l4_summary_differential` integration test can SHA-256 the CDO whole-program
 # frozen baseline (too large to commit readably; frozen as a digest). Not a new
 # crate in the tree.
-sha2 = "0.10"
+sha2 = "0.11"
 
 [[bin]]
 name = "telemetry-spike"

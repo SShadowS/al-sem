@@ -6,8 +6,8 @@ description = "The only crate that knows tree-sitter: AL grammar FFI, generated 
 license = "GPL-3.0"
 
 [dependencies]
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 
 [build-dependencies]
 cc = "1"
-sha2 = "0.10"
+sha2 = "0.11"

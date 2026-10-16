@@ -4,7 +4,8 @@
 #![cfg(feature = "telemetry")]
 
 use al_sem::telemetry;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn make_ctx() -> telemetry::CallContext<'static> {
     telemetry::CallContext {

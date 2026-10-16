@@ -10,7 +10,8 @@ use opentelemetry::{
     KeyValue, global,
     trace::{Span, Tracer, TracerProvider as _},
 };
-use opentelemetry_application_insights::new_pipeline_from_connection_string;
+use opentelemetry_application_insights::Exporter;
+use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Receiver;
@@ -65,16 +66,21 @@ async fn run(
         .build()
         .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
-    let tracer_provider = match new_pipeline_from_connection_string(&config.connection_string) {
-        Ok(p) => p
-            .with_client(http_client)
-            .with_service_name(SERVICE_NAME)
-            .build_batch(opentelemetry_sdk::runtime::TokioCurrentThread),
-        Err(e) => {
-            log::warn!("telemetry: exporter init failed: {}; subsystem disabled", e);
-            return;
-        }
-    };
+    let exporter =
+        match Exporter::new_from_connection_string(config.connection_string.clone(), http_client) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("telemetry: exporter init failed: {}; subsystem disabled", e);
+                return;
+            }
+        };
+    // `service.name` on the resource is what App Insights files as `cloud_RoleName`.
+    // The batch processor runs on its own thread, so the blocking HTTP client never
+    // runs inside this tokio runtime.
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_resource(Resource::builder().with_service_name(SERVICE_NAME).build())
+        .with_batch_exporter(exporter)
+        .build();
 
     global::set_tracer_provider(tracer_provider.clone());
     let tracer = tracer_provider.tracer(SERVICE_NAME);
@@ -87,10 +93,8 @@ async fn run(
     let summary = build_session_summary(started_at, &counters);
     export_summary(&tracer, &summary);
 
-    for r in tracer_provider.force_flush() {
-        if let Err(e) = r {
-            log::warn!("telemetry: final flush error: {:?}", e);
-        }
+    if let Err(e) = tracer_provider.force_flush() {
+        log::warn!("telemetry: final flush error: {:?}", e);
     }
 }
 

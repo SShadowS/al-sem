@@ -46,7 +46,8 @@ use al_sem::program::resolve::decl_surface::DeclSurface;
 use al_sem::program::resolve::full::resolve_full_program;
 use al_sem::program::resolve::index::ResolveIndex;
 use al_sem::snapshot::{AppSetSnapshot, SnapshotBuilder, parse_snapshot};
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use tempfile::TempDir;
 
 /// A minimal `app.json` so `SnapshotBuilder` (which hard-requires one at the

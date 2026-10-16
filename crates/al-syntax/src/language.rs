@@ -14,3 +14,12 @@ unsafe extern "C" {
 pub fn language() -> Language {
     unsafe { tree_sitter_al() }
 }
+
+/// One process-wide handle on the grammar. Its kind names live in the grammar's
+/// static tables; borrowing them through a `'static` `Language` is how a node's
+/// kind keeps a `'static` lifetime now that tree-sitter 0.27's `Node::kind` ties
+/// it to the tree.
+pub(crate) fn static_language() -> &'static Language {
+    static LANGUAGE: std::sync::LazyLock<Language> = std::sync::LazyLock::new(language);
+    &LANGUAGE
+}

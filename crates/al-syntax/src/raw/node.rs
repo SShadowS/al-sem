@@ -28,7 +28,9 @@ impl<'t> RawNode<'t> {
 
     /// The raw grammar kind string, for anchor `syntax_kind` byte-parity.
     pub fn kind_str(self) -> &'static str {
-        self.node.kind()
+        crate::language::static_language()
+            .node_kind_for_id(self.node.kind_id())
+            .expect("a parsed node's kind id is a symbol of its own grammar")
     }
 
     /// tree-sitter node id. EPHEMERAL: only valid within one parse; tree-sitter

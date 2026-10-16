@@ -92,7 +92,7 @@
 //! audit (`compiler_golden.rs`) works this way: it anonymizes the program
 //! resolver's pairs and compares ids, never inverting a committed one.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -173,7 +173,7 @@ pub fn anon(domain: &str, s: &str) -> AnonId {
     // `Hmac::new_from_slice` only fails for algorithms with a fixed/maximum key
     // size; HMAC-SHA256 accepts any key length, so this cannot fail.
     let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(&key).expect("HMAC-SHA256 accepts any key length");
+        <HmacSha256 as KeyInit>::new_from_slice(&key).expect("HMAC-SHA256 accepts any key length");
     mac.update(domain.as_bytes());
     mac.update(&[0u8]); // domain/input separator — `:v1` domain tags never contain NUL.
     mac.update(s.as_bytes());
