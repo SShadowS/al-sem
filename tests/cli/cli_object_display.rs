@@ -9,8 +9,6 @@
 //! the identity table would print `OD Item Ext` for the real table's routines.
 //! Two Interfaces share the object id `<guid>/Interface/0`, so their owners
 //! must come from the declaring object.
-//! Rule (#78): the owner comes from the model, as `query effects` prints it; never
-//! the snapshot identity table.
 
 use std::path::Path;
 use std::process::Command;
@@ -297,4 +295,73 @@ fn prove_names_its_owning_object() {
     assert_eq!(r["stableId"], id.as_str(), "{doc}");
     assert_eq!(r["display"], "OnInsert", "{doc}");
     assert_eq!(r["objectDisplay"], TABLE_OWNER, "{doc}");
+}
+
+/// Spawn `alsem <args>` -> (stdout text, exit code).
+fn alsem_text(args: &[&str]) -> (String, i32) {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
+        .output()
+        .expect("spawn alsem");
+    let stdout = String::from_utf8_lossy(&out.stdout).replace('\r', "");
+    (stdout, out.status.code().unwrap_or(-1))
+}
+
+/// A5. The human headers of digest, fingerprint and prove print
+/// `<owner>::<routine>` for the real table's `OnInsert` (digest and prove as
+/// `--- … ---`, fingerprint as the block's first line).
+///
+/// Mutations: a renderer that prints only the routine, or the owner from the
+/// identity table (`OD Item Ext`), fails its assert.
+#[test]
+fn human_headers_name_the_owning_object() {
+    let dir = tempfile::tempdir().unwrap();
+    owner_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    let id = stable_id_of(ws, "src/a_Table.al", "OnInsert");
+    let header = format!("{TABLE_OWNER}::OnInsert");
+
+    let (digest, code) = alsem_text(&[
+        "digest",
+        w,
+        "--file",
+        "src/a_Table.al",
+        "--deterministic",
+        "--format",
+        "human",
+    ]);
+    assert_eq!(code, 0, "{digest}");
+    assert!(
+        digest.lines().any(|l| l == format!("--- {header} ---")),
+        "{digest}"
+    );
+
+    let (fp, code) = alsem_text(&[
+        "fingerprint",
+        w,
+        "--routine",
+        &id,
+        "--deterministic",
+        "--format",
+        "human",
+    ]);
+    assert_eq!(code, 0, "{fp}");
+    assert!(
+        fp.lines().any(|l| l.starts_with(&format!("{header}  ["))),
+        "{fp}"
+    );
+
+    let (prove, code) = alsem_text(&[
+        "prove",
+        w,
+        &id,
+        "may-commit",
+        "--deterministic",
+        "--format",
+        "human",
+    ]);
+    assert_eq!(code, 0, "{prove}");
+    assert!(prove.contains(&header), "{prove}");
 }

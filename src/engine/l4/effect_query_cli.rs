@@ -519,12 +519,26 @@ pub fn object_display(object_type: &str, object_name: &str) -> String {
     format!("{object_type} {object_name}").trim().to_string()
 }
 
+/// The one human-header rule: `<owner>::<routine>`, or the bare routine when
+/// the owner is unknown (never `::<routine>`). Digest, fingerprint and prove
+/// headers all print it (#78).
+pub fn owner_qualified(object_display: &str, routine_display: &str) -> String {
+    if object_display.is_empty() {
+        routine_display.to_string()
+    } else {
+        format!("{object_display}::{routine_display}")
+    }
+}
+
 /// Stable routine id -> its owning object's display, for every workspace-app
 /// routine and Interface / ControlAddIn declaration (#78). The owner comes from
 /// the model, never the snapshot identity table: every unnumbered object shares
-/// `<guid>:<Kind>:0` there, and a tableextension stub can overwrite its table's
-/// name. Declaration-only rows read their declaring object directly. First row
-/// wins (the `#if` arms of one routine share a stable id and an owner).
+/// `<guid>:<Kind>:0` there, and a tableextension stub can overwrite the name of
+/// the real table with its own number. Declaration-only rows read their
+/// declaring object directly. First row wins: the `#if` arms of one routine
+/// share a stable id and so an internal object id. Two model objects with ONE
+/// internal id (`#if`-split object declarations, a missing number) share the
+/// name `RoutineJoin` keeps for that id, as `query effects` does.
 pub fn object_display_by_stable_routine_id(resolved: &Model) -> HashMap<String, String> {
     let ws = &resolved.workspace;
     let join = RoutineJoin::build(resolved);
@@ -1381,6 +1395,15 @@ mod tests {
             enclosing_member_range: None,
             entry_temp_guard_receiver: None,
         }
+    }
+
+    /// #78: a header names the owner when known and never prints `::<routine>`.
+    ///
+    /// Mutation: drop the empty-owner branch -> the second assert reads `::Run`.
+    #[test]
+    fn owner_qualified_omits_an_unknown_owner() {
+        assert_eq!(owner_qualified("Codeunit Foo", "Run"), "Codeunit Foo::Run");
+        assert_eq!(owner_qualified("", "Run"), "Run");
     }
 
     /// #78: the owner map holds workspace-app rows only, a declaration-only row

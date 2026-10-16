@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
+use crate::engine::l4::effect_query_cli::owner_qualified;
 use crate::engine::l5::digest::{
     FingerprintIndexesPub, HumanHop, ProjectedPath, QueryWitnessHop, TerminalHopInfo,
     build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
@@ -1521,9 +1522,8 @@ fn render_block(block: &FingerprintBlock, verbosity: &str, lines: &mut Vec<Strin
         _ => "",
     };
     lines.push(format!(
-        "{}::{}  [{}]{marker}",
-        block.object_display,
-        block.routine_display,
+        "{}  [{}]{marker}",
+        owner_qualified(&block.object_display, &block.routine_display),
         block.kinds.join(", ")
     ));
 
