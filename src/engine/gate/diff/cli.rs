@@ -118,7 +118,9 @@ fn load_snapshot_from_workspace(
 }
 
 /// Load one side: a workspace (reanalyzed, with its strict diagnostic lines) or
-/// a snapshot file (no analyzer diagnostics survive deserialization).
+/// a snapshot file. Deserialization keeps only the snapshot payload, so a
+/// snapshot side contributes no analyzer diagnostics even when the envelope
+/// carried some.
 fn load_side(
     arg: &str,
     kind: InputKind,
@@ -130,6 +132,31 @@ fn load_side(
         }
         _ => load_snapshot_from_path(arg).map(|s| (s, Vec::new())),
     }
+}
+
+/// The strict gate's stderr (#89): the old side's lines, then the new side's in
+/// full, with no text dedupe across sides, because a path-free message shared by
+/// two revisions must still show the new side has it. When both sides are the
+/// same workspace, its list prints once.
+fn strict_gate_lines(old: Vec<String>, new: Vec<String>, same_workspace: bool) -> Vec<String> {
+    if same_workspace {
+        return old;
+    }
+    let mut lines = old;
+    lines.extend(new);
+    lines
+}
+
+/// Both arguments name one workspace directory, so its diagnostics would print
+/// twice under `--strict` (#89). Compared canonically; an unresolvable path is
+/// never "the same".
+fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind) -> bool {
+    old_kind == InputKind::Workspace
+        && new_kind == InputKind::Workspace
+        && matches!(
+            (std::fs::canonicalize(old), std::fs::canonicalize(new)),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 /// Run the diff command end-to-end. Returns a `DiffRunOutcome`; the bin maps it to
@@ -175,25 +202,21 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
     // --strict (#89): an error-severity analyzer diagnostic on EITHER workspace
     // side → its lines to stderr, no output, exit 1, and no ws-mode note, as
     // `fingerprint`/`events`/`policy` print only the diagnostics. It runs before
-    // the rename overlay, the engine and every exit gate. Old side first; a
-    // new-side line already printed for the old side is dropped, repeats within
-    // one side are kept. Without an error the run continues unchanged and the
-    // warning/info lines are not printed. In snapshot-input mode both lists are
-    // empty, so `--strict` is a no-op there.
+    // the rename overlay, the engine and every exit gate. Old side first, then
+    // the new side in full: a path-free message the two revisions share must
+    // still show the new side has it. Only when both arguments are the SAME
+    // workspace is its list printed once. Without an error the run continues
+    // unchanged and the warning/info lines are not printed. Diff reads no
+    // diagnostics from a snapshot file, so `--strict` is a no-op for that side.
     let any_error = old_diag_lines
         .iter()
         .chain(&new_diag_lines)
         .any(|l| l.starts_with("error:"));
     if any_error {
-        let mut lines = old_diag_lines.clone();
-        lines.extend(
-            new_diag_lines
-                .into_iter()
-                .filter(|l| !old_diag_lines.contains(l)),
-        );
+        let same = same_workspace(opts.old_arg, old_kind, opts.new_arg, new_kind);
         return DiffRunOutcome {
             output: None,
-            stderr_lines: lines,
+            stderr_lines: strict_gate_lines(old_diag_lines, new_diag_lines, same),
             exit_code: 1,
             error_message: None,
         };
@@ -269,5 +292,31 @@ fn early_error(msg: String, exit_code: u8) -> DiffRunOutcome {
         stderr_lines: Vec::new(),
         exit_code,
         error_message: Some(msg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|l| l.to_string()).collect()
+    }
+
+    /// #89: two different workspaces that share a path-free message both print
+    /// it, so the reader sees the NEW side has the error too. Mutation: drop
+    /// new-side lines equal to an old-side line -> the second assert fails.
+    #[test]
+    fn strict_gate_lines_keep_a_shared_line_from_two_workspaces() {
+        let old = v(&["error: cap hit", "warning: w"]);
+        let new = v(&["error: cap hit"]);
+        assert_eq!(
+            strict_gate_lines(old.clone(), new.clone(), true),
+            v(&["error: cap hit", "warning: w"])
+        );
+        assert_eq!(
+            strict_gate_lines(old, new, false),
+            v(&["error: cap hit", "warning: w", "error: cap hit"])
+        );
     }
 }

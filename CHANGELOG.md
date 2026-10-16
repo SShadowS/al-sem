@@ -253,12 +253,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `alsem diff --strict` now does what its help says in workspace mode: when either workspace
-  side has an error-severity analyzer diagnostic, it prints those diagnostics to stderr
-  (`<severity>: <message>`, old side first, a line already printed for the old side not
-  repeated), writes nothing to stdout or `--out`, and exits 1 (#89). Before, `--strict` was
-  ignored and the run exited 0. The check runs before the `--renames` overlay is read. A run with
-  no error is unchanged, warnings included (they are still not printed). Snapshot-file inputs carry
-  no analyzer diagnostics, so `--strict` stays a no-op for them.
+  side has an error-severity analyzer diagnostic, it prints both sides' diagnostics to stderr
+  (`<severity>: <message>`, old side first; one list when both arguments are the same
+  workspace), writes nothing to stdout or `--out`, and exits 1 (#89). Before, `--strict` was
+  ignored and the run exited 0. The check runs before the `--renames` overlay is read. A run
+  with no error is unchanged, warnings included (they are still not printed). `diff` does not
+  read the diagnostics a snapshot file's envelope carries, so `--strict` stays a no-op for a
+  snapshot-file side.
 - `alsem graph` now rejects an `app.json` without a non-empty string `id` (exit 1,
   `could not compute modelInstanceId`), as every gate-backed command does for that case; before,
   it exported the graph with an empty app id and exited 0 (#73). A missing or unparseable
