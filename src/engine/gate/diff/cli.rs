@@ -1,7 +1,8 @@
 //! The `diff` CLI orchestrator. Port of al-sem `src/cli/diff.ts`: input-kind
-//! detection, snapshot/workspace loading, the rename overlay, the `--strict`
-//! analyzer-diagnostic gate, format dispatch, `--out`, the ws-mode stderr note,
-//! and the exit gates (`--fail-on`, strict-coverage).
+//! detection, snapshot/workspace loading, the `--strict` analyzer-diagnostic gate
+//! (workspace-mode sides only, before the rename overlay; #89), the rename
+//! overlay, format dispatch, `--out`, the ws-mode stderr note, and the exit gates
+//! (`--fail-on`, strict-coverage).
 
 use std::path::Path;
 
@@ -40,6 +41,8 @@ pub struct DiffCliOptions<'a> {
     pub coverage_policy: CoveragePolicy,
     pub renames_path: Option<&'a str>,
     pub fail_on: Option<Severity>,
+    /// `--strict`: exit 1 on an error-severity analyzer diagnostic of either
+    /// workspace-mode side, before any output (#89). A no-op for snapshot inputs.
     pub strict: bool,
     pub deterministic: bool,
     pub driver_version: &'a str,
@@ -78,12 +81,18 @@ fn load_snapshot_from_path(path: &str) -> Result<CborValue, String> {
 }
 
 /// Compose a full snapshot tree by reanalyzing a workspace directory (ws-mode).
+/// Under `strict` it also returns that side's analyzer diagnostics as
+/// `<severity>: <message>` lines, the list `fingerprint --strict` gates on (#89);
+/// otherwise the lines are empty and no detector runs. `diff` stays single-app
+/// (#70). The model is dropped before the next side loads, so at most one is alive.
 fn load_snapshot_from_workspace(
     dir: &str,
     driver_version: &str,
     deterministic: bool,
-) -> Result<CborValue, String> {
+    strict: bool,
+) -> Result<(CborValue, Vec<String>), String> {
     use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
+    use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -93,13 +102,34 @@ fn load_snapshot_from_workspace(
     // Engine-switch S6.4: the program-backed model (program calls and events).
     let resolved = assemble_and_resolve_workspace_program(ws, &model_id, false)
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
+    let target = AnalysisTarget::SingleApp(Box::new(resolved));
+    let diag_lines = if strict {
+        analyzer_diagnostic_lines(ws, &target)
+    } else {
+        Vec::new()
+    };
     let opts = FullSnapshotOptions {
         workspace_dir: ws,
         driver_version,
         deterministic,
         roots_config_ignored: false,
     };
-    Ok(compose_full_snapshot(&resolved, &opts))
+    Ok((compose_full_snapshot(target.resolved(), &opts), diag_lines))
+}
+
+/// Load one side: a workspace (reanalyzed, with its strict diagnostic lines) or
+/// a snapshot file (no analyzer diagnostics survive deserialization).
+fn load_side(
+    arg: &str,
+    kind: InputKind,
+    opts: &DiffCliOptions,
+) -> Result<(CborValue, Vec<String>), String> {
+    match kind {
+        InputKind::Workspace => {
+            load_snapshot_from_workspace(arg, opts.driver_version, opts.deterministic, opts.strict)
+        }
+        _ => load_snapshot_from_path(arg).map(|s| (s, Vec::new())),
+    }
 }
 
 /// Run the diff command end-to-end. Returns a `DiffRunOutcome`; the bin maps it to
@@ -133,26 +163,41 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
     }
 
     // Load both snapshots.
-    let old_snap = match old_kind {
-        InputKind::Workspace => {
-            load_snapshot_from_workspace(opts.old_arg, opts.driver_version, opts.deterministic)
-        }
-        _ => load_snapshot_from_path(opts.old_arg),
-    };
-    let old_snap = match old_snap {
+    let (old_snap, old_diag_lines) = match load_side(opts.old_arg, old_kind, opts) {
         Ok(s) => s,
         Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
     };
-    let new_snap = match new_kind {
-        InputKind::Workspace => {
-            load_snapshot_from_workspace(opts.new_arg, opts.driver_version, opts.deterministic)
-        }
-        _ => load_snapshot_from_path(opts.new_arg),
-    };
-    let new_snap = match new_snap {
+    let (new_snap, new_diag_lines) = match load_side(opts.new_arg, new_kind, opts) {
         Ok(s) => s,
         Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
     };
+
+    // --strict (#89): an error-severity analyzer diagnostic on EITHER workspace
+    // side → its lines to stderr, no output, exit 1, and no ws-mode note, as
+    // `fingerprint`/`events`/`policy` print only the diagnostics. It runs before
+    // the rename overlay, the engine and every exit gate. Old side first; a
+    // new-side line already printed for the old side is dropped, repeats within
+    // one side are kept. Without an error the run continues unchanged and the
+    // warning/info lines are not printed. In snapshot-input mode both lists are
+    // empty, so `--strict` is a no-op there.
+    let any_error = old_diag_lines
+        .iter()
+        .chain(&new_diag_lines)
+        .any(|l| l.starts_with("error:"));
+    if any_error {
+        let mut lines = old_diag_lines.clone();
+        lines.extend(
+            new_diag_lines
+                .into_iter()
+                .filter(|l| !old_diag_lines.contains(l)),
+        );
+        return DiffRunOutcome {
+            output: None,
+            stderr_lines: lines,
+            exit_code: 1,
+            error_message: None,
+        };
+    }
 
     // Optional rename overlay.
     let rename_overlay = match opts.renames_path {
@@ -168,12 +213,9 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
         },
     };
 
-    // --strict: in snapshot-input mode there are no analyzer diagnostics to gate on,
-    // so `--strict` is a no-op here. (ws-mode analyzer-diagnostic collection — the
-    // `error → stderr + exit 1` gate — is the corpus-invisible follow-up; no golden
-    // exercises a ws-mode `--strict` run.) The envelope diagnostics channel stays
-    // empty, matching the snapshot-input goldens (`projectDiagnostics([])`).
-    let _ = opts.strict;
+    // The envelope diagnostics channel stays empty in both modes, matching the
+    // snapshot-input and ws-mode goldens (`projectDiagnostics([])`); the `--strict`
+    // gate above reads the analyzer diagnostics, the envelope does not (#89).
     let analyzer_diagnostics: Vec<CborValue> = Vec::new();
 
     // Run the engine.
