@@ -6,6 +6,8 @@ publish = false
 
 [dependencies]
 al-sem = { path = "../.." }
+# Large-allocation log: frames captured unresolved, resolved only when printed.
+backtrace = "=0.3.76"
 
 # Own workspace: the probe must not join the repo's workspace or CI.
 [workspace]
@@ -15,3 +17,5 @@ al-sem = { path = "../.." }
 lto = "thin"
 codegen-units = 4
 panic = "abort"
+# Names the frames of the large-allocation log's backtraces.
+debug = "line-tables-only"

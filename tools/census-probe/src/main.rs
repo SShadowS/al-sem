@@ -11,11 +11,12 @@
 //! All roots share ONE DepCache, built sequentially, kept alive (like the server).
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 use al_sem::lsp::encoding::PositionEncoding;
@@ -43,12 +44,18 @@ unsafe impl GlobalAlloc for Counting {
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
+        if l.size() >= BIG {
+            log_big("alloc", l.size(), 0, n);
+        }
         unsafe { System.alloc(l) }
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
+        if l.size() >= BIG {
+            log_big("alloc_zeroed", l.size(), 0, n);
+        }
         unsafe { System.alloc_zeroed(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
@@ -60,7 +67,165 @@ unsafe impl GlobalAlloc for Counting {
         let n = BYTES.fetch_add(new as isize - l.size() as isize, Relaxed) + new as isize
             - l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
+        if new >= BIG {
+            log_big("realloc", new, l.size(), n);
+        }
         unsafe { System.realloc(p, l, new) }
+    }
+}
+
+// ───────────────────────── large-allocation log (issue #84) ─────────────────────────
+
+/// Every alloc/alloc_zeroed/realloc whose NEW requested size is at least this
+/// is logged with a backtrace.
+const BIG: usize = 8 << 20;
+
+struct Big {
+    kind: &'static str,
+    new: usize,
+    /// The block's old size (realloc only; 0 otherwise).
+    old: usize,
+    /// Live heap right after this request was counted (net: old block already
+    /// subtracted for a realloc).
+    live: isize,
+    /// 1-based root being built (0 = outside a root build).
+    root: usize,
+    /// Number of census marks seen so far in this root's build: the record
+    /// belongs to the phase that ends at mark `phase`.
+    phase: usize,
+    /// Captured UNRESOLVED; resolved only when printed.
+    bt: backtrace::Backtrace,
+}
+
+/// Guard-protected buffer: only pushed while the thread's `IN` guard is set,
+/// so the push's own allocation (and the backtrace's) re-enter the allocator
+/// with the guard set and are never logged.
+static BIGS: Mutex<Vec<Big>> = Mutex::new(Vec::new());
+static ROOT: AtomicUsize = AtomicUsize::new(0);
+static PHASE: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    // const + no Drop: allocation-free access, never torn down.
+    static IN: Cell<bool> = const { Cell::new(false) };
+}
+
+fn log_big(kind: &'static str, new: usize, old: usize, live: isize) {
+    let entered = IN
+        .try_with(|g| {
+            if g.get() {
+                false
+            } else {
+                g.set(true);
+                true
+            }
+        })
+        .unwrap_or(false);
+    if !entered {
+        return;
+    }
+    let rec = Big {
+        kind,
+        new,
+        old,
+        live,
+        root: ROOT.load(Relaxed),
+        phase: PHASE.load(Relaxed),
+        bt: backtrace::Backtrace::new_unresolved(),
+    };
+    BIGS.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(rec);
+    let _ = IN.try_with(|g| g.set(false));
+}
+
+/// Prints and drains the ≥8 MiB records of root `root`. `marks` are this
+/// root's phase names in order; `b0` its live heap before the build.
+fn report_bigs(root: usize, marks: &[&'static str], b0: isize) {
+    // Take the records out and drop the lock first: nothing below may
+    // allocate while BIGS is held (the allocator hook locks it too).
+    let all: Vec<Big> = std::mem::take(
+        &mut *BIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let (mine, rest): (Vec<Big>, Vec<Big>) = all.into_iter().partition(|r| r.root == root);
+    // Put the other roots' records back, AFTER any logged since the take, so
+    // none is lost. `extend` may allocate under the lock, so set the guard
+    // first: that allocation re-enters `log_big` unlogged and cannot try to
+    // take the lock this thread already holds.
+    let _ = IN.try_with(|g| g.set(true));
+    BIGS.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(rest);
+    let _ = IN.try_with(|g| g.set(false));
+    let (rn, on) = (size_of::<RoutineNode>(), size_of::<ObjectNode>());
+    println!(
+        "Large-allocation log: {} request(s) with NEW size >= {} B during this build (live = net live heap after the request, relative to before this root's build; a realloc's old and new blocks are both live during the copy, so its transient is live + old)",
+        mine.len(),
+        BIG
+    );
+    let mut largest: Option<(usize, &'static str, usize)> = None;
+    for (i, mut r) in mine.into_iter().enumerate() {
+        r.bt.resolve();
+        let mut frames: Vec<String> = Vec::new();
+        let mut in_build = false;
+        for f in r.bt.frames() {
+            for s in f.symbols() {
+                let name = s.name().map(|n| format!("{n:#}")).unwrap_or_default();
+                if name.contains("build_dep_nodes")
+                    || name.contains("dedup_routines_preserving_genuine_overloads")
+                {
+                    in_build = true;
+                }
+                if name.contains("al_sem") {
+                    let at = match (s.filename(), s.lineno()) {
+                        (Some(p), Some(l)) => format!(" at {}:{l}", p.display()),
+                        _ => String::new(),
+                    };
+                    frames.push(format!("{name}{at}"));
+                }
+            }
+        }
+        let mut flags: Vec<String> = Vec::new();
+        if in_build && r.new % rn == 0 {
+            flags.push(format!("Vec<RoutineNode> cap {}", r.new / rn));
+        }
+        if in_build && r.new % on == 0 {
+            flags.push(format!("Vec<ObjectNode> cap {}", r.new / on));
+        }
+        if in_build && !flags.is_empty() && largest.is_none_or(|l| r.new > l.0) {
+            largest = Some((r.new, r.kind, i + 1));
+        }
+        let phase = marks.get(r.phase).copied().unwrap_or("(after last mark)");
+        println!(
+            "  #{} {:<12} new {:>12} B ({:.2} MiB)  old {:>12} B  live {:.1} MiB  transient {:.1} MiB  phase {}  through build_dep_nodes/dedup: {}  {}",
+            i + 1,
+            r.kind,
+            r.new,
+            mibu(r.new as u64),
+            r.old,
+            mib(r.live - b0),
+            mib(r.live - b0 + r.old as isize),
+            phase,
+            in_build,
+            if flags.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", flags.join(" | "))
+            }
+        );
+        for f in &frames {
+            println!("      {f}");
+        }
+    }
+    match largest {
+        Some((n, k, i)) => println!(
+            "  LARGEST Vec<RoutineNode>/Vec<ObjectNode> buffer in build_dep_nodes: #{i} {k} {n} B ({:.2} MiB)",
+            mibu(n as u64)
+        ),
+        None => println!(
+            "  LARGEST Vec<RoutineNode>/Vec<ObjectNode> buffer in build_dep_nodes: none >= {BIG} B"
+        ),
     }
 }
 
@@ -116,6 +281,7 @@ fn on_mark(name: &'static str) {
         peak: p,
         allocs: a,
     });
+    PHASE.fetch_add(1, Relaxed);
     reset_peak();
 }
 
@@ -958,6 +1124,7 @@ fn q6(ws: PathBuf) {
         root_classifications,
         primary_app,
         infra_diagnostics,
+        dependency_diagnostics,
         calls,
         events,
     } = resolved;
@@ -1048,6 +1215,7 @@ fn q6(ws: PathBuf) {
     top.drop_as("root_classifications", root_classifications);
     top.drop_as("primary_app", primary_app);
     top.drop_as("infra_diagnostics", infra_diagnostics);
+    top.drop_as("dependency_diagnostics", dependency_diagnostics);
     top.drop_as("calls (program engine)", calls);
     top.drop_as("events (program engine)", events);
     let (t2, ta2) = live();
@@ -1313,6 +1481,8 @@ fn main() {
     for (i, root) in roots.iter().enumerate() {
         settle();
         MARKS.lock().unwrap().clear();
+        PHASE.store(0, Relaxed);
+        ROOT.store(i + 1, Relaxed);
         let (b0, a0) = live();
         reset_peak();
         let t = std::time::Instant::now();
@@ -1330,9 +1500,16 @@ fn main() {
         println!(
             "Q3 phases (MiB relative to live heap before this root's build; peak = max live inside the phase):"
         );
+        ROOT.store(0, Relaxed);
         let mut overall = 0;
+        let mut peak_phase = "";
+        let mut names: Vec<&'static str> = Vec::new();
         for m in MARKS.lock().unwrap().iter() {
-            overall = overall.max(m.peak);
+            names.push(m.name);
+            if m.peak > overall {
+                overall = m.peak;
+                peak_phase = m.name;
+            }
             println!(
                 "  {:<40} end-live {:>9.1}  in-phase peak {:>9.1}  live allocs {:>+10}",
                 m.name,
@@ -1349,6 +1526,15 @@ fn main() {
             mib(b1 - b0),
             a1 - a0
         );
+        println!("  build peak is in phase {peak_phase}");
+        let symbol_only = snap.snap.apps.iter().filter(|u| u.source.is_none());
+        println!(
+            "  SymbolOnly units ingested by step 2b (source None): {} ({} with an app_path); abi_ingest_errors {}",
+            symbol_only.clone().count(),
+            symbol_only.filter(|u| u.app_path.is_some()).count(),
+            snap.dep_layer.abi_ingest_errors.len()
+        );
+        report_bigs(i + 1, &names, b0);
         let cfg = al_sem::config::DiagnosticConfig::load(root);
         let d = al_sem::lsp::diagnostics::compute_all(&snap, PositionEncoding::Utf16, &cfg);
         let diags: Box<dyn std::any::Any> = Box::new(d);

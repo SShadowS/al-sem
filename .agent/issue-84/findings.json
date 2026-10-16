@@ -1,0 +1,722 @@
+[
+  {
+    "id": "S1",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 229,
+    "severity": "critical",
+    "text": "Collect-then-reserve keeps every per-app vector (with growth slack) live next to the reserved list, so the peak is about 2-3x the data and the >=40 MB drop is not achieved.",
+    "disposition": "fixed",
+    "evidence": "Design Fix 1: count first from AbiCache (abi_node_counts via a shared load_abi helper), reserve_exact, then ingest and extend one app at a time; ABIs are cached anyway (abi_ingest.rs:~212).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/program/abi_ingest.rs",
+    "line": 474,
+    "severity": "important",
+    "text": "ingest_abi grows its per-app vectors from Vec::new() by doubling; Base Application's vector can be a large slack-carrying block.",
+    "disposition": "fixed",
+    "evidence": "Design Fix 2: ingest_abi presizes objects/routines with Vec::with_capacity from the same exact counts.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "both r1",
+    "round": 1,
+    "file": "tools/census-probe/src/main.rs",
+    "line": 56,
+    "severity": "important",
+    "text": "The planned >=8 MiB logger must also hook realloc (the 51 MB doubling is a realloc) and record the new size; net-delta accounting hides the old+new overlap.",
+    "disposition": "fixed",
+    "evidence": "Design Measurement tool: alloc, alloc_zeroed AND realloc logged by new requested size (old size for realloc), with old+new transient noted in the run notes.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "opus r1",
+    "round": 1,
+    "file": "tools/census-probe/Cargo.toml",
+    "line": 0,
+    "severity": "important",
+    "text": "Backtraces inside the allocator need a reentrancy guard and lazy symbol resolution; the probe's release profile has no debug info, so build_dep_nodes may not appear as a frame.",
+    "disposition": "fixed",
+    "evidence": "Design: thread-local guard, unresolved capture resolved at print, debug = \"line-tables-only\" in the probe profile, census-hook phase marks as fallback attribution.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "opus r1",
+    "round": 1,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "'Largest single allocation inside build_dep_nodes' is ambiguous: ABI parse and sort-scratch allocations also fall in that phase.",
+    "disposition": "fixed",
+    "evidence": "Metric defined: the largest Vec<RoutineNode>/Vec<ObjectNode> buffer (size a multiple of size_of, backtrace through build_dep_nodes or the dedup); all other >=8 MiB allocations in the phase are listed.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "both r1",
+    "round": 1,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "Corpus fidelity is unproven: GUID grouping keeps one version per app, so fewer than 263 may be ingested, and the probe README uses a different .alpackages.",
+    "disposition": "fixed",
+    "evidence": "Hard gate: the master f3f0b304 run must reproduce the 51,032,576-byte Vec<RoutineNode> realloc before any code change; the run records ingested SymbolOnly units and size_of::<RoutineNode>().",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 771,
+    "severity": "important",
+    "text": "The shrink_to_fit rationale was false: the old code left capacity = the pre-dedup length, so shrinking is an extra realloc, not parity.",
+    "disposition": "fixed",
+    "evidence": "Design Fix 3: no shrink_to_fit; in-place retain_mut on the presized list leaves the same capacity as before.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "both r1",
+    "round": 1,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "The planned dedup test projection (ids + flags) cannot see same-id alias reordering or context intersection, and its layout does not force the verdict iterator to stay aligned.",
+    "disposition": "fixed",
+    "evidence": "D1 asserts a literal ordered projection with param_sig_key, a distinguishing payload, preproc_context, both flags and AbiParams; Drop entries are placed before collapsed/aliased runs; breaks (a)-(d) include skip-context and advance-only-on-keep.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 771,
+    "severity": "minor",
+    "text": "An end-of-loop debug_assert catches only an over-long iterator; zip would hide a mismatch.",
+    "disposition": "fixed",
+    "evidence": "assert_eq!(verdicts.len(), routines.len()) before the loop and .expect() on each next() inside it.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 229,
+    "severity": "minor",
+    "text": "Goldens may not exercise step 2b over several SymbolOnly units, so count-first ordering would be unpinned.",
+    "disposition": "fixed",
+    "evidence": "D2 interleaves >=2 seeded units with >=2 unseeded failing units (distinct cache keys) and asserts abi_ingest_errors order, parse_count = 2 and dep_routines.capacity() = raw count; the reorder break targets the error order (node order is fixed by the step 4 sort and step 1 AppRefs); skip-one-unit targets contents.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 324,
+    "severity": "minor",
+    "text": "The dedup helper is also called by assemble_program_graph for workspace routines; the design did not say so.",
+    "disposition": "fixed",
+    "evidence": "Design Fix 3 states it: the workspace path gets the same in-place behaviour, with no change in meaning.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "sol r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 246,
+    "severity": "minor",
+    "text": "If results were collected, each should be pooled (share_strings) before being retained.",
+    "disposition": "fixed",
+    "evidence": "Moot under count-first: no result is retained; the per-app loop pools and extends exactly as today.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N1",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "A wrong count shows only as capacity, never as contents, so neither D1 nor D2 pins the count-first change.",
+    "disposition": "fixed",
+    "evidence": "D3 asserts abi_node_counts == (objects.len(), routines.len()) and capacity == len over all four load paths (hit, load, no path, failing path); D2 asserts dep_routines.capacity() = the raw pre-dedup count. Round 3: D3 path 2 is now an UNSEEDED real tiny .app built with test_apps::build_app, asserting parse_count 1 after counting and 1 after ingestion.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N2",
+    "source": "opus r2",
+    "round": 2,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The >=40 MB build-peak drop only follows if the build peak lies in the step 2b/dedup phase.",
+    "disposition": "fixed",
+    "evidence": "Pass criterion is the OVERALL build peak drop >= 40 MB (the issue's); the census-hook phase peaks are diagnostic only; a shortfall with a >=40 MB phase drop is recorded under Not delivered as an operator decision, never a pass.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N3",
+    "source": "opus r2",
+    "round": 2,
+    "file": "tools/census-probe/src/main.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "A lazily initialised or destructor-carrying thread_local can allocate inside GlobalAlloc.",
+    "disposition": "fixed",
+    "evidence": "Guard declared thread_local!{ static IN: Cell<bool> = const { Cell::new(false) } }; log records pushed only while the guard is set.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N4",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The Design read the 40 MB target against the phase peak while the Acceptance row and the issue use the overall build peak.",
+    "disposition": "fixed",
+    "evidence": "Same fix as N2: the overall build-peak drop is the pass criterion; phase peaks diagnostic; shortfall goes to Not delivered.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N5",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "capacity == len can pass by coincidence when a fixture's count lands on the doubling growth path (e.g. 4+4=8), and D2's capacity check already holds on master's with_capacity(len) dedup.",
+    "disposition": "fixed",
+    "evidence": "Final form: D2's object total is 5 (off ObjectNode's 4/8 growth path) and debug_assert_eq!s in build_dep_nodes pin lengths and capacities of objects/routines/dep_meta against the counted totals; a full revert to Vec::new() fails (build.rs:285, (8,8,4) vs (5,7,2)).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N6",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "D3's seeded-then-loaded option never reaches the file-loading branch of get_or_load, so the real-load path was untested.",
+    "disposition": "fixed",
+    "evidence": "D3 path 2 is an unseeded real .app (test_apps::build_app) with parse_count == 1.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N7",
+    "source": "opus r4",
+    "round": 4,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "D3's break (a) (count only the first object's routines) cannot fail if the fixture puts all routines on one object.",
+    "disposition": "fixed",
+    "evidence": "D3's fixture spreads its routines over at least two ABI objects (e.g. 2 + 1 = 3), keeping the total off the growth path.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 794,
+    "severity": "important",
+    "text": "Nothing pinned that the dedup runs in place; D2's capacity check also passes on the old rebuild.",
+    "disposition": "fixed",
+    "evidence": "D1 records routines.as_ptr() before the dedup and asserts it after; proof: restoring a with_capacity+drain rebuild fails D1 at build.rs:1880 'the dedup must reuse the buffer (in place), not build a second list'.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 2080,
+    "severity": "minor",
+    "text": "Exact capacity() asserts rely on std's current exact with_capacity/reserve_exact (docs promise 'at least').",
+    "disposition": "fixed",
+    "evidence": "Comments at the D2/D3 capacity asserts state the dependency on std's current behaviour.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 78,
+    "severity": "minor",
+    "text": "CHANGELOG used an unbacked 'two or three times over' multiplier and an over-broad 'exact size' claim.",
+    "disposition": "fixed",
+    "evidence": "Entry reworded to the mechanism only.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R4",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "tools/census-probe/src/main.rs",
+    "line": 145,
+    "severity": "minor",
+    "text": "report_bigs held the BIGS lock while partition/drain allocated with the guard unset (a >=8 MiB request there would self-deadlock).",
+    "disposition": "fixed",
+    "evidence": "Records are mem::take'n under the lock; all partitioning and formatting happen after the lock is dropped.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R5",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "tools/census-probe/src/main.rs",
+    "line": 1118,
+    "severity": "minor",
+    "text": "The dependency_diagnostics destructure fix was undocumented.",
+    "disposition": "fixed",
+    "evidence": "README notes the model-mode destructure now covers Model::dependency_diagnostics (added by #91).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R6",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "tools/census-probe/Cargo.lock",
+    "line": 0,
+    "severity": "minor",
+    "text": "The probe's Cargo.lock is untracked, so runs are not lock-reproducible.",
+    "disposition": "deferred",
+    "evidence": "backtrace is now pinned exactly (=0.3.76, tools/census-probe/Cargo.toml); the probe's Cargo.lock stays untracked because the main checkout carries an untracked copy at that path that a tracked one would collide with at merge; README states that transitive deps resolve fresh. Deferred (minor), not refuted.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R7",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "src/program/abi_ingest.rs",
+    "line": 473,
+    "severity": "minor",
+    "text": "abi_node_counts was pub with only in-crate callers.",
+    "disposition": "fixed",
+    "evidence": "Now pub(crate).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 794,
+    "severity": "important",
+    "text": "The in-place dedup keeps incoming growth slack that master's with_capacity(len) rebuild trimmed (workspace assemble_program_graph path; embedded-mode step 2), retained for the snapshot/DepCache lifetime; the comment claiming parity was false.",
+    "disposition": "fixed",
+    "evidence": "build.rs dedup records pre_len and shrink_to(pre_len) after retain_mut = master's capacity (no-op on an exact list); the false parity comment is corrected. D4 pins it: a with_capacity(8) list of 4 ends at capacity 4; dropping shrink_to fails D4 (8 vs 4).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 241,
+    "severity": "important",
+    "text": "Step 2b's reserve_exact is a no-op when step 2's doubling slack already covers the ABI total, so 'reserve once, exact' does not hold in mixed snapshots.",
+    "disposition": "fixed",
+    "evidence": "Step 2b no longer reserves on its own: one with_capacity(total) before step 2 covers source summaries + SymbolOnly ABIs, so the reservation cannot be swallowed by step-2 slack.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 204,
+    "severity": "important",
+    "text": "Step 2 still grows objects/routines by doubling across source-dep summaries although every length is already known.",
+    "disposition": "fixed",
+    "evidence": "build_dep_nodes counts objects/routines/routine_meta over the in-memory summaries plus abi_node_counts before step 2 and allocates objects, routines and dep_meta once; step 2 and 2b append without growth.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/abi_ingest.rs",
+    "line": 497,
+    "severity": "minor",
+    "text": "ingest_abi builds a per-app Vec the caller then copies with extend (a ~10 MiB transient for Base Application).",
+    "disposition": "deferred",
+    "evidence": "Beyond #84's ask (reserve once + dedup in place); changes ingest_abi's signature and needs a slice share_strings. Filed as a discovery with its measurement (the 10,655,232 B per-app buffer in the after run). Recorded under the ledger's ## Discoveries (item 1) with the measurement.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 277,
+    "severity": "minor",
+    "text": "After the fix the build peak sits at step 4's stable-sort scratch buffer (len/2 RoutineNodes, 13.5 MB).",
+    "disposition": "deferred",
+    "evidence": "A separate optimisation (unstable sort on (id, index) or an index permutation) with its own order-preservation proof; filed as a discovery with the after-run evidence. Recorded under the ledger's ## Discoveries (item 2) with the measurement.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/abi_ingest.rs",
+    "line": 450,
+    "severity": "minor",
+    "text": "Each SymbolOnly unit is looked up in AbiCache twice (count pass, ingest pass).",
+    "disposition": "refuted",
+    "evidence": "263 extra lookups (four short key Strings + an uncontended mutex each) against ingesting 120k routines; no measurable cost, and threading the Arcs through would widen ingest_abi's API for nothing.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 2048,
+    "severity": "important",
+    "text": "D2's capacity check covers only a fixture without step-2 routines and cannot see retained slack.",
+    "disposition": "fixed",
+    "evidence": "D2 holds a source dependency; the reservation is pinned by the build_dep_nodes debug_asserts (lengths + capacities vs totals) and D2's object capacity 5; breaks A/B/C (Vec::new everywhere, missing ABI routine term, unreserved dep_meta) all fail.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR8",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/abi_ingest.rs",
+    "line": 2120,
+    "severity": "minor",
+    "text": "Exact capacity() asserts are not guaranteed by std.",
+    "disposition": "refuted",
+    "evidence": "Same as R2: std's with_capacity/reserve_exact are exact today and the tests say so in a comment; an exact check is the only way to pin the reservation, and a future std change would surface loudly, not silently.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR9",
+    "source": "code-review high",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 9,
+    "severity": "minor",
+    "text": "CHANGELOG claims the node lists are reserved once while only the SymbolOnly part was.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG entry describes the single count-and-reserve before step 2 (source summaries + SymbolOnly ABIs), exact per-app ABI lists, and the in-place dedup trimming to the pre-dedup length.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR10",
+    "source": "code-review high",
+    "round": 1,
+    "file": "tools/census-probe/README.md",
+    "line": 576,
+    "severity": "minor",
+    "text": "README does not describe runs-issue-84/after/ (which build, why two runs).",
+    "disposition": "fixed",
+    "evidence": "README describes runs-issue-84/after/: produced by commit 3af3f02f (release-equivalent to the head: later commits change only comments, debug_asserts and the README), same peaks as the intermediate 5d16a385 run, run2 a stability repeat.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 218,
+    "severity": "important",
+    "text": "The reservation that fixes the issue was not pinned: shrink_to hid a wrong routine_total, meta_total was unchecked, D2's object total sat on the growth path; a full revert to Vec::new() passed all tests.",
+    "disposition": "fixed",
+    "evidence": "debug_assert_eq! on lengths and capacities of objects/routines/dep_meta vs the totals after step 2b (build.rs:277-289); D2 object total 5; breaks A/B/C fail (ledger proof table).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "opus final r1",
+    "round": 1,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The ledger was stale: D2 row and proof table described T2's D2, D4 and T4 proofs missing, empty sections, the r4 line misplaced.",
+    "disposition": "fixed",
+    "evidence": "D2 row rewritten to its final form, D4 row and the T4/T5/R1 proofs added, discoveries written, r4 moved into the spec-panel block; gate results and the register summary are filled at freeze.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F3",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "tools/census-probe/src/main.rs",
+    "line": 152,
+    "severity": "minor",
+    "text": "report_bigs overwrote BIGS with the put-back, losing records logged after the take.",
+    "disposition": "fixed",
+    "evidence": "It now sets the IN guard, locks, extends the current vec with the remainder, unlocks and clears the guard.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F4",
+    "source": "opus final r1",
+    "round": 1,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The scripts/cdo-gate run named in acceptance item 1 was not on record.",
+    "disposition": "fixed",
+    "evidence": "cdo-gate runs under the supervisor on the final head; its exit code and log are recorded under ## Gate results.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F5",
+    "source": "sol final r1",
+    "round": 1,
+    "file": "src/program/build.rs",
+    "line": 204,
+    "severity": "minor",
+    "text": "A comment claimed the doubling slack survived for the dependency layer's lifetime; master's dedup rebuild already trimmed it.",
+    "disposition": "fixed",
+    "evidence": "Reworded: the excess was pre-dedup/transient capacity (doubling reallocs and their old+new overlap).",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "opus final r2",
+    "round": 2,
+    "file": "tools/census-probe/README.md",
+    "line": 24,
+    "severity": "minor",
+    "text": "The README and the ledger's T3 bullet named the wrong code for the after-runs (3af3f02f called the final code; 'reserve_exact'ed list).",
+    "disposition": "fixed",
+    "evidence": "README now says the runs come from 3af3f02f, that later commits change only comments and debug_asserts (compiled out in the probe's release profile), and that backtrace line numbers refer to 3af3f02f; the ledger says the single up-front Vec::with_capacity reservation.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F6",
+    "source": "sol final r2",
+    "round": 2,
+    "file": "tools/census-probe/README.md",
+    "line": 30,
+    "severity": "minor",
+    "text": "The README claimed the probe's transitive dependencies resolve fresh on each run because the lock is untracked; Cargo reuses an existing local lock.",
+    "disposition": "fixed",
+    "evidence": "Reworded: an existing local lock is reused, but a fresh checkout without one may resolve different transitive versions.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "H1",
+    "source": "opus final r3",
+    "round": 3,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Stale record text: CR10's evidence called 3af3f02f 'the final code', and the ledger timeline stopped at final round 1.",
+    "disposition": "fixed",
+    "evidence": "CR10's evidence now says commit 3af3f02f (release-equivalent to the head); the timeline gained T5, final r2, the gate runs on a5ba2293 and final r3.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "I1",
+    "source": "sol final r4",
+    "round": 4,
+    "file": ".agent/issue-84/ledger.md",
+    "line": 140,
+    "severity": "minor",
+    "text": "The ledger's findings-register summary said 43 entries and omitted H1.",
+    "disposition": "fixed",
+    "evidence": "The summary now counts 45 entries and lists F1-F6, G1, H1 and I1 for the final panel.",
+    "hash": "7ee2ee8324116c02",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]

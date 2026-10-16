@@ -444,6 +444,36 @@ pub(crate) fn abi_routine_node_id(obj_id: &ObjectNodeId, routine: &AbiRoutine) -
     }
 }
 
+/// The ABI of one SymbolOnly dep unit, through `cache`: a cached (or seeded)
+/// entry first, then a load of the unit's `.app`. `None` when neither exists.
+/// A read failure gives an ABI whose `error` is set (see `get_or_load`).
+fn load_abi(unit: &AppUnit, cache: &AbiCache) -> Option<Arc<SymbolReferenceAbi>> {
+    let id = &unit.id;
+    if let Some(cached) = cache.get(&id.guid, &id.name, &id.publisher, &id.version) {
+        Some(cached)
+    } else {
+        let path = unit.app_path.as_ref()?;
+        Some(cache.get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path))
+    }
+}
+
+/// `(objects, routines)` that [`ingest_abi`] builds from `abi`: one
+/// `ObjectNode` per ABI object and one `RoutineNode` per ABI routine, with
+/// no filtering.
+fn node_counts(abi: &SymbolReferenceAbi) -> (usize, usize) {
+    let routines = abi.objects.iter().map(|o| o.routines.len()).sum();
+    (abi.objects.len(), routines)
+}
+
+/// The exact `(objects, routines)` lengths [`ingest_abi`] returns for
+/// `unit`, without building any node, so a caller can reserve once before
+/// ingesting (issue #84). Loads the ABI through `cache` exactly as
+/// [`ingest_abi`] does, so a later [`ingest_abi`] hits the cache and does not
+/// load it again. `(0, 0)` when there is no ABI or it failed to load.
+pub(crate) fn abi_node_counts(unit: &AppUnit, cache: &AbiCache) -> (usize, usize) {
+    load_abi(unit, cache).map_or((0, 0), |abi| node_counts(&abi))
+}
+
 /// Ingest one SymbolOnly dep unit into `ObjectNode` + `RoutineNode` lists.
 ///
 /// Returns empty vecs when the ABI is not available (no `app_path` and not
@@ -453,22 +483,19 @@ pub(crate) fn abi_routine_node_id(obj_id: &ObjectNodeId, routine: &AbiRoutine) -
 /// (H-3's `error` field covers the latter). Local and internal routines are
 /// no longer skipped (H-1) — see the loop-entry doc below.
 pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestResult {
-    let id = &unit.id;
-    let abi: Arc<SymbolReferenceAbi> =
-        if let Some(cached) = cache.get(&id.guid, &id.name, &id.publisher, &id.version) {
-            cached
-        } else if let Some(path) = &unit.app_path {
-            cache.get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path)
-        } else {
-            return AbiIngestResult {
-                objects: vec![],
-                routines: vec![],
-                error: None,
-            };
+    let Some(abi) = load_abi(unit, cache) else {
+        return AbiIngestResult {
+            objects: vec![],
+            routines: vec![],
+            error: None,
         };
+    };
 
-    let mut objects: Vec<ObjectNode> = Vec::new();
-    let mut routines: Vec<RoutineNode> = Vec::new();
+    // Presized to the exact counts `abi_node_counts` reports (issue #84), so
+    // no app's vectors carry growth-by-doubling slack.
+    let (object_count, routine_count) = node_counts(&abi);
+    let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_count);
+    let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_count);
 
     for abi_obj in &abi.objects {
         let obj_id = abi_object_node_id(app, abi_obj);
@@ -2075,5 +2102,90 @@ codeunit 50900 "Subscriber CU"
             attributes_parsed: vec![],
         };
         assert_eq!(retain_abi_params(&routine), AbiParams::Missing);
+    }
+
+    /// D3 (issue #84): `abi_node_counts` gives exactly the node counts
+    /// `ingest_abi` produces, on all four load paths, and `ingest_abi`'s
+    /// vectors are allocated at exactly that size. The fixture has 3 routines
+    /// over 2 objects (2 + 1), so neither doubling growth nor counting only
+    /// the first object's routines can land on the right number by chance.
+    #[test]
+    fn abi_node_counts_match_ingest_on_every_load_path() {
+        use crate::engine::deps::app_package_zip::test_apps;
+        let json = r#"{"Codeunits":[{"Id":1,"Name":"A","Methods":[{"Name":"P1","Parameters":[]},{"Name":"P2","Parameters":[]}]},{"Id":2,"Name":"B","Methods":[{"Name":"Q","Parameters":[]}]}]}"#;
+        let check = |unit: &AppUnit, cache: &AbiCache, expected: (usize, usize)| {
+            let counts = abi_node_counts(unit, cache);
+            let r = ingest_abi(unit, AppRef(1), cache);
+            assert_eq!(counts, expected);
+            assert_eq!(counts, (r.objects.len(), r.routines.len()));
+            // Relies on std's current exact `with_capacity`; its docs promise
+            // only "at least" that capacity.
+            assert_eq!(r.objects.capacity(), r.objects.len());
+            assert_eq!(r.routines.capacity(), r.routines.len());
+            r
+        };
+
+        // (1) A cache hit through `AbiCache::seed`.
+        let seeded = dep_id("Seeded");
+        let cache = AbiCache::new();
+        cache.seed(
+            &seeded.guid,
+            &seeded.name,
+            &seeded.publisher,
+            &seeded.version,
+            Arc::new(parse_symbol_reference(json)),
+        );
+        let r = check(&make_symbolonly_dep_unit(&seeded), &cache, (2, 3));
+        assert!(r.error.is_none());
+        assert_eq!(
+            cache.parse_count.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+
+        // (2) A real load of an unseeded `.app`: counting loads it once, and
+        // the ingest after it hits the cache.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Test_Loaded_1.0.0.0.app");
+        std::fs::write(
+            &path,
+            test_apps::build_app(&[("SymbolReference.json", json.as_bytes())]),
+        )
+        .unwrap();
+        let mut loaded = make_symbolonly_dep_unit(&dep_id("Loaded"));
+        loaded.app_path = Some(path);
+        let cache = AbiCache::new();
+        assert_eq!(abi_node_counts(&loaded, &cache), (2, 3));
+        assert_eq!(
+            cache.parse_count.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let r = check(&loaded, &cache, (2, 3));
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(
+            cache.parse_count.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        // (3) No `app_path` and nothing seeded: no ABI at all, no error.
+        let r = check(
+            &make_symbolonly_dep_unit(&dep_id("Absent")),
+            &AbiCache::new(),
+            (0, 0),
+        );
+        assert!(r.error.is_none());
+
+        // (4) A failing path: nothing counted, and the error is kept.
+        let mut broken = make_symbolonly_dep_unit(&dep_id("Broken"));
+        broken.app_path = Some(std::path::PathBuf::from(
+            "Z:/definitely/does/not/exist/broken.app",
+        ));
+        let r = check(&broken, &AbiCache::new(), (0, 0));
+        assert!(
+            r.error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("failed to read")),
+            "{:?}",
+            r.error
+        );
     }
 }
