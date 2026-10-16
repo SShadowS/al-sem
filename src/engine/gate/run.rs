@@ -349,7 +349,12 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
         &rows.workspace,
         ctx.graph(),
     ));
-    let resolved = crate::program::model::program_calls::attach_program_calls(rows, ctx, report);
+    // The same build's coverage (#91): `program` is `Some` exactly when `fresh` is `Ok`.
+    let coverage = fresh
+        .as_ref()
+        .expect("a built program carries its coverage");
+    let resolved =
+        crate::program::model::program_calls::attach_program_calls(rows, ctx, report, coverage);
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
@@ -411,49 +416,6 @@ pub fn dependency_object_predicate<'a>(
         (Some(p), Some(o)) => !o.app_guid.eq_ignore_ascii_case(p),
         _ => false,
     }
-}
-
-/// One `dependencies`-stage warning per problem in the program build's dependency
-/// ledger (engine-switch S5.2b, spec G14), in ledger (guid) order, then one per
-/// package whose manifest could not be read. Missing and older dependencies do not
-/// degrade the preflight on their own (a call into one is already an unknown
-/// edge); an unreadable one does, there.
-pub fn dependency_diagnostics(
-    fc: &crate::program::resolve::full::FreshCoverage,
-) -> Vec<crate::engine::l5::registry::Diagnostic> {
-    let warn = |message: String| crate::engine::l5::registry::Diagnostic {
-        severity: "warning".to_string(),
-        stage: "dependencies".to_string(),
-        message,
-    };
-    let mut out = Vec::new();
-    for e in &fc.ledger {
-        let what = format!(
-            "dependency \"{}\" ({}), declared by \"{}\" at version {}",
-            e.name, e.guid, e.declared_by, e.declared_version
-        );
-        match (&e.found, &e.unreadable) {
-            (None, Some(err)) => out.push(warn(format!("{what}, could not be read: {err}"))),
-            (None, None) => out.push(warn(format!("{what}, is missing"))),
-            (Some(f), _) => {
-                if let Some(err) = &f.ingest_error {
-                    out.push(warn(format!("{what}, could not be read: {err}")));
-                }
-                if e.below_declared_version() {
-                    out.push(warn(format!(
-                        "{what}, is present only at version {}",
-                        f.version
-                    )));
-                }
-            }
-        }
-    }
-    out.extend(
-        fc.unidentified_packages
-            .iter()
-            .map(|p| warn(format!("dependency package could not be read: {p}"))),
-    );
-    out
 }
 
 /// The analysis coverage `alsem analyze` reports for `resolved`.
@@ -554,54 +516,12 @@ pub fn run_analyze_with_exit(
             ),
         }
     };
-    // Capture diagnostics + detector stats for the Json formatter (consumed after filtering).
-    //
-    // al-sem `analyzeWorkspace` (src/index.ts:287-297) concatenates SIX diagnostic
-    // sources, IN THIS ORDER, into the flat `result.diagnostics` the JSON envelope
-    // serializes:
-    //   1. workspace.diagnostics  — provider (remapped "discover") + index/parse
-    //   2. depArtifacts.diagnostics — dependency-artifact resolution
-    //   3. summarizeDiagnostics   — L4 `computeSummaries`
-    //   4. loadedRootsConfig.diagnostics — roots.config.json LOADER (parse/schema)
-    //   5. overlayDiagnostics     — roots.config.json OVERLAY (kinds-mismatch)
-    //   6. detectDiagnostics      — L5 detector-emitted (e.g. d43 substrate guard)
-    //
-    // Each source preserves a deterministic (insertion / sorted-file) order — no
-    // HashMap/HashSet iteration leaks into this concatenation (the determinism
-    // contract). `infra_diagnostics` is the OVERLAY source (5); `run.diagnostics`
-    // is DETECT (6). The TS-order #1 (workspace) goes FIRST so it precedes overlay.
+    // Capture diagnostics + detector stats for the Json formatter (consumed after
+    // filtering), through the aggregation every other command uses, over THIS
+    // run (the selected detectors), so analyze and the rest report one set (#91).
     let run_diagnostics: Vec<crate::engine::l5::registry::Diagnostic> = {
         let _s = pt::span("gate", "gate.workspace_diagnostics");
-        let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
-        // (1) workspace.diagnostics — provider (discover) + index, computed from disk.
-        all.extend(
-            crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path),
-        );
-        // (2) dependency diagnostics — the program build's dependency ledger
-        //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
-        //     unidentified dependency packages.
-        if let Ok(fc) = &fresh {
-            all.extend(dependency_diagnostics(fc));
-        }
-        // (3) summarizeDiagnostics — WIRED: L4 `compute_summaries*` (run inside
-        //     `run_detectors`'s `DetectorContext` build) now surfaces the JACOBI
-        //     fixed-point cap-hit here. Empty whenever every SCC converges.
-        all.extend(run.summarize_diagnostics.iter().cloned());
-        // (4) loadedRootsConfig.diagnostics — TRACKED GAP: the roots.config.json LOADER
-        //     diagnostics (parse/schema errors) are not yet surfaced separately from the
-        //     OVERLAY diagnostics by `compute_root_classifications`. The overlay
-        //     diagnostics (5) below cover the kinds-mismatch case the corpus exercises.
-        // (5) overlayDiagnostics — roots.config.json overlay (kinds-mismatch warnings).
-        all.extend(resolved.infra_diagnostics.iter().map(|d| {
-            crate::engine::l5::registry::Diagnostic {
-                severity: d.severity.clone(),
-                stage: d.stage.clone(),
-                message: d.message.clone(),
-            }
-        }));
-        // (6) detectDiagnostics — L5 detector-emitted (d43 substrate guard, ...).
-        all.extend(run.diagnostics.iter().cloned());
-        all
+        analyzer_diagnostics_of_run(ws_path, resolved, &run)
     };
     let run_detector_stats = run.detector_stats.clone();
 
@@ -940,6 +860,7 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
+                dependency_diagnostics: vec![],
                 calls: Default::default(),
                 events: Default::default(),
             };
@@ -1083,24 +1004,18 @@ fn range_extent_cmp(
     })
 }
 
-/// Aggregate the analyzer diagnostics for a resolved workspace, in al-sem
-/// `analyzeWorkspace` (`src/index.ts:287-297`) concat order:
-///   1. workspace.diagnostics  (provider/discover + index/parse)
-///   2. dependency diagnostics (not produced here: `run_analyze` has the program
-///      build's ledger, these callers do not — docs/OUTSTANDING.md)
-///   3. summarizeDiagnostics    (L4 JACOBI cap-hit — empty unless an SCC fails to converge)
-///   4. loadedRootsConfig.diagnostics (gate gap — covered by overlay below)
-///   5. overlayDiagnostics      (roots.config kinds-mismatch — `infra_diagnostics`)
-///   6. detectDiagnostics       (L5 detector-emitted, e.g. d43 substrate guard)
+/// The analyzer diagnostics for a resolved single-app workspace:
+/// [`analyzer_diagnostics_of_run`] over a run of the default detector set.
 ///
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
-/// channel (`projectDiagnostics`). It follows the `run_diagnostics` build in
-/// `run_analyze`, but the output is the same only for the same `resolved`.
-/// Since engine-switch S6 its callers (events, policy, digest, fingerprint, prove)
-/// pass a program-backed single-app model
+/// channel (`projectDiagnostics`). It builds them as `run_analyze` does, but the
+/// output is the same only for the same `resolved`.
+/// Since engine-switch S6 its callers (fingerprint, prove, diff, and the
+/// `--single-app` modes of events, policy and digest) pass a program-backed
+/// single-app model
 /// (`program_calls::assemble_and_resolve_workspace_program`), the kind
-/// `run_analyze` builds for `--single-app`, so the cap-hit (3)
-/// and detector (6) diagnostics agree with `alsem analyze --single-app`'s. They
+/// `run_analyze` builds for `--single-app`, so every source agrees with
+/// `alsem analyze --single-app`'s. They
 /// need not agree with plain `alsem analyze`, which is cross-app by default;
 /// the cross-app twin is [`compute_analyzer_diagnostics_cross_app`].
 ///
@@ -1144,18 +1059,47 @@ pub fn compute_analyzer_diagnostics_cross_app(
     analyzer_diagnostics_of_run(ws_path, &base.resolved, &run)
 }
 
-/// The diagnostics aggregation shared by [`compute_analyzer_diagnostics`] and
-/// [`compute_analyzer_diagnostics_cross_app`], over the detector run each made.
+/// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
+/// (over the run of its selected detectors), [`compute_analyzer_diagnostics`] and
+/// [`compute_analyzer_diagnostics_cross_app`] (over a default-set run) all build
+/// their diagnostics here, so every command reports the same set (#91).
+///
+/// al-sem `analyzeWorkspace` (src/index.ts:287-297) concatenates SIX diagnostic
+/// sources, IN THIS ORDER, into the flat `result.diagnostics` the JSON envelope
+/// serializes:
+///   1. workspace.diagnostics  — provider (remapped "discover") + index/parse
+///   2. depArtifacts.diagnostics — dependency-artifact resolution
+///   3. summarizeDiagnostics   — L4 `computeSummaries`
+///   4. loadedRootsConfig.diagnostics — roots.config.json LOADER (parse/schema)
+///   5. overlayDiagnostics     — roots.config.json OVERLAY (kinds-mismatch)
+///   6. detectDiagnostics      — L5 detector-emitted (e.g. d43 substrate guard)
+///
+/// Each source preserves a deterministic (insertion / sorted-file) order — no
+/// HashMap/HashSet iteration leaks into this concatenation (the determinism
+/// contract). `dependency_diagnostics` is the DEPENDENCY source (2),
+/// `infra_diagnostics` the OVERLAY source (5), `run.diagnostics` DETECT (6). The
+/// TS-order #1 (workspace) goes FIRST so it precedes overlay.
 fn analyzer_diagnostics_of_run(
     ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
     run: &crate::engine::l5::registry::RunOutput,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
-    // (1) workspace.diagnostics.
+    // (1) workspace.diagnostics — provider (discover) + index, computed from disk.
     all.extend(crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path));
-    // (3) summarizeDiagnostics — L4 JACOBI fixed-point cap-hit.
+    // (2) dependency diagnostics — the program build's dependency ledger
+    //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
+    //     unidentified dependency packages, kept on the model by
+    //     `attach_program_calls` (#91).
+    all.extend(resolved.dependency_diagnostics.iter().cloned());
+    // (3) summarizeDiagnostics — L4 `compute_summaries*` (run inside
+    //     `run_detectors`'s `DetectorContext` build) surfaces the JACOBI
+    //     fixed-point cap-hit here. Empty whenever every SCC converges.
     all.extend(run.summarize_diagnostics.iter().cloned());
+    // (4) loadedRootsConfig.diagnostics — TRACKED GAP: the roots.config.json LOADER
+    //     diagnostics (parse/schema errors) are not yet surfaced separately from the
+    //     OVERLAY diagnostics by `compute_root_classifications`. The overlay
+    //     diagnostics (5) below cover the kinds-mismatch case the corpus exercises.
     // (5) overlayDiagnostics — roots.config.json overlay (kinds-mismatch).
     all.extend(resolved.infra_diagnostics.iter().map(|d| {
         crate::engine::l5::registry::Diagnostic {
@@ -1167,4 +1111,99 @@ fn analyzer_diagnostics_of_run(
     // (6) detectDiagnostics.
     all.extend(run.diagnostics.iter().cloned());
     all
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::l5::registry::{Diagnostic, RunOutput};
+    use crate::program::model::workspace::{Model, ModelEntities};
+
+    /// #91: the shared aggregation returns every source, in analyze's order:
+    /// (1) workspace, (2) dependency, (3) summarize, (5) overlay, (6) detect.
+    /// The workspace has no `app.json`, so (1) is the fail-closed `discover`
+    /// error. Mutation: drop (2) from `analyzer_diagnostics_of_run` -> this fails.
+    #[test]
+    fn analyzer_diagnostics_of_run_keeps_every_source_in_order() {
+        let d = |stage: &str| Diagnostic {
+            severity: "warning".to_string(),
+            stage: stage.to_string(),
+            message: format!("{stage} message"),
+        };
+        let ws = tempfile::tempdir().expect("tempdir");
+        let model = Model {
+            workspace: ModelEntities {
+                objects: vec![],
+                tables: vec![],
+                routines: vec![],
+            },
+            root_classifications: vec![],
+            primary_app: None,
+            infra_diagnostics: vec![crate::engine::root_classification::InfraDiagnostic {
+                severity: "warning".to_string(),
+                stage: "overlay".to_string(),
+                message: "overlay message".to_string(),
+            }],
+            dependency_diagnostics: vec![d("dependencies")],
+            calls: Default::default(),
+            events: Default::default(),
+        };
+        let run = RunOutput {
+            findings: vec![],
+            diagnostics: vec![d("detect")],
+            detector_stats: vec![],
+            summarize_diagnostics: vec![d("summarize")],
+            d1_cohort_index: None,
+        };
+        let stages: Vec<String> = super::analyzer_diagnostics_of_run(ws.path(), &model, &run)
+            .into_iter()
+            .map(|d| d.stage)
+            .collect();
+        assert_eq!(
+            stages,
+            ["discover", "dependencies", "summarize", "overlay", "detect"]
+        );
+    }
+
+    /// #91: `alsem analyze` builds its diagnostics through the one shared
+    /// aggregation, not an inline copy of it. Its output cannot tell the two
+    /// apart, so the call itself is pinned. Mutation: restore the inline
+    /// `compute_workspace_diagnostics(` / `dependency_diagnostics(` block in
+    /// `run_analyze_with_exit` -> this fails.
+    #[test]
+    fn run_analyze_with_exit_uses_the_shared_aggregation() {
+        let src = include_str!("run.rs");
+        let start = src
+            .find("pub fn run_analyze_with_exit(")
+            .expect("run_analyze_with_exit");
+        let body = &src[start..];
+        // Cut at the next top-level item, not the first column-0 `}`, which a raw
+        // string inside the fn could hold.
+        let end = ["\npub fn ", "\nfn ", "\n#[", "\n///"]
+            .iter()
+            .filter_map(|m| body[1..].find(m))
+            .min()
+            .expect("an item after run_analyze_with_exit");
+        let body = &body[..end + 1];
+        // A late anchor proves the cut did not stop early.
+        assert!(
+            body.contains("detector_stats"),
+            "the cut must reach run_analyze_with_exit's later code"
+        );
+        assert!(
+            body.contains("analyzer_diagnostics_of_run("),
+            "run_analyze_with_exit must call analyzer_diagnostics_of_run"
+        );
+        for banned in [
+            "compute_workspace_diagnostics(",
+            "dependency_diagnostics(",
+            "summarize_diagnostics",
+            "infra_diagnostics",
+        ] {
+            assert!(
+                !body.contains(banned),
+                "run_analyze_with_exit calls {banned} itself; aggregate through \
+                 analyzer_diagnostics_of_run so every command reports the same set"
+            );
+        }
+    }
 }

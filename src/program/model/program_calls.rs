@@ -627,12 +627,17 @@ pub fn resolved_calls_from_program(
 /// return the model with both. `alsem analyze` and
 /// [`assemble_and_resolve_workspace_program`] both use it, so a test cannot
 /// drift from the production path.
+///
+/// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
+/// go on the model (#91). It is required, so no program-backed model can be built
+/// without them.
 pub fn attach_program_calls(
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
+    coverage: &crate::program::resolve::full::FreshCoverage,
 ) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(rows, ctx, report, None)
+    attach_program_calls_with(rows, ctx, report, coverage, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
@@ -641,6 +646,7 @@ fn attach_program_calls_with(
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
+    coverage: &crate::program::resolve::full::FreshCoverage,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> crate::program::model::workspace::Model {
     use crate::engine::perf_trace as pt;
@@ -666,6 +672,7 @@ fn attach_program_calls_with(
         root_classifications: rows.root_classifications,
         primary_app: rows.primary_app,
         infra_diagnostics: rows.infra_diagnostics,
+        dependency_diagnostics: coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
@@ -701,7 +708,7 @@ pub fn assemble_and_resolve_workspace_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
-    let (ctx, report, _) =
+    let (ctx, report, coverage) =
         crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         workspace,
@@ -710,7 +717,7 @@ pub fn assemble_and_resolve_workspace_program(
         &ctx,
         &report.parenless_calls,
     )?;
-    Some(attach_program_calls(rows, ctx, report))
+    Some(attach_program_calls(rows, ctx, report, &coverage))
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -881,7 +888,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(rows, ctx, report, Some(&abi_rows))
+        attach_program_calls_with(rows, ctx, report, &coverage, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,

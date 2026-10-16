@@ -1,1 +1,3 @@
+warning: dependency "System Application" (63ca2fa4-4f03-4f2b-a480-172fef340d3f), declared by "WSEventPartialCoverage" at version 26.0.0.0, is missing
+warning: dependency "System" (8874ed3a-0643-4247-9ced-7a7002f7135d), declared by "WSEventPartialCoverage" at version 26.0.0.0, is missing
 warning: d43-event-ishandled-skip: conditionReferences substrate empty; dispatch-site detection limited

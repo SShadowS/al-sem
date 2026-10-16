@@ -1215,6 +1215,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
         };
@@ -1271,6 +1272,7 @@ mod tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
         };
