@@ -24,6 +24,7 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from . import budget
 from .state import Ctx, MutexTimeout, append_audit, config, mutex, read_json, write_json
 
 STALE_SECONDS = 30 * 60
@@ -34,7 +35,8 @@ class LockHeld(RuntimeError):
     machine-readable reason: `issue-held:<run>` (the issue has a lease, live
     or stale), `slots-full` (as many leases as `slots`), `run-holds-a-lock`
     (this run id already owns a lease: one run, one issue),
-    `disk-low:<free>GB<<need>GB` (see `disk_required_gb`), `lock-live:<run>`
+    `disk-low:<free>GB<<need>GB` (see `disk_required_gb`), `loop-exhausted`
+    (`claim --loop-max`: the shared loop budget is spent), `lock-live:<run>`
     (the lease to recover is live again: another session stole it first) or
     `lock-gone` (the lease to recover no longer names the stale run)."""
 
@@ -149,7 +151,8 @@ def disk_required_gb(ctx: Ctx, live_runs: int) -> int:
 
 
 def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
-            started: float | None = None, count_slot: bool = True) -> Lock:
+            started: float | None = None, count_slot: bool = True,
+            loop_max: int | None = None) -> Lock:
     """Take the lease for `issue` under this run's id.
 
     Under mutex `registry`, in this order: refuse `run-holds-a-lock` if this
@@ -160,6 +163,12 @@ def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
     cannot be over-subscribed around: `recover` frees its slot. Then refuse
     `disk-low:<free>GB<<need>GB` below `disk_required_gb`. `unblock` passes
     `count_slot=False`, because it does no work, and skips both.
+
+    `loop_max` (`claim --loop-max`): refuse `loop-exhausted` first if one
+    more claim would pass the loop budget, and charge `.agent/runs/loop.json`
+    only once the lease file exists, all in this one critical section. A
+    budget checked here but charged later would let two sessions at the last
+    unit both claim; a refused claim spends nothing.
 
     `started` names WHEN THE WORK WAS CLAIMED, and it is a parameter because
     one caller is not claiming new work: `cli.cmd_recover` mints a
@@ -182,16 +191,22 @@ def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
     if not ctx.run_id:
         raise RuntimeError("acquire needs a run_id")
     with mutex(ctx, "registry"):
-        return _acquire_held(ctx, issue, session, attempt, started, count_slot)
+        return _acquire_held(ctx, issue, session, attempt, started, count_slot, loop_max)
 
 
 def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
-                  started: float | None, count_slot: bool) -> Lock:
+                  started: float | None, count_slot: bool, loop_max: int | None) -> Lock:
     """`acquire`'s body. Assumes mutex `registry` is held."""
     entries = [lk for _, lk in _entries(ctx)]
     mine = next((lk for lk in entries if lk.run_id == ctx.run_id), None)
     if mine is not None:
         raise LockHeld("run-holds-a-lock", mine)
+    loop_after = None
+    if loop_max is not None:
+        try:
+            loop_after = budget.loop_next_held(ctx, loop_max)
+        except budget.BudgetExceeded:
+            raise LockHeld("loop-exhausted") from None
     held = next((lk for lk in entries if lk.issue == issue), None)
     if held is not None:
         raise LockHeld("issue-held", held)
@@ -210,6 +225,15 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         try:
             with open(path, "x", encoding="utf-8") as f:
                 f.write(json.dumps(asdict(lk), indent=2))
+            if loop_after is not None:
+                # Charged only now that the lease exists. A failed charge takes
+                # the lease back: no lease without its unit, and no unit spent
+                # without a lease.
+                try:
+                    write_json(ctx, ctx.paths.loop, loop_after)
+                except BaseException:
+                    path.unlink(missing_ok=True)
+                    raise
             return lk
         except FileExistsError:
             # Only a file the check above could not read gets here (a writer

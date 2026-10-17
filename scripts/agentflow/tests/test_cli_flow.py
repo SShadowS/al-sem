@@ -364,6 +364,83 @@ def test_two_processes_claiming_two_issues_with_one_slot_get_one_lease(root):
     assert len(lock.all_locks(Ctx(Paths(root)))) == 1
 
 
+# ---- claim --loop-max (parallel-issues design, commit 9) --------------------
+
+def _loop(root):
+    p = root / ".agent" / "runs" / "loop.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def _set_loop(root, n):
+    p = root / ".agent" / "runs" / "loop.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"issues_done": n}), encoding="utf-8")
+
+
+def _claim_max(capsys, root, issue, gh, run_id, loop_max):
+    return run(capsys, root, "claim", str(issue), "--session", "https://s", "--title-slug", "x",
+               "--loop-max", str(loop_max), gh_run=gh, run_id=run_id)
+
+
+def test_claim_with_loop_max_spends_the_loop_budget_only_on_a_claim_that_lands(capsys, root):
+    """`claim --loop-max M` charges `loop.json` inside the claim's own
+    registry critical section. A landed claim spends one; `issue-held` spends
+    nothing (the conductor tries its next pick); an exhausted budget is
+    `loop-exhausted` with no lease and no gh call. Without `--loop-max`,
+    `loop.json` is not touched (the old `loop-tick` + `claim` shape)."""
+    _slots(root, 3)
+    _set_loop(root, 2)
+    code, out = _claim_max(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a", 3)
+    assert code == 0, out
+    assert _loop(root) == {"issues_done": 3}
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim_max(capsys, root, 8, gh, "run-b", 5)
+    assert code == 1 and out["error"] == "issue-held:run-a", out
+    assert _loop(root) == {"issues_done": 3} and gh.calls == []
+    code, out = _claim_max(capsys, root, 9, gh, "run-b", 3)
+    assert code == 1 and out["error"] == "loop-exhausted", out
+    assert gh.calls == [] and lock.for_issue(Ctx(Paths(root)), 9) is None
+    assert _loop(root) == {"issues_done": 3}
+    code, out = _claim(capsys, root, 9, FakeRunner(CLAIM_GH), "run-c")
+    assert code == 0, out
+    assert _loop(root) == {"issues_done": 3}
+
+
+def test_a_rolled_back_claim_gives_its_loop_budget_back(capsys, root):
+    """The budget counts issues actually claimed. A claim that rolls back
+    (a gh failure after the lease) returns the unit it spent."""
+    _set_loop(root, 1)
+    gh = FakeRunner({**CLAIM_GH, "issue edit 8 --add-label agent-working": (1, "", "HTTP 500: boom")})
+    code, out = _claim_max(capsys, root, 8, gh, "run-a", 3)
+    assert code == 1 and "claim rolled back" in out["error"], out
+    assert lock.for_issue(Ctx(Paths(root)), 8) is None
+    assert _loop(root) == {"issues_done": 1}
+
+
+def test_two_processes_claiming_with_one_loop_unit_left_get_one_claim(root):
+    """Design test 14, the `claim --loop-max` form. Two sessions claim two
+    different issues at `issues_done = 2` under `--loop-max 3` with two free
+    slots: exactly one claim lands; the other is `loop-exhausted`.
+
+    The window that matters is AFTER the lease, where the claim does its gh
+    calls: a budget checked in the critical section but charged there would
+    let the second session check 2 < 3 too. The claim's read of
+    `handoffs.json`, which sits in that window, is slowed to hold it open."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    _set_loop(root, 2)
+    (root / ".agent" / "handoffs.json").write_text("{}", encoding="utf-8")
+    body = (CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+            .replace('"--title-slug", "x"]', '"--title-slug", "x", "--loop-max", "3"]'))
+    assert body.count('"--loop-max", "3"') == 1
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "handoffs.json"])
+    outs = [o for _, o, _ in res]
+    assert sorted(o.strip()[-6:] for o in outs) == ["EXIT 0", "EXIT 1"], res
+    assert '"loop-exhausted"' in next(o for o in outs if o.strip().endswith("EXIT 1")), res
+    assert len(lock.all_locks(Ctx(Paths(root)))) == 1
+    assert _loop(root) == {"issues_done": 3}
+
+
 def test_finish_naming_another_issue_than_the_lease_refuses_before_any_gh_call(
         capsys, root, tmp_path, monkeypatch):
     """Design test 12. `finish --issue 9` under a lease for 8 used to label

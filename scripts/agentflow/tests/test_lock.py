@@ -67,6 +67,18 @@ def test_unblock_style_acquire_does_not_count_a_slot_but_still_respects_the_issu
     assert e.value.code == "issue-held:run-test"
 
 
+def test_a_loop_charge_that_fails_takes_the_new_lease_back(ctx, monkeypatch):
+    """`acquire(loop_max=...)` charges `loop.json` after creating the lease.
+    If that write fails, the lease goes too: a lease whose budget unit was
+    never spent would be a claim the loop never counted."""
+    def failing(c, path, data):
+        raise OSError("disk full")
+    monkeypatch.setattr(lock, "write_json", failing)
+    with pytest.raises(OSError):
+        lock.acquire(ctx, 8, "s", 1, loop_max=3)
+    assert lock.all_locks(ctx) == [] and not ctx.paths.lease(8).exists()
+
+
 def test_check_fence_with_an_issue_refuses_another_issue(ctx):
     """Design test 12, at the library level: the own lease is not enough when
     the call names a different issue."""

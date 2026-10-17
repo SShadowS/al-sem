@@ -438,6 +438,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   machine's real free space must not decide a claim test (this machine had
   31 GB free on `C:`). The suite is 344 passed (was 343).
 
+- **agentflow: `claim --loop-max` charges the loop budget with the lease
+  (`scripts/agentflow/{budget,lock,cli}.py`).** Step 9 of the parallel-issues
+  design. `claim N ... --loop-max M` checks `.agent/runs/loop.json` and
+  charges it in the same `registry` critical section that creates the lease,
+  and only once the lease file exists. Before, the budget was a separate
+  `loop-tick` call, so a claim that then failed had already spent a unit,
+  and two sessions at the last unit could both pass a check made before
+  either charged. Now an exhausted budget is `loop-exhausted` (no lease, no
+  gh call), `issue-held` and the other refusals spend nothing, and a claim
+  that rolls back gives its unit back. The budget is shared: `--max-issues`
+  is a total across sessions. `loop-tick` stays one release for old prompts;
+  without `--loop-max`, `claim` does not touch `loop.json`.
+
+  4 new tests (3 in `test_cli_flow.py`, among them two real processes at the
+  last unit; 1 in `test_lock.py`). The suite is 348 passed (was 344).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

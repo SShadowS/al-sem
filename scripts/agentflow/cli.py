@@ -400,10 +400,11 @@ def cmd_claim(args, ctx, gh, git):
     ctx.run_id = ctx.run_id or new_run_id(ctx.now())
     attempt = read_json(ctx.paths.attempts, default={}).get(str(args.issue), 0) + 1
     try:
-        lk = lock.acquire(ctx, args.issue, args.session, attempt)
+        lk = lock.acquire(ctx, args.issue, args.session, attempt, loop_max=args.loop_max)
     except lock.LockHeld as e:
         # Nothing was created, labelled or counted. `issue-held` means "try
-        # the next ranked issue"; `slots-full` means "do not claim now".
+        # the next ranked issue"; `slots-full` and `disk-low` mean "do not
+        # claim now"; `loop-exhausted` ends the loop.
         raise Fail({"error": e.code, "detail": str(e)})
     try:
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
@@ -455,6 +456,11 @@ def cmd_claim(args, ctx, gh, git):
             lock.release(ctx)
         except Exception:
             pass  # never let a release failure mask the original error
+        if args.loop_max is not None:
+            try:
+                budget.loop_refund(ctx)  # the budget counts claims that landed
+            except Exception:
+                pass
         raise Fail({"error": f"claim rolled back: {e}"})
     if handoff is not None:
         try:
@@ -1526,6 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("recover", cmd_recover)
     s.add_argument("--issue", type=int, help="the stale lease to recover; required when there are several")
     s = add("claim", cmd_claim); s.add_argument("issue", type=int); s.add_argument("--session", required=True); s.add_argument("--title-slug", required=True)
+    s.add_argument("--loop-max", type=int, help="charge the shared loop budget (`--max-issues`) in the same step as the lease")
     add("beat", cmd_beat)
     s = add("halt-check", cmd_halt_check); s.add_argument("--terminal", action="store_true")
     s = add("set-halt", cmd_set_halt); s.add_argument("reason")

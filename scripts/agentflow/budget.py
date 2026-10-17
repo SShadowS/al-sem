@@ -91,16 +91,39 @@ def snapshot(ctx: Ctx) -> dict:
 
 # `loop.json` is shared by every session, so its read-modify-write holds mutex
 # `registry`: two ticks at once must not both read 2 and both write 3.
+# `--max-issues` is therefore a total across sessions, not per session.
+_LOOP_DEFAULT = {"issues_done": 0}
+
+
 def loop_reset(ctx: Ctx) -> None:
     update_json(ctx, ctx.paths.loop, lambda _: {"issues_done": 0}, mutex_name="registry")
 
 
-def loop_tick(ctx: Ctx, max_issues: int) -> int:
-    def tick(data: dict) -> dict:
-        done = data["issues_done"] + 1
-        if done > max_issues:
-            raise BudgetExceeded("loop")
-        return {"issues_done": done}
+def _loop_next(data: dict, max_issues: int) -> dict:
+    done = data["issues_done"] + 1
+    if done > max_issues:
+        raise BudgetExceeded("loop")
+    return {"issues_done": done}
 
-    data = update_json(ctx, ctx.paths.loop, tick, mutex_name="registry", default={"issues_done": 0})
+
+def loop_tick(ctx: Ctx, max_issues: int) -> int:
+    """The old, separate budget step (kept one release for old prompts)."""
+    data = update_json(ctx, ctx.paths.loop, lambda d: _loop_next(d, max_issues),
+                       mutex_name="registry", default=_LOOP_DEFAULT)
     return max_issues - data["issues_done"]
+
+
+def loop_next_held(ctx: Ctx, max_issues: int) -> dict:
+    """What `loop.json` becomes if one more issue is claimed, or
+    `BudgetExceeded`. Writes nothing. ASSUMES mutex `registry` is held: it is
+    `lock.acquire`'s helper for `claim --loop-max`, which charges the budget
+    in the same critical section as the lease (calling `loop_tick` there
+    would take `registry` twice and time out)."""
+    return _loop_next(read_json(ctx.paths.loop, _LOOP_DEFAULT), max_issues)
+
+
+def loop_refund(ctx: Ctx) -> None:
+    """Give back the unit a rolled-back `claim --loop-max` spent. Takes
+    `registry`; never below 0 (a `loop-reset` may have run meanwhile)."""
+    update_json(ctx, ctx.paths.loop, lambda d: {"issues_done": max(0, d["issues_done"] - 1)},
+                mutex_name="registry", default=_LOOP_DEFAULT)
