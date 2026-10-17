@@ -788,6 +788,25 @@ changed or overridden. Three more rules:
 - an attempt that started from a handoff may not hand off again
   (`handoff-already-used`).
 
+**Stand-ins on a handoff (#141).** When the operator named reviewer stand-ins,
+the marks sit under their names, so the named roster's slots are empty and the
+rule could never pass. `finish --outcome handoff` therefore takes the same
+`--substitute SLOT=REVIEWER` flags as `attest`, validated the same way
+(`bad-substitute`: unknown slot, a slot twice, one reviewer in both slots, a
+malformed spec), and judges the rule against that roster. `--substitute` on
+any other outcome is refused (exit 2), never ignored. The record stores the
+roster as `reviewers` and the public comment names the stand-ins; a record
+without `reviewers` (older than #141) was signed by the named roster. The
+claim carries `reviewers` to the next attempt, but `attest` never applies it
+on its own: the substitution stays an explicit operator decision per attempt.
+A mismatch fails closed in both directions (`register-not-converged`), because
+the carried entries have no marks under the other roster's names.
+
+One limit, older than #141: a mark is not bound to the hash it was made
+against. A carried `accepted` from the spec panel passes `attest` even if the
+final panel never re-marked that entry. Only the prompt (`issue.md`: round 1
+re-marks every carried entry) enforces this; a fix would be a per-mark `hash`.
+
 A crash after a consumed handoff takes the normal `blocked-crashed` route. The
 issue then needs `unblock` and a fresh panel. The handoff record is gone, but
 its SHA survives in the retained `claim.json` and on the first attempt's

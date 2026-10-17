@@ -3212,3 +3212,141 @@ def test_a_rolled_back_claim_does_not_consume_the_handoff(capsys, repo_pair, tmp
     assert code == 1 and "claim rolled back" in out["error"]
     assert handoffs(clone)["8"]["sha"] == sha
     assert "issue edit 8 --remove-label agent-design-ready" not in failing.calls
+
+
+# ---- #141: a handoff signed by declared stand-ins ---------------------------
+
+# #34's register with its marks recorded under the stand-ins the operator
+# named (sol for astra, opus for flash). Stated literally: the #141 reproducer
+# is the first entry, `sol: re-raised, opus: accepted`.
+STAND_IN_REGISTER = [
+    {"id": "A1", "severity": "important", "disposition": "fixed",
+     "reviews": {"sol": "re-raised", "opus": "accepted"}},
+    {"id": "A2", "severity": "minor", "disposition": "refuted",
+     "reviews": {"sol": "accepted", "opus": "accepted"}},
+    {"id": "A3", "severity": "minor", "disposition": "deferred",
+     "reviews": {"sol": "accepted", "opus": "accepted"}},
+]
+STAND_INS = ("--substitute", "astra=sol", "--substitute", "flash=opus")
+
+
+def finish_handoff_with(capsys, clone, sha, gh, extra, run_id="run-test"):
+    return run(capsys, clone, "finish", "--issue", "8", "--outcome", "handoff", "--handoff-ref", sha,
+               "--reason", "spec-panel-cap", *extra, gh_run=gh, run_id=run_id)
+
+
+def comment_bodies(gh):
+    return [Path(c.split(" --body-file ", 1)[1]).read_text(encoding="utf-8")
+            for c in gh.calls if c.startswith("issue comment 8 --body-file ")]
+
+
+def test_a_register_marked_by_stand_ins_is_handed_off_with_substitute(capsys, repo_pair, fake_home):
+    """#141. `attest` honours `--substitute`, but the handoff judged the rule
+    against the fixed astra/flash roster, so a register the operator's
+    stand-ins marked could never be handed off. With the same declaration
+    the stand-ins' marks fill the slots, and the record and the public
+    comment both say who signed."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff_with(capsys, clone, sha, gh, STAND_INS)
+    assert code == 0, out
+    rec = handoffs(clone)["8"]
+    assert rec["reviewers"] == {"astra": "sol", "flash": "opus"}
+    assert "issue edit 8 --add-label agent-design-ready" in gh.calls
+    [body] = [b for b in comment_bodies(gh) if "PRE-RATIFIED" in b]
+    assert "sol (astra slot)" in body and "opus (flash slot)" in body, body
+
+
+def test_a_register_marked_by_stand_ins_is_not_handed_off_without_substitute(capsys, repo_pair, fake_home):
+    """The #141 bug, kept as a pin: without the declaration the astra and
+    flash slots are empty for every entry, so a stand-in's marks never count
+    by accident."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 1 and out["error"] == "handoff-not-ready", out
+    assert out["entries"] == ["A1", "A2", "A3"]
+    assert out["reviewers"] == {"astra": "astra", "flash": "flash"}
+    assert gh.calls == [] and handoffs(clone) == {}
+
+
+@pytest.mark.parametrize("extra", [
+    ("--substitute", "bob=sol"),                                     # no such slot
+    ("--substitute", "astra=sol", "--substitute", "astra=x"),        # slot twice
+    ("--substitute", "astra=sol", "--substitute", "flash=sol"),      # one reviewer, both slots
+    ("--substitute", "sol"),                                         # malformed
+], ids=["unknown-slot", "slot-twice", "one-reviewer-both-slots", "malformed"])
+def test_a_handoff_with_a_bad_substitute_is_refused(capsys, repo_pair, fake_home, extra):
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff_with(capsys, clone, sha, gh, extra)
+    assert code == 1 and out["error"] == "bad-substitute", out
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+    assert handoffs(clone) == {}
+
+
+def test_substitute_is_refused_on_an_outcome_other_than_handoff(capsys, repo_pair, fake_home):
+    """A flag that is accepted and then ignored is a silent no-op: refuse it."""
+    _, clone = repo_pair
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = run(capsys, clone, "finish", "--issue", "8", "--outcome", "blocked", "--reason", "x",
+                    *STAND_INS, gh_run=gh)
+    assert code == 2, out
+    assert "--substitute" in out["error"]
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+
+
+def test_the_next_claim_carries_the_stand_ins_and_attest_fails_closed_without_them(
+        capsys, repo_pair, fake_home):
+    """The record's `reviewers` reach the next attempt through `claim`. Attest
+    does NOT apply them on its own: the same declaration converges, and an
+    attest without it is `register-not-converged`, never a silent pass."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    assert finish_handoff_with(capsys, clone, sha, FakeRunner(HANDOFF_GH), STAND_INS)[0] == 0
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH), run_id="run-2")
+    assert code == 0, out
+    assert out["handoff"]["reviewers"] == {"astra": "sol", "flash": "opus"}
+    claim = json.loads((clone / ".agent" / "runs" / "run-2" / "claim.json").read_text())
+    assert claim["handoff"]["reviewers"] == {"astra": "sol", "flash": "opus"}
+
+    # The final panel re-marked every carried entry under the same stand-ins.
+    register = Path(claim["worktree"]) / ".agent" / "issue-8" / "findings.json"
+    register.parent.mkdir(parents=True)
+    register.write_text(json.dumps([{**e, "reviews": {"sol": "accepted", "opus": "accepted"}}
+                                    for e in STAND_IN_REGISTER]))
+
+    def attest2(*extra):
+        return run(capsys, clone, "attest", "--issue", "8", "--B", "b" * 40, "--H", "c" * 40,
+                   "--final-head", "f" * 40, "--register", str(register), "--gates", GREEN_GATES,
+                   "--body-hash", claim["body_hash"], *extra, gh_run=FakeRunner(), run_id="run-2")
+
+    code, out = attest2()
+    assert code == 1 and out["error"] == "register-not-converged", out
+    code, out = attest2(*STAND_INS)
+    assert code == 0, out
+    assert json.loads(Path(out["path"]).read_text())["reviewers"] == {"astra": "sol", "flash": "opus"}
+
+
+def test_a_handoff_record_without_reviewers_still_claims(capsys, repo_pair, fake_home):
+    """A record written before #141 has no `reviewers` key; it was signed by
+    the named roster, and the next claim carries it as before."""
+    _, clone = repo_pair
+    old = {"from_run": "run-old", "from_attempt": 1, "branch": BRANCH_A1, "sha": "a" * 40,
+           "body_hash": mergeops.body_hash("## Acceptance\nx"), "register_blob": "b" * 40, "files": []}
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "handoffs.json").write_text(json.dumps({"8": old}))
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH))
+    assert code == 0, out
+    assert out["handoff"] == old and "reviewers" not in out["handoff"]
+    assert "8" not in handoffs(clone)

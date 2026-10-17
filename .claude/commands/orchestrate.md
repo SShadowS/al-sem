@@ -44,7 +44,9 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    `recover` below that is the only autonomous way to discharge it. Only a
    `state: open` row reaches `failures`, as `incident:<sha12>`.
    Also call `mcp__pi__pi_models` (load it with ToolSearch) and confirm
-   both `gpt-6-astra` and `gemini-3.8-flash` are listed; if not, call the
+   both reviewers this loop will use are listed: `gpt-6-astra` and
+   `gemini-3.8-flash` by default, or the stand-ins the operator named for
+   this loop instead (since 2026-10-16, `gpt-6.1-sol` and Opus); if not, call the
    push-notification tool directly with kind `reviewer-unavailable` — if that
    tool does not load, append `NOTIFY: reviewer-unavailable: <models missing>`
    to `.agent/runs/$AGENTFLOW_RUN_ID/notify.log` yourself (create the
@@ -291,11 +293,15 @@ the recovered run's just-retained evidence directory — see step 1. Never set
     `.alpackages/` path. On other `blocked` outcomes, just `finish --issue N
     --outcome blocked --reason R` and leave the worktree in place.
     On `handoff <sha>`, `finish --issue N --outcome handoff --handoff-ref <sha>
-    --reason spec-panel-cap` and leave the worktree in place. It labels
+    --reason spec-panel-cap`, plus the same `--substitute` flags `/issue`
+    reported the marks were made under (the operator's instruction; e.g.
+    `--substitute astra=sol --substitute flash=opus`), and leave the worktree
+    in place. The record keeps them as `reviewers`. It labels
     `agent-design-ready` instead of `agent-blocked`, so the issue stays
     eligible and a later tick's claim carries the design as `handoff`. If it
     refuses (`handoff-not-ready`, `handoff-not-on-branch`,
-    `handoff-evidence-missing`, `handoff-already-used`, `sha-not-full`), it
+    `handoff-evidence-missing`, `handoff-already-used`, `sha-not-full`,
+    `bad-substitute`), it
     has labelled and commented nothing and still holds the lock: run `finish
     --issue N --outcome blocked --reason spec-panel-cap` instead. That
     refusal is the fallback, not a stop.

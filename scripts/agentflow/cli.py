@@ -1280,6 +1280,12 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
     sha = args.handoff_ref or ""
     if not _FULL_SHA.match(sha):
         raise Fail({"error": "sha-not-full", "values": {"handoff_ref": sha}})
+    # #141: the same declared stand-ins `attest` accepts, judged by the same
+    # validation. Without it a register marked by stand-ins could never be
+    # handed off, because the named roster's slots were empty on every entry.
+    reviewers, problem = _substituted_roster(args.substitute)
+    if problem:
+        raise Fail({"error": "bad-substitute", "detail": problem})
     claim = read_json(ctx.run_dir / "claim.json")
     if not isinstance(claim, dict):
         raise Fail({"error": "no claim.json for this run"})
@@ -1302,15 +1308,21 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
         entries = json.loads(register)
     except ValueError:
         entries = None
-    bad = _register_failures(entries, marks_ok=_handoff_marks)
+    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks)
     if bad:
-        raise Fail({"error": "handoff-not-ready", "entries": bad})
+        raise Fail({"error": "handoff-not-ready", "entries": bad, "reviewers": reviewers})
+    # `reviewers` reaches the next attempt through `claim`. A record without
+    # it (written before #141) was signed by the named roster.
     return {"from_run": ctx.run_id, "from_attempt": claim.get("attempt"), "branch": branch, "sha": sha,
             "body_hash": claim.get("body_hash"), "register_blob": register_blob,
-            "files": git.changed_files(git.out("merge-base", "master", sha), sha)}
+            "files": git.changed_files(git.out("merge-base", "master", sha), sha),
+            "reviewers": reviewers}
 
 
 def cmd_finish(args, ctx, gh, git):
+    if args.substitute and args.outcome != "handoff":
+        # A flag accepted and then ignored would be a silent no-op.
+        raise Fail({"error": "--substitute applies only to --outcome handoff"}, 2)
     reason = _reason(args)
     if args.outcome == "handoff":
         _scan_or_fail(reason or "")
@@ -1354,10 +1366,13 @@ def cmd_finish(args, ctx, gh, git):
                                f"Branch and worktree are left in place. See the ledger in the run's PR or comments.")
         recovery.notify(ctx, "halted" if reason == "halted" else "blocked", f"#{args.issue}: {reason}")
     if args.outcome == "handoff":
+        signers = record["reviewers"]
+        stand_ins = "" if all(s == r for s, r in signers.items()) else (
+            " Design marks recorded by " + ", ".join(f"{r} ({s} slot)" for s, r in signers.items()) + ".")
         gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped at **{reason or 'spec-panel-cap'}** with a "
                                f"converged design, handed off as PRE-RATIFIED at `{record['sha'][:12]}` on "
-                               f"`{record['branch']}`. The next attempt starts at implementation; both reviewers "
-                               f"must still accept every carried finding before a merge.")
+                               f"`{record['branch']}`.{stand_ins} The next attempt starts at implementation; both "
+                               f"reviewers must still accept every carried finding before a merge.")
     dest = recovery.retain(ctx)
     lock.release(ctx)
     return _emit({"outcome": args.outcome, "retained": str(dest)})
@@ -1407,6 +1422,13 @@ def build_parser() -> argparse.ArgumentParser:
         s.set_defaults(fn=fn)
         return s
 
+    def add_substitute(s):
+        # One definition for `attest` and `finish --outcome handoff` (#141), so
+        # the two judgements of one register cannot drift apart.
+        s.add_argument("--substitute", action="append", default=[], metavar="SLOT=REVIEWER",
+                       help="fill a review slot with a named stand-in (e.g. astra=fable); recorded "
+                            "in the attestation or handoff record")
+
     add("preflight", cmd_preflight)
     add("fetch", cmd_fetch)
     add("recover", cmd_recover)
@@ -1430,8 +1452,7 @@ def build_parser() -> argparse.ArgumentParser:
     for a in ("--B", "--H", "--final-head", "--register", "--gates", "--body-hash"):
         s.add_argument(a, required=True)
     s.add_argument("--issue", type=int, required=True); s.add_argument("--docs-only", action="store_true")
-    s.add_argument("--substitute", action="append", default=[], metavar="SLOT=REVIEWER",
-                   help="fill a review slot with a named stand-in (e.g. astra=fable); recorded in the attestation")
+    add_substitute(s)
     s = add("body-hash", cmd_body_hash); s.add_argument("issue", type=int)
     s = add("merge-gate", cmd_merge_gate); s.add_argument("--pr", type=int, required=True)
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)
@@ -1450,6 +1471,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--outcome", choices=["merged", "blocked", "answered", "regressed", "handoff"], required=True)
     s.add_argument("--handoff-ref", help="full SHA of the commit carrying the handed-off design (--outcome handoff)")
     g = s.add_mutually_exclusive_group(); g.add_argument("--reason"); g.add_argument("--reason-file")
+    add_substitute(s)  # --outcome handoff only; cmd_finish refuses it elsewhere
     s = add("loop-tick", cmd_loop_tick); s.add_argument("--max", type=int, required=True)
     add("loop-reset", cmd_loop_reset)
     add("status", cmd_status)

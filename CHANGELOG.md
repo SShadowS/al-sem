@@ -262,6 +262,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **agentflow: a design marked by reviewer stand-ins can be handed off (#141,
+  `scripts/agentflow/cli.py`).** `attest` accepts `--substitute SLOT=REVIEWER`,
+  but `finish --outcome handoff` judged the handoff rule against the fixed
+  `astra`/`flash` roster and had no such flag. A register whose marks were
+  recorded under the stand-ins (`sol`/`opus`) had empty slots on every entry, so
+  it was always `handoff-not-ready`.
+  - `finish --outcome handoff` now takes the same `--substitute` flags, defined
+    once for both commands and validated by the same `_substituted_roster`
+    (`bad-substitute`: unknown slot, a slot twice, one reviewer in both slots, a
+    malformed spec). Refusals still label and comment nothing and keep the lock.
+  - `--substitute` on any other outcome exits 2; a flag accepted and then
+    ignored would be a silent no-op.
+  - The handoff record stores `reviewers`, and the public comment names the
+    stand-ins. The next claim carries `reviewers`; `attest` does not apply it on
+    its own, so a mismatched roster fails closed (`register-not-converged`). A
+    record without `reviewers` (older than this change) claims as before.
+  - `.claude/commands/{issue,orchestrate}.md` and the orchestrator spec say how
+    the flags travel from `/issue` to `finish` and to the next attempt's
+    `attest`, and the preflight reviewer check now checks the operator's
+    stand-ins when a loop uses them.
+
+  9 new tests in `scripts/agentflow/tests/test_cli_flow.py`; the suite is 294
+  passed (was 285).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

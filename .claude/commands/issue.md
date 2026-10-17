@@ -110,8 +110,12 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    ledger and `findings.json` on the issue branch — name each path; a spec
    left untracked is not carried — run `check-diff --base master --head HEAD
    --issue N --cwd <worktree>`, write the commit's FULL SHA into the ledger,
-   and return `handoff <full sha>`. Not handoff-ready: `blocked
-   spec-panel-cap`, as before.
+   and return `handoff <full sha>`. If the operator named stand-ins and the
+   marks are stored under their names (e.g. `reviews: {sol: …, opus: …}`),
+   also tell the orchestrator which `--substitute` flags the marks were made
+   under (e.g. `--substitute astra=sol --substitute flash=opus`); `finish`
+   judges the handoff rule against that roster (#141). Not handoff-ready:
+   `blocked spec-panel-cap`, as before.
 6. **Acceptance tests.** Call `python scripts/agentflow beat` immediately before
    AND immediately after dispatching this step's subagent — the same
    30-minute-staleness reason as step 8's dispatches. Dispatch an `opus`
@@ -243,6 +247,11 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     substituted once, and one reviewer may not hold both slots
     (`bad-substitute`). The substitution is written into the attestation as
     `reviewers`, so the public PR comment says who actually signed.
+    On a pre-ratified attempt the claim's `handoff.reviewers` records who
+    signed the carried design (absent means the named roster); print it in the
+    ledger. `attest` never applies it on its own: pass the same `--substitute`
+    flags only if the operator's instruction still holds. A mismatch fails
+    closed (`register-not-converged`), it is never a silent pass.
 
     `attest` also records the register's path — relative to the claim's
     worktree, because the attestation is posted verbatim as a public PR comment
