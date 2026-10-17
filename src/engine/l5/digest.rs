@@ -360,7 +360,9 @@ impl FirstHop<'_> {
 }
 
 /// The ONE reader of a fact's first-hop ids (#98 D2), precedence op, then
-/// event, then call site. `None` when the fact has none (a direct fact).
+/// event, then call site. `None` when the fact has no op, event or call-site
+/// id (a direct fact with a callsite witness returns `Some(Callsite)`; only
+/// Case C, reached for inherited facts, acts on it).
 fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
     if let Some(op) = &f.witness_first_hop_operation_id {
         Some(FirstHop::Op(op))
@@ -1376,18 +1378,20 @@ fn reconstruct_witness_paths<'i>(
 
     // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
     //
-    // An EVENT first hop (#98) seeds only subscribers in `valid_nodes`. Every
-    // subscriber of the event runs, so the write the fact names came from a
-    // subscriber that reaches a carrier. A subscriber that cannot reach one,
-    // opaque or not, is not a witness of THIS write: seeding it would report
-    // a bogus opaque boundary (sorted before the real, longer path) or set
-    // `truncated` through its unrelated out-edges at a cut. `valid_nodes`
-    // holds every carrier, so a writing subscriber is always kept.
+    // An EVENT first hop (#98) seeds only subscribers in `valid_nodes`. The
+    // dispatch fans out to every subscriber, and each one MAY run (binding,
+    // skip flags; the ordering engine keeps `event-subscriber-may`). The
+    // write the fact names comes from a subscriber that reaches a carrier. A
+    // subscriber that cannot reach one, opaque or not, is no witness of THIS
+    // write: seeding it reports a bogus opaque boundary (sorted before the
+    // real, longer path) or sets `truncated` through unrelated out-edges at a
+    // cut. `valid_nodes` holds every carrier, so a writing subscriber is
+    // always kept.
     //
-    // Call-site and op seeds skip the prune, as before: the candidate edges
-    // of ONE call site (interface dispatch) are alternatives, only one runs,
-    // and the fact may come from either, so an opaque candidate there is an
-    // honest boundary.
+    // Call-site and op seeds skip the prune, as before #98. The same argument
+    // would apply to an opaque interface candidate, so this is a SCOPE choice
+    // that keeps that behaviour and its goldens unchanged, not a semantic
+    // difference; pruning those seeds too is a recorded follow-up.
     //
     // When every subscriber fails the prune there is no seed, and the result
     // is `terminal-not-found`, not `first-hop-not-found`: the first hop WAS
@@ -6701,8 +6705,8 @@ codeunit 50410 DupProducer
     }
 
     /// #98 CR1: an opaque subscriber O (coverage `unknown`, no out-edge, no
-    /// direct fact) beside the writing subscriber W. Every subscriber runs, so
-    /// O is no witness of W's write: it is not seeded. Unpruned, O's 1-hop
+    /// direct fact) beside the writing subscriber W. O cannot reach a
+    /// carrier, so it is no witness of W's write: it is not seeded. Unpruned, O's 1-hop
     /// boundary path sorts before W's 2-hop path and is the only one cap 1
     /// keeps, and W's dropped terminal sets `truncated`.
     #[test]
