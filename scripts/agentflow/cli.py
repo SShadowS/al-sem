@@ -285,8 +285,11 @@ def cmd_preflight(args, ctx, gh, git):
     warnings = []
     if os.environ.get("CARGO_TARGET_DIR"):
         warnings.append(f"cargo-target-dir-set:{os.environ['CARGO_TARGET_DIR']}")
-    stale_lock = {k: v for k, v in stale[0].items() if k != "stale"} if stale else None
-    out = {"ok": not fails, "failures": fails, "locks": leases, "stale_lock": stale_lock,
+    # `stale_locks` is what `recover --issue` works through. `stale_lock` (the
+    # first, or null) stays one release for the old prompt text.
+    stale_locks = [{k: v for k, v in r.items() if k != "stale"} for r in stale]
+    out = {"ok": not fails, "failures": fails, "locks": leases, "stale_locks": stale_locks,
+           "stale_lock": stale_locks[0] if stale_locks else None,
            "warnings": warnings, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:
@@ -322,10 +325,31 @@ def cmd_fetch(args, ctx, gh, git):
 
 
 def cmd_recover(args, ctx, gh, git):
-    lk = lock.read(ctx)
-    if lk is None or not lock.is_stale(lk, ctx.now()):
-        raise Fail({"error": "no stale lock"})
-    ctx.run_id = ctx.run_id or new_run_id(ctx.now())
+    now = ctx.now()
+    if args.issue is not None:
+        lk = lock.for_issue(ctx, args.issue)
+        if lk is None:
+            raise Fail({"error": "no stale lock", "issue": args.issue})
+        if not lock.is_stale(lk, now):
+            raise Fail({"error": f"lock-live:{lk.run_id}", "issue": args.issue})
+    else:
+        # Today's call shape still works when there is one stale lease. With
+        # more, guessing would recover the wrong issue: name one.
+        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now)]
+        if not stale:
+            raise Fail({"error": "no stale lock"})
+        if len(stale) > 1:
+            raise Fail({"error": "several stale locks; name one with --issue",
+                        "stale_locks": [asdict(x) for x in stale]}, 2)
+        lk = stale[0]
+    ctx.run_id = ctx.run_id or new_run_id(now)
+    # Make the lease live under this run's name before acting on it, so a
+    # second session recovering at the same time gets `lock-live` and leaves
+    # it alone. It keeps the stale run's id (see `lock.steal_for_recovery`).
+    try:
+        lk = lock.steal_for_recovery(ctx, lk)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     out = recovery.recover_stale(ctx, git, gh, lk, worktrees_parent=ctx.paths.root.parent)
     if out.get("action") == "merged-needs-post-merge":
         # A merged stale run is not fully recovered until ITS follow-through
@@ -343,7 +367,10 @@ def cmd_recover(args, ctx, gh, git):
         # again, and master would keep an unverified merge behind a
         # `verifying` row. `heartbeat` deliberately stays `now` (see
         # `lock.acquire`) -- carrying it back would make this lock born stale.
-        lock.acquire(ctx, lk.issue, "recover", lk.attempt, started=lk.started)
+        #
+        # `handover`, not release-then-acquire: one write replaces the stolen
+        # lease, so the issue never has no lease (a sibling could claim it).
+        lock.handover(ctx, lk.issue, started=lk.started)
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
         budget.init(ctx, claimed_at=ctx.now())
         worktree = str(ctx.paths.root.parent / recovery.worktree_name(lk.issue, lk.attempt))
@@ -1491,7 +1518,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("preflight", cmd_preflight)
     add("fetch", cmd_fetch)
-    add("recover", cmd_recover)
+    s = add("recover", cmd_recover)
+    s.add_argument("--issue", type=int, help="the stale lease to recover; required when there are several")
     s = add("claim", cmd_claim); s.add_argument("issue", type=int); s.add_argument("--session", required=True); s.add_argument("--title-slug", required=True)
     add("beat", cmd_beat)
     s = add("halt-check", cmd_halt_check); s.add_argument("--terminal", action="store_true")

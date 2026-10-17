@@ -499,7 +499,9 @@ def recover_stale(ctx: Ctx, git: Git, gh: Gh, lk: lock.Lock, worktrees_parent: P
     # heartbeat is not carried back, so staleness still measures liveness.
     pr = gh.pr_for_branch_prefix(f"issue/{lk.issue}-", suffix=f"-a{lk.attempt}")
     if pr and pr.get("state") == "MERGED" and not _merged_before(pr, lk.started):
-        lock.drop(ctx, lk.issue, lk.run_id)
+        # The lease is NOT removed here: `cli.cmd_recover` hands it over to
+        # the follow-through in one write (`lock.handover`). Removing it first
+        # left the issue with no lease, and a sibling could claim it.
         return {"action": "merged-needs-post-merge", "merge_sha": pr["mergeCommit"]["oid"], "pr": pr["number"],
                 "branch": pr["headRefName"]}
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(ctx.now()))

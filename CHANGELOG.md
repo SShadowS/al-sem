@@ -401,6 +401,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `post-merge` preflight test now expects `slots-full`. The suite is 339 passed
   (was 332).
 
+- **agentflow: recovery works on one issue's lease (`scripts/agentflow/{lock,cli,recovery}.py`).**
+  Step 7 of the parallel-issues design.
+  - `preflight` adds `stale_locks`, every stale lease; `stale_lock` stays (the
+    first, or null) for one release.
+  - `recover --issue N` recovers issue N's lease. Without `--issue` it still
+    works when exactly one lease is stale; with several it exits 2 and lists
+    them. A live lease is `lock-live:<run>`.
+  - `recover` first steals the lease (`lock.steal_for_recovery`): under mutex
+    `registry` it checks the lease is still stale, then makes it live with
+    `recovering_by` set and the stale run's id kept. A second session
+    recovering the same lease at once gets `lock-live` and leaves it alone.
+  - On a merged run, `lock.handover` replaces the stolen lease with the
+    follow-through's lease in one write. Before, `recover_stale` removed the
+    lease and `cmd_recover` took a new one afterwards, so the issue had no
+    lease in between and a sibling could claim it.
+
+  4 new tests in `scripts/agentflow/tests/test_cli_flow.py` (two stale leases,
+  a live lease by issue, two sessions stealing at once in two real processes,
+  no moment without a lease); the suite is 343 passed (was 339).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

@@ -29,14 +29,17 @@ STALE_SECONDS = 30 * 60
 
 
 class LockHeld(RuntimeError):
-    """`acquire` refused. `.code` is the machine-readable reason:
-    `issue-held:<run>` (the issue has a lease, live or stale), `slots-full`
-    (as many leases as `slots`), or `run-holds-a-lock` (this run id already
-    owns a lease: one run, one issue)."""
+    """`acquire` or `steal_for_recovery` refused. `.code` is the
+    machine-readable reason: `issue-held:<run>` (the issue has a lease, live
+    or stale), `slots-full` (as many leases as `slots`), `run-holds-a-lock`
+    (this run id already owns a lease: one run, one issue), `lock-live:<run>`
+    (the lease to recover is live again: another session stole it first) or
+    `lock-gone` (the lease to recover no longer names the stale run)."""
 
     def __init__(self, reason: str, existing: "Lock | None" = None):
         self.reason, self.existing = reason, existing
-        self.code = f"{reason}:{existing.run_id}" if reason == "issue-held" and existing else reason
+        named = reason in ("issue-held", "lock-live") and existing
+        self.code = f"{reason}:{existing.run_id}" if named else reason
         held = f" (run {existing.run_id} holds issue {existing.issue})" if existing else ""
         super().__init__(f"{self.code}{held}")
 
@@ -227,6 +230,63 @@ def release(ctx: Ctx) -> None:
     ctx.write_guard("release lock")
     path, _ = _fenced_entry(ctx)
     path.unlink()
+
+
+def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
+    """Mark `stale`'s lease as being recovered by this run, and make it live.
+
+    Under mutex `registry` the lease is re-read: it must still name
+    `stale.run_id` (else `lock-gone`) and still be stale (else `lock-live`:
+    another session stole it first). It is rewritten with `heartbeat = now`
+    and `recovering_by = ctx.run_id`, and KEEPS `run_id = stale.run_id`.
+    Live, a second session's `recover` leaves it alone; with the old run id,
+    `recover_stale`'s bookkeeping under the old run's fence still passes.
+    `handover` or `drop` ends it. A run that already owns a lease is refused
+    `run-holds-a-lock`: one run, one issue.
+    """
+    ctx.write_guard("steal lease for recovery")
+    if not ctx.run_id:
+        raise RuntimeError("steal_for_recovery needs a run_id")
+    with mutex(ctx, "registry"):
+        entries = _entries(ctx)
+        mine = next((lk for _, lk in entries if lk.run_id == ctx.run_id), None)
+        if mine is not None:
+            raise LockHeld("run-holds-a-lock", mine)
+        e = next(((p, lk) for p, lk in entries if lk.issue == stale.issue), None)
+        if e is None or e[1].run_id != stale.run_id:
+            raise LockHeld("lock-gone", e[1] if e else None)
+        path, cur = e
+        now = ctx.now()
+        if not is_stale(cur, now):
+            raise LockHeld("lock-live", cur)
+        cur.heartbeat, cur.recovering_by = now, ctx.run_id
+        _write(ctx, path, cur)
+        return cur
+
+
+def handover(ctx: Ctx, issue: int, *, started: float) -> Lock:
+    """Replace the lease this run is recovering with its own follow-through
+    lease (`run_id = ctx.run_id`, session `recover`), in one atomic write.
+
+    The issue has a lease at every moment: the old one until `os.replace`,
+    the new one after. A legacy `lock.json` lease is replaced by a lease
+    under `locks/` written FIRST, then the legacy file goes, so the overlap
+    is two leases, never none. `started` is the original claim's date (see
+    `acquire`); the heartbeat is `now`.
+    """
+    ctx.write_guard("hand over recovered lease")
+    with mutex(ctx, "registry"):
+        e = next(((p, lk) for p, lk in _entries(ctx) if lk.issue == issue), None)
+        if e is None or e[1].recovering_by != ctx.run_id:
+            raise FenceError(f"the lease for issue {issue} is not being recovered by run {ctx.run_id}")
+        path, old = e
+        new = Lock(issue=issue, run_id=ctx.run_id, session="recover", started=started,
+                   heartbeat=ctx.now(), attempt=old.attempt)
+        target = ctx.paths.lease(issue)
+        _write(ctx, target, new)
+        if path != target:
+            path.unlink(missing_ok=True)
+        return new
 
 
 def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:

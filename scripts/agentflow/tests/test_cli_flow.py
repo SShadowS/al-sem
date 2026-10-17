@@ -170,6 +170,7 @@ def test_preflight_lists_every_lease_and_fails_slots_full_only_on_live_ones(
     assert [(lk["issue"], lk["run_id"], lk["stale"]) for lk in out["locks"]] == [
         (8, "run-live", False), (9, "run-dead", True)]
     assert out["stale_lock"]["run_id"] == "run-dead"
+    assert [lk["run_id"] for lk in out["stale_locks"]] == ["run-dead"]      # the list `recover` reads
     assert out["warnings"] == []
     (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 3}), encoding="utf-8")
     lock.acquire(Ctx(Paths(clone), run_id="run-live2", now=lambda: 1_000_000.0), 10, "s", 1)
@@ -2857,6 +2858,115 @@ def test_a_recovery_follow_through_that_dies_mid_gates_is_recoverable_again(
     # fail on the OUTCOME above (an unrecoverable follow-through) rather than
     # on a field value, or the proof only shows that the field was read.
     assert follow.started == claimed, follow
+
+
+# ---- recovery per issue (parallel-issues design, commit 7) -----------------
+
+def _stale_pair(clone):
+    """Two stale leases, 8 and 9, with a worktree each. Written by acquiring
+    at time 1.0 under `slots: 2`, so both are stale at any later clock."""
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    for run_id, issue in (("dead-8", 8), ("dead-9", 9)):
+        lock.acquire(Ctx(Paths(clone), run_id=run_id, now=lambda: 1.0), issue, "s", 1)
+        (clone.parent / recovery.worktree_name(issue, 1)).mkdir()
+
+
+BLOCKED_9 = {"pr list *": "[]", "issue comment 9 *": "", "issue edit 9 --add-label agent-blocked": "",
+             "issue edit 9 --remove-label agent-working": ""}
+
+
+def test_recover_with_two_stale_leases_needs_an_issue_and_touches_only_that_one(
+        capsys, repo_pair, monkeypatch):
+    """Design test 27. With more than one stale lease, `recover` must be told
+    which (exit 2, listing them). `recover --issue 9` then moves only issue
+    9's worktree, labels only issue 9 and drops only its lease."""
+    _, clone = repo_pair
+    _stale_pair(clone)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    gh = FakeRunner(BLOCKED_9)
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-r")
+    assert code == 2, out
+    assert [lk["issue"] for lk in out["stale_locks"]] == [8, 9], out
+    assert gh.calls == [] and len(lock.all_locks(Ctx(Paths(clone)))) == 2
+    before_8 = lock.for_issue(Ctx(Paths(clone)), 8)
+    code, out = run(capsys, clone, "recover", "--issue", "9", gh_run=gh, run_id="run-r")
+    assert code == 0 and out["action"] == "blocked-crashed", out
+    assert all(" 9 " in f" {c} " or c.startswith("pr list") for c in gh.calls), gh.calls
+    assert lock.for_issue(Ctx(Paths(clone)), 9) is None
+    assert lock.for_issue(Ctx(Paths(clone)), 8) == before_8                 # untouched
+    assert (clone.parent / recovery.worktree_name(8, 1)).exists()
+    assert not (clone.parent / recovery.worktree_name(9, 1)).exists()
+    assert list(clone.parent.glob(f"{recovery.worktree_name(9, 1)}.crashed-*"))
+
+
+def test_recover_of_a_live_lease_by_issue_is_lock_live(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="alive", now=lambda: 1_000_000.0), 8, "s", 1)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    gh = FakeRunner({})
+    code, out = run(capsys, clone, "recover", "--issue", "8", gh_run=gh, run_id="run-r")
+    assert code == 1 and out["error"] == "lock-live:alive", out
+    assert gh.calls == []
+
+
+STEAL_CHILD = """
+from agentflow import lock
+from agentflow.state import Ctx, Paths
+ctx = Ctx(Paths(ROOT), run_id=f"rec-{TAG}", now=lambda: 1_000_000.0)
+stale = lock.for_issue(ctx, 8)          # both sessions see it stale, BEFORE the barrier
+assert lock.is_stale(stale, ctx.now())
+slow_reads("issue-8.json")
+barrier()
+try:
+    lock.steal_for_recovery(ctx, stale)
+    print("RESULT stolen")
+except lock.LockHeld as e:
+    print("RESULT", e.code)
+"""
+
+
+def test_two_sessions_recovering_one_stale_lease_at_once_one_proceeds(root):
+    """Design test 28, two real processes. Both saw the lease stale; exactly
+    one steals it. The steal makes it LIVE (heartbeat now), so the other gets
+    `lock-live` and leaves it alone. The lease keeps the stale run's id, so
+    `recover_stale`'s old-run gh fence still passes."""
+    from agentflow.tests.conftest import run_concurrently
+    lock.acquire(Ctx(Paths(root), run_id="dead-8", now=lambda: 1.0), 8, "s", 1)
+    res = run_concurrently(root, STEAL_CHILD, ["a", "b"])
+    results = sorted(o.split("RESULT")[-1].strip() for _, o, _ in res)
+    assert results == ["lock-live:dead-8", "stolen"], res
+    lk = lock.for_issue(Ctx(Paths(root)), 8)
+    assert lk.run_id == "dead-8" and lk.recovering_by in ("rec-a", "rec-b")
+    assert lk.heartbeat == 1_000_000.0
+
+
+def test_a_merged_path_recovery_never_leaves_the_issue_without_a_lease(capsys, repo_pair, monkeypatch):
+    """Design test 29. `recover_stale` used to unlink the stale lease and
+    return, and `cmd_recover` acquired the follow-through lease only after:
+    in between, issue 8 had no lease and a sibling could claim it. Checked
+    INSIDE a wrapped `recover_stale` (before and after the real one) and at
+    the end."""
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    monkeypatch.setenv("AGENTFLOW_NOW", str(1_000_000.0 + 4000))
+    real, seen = recovery.recover_stale, []
+
+    def watching(ctx, git, gh, lk, worktrees_parent):
+        seen.append(lock.for_issue(ctx, 8))
+        out = real(ctx, git, gh, lk, worktrees_parent=worktrees_parent)
+        seen.append(lock.for_issue(ctx, 8))
+        return out
+
+    monkeypatch.setattr(recovery, "recover_stale", watching)
+    gh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a1",
+                                               "headRefOid": "h", "mergeCommit": {"oid": "abc"}, "mergedAt": "x"}])})
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
+    assert code == 0 and out["action"] == "merged-needs-post-merge", out
+    assert len(seen) == 2 and all(lk is not None for lk in seen), seen
+    assert seen[0].recovering_by == "run-new" and seen[0].run_id == "old-run"   # stolen, not new
+    final = lock.for_issue(Ctx(Paths(clone)), 8)
+    assert (final.run_id, final.started, final.recovering_by) == ("run-new", 1_000_000.0, None)
 
 
 def test_a_recovery_lock_still_refuses_a_merge_that_predates_the_original_claim(
