@@ -1,0 +1,498 @@
+[
+ {
+  "id": "S1",
+  "source": "sol+opus",
+  "round": 1,
+  "file": "src/program/resolve/differential.rs",
+  "line": 492,
+  "severity": "important",
+  "text": "The differential verifier returns at the first name+arity-matching declaration, so it rejects the new OnB route; the ledger's 'will ACCEPT' claim was false.",
+  "disposition": "fixed",
+  "evidence": "D1b: the verifier loops over all matching declarations, true on any matching subscription attribute, false only after the loop; A7 direct test (OnA, OnB accepted; OnC rejected); break 7.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2",
+  "source": "opus",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 806,
+  "severity": "important",
+  "text": "D1 would merge publisher_kind/include_sender across ABI KeepCollapsed runs (genuinely different overloads under one empty key).",
+  "disposition": "fixed",
+  "evidence": "D1 scope: source-tier routines only (tier != SymbolOnly); A6c pins an unchanged collapsed ABI survivor; break 6c.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3",
+  "source": "sol+opus",
+  "round": 1,
+  "file": "src/program/model/events.rs",
+  "line": 83,
+  "severity": "important",
+  "text": "D2's identity named conditions/anchor fields EventEdge does not have, and full-identity dedup would change single-row multiplicity.",
+  "disposition": "fixed",
+  "evidence": "D2 is now a row skip: a subscriber row whose routine id was already processed is skipped (first row in document order processes); single-row routines unchanged including multiplicity; EventEdge gains no field; A5; break 5.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 62,
+  "severity": "important",
+  "text": "Break 6 (cross-key merge) could not fail any test (all fixtures have empty event facts); full-equality identity and verifier behaviour were unpinned.",
+  "disposition": "fixed",
+  "evidence": "A6 (aliased pair, different param_sig_key, distinct subscriptions -> no leakage), A6b (same event, different skip flags -> two entries), A7 (verifier); breaks 6, 6b, 7. Revision 3: A6 is a hand-stated unit test (as build.rs:1635-1642): two source routines with a forced equal RoutineNodeId and asserted-unequal param_sig_keys, subscribing OnA/OnB; each key's survivor keeps only its own; break 6 targets it.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 35,
+  "severity": "minor",
+  "text": "Ordinals are not invariably preserved if the survivor already holds duplicate parsed attributes.",
+  "disposition": "fixed",
+  "evidence": "D1: the survivor's own list is kept exactly (duplicates included), so its ordinals are unchanged; later copies append only entries not already in the merged list.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S6",
+  "source": "opus",
+  "round": 1,
+  "file": "src/program/resolve/index.rs",
+  "line": 103,
+  "severity": "minor",
+  "text": "The meaning of Subscription.ordinal changes; readers unverified.",
+  "disposition": "fixed",
+  "evidence": "D1: the ordinal doc is updated to 'position in the survivor's merged subscriber list'; the implementer greps and records every ordinal reader first.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S7",
+  "source": "opus",
+  "round": 1,
+  "file": "src/program/model/workspace.rs",
+  "line": 1336,
+  "severity": "minor",
+  "text": "Arms differing in return type are two model ids on one node, so both get the unioned edges.",
+  "disposition": "fixed",
+  "evidence": "D3 notes it under the access/return_type discovery; D2 does not skip distinct model ids.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S8",
+  "source": "opus",
+  "round": 1,
+  "file": "src/program/resolve/decl_surface.rs",
+  "line": 141,
+  "severity": "minor",
+  "text": "The decl_surface citation pointed at file_routine_meta.",
+  "disposition": "fixed",
+  "evidence": "D3 cites src/program/resolve/decl_surface.rs:141-145. Revision 3: cites workspace DeclSurface::build decl_surface.rs:288-299 (local.insert :299) and dependency DepMeta :140-145.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N1",
+  "source": "sol+opus",
+  "round": 2,
+  "file": "src/program/resolve/differential.rs",
+  "line": 467,
+  "severity": "important",
+  "text": "The verifier matches declarations by name and arity only; once D1b scans all, a sibling same-arity overload's subscription would verify a route to a different id.",
+  "disposition": "fixed",
+  "evidence": "D1b: a declaration matches only when source_routine_node_id(obj_id, r) == *sub_rid; A7 rejects OnB->H(Integer) when only H(X: Text) subscribes; break 7b.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N2",
+  "source": "sol+opus",
+  "round": 2,
+  "file": "src/program/model/events.rs",
+  "line": 369,
+  "severity": "important",
+  "text": "A first-row-wins skip that marks the id before the span lookup can suppress a later mappable dependency row (DeclSurface keeps the last same-id span), emitting no edges; census placement unstated.",
+  "disposition": "fixed",
+  "evidence": "D2: the processed set is updated only after a row maps through node_by_span; skipped rows still count in EventCensus.model_subscribers; A8 cross-app dependency duplicate incl. an unmapped first row; break 8. Revision 4 (re-raise + opus F3): the census is decided per counter: model_subscribers and unmapped_subscribers stay per row (counted before mapping, events.rs:369/371); subscribers_without_subscription and every per-subscription counter (bound_model, bound_model_missing, bound_dependency, bound_platform, ambiguous, orphaned, object_unresolved) now count once per routine id (e.g. bound_model 2 -> 1 for a same-event duplicate); no fixture has the shape, so no golden moves; a unit test pins the per-id count.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N3",
+  "source": "opus",
+  "round": 2,
+  "file": "src/program/resolve/differential.rs",
+  "line": 496,
+  "severity": "minor",
+  "text": "D1b's 'false after the loop' would turn today's fail-open (routine not found) into false.",
+  "disposition": "fixed",
+  "evidence": "D1b: true on any match; false when matching decls exist but none subscribes; true (fail-open) when none is found; A7 fail-open case; break 7c.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N4",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/resolve/semantic_golden.rs",
+  "line": 2360,
+  "severity": "important",
+  "text": "Full-id matching silently disarms event_route_passes_with_include_sender_true_and_arity_one_subscriber: its hand-built sub_rid has sig_fp 0 for a 1-parameter routine, so nothing matches and the verifier fails open without checking the attribute.",
+  "disposition": "fixed",
+  "evidence": "D1b: that test takes sub_rid from source_routine_node_id, and gains a twin with the real id and a mismatching attribute that must be rejected (proving the declaration was examined); the implementer greps every test building sub_rid with a literal sig_fp and lists/treats each.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N5",
+  "source": "sol+opus",
+  "round": 3,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 77,
+  "severity": "minor",
+  "text": "A6 claimed a real AL pair cannot produce a same-id/different-key collision; whitespace variants do (sig_fp collapses internal whitespace, param_sig_key does not).",
+  "disposition": "fixed",
+  "evidence": "A6 rationale now: stated by hand for determinism; a real pair (Record Customer vs Record  Customer) can reach it (build.rs:1623-1632, sig_fp.rs:66-73, node_extract.rs:475-480).",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N6",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/model/events.rs",
+  "line": 330,
+  "severity": "minor",
+  "text": "D2 cited the publisher-symbol loop instead of the node_by_span builds and lookup.",
+  "disposition": "fixed",
+  "evidence": "D2 cites node_by_span builds :284-289 (workspace) and :302-315 (dependency), lookup :370-373.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1",
+  "source": "opus",
+  "round": 4,
+  "file": "src/program/model/events.rs",
+  "line": 400,
+  "severity": "minor",
+  "text": "The D2 census list of once-per-id counters omitted bound_model_missing (incremented in the same Bound branch, events.rs:399).",
+  "disposition": "fixed",
+  "evidence": "D2 census list now includes bound_model_missing.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2",
+  "source": "opus",
+  "round": 4,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 115,
+  "severity": "minor",
+  "text": "A timeline bullet still said 'the census is unchanged', contradicting D2's per-counter decision.",
+  "disposition": "fixed",
+  "evidence": "The r3 timeline block is marked as history superseded by r4, and the clause now says r4 replaced it.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR1",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 803,
+  "severity": "important",
+  "text": "The event-facts union ran for every same-id/same-key duplicate, including same-object copies from two files (Al/ + .dependencies/, sibling app extracted twice), merging a stale copy's subscriptions.",
+  "disposition": "fixed",
+  "evidence": "18aa8830: EventFacts::of_arms unions only the #if arms of one site \u2014 leading copies whose preproc conditions pairwise contradict (preproc_contradicts); later copies keep first-wins. Limits stated (ponytail): undecidable arm not grouped; two files each holding one opposite arm are grouped; RoutineNode has no source file (discovery). Test copies_from_a_second_file_keep_the_first_files_subscriptions; break CR1 fails it. Final r1 (sol re-raise): replaced by real provenance in 771e071e \u2014 RoutineNode.source_unit (file index within one dedup population, stamped by both builds); the union merges exactly the same-key copies of the survivor's unit; the preproc_contradicts heuristic and its limits are gone; tests (b) cross-file counterexample and (d) opposite arms in two files keep first-wins; breaks CR1-prov/prov2/prov3 fail them.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR2",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 914,
+  "severity": "important",
+  "text": "include_sender None on disagreeing publisher arms dropped legitimate Sender-capturing subscribers and could make count_unknown_include_sender_plus1_subscribers nonzero (CDO gate asserts 0).",
+  "disposition": "fixed",
+  "evidence": "18aa8830: Some(true) if any publisher arm is true, Some(false) if all false, else None (possible-build reading, consistent with the subscription union); A3b binds H(Sender) -> OnA and asserts the plus1 count 0; breaks CR2/CR2b fail it.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR3",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/resolve/differential.rs",
+  "line": 513,
+  "severity": "important",
+  "text": "The verifier fail-open widened: a same-name routine with no full-id declaration (a wrong sig_fp) was accepted.",
+  "disposition": "fixed",
+  "evidence": "18aa8830: fail-open only when the object or the routine name is not found; same-name declarations with no full-id match -> false; new A7 case (sig_fp ^ 1) rejected; break CR3 fails it.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR4",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/model/events.rs",
+  "line": 385,
+  "severity": "important",
+  "text": "Model edge dedup keyed on the model id, so #if arms differing only in return type (two model ids, one node) both emit the node's edges.",
+  "disposition": "refuted",
+  "evidence": "Spec D3 (both reviewers accepted at r5): arms differing in return type are two distinct model ids (workspace.rs:1336 hashes the return type) \u2014 distinct declarations \u2014 and each gets the node's edges; D2 skips only a later row of the SAME id. return_type first-wins is the filed discovery (D4: 2 CDO groups).",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR5",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/model/events.rs",
+  "line": 310,
+  "severity": "important",
+  "text": "Dependency #if-duplicated subscribers' earlier rows (unmappable: DeclSurface keeps the last same-id span) inflated unmapped_subscribers, whose doc means 'a lost subscription'.",
+  "disposition": "fixed",
+  "evidence": "18aa8830: unmapped rows are collected by id; after the loop only ids no row mapped count. A8 asserts unmapped_subscribers == 0; break CR5 fails it. The root-cause alternative (DepMeta keeping every span per id) is a memory-sensitive column change, noted as part of the first/last-decl discovery.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR6",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 922,
+  "severity": "minor",
+  "text": "publisher_kind takes the first arm's kind with no agreement check, unlike include_sender.",
+  "disposition": "refuted",
+  "evidence": "Every resolver/index reader tests only is_some() (index.rs:318, :1143; resolver.rs:3207/3237/3294); the kind is used only as the event-kind label (model/events.rs:470-473); Platform is set only on synthetic publishers after the dedup. Spec D1 (accepted) states this.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR7",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 803,
+  "severity": "minor",
+  "text": "The union cloned the subscriber list for every duplicate run even when all copies were identical.",
+  "disposition": "fixed",
+  "evidence": "18aa8830: of_arms returns None (survivor untouched) when every later arm's event facts equal the survivor's.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR8",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 803,
+  "severity": "minor",
+  "text": "The same-key copy filter and the verdict condition were re-derived in parallel.",
+  "disposition": "fixed",
+  "evidence": "18aa8830: the same-key copies are computed once per key (copies: Vec<&RoutineNode>); preproc_context, event facts and the verdict read it; sig_counts removed; existing dedup tests unchanged and green.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1",
+  "source": "opus",
+  "round": 1,
+  "file": "tests/r4/r4_cross_app_program.rs",
+  "line": 1717,
+  "severity": "minor",
+  "text": "A8 claims its first dependency row does not map but does not assert it; after CR5 both shapes give unmapped 0, so A8 could silently stop guarding break 8.",
+  "disposition": "fixed",
+  "evidence": "The A8 doc now states the limit: the precondition is internal (span map) and holds while DepMeta keeps the last same-id span; break 8 was recorded failing on the final tree (prov-fix.md); the DepMeta discovery covers the root cause.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 39,
+  "severity": "minor",
+  "text": "The D1 include_sender and D2 census bullets still stated the pre-CR2/CR5 rules.",
+  "disposition": "fixed",
+  "evidence": "Both bullets are marked 'Superseded by CR2 / CR5 (see Timeline)' with the current rule.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F3",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 100,
+  "severity": "minor",
+  "text": "The Discoveries section was unfilled.",
+  "disposition": "fixed",
+  "evidence": "Discoveries filled: (1) access/return_type first-wins (2 CDO groups); (2) DepMeta keeps only the last same-id span / first-vs-last decl mismatch. The 'RoutineNode has no source file' discovery is resolved by 771e071e and dropped.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F4",
+  "source": "sol",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 908,
+  "severity": "important",
+  "text": "A whole-object #if/#else duplicate in one file lost the later arm's subscription: object guards are not propagated to routine contexts, so the contradiction grouping picked only the first copy.",
+  "disposition": "fixed",
+  "evidence": "771e071e: provenance-based union merges same-unit copies regardless of where the #if sits; test (a) whole_object_if_duplicate_in_one_file_is_unioned plus e2e digest_sees_both_declarations_of_an_if_duplicated_object (FireB reaches COMMIT); break CR1-prov2 (old heuristic) fails them.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F5",
+  "source": "sol",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 2713,
+  "severity": "minor",
+  "text": "After CR7/CR8 the A6c and A1b discrimination evidence no longer exercised the final code paths.",
+  "disposition": "fixed",
+  "evidence": "prov-fix.md: A6c's fixture shares one unit so removing the tier guard alone fails it (break 6c); break 2 is proved through A4 (A1b takes the CR7 fast path); every break re-run and recorded on the final tree.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F6",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-103/ledger.md",
+  "line": 35,
+  "severity": "minor",
+  "text": "The ledger D1 intro / 'Same param_sig_key only' bullet still described the pre-provenance union scope.",
+  "disposition": "fixed",
+  "evidence": "The bullet is marked 'Superseded by the CR1 provenance fix (see Timeline)': same key AND same source file only.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F7",
+  "source": "opus",
+  "round": 2,
+  "file": "src/program/node_extract.rs",
+  "line": 769,
+  "severity": "minor",
+  "text": "Whole-object #if duplicates may differ in EventSubscriberInstance; union does not merge the per-object subscriber_instance_manual flag, so the second object's merged subscriptions inherit the first object's binding mode.",
+  "disposition": "deferred",
+  "evidence": "Deferred (minor) as ledger Discovery 3, filed as an issue at close-out: subscriber_instance_manual is per object (node_extract.rs:790 at 771e071e) and not merged by EventFacts::union; outside #103's acceptance (subscriptions/publisher facts). Sol (final r3) accepted it as a documented deferred bug.",
+  "hash": "ca788e618c6ea555",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
