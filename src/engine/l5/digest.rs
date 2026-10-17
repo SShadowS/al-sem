@@ -385,6 +385,13 @@ const HARD_PATH_CAP: usize = 256;
 const MAX_DEPTH: usize = 64;
 const MAX_STATES: usize = 25_000;
 
+// Test hook (#97 W7): the arena length at the end of the last ordinary BFS
+// on this thread, so a test can bound the work after the cut.
+#[cfg(test)]
+thread_local! {
+    static WITNESS_ARENA_LEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Internal WitnessHop union (witness.ts). Field set per the TS literal.
 #[derive(Debug, Clone)]
 enum WitnessHop {
@@ -1286,8 +1293,9 @@ fn reconstruct_witness_paths<'i>(
     // pruning after `truncate(cap)`).
     let mut diags_at_cut = 0usize;
     // A possible path the post-cut rules discarded (a suppressed terminal, an
-    // unexpanded node with an out-edge, a node past `MAX_DEPTH`).
-    // Conservative: an out-edge may lead nowhere.
+    // unexpanded node with an out-edge at `depth >= cut_hops` or an eligible
+    // edge below it, a node past `MAX_DEPTH`). Conservative: such an edge may
+    // lead nowhere.
     let mut dropped_beyond_cut = false;
     let mut state_count = 0usize;
     let mut incomplete = false;
@@ -1394,9 +1402,9 @@ fn reconstruct_witness_paths<'i>(
         queue.pop_front();
         // Only pops BEFORE the cut count toward `MAX_STATES`, so finishing the
         // cut's length class never turns a witness `incomplete`. The pops after
-        // the cut are bounded without it: they are the nodes queued before the
-        // cut plus the children of the ones at depth `cut_hops - 1`, and a node
-        // at `depth >= cut_hops` pushes nothing.
+        // the cut are bounded without it: no node pushes a child after the cut
+        // (see the expansion below), so they are at most the nodes already
+        // queued when the cut was recorded.
         if cut_hops.is_none() {
             state_count += 1;
         }
@@ -1549,6 +1557,27 @@ fn reconstruct_witness_paths<'i>(
                 expansions.push((to, edge));
             }
         }
+        // After the cut, a node below the cut's depth pushes NO child either:
+        // every child leads only to a path longer than the cut. The argument:
+        // the cut is recorded at the loop head right after a push to `found`
+        // from a node popped at some depth `d`. That path has `d` hops (opaque)
+        // or `d + 1` (terminal), and every earlier one has at most `d + 1`, so
+        // `d <= cut_hops <= d + 1`. The queue is FIFO, so every node still
+        // queued (this one included) has depth `>= d`, and a child has depth
+        // `>= d + 1`:
+        // - a terminal child has `>= d + 2` hops, more than the cut;
+        // - an opaque child cannot occur: a child is a non-seed, and the
+        //   reachability prune above (`valid_nodes`) keeps only ancestors of a
+        //   carrier, while an opaque boundary has no out-edge and no direct
+        //   fact (only a seed skips the prune);
+        // - any other child leads only to deeper paths.
+        // So the node runs the same eligibility filters without pushing, and
+        // an eligible edge counts as a dropped path. A dead branch that only
+        // revisits an ancestor has no eligible edge and drops nothing (W3).
+        if cut_hops.is_some() {
+            dropped_beyond_cut |= !expansions.is_empty();
+            continue;
+        }
         // Now push children to arena (mutable); `visited_routines` is still live here
         // but we only read `cur_depth` from it (a Copy value captured above).
         for (to, edge) in expansions {
@@ -1562,6 +1591,9 @@ fn reconstruct_witness_paths<'i>(
             queue.push_back(child_idx);
         }
     }
+
+    #[cfg(test)]
+    WITNESS_ARENA_LEN.with(|c| c.set(arena.len()));
 
     // Truncated (#97): the cut left a queued node or dropped a possible path.
     // `found.len() > cap` truncates too (BFS paths are distinct, so
@@ -6339,9 +6371,10 @@ codeunit 50410 DupProducer
     }
 
     /// W5, the CONSERVATIVE flag, pinned: A calls the carrier H at `cs-a` and
-    /// D at `cs-b`; D → E → F → A only cycles back. After the cut (3 hops) E
-    /// is not expanded although it has an out-edge (to F), so cap 1 reads
-    /// truncated although the uncapped run finds no second path.
+    /// D at `cs-b`; D → E → F → A only cycles back. After the cut (3 hops) D
+    /// is not expanded although its edge to E passes the expansion filters
+    /// (E reaches H through F and A), so cap 1 reads truncated although the
+    /// uncapped run finds no second path.
     #[test]
     fn capped_ordinary_witness_truncation_is_conservative() {
         let mut snap = empty_snapshot();
@@ -6360,7 +6393,7 @@ codeunit 50410 DupProducer
         let (capped, truncated, incomplete) = ordinary_witness(&snap, 1);
         assert!(!incomplete);
         assert_eq!(capped, all);
-        assert!(truncated, "conservative: E has an out-edge");
+        assert!(truncated, "conservative: D's edge to E is eligible");
     }
 
     /// W6, opaque diagnostics after the cut: cap 1, seeds A (a carrier, 2
@@ -6422,5 +6455,83 @@ codeunit 50410 DupProducer
             "only the kept path's boundary: {:?}",
             out.diagnostics
         );
+    }
+
+    /// W7, wide fan-out after the cut: A calls the early writer Hz at `cs-a`,
+    /// then B at N callsites; B calls the writer C at N callsites. Cap 1: Hz
+    /// sets the cut (3 hops) while the N B nodes (depth 2) are still queued.
+    /// Expanding them would push N² dominated C nodes (4 hops each); no node
+    /// may push a child after the cut, so the arena stays at the sentinel, A,
+    /// Hz and the N B nodes.
+    #[test]
+    fn capped_ordinary_witness_does_not_expand_after_the_cut() {
+        const N: usize = 60;
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("Hz", "opz"), ordinary_carrier("C", "opc")];
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "Hz", "cs-a"),
+        ];
+        for i in 0..N {
+            snap.typed_edges
+                .push(call_edge("A", "B", &format!("cs-b{i:03}")));
+            snap.typed_edges
+                .push(call_edge("B", "C", &format!("cs-c{i:03}")));
+        }
+        let (all, _, all_incomplete) = ordinary_witness(&snap, HARD_PATH_CAP);
+        assert!(!all_incomplete);
+        assert_eq!(all.len(), HARD_PATH_CAP, "precondition: 1 + N² paths");
+        assert!(
+            all[0].contains("\"Hz\"") && !all[0].contains("\"C\""),
+            "precondition: Hz's path sorts first: {:?}",
+            all[0]
+        );
+        let (capped, truncated, incomplete) = ordinary_witness(&snap, 1);
+        let arena_len = WITNESS_ARENA_LEN.with(|c| c.get());
+        assert!(!incomplete);
+        assert_eq!(capped, all[..1]);
+        assert!(truncated, "the C paths were dropped by the cut");
+        assert!(
+            arena_len <= N + 3,
+            "no node expands after the cut: arena {arena_len}, bound {}",
+            N + 3
+        );
+    }
+
+    /// W8, the prefix guarantee is TWO-SIDED: it holds only when NEITHER run
+    /// is `incomplete`. A calls Hz at `cs-a`, then `MAX_STATES` siblings that
+    /// only call back to A, then Hb at `cs-z`. Cap 1 sets the cut at Hz and
+    /// pops the siblings uncounted, so it reaches Hb (which sorts first) and
+    /// is not `incomplete`. Cap 256 counts every pop, hits `MAX_STATES` before
+    /// Hb and is `incomplete`, holding only Hz. So the capped run is not a
+    /// prefix of that run, and the corpus oracle requires both runs complete.
+    #[test]
+    fn capped_ordinary_witness_prefix_needs_both_runs_complete() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("Hz", "opz"), ordinary_carrier("Hb", "opb")];
+        snap.typed_edges = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "Hz", "cs-a"),
+            call_edge("A", "Hb", "cs-z"),
+        ];
+        for i in 0..MAX_STATES {
+            let sib = format!("I{i:05}");
+            snap.typed_edges
+                .push(call_edge("A", &sib, &format!("cs-m{i:05}")));
+            snap.typed_edges
+                .push(call_edge(&sib, "A", &format!("cs-n{i:05}")));
+        }
+        let (capped, _, capped_incomplete) = ordinary_witness(&snap, 1);
+        assert!(!capped_incomplete, "cap 1 pops after the cut uncounted");
+        assert_eq!(capped.len(), 1);
+        assert!(capped[0].contains("\"Hb\""), "cap 1 reaches Hb: {capped:?}");
+        let (wide, _, wide_incomplete) = ordinary_witness(&snap, HARD_PATH_CAP);
+        assert!(wide_incomplete, "cap 256 hits MAX_STATES before Hb");
+        assert_eq!(wide.len(), 1);
+        assert!(
+            wide[0].contains("\"Hz\""),
+            "cap 256 holds only Hz: {wide:?}"
+        );
+        assert_ne!(capped, wide[..1], "no prefix when one run is incomplete");
     }
 }
