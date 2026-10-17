@@ -20,7 +20,7 @@ from . import (budget, discoveries, eligibility, incidents, lock, mergeops, prot
                sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, update_json, write_json
+from .state import Ctx, DryRunViolation, Paths, config, new_run_id, read_json, update_json, write_json
 
 # `agent-regressed` is no longer spelled here: it comes from
 # `recovery.INCIDENT_LABELS` along with the three two-axis names, so the
@@ -47,11 +47,8 @@ CDO_GATE_KEY = "cdo-gate"
 # matches HEAD but whose porcelain disagrees. The list is CUT; the count beside
 # it never is -- see `recovery.HaltOutcome.dirty`.
 MAX_ANOMALY_LISTED = 50
-# `preflight` refuses a tick below this much free disk. One issue run builds a
-# worktree target (up to ~30 GB) and post-merge builds another, so 20 GB was not
-# enough: on 2026-10-14 a tick started above it, the drive hit 35 MB, and the
-# post-merge check failed at `gen-syntax` on a green merge (#68).
-MIN_FREE_GB = 40
+# The free-disk floor `preflight` refuses below is `min_free_gb` in
+# `.agent/config.json` (see `state.CONFIG_DEFAULTS` for why it is 40 GB).
 _REJECTED_BASH_DIRS = ("system32", "windowsapps")
 
 
@@ -270,7 +267,7 @@ def cmd_preflight(args, ctx, gh, git):
     except RuntimeError:
         fails.append("bash")
     free_gb = shutil.disk_usage(ctx.paths.root).free // 2**30
-    if free_gb < MIN_FREE_GB:
+    if free_gb < config(ctx)["min_free_gb"]:
         fails.append(f"disk-free:{free_gb}GB")
     out = {"ok": not fails, "failures": fails, "stale_lock": asdict(lk) if stale else None,
            "incidents": incidents.visible(ctx),

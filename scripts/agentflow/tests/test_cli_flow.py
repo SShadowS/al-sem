@@ -113,12 +113,14 @@ def test_preflight_does_not_call_a_byte_identical_crlf_checkout_dirty(
 
 
 def test_preflight_refuses_below_the_free_disk_floor(capsys, repo_pair, monkeypatch, tmp_path):
-    """One GB under MIN_FREE_GB fails preflight with `disk-free:`; exactly the
-    floor does not. Stated as numbers, not via the constant, so lowering the
-    floor back to 20 fails this test."""
+    """One GB under the default `min_free_gb` fails preflight with
+    `disk-free:`; exactly the floor does not. Stated as numbers, not via the
+    default, so lowering the floor back to 20 fails this test. No
+    `.agent/config.json` exists here, so this is the default."""
     _, clone = repo_pair
     monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
     preflight_ready(clone, monkeypatch, tmp_path)
+    assert not (clone / ".agent" / "config.json").exists()
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=39 * 2**30))
     code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert "disk-free:39GB" in out["failures"], out["failures"]
@@ -126,6 +128,26 @@ def test_preflight_refuses_below_the_free_disk_floor(capsys, repo_pair, monkeypa
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=40 * 2**30))
     code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+
+
+def test_preflight_reads_its_free_disk_floor_from_the_config_file(capsys, repo_pair, monkeypatch, tmp_path):
+    """`min_free_gb` in `.agent/config.json` moves the floor, in both
+    directions, and a broken config file is an error, not the default."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    config = clone / ".agent" / "config.json"
+    config.write_text(json.dumps({"min_free_gb": 100}), encoding="utf-8")
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=99 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert "disk-free:99GB" in out["failures"], out["failures"]
+    config.write_text(json.dumps({"min_free_gb": 10}), encoding="utf-8")
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=10 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+    config.write_text(json.dumps({"min_free_gb": "lots"}), encoding="utf-8")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 2 and "min_free_gb" in out["error"], out
 
 
 def test_preflight_under_dry_run_never_refreshes_the_index(capsys, repo_pair, monkeypatch, tmp_path):

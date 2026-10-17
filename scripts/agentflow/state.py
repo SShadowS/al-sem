@@ -29,6 +29,24 @@ class MutexTimeout(RuntimeError):
     """`mutex` could not take its lock within the timeout."""
 
 
+class ConfigError(ValueError):
+    """`.agent/config.json` holds something `config` refuses to guess about."""
+
+
+# `.agent/config.json`, read by `config`. These defaults ARE today's
+# behaviour, so a checkout without the file acts exactly as before.
+# `min_free_gb`: `preflight` refuses a tick below this much free disk. One
+# issue run builds a worktree target (up to ~30 GB) and post-merge builds
+# another, so 20 GB was not enough: on 2026-10-14 a tick started above it,
+# the drive hit 35 MB, and the post-merge check failed at `gen-syntax` on a
+# green merge (#68). The other keys are read by later steps of the
+# parallel-issues design.
+CONFIG_DEFAULTS: dict[str, int] = {
+    "slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
+    "gate_wait_minutes": 180,
+}
+
+
 @dataclass(frozen=True)
 class Paths:
     root: Path
@@ -75,6 +93,10 @@ class Paths:
 
     def mutex(self, name: str) -> Path:
         return self.agent / "mutex" / f"{name}.lock"
+
+    @property
+    def config(self) -> Path:
+        return self.agent / "config.json"
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs / run_id
@@ -162,6 +184,26 @@ def write_json(ctx: Ctx, path: Path, data: Any) -> None:
                 time.sleep(RETRY_DELAY_S)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def config(ctx: Ctx) -> dict[str, int]:
+    """`.agent/config.json` over CONFIG_DEFAULTS. A missing file or key is the
+    default.
+
+    A FILE, not a flag or an env var: two sessions must not disagree about
+    these numbers. For the same reason a value it would otherwise ignore (an
+    unknown key, a non-integer, a negative) raises `ConfigError` instead of
+    quietly falling back to the default.
+    """
+    data = read_json(ctx.paths.config, default={})
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx.paths.config} must hold a JSON object")
+    for key, value in data.items():
+        if key not in CONFIG_DEFAULTS:
+            raise ConfigError(f"{ctx.paths.config}: unknown key {key!r}")
+        if type(value) is not int or value < 0:
+            raise ConfigError(f"{ctx.paths.config}: {key} must be a whole number >= 0, not {value!r}")
+    return {**CONFIG_DEFAULTS, **data}
 
 
 MUTEX_POLL_S = 0.05

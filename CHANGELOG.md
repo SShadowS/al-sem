@@ -340,6 +340,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `issues_done = 2` under `--max 3`, two incidents, one discovery filed twice, a
   mutex held across processes); the suite is 311 passed (was 300).
 
+- **agentflow: settings live in `.agent/config.json` (`scripts/agentflow/{state,cli}.py`).**
+  Step 4 of the parallel-issues design. `state.config(ctx)` reads the file over
+  the defaults `slots: 1`, `heavy_gates: 1`, `min_free_gb: 40`,
+  `reserve_gb_per_run: 30` and `gate_wait_minutes: 180`; a missing file or key
+  is the default, so nothing changes until the owner writes the file. It is a
+  file, not a flag or an env var, so two sessions cannot disagree. An unknown
+  key, a non-integer or a negative value is a `ConfigError`, not a quiet
+  default. `preflight`'s free-disk floor now reads `min_free_gb` from it
+  (`cli.MIN_FREE_GB` is gone). The other keys are read by later steps.
+
+  7 new tests in `scripts/agentflow/tests/test_{state,cli_flow}.py`; the suite is
+  318 passed (was 311).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.
