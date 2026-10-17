@@ -47,8 +47,8 @@
 					"via": "self",
 					"resourceId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnAfterPost::5d27e6c23eb9260593c90f74196bfc91445a4811733d45d362552f41a9d1785e",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Business"
+						"eventClass": "Business",
+						"kind": "event"
 					}
 				}
 			],
@@ -72,8 +72,8 @@
 					"via": "self",
 					"resourceId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnBeforePost::7f06a5bc600b42b9e23d13c21743d89ae37521cabc8a07b1165d937df1570715",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -84,9 +84,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnBeforePost::7f06a5bc600b42b9e23d13c21743d89ae37521cabc8a07b1165d937df1570715",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -145,8 +146,8 @@
 					"via": "self",
 					"resourceId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnLegacyPost::c7377e506cfec0cb61c02e034b0ed817a21958f0ceb0470b42fe74d83b90b878",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -205,8 +206,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

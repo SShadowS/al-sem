@@ -70,6 +70,7 @@ mod cli_digest_changed_spans;
 mod cli_digest_query_dependencies;
 mod cli_digest_temp_state;
 mod cli_envelope_detector_set;
+mod cli_event_dispatch_first_hop;
 mod cli_events_policy_dependencies;
 mod cli_graph_export;
 mod cli_implicit_trigger_cone;

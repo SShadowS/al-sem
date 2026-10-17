@@ -339,17 +339,49 @@ fn edge_callsite_id(e: &SnapshotGraphEdge) -> Option<&str> {
     e.edge_callsite_id()
 }
 
-/// Does `e` carry `fact`'s first hop? (#96 D5) By the firing operation when the
-/// fact's first hop is an implicit-trigger edge, else by the call site. `false`
-/// when the fact has neither.
+/// The identity of an inherited fact's first hop (#96 D5, #98 D2): the firing
+/// operation of an implicit-trigger edge, the INTERNAL event id of an
+/// event-dispatch edge, or the call site of a call-family edge. `retag` sets
+/// all three from the same edge, so at most one is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstHop<'a> {
+    Op(&'a str),
+    Event(&'a str),
+    Callsite(&'a str),
+}
+
+impl FirstHop<'_> {
+    /// The id itself (the `first-hop-not-found` detail).
+    fn id(self) -> String {
+        match self {
+            FirstHop::Op(s) | FirstHop::Event(s) | FirstHop::Callsite(s) => s.to_string(),
+        }
+    }
+}
+
+/// The ONE reader of a fact's first-hop ids (#98 D2), precedence op, then
+/// event, then call site. `None` when the fact has no op, event or call-site
+/// id (a direct fact with a callsite witness returns `Some(Callsite)`; only
+/// Case C, reached for inherited facts, acts on it).
+fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
+    if let Some(op) = &f.witness_first_hop_operation_id {
+        Some(FirstHop::Op(op))
+    } else if let Some(ev) = &f.witness_first_hop_event_id {
+        Some(FirstHop::Event(ev))
+    } else {
+        f.witness_callsite_id.as_deref().map(FirstHop::Callsite)
+    }
+}
+
+/// Does `e` carry `fact`'s first hop? (#96 D5, #98 D2) By the firing
+/// operation, the dispatched event, or the call site, per [`fact_first_hop`].
+/// `false` when the fact has none.
 fn is_first_hop(e: &SnapshotGraphEdge, fact: &Fact) -> bool {
-    match (
-        &fact.witness_first_hop_operation_id,
-        &fact.witness_callsite_id,
-    ) {
-        (Some(op), _) => e.edge_operation_id() == Some(op.as_str()),
-        (None, Some(cs)) => edge_callsite_id(e) == Some(cs.as_str()),
-        (None, None) => false,
+    match fact_first_hop(fact) {
+        Some(FirstHop::Op(op)) => e.edge_operation_id() == Some(op),
+        Some(FirstHop::Event(ev)) => e.edge_event_id() == Some(ev),
+        Some(FirstHop::Callsite(cs)) => edge_callsite_id(e) == Some(cs),
+        None => false,
     }
 }
 
@@ -830,8 +862,9 @@ struct ProofOutcome {
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
 /// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
 /// whose class is `f`'s, every link path from that state down to the seed whose
-/// FIRST edge is `f`'s first hop ([`is_first_hop`]: its firing operation for a
-/// trigger-first fact, else its callsite; the witness's first-hop contract).
+/// FIRST edge is `f`'s first hop ([`is_first_hop`] over [`fact_first_hop`]: its
+/// firing operation for a trigger-first fact, its event id for an event-first
+/// fact, else its callsite; the witness's first-hop contract).
 /// Each proof is a complete path from `root`, so it holds in `root`'s frame by
 /// construction. Breadth-first by length; a path never revisits a STATE (it may
 /// revisit a routine). Limits as the BFS: `MAX_DEPTH` edges, `MAX_STATES`
@@ -853,7 +886,7 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
         len: usize,
     }
     let mut out = ProofOutcome::default();
-    if f.witness_first_hop_operation_id.is_none() && f.witness_callsite_id.is_none() {
+    if fact_first_hop(f).is_none() {
         return out;
     }
     let Some(root_states) = idx.pd.by_routine.get(root) else {
@@ -1160,14 +1193,10 @@ fn reconstruct_witness_paths<'i>(
 
     // --- Case C: inherited fact (BFS) ---
 
-    // The first hop's id: the firing operation of a trigger-first fact (#96 D5),
-    // else the call site.
-    let Some(first_hop_id) = fact
-        .witness_first_hop_operation_id
-        .as_ref()
-        .or(fact.witness_callsite_id.as_ref())
-    else {
-        // first-hop-not-found (no first-hop id) → detail = via (callsiteId absent).
+    // The first hop's identity (#96 D5, #98 D2): see `fact_first_hop`.
+    let Some(first_hop) = fact_first_hop(fact) else {
+        // first-hop-not-found (no first-hop id at all: no op, event or call
+        // site, see `fact_first_hop`) → detail = via.
         return WitnessOutcomeExt {
             paths: Vec::new(),
             truncated: false,
@@ -1197,10 +1226,7 @@ fn reconstruct_witness_paths<'i>(
             truncated: false,
             incomplete: true,
             limit_hit: false,
-            diagnostics: vec![(
-                "first-hop-not-found".to_string(),
-                Some(first_hop_id.clone()),
-            )],
+            diagnostics: vec![("first-hop-not-found".to_string(), Some(first_hop.id()))],
             projected: None,
         };
     }
@@ -1236,36 +1262,6 @@ fn reconstruct_witness_paths<'i>(
         parent: 0,
         depth: 0,
     }];
-
-    // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
-    let mut seed_pairs: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
-    for &edge in &first_edges {
-        if !edge_has_hop(edge) {
-            continue;
-        }
-        let Some(to) = edge_to(edge) else {
-            continue;
-        };
-        seed_pairs.push((to, edge));
-    }
-
-    // seed-sort by routine (`.cmp`, stable). witness.ts:276 uses `(a,b)=> a.routine<b.routine?-1:1`
-    // — an empirical V8 2000-array stress test confirmed V8-stable-preserves-equal-key-order for
-    // this `?-1:1` comparator, so Rust's stable `.cmp` (which returns Equal on a tie) is CORRECT
-    // and preserves typedEdges-insertion order for equal-routine seeds. Do NOT change to `?-1:1`.
-    seed_pairs.sort_by(|a, b| a.0.cmp(b.0));
-
-    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-    for (routine, edge) in seed_pairs {
-        let idx_node = arena.len();
-        arena.push(Node {
-            routine,
-            edge: Some(edge),
-            parent: 0, // seed: no parent
-            depth: 1,
-        });
-        queue.push_back(idx_node);
-    }
 
     // Helper: build the per-path visited set by walking the parent chain.
     // Uses &str references into arena strings — no String allocation.
@@ -1379,6 +1375,60 @@ fn reconstruct_witness_paths<'i>(
         }
         visited
     });
+
+    // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
+    //
+    // An EVENT first hop (#98) seeds only subscribers in `valid_nodes`. The
+    // dispatch fans out to every subscriber, and each one MAY run (binding,
+    // skip flags; the ordering engine keeps `event-subscriber-may`). The
+    // write the fact names comes from a subscriber that reaches a carrier. A
+    // subscriber that cannot reach one, opaque or not, is no witness of THIS
+    // write: seeding it reports a bogus opaque boundary (sorted before the
+    // real, longer path) or sets `truncated` through unrelated out-edges at a
+    // cut. `valid_nodes` holds every carrier, so a writing subscriber is
+    // always kept.
+    //
+    // Call-site and op seeds skip the prune, as before #98. The same argument
+    // would apply to an opaque interface candidate, so this is a SCOPE choice
+    // that keeps that behaviour and its goldens unchanged, not a semantic
+    // difference; pruning those seeds too is a recorded follow-up.
+    //
+    // When every subscriber fails the prune there is no seed, and the result
+    // is `terminal-not-found`, not `first-hop-not-found`: the first hop WAS
+    // found (the check above runs on the unpruned `first_edges`); what is
+    // missing is a carrier below it.
+    let prune_seeds = matches!(first_hop, FirstHop::Event(_));
+    let mut seed_pairs: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
+    for &edge in &first_edges {
+        if !edge_has_hop(edge) {
+            continue;
+        }
+        let Some(to) = edge_to(edge) else {
+            continue;
+        };
+        if prune_seeds && !valid_nodes.contains(to) {
+            continue;
+        }
+        seed_pairs.push((to, edge));
+    }
+
+    // seed-sort by routine (`.cmp`, stable). witness.ts:276 uses `(a,b)=> a.routine<b.routine?-1:1`
+    // — an empirical V8 2000-array stress test confirmed V8-stable-preserves-equal-key-order for
+    // this `?-1:1` comparator, so Rust's stable `.cmp` (which returns Equal on a tie) is CORRECT
+    // and preserves typedEdges-insertion order for equal-routine seeds. Do NOT change to `?-1:1`.
+    seed_pairs.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for (routine, edge) in seed_pairs {
+        let idx_node = arena.len();
+        arena.push(Node {
+            routine,
+            edge: Some(edge),
+            parent: 0, // seed: no parent
+            depth: 1,
+        });
+        queue.push_back(idx_node);
+    }
 
     loop {
         // Every push to `found` is followed by this check, so the cut is the
@@ -1569,7 +1619,7 @@ fn reconstruct_witness_paths<'i>(
         // - an opaque child cannot occur: a child is a non-seed, and the
         //   reachability prune above (`valid_nodes`) keeps only ancestors of a
         //   carrier, while an opaque boundary has no out-edge and no direct
-        //   fact (only a seed skips the prune);
+        //   fact (only a call-site or op seed skips the prune);
         // - any other child leads only to deeper paths.
         // So the node runs the same eligibility filters without pushing, and
         // an eligible edge counts as a dropped path. A dead branch that only
@@ -2681,7 +2731,8 @@ fn detail_json(detail: &[(String, String)]) -> String {
 /// Fields, and why each is here (grepped every `fact.`/`fact_equivalent` use inside
 /// `digest_one_root`'s call tree — see witness-investigation.md §3 and the brief):
 ///   - `provenance`, `witness_operation_id`, `witness_callsite_id`,
-///     `witness_first_hop_operation_id` (#96 D5), `op`, `subject` —
+///     `witness_first_hop_operation_id` (#96 D5), `witness_first_hop_event_id`
+///     (#98 D1; defensive, a subject has one fact per key), `op`, `subject` —
 ///     `reconstruct_witness_paths`'s direct BFS-input fields (cases A/B/C dispatch).
 ///   - `resource_kind`, `resource_id` — read by `reconstruct_witness_paths` (Case-C
 ///     reachability seeding via `direct_facts_by_op_kind`) AND by `dedupe_key`.
@@ -2694,8 +2745,8 @@ fn detail_json(detail: &[(String, String)]) -> String {
 ///     `fact_equivalent`) and `table`'s `temp_state` (read directly in the loop for
 ///     the physical-write filter), plus every other extra field the (currently
 ///     unread-elsewhere) variants carry — over-included defensively.
-///   - `witness_callsite_id`, the temp class (in `extra`) and the `fact_equivalent`
-///     fields — also read by `enumerate_proofs` (#69 D3), which is why equal
+///   - the three first-hop ids (`fact_first_hop`), the temp class (in `extra`) and
+///     the `fact_equivalent` fields — also read by `enumerate_proofs` (#69 D3), which is why equal
 ///     identities still have equal witnesses.
 ///   - `detail` (the computed `effect_detail_of` output) — folded into `dedupe_key`'s
 ///     grouping key, so two facts differing only in a detail field must NOT collapse.
@@ -2708,13 +2759,14 @@ fn detail_json(detail: &[(String, String)]) -> String {
 /// if they ever start mattering, never causes incorrect output.
 fn effect_fact_loop_identity(fact: &Fact, detail: &[(String, String)]) -> String {
     format!(
-        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
         fact.provenance,
         fact.op,
         fact.resource_kind,
         fact.resource_id.as_deref().unwrap_or(""),
         fact.witness_callsite_id.as_deref().unwrap_or(""),
         fact.witness_first_hop_operation_id.as_deref().unwrap_or(""),
+        fact.witness_first_hop_event_id.as_deref().unwrap_or(""),
         fact.witness_operation_id.as_deref().unwrap_or(""),
         fact.subject,
         serde_json::to_string(&fact.resource_arg_source).unwrap_or_default(),
@@ -4732,6 +4784,7 @@ mod tests {
             witness_callsite_id: witness_callsite_id.map(|s| s.to_string()),
             extra: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
         }
     }
 
@@ -5750,6 +5803,82 @@ codeunit 50101 "T7b Temp Classes"
         }
     }
 
+    fn anchor(routine: &str) -> SnapshotSourceAnchor {
+        SnapshotSourceAnchor {
+            source_unit_id: "su".to_string(),
+            range: SnapshotRange {
+                start_line: 1,
+                start_column: 0,
+                end_line: 1,
+                end_column: 1,
+            },
+            enclosing_routine_id: routine.to_string(),
+            syntax_kind: "x".to_string(),
+        }
+    }
+
+    fn event_edge(from: &str, to: &str, ev: &str) -> SnapshotGraphEdge {
+        SnapshotGraphEdge::EventDispatch {
+            kind: "event-dispatch",
+            from: from.to_string(),
+            to: to.to_string(),
+            event_id: ev.to_string(),
+            publish_anchor: anchor(from),
+            subscriber_anchor: anchor(to),
+            edge_id: format!("e-{ev}-{to}"),
+        }
+    }
+
+    fn trigger_edge(from: &str, to: &str, op: &str) -> SnapshotGraphEdge {
+        SnapshotGraphEdge::ImplicitTrigger {
+            kind: "implicit-trigger",
+            from: from.to_string(),
+            to: to.to_string(),
+            operation_id: op.to_string(),
+            trigger_kind: "OnInsert".to_string(),
+            fires: crate::engine::l4::combined_graph::TriggerFires::Always,
+            anchor: None,
+            edge_id: format!("e-{op}"),
+        }
+    }
+
+    /// #98 A1b: `fact_first_hop` precedence, and `is_first_hop`'s Event arm
+    /// matches exactly the event-dispatch edge with the same event id. Call-site
+    /// and op facts never match an event edge.
+    #[test]
+    fn is_first_hop_matches_an_event_fact_to_its_event_edge_only() {
+        let ev = "app/Codeunit/1/event/onx";
+        let mut ev_fact = make_fact("insert", "table", Some("T"), "inherited", Some("op0"), None);
+        ev_fact.witness_first_hop_event_id = Some(ev.to_string());
+        assert_eq!(fact_first_hop(&ev_fact), Some(FirstHop::Event(ev)));
+
+        let same = event_edge("P", "S1", ev);
+        let same_other_sub = event_edge("P", "S2", ev);
+        let other = event_edge("P", "S1", "app/Codeunit/1/event/ony");
+        let call = call_edge("P", "S1", "cs1");
+        let trig = trigger_edge("P", "S1", "op9");
+        assert!(is_first_hop(&same, &ev_fact));
+        assert!(is_first_hop(&same_other_sub, &ev_fact), "id alone, no `to`");
+        assert!(!is_first_hop(&other, &ev_fact));
+        assert!(!is_first_hop(&call, &ev_fact));
+        assert!(!is_first_hop(&trig, &ev_fact));
+
+        let cs_fact = make_fact("insert", "table", Some("T"), "inherited", None, Some("cs1"));
+        assert_eq!(fact_first_hop(&cs_fact), Some(FirstHop::Callsite("cs1")));
+        assert!(is_first_hop(&call, &cs_fact));
+        assert!(!is_first_hop(&same, &cs_fact));
+
+        let mut op_fact = make_fact("insert", "table", Some("T"), "inherited", None, None);
+        op_fact.witness_first_hop_operation_id = Some("op9".to_string());
+        assert_eq!(fact_first_hop(&op_fact), Some(FirstHop::Op("op9")));
+        assert!(is_first_hop(&trig, &op_fact));
+        assert!(!is_first_hop(&same, &op_fact));
+
+        let direct = make_fact("insert", "table", Some("T"), "direct", Some("op0"), None);
+        assert_eq!(fact_first_hop(&direct), None);
+        assert!(!is_first_hop(&same, &direct));
+    }
+
     /// An insert fact into table T, with a temp state.
     fn insert_fact(
         subject: &str,
@@ -6533,5 +6662,107 @@ codeunit 50410 DupProducer
             "cap 256 holds only Hz: {wide:?}"
         );
         assert_ne!(capped, wide[..1], "no prefix when one run is incomplete");
+    }
+
+    /// Root publishes `EV`; each name in `subs` is a subscriber. Returns the
+    /// witness of Root's inherited, event-first insert into T at `cap`.
+    fn event_witness(
+        snap: &mut CapabilitySnapshot,
+        subs: &[&str],
+        cap: usize,
+    ) -> WitnessOutcomeExt {
+        const EV: &str = "app/Codeunit/1/event/onx";
+        for s in subs {
+            snap.typed_edges.push(event_edge("Root", s, EV));
+        }
+        let mut f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            None,
+            SnapTempState::Known { value: false },
+        );
+        f.witness_first_hop_event_id = Some(EV.to_string());
+        let idx = build_fingerprint_indexes(snap);
+        reconstruct_witness_paths(
+            "Root",
+            &f,
+            &idx,
+            cap,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        )
+    }
+
+    fn opaque_coverage(s: &str) -> crate::engine::l5::snapshot::SnapshotCoverageRecord {
+        crate::engine::l5::snapshot::SnapshotCoverageRecord {
+            subject: s.to_string(),
+            direct_status: "unknown".to_string(),
+            inherited_status: "unknown".to_string(),
+            reasons: vec![],
+            unknown_targets: vec![],
+        }
+    }
+
+    /// #98 CR1: an opaque subscriber O (coverage `unknown`, no out-edge, no
+    /// direct fact) beside the writing subscriber W. O cannot reach a
+    /// carrier, so it is no witness of W's write: it is not seeded. Unpruned, O's 1-hop
+    /// boundary path sorts before W's 2-hop path and is the only one cap 1
+    /// keeps, and W's dropped terminal sets `truncated`.
+    #[test]
+    fn event_first_hop_does_not_seed_an_opaque_subscriber() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("W", "opw")];
+        snap.coverage = vec![opaque_coverage("O")];
+        let out = event_witness(&mut snap, &["O", "W"], 1);
+        assert_eq!(out.paths.len(), 1, "{:?}", out.diagnostics);
+        let path = witness_hops_json(&out.paths[0].hops);
+        assert!(
+            path.contains("\"W\"") && !path.contains("\"O\""),
+            "the path goes through W: {path}"
+        );
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|(k, _)| k == "opaque-or-unresolved-boundary"),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(!out.truncated, "{:?}", out.diagnostics);
+        assert!(!out.incomplete, "{:?}", out.diagnostics);
+    }
+
+    /// #98 CR1: a non-writing subscriber N with an out-edge (to X, which
+    /// reaches no carrier) beside the writer W. N is not seeded, so the arena
+    /// holds only the sentinel and W, and cap 1 is not truncated. (A cut at 1
+    /// hop needs a 1-hop path, which for an event fact only an opaque seed
+    /// gave; see the test above.)
+    #[test]
+    fn event_first_hop_does_not_seed_a_subscriber_that_cannot_reach_the_write() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("W", "opw")];
+        snap.typed_edges = vec![call_edge("N", "X", "cs-n")];
+        let out = event_witness(&mut snap, &["N", "W"], 1);
+        let arena_len = WITNESS_ARENA_LEN.with(|c| c.get());
+        assert_eq!(out.paths.len(), 1);
+        assert!(witness_hops_json(&out.paths[0].hops).contains("\"W\""));
+        assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
+        assert_eq!(arena_len, 2, "sentinel + W only; N is not seeded");
+    }
+
+    /// #98 CR1, the all-pruned case: the event edge exists but no subscriber
+    /// reaches a carrier. The first hop WAS found, so the honest diagnostic is
+    /// `terminal-not-found`, not `first-hop-not-found` nor an opaque boundary.
+    #[test]
+    fn event_first_hop_with_every_subscriber_pruned_is_terminal_not_found() {
+        let mut snap = empty_snapshot();
+        snap.coverage = vec![opaque_coverage("O")];
+        let out = event_witness(&mut snap, &["O"], HARD_PATH_CAP);
+        assert!(out.paths.is_empty());
+        assert!(out.incomplete);
+        assert_eq!(
+            out.diagnostics,
+            vec![("terminal-not-found".to_string(), None)]
+        );
     }
 }

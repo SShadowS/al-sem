@@ -13,8 +13,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50000#aa759f91ef5cfa0ba82d4f350565c4a9b673808c8c33fcb6b03259d0aab1e1a4/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -26,8 +26,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50000#aa759f91ef5cfa0ba82d4f350565c4a9b673808c8c33fcb6b03259d0aab1e1a4/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -38,8 +38,8 @@
 					"via": "call",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50000#aa759f91ef5cfa0ba82d4f350565c4a9b673808c8c33fcb6b03259d0aab1e1a4/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -62,8 +62,8 @@
 					"via": "self",
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -75,9 +75,10 @@
 					"provenance": "inherited",
 					"via": "event-dispatch",
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
+					"witnessFirstHopEventId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -86,9 +87,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -111,8 +113,8 @@
 					"via": "self",
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -124,9 +126,10 @@
 					"provenance": "inherited",
 					"via": "event-dispatch",
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
+					"witnessFirstHopEventId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -135,9 +138,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -159,8 +163,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -174,8 +178,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50001#f8970453778aeb87d5fb9e1cd7f42cbf938fad2c693960c6fe15b68691c9e002/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -187,8 +191,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50001#f8970453778aeb87d5fb9e1cd7f42cbf938fad2c693960c6fe15b68691c9e002/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -199,8 +203,8 @@
 					"via": "call",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50001#f8970453778aeb87d5fb9e1cd7f42cbf938fad2c693960c6fe15b68691c9e002/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -222,8 +226,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -237,8 +241,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50000::OnA::cf0899e37f3fc2659ad8f3f3564769313ea147d40c009f7587985b8328199c8b",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50002#7e9cf21f5f784dbc84851d7122dce2b2ef0b585d0ca87d8f16b38f0473ccceda/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -250,8 +254,8 @@
 					"resourceId": "55555555-5555-5555-5555-555555555555:Codeunit:50001::OnB::5760721b1f6966b8e167ea4335e704afb8620dda39f037e8652b26663cf7a848",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50002#7e9cf21f5f784dbc84851d7122dce2b2ef0b585d0ca87d8f16b38f0473ccceda/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -262,8 +266,8 @@
 					"via": "call",
 					"witnessCallsiteId": "55555555-5555-5555-5555-555555555555:Codeunit:50002#7e9cf21f5f784dbc84851d7122dce2b2ef0b585d0ca87d8f16b38f0473ccceda/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

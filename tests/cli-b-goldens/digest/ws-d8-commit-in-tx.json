@@ -325,24 +325,54 @@
             "confidence": "static",
             "detail": {},
             "evidence": {
-              "sourceKind": "unavailable"
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/subscriber.al",
+              "line": 10,
+              "sourceKind": "source"
             },
-            "factId": "4ad986136a11c4e7",
+            "factId": "c8cd58386b33a968",
             "guarantees": [
-              "ORDERING_UNKNOWN"
+              "COMMIT_REACHABLE",
+              "COMMIT_DOMINATES_RETURN",
+              "WRITE_COMMITTED_BEFORE_RETURN"
             ],
             "provenance": "transitive",
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
-                "label": "ORDERING_UNKNOWN",
+                "label": "COMMIT_REACHABLE",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              },
+              {
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              },
+              {
+                "interveningBoundary": "none",
+                "label": "WRITE_COMMITTED_BEFORE_RETURN",
                 "scope": "owning-routine",
                 "validForRefutation": false
               }
             ],
-            "transactionContext": "unknown",
+            "transactionContext": "span-has-known-writes",
             "type": "COMMIT",
-            "viaPaths": [],
+            "viaPaths": [
+              [
+                {
+                  "edgeKind": "event-dispatch",
+                  "eventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc",
+                  "fromDisplay": "OnAfterPostSalesDoc",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
+                  "kind": "event-dispatch",
+                  "toDisplay": "HandlePosted",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0"
+                }
+              ]
+            ],
             "viaPathsTruncated": false
           },
           {
@@ -354,24 +384,40 @@
               "tempState": "known(false)"
             },
             "evidence": {
-              "sourceKind": "unavailable"
+              "column": 8,
+              "excerpt": "Audit.Insert",
+              "file": "ws:src/subscriber.al",
+              "line": 9,
+              "sourceKind": "source"
             },
-            "factId": "1b0f28d232a82f5d",
+            "factId": "b55d7e589bf08559",
             "guarantees": [
-              "ORDERING_UNKNOWN"
+              "COMMIT_REACHABLE"
             ],
             "provenance": "transitive",
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
-                "label": "ORDERING_UNKNOWN",
+                "label": "COMMIT_REACHABLE",
                 "scope": "owning-routine",
                 "validForRefutation": false
               }
             ],
             "transactionContext": "unknown",
             "type": "DB_INSERT",
-            "viaPaths": [],
+            "viaPaths": [
+              [
+                {
+                  "edgeKind": "event-dispatch",
+                  "eventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc",
+                  "fromDisplay": "OnAfterPostSalesDoc",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
+                  "kind": "event-dispatch",
+                  "toDisplay": "HandlePosted",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0"
+                }
+              ]
+            ],
             "viaPathsTruncated": false
           },
           {
@@ -407,16 +453,6 @@
           }
         ],
         "entryDiagnostics": [
-          {
-            "effectType": "COMMIT",
-            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
-            "kind": "evidence-unavailable"
-          },
-          {
-            "effectType": "DB_INSERT",
-            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
-            "kind": "evidence-unavailable"
-          },
           {
             "effectType": "EVENT_PUBLISH",
             "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",

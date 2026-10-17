@@ -11,8 +11,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000::OnAfterNotify::d9f5b633ab1ee7c22b9fb8e25535f7c29e31b8872a723ce4849a527d9ee7f1f6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -27,16 +27,17 @@
 						"kind": "literal",
 						"value": "https://example.test/notify"
 					},
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000::OnAfterNotify::d9f5b633ab1ee7c22b9fb8e25535f7c29e31b8872a723ce4849a527d9ee7f1f6",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -45,9 +46,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000::OnAfterNotify::d9f5b633ab1ee7c22b9fb8e25535f7c29e31b8872a723ce4849a527d9ee7f1f6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -72,8 +74,8 @@
 					"resourceId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000::OnAfterNotify::d9f5b633ab1ee7c22b9fb8e25535f7c29e31b8872a723ce4849a527d9ee7f1f6",
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000#ddb3cc33d543406ad9c70d28832e85d0002fe626b3308593180e5eb70b92b775/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -88,15 +90,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000#ddb3cc33d543406ad9c70d28832e85d0002fe626b3308593180e5eb70b92b775/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -107,8 +109,8 @@
 					"via": "call",
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50000#ddb3cc33d543406ad9c70d28832e85d0002fe626b3308593180e5eb70b92b775/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -135,15 +137,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4722:Codeunit:50001#8d7dd2d296ce1acbf5f1df52cdfdb49f32dd6aad54cc639c7031aef6f95d21df/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -153,8 +155,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

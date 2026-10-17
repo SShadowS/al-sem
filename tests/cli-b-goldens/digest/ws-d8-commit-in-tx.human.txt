@@ -28,16 +28,16 @@
 --- OnAfterPostSalesDoc ---
   coverage: complete
   [COMMIT] transitive
-    evidence: (unavailable)
+    evidence: ws:src/subscriber.al:10 "commit"
+    via: 1 path(s)
   [DB_INSERT] transitive
-    evidence: (unavailable)
+    evidence: ws:src/subscriber.al:9 "Audit.Insert"
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/table/50100, resourceDisplay=Audit Entry, tempState=known(false)
+    via: 1 path(s)
   [EVENT_PUBLISH] direct
     evidence: (unavailable)
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc, resourceDisplay=onafterpostsalesdoc, eventClass=Integration
     via: 1 path(s)
-  diagnostic: evidence-unavailable (COMMIT)
-  diagnostic: evidence-unavailable (DB_INSERT)
   diagnostic: evidence-unavailable (EVENT_PUBLISH)
 
 --- HandlePosted ---

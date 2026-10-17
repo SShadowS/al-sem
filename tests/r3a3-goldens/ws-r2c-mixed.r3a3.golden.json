@@ -11,8 +11,8 @@
 					"via": "self",
 					"resourceId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnPlainBiz::30ad95b3a926d0ea496ac87e3692e61e4e4f53a9cb260009e6a61f2746967324",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Business"
+						"eventClass": "Business",
+						"kind": "event"
 					}
 				}
 			],
@@ -36,8 +36,8 @@
 					"via": "self",
 					"resourceId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnIsolatedInt::4f8e1f5b4420eac650ab49ea6a972f094948658b622a6cd6c87d37ed974bd430",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -48,9 +48,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnIsolatedInt::4f8e1f5b4420eac650ab49ea6a972f094948658b622a6cd6c87d37ed974bd430",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -73,8 +74,8 @@
 					"via": "self",
 					"resourceId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnMixedCaseEvent::5564a26181b69bc2f43593cb296d906ef0b0f292b24cdee1cdee8c6dc935326d",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -85,9 +86,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnMixedCaseEvent::5564a26181b69bc2f43593cb296d906ef0b0f292b24cdee1cdee8c6dc935326d",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -110,8 +112,8 @@
 					"via": "self",
 					"resourceId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnIsolatedBiz::8305919d8f56e027033d5a88c6e1349d53089296782edaa3782b1a680a231229",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Business"
+						"eventClass": "Business",
+						"kind": "event"
 					}
 				}
 			],
@@ -135,8 +137,8 @@
 					"via": "self",
 					"resourceId": "c2c00003-0000-0000-0000-000000000003:Codeunit:50100::OnPlainInt::953e33682c621cabc1238855fb8dfad2716ca44cf1ab37387f45aa8dcc7e6d8b",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -159,8 +161,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -183,8 +185,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -207,8 +209,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

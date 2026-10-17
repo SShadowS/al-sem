@@ -32,8 +32,8 @@
 					"resourceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
 					"witnessCallsiteId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000#6613cb531f8da247f6c76c9438913d0cc6732d441030931febbe346a095713a7/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -63,8 +63,8 @@
 					"via": "call",
 					"witnessCallsiteId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000#6613cb531f8da247f6c76c9438913d0cc6732d441030931febbe346a095713a7/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -87,8 +87,8 @@
 					"via": "self",
 					"resourceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -101,6 +101,7 @@
 					"via": "event-dispatch",
 					"resourceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Table:50100",
 					"witnessOperationId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50001#db2f7657277cea6b37edaf5291907f053797801512d1c7785b79275a0494c019/op0",
+					"witnessFirstHopEventId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Modify",
@@ -119,6 +120,7 @@
 					"via": "event-dispatch",
 					"resourceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Table:50100",
 					"witnessOperationId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50002#cd5423a371900a70eacf7a6fe6aa5771386fad10ef81746b9f0dd61becbd43ff/op0",
+					"witnessFirstHopEventId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Get",
@@ -135,9 +137,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -177,8 +180,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -219,8 +222,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

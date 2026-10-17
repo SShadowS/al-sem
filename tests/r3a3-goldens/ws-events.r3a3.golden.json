@@ -11,8 +11,8 @@
 					"via": "self",
 					"resourceId": "88888888-8888-8888-8888-888888888888:Codeunit:51200::OnAfterDoWork::476712af2598f38dc2f6d352859e11ac7681d84607ccc4af6ce6e9914c606bf6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -23,9 +23,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "88888888-8888-8888-8888-888888888888:Codeunit:51200::OnAfterDoWork::476712af2598f38dc2f6d352859e11ac7681d84607ccc4af6ce6e9914c606bf6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -50,8 +51,8 @@
 					"resourceId": "88888888-8888-8888-8888-888888888888:Codeunit:51200::OnAfterDoWork::476712af2598f38dc2f6d352859e11ac7681d84607ccc4af6ce6e9914c606bf6",
 					"witnessCallsiteId": "88888888-8888-8888-8888-888888888888:Codeunit:51200#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -62,8 +63,8 @@
 					"via": "call",
 					"witnessCallsiteId": "88888888-8888-8888-8888-888888888888:Codeunit:51200#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -85,8 +86,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -109,8 +110,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

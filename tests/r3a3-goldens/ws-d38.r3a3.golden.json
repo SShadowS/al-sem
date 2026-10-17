@@ -13,8 +13,8 @@
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffPending::db37ad957a5e2f29e8cb36ea481e6ded565d3db969c67ba8f0aa7649768987cd",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400#43e602765cb1fd17e5fc0bbf0765132e02f875c506ee04d4a32471c9443fed36/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -26,8 +26,8 @@
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffRemoved::7159135672ff7ddc0cfd86ee6a1f447106ed9db51794d729be124cb77a9a6cce",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400#43e602765cb1fd17e5fc0bbf0765132e02f875c506ee04d4a32471c9443fed36/cs1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -39,8 +39,8 @@
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterFresh::ef7acd964c2b00ebbbab85e58e47f1c3d4336039ebb80edba46d82640cf12c90",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400#43e602765cb1fd17e5fc0bbf0765132e02f875c506ee04d4a32471c9443fed36/cs2",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -51,8 +51,8 @@
 					"via": "call",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400#43e602765cb1fd17e5fc0bbf0765132e02f875c506ee04d4a32471c9443fed36/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -75,8 +75,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffRemoved::7159135672ff7ddc0cfd86ee6a1f447106ed9db51794d729be124cb77a9a6cce",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -87,9 +87,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffRemoved::7159135672ff7ddc0cfd86ee6a1f447106ed9db51794d729be124cb77a9a6cce",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -112,8 +113,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffPending::db37ad957a5e2f29e8cb36ea481e6ded565d3db969c67ba8f0aa7649768987cd",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -124,9 +125,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterDoStuffPending::db37ad957a5e2f29e8cb36ea481e6ded565d3db969c67ba8f0aa7649768987cd",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -149,8 +151,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterFresh::ef7acd964c2b00ebbbab85e58e47f1c3d4336039ebb80edba46d82640cf12c90",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -161,9 +163,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d380:Codeunit:51400::OnAfterFresh::ef7acd964c2b00ebbbab85e58e47f1c3d4336039ebb80edba46d82640cf12c90",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -185,8 +188,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -209,8 +212,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -233,8 +236,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -257,8 +260,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

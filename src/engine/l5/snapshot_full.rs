@@ -226,6 +226,10 @@ fn one_capability_fact_to_cbor(
             CborValue::Text(op.clone()),
         );
     }
+    // Last, present only on an event-dispatch-first inherited fact (#98 D1).
+    if let Some(ev) = &f.witness_first_hop_event_id {
+        m.insert("witnessFirstHopEventId".into(), CborValue::Text(ev.clone()));
+    }
     CborValue::Map(m)
 }
 
@@ -766,9 +770,10 @@ fn make_required_perm(
         "rights".into(),
         CborValue::Array(vec![CborValue::Text(right.into())]),
     );
-    // derivedFromCapability: { op, [witnessCallsiteId], [witnessFirstHopOperationId] }.
-    // A fact inherited through an `implicit-trigger` first hop has no call site;
-    // its witness is the firing record op (#96 D5).
+    // derivedFromCapability: { op, [witnessCallsiteId], [witnessFirstHopOperationId],
+    // [witnessFirstHopEventId] }. A fact inherited through an `implicit-trigger`
+    // first hop has no call site; its witness is the firing record op (#96 D5).
+    // Through an `event-dispatch` first hop it is the dispatched event (#98 D1).
     let mut dfc: IndexMap<String, CborValue> = IndexMap::new();
     dfc.insert("op".into(), CborValue::Text(f.op.into()));
     if let Some(wc) = &f.witness_callsite_id {
@@ -779,6 +784,9 @@ fn make_required_perm(
             "witnessFirstHopOperationId".into(),
             CborValue::Text(op.clone()),
         );
+    }
+    if let Some(ev) = &f.witness_first_hop_event_id {
+        dfc.insert("witnessFirstHopEventId".into(), CborValue::Text(ev.clone()));
     }
     m.insert("derivedFromCapability".into(), CborValue::Map(dfc));
     m.insert("coverage".into(), CborValue::Text(coverage.into()));
@@ -1985,6 +1993,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             witness_callsite_id: None,
             extra: None,
             witness_first_hop_operation_id: Some(op.clone()),
+            witness_first_hop_event_id: None,
         };
         let CborValue::Map(m) = one_capability_fact_to_cbor(&snap) else {
             panic!("a fact is a map");
@@ -2010,6 +2019,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             witness_operation_id: Some("app/trigger/op0".to_string()),
             witness_callsite_id: None,
             witness_first_hop_operation_id: Some(op.clone()),
+            witness_first_hop_event_id: None,
             extra: None,
         };
         let (_, row) = make_required_perm("s", "t", "TableData", "I", &fact, "complete");
@@ -2024,5 +2034,93 @@ page 50818 "T5 I-3 Wizard Alpha"
             "derivedFromCapability: {dfc:?}"
         );
         assert!(!dfc.contains_key("witnessCallsiteId"));
+        assert!(!dfc.contains_key("witnessFirstHopEventId"));
+        assert!(!m.contains_key("witnessFirstHopEventId"));
+    }
+
+    /// #98 A4: a fact inherited through an `event-dispatch` first hop has no
+    /// call site and no op; its witness is the dispatched event. The CBOR fact
+    /// carries `witnessFirstHopEventId` last, and a permission row derived from
+    /// it carries it in `derivedFromCapability`. A call-first fact writes
+    /// neither key.
+    #[test]
+    fn event_first_fact_keeps_its_first_hop_event_in_cbor_and_permissions() {
+        let ev = "app/Codeunit/1/event/onx".to_string();
+        let snap_fact = |first_hop_event: Option<String>, callsite: Option<String>| {
+            crate::engine::l5::snapshot::SnapshotCapabilityFact {
+                subject: "s".to_string(),
+                op: "insert".to_string(),
+                resource_kind: "table".to_string(),
+                resource_id: Some("app/table/1".to_string()),
+                resource_arg_source: None,
+                confidence: "high".to_string(),
+                provenance: "inherited".to_string(),
+                via: "event-dispatch".to_string(),
+                witness_operation_id: Some("app/sub/op0".to_string()),
+                witness_callsite_id: callsite,
+                extra: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: first_hop_event,
+            }
+        };
+        let CborValue::Map(m) = one_capability_fact_to_cbor(&snap_fact(Some(ev.clone()), None))
+        else {
+            panic!("a fact is a map");
+        };
+        assert!(
+            matches!(
+                m.last(),
+                Some((k, CborValue::Text(v))) if k == "witnessFirstHopEventId" && *v == ev
+            ),
+            "last key: {:?}",
+            m.last()
+        );
+        let CborValue::Map(m) =
+            one_capability_fact_to_cbor(&snap_fact(None, Some("app/caller/cs0".to_string())))
+        else {
+            panic!("a fact is a map");
+        };
+        assert!(
+            !m.contains_key("witnessFirstHopEventId"),
+            "call fact: {m:?}"
+        );
+
+        let fact = |first_hop_event: Option<String>, callsite: Option<String>| CapabilityFact {
+            subject: "s".to_string(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: Some("app/table/1".to_string()),
+            resource_arg_source: None,
+            confidence: "high",
+            provenance: "inherited",
+            via: "event-dispatch",
+            witness_operation_id: Some("app/sub/op0".to_string()),
+            witness_callsite_id: callsite,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: first_hop_event,
+            extra: None,
+        };
+        let dfc_of = |f: &CapabilityFact| {
+            let (_, row) = make_required_perm("s", "t", "TableData", "I", f, "complete");
+            let CborValue::Map(mut row) = row else {
+                panic!("a row is a map");
+            };
+            let Some(CborValue::Map(dfc)) = row.shift_remove("derivedFromCapability") else {
+                panic!("derivedFromCapability is a map");
+            };
+            dfc
+        };
+        let dfc = dfc_of(&fact(Some(ev.clone()), None));
+        assert!(
+            matches!(dfc.get("witnessFirstHopEventId"), Some(CborValue::Text(v)) if *v == ev),
+            "derivedFromCapability: {dfc:?}"
+        );
+        assert!(!dfc.contains_key("witnessCallsiteId"));
+        assert!(!dfc.contains_key("witnessFirstHopOperationId"));
+        let dfc = dfc_of(&fact(None, Some("app/caller/cs0".to_string())));
+        assert!(
+            !dfc.contains_key("witnessFirstHopEventId"),
+            "call fact derivedFromCapability: {dfc:?}"
+        );
     }
 }

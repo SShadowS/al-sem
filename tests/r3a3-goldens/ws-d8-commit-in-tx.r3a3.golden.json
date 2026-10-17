@@ -114,8 +114,8 @@
 					"resourceId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108::OnAfterPostSalesDoc::eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -126,8 +126,8 @@
 					"via": "call",
 					"witnessCallsiteId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -150,8 +150,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108::OnAfterPostSalesDoc::eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -162,7 +162,8 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
-					"witnessOperationId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0/op2"
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0/op2",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108::OnAfterPostSalesDoc::eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
 				},
 				{
 					"op": "insert",
@@ -172,6 +173,7 @@
 					"via": "event-dispatch",
 					"resourceId": "11111111-0000-0000-0000-00000000d80a:Table:50100",
 					"witnessOperationId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0/op1",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108::OnAfterPostSalesDoc::eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
@@ -188,9 +190,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108::OnAfterPostSalesDoc::eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -238,8 +241,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

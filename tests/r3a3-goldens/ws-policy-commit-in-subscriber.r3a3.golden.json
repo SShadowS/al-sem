@@ -11,8 +11,8 @@
 					"via": "self",
 					"resourceId": "10000002-0000-0000-0000-000000000000:Codeunit:50000::OnEvent::4fec5b9a9cfd6b9b188c8b68bf37265e0dd508724ce4b8576015d956b44a0754",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -23,7 +23,8 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
-					"witnessOperationId": "10000002-0000-0000-0000-000000000000:Codeunit:50001#e7dcab6bf11e66911db86de47ca9f95ba764b4bca66a975d31a70b65e9d88f74/op0"
+					"witnessOperationId": "10000002-0000-0000-0000-000000000000:Codeunit:50001#e7dcab6bf11e66911db86de47ca9f95ba764b4bca66a975d31a70b65e9d88f74/op0",
+					"witnessFirstHopEventId": "10000002-0000-0000-0000-000000000000:Codeunit:50000::OnEvent::4fec5b9a9cfd6b9b188c8b68bf37265e0dd508724ce4b8576015d956b44a0754"
 				},
 				{
 					"op": "subscribe",
@@ -31,9 +32,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "10000002-0000-0000-0000-000000000000:Codeunit:50000::OnEvent::4fec5b9a9cfd6b9b188c8b68bf37265e0dd508724ce4b8576015d956b44a0754",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -67,8 +69,8 @@
 					"resourceId": "10000002-0000-0000-0000-000000000000:Codeunit:50000::OnEvent::4fec5b9a9cfd6b9b188c8b68bf37265e0dd508724ce4b8576015d956b44a0754",
 					"witnessCallsiteId": "10000002-0000-0000-0000-000000000000:Codeunit:50000#98346da5d6b1d05da0daaffb1ca53f81633333dea8bf0e5d72bc9e0fc4c18f6a/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -79,8 +81,8 @@
 					"via": "call",
 					"witnessCallsiteId": "10000002-0000-0000-0000-000000000000:Codeunit:50000#98346da5d6b1d05da0daaffb1ca53f81633333dea8bf0e5d72bc9e0fc4c18f6a/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -110,8 +112,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
