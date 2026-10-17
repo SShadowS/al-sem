@@ -300,3 +300,253 @@ fn digest_sees_a_subscriber_separated_by_trivia() {
         .collect();
     assert_eq!(got, want, "merge variant: routine -> has COMMIT");
 }
+
+// ---------------------------------------------------------------------------
+// #103: one procedure declared in two `#if` arms with the same signature is one
+// routine, and it subscribes to what EITHER arm subscribes to.
+// ---------------------------------------------------------------------------
+
+/// The issue's reproducer: `H` subscribes `OnA` under `XSYM` and `OnB` otherwise.
+const IF_DUP: &str = r##"codeunit 50103 "Repro Pub"
+{
+    procedure FireA()
+    begin
+        OnA();
+    end;
+
+    procedure FireB()
+    begin
+        OnB();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnB()
+    begin
+    end;
+
+#if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnB', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#endif
+}
+"##;
+
+/// Both arms of `H` subscribe the SAME event.
+const IF_DUP_SAME: &str = r##"codeunit 50103 "Repro Pub"
+{
+    procedure FireA()
+    begin
+        OnA();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+
+#if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#endif
+}
+"##;
+
+/// The `ws3` shape: `OnA` is a plain procedure under `XSYM` and the publisher
+/// otherwise; `H` subscribes to it unconditionally.
+const IF_PUBNESS: &str = r##"codeunit 50103 "Repro Pub"
+{
+    procedure FireA()
+    begin
+        OnA();
+    end;
+
+#if XSYM
+    local procedure OnA()
+    begin
+    end;
+#else
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+#endif
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+}
+"##;
+
+/// The program engine's call graph of a workspace holding `al`: every edge, and
+/// the whole-program histogram.
+fn program_edges(
+    al: &str,
+) -> (
+    Vec<al_sem::program::resolve::full::ClassifiedEdge>,
+    al_sem::program::resolve::edge::Histogram,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), al);
+    let (_, report, _) =
+        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+    (report.edges, report.histogram)
+}
+
+/// The event-flow edges of `publisher_lc`, each as its outcome and its routine
+/// targets (`name_lc`, source evidence).
+fn event_flow(
+    edges: &[al_sem::program::resolve::full::ClassifiedEdge],
+    publisher_lc: &str,
+) -> Vec<(String, Vec<(String, bool)>)> {
+    use al_sem::program::resolve::edge::{EdgeKind, Evidence, RouteTarget, classify_obligation};
+    edges
+        .iter()
+        .filter(|e| e.edge.kind == EdgeKind::EventFlow && &*e.edge.from.name_lc == publisher_lc)
+        .map(|e| {
+            let targets = e
+                .edge
+                .routes
+                .iter()
+                .filter_map(|r| match &r.target {
+                    RouteTarget::Routine(t) => Some((
+                        t.name_lc.to_string(),
+                        matches!(r.evidence, Evidence::Source),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            (format!("{:?}", classify_obligation(&e.edge)), targets)
+        })
+        .collect()
+}
+
+/// The model's event graph of a workspace holding `al`: one
+/// `(event, subscriber, resolution)` per edge, sorted, and the census.
+fn model_event_edges(
+    al: &str,
+) -> (
+    Vec<(String, String, String)>,
+    al_sem::program::model::events::EventCensus,
+) {
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), al);
+    let m = assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
+        .expect("model");
+    let name_of = |id: &str| {
+        m.workspace
+            .routines
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("no model routine {id}"))
+            .name
+            .clone()
+    };
+    let mut out: Vec<(String, String, String)> = m
+        .events
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                name_of(&e.subscriber_routine_id),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    out.sort();
+    (out, m.events.census.clone())
+}
+
+/// A2: `FireB` raises `OnB`, which only `H`'s second arm subscribes to; the
+/// digest of `FireB` must reach `H`'s `Commit()`, as `FireA`'s does.
+#[test]
+fn digest_sees_both_arms_of_an_if_duplicated_subscriber() {
+    let got = commit_by_routine(IF_DUP, &["FireA", "FireB"]);
+    let want: BTreeMap<String, bool> = [("FireA".to_string(), true), ("FireB".to_string(), true)]
+        .into_iter()
+        .collect();
+    assert_eq!(got, want, "routine -> has COMMIT");
+}
+
+/// A2b: the program engine's event-flow edge of `OnB` resolves to `H` from
+/// source; on master it was classed `HonestEmpty` ("provably no callee").
+#[test]
+fn the_second_arms_event_flow_edge_resolves_from_source() {
+    let (edges, histogram) = program_edges(IF_DUP);
+    for event in ["ona", "onb"] {
+        assert_eq!(
+            event_flow(&edges, event),
+            [("Resolved".to_string(), vec![("h".to_string(), true)])],
+            "{event}'s event-flow edge"
+        );
+    }
+    assert_eq!(histogram.honest_empty, 0, "{histogram:?}");
+}
+
+/// A3: a publisher declared in two `#if` arms, only one of which carries
+/// `[IntegrationEvent]`, is a publisher: its event-flow edge reaches `H`, and
+/// the model edge is `resolved`, not the `maybe` of an orphaned subscription.
+#[test]
+fn a_publisher_in_one_if_arm_is_a_publisher() {
+    let (edges, _) = program_edges(IF_PUBNESS);
+    assert_eq!(
+        event_flow(&edges, "ona"),
+        [("Resolved".to_string(), vec![("h".to_string(), true)])]
+    );
+    let (model, _) = model_event_edges(IF_PUBNESS);
+    assert_eq!(
+        model,
+        [("ona".to_string(), "H".to_string(), "resolved".to_string())]
+    );
+}
+
+/// A5: the two rows of an `#if`-duplicated subscriber are one routine id, so
+/// the model has ONE edge per subscription, not one per row and subscription.
+/// The census counts the routine once too: with both arms subscribing `OnA`,
+/// `bound_model` is 1 (2 on master), while `model_subscribers` stays per row.
+#[test]
+fn the_model_has_one_edge_per_subscription_of_an_if_duplicate() {
+    let resolved = |event: &str| (event.to_string(), "H".to_string(), "resolved".to_string());
+    let (edges, _) = model_event_edges(IF_DUP);
+    assert_eq!(edges, [resolved("ona"), resolved("onb")]);
+
+    let (edges, census) = model_event_edges(IF_DUP_SAME);
+    assert_eq!(edges, [resolved("ona")]);
+    assert_eq!(
+        (
+            census.model_subscribers,
+            census.unmapped_subscribers,
+            census.bound_model
+        ),
+        (2, 0, 1),
+        "{census:?}"
+    );
+}

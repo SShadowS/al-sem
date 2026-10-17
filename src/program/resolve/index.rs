@@ -100,8 +100,10 @@ pub struct SubscriberEntry {
 pub struct Subscription {
     /// The subscriber routine carrying the attribute.
     pub subscriber: RoutineNodeId,
-    /// The attribute's position among the routine's parsed `[EventSubscriber]`
-    /// attributes (a routine may subscribe to several events).
+    /// The attribute's position in the survivor's merged subscriber list (a
+    /// routine may subscribe to several events). For a same-signature `#if`
+    /// duplicate that list is the survivor's own attributes, then the later
+    /// arms' new ones (`build::EventFacts::union`, issue #103).
     pub ordinal: usize,
     /// Publisher object type as written, lowercased (e.g. `"codeunit"`).
     pub publisher_object_type: String,
