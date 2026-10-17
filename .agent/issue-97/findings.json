@@ -1,0 +1,466 @@
+[
+  {
+    "id": "S1",
+    "source": "both r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 50,
+    "severity": "important",
+    "text": "W2's opaque-at-depth-d+1 tie is unreachable: an opaque boundary has no out-edges or direct facts, so the reachability prune drops it below depth 1.",
+    "disposition": "fixed",
+    "evidence": "W2 replaced by a reachable tie: seeds A (terminal, 2 hops) and Z (opaque, 1 hop, hand-built coverage unknown) on the first-hop callsite; A found first, Z sorts first; cap 1 must return Z.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1500,
+    "severity": "important",
+    "text": "'Bounded by one frontier level' was false: post-cut nodes would still expand and push deeper terminals.",
+    "disposition": "fixed",
+    "evidence": "Design step 2: after the cut, nodes with depth >= cut_hops are not expanded and terminals with depth+1 > cut_hops are not pushed; only a same-length opaque hit remains possible.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "both r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 51,
+    "severity": "important",
+    "text": "The golden/no-change claim was too narrow: CDO hits the 256 cap (evidence, canonical keys, via_paths, conditionality, time can move), flags can move at exactly the cap, and a small --witness cap reaches this code.",
+    "disposition": "fixed",
+    "evidence": "Acceptance now: any golden movement triaged (truncated/path-limit at exact cap, path choice over cap), grep for non-default --witness, and a CDO digest byte-compare with every change explained plus a before/after timing.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1510,
+    "severity": "important",
+    "text": "The truncated gating was unspecified.",
+    "disposition": "fixed",
+    "evidence": "Revision 3: dropped_beyond_cut is set when a terminal is not pushed (depth+1 > cut_hops), when a node at depth >= cut_hops with an eligible expansion is not expanded, or when a post-cut node deeper than MAX_DEPTH is skipped; truncated = (cut_hops.is_some() && (!queue.is_empty() || dropped_beyond_cut)) || keyed.len() > cap; W4 (A, B->C, cap 1) pins truncated == true; a corpus oracle asserts the IMPLICATION (uncapped.paths.len() > 2 || uncapped.truncated) => capped.truncated (the flag is conservative, N3).",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1366,
+    "severity": "minor",
+    "text": "Post-cut pops count toward MAX_STATES and could introduce limit diagnostics; the prefix property cannot hold if a limit fires.",
+    "disposition": "fixed",
+    "evidence": "Since CR2 (T2) and F1 (T3): the loop guard peeks before pop, so no node beyond the cut is popped; pops after the cut are NOT counted toward MAX_STATES (digest.rs `if cut_hops.is_none() { state_count += 1 }`), so finishing the length class cannot newly trigger state-limit-exceeded. The post-cut work is bounded instead because no node pushes a child after the cut (F1), so it is at most the queue at the cut; W7 pins the bound. The prefix property is promised only when NEITHER the capped nor the uncapped run is incomplete; W8 pins a case where the uncapped run is incomplete and the prefix fails. Post-cut depth > MAX_DEPTH nodes are skipped without depth_exceeded and count as dropped.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 5340,
+    "severity": "minor",
+    "text": "check_witness_bfs already runs cap 2 and HARD_PATH_CAP over the r0 corpus.",
+    "disposition": "fixed",
+    "evidence": "check_witness_bfs (~:5340) runs cap 2 and HARD_PATH_CAP over the r0 corpus and, when BOTH runs are non-incomplete, asserts capped(2) == uncapped[..2] and (uncapped.paths.len() > 2 || uncapped.truncated) => capped.truncated. The corpus has no distinguishing witness, so it is a regression net, not a discrimination proof (W1-W8 carry the proofs).",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 3040,
+    "severity": "minor",
+    "text": "merge_normalize_via_paths re-selects its top 3 by projected length/JSON, so the invariant is a raw-order prefix only.",
+    "disposition": "fixed",
+    "evidence": "Invariant explicitly limited to the raw reported order; the projection is noted as downstream and unchanged.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "opus r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "cut_hops recomputation was unspecified.",
+    "disposition": "fixed",
+    "evidence": "Recorded once with get_or_insert, never recomputed.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "sol r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 51,
+    "severity": "minor",
+    "text": "At exactly the cap, a dead queued branch made the old code report truncation; completing it clears truncation with no new path.",
+    "disposition": "fixed",
+    "evidence": "W3 pins truncated == false for the exact-cap dead-branch shape; the golden plan allows that flag movement.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N1",
+    "source": "both r2",
+    "round": 2,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "An empty queue after the cut does not mean nothing was dropped: the new guards suppress paths without leaving queue entries, so truncated could read false on an incomplete capped witness.",
+    "disposition": "fixed",
+    "evidence": "Same fix as S4 (dropped_beyond_cut), pinned by W4 and the corpus truncation oracle.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N2",
+    "source": "both r2",
+    "round": 2,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "W1 cannot discriminate the expansion guard (its leaves are terminals) and no state counter is exposed; W3 needs H's callsite to sort before D's.",
+    "disposition": "fixed",
+    "evidence": "The states-counting claim is dropped; the terminal-push guard is documented as a cost-only guard that no output can detect; W3 states the callsite order; W4 discriminates the truncation flag.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N3",
+    "source": "both r3",
+    "round": 3,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "important",
+    "text": "The exact corpus truncation oracle conflicts with the conservative dropped_beyond_cut: reverse reachability ignores visited ancestors, so an eligible expansion can dead-end (e.g. a cycle back to an ancestor) and the capped run reports truncated while the uncapped run has no further path.",
+    "disposition": "fixed",
+    "evidence": "Oracle changed to the implication (uncapped.paths.len() > 2 || uncapped.truncated) => capped.truncated; the conservative direction is documented in design step 3 and pinned by W5 (Root->A; A->H, A->D; D->E->F; F->A; cap 1 => truncated true, uncapped 1 path).",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N4",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The loop guard must peek before pop/count, otherwise one node beyond the cut is counted toward MAX_STATES.",
+    "disposition": "fixed",
+    "evidence": "Design step 4: the guard peeks on queue.front() before pop_front and before the state_count increment.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N5",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Both post-cut guards (expansion and terminal push) are cost-only, not only the terminal one.",
+    "disposition": "fixed",
+    "evidence": "Acceptance: both guards are described as cost-only and gated only by the CDO timing.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N6",
+    "source": "opus r3",
+    "round": 3,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "'Eligible expansion' was undefined.",
+    "disposition": "fixed",
+    "evidence": "Design step 3 (after CR1 and F1): a post-cut node at depth < cut_hops runs exactly the expansion filters (not visited, in valid_nodes, edge_has_hop) on its out-edges, by the same code the expansion uses, WITHOUT pushing; an eligible edge sets dropped_beyond_cut. A post-cut node at depth >= cut_hops takes an O(1) path: any out-edge sets dropped_beyond_cut (more conservative, allowed). W5 pins the conservative direction ('D's edge to E is eligible'), W3 the exact case.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N7",
+    "source": "opus r4",
+    "round": 4,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "S4's register evidence still quoted the old equality oracle.",
+    "disposition": "fixed",
+    "evidence": "S4's evidence now quotes the implication oracle.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N8",
+    "source": "opus r4",
+    "round": 4,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "path-limit-reached has two push sites, so which truncation cause fires changes its position relative to depth-exceeded and proof diagnostics; the 'cost-only' guards could change diagnostic order.",
+    "disposition": "fixed",
+    "evidence": "Design step 3: the post-loop site is gated on cut_hops.is_some() && (!queue.is_empty() || dropped_beyond_cut || found.len() > cap), so the diagnostic is pushed at the same site whatever the cause; the keyed.len() > cap fallback stays for the proof-only case.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1387,
+    "severity": "important",
+    "text": "After the cut the BFS still pops the whole cut-depth level, building visited chains and scanning out-edges only to set dropped_beyond_cut: up to a full BFS level of extra work per call on dense CDO roots.",
+    "disposition": "fixed",
+    "evidence": "A post-cut node at depth >= cut takes an O(1) path: no visited chain, no expansion scan; only a terminal-carrier check (dropped, sets dropped_beyond_cut) and an opaque check (kept at depth == cut); any out-edge sets dropped_beyond_cut (conservative). Commit 33a79418.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1393,
+    "severity": "important",
+    "text": "Post-cut pops count toward MAX_STATES, so a witness that used to be complete+truncated can newly come back incomplete with state-limit-exceeded.",
+    "disposition": "fixed",
+    "evidence": "Post-cut pops do not increment state_count; they are bounded by the queue built before the cut, so no witness newly reads incomplete from work beyond the cap.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1495,
+    "severity": "minor",
+    "text": "A post-cut node at depth >= cut still builds visited_routines and filters all out-edges just to OR one bool.",
+    "disposition": "fixed",
+    "evidence": "Same change as CR1: the post-cut O(1) path skips the visited_routines build and the out-edge filter entirely.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1475,
+    "severity": "minor",
+    "text": "After the cut, opaque seeds in the length class push opaque-or-unresolved-boundary diagnostics even when truncate(cap) drops their path.",
+    "disposition": "fixed",
+    "evidence": "After sort/dedup/truncate, opaque-or-unresolved-boundary diagnostics found after the cut (index >= diags_at_cut) are kept only when their routine ends a kept path, preserving order; pre-cut diagnostics never move. W6 (cap 1, seeds A terminal, Y and Z opaque) emits exactly the kept path's diagnostic; disabling the pruning fails W6.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review high",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 265,
+    "severity": "minor",
+    "text": "The CHANGELOG claims exact-cap witnesses no longer read truncated because of a dead branch; that holds only when the cut comes from a terminal, not from opaque seeds.",
+    "disposition": "fixed",
+    "evidence": "The CHANGELOG now scopes the dead-branch claim to cuts made by a terminal; with an opaque-seed cut, queued deeper children still read truncated.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1213,
+    "severity": "minor",
+    "text": "Stale performance prose cites pushed/popped counts measured when the BFS stopped at the cap.",
+    "disposition": "fixed",
+    "evidence": "The pushed/popped numbers are removed; the comment points to the arena note.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1562,
+    "severity": "minor",
+    "text": "The post-loop path-limit condition has a redundant cut_hops.is_some() term, and two push sites are easy to desynchronise.",
+    "disposition": "fixed",
+    "evidence": "The redundant term is removed; the post-loop push site and the proof-only keyed.len() > cap fallback are each commented with why two sites exist.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-sol",
+    "source": "sol final r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1499,
+    "severity": "important",
+    "text": "Post-cut nodes below the cut depth are still expanded without counting toward MAX_STATES, so a wide fan-out (A->B at N callsites, B->C at N) materialises N^2 dominated nodes after the cut.",
+    "disposition": "fixed",
+    "evidence": "No post-cut node pushes children (BFS FIFO: every node queued at the cut is at least as deep as the cut level; a terminal child has hop_count >= depth+2, a non-seed opaque boundary is pruned by reachability). Below the cut depth a post-cut node only evaluates the shared eligibility filters to mark a dropped path; at or beyond it takes the O(1) path. W7 (A->B at 60 callsites, B->C at 60) asserts the arena stays bounded; re-allowing expansion fails W7 (arena 3663, bound 63). Commit after 33a79418.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2-sol",
+    "source": "sol final r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 39,
+    "severity": "minor",
+    "text": "The prefix guarantee was stated for the capped run only; it requires both compared runs to be non-incomplete (a 25k-sibling shape gives a complete cap-1 run and an incomplete cap-256 run with different first paths).",
+    "disposition": "fixed",
+    "evidence": "The ledger invariant and the corpus oracle require BOTH runs non-incomplete; W8 (MAX_STATES siblings, cap 1 complete returns Hb, cap 256 incomplete) pins the two-sided condition.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F3-sol",
+    "source": "sol final r1",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 265,
+    "severity": "minor",
+    "text": "'Nodes popped after the cut are not expanded' was false: nodes below the cut depth were still expanded.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG now says after the cut no node is expanded and post-cut pops are not counted toward the state limit.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N9",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1212,
+    "severity": "important",
+    "text": "The cost-only guards and the uncounted post-cut work were never timed on a workload that reaches the cap (the 3 CDO digests never hit it).",
+    "disposition": "fixed",
+    "evidence": "CDO release-fast: fingerprint --witness 1 over the whole workspace hits the cap 78,102 times; master 417.0/454.1 s vs branch 418.0/464.1 s (+1.3%, within the ~9% run-to-run spread); a 14-routine --witness all sample (150 cap hits) 21.5/19.1 vs 21.1/19.7 s. Output diffs are path choice only (2,191 cap-1 and 21 cap-256 witnesses); 114 sampled changed cap-1 witnesses each equal the uncapped first path.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N10",
+    "source": "opus final r1",
+    "round": 1,
+    "file": ".agent/issue-97/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Ledger lines stale after CR1/CR2 (step 3 eligibility, step 4 MAX_STATES counting, the invariant, the corpus discrimination claim, the W5 message) and the S5/N6 evidence text.",
+    "disposition": "fixed",
+    "evidence": "Ledger design steps 3-4, the invariant, the acceptance discrimination text and the proofs table updated by T3; S5 and N6 evidence updated.",
+    "hash": "6bf1ad2546685617",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
