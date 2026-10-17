@@ -671,8 +671,9 @@ impl SnapshotGraphEdge {
         }
     }
 
-    /// The (internal) eventId of an event-dispatch edge.
-    fn event_id(&self) -> Option<&str> {
+    /// The INTERNAL `eventId` of an event-dispatch edge: digest's first-hop
+    /// selector for an event fact (#98 D2). `None` on every other kind.
+    pub fn edge_event_id(&self) -> Option<&str> {
         match self {
             SnapshotGraphEdge::EventDispatch { event_id, .. } => Some(event_id),
             _ => None,
@@ -687,12 +688,6 @@ impl SnapshotGraphEdge {
             SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => Some(operation_id),
             _ => None,
         }
-    }
-
-    /// Public INTERNAL `eventId` accessor: digest's first-hop selector for an
-    /// event-dispatch edge (#98 D2). `None` on every other kind.
-    pub fn edge_event_id(&self) -> Option<&str> {
-        self.event_id()
     }
 
     /// Public `from` accessor (R4-F Stage-4 ordering: typedEdge `.from`).
@@ -1546,7 +1541,7 @@ fn derive_pd_arena(
             e.source_routine(),
             to,
             e.callsite_id().unwrap_or(""),
-            e.event_id().unwrap_or(""),
+            e.edge_event_id().unwrap_or(""),
             e.edge_operation_id().unwrap_or(""),
         );
         let prev = edge_ix.insert(key, ix);

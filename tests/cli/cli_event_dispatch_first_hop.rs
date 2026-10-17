@@ -361,10 +361,9 @@ fn a2_a3_publisher_digest_has_the_event_first_hop_and_source_evidence() {
     let e = entry(&doc, "OnX");
     let eff = db_insert(e);
     let mut f = Vec::new();
-    let want = vec!["event-dispatch:OnX->HandleOnX".to_string()];
-    match via_paths(eff).first() {
-        Some(p) if *p == want => {}
-        other => f.push(format!("viaPaths[0] is {other:?} (want {want:?})")),
+    let want = vec![vec!["event-dispatch:OnX->HandleOnX".to_string()]];
+    if via_paths(eff) != want {
+        f.push(format!("viaPaths {:?} (want {want:?})", via_paths(eff)));
     }
     event_hops_carry_onx_id(eff, &mut f);
     evidence_at(eff, 7, 8, &mut f);
@@ -492,16 +491,20 @@ fn a2b_pd_write_through_the_event_first_hop_has_a_proof_path() {
 fn control_a2c_raise_rooted_paths_reach_both_subscribers() {
     let doc = digest(PUBLISHER_AL, FAN_SUBSCRIBER_AL, "Raise");
     let eff = db_insert(entry(&doc, "Raise"));
-    let got = via_paths(eff);
+    let mut got = via_paths(eff);
+    got.sort();
     let mut f = Vec::new();
-    for to in ["HandleOnX", "HandleOnX2"] {
-        let want = vec![
-            "call:Raise->OnX".to_string(),
-            format!("event-dispatch:OnX->{to}"),
-        ];
-        if !got.contains(&want) {
-            f.push(format!("viaPaths {got:?} has no {want:?}"));
-        }
+    let want: Vec<Vec<String>> = ["HandleOnX", "HandleOnX2"]
+        .iter()
+        .map(|to| {
+            vec![
+                "call:Raise->OnX".to_string(),
+                format!("event-dispatch:OnX->{to}"),
+            ]
+        })
+        .collect();
+    if got != want {
+        f.push(format!("viaPaths (sorted) {got:?} (want exactly {want:?})"));
     }
     finish(f);
 }
@@ -511,13 +514,15 @@ fn control_a2c_raise_rooted_paths_reach_both_subscribers() {
 fn a2c_publisher_insert_lists_both_subscriber_first_hops() {
     let doc = digest(PUBLISHER_AL, FAN_SUBSCRIBER_AL, "OnX");
     let eff = db_insert(entry(&doc, "OnX"));
-    let got = via_paths(eff);
+    let mut got = via_paths(eff);
+    got.sort();
     let mut f = Vec::new();
-    for to in ["HandleOnX", "HandleOnX2"] {
-        let want = vec![format!("event-dispatch:OnX->{to}")];
-        if !got.contains(&want) {
-            f.push(format!("viaPaths {got:?} has no {want:?}"));
-        }
+    let want: Vec<Vec<String>> = ["HandleOnX", "HandleOnX2"]
+        .iter()
+        .map(|to| vec![format!("event-dispatch:OnX->{to}")])
+        .collect();
+    if got != want {
+        f.push(format!("viaPaths (sorted) {got:?} (want exactly {want:?})"));
     }
     event_hops_carry_onx_id(eff, &mut f);
     if eff["evidence"]["sourceKind"] != "source" {

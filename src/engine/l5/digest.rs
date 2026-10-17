@@ -860,8 +860,9 @@ struct ProofOutcome {
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
 /// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
 /// whose class is `f`'s, every link path from that state down to the seed whose
-/// FIRST edge is `f`'s first hop ([`is_first_hop`]: its firing operation for a
-/// trigger-first fact, else its callsite; the witness's first-hop contract).
+/// FIRST edge is `f`'s first hop ([`is_first_hop`] over [`fact_first_hop`]: its
+/// firing operation for a trigger-first fact, its event id for an event-first
+/// fact, else its callsite; the witness's first-hop contract).
 /// Each proof is a complete path from `root`, so it holds in `root`'s frame by
 /// construction. Breadth-first by length; a path never revisits a STATE (it may
 /// revisit a routine). Limits as the BFS: `MAX_DEPTH` edges, `MAX_STATES`
@@ -1192,7 +1193,8 @@ fn reconstruct_witness_paths<'i>(
 
     // The first hop's identity (#96 D5, #98 D2): see `fact_first_hop`.
     let Some(first_hop) = fact_first_hop(fact) else {
-        // first-hop-not-found (no first-hop id) → detail = via (callsiteId absent).
+        // first-hop-not-found (no first-hop id at all: no op, event or call
+        // site, see `fact_first_hop`) → detail = via.
         return WitnessOutcomeExt {
             paths: Vec::new(),
             truncated: false,
@@ -1258,36 +1260,6 @@ fn reconstruct_witness_paths<'i>(
         parent: 0,
         depth: 0,
     }];
-
-    // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
-    let mut seed_pairs: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
-    for &edge in &first_edges {
-        if !edge_has_hop(edge) {
-            continue;
-        }
-        let Some(to) = edge_to(edge) else {
-            continue;
-        };
-        seed_pairs.push((to, edge));
-    }
-
-    // seed-sort by routine (`.cmp`, stable). witness.ts:276 uses `(a,b)=> a.routine<b.routine?-1:1`
-    // — an empirical V8 2000-array stress test confirmed V8-stable-preserves-equal-key-order for
-    // this `?-1:1` comparator, so Rust's stable `.cmp` (which returns Equal on a tie) is CORRECT
-    // and preserves typedEdges-insertion order for equal-routine seeds. Do NOT change to `?-1:1`.
-    seed_pairs.sort_by(|a, b| a.0.cmp(b.0));
-
-    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-    for (routine, edge) in seed_pairs {
-        let idx_node = arena.len();
-        arena.push(Node {
-            routine,
-            edge: Some(edge),
-            parent: 0, // seed: no parent
-            depth: 1,
-        });
-        queue.push_back(idx_node);
-    }
 
     // Helper: build the per-path visited set by walking the parent chain.
     // Uses &str references into arena strings — no String allocation.
@@ -1401,6 +1373,58 @@ fn reconstruct_witness_paths<'i>(
         }
         visited
     });
+
+    // Collect seed (routine, edge) pairs so we can sort before pushing to arena.
+    //
+    // An EVENT first hop (#98) seeds only subscribers in `valid_nodes`. Every
+    // subscriber of the event runs, so the write the fact names came from a
+    // subscriber that reaches a carrier. A subscriber that cannot reach one,
+    // opaque or not, is not a witness of THIS write: seeding it would report
+    // a bogus opaque boundary (sorted before the real, longer path) or set
+    // `truncated` through its unrelated out-edges at a cut. `valid_nodes`
+    // holds every carrier, so a writing subscriber is always kept.
+    //
+    // Call-site and op seeds skip the prune, as before: the candidate edges
+    // of ONE call site (interface dispatch) are alternatives, only one runs,
+    // and the fact may come from either, so an opaque candidate there is an
+    // honest boundary.
+    //
+    // When every subscriber fails the prune there is no seed, and the result
+    // is `terminal-not-found`, not `first-hop-not-found`: the first hop WAS
+    // found (the check above runs on the unpruned `first_edges`); what is
+    // missing is a carrier below it.
+    let prune_seeds = matches!(first_hop, FirstHop::Event(_));
+    let mut seed_pairs: Vec<(&str, &SnapshotGraphEdge)> = Vec::new();
+    for &edge in &first_edges {
+        if !edge_has_hop(edge) {
+            continue;
+        }
+        let Some(to) = edge_to(edge) else {
+            continue;
+        };
+        if prune_seeds && !valid_nodes.contains(to) {
+            continue;
+        }
+        seed_pairs.push((to, edge));
+    }
+
+    // seed-sort by routine (`.cmp`, stable). witness.ts:276 uses `(a,b)=> a.routine<b.routine?-1:1`
+    // — an empirical V8 2000-array stress test confirmed V8-stable-preserves-equal-key-order for
+    // this `?-1:1` comparator, so Rust's stable `.cmp` (which returns Equal on a tie) is CORRECT
+    // and preserves typedEdges-insertion order for equal-routine seeds. Do NOT change to `?-1:1`.
+    seed_pairs.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for (routine, edge) in seed_pairs {
+        let idx_node = arena.len();
+        arena.push(Node {
+            routine,
+            edge: Some(edge),
+            parent: 0, // seed: no parent
+            depth: 1,
+        });
+        queue.push_back(idx_node);
+    }
 
     loop {
         // Every push to `found` is followed by this check, so the cut is the
@@ -1591,7 +1615,7 @@ fn reconstruct_witness_paths<'i>(
         // - an opaque child cannot occur: a child is a non-seed, and the
         //   reachability prune above (`valid_nodes`) keeps only ancestors of a
         //   carrier, while an opaque boundary has no out-edge and no direct
-        //   fact (only a seed skips the prune);
+        //   fact (only a call-site or op seed skips the prune);
         // - any other child leads only to deeper paths.
         // So the node runs the same eligibility filters without pushing, and
         // an eligible edge counts as a dropped path. A dead branch that only
@@ -2717,8 +2741,8 @@ fn detail_json(detail: &[(String, String)]) -> String {
 ///     `fact_equivalent`) and `table`'s `temp_state` (read directly in the loop for
 ///     the physical-write filter), plus every other extra field the (currently
 ///     unread-elsewhere) variants carry — over-included defensively.
-///   - `witness_callsite_id`, the temp class (in `extra`) and the `fact_equivalent`
-///     fields — also read by `enumerate_proofs` (#69 D3), which is why equal
+///   - the three first-hop ids (`fact_first_hop`), the temp class (in `extra`) and
+///     the `fact_equivalent` fields — also read by `enumerate_proofs` (#69 D3), which is why equal
 ///     identities still have equal witnesses.
 ///   - `detail` (the computed `effect_detail_of` output) — folded into `dedupe_key`'s
 ///     grouping key, so two facts differing only in a detail field must NOT collapse.
@@ -6634,5 +6658,107 @@ codeunit 50410 DupProducer
             "cap 256 holds only Hz: {wide:?}"
         );
         assert_ne!(capped, wide[..1], "no prefix when one run is incomplete");
+    }
+
+    /// Root publishes `EV`; each name in `subs` is a subscriber. Returns the
+    /// witness of Root's inherited, event-first insert into T at `cap`.
+    fn event_witness(
+        snap: &mut CapabilitySnapshot,
+        subs: &[&str],
+        cap: usize,
+    ) -> WitnessOutcomeExt {
+        const EV: &str = "app/Codeunit/1/event/onx";
+        for s in subs {
+            snap.typed_edges.push(event_edge("Root", s, EV));
+        }
+        let mut f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            None,
+            SnapTempState::Known { value: false },
+        );
+        f.witness_first_hop_event_id = Some(EV.to_string());
+        let idx = build_fingerprint_indexes(snap);
+        reconstruct_witness_paths(
+            "Root",
+            &f,
+            &idx,
+            cap,
+            &mut HopCache::default(),
+            &ValidNodesCache::default(),
+        )
+    }
+
+    fn opaque_coverage(s: &str) -> crate::engine::l5::snapshot::SnapshotCoverageRecord {
+        crate::engine::l5::snapshot::SnapshotCoverageRecord {
+            subject: s.to_string(),
+            direct_status: "unknown".to_string(),
+            inherited_status: "unknown".to_string(),
+            reasons: vec![],
+            unknown_targets: vec![],
+        }
+    }
+
+    /// #98 CR1: an opaque subscriber O (coverage `unknown`, no out-edge, no
+    /// direct fact) beside the writing subscriber W. Every subscriber runs, so
+    /// O is no witness of W's write: it is not seeded. Unpruned, O's 1-hop
+    /// boundary path sorts before W's 2-hop path and is the only one cap 1
+    /// keeps, and W's dropped terminal sets `truncated`.
+    #[test]
+    fn event_first_hop_does_not_seed_an_opaque_subscriber() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("W", "opw")];
+        snap.coverage = vec![opaque_coverage("O")];
+        let out = event_witness(&mut snap, &["O", "W"], 1);
+        assert_eq!(out.paths.len(), 1, "{:?}", out.diagnostics);
+        let path = witness_hops_json(&out.paths[0].hops);
+        assert!(
+            path.contains("\"W\"") && !path.contains("\"O\""),
+            "the path goes through W: {path}"
+        );
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|(k, _)| k == "opaque-or-unresolved-boundary"),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(!out.truncated, "{:?}", out.diagnostics);
+        assert!(!out.incomplete, "{:?}", out.diagnostics);
+    }
+
+    /// #98 CR1: a non-writing subscriber N with an out-edge (to X, which
+    /// reaches no carrier) beside the writer W. N is not seeded, so the arena
+    /// holds only the sentinel and W, and cap 1 is not truncated. (A cut at 1
+    /// hop needs a 1-hop path, which for an event fact only an opaque seed
+    /// gave; see the test above.)
+    #[test]
+    fn event_first_hop_does_not_seed_a_subscriber_that_cannot_reach_the_write() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![ordinary_carrier("W", "opw")];
+        snap.typed_edges = vec![call_edge("N", "X", "cs-n")];
+        let out = event_witness(&mut snap, &["N", "W"], 1);
+        let arena_len = WITNESS_ARENA_LEN.with(|c| c.get());
+        assert_eq!(out.paths.len(), 1);
+        assert!(witness_hops_json(&out.paths[0].hops).contains("\"W\""));
+        assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
+        assert_eq!(arena_len, 2, "sentinel + W only; N is not seeded");
+    }
+
+    /// #98 CR1, the all-pruned case: the event edge exists but no subscriber
+    /// reaches a carrier. The first hop WAS found, so the honest diagnostic is
+    /// `terminal-not-found`, not `first-hop-not-found` nor an opaque boundary.
+    #[test]
+    fn event_first_hop_with_every_subscriber_pruned_is_terminal_not_found() {
+        let mut snap = empty_snapshot();
+        snap.coverage = vec![opaque_coverage("O")];
+        let out = event_witness(&mut snap, &["O"], HARD_PATH_CAP);
+        assert!(out.paths.is_empty());
+        assert!(out.incomplete);
+        assert_eq!(
+            out.diagnostics,
+            vec![("terminal-not-found".to_string(), None)]
+        );
     }
 }
