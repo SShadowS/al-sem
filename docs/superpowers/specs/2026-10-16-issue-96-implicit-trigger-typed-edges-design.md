@@ -101,6 +101,7 @@ Today a table or table-extension trigger's implicit `Rec` is `Known(false)` (`ir
 ### D6. Ordering and policy
 
 - **Ordering:** `ordering_inter` already maps the kind (`:365-377`, `:127`); an edge without a callsite is never a dominating caller, which is conservative.
+- **Ordering, call chains (T8, final-panel N-F1):** `reconstruct_call_chains` used to skip every hop with no call site, so a trigger hop made no `CallLink`. A trigger-first effect then looked root-local, and `inter_hb` compared its order id (from the trigger's frame) with an order id from the root's frame: a false happens-before, even `MustAllPaths`. The trigger hop now makes a link keyed by its firing operation (`QueryWitnessHop.operation_id`, internal), with the operation's order and `unordered-broadcast` sequencing. `build_canonical_key` uses the same operation in the hop's site slot.
 - **Policy:** the `via` value `"implicit-trigger"` is already legal (`predicate_fields.rs:133-140`).
 
 ### D7. Prose and oracles

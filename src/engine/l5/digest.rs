@@ -1718,6 +1718,11 @@ pub struct QueryWitnessHop {
     pub receiver_type: Option<String>,
     pub interface_name: Option<String>,
     pub candidate_count: Option<usize>,
+    /// #96: the firing record operation of an `implicit-trigger` hop (else
+    /// `None`). Internal: neither serializer emits it (N5). The ordering
+    /// engine keys the hop's call link by it, and `build_canonical_key` uses
+    /// it in the hop's site slot, because a trigger hop has no call site.
+    pub operation_id: Option<String>,
 }
 
 /// One projected hop with its `query_hop_json`, built once and shared (`Rc`) by
@@ -1843,6 +1848,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::ObjectRun {
             routine_id,
@@ -1884,6 +1890,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::EventDispatch {
             routine_id,
@@ -1905,6 +1912,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::VariableTypedCall {
             routine_id,
@@ -1930,6 +1938,7 @@ fn project_hop(
             receiver_type: Some(receiver_type.clone()),
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::InterfaceDispatch {
             routine_id,
@@ -1956,10 +1965,12 @@ fn project_hop(
             receiver_type: None,
             interface_name: Some(interface_name.clone()),
             candidate_count: Some(*candidate_count),
+            operation_id: None,
         }),
         WitnessHop::ImplicitTrigger {
             routine_id,
             routine_display,
+            operation_id,
             source_file,
             line,
             column,
@@ -1979,6 +1990,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: Some(operation_id.clone()),
         }),
     }
 }
@@ -2603,11 +2615,17 @@ fn build_canonical_key(
             .iter()
             .map(|hop| {
                 // QueryWitnessHop has NO edgeId → "". Trailing slot also "".
+                // #96: an implicit-trigger hop has no call site; its firing
+                // operation fills the site slot, so two trigger-first effects
+                // that differ only in the op keep distinct occurrence keys.
                 format!(
                     "{}>{}@{}/{}//",
                     hop.from_routine_id,
-                    hop.to_routine_id.clone().unwrap_or_default(),
-                    hop.callsite_id.clone().unwrap_or_default(),
+                    hop.to_routine_id.as_deref().unwrap_or_default(),
+                    hop.callsite_id
+                        .as_deref()
+                        .or(hop.operation_id.as_deref())
+                        .unwrap_or_default(),
                     hop.kind
                 )
             })
@@ -4531,9 +4549,39 @@ mod tests {
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         };
         let (_key, link) = build_canonical_key("R", &[vec![hop]], "callsite", "cs", "HTTP");
         assert_eq!(link, "A>B@/event-dispatch//");
+    }
+
+    /// #96: an implicit-trigger hop has no call site, so its firing op fills
+    /// the site slot. Two trigger-first effects that differ only in the op
+    /// must not share an occurrence key.
+    #[test]
+    fn link_signature_implicit_trigger_hop_is_keyed_by_its_op() {
+        let hop = |op: &str| QueryWitnessHop {
+            kind: "implicit-trigger",
+            from_routine_id: "A".to_string(),
+            from_display: "a".to_string(),
+            to_routine_id: Some("T".to_string()),
+            to_display: Some("t".to_string()),
+            callee_display: None,
+            callsite_id: None,
+            event_id: None,
+            target_app_guid: None,
+            edge_kind: Some("implicit-trigger".to_string()),
+            anchor: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            operation_id: Some(op.to_string()),
+        };
+        let (k1, link) =
+            build_canonical_key("R", &[vec![hop("op1")]], "operation", "w", "DB_INSERT");
+        assert_eq!(link, "A>T@op1/implicit-trigger//");
+        let (k2, _) = build_canonical_key("R", &[vec![hop("op2")]], "operation", "w", "DB_INSERT");
+        assert_ne!(k1, k2);
     }
 
     // -----------------------------------------------------------------------
@@ -5033,6 +5081,7 @@ mod tests {
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }
     }
 

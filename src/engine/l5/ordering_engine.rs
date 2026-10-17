@@ -421,6 +421,7 @@ pub fn compute_ordering(
                 via_paths,
                 snap,
                 callsite_by_id,
+                &index.op_by_id,
                 &index.resolution_by_callsite_id,
                 via_paths_truncated,
                 isolated_event_ids,

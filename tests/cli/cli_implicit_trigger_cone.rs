@@ -538,14 +538,16 @@ fn a1_digest_follows_the_implicit_trigger() {
     });
 }
 
-/// A1's precondition, true on today's code: L4 already sees the trigger writes
-/// A1 asks digest for, so A1's red is the typed graph, not the fixture.
+/// A1's precondition, true on master: L4 already sees the trigger writes A1
+/// asks digest for, so A1's red on master is the typed graph, not the fixture.
 ///
-/// Stated exception: `ModifyAllTrue`. The program engine has its `OnModify`
-/// edge (`alsem graph`: `via implicitTrigger`), but the model adapter drops it:
-/// `can_fire_trigger` (`src/program/model/program_calls.rs:340-342`) lists
-/// neither `modifyall` nor `deleteall`, so L4 has no `Mod Log` insert either.
-/// A1's bulk case is therefore red for that reason too.
+/// Stated exception, on master (before #96): `ModifyAllTrue`. The program
+/// engine had its `OnModify` edge (`alsem graph`: `via implicitTrigger`), but
+/// the model adapter dropped it: master's `can_fire_trigger` listed neither
+/// `modifyall` nor `deleteall`, so L4 had no `Mod Log` insert either, and A1's
+/// bulk case was red for that reason too. #96 admits both in the adapter
+/// (`src/program/model/program_calls.rs`, `can_fire_trigger`); this list still
+/// leaves the bulk case out, because it states the master condition.
 #[test]
 fn a1_precondition_l4_sees_the_trigger_writes() {
     let mut f = Vec::new();
@@ -927,9 +929,34 @@ table 70000 "Dep Trig"
     }
     keys { key(PK; Id) { Clustered = true; } }
 }
+
+codeunit 70002 "Dep Ops"
+{
+    procedure DoValidate()
+    var D: Record "Dep Trig";
+    begin
+        D.Validate(Amount, 1);
+    end;
+
+    procedure DoInsert()
+    begin
+        InsertLog();
+    end;
+
+    local procedure InsertLog()
+    var L: Record "Dep Log";
+    begin
+        L.Id := 2;
+        L.Insert();
+    end;
+}
 "#;
 
-/// Line 6, column 8 (0-based) is `D.Validate(Amount, 1);`.
+/// Line 6, column 8 (0-based) is `D.Validate(Amount, 1);`. `ValidateViaDep`
+/// reaches the dependency's `OnValidate` through a DEPENDENCY-origin trigger
+/// edge (`Dep Ops.DoValidate` fires it); `InsertViaDep` reaches "Dep Log"
+/// through a dependency-origin CALL (`DoInsert` -> `InsertLog`), the
+/// non-trigger control.
 const WS6_AL: &str = r#"codeunit 50396 "Ws Caller"
 {
     procedure ValidateDep()
@@ -937,6 +964,18 @@ const WS6_AL: &str = r#"codeunit 50396 "Ws Caller"
         D: Record "Dep Trig";
     begin
         D.Validate(Amount, 1); // @dep-validate
+    end;
+
+    procedure ValidateViaDep()
+    var Ops: Codeunit "Dep Ops";
+    begin
+        Ops.DoValidate();
+    end;
+
+    procedure InsertViaDep()
+    var Ops: Codeunit "Dep Ops";
+    begin
+        Ops.DoInsert();
     end;
 }
 "#;
@@ -952,7 +991,7 @@ fn write_cross_app_workspace(dir: &Path) {
     .unwrap();
     std::fs::write(dir.join("src/Ws.al"), WS6_AL).unwrap();
     let symbols = format!(
-        r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":70000,"Name":"Dep Trig","Fields":[{{"Id":1,"Name":"Id","TypeDefinition":{{"Name":"Integer"}}}},{{"Id":2,"Name":"Amount","TypeDefinition":{{"Name":"Decimal"}}}}]}},{{"Id":70001,"Name":"Dep Log","Fields":[{{"Id":1,"Name":"Id","TypeDefinition":{{"Name":"Integer"}}}}]}}],"AppId":"{DEP_GUID}","Name":"Dep96","Publisher":"probe","Version":"1.0.0.0"}}"#
+        r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":70000,"Name":"Dep Trig","Fields":[{{"Id":1,"Name":"Id","TypeDefinition":{{"Name":"Integer"}}}},{{"Id":2,"Name":"Amount","TypeDefinition":{{"Name":"Decimal"}}}}]}},{{"Id":70001,"Name":"Dep Log","Fields":[{{"Id":1,"Name":"Id","TypeDefinition":{{"Name":"Integer"}}}}]}}],"Codeunits":[{{"Id":70002,"Name":"Dep Ops","Methods":[{{"Name":"DoValidate","Parameters":[]}},{{"Name":"DoInsert","Parameters":[]}}]}}],"AppId":"{DEP_GUID}","Name":"Dep96","Publisher":"probe","Version":"1.0.0.0"}}"#
     );
     let pkgs = dir.join(".alpackages");
     std::fs::create_dir_all(&pkgs).unwrap();
@@ -1024,6 +1063,112 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
             cond: "unconditional-on-success",
         },
     );
+    assert!(f.is_empty(), "{}", f.join("\n"));
+}
+
+/// A `facts: inherited` rule for an insert into the dependency's "Dep Log".
+const DEP_LOG_INSERT_POLICY: &str = r#"version: 1
+defaults:
+  onUnknown: fail-open
+  requireCoverage: any
+rules:
+  - id: dep-log-insert
+    title: "Dep Log insert"
+    severity: high
+    when:
+      capability.op: insert
+      capability.resource.table.name: "Dep Log"
+    facts: inherited
+"#;
+
+/// A6, final-panel S8: a trigger edge that starts in DEPENDENCY code.
+/// `ValidateViaDep` calls the dependency's `Dep Ops.DoValidate`, which does
+/// `D.Validate(Amount, 1)` on the dependency's own "Dep Trig"; its
+/// `OnValidate` inserts "Dep Log". That trigger edge is not in the model's
+/// `calls` (cut to workspace callers): it reaches the cone only as an
+/// injected typed edge (`build_cross_app_base`'s `dep_calls`). The cross-app
+/// detector context's cone must carry the insert to `ValidateViaDep`.
+///
+/// Observed through `policy check`, the public consumer of the cross-app
+/// detector context's cone (`ConeDerivedStore` is crate-private there): a
+/// `facts: inherited` rule on "Dep Log" inserts finds `ValidateViaDep`, like
+/// the non-trigger control `InsertViaDep` (`DoInsert` -> `InsertLog`) and the
+/// workspace-origin trigger `ValidateDep`. Single-app finds none of them
+/// (precondition: the facts come from the dependency).
+///
+/// Digest is NOT asserted for the two dependency-origin shapes: the cross-app
+/// digest snapshot is composed from the model's cut `calls`, so it misses
+/// EVERY dependency-origin edge, a call as much as a trigger (pre-existing,
+/// see `.agent/issue-96/t8.md`, "F1 root cause", and the ledger's discovery).
+#[test]
+fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
+    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    write_cross_app_workspace(&ws);
+    let policy = tmp.path().join("policy.yaml");
+    std::fs::write(&policy, DEP_LOG_INSERT_POLICY).unwrap();
+    let policy = policy.to_string_lossy().to_string();
+
+    let run = |single_app: bool| -> Vec<u64> {
+        let out = run_policy_check(&PolicyCheckOptions {
+            workspace: &ws,
+            policy_path: Some(&policy),
+            no_policy: false,
+            format: "json",
+            out: None,
+            deterministic: true,
+            strict: false,
+            driver_version: "t",
+            single_app,
+        });
+        let text = out.text.unwrap_or_else(|| {
+            panic!(
+                "policy check: exit {} {:?}",
+                out.exit_code, out.stderr_lines
+            )
+        });
+        let doc: Value = serde_json::from_str(&text).expect("policy json");
+        let mut lines: Vec<u64> = doc["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .filter(|x| x["primaryLocation"]["sourceUnitId"] == "ws:src/Ws.al")
+            .map(|x| {
+                x["primaryLocation"]["range"]["startLine"]
+                    .as_u64()
+                    .unwrap_or(u64::MAX)
+            })
+            .collect();
+        lines.sort_unstable();
+        lines
+    };
+    let decl = |name: &str| -> u64 {
+        let needle = format!("procedure {name}()");
+        WS6_AL
+            .lines()
+            .position(|l| l.contains(&needle))
+            .unwrap_or_else(|| panic!("{name}: not in WS6_AL")) as u64
+    };
+    let want = vec![
+        decl("ValidateDep"),
+        decl("ValidateViaDep"),
+        decl("InsertViaDep"),
+    ];
+    let mut f = Vec::new();
+    let cross = run(false);
+    if cross != want {
+        f.push(format!(
+            "cross-app: dep-log-insert findings at lines {cross:?}, want {want:?} \
+             (ValidateDep, ValidateViaDep, InsertViaDep)"
+        ));
+    }
+    let single = run(true);
+    if !single.is_empty() {
+        f.push(format!(
+            "precondition: single-app finds {single:?}, want none"
+        ));
+    }
     assert!(f.is_empty(), "{}", f.join("\n"));
 }
 
@@ -1242,4 +1387,139 @@ fn d1_binds_the_trigger_rec_to_the_firing_op() {
         .map(|x| (x.severity.as_str(), x.root_cause.as_str()))
         .collect();
     assert!(f.is_empty(), "{}\nall d1 findings: {all:#?}", f.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Ordering keeps the trigger hop in the call chain (final-panel N-F1).
+// ---------------------------------------------------------------------------
+
+/// `O Trig`'s `OnValidate` makes an HTTP call as its first operation. In
+/// `LateIo` the trigger fires AFTER `DoCommit()`; in `EarlyIo` BEFORE it.
+/// `Noop()` makes `DoCommit()`'s order in `LateIo` larger than the HTTP
+/// call's order inside `OnValidate`, which is what the erased hop compared.
+const ORDER_SRC: &str = r#"table 50351 "O Trig"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; Decimal)
+        {
+            trigger OnValidate()
+            var
+                Client: HttpClient;
+                Resp: HttpResponseMessage;
+            begin
+                Client.Get('https://example.test/t', Resp);
+            end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 50352 "O Caller"
+{
+    procedure Noop()
+    begin
+    end;
+
+    procedure DoCommit()
+    begin
+        Commit();
+    end;
+
+    procedure LateIo()
+    var T: Record "O Trig";
+    begin
+        Noop();
+        DoCommit();
+        T.Validate(Amount, 1);
+    end;
+
+    procedure EarlyIo()
+    var T: Record "O Trig";
+    begin
+        T.Validate(Amount, 1);
+        DoCommit();
+    end;
+}
+"#;
+
+/// Every label an effect carries (`guarantees` and `scopedGuarantees`).
+fn labels(eff: &Value) -> Vec<String> {
+    let plain = eff["guarantees"].as_array().into_iter().flatten();
+    let scoped = eff["scopedGuarantees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|g| &g["label"]);
+    plain
+        .chain(scoped)
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// #96 final-panel N-F1. A trigger hop has no call site, and the ordering
+/// engine used to drop it from the call chain. The trigger's HTTP call then
+/// looked root-local, and its order inside `OnValidate` was compared with
+/// `DoCommit()`'s order in the root: a false "HTTP before commit" in `LateIo`.
+/// The hop is now a call link keyed by the firing op (`T.Validate`), so
+/// `LateIo` has no `EXTERNAL_IO_BEFORE_COMMIT`. `EarlyIo` keeps it (the HTTP
+/// call really runs before the commit), which shows the label sees the
+/// trigger's HTTP effect at all.
+#[test]
+fn ordering_keeps_the_trigger_hop_in_the_call_chain() {
+    let tmp = tempfile::Builder::new()
+        .prefix("alsem-96-ord-")
+        .tempdir()
+        .expect("create scratch ws");
+    std::fs::create_dir_all(tmp.path().join("src")).expect("create src dir");
+    std::fs::write(tmp.path().join("app.json"), APP_JSON).expect("write app.json");
+    std::fs::write(tmp.path().join("src").join("O.al"), ORDER_SRC).expect("write al source");
+
+    let mut f = Vec::new();
+    for single_app in [true, false] {
+        let doc = digest(tmp.path(), "src/O.al", single_app);
+        no_incoherence(&doc, &mut f);
+        for (root, want) in [("LateIo", false), ("EarlyIo", true)] {
+            let e = entry(&doc, root);
+            let effects: Vec<&Value> = e["effects"].as_array().into_iter().flatten().collect();
+            let http: Vec<&&Value> = effects
+                .iter()
+                .filter(|x| {
+                    x["type"] == "HTTP"
+                        && via_paths(x).iter().any(|p| {
+                            p.first().is_some_and(|h| {
+                                h["kind"] == "implicit-trigger"
+                                    && h["toDisplay"]
+                                        .as_str()
+                                        .is_some_and(|d| d.ends_with("OnValidate"))
+                            })
+                        })
+                })
+                .collect();
+            let commits = effects.iter().filter(|x| x["type"] == "COMMIT").count();
+            if http.len() != 1 || commits != 1 {
+                f.push(format!(
+                    "[single_app={single_app}] {root}: precondition: want 1 HTTP via the \
+                     trigger and 1 COMMIT, got {} and {commits}",
+                    http.len()
+                ));
+                continue;
+            }
+            let has = effects
+                .iter()
+                .any(|x| labels(x).iter().any(|l| l == "EXTERNAL_IO_BEFORE_COMMIT"));
+            if has != want {
+                let all: Vec<(String, Vec<String>)> = effects
+                    .iter()
+                    .map(|x| (x["type"].as_str().unwrap_or("?").to_string(), labels(x)))
+                    .collect();
+                f.push(format!(
+                    "[single_app={single_app}] {root}: EXTERNAL_IO_BEFORE_COMMIT {has}, \
+                     want {want}; labels: {all:?}"
+                ));
+            }
+        }
+    }
+    assert!(f.is_empty(), "{}", f.join("\n"));
 }

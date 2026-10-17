@@ -19,6 +19,7 @@ use crate::engine::l5::ordering::{
 };
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, SnapshotCallsiteEvidence, SnapshotCallsiteResolution,
+    SnapshotOperationEvidence,
 };
 use crate::engine::return_summary::RoutineReturnSummary;
 use crate::program::body::operation_order::{OperationOrder, ScopeFrame};
@@ -189,10 +190,14 @@ pub fn resolution_by_callsite_id(snap: &CapabilitySnapshot) -> ResolutionByCalls
     m
 }
 
+/// operationId → evidence lookup (the first row wins).
+pub type OperationByIdMap<'a> = HashMap<&'a str, &'a SnapshotOperationEvidence>;
+
 pub fn reconstruct_call_chains(
     via_paths: &[Vec<QueryWitnessHop>],
     snap: &CapabilitySnapshot,
     callsite_by_id: &CallsiteByIdMap,
+    operation_by_id: &OperationByIdMap,
     resolution_by_callsite_id: &ResolutionByCallsiteId,
     via_paths_capped: bool,
     isolated_event_ids: Option<&HashSet<String>>,
@@ -234,15 +239,23 @@ pub fn reconstruct_call_chains(
 
             for hop_idx in 0..hops.len() {
                 let hop = &hops[hop_idx];
-                let Some(callsite_id) = hop.callsite_id.as_deref() else {
+                // #96: an implicit-trigger hop has no call site. Its firing
+                // record operation is the site: it keys the link and gives
+                // its order in the caller's frame. Without this link the
+                // trigger's effect looks root-local, and its order id (from
+                // the trigger's frame) is compared with the root's.
+                let (callsite_id, callsite_order) = if let Some(cs) = hop.callsite_id.as_deref() {
+                    (cs, callsite_by_id.get(cs).and_then(|c| c.order))
+                } else if hop.kind == "implicit-trigger"
+                    && let Some(op) = hop.operation_id.as_deref()
+                {
+                    (op, operation_by_id.get(op).and_then(|o| o.order))
+                } else {
                     continue;
                 };
 
                 let caller_routine_id = hop.from_routine_id.clone();
                 let callee_routine_id = hop.to_routine_id.clone().unwrap_or_default();
-
-                let cs_evidence = callsite_by_id.get(callsite_id).copied();
-                let callsite_order = cs_evidence.and_then(|c| c.order);
 
                 let mut frame_chain: Vec<ScopeFrame> = Vec::new();
                 if let Some(order) = callsite_order {
@@ -1879,5 +1892,147 @@ mod tests {
 
         let edge = inter_hb(&a, &b, "root", &snap);
         assert!(edge.is_none(), "alternative on kb → no edge");
+    }
+
+    // =========================================================================
+    // #96 (final-panel N-F1): an implicit-trigger hop is a call link.
+    // =========================================================================
+
+    fn evidence_order(order_id: u32) -> Option<OperationOrder> {
+        Some(OperationOrder {
+            order_id,
+            frame_id: 0,
+            on_success_path: true,
+            dominates_success_return: true,
+        })
+    }
+
+    fn hop(
+        kind: &'static str,
+        to: &str,
+        callsite_id: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> QueryWitnessHop {
+        QueryWitnessHop {
+            kind,
+            from_routine_id: "root".to_string(),
+            from_display: "root".to_string(),
+            to_routine_id: Some(to.to_string()),
+            to_display: Some(to.to_string()),
+            callee_display: None,
+            callsite_id: callsite_id.map(str::to_string),
+            event_id: None,
+            target_app_guid: None,
+            edge_kind: None,
+            anchor: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            operation_id: operation_id.map(str::to_string),
+        }
+    }
+
+    /// `root` does `Commit(); Helper(); T.Validate(...)` (orders 1, 2, 3 in
+    /// root's frame). `Helper` does an HTTP call; `OnValidate` writes as its
+    /// order 0, in the TRIGGER's frame. The write runs after the HTTP call, so
+    /// there must be no `write ≺ http` edge. With the trigger hop dropped from
+    /// the chain, the write looked root-local and its order 0 was compared
+    /// with Helper's call site order 2: a false `write ≺ http`.
+    #[test]
+    fn implicit_trigger_hop_is_a_call_link_keyed_by_its_operation() {
+        let mut snap = empty_snap();
+        snap.callsite_index.push(SnapshotCallsiteEvidence {
+            callsite_id: "csHelper".to_string(),
+            routine: "root".to_string(),
+            source_file: "f".to_string(),
+            start_line: 2,
+            start_column: 0,
+            end_line: 2,
+            end_column: 9,
+            callee_display: "Helper".to_string(),
+            control_context: Some("top-level".to_string()),
+            order: evidence_order(2),
+            under_asserterror: None,
+        });
+        snap.callsite_resolutions.push(SnapshotCallsiteResolution {
+            callsite_id: "csHelper".to_string(),
+            from: "root".to_string(),
+            callee_display: "Helper".to_string(),
+            dispatch_kind: "direct".to_string(),
+            status: "resolved".to_string(),
+            resolved_edges: vec![],
+            candidates: None,
+            open_world: None,
+            unresolved_candidates: None,
+            result_consumed: None,
+            under_asserterror: None,
+        });
+        snap.operation_index.push(SnapshotOperationEvidence {
+            operation_id: "opValidate".to_string(),
+            routine: "root".to_string(),
+            source_file: "f".to_string(),
+            start_line: 3,
+            start_column: 0,
+            end_line: 3,
+            end_column: 20,
+            display_text: "T.Validate".to_string(),
+            control_context: Some("top-level".to_string()),
+            order: evidence_order(3),
+            under_asserterror: None,
+        });
+        let callsite_by_id: CallsiteByIdMap = snap
+            .callsite_index
+            .iter()
+            .map(|c| (c.callsite_id.as_str(), c))
+            .collect();
+        let operation_by_id: OperationByIdMap = snap
+            .operation_index
+            .iter()
+            .map(|o| (o.operation_id.as_str(), o))
+            .collect();
+        let resolutions = resolution_by_callsite_id(&snap);
+        let chain = |h: QueryWitnessHop| {
+            reconstruct_call_chains(
+                &[vec![h]],
+                &snap,
+                &callsite_by_id,
+                &operation_by_id,
+                &resolutions,
+                false,
+                None,
+            )
+            .remove(0)
+        };
+
+        let write_chain = chain(hop(
+            "implicit-trigger",
+            "onValidate",
+            None,
+            Some("opValidate"),
+        ));
+        let http_chain = chain(hop("call", "helper", Some("csHelper"), None));
+
+        assert_eq!(write_chain.links.len(), 1, "the trigger hop is a link");
+        let link = &write_chain.links[0];
+        assert_eq!(link.callsite_id, "opValidate");
+        assert_eq!(link.callsite_order.as_ref().map(|o| o.order_id), Some(3));
+        assert_eq!(link.dispatch_sequencing, "unordered-broadcast");
+
+        let occ = |id: &str, routine: &str, chain: CallChain| OccurrenceWithChain {
+            occurrence_id: id.to_string(),
+            terminal_routine_id: routine.to_string(),
+            terminal_op: Some(ordered_op(id, 0, true, vec![frame(0, -1, "root", None)])),
+            terminal_routine_ops: vec![],
+            chain,
+        };
+        let write = occ("write", "onValidate", write_chain);
+        let http = occ("http", "helper", http_chain);
+
+        assert!(
+            inter_hb(&write, &http, "root", &snap).is_none(),
+            "the trigger's write runs after Helper's HTTP call: no write ≺ http"
+        );
+        let edge = inter_hb(&http, &write, "root", &snap).expect("http ≺ write");
+        assert_eq!(edge.quantifier, Quantifier::MaySomePath);
     }
 }
