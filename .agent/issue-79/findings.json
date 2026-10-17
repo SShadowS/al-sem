@@ -1,0 +1,562 @@
+[
+ {
+  "id": "S1",
+  "source": "opus",
+  "round": 1,
+  "file": "src/engine/l5/digest_cli.rs",
+  "line": 466,
+  "severity": "critical",
+  "text": "A diff file with no routine spans is dropped as diff-file-unmatched before any declaration pass, so field/global changes in routine-less table/tableextension files are never resolved.",
+  "disposition": "fixed",
+  "evidence": "D4: DeclarationSpanIndex built beside RoutineSpanIndex; diff-file-unmatched only when a file has neither routine nor declaration spans (replaces the guard at digest_cli.rs:466-472). A1e (declaration-only table file) and A3c (tableextension in its own file); break 16.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2",
+  "source": "sol+opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 35,
+  "severity": "important",
+  "text": "A3 could not discriminate F2 from xRec: both accesses sat in OnModify.",
+  "disposition": "fixed",
+  "evidence": "A3 now has OnModify (bare only) and OnDelete (xRec only), each asserted; breaks 9 and 10.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 94,
+  "severity": "important",
+  "text": "this.G was missed, and the claim that a shadowed global is unreachable contradicts the resolver's self-qualified handling (receiver.rs:2387-2406, 2536-2551).",
+  "disposition": "fixed",
+  "evidence": "D3 binder records this.X for object globals regardless of local shadows; A2 ThisUse (local PostCount + this.PostCount) is a root; break 6.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4",
+  "source": "sol",
+  "round": 1,
+  "file": "src/program/body/ir_walk.rs",
+  "line": 2432,
+  "severity": "important",
+  "text": "Named-return bindings are missing from the model lists D4 trusted, so a global non-reader could be rooted and a named-return record reader missed.",
+  "disposition": "fixed",
+  "evidence": "D3 binder resolves in the resolver's lexical order (receiver.rs:3640-3657) including the named return; A2d (named-return PostCount not rooted; named-return record H rooted by the field); break 7.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5",
+  "source": "sol",
+  "round": 1,
+  "file": "src/program/model/record_types.rs",
+  "line": 213,
+  "severity": "important",
+  "text": "The page-extension own-table rule ignored the extension's own SourceTable, unlike receiver.rs:2748-2755.",
+  "disposition": "fixed",
+  "evidence": "D4 own table: PageExtension uses its OWN SourceTable if declared, else the base page's; A3d two-table regression; break 14. Revision 3: the own table is no longer derived by D4 at all; R3 types Rec/xRec through the resolver's infer_implicit_rec (receiver.rs:2706-2810, own SourceTable first for a PageExtension) and implicit_rec_table_id is made to delegate to the same rule (D3 'PageExtension SourceTable split'). Revision 4: D3 'PageExtension SourceTable split' makes implicit_rec_table_id delegate to the per-kind rule; if alc accepts SourceTable on a page extension, A3d gains that case with its own break, otherwise the two rules are identical on valid code and A7 (byte-identical) is the pin. (The earlier 'A3d two-table regression; break 14' evidence was stale and is superseded.)",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S6",
+  "source": "sol",
+  "round": 1,
+  "file": "src/program/model/record_types.rs",
+  "line": 234,
+  "severity": "important",
+  "text": "An unresolved declared Rec/xRec is stamped with the own-table id, and global promotion ignores non-record shadows, so F1 could treat the wrong symbol as a record of T.",
+  "disposition": "fixed",
+  "evidence": "D3 binder distinguishes Declared{T} (a declaration binds the receiver) from OwnTable (rec/xrec with NO declaration in scope); D4 never infers the own table from an unresolved explicit declaration; A7 unit cases. Revision 3: declared vs implicit Rec is decided by the resolver (Step 2 scope finds a declaration before Step 3b infer_implicit_rec, receiver.rs:829-845/1043-1045); no rec.table_id shortcut remains.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S7",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 92,
+  "severity": "important",
+  "text": "The traversal promise omitted attribute entry points and conflicted with the with exclusion.",
+  "disposition": "fixed",
+  "evidence": "D3 'The walk' enumerates every Stmt kind and Expr children; with bodies have an explicit conservative policy (both R's binding and implicit_fields); attribute arguments are a stated non-goal (they name objects/events); A7 covers each position.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S8",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 105,
+  "severity": "important",
+  "text": "Line-only routine precedence loses declaration fan-out on a line shared by a field header and its trigger.",
+  "disposition": "fixed",
+  "evidence": "D4 per-change rule: a declaration is touched when the change touches its span and the line is its first (header) line or lies in no routine span; A3b one-line case roots the trigger directly AND fans out; break 12.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S9",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 98,
+  "severity": "important",
+  "text": "names included bare field arguments of other receivers' calls, enum type names and callee names, so F2 could root a same-named field of the wrong table; the false-positive table wrongly said 'only for globals'.",
+  "disposition": "fixed",
+  "evidence": "D3 implicit_fields excludes callee position, QualifiedEnum enum types, and arguments of Member-callee calls; false-positive table updated; A3d (RB.SetRange(Code) does not root table A's Code); break 15. Revision 3: R1 applies to bare names in every non-callee position (so Sink.Accept(Code) in a table routine records the implicit field, A3 'Sink'); R4 types the record receiver and treats only catalogued field-selector positions as (t, arg), not also as implicit fields; A3d puts the wrong-table non-reader in table A itself (RB.SetRange(Code,'x')), so break 16 can fail.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S10",
+  "source": "opus",
+  "round": 1,
+  "file": "crates/al-syntax/src/casing.rs",
+  "line": 1,
+  "severity": "important",
+  "text": "fold_identifier names were compared with ASCII-lowercased variable names, so non-ASCII globals produce a false declaration-unreferenced.",
+  "disposition": "fixed",
+  "evidence": "D3 binder compares with fold_identifier / eq_fold_identifier on both sides; A2e (global \u00c6ndring); break 8.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S11",
+  "source": "opus",
+  "round": 1,
+  "file": "src/program/model/extension_fields.rs",
+  "line": 44,
+  "severity": "important",
+  "text": "T, its name and the stableId app guid were undefined when a tableextension's base table is unresolved.",
+  "disposition": "fixed",
+  "evidence": "D4: T known by name only (extends_target_name), table_matches falls back to folded name equality, stableId omitted; A3e (--single-app, base unresolved); break 17.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S12",
+  "source": "sol+opus",
+  "round": 1,
+  "file": "src/program/model/record_types.rs",
+  "line": 133,
+  "severity": "important",
+  "text": "The codeunit TableNo non-goal rested on a wrong premise (pass 1 resolves the seeded Rec via TableNo), and report dataitem triggers lost bare-field roots without being listed.",
+  "disposition": "fixed",
+  "evidence": "D4 own table: R's rec record variable's resolved table_id first (covers TableNo codeunits and dataitem triggers), else the object own-table rule; the TableNo non-goal is removed. Revision 4 (re-raise): bare field names in a TableNo codeunit are a stated non-goal + discovery, consistent with the resolver's own Step 3a kind gate (receiver.rs:984-997); explicit Rec.F in a TableNo codeunit is covered via infer_implicit_rec's Codeunit branch (2776-2781).",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S13",
+  "source": "sol+opus",
+  "round": 1,
+  "file": "src/program/model/workspace.rs",
+  "line": 435,
+  "severity": "minor",
+  "text": "#[serde(skip)] is not valid on ModelRoutine, which derives only Debug, Clone.",
+  "disposition": "fixed",
+  "evidence": "D3: routine_references carries no serde attribute; ModelRoutine is not Serialize, so it is never serialized.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S14",
+  "source": "opus",
+  "round": 1,
+  "file": "crates/al-syntax/src/lower/mod.rs",
+  "line": 500,
+  "severity": "minor",
+  "text": "Declaration spans can nest (a split field contains leading complete fields; an XmlPort text node spans its element subtree).",
+  "disposition": "fixed",
+  "evidence": "D4 scans declaration spans linearly; XmlPort text nodes are excluded from declarations (stated limit).",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S15",
+  "source": "opus",
+  "round": 1,
+  "file": "crates/al-syntax/src/ir/expr.rs",
+  "line": 16,
+  "severity": "minor",
+  "text": "Member.member is raw text with its quotes.",
+  "disposition": "fixed",
+  "evidence": "D3: members are unquoted, doubled \"\" collapsed, then folded; A7 covers quoted members. Revision 4 (re-raise): D3 'One name normalization' \u2014 resolver identifier unquoting (outer quotes stripped, doubled \"\" collapsed; the function that indexes field names, node_extract.rs:698-707) then fold_identifier, applied to declaration names, Member.member (always normalized), selector args and bare names; A8 quoted member with escaped \"\"; break 6f. Revision 5 (re-raise): the normalization is the resolver's own key shape on both sides: outer-quote strip only (receiver::unquote_identifier, receiver.rs:3500-3508), inner escaped \"\" KEPT (as the lowerer and node_extract index it, index.rs:819-822/837-840), then fold_identifier; applied to Member.member, selector args, bare names and D2 declaration names; no collapsing anywhere; A8 escaped-quote case \"A\"\"B\" exercises member -> fields_named_in_table -> D2 key.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S16",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 120,
+  "severity": "minor",
+  "text": "Break 5 was not a well-defined change; break 8 depended on an unstated precondition.",
+  "disposition": "fixed",
+  "evidence": "Break 5 is now 'the binder does not record a Member's receiver expression'; A3b states the OnValidate body does not reference the field. Revision 4 (re-raise): break 5 now targets the path ParenlessUse uses: GCu.Run; lowers to Call{function: Member} (lower/mod.rs:2512-2526) and GCu is reached by the child walk into the callee Member's object (R1 row says so); break 5 = 'the walk does not descend into a callee Member's object expression'.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S17",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 111,
+  "severity": "minor",
+  "text": "F3 excluded tableextension modify(F) triggers.",
+  "disposition": "fixed",
+  "evidence": "F3 extended to tableextensions of T whose enclosing_member folds to f; A3c asserts the modify trigger is rooted; break 13.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S18",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 140,
+  "severity": "minor",
+  "text": "Human format did not specify values with spaces/quotes, order relative to the dependencies prefix line, nested kind, or dedup of #if-arm rootedBy items.",
+  "disposition": "fixed",
+  "evidence": "D5: string values printed as JSON literals, numbers bare; lines after existing preamble and before entries/no-entries line; nested objects flattened with dotted keys keeping their kind; rootedBy deduplicated on (kind, declaringObject, folded name); A5 asserts a value with spaces and quotes.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S19",
+  "source": "opus",
+  "round": 1,
+  "file": "src/engine/gate/run.rs",
+  "line": 197,
+  "severity": "minor",
+  "text": "The opt-in flag must be threaded through both the single-app and the cross-app assembly entries (the latter shared with analyze, events, policy check).",
+  "disposition": "fixed",
+  "evidence": "D3 names both entries (assemble_and_resolve_workspace_program, assemble_and_resolve_cross_app_program); digest passes true, others false; A6 assembles through the analyze entry in both modes; break 19.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N1",
+  "source": "sol",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 176,
+  "severity": "important",
+  "text": "A declared Rec must not redefine the implicit own table (revision 2 used any resolved rec record variable's table_id, so a declared Rec: Record B made xRec.Code match B in a table A routine).",
+  "disposition": "fixed",
+  "evidence": "Revision 3 removes the shortcut; Rec/xRec typing is the resolver's (declared \u2192 its type; implicit \u2192 infer_implicit_rec), per receiver.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N2",
+  "source": "sol",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 125,
+  "severity": "important",
+  "text": "Declared.table_name collapsed Record 18 and Record \"18\" to one string.",
+  "disposition": "fixed",
+  "evidence": "Revision 3 types receivers with the resolver (classify_type_text \u2192 ObjectRef::Id vs ::Name, receiver.rs:528-544) and keys fields by the physical table's model id; A3d covers Record 18 vs Record \"18\"; break 17.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N3",
+  "source": "sol+opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 131,
+  "severity": "important",
+  "text": "Report dataitem / XmlPort table-element names were missing from the binder's scope, under-rooting field reads through them.",
+  "disposition": "fixed",
+  "evidence": "Revision 3: R3 uses infer_receiver_type_for_expr, whose Step 2b types dataitem and table-element names (receiver.rs:886-895, routine-name guard included); A3e (report procedure reads SalesHeader.\"Status Posted\"); break 18.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N4",
+  "source": "opus",
+  "round": 2,
+  "file": "src/engine/l5/digest_cli.rs",
+  "line": 254,
+  "severity": "minor",
+  "text": "The boundary rule tested the change's line, so a deletion gap right after a trigger's end; touches neither the routine nor the declaration.",
+  "disposition": "fixed",
+  "evidence": "D4 per-change rule (c): for a deletion gap after line l, the declaration is touched unless the routine span contains both l and l+1; A3b gap case; break 14.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N5",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 139,
+  "severity": "minor",
+  "text": "this.GHeader.\"F\" / this.GHeader.SetRange(F, \u2026) have a Member receiver, so the binder recorded nothing.",
+  "disposition": "fixed",
+  "evidence": "Revision 3: R3 types the receiver expression with infer_receiver_type_for_expr, which handles this.G chains (infer_compound_member_receiver \u2192 infer_this_member); A2 ThisChain; break 6.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N6",
+  "source": "opus",
+  "round": 2,
+  "file": "src/engine/l5/digest_cli.rs",
+  "line": 477,
+  "severity": "minor",
+  "text": "A renamed declaration-only file with no hunks got no roots and no diagnostic.",
+  "disposition": "fixed",
+  "evidence": "D4: a pure rename with no hunks touches every declaration in the file, mirroring the routine rule at digest_cli.rs:477-482; A1e.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N7",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 20,
+  "severity": "minor",
+  "text": "The attribute non-goal reason was inaccurate: field-event subscribers name the field in [EventSubscriber(...,'<Field>',...)].",
+  "disposition": "fixed",
+  "evidence": "Non-goals now list field-keyed event subscribers as a known under-root, marked as a discovery.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N8",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 215,
+  "severity": "minor",
+  "text": "When #if duplicate declarations collapse to one rootedBy item, the anchor kept was unspecified.",
+  "disposition": "fixed",
+  "evidence": "D5: the item is anchored at the FIRST declaration in document order; A5.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N9",
+  "source": "claude (resolver-reuse study)",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 100,
+  "severity": "important",
+  "text": "Revision 2's hand-written binder duplicated ~600 lines of resolver binding rules and kept drifting (panel rounds 1-2); protected base globals (Step 2c) were also missed by D4's 'R.object_id == O.id'.",
+  "disposition": "fixed",
+  "evidence": "Revision 3 replaces it with a reference-collection pass in src/program/resolve/references.rs that calls the resolver's own scope/receiver functions (caller_scope_binding, infer_receiver_type_for_expr, implicit_field_target, base_protected_var_owner, fields_named_in_table), opt-in for digest; resolution kept identical (A7: goldens + byte-identical CDO histogram); protected globals covered (A2f, break 9). Study: .agent/issue-79/resolver-reuse.md. Revision 5: the extracted helper is implicit_table (table selection only), not implicit_field_target.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N10",
+  "source": "sol+opus",
+  "round": 3,
+  "file": "src/program/resolve/extract.rs",
+  "line": 493,
+  "severity": "important",
+  "text": "WithCtx::state() is Unknown for the whole routine if any with token appears, so R1 dropped bare implicit fields outside the with body.",
+  "disposition": "fixed",
+  "evidence": "D3 'with tracking for the pass': the pass keeps its own lexical with depth; depth 0 applies R1's implicit branch, inside a body R5; the resolver is unchanged; A3g (read before and after a with); break 6d. Revision 5: D3 Setup now says R3/R5 receiver typing gets its WithState from the pass's own depth (NoWithProven at depth 0, inside-with within a body); WithCtx is not reused or made public.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N11",
+  "source": "sol+opus",
+  "round": 3,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 177,
+  "severity": "important",
+  "text": "R4 handled only Record{Some(t)}; Record{None} selector args fell through to R1 (binding them to the caller's own table) and the method-only unresolved reader was lost.",
+  "disposition": "fixed",
+  "evidence": "R4 covers Record{None}: selector positions go to unresolved_fields and never through R1; A3f adds H.ModifyAll(\"Ext Flag\", true) as a method-argument-only reader; break 6e.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N12",
+  "source": "sol+opus",
+  "round": 3,
+  "file": "src/program/resolve/receiver.rs",
+  "line": 3624,
+  "severity": "important",
+  "text": "caller_scope_symbol returns MalformedDuplicate when #if arms declare a global with different types; R1 had no rule, so readers recorded nothing and a false declaration-unreferenced followed.",
+  "disposition": "fixed",
+  "evidence": "caller_scope_binding reports which tier bound and which tier is a duplicate; when only the global tier is a duplicate and no param/local/return binds, R1 records (own object, name); the resolver's own projection keeps declining; A2g; break 6c.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N13",
+  "source": "sol+opus",
+  "round": 3,
+  "file": "src/program/resolve/receiver.rs",
+  "line": 886,
+  "severity": "minor",
+  "text": "Break 18 (bare_ctx = None) cannot disable Step 2b dataitem typing, which is not gated on bare_ctx.",
+  "disposition": "fixed",
+  "evidence": "Break 18 now skips Step 2b for the procedure reader and separately passes bare_ctx = None for a new bare-field read in the dataitem's own trigger (Step 3a report branch, A3e). Revision 5 (re-raise): break 18 = skip Step 2b (procedure reader); break 18b = implicit_table(R) returns None for Report/ReportExtension (trigger's bare field); break 18c = R3 passes bare_ctx = None, pinned by an A8 Step 5 compound receiver (call-result chain GetHeader().\"Status Posted\").",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N14",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/resolve/receiver.rs",
+  "line": 1007,
+  "severity": "minor",
+  "text": "Extracting implicit_field_target from Step 3a would carry the routine-shadow guard and the uniqueness decline, contradicting the recall section.",
+  "disposition": "fixed",
+  "evidence": "R1 now calls implicit_table(R) (extracted Step 3a table selection only, same kind gate) and then fields_named_in_table; neither decline is in the pass. Revision 5: the refactor list names implicit_table; the stale implicit_field_target and WithCtx entries are removed; the title/status say revision 5.",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N15",
+  "source": "opus",
+  "round": 3,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 100,
+  "severity": "minor",
+  "text": "Break 6 (drop R2) cannot un-root ThisChain, which is typed through R3's compound this arm; and the app guid source for model ids/stableId was graph.apps, whose doc says dependency guids are empty (node.rs:13-14).",
+  "disposition": "fixed",
+  "evidence": "Break 6 lists only ThisUse; break 6b skips the this arm of compound typing for ThisChain. D3: model ids use the same app identity project_ir uses for ModelObject.id; A8 asserts pass ids equal ModelObject.id (workspace and, cross-app, a dependency table).",
+  "hash": "5587f49e8fc58316",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N16",
+  "source": "opus",
+  "round": 5,
+  "file": "docs/superpowers/specs/2026-10-17-issue-79-declaration-change-roots-design.md",
+  "line": 177,
+  "severity": "minor",
+  "text": "unquote_identifier belongs on raw token text only; bare QuotedIdentifier payloads and D2 VarDecl/FieldDecl names are already outer-stripped, so a second strip corrupts names like \"\"\"X\"\"\" (IR name \"\"X\"\"), breaking the 'same key on both sides' claim.",
+  "disposition": "fixed",
+  "evidence": "Applied after the round-5 cap (spec hash 3cedcade9ad44d26): the outer-quote strip applies only to raw text (Member.member, raw selector-argument text); IR names (QuotedIdentifier payloads, VarDecl.name/FieldDecl.name) get fold_identifier only; A8 includes the \"\"\"X\"\"\" shape. NOT reviewed by the panel (raised in the last round).",
+  "hash": "3cedcade9ad44d26",
+  "reviews": {
+   "sol": "unreviewed",
+   "opus": "unreviewed"
+  }
+ }
+]
