@@ -1,0 +1,658 @@
+[
+  {
+    "id": "S1",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 1128,
+    "severity": "critical",
+    "text": "Digest Case C and enumerate_proofs return first-hop-not-found when an inherited fact has no witness_callsite_id, which trigger facts never have, so A1 could never get a viaPath.",
+    "disposition": "fixed",
+    "evidence": "D5: inherited facts carry witness_first_hop_operation_id (set in retag from TypedOutEdge.operation_id); Case C and enumerate_proofs (incl. the PD first-hop check) select the first edge by operation_id; break (f).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1426,
+    "severity": "critical",
+    "text": "PdEdgeKey (kind, from, to, callsite, event) collides for two trigger edges from one caller to one trigger through different ops, tripping the PD arena debug_assert.",
+    "disposition": "fixed",
+    "evidence": "D2: PdEdgeKey gains operation_id on both the cone-link and snapshot sides; A4 and break (e).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1081,
+    "severity": "critical",
+    "text": "TypedOutEdge has no operation_id and its sort key is kind|callsite|event|to, so the op is discarded and D2's op-bound site had nothing to read; 'traversal unchanged' was false.",
+    "disposition": "fixed",
+    "evidence": "D2: TypedOutEdge gains operation_id in its sort key; build_typed_edge_graph copies it; bound_site/cross_edge read it; break (d).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/program/model/program_calls.rs",
+    "line": 1785,
+    "severity": "important",
+    "text": "The adapter marks every op other than Validate/Rename Maybe (Insert(true)/Modify(true) included), so 'Maybe = non-literal RunTrigger' was false and the conditional mark had no data path.",
+    "disposition": "fixed",
+    "evidence": "D1: TypedEdge.fires derived from the op (Validate/Rename always; Insert/Modify/Delete always on literal true, else maybe); RunTrigger captured for Insert too; D4 carries fires; D5 gives ImplicitTrigger an explicit conditionality arm (op control context + fires).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "opus r1",
+    "round": 1,
+    "file": ".../spec",
+    "line": 0,
+    "severity": "important",
+    "text": "'The program engine is untouched' was false: D2 edits ir_walk.rs.",
+    "disposition": "fixed",
+    "evidence": "Reworded: the byte-identical --program-call-graph-stats check is justified by no program-engine edge changing; ir_walk (model build) changes are stated.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "both r1",
+    "round": 1,
+    "file": ".../spec",
+    "line": 0,
+    "severity": "important",
+    "text": "D2 moves goldens the plan said must stay identical: serialized L2 recordVariables/tempState, r1a/r2a differentials, r3a2/r3a3 direct facts, possibly l4-summary-baseline, r4 over trigger fixtures.",
+    "disposition": "fixed",
+    "evidence": "Measurement plan 1 now predicts per fixture and per shape (D1 typed edges, D1/D3 inherited facts, D3 trigger-Rec known(false)->PD, Insert RunTrigger field, r4 triage).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "opus r1",
+    "round": 1,
+    "file": ".../spec",
+    "line": 0,
+    "severity": "important",
+    "text": "A3 did not pin D2's L4 binding (digest, cone and prove all read the cone).",
+    "disposition": "fixed",
+    "evidence": "A3 also asserts L4 query effects shows temp known(true); the A5 parity oracle's probe gains the A3/A4 shapes; break (b).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3400,
+    "severity": "important",
+    "text": "A dependency-free tempdir in cross-app mode never exercises the dependency trigger-edge injection path.",
+    "disposition": "fixed",
+    "evidence": "A6: a source-bearing dependency whose OnValidate writes, via the existing cross-app fixture mechanism; a missing mechanism goes to Not delivered with the reason. Final r1 (opus): extended with the dependency-origin shape (Dep Ops.DoValidate does D.Validate on its own table, called from the workspace); its write reaches the workspace caller's cross-app cone, asserted via run_policy_check (the public consumer of that cone); breaking the dep_calls injection for trigger edges only fails the test ([2,15] vs [2,9,15]).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l4/pd_solve.rs",
+    "line": 246,
+    "severity": "important",
+    "text": "The cost plan measured only the cone on CDO, missing the PD solve (every table-trigger Rec op becomes a producer) and digest witness enumeration.",
+    "disposition": "fixed",
+    "evidence": "Measurement 4: ALSEM_CONES_CENSUS cone + PD_PRODUCERS/STATES/LINKS/SOLVE_BYTES/SNAPSHOT_BYTES, analyze/digest/fingerprint wall time and peak, digest truncation/unmapped counters, on CDO and DO.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol r1",
+    "round": 1,
+    "file": ".../spec",
+    "line": 0,
+    "severity": "important",
+    "text": "A1-A3 lacked same-routine temp/real sites reaching one trigger, a forwarded receiver, and independent mutations of L4 binding, cone binding and witness reconstruction.",
+    "disposition": "fixed",
+    "evidence": "A4 (same routine, real+temp+second real Validate), A5 (forwarded var parameter), breaks (a)-(f) each independently.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "both r1",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1915,
+    "severity": "minor",
+    "text": "The new snapshot edge's callsite_id() must return None or the third pass mints bogus resolution rows.",
+    "disposition": "fixed",
+    "evidence": "D4 states callsite_id() returns None.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1316,
+    "severity": "minor",
+    "text": "derive_typed_edges silently continues on a missing anchor, so a cross-app trigger edge could vanish from the snapshot while the cone follows it.",
+    "disposition": "fixed",
+    "evidence": "D4: a trigger edge with a missing op anchor is emitted with no anchor, never dropped; A6 exercises it.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S13",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2085,
+    "severity": "minor",
+    "text": "Stale prose not listed: ir_walk.rs:2085-2087 and summary_runner.rs:784-786.",
+    "disposition": "fixed",
+    "evidence": "D7 lists both.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S14",
+    "source": "opus r1",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 2278,
+    "severity": "minor",
+    "text": "A1 asserted 'with the op anchor' but the JSON trigger hop has no operationId field.",
+    "disposition": "fixed",
+    "evidence": "A1 asserts the hop's anchor line and column.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S15",
+    "source": "sol r1",
+    "round": 1,
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2083,
+    "severity": "minor",
+    "text": "D2 scope unclear for xRec, codeunit OnRun, page/report triggers and caller-free triggers.",
+    "disposition": "fixed",
+    "evidence": "Non-goals state only table/table-extension trigger Rec changes; D3.4 states caller-free triggers stay PD roots whose facts remain physical (only the serialized temp state changes).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N1",
+    "source": "both r2",
+    "round": 2,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "important",
+    "text": "A4 required a separate viaPath per real Validate site, but the cone keeps one representative per fact key and digest filters to that first hop, so it could not pass.",
+    "disposition": "fixed",
+    "evidence": "A4 relaxed to exactly one viaPath anchored at a real op: the cone's choice by minimum distance, then the lowest first-hop TypedOutEdge sort key (op id compared as a string); pd_solve's first shortest link in the same order for the PD form; never the temporary op. rep_key does not distinguish them (shared callee entry). Separate per-op edges in the typed graph and PD arena are still asserted.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N2",
+    "source": "both r2",
+    "round": 2,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "important",
+    "text": "fires was undefined for ModifyAll/DeleteAll, whose triggers run once per matching row (possibly none).",
+    "disposition": "fixed",
+    "evidence": "D1: ModifyAll/DeleteAll are always Maybe; A1 checks Insert(true) unconditional, Insert(B) and ModifyAll(...,true) conditional, and an if-nested Validate conditional via the op context.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N3",
+    "source": "opus r2",
+    "round": 2,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The predicted Insert RunTrigger golden movement cannot happen: run_trigger is serde(skip).",
+    "disposition": "fixed",
+    "evidence": "Measurement plan: zero golden movement from capturing RunTrigger for Insert.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N4",
+    "source": "opus r2",
+    "round": 2,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "retag must set the new field for every edge (None for non-trigger) or a stale op id can leak via ..rep.clone(); the field's serialized shape movement was unpredicted.",
+    "disposition": "fixed",
+    "evidence": "D5: retag sets witness_first_hop_operation_id explicitly from edge.operation_id; skip_serializing_if None; digest memo identity includes it; the plan predicts it on trigger-first facts in r3a3 and snapshot facts.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N5",
+    "source": "opus r2",
+    "round": 2,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "D5 did not say the internal witness hop carries the op id needed for the op_ctx lookup.",
+    "disposition": "fixed",
+    "evidence": "D5: WitnessHop::ImplicitTrigger holds operation_id internally (not serialized).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-1",
+    "source": "both r3",
+    "round": 3,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 31,
+    "severity": "minor",
+    "text": "A4 named the wrong tie-break (minimum rep_key); the real sites share one rep, and the selection is by distance then first-hop edge sort key.",
+    "disposition": "fixed",
+    "evidence": "A4 now states the minimum distance then lowest TypedOutEdge sort key (string op ids), pd_solve's first shortest link for PD, never the temp op.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-2",
+    "source": "opus r3",
+    "round": 3,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "Leftovers: D1 placed the Insert fires shapes in A3 (now A1); the status line still said revision 2.",
+    "disposition": "fixed",
+    "evidence": "D1 says A1; status says revision 3.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review high + sonnet",
+    "round": 1,
+    "file": "src/engine/l5/d1_temp.rs",
+    "line": 126,
+    "severity": "important",
+    "text": "The production d1 temp resolver (d1_temp::cross_hop, and d1_liveness::classify_edge_param) has no implicit-trigger arm; T6 fixed only the test-only path_temp_resolve, so 3 CDO d1 findings still say 'temp state uncertain' and the resolvers disagree.",
+    "disposition": "fixed",
+    "evidence": "d1_liveness::classify_edge_param and d1_temp::cross_hop gain the implicit-trigger receiver arm through summary_runner::trigger_receiver_temp_state (one helper). Production d1 crosses trigger hops through classify_edge_param (cross_hop only seeds in-loop call sites, never trigger edges); breaking the liveness arm turns the new d1 detector test red, breaking cross_hop turns the lib parity tests red (t7.md).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review high",
+    "round": 1,
+    "file": "tests/temp_state/temp_state_path.rs",
+    "line": 532,
+    "severity": "important",
+    "text": "T6's tests pin the test-only resolver, not the production d1 use; removing the production binding keeps them green.",
+    "disposition": "fixed",
+    "evidence": "A d1 DETECTOR-level test drives the production pipeline across T.Validate/T.Insert(true) into a looping trigger: a real record gives a finding without '(temp state uncertain)', a temporary one is downgraded; proof in t7.md.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l4/pd_solve.rs",
+    "line": 351,
+    "severity": "important",
+    "text": "edge_reqs is looked up only by callsite, so the caller's own guard on the firing op is never conjoined for implicit-trigger edges (FrameGuards.by_site is keyed by op ids too).",
+    "disposition": "fixed",
+    "evidence": "Both the PD solve (pd_solve edge_reqs) and the non-PD cone path (capability_cone fact_cone_for_scc) look the caller's guard up by TypedOutEdge::site() (callsite, else the firing op id); the Skip-guard test and its two proofs are in t7.md.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l5/snapshot_full.rs",
+    "line": 191,
+    "severity": "important",
+    "text": "The CBOR/full snapshot fact serializer omits witnessFirstHopOperationId, so trigger-first facts lose first-hop identity there.",
+    "disposition": "fixed",
+    "evidence": "snapshot_full serializes witnessFirstHopOperationId like the JSON snapshot; no golden moved (no full-snapshot fixture has trigger edges).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l4/summary_runner.rs",
+    "line": 861,
+    "severity": "minor",
+    "text": "trigger_receiver_temp_state scans record_operations linearly inside the PD solve's hot loop.",
+    "disposition": "fixed",
+    "evidence": "record_op_by_id starts at index N (from the op id) and walks back over the Commit/Error calls before the op, with a full-scan fallback: a short walk-back, NOT O(1). The doc comment (summary_runner.rs ~:874) now says exactly that, and why a per-routine index was not built (memory per routine); the earlier O(1) claim is removed from code and register. Behaviour unchanged.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/program/model/program_calls.rs",
+    "line": 1793,
+    "severity": "minor",
+    "text": "fires and resolution have two sources of truth (adapter vs combined_graph re-derivation).",
+    "disposition": "fixed",
+    "evidence": "fires is computed once in the adapter (program_calls) and carried on the CallEdge; build_typed_edges copies it; acceptance tests still pin always/maybe.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review high",
+    "round": 1,
+    "file": "src/engine/l4/combined_graph.rs",
+    "line": 555,
+    "severity": "minor",
+    "text": "build_typed_edges makes several separate passes over workspace.routines.",
+    "disposition": "fixed",
+    "evidence": "build_typed_edges builds its per-routine maps in one loop.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR8",
+    "source": "code-review high",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-16-issue-96-implicit-trigger-typed-edges-design.md",
+    "line": 3,
+    "severity": "minor",
+    "text": "The spec cited the untracked investigation.md as evidence.",
+    "disposition": "fixed",
+    "evidence": "The status line now points to the committed ledger's Assumption probes and the committed register; it states the investigation note is not committed and that every relied-on claim is restated in the ledger.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "RS1",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "docs/OUTSTANDING.md",
+    "line": 126,
+    "severity": "minor",
+    "text": "OUTSTANDING still says argument-less Modify/Insert may fire and Insert's RunTrigger is not read.",
+    "disposition": "fixed",
+    "evidence": "docs/OUTSTANDING.md corrected to the measured trigger-firing truth (no argument / literal false fire nothing; literal true always; non-literal maybe; ModifyAll/DeleteAll maybe), citing #96.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "RS2",
+    "source": "sonnet review",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "capability_fact_sort_key does not include witness_first_hop_operation_id.",
+    "disposition": "refuted",
+    "evidence": "Output stays deterministic: the fact key already separates facts that differ in content; the first-hop op is a witness selection, chosen deterministically (minimum distance, then the lowest TypedOutEdge sort key), so two facts that differ only by it never coexist for one key.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-sol",
+    "source": "sol final r1",
+    "round": 1,
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1572,
+    "severity": "important",
+    "text": "The cross-app digest snapshot is composed from the cut resolved model without the injected dependency-origin edges, so a dependency-internal trigger reaches the cone but not the digest.",
+    "disposition": "refuted",
+    "evidence": "Refuted as a #96 defect: T8 root-caused it as GENERAL and pre-existing. build_cross_app_base (capability_cone.rs:3427-3474) keeps only workspace-origin calls in resolved.calls and sends EVERY dependency-origin call, of any kind, to injected typed edges, which compose_snapshot (snapshot.rs:1141-1147) never consumes. A probe on this branch shows a plain dependency-internal call (InsertViaDep -> Dep Ops.DoInsert -> InsertLog) loses its Dep Log insert in the cross-app digest exactly like the trigger shape (t8-a6probe.log). #96 adds no new loss; the cone (prove, fingerprint, detectors) carries the dependency-origin trigger write, pinned by the extended A6 with a discrimination break. The digest gap is filed as discovery and stated under Not delivered.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2-sol",
+    "source": "sol final r1",
+    "round": 1,
+    "file": "tests/cli/cli_implicit_trigger_cone.rs",
+    "line": 544,
+    "severity": "minor",
+    "text": "A precondition comment described the fixed ModifyAll/DeleteAll adapter gap as current.",
+    "disposition": "fixed",
+    "evidence": "Reworded as the pre-fix/master condition.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F1",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "src/engine/l5/ordering_inter.rs",
+    "line": 236,
+    "severity": "important",
+    "text": "The ordering engine never turned an implicit-trigger hop into a CallLink, so a trigger-first effect was treated as root-local and compared by order id against the root's frame, allowing a false happens-before (and a false WRITE_PENDING_AT_EXTERNAL_IO).",
+    "disposition": "fixed",
+    "evidence": "QueryWitnessHop carries the firing op internally; reconstruct_call_chains emits a link keyed by it (order from operation_index, unordered-broadcast sequencing); build_canonical_key uses the same op; an ordering test (Commit; Helper(HTTP); T.Validate with OnValidate writing) pins that the trigger write is not ordered before the HTTP call, and reverting the link emission fails it (t8.md).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F2",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "src/engine/l5/d1_graph.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "d1 misses a trigger fired directly inside a loop (an op is not a d1 seed; a trigger edge's loop_depth reads 0).",
+    "disposition": "deferred",
+    "evidence": "Pre-existing (predates #96); filed as a discovery.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F3",
+    "source": "opus final r1",
+    "round": 1,
+    "file": ".agent/issue-96/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The ledger's proofs, SHAs, gate results, register summary and T6/T7 timeline were missing.",
+    "disposition": "fixed",
+    "evidence": "Ledger filled at freeze: Base/Head SHAs (B 6b47f58d, H b4c28b39), the full timeline through T10 and the re-mint, the 13-row discrimination proof table, the register summary, and the gate results on b4c28b39 (all 4 exit 0, clean tree); sol's CR5 re-raise is recorded in the timeline.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F4",
+    "source": "opus final r1",
+    "round": 1,
+    "file": "CHANGELOG.md",
+    "line": 277,
+    "severity": "minor",
+    "text": "The CHANGELOG cost/finding numbers predated T7.",
+    "disposition": "fixed",
+    "evidence": "Replaced with the c4b5da61 re-measure (t5b.md): analyze 24.5 -> 49.8 s, primary 23.0 -> 47.0 s, digest 32.3 -> 80.2 s, peak flat 2.84 GB; findings unchanged since T5.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F5",
+    "source": "opus final r2",
+    "round": 2,
+    "file": "src/engine/l5/ordering_inter.rs",
+    "line": 589,
+    "severity": "minor",
+    "text": "A trigger link's unordered-broadcast sequencing sets has_event_broadcast_on_path, so a trigger-only path gets the reason event-subscriber-may and can be labelled EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN with no event involved.",
+    "disposition": "fixed",
+    "evidence": "inter_hb (ordering_inter.rs ~:820-850) separates a trigger broadcast (CallLink.hop_kind == implicit-trigger) from an event broadcast: both make the edge May; a trigger pushes implicit-trigger-may, only a real event pushes event-subscriber-may (both if both), so HAZARD #4 / EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN needs a real event. Twin unit tests; the break (trigger sets the event flag) fails the trigger test (t9.md). Commit 6332e578.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F6",
+    "source": "opus final r3",
+    "round": 3,
+    "file": ".agent/issue-96/ledger.md",
+    "line": 126,
+    "severity": "minor",
+    "text": "The ledger called the 2 T5c EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN items correct although the path is trigger-only, and T9 should remove them; no re-measure on 6332e578 was recorded.",
+    "disposition": "fixed",
+    "evidence": "T10 re-ran the digest on 6332e578: both items are gone and no other digest fact moved since t5c; the T5c ledger note is corrected to the label's meaning (a write and IO joined by an event hop).",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "N-F7",
+    "source": "opus final r4",
+    "round": 4,
+    "file": ".agent/issue-96/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The ledger register summary said 39 entries (omitting N-F6) and the T7 timeline bullet still said 'an O(1) op lookup'.",
+    "disposition": "fixed",
+    "evidence": "The summary counts 41 entries with N-F1..N-F7; the T7 bullet says 'a short walk-back op lookup (not O(1); see CR5)'; the r4 timeline line records this.",
+    "hash": "655bcff2ccb76b17",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
