@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 
-from .state import Ctx, append_audit, read_json
+from .state import Ctx, append_audit, read_json, write_json
 
 STALE_SECONDS = 30 * 60
 
@@ -58,8 +58,11 @@ def read(ctx: Ctx) -> Lock | None:
 
 
 def _write(ctx: Ctx, lk: Lock) -> None:
+    # Atomic: a reader in another process (the conductor, while the
+    # supervisor beats) must never see half a lease. Only `acquire`'s FIRST
+    # write is not this one, because it must be create-exclusive.
     ctx.write_guard("write lock")
-    ctx.paths.lock.write_text(json.dumps(asdict(lk), indent=2), encoding="utf-8")
+    write_json(ctx, ctx.paths.lock, asdict(lk))
 
 
 def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,

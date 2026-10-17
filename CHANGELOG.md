@@ -286,6 +286,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9 new tests in `scripts/agentflow/tests/test_cli_flow.py`; the suite is 294
   passed (was 285).
 
+- **agentflow: two processes can write one JSON file safely
+  (`scripts/agentflow/{state,lock}.py`).** This is step 2 of the parallel-issues
+  design and changes no behaviour of a single run.
+  - `write_json` wrote every file through one fixed temp name (`x.json.tmp`). Two
+    writers of one file shared that temp file, and one `os.replace` moved away
+    the file the other was replacing. Two real processes writing one file 200
+    times each failed with `WinError 32` within the first writes. The temp name
+    is now unique per call (`<name>.<pid>.<uuid>.tmp`), and a failed write
+    removes its temp file.
+  - On Windows, `os.replace` onto a file another process has open raises
+    `PermissionError`, and so does opening a file while another process
+    replaces it. A write and a read now retry that error 40 times, 50 ms apart
+    (2 s), then raise. The design asked for 5 retries at 100 ms on the write
+    and one on the read; measured with two processes, that still failed about
+    1 run in 15, and 2 s failed 0 of 60.
+  - `read_json` retries a parse error once. A file that is still bad on the
+    retry raises as before.
+  - `lock.beat` rewrote `.agent/lock.json` in place, so a reader in another
+    process (the conductor, while the supervisor beats) could see half a file.
+    Lease rewrites now go through `write_json`. `acquire`'s first write stays
+    create-exclusive.
+
+  6 new tests in `scripts/agentflow/tests/test_{state,lock}.py`, one of them with
+  two real processes; the suite is 300 passed (was 294).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

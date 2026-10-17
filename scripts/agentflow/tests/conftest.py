@@ -91,6 +91,48 @@ def repo_pair(tmp_path):
     return origin, clone
 
 
+CHILD_PROLOGUE = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+ROOT = Path(sys.argv[2])
+TAG = sys.argv[3]
+ARGS = sys.argv[4:]
+
+def barrier():
+    (ROOT / f"ready-{TAG}").write_text("")
+    while not (ROOT / "go").exists():
+        time.sleep(0.005)
+"""
+
+
+def run_concurrently(root: Path, body: str, tags, extra=(), timeout: float = 180):
+    """Run `body` in one real `python` process per tag, released together.
+
+    Each child gets `ROOT`, `TAG`, `ARGS` and `barrier()` from
+    `CHILD_PROLOGUE`, and must call `barrier()` right before the racy part.
+    The parent starts every child, waits until all are at the barrier, then
+    releases them. Returns `[(returncode, stdout, stderr), ...]` in tag order.
+    """
+    import textwrap
+    import time
+    code = CHILD_PROLOGUE + textwrap.dedent(body)
+    procs = [subprocess.Popen([sys.executable, "-c", code, str(SCRIPTS), str(root), str(t), *extra],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for t in tags]
+    deadline = time.monotonic() + timeout
+    while not all((root / f"ready-{t}").exists() for t in tags):
+        if any(p.poll() is not None for p in procs) or time.monotonic() > deadline:
+            break  # a child died before the barrier; its output says why
+        time.sleep(0.01)
+    (root / "go").write_text("")
+    out = []
+    for p in procs:
+        o, e = p.communicate(timeout=timeout)
+        out.append((p.returncode, o, e))
+    return out
+
+
 def commit_file(repo: Path, name: str, text: str, msg: str) -> str:
     (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(text)

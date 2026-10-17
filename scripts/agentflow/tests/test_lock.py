@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,24 @@ def test_beat_updates_heartbeat_and_release_removes(ctx):
     assert lock.read(ctx).heartbeat == 1_000_500.0
     lock.release(later)
     assert lock.read(ctx) is None
+
+
+def test_beat_rewrites_the_lease_through_the_atomic_writer(ctx, monkeypatch):
+    """A `beat` that wrote the lease in place let a reader in another process
+    see half a file. The supervisor beats while the conductor reads, so this
+    already happened with one run. The rewrite must be a temp file plus
+    `os.replace` onto the lease."""
+    lock.acquire(ctx, 8, "s1", 1)
+    real, targets = os.replace, []
+
+    def recording(src, dst):
+        targets.append(Path(dst))
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", recording)
+    lock.beat(Ctx(paths=ctx.paths, run_id="run-test", now=lambda: 1_000_500.0))
+    assert targets == [ctx.paths.lock]
+    assert lock.read(ctx).heartbeat == 1_000_500.0
 
 
 def test_fence_refuses_foreign_run(ctx):
