@@ -192,6 +192,7 @@
         "resourceKind": "transaction",
         "subject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
         "via": "event-dispatch",
+        "witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc",
         "witnessOperationId": "323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2"
       },
       {
@@ -211,6 +212,7 @@
         "resourceKind": "table",
         "subject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
         "via": "event-dispatch",
+        "witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc",
         "witnessOperationId": "323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op1"
       },
       {
@@ -236,7 +238,8 @@
         "provenance": "inherited",
         "resourceKind": "event",
         "subject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
-        "via": "event-dispatch"
+        "via": "event-dispatch",
+        "witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
       },
       {
         "confidence": "static",
@@ -598,7 +601,8 @@
       {
         "coverage": "complete",
         "derivedFromCapability": {
-          "op": "insert"
+          "op": "insert",
+          "witnessFirstHopEventId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
         },
         "kind": "required",
         "rights": [

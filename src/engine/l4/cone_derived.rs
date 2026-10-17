@@ -33,7 +33,8 @@
 //! ## Why the fold is byte-identical to the raw path
 //!
 //! `retag` (`capability_cone.rs`) rewrites ONLY `subject` / `provenance` / `via` /
-//! `witness_callsite_id`. No derived predicate above reads any of those four, so
+//! `witness_callsite_id` and the two first-hop ids (`witness_first_hop_operation_id`,
+//! `witness_first_hop_event_id`). No derived predicate above reads any of them, so
 //! folding the PRE-retag representative is equivalent by construction. The fold
 //! therefore runs at the exact `retag` call sites, over the exact same
 //! representatives (the singleton path's key-winner `best.values()`, the BFS
@@ -846,6 +847,7 @@ mod tests {
             witness_operation_id: None,
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         }
     }

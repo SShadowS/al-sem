@@ -50,8 +50,8 @@
 					"resourceId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000::OnAfterProcess::d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -66,15 +66,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -85,8 +85,8 @@
 					"via": "call",
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -109,8 +109,8 @@
 					"via": "self",
 					"resourceId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000::OnAfterProcess::d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -125,16 +125,17 @@
 						"kind": "literal",
 						"value": "https://example.test/notify"
 					},
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000::OnAfterProcess::d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -143,9 +144,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000::OnAfterProcess::d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -172,15 +174,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50001#286cfef4fb8de5396d3920d266b96550e0dfbeec1e622b269958aae4c2b671ae/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Post",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "content",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "content"
+						},
+						"kind": "http",
+						"method": "Post"
 					}
 				},
 				{
@@ -190,8 +192,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

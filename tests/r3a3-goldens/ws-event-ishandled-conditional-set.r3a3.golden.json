@@ -32,8 +32,8 @@
 					"resourceId": "dddddddd-dddd-dddd-dddd-dddddddddd01:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"witnessCallsiteId": "dddddddd-dddd-dddd-dddd-dddddddddd01:Codeunit:50000#52d4f6e9f0d8415f293b8e403f633ad1730b40db6a00641cc763ead4b55d5249/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -44,8 +44,8 @@
 					"via": "call",
 					"witnessCallsiteId": "dddddddd-dddd-dddd-dddd-dddddddddd01:Codeunit:50000#52d4f6e9f0d8415f293b8e403f633ad1730b40db6a00641cc763ead4b55d5249/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -68,8 +68,8 @@
 					"via": "self",
 					"resourceId": "dddddddd-dddd-dddd-dddd-dddddddddd01:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -80,9 +80,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "dddddddd-dddd-dddd-dddd-dddddddddd01:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -104,8 +105,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

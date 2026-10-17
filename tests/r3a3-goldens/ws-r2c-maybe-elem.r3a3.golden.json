@@ -11,8 +11,8 @@
 					"via": "self",
 					"resourceId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::OnRealEvent::a4783091e5a2ce84b875f460663fb04cafedd8ec26bc670ff1654e96f0fdce60",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -23,9 +23,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "c2c00001-0000-0000-0000-000000000001:Codeunit:50100::OnRealEvent::a4783091e5a2ce84b875f460663fb04cafedd8ec26bc670ff1654e96f0fdce60",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -59,8 +60,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -83,8 +84,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -107,8 +108,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

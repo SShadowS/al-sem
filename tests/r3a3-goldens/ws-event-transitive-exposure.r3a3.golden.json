@@ -32,8 +32,8 @@
 					"resourceId": "33333333-3333-3333-3333-333333333333:Codeunit:50000::OnExport::5da9b870383a38e35e94a3337a7a573278d2d6b9951cd6aa8645726a9c4753aa",
 					"witnessCallsiteId": "33333333-3333-3333-3333-333333333333:Codeunit:50000#0d8d490bd2716acc6fd32441b143c1e32b6ab8132c6e8e6a25caefd767dd6c32/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -44,8 +44,8 @@
 					"via": "call",
 					"witnessCallsiteId": "33333333-3333-3333-3333-333333333333:Codeunit:50000#0d8d490bd2716acc6fd32441b143c1e32b6ab8132c6e8e6a25caefd767dd6c32/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -68,8 +68,8 @@
 					"via": "self",
 					"resourceId": "33333333-3333-3333-3333-333333333333:Codeunit:50000::OnExport::5da9b870383a38e35e94a3337a7a573278d2d6b9951cd6aa8645726a9c4753aa",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -82,6 +82,7 @@
 					"via": "event-dispatch",
 					"resourceId": "33333333-3333-3333-3333-333333333333:Table:50101",
 					"witnessOperationId": "33333333-3333-3333-3333-333333333333:Codeunit:50001#cac320d2ba49755e20d89b2940f64618c1e09d953b7b86c28677381a030daed4/op1",
+					"witnessFirstHopEventId": "33333333-3333-3333-3333-333333333333:Codeunit:50000::OnExport::5da9b870383a38e35e94a3337a7a573278d2d6b9951cd6aa8645726a9c4753aa",
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
@@ -98,9 +99,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "33333333-3333-3333-3333-333333333333:Codeunit:50000::OnExport::5da9b870383a38e35e94a3337a7a573278d2d6b9951cd6aa8645726a9c4753aa",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -140,8 +142,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

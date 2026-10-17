@@ -153,7 +153,8 @@
               "kind": "unknown"
             }
           }
-        }
+        },
+        "witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4720/Codeunit/50000/event/onafterprocess"
       },
       {
         "subject": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
@@ -165,7 +166,8 @@
         "extra": {
           "kind": "event",
           "eventClass": "Integration"
-        }
+        },
+        "witnessFirstHopEventId": "11111111-0000-0000-0000-0000000d4720/Codeunit/50000/event/onafterprocess"
       },
       {
         "subject": "11111111-0000-0000-0000-0000000d4720:Codeunit:50001#286cfef4fb8de5396d3920d266b96550e0dfbeec1e622b269958aae4c2b671ae",

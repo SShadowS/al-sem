@@ -139,6 +139,10 @@ pub struct CapabilityFact {
     /// other first hop. `witness_callsite_id` keeps its meaning (a trigger edge
     /// has no call site).
     pub witness_first_hop_operation_id: Option<String>,
+    /// An inherited fact whose first hop is an `event-dispatch` edge: that
+    /// edge's INTERNAL event id (#98 D1). `None` on direct facts and on every
+    /// other first hop (an event edge has no call site and no op).
+    pub witness_first_hop_event_id: Option<String>,
     pub extra: Option<CapabilityExtra>,
 }
 
@@ -624,6 +628,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: Some(op.id.clone()),
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: op.record_variable_id.clone(),
                 temp_state: op.temp_state.clone(),
@@ -648,6 +653,7 @@ pub(crate) fn direct_facts_for_routine(
                 witness_operation_id: Some(op.id.clone()),
                 witness_callsite_id: None,
                 witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
                 extra: None,
             });
         }
@@ -672,6 +678,7 @@ pub(crate) fn direct_facts_for_routine(
                     witness_operation_id: None,
                     witness_callsite_id: Some(cs.id.clone()),
                     witness_first_hop_operation_id: None,
+                    witness_first_hop_event_id: None,
                     extra: Some(CapabilityExtra::Dispatch {
                         object_type,
                         modal: None,
@@ -699,6 +706,7 @@ pub(crate) fn direct_facts_for_routine(
                     witness_operation_id: None,
                     witness_callsite_id: Some(cs.id.clone()),
                     witness_first_hop_operation_id: None,
+                    witness_first_hop_event_id: None,
                     extra: Some(CapabilityExtra::Dispatch {
                         object_type: object_type.to_string(),
                         modal,
@@ -747,6 +755,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Http {
                 method: http_method.to_string(),
                 body_arg_source,
@@ -784,6 +793,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -827,6 +837,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Storage {
                 key_arg_source: Some(key_source),
                 value_arg_source,
@@ -861,6 +872,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -896,6 +908,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -945,6 +958,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -973,6 +987,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -1016,6 +1031,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: None,
         });
     }
@@ -1039,6 +1055,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Event {
                 event_class: "Integration".to_string(),
                 include_sender: None,
@@ -1062,6 +1079,7 @@ pub(crate) fn direct_facts_for_routine(
                 witness_operation_id: Some(op.id.clone()),
                 witness_callsite_id: None,
                 witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
                 extra: None,
             });
         }
@@ -1083,6 +1101,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_operation_id: None,
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Event {
                 event_class: map_event_kind_to_class(&evt.event_kind).to_string(),
                 include_sender: None,
@@ -1655,6 +1674,8 @@ fn retag(rep: &CapabilityFact, subject: &str, edge: &TypedOutEdge) -> Capability
         // id of a trigger first hop, `None` otherwise, so a stale op id cannot
         // leak through `..rep.clone()`.
         witness_first_hop_operation_id: edge.operation_id.clone(),
+        // Same rule for the event id of an event-dispatch first hop (#98 D1).
+        witness_first_hop_event_id: edge.event_id.clone(),
         ..rep.clone()
     }
 }
@@ -2949,6 +2970,13 @@ pub struct PCapabilityFact {
         skip_serializing_if = "Option::is_none"
     )]
     pub witness_first_hop_operation_id: Option<String>,
+    /// Only on event-dispatch-first inherited facts (#98 D1), stable form.
+    #[serde(
+        rename = "witnessFirstHopEventId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub witness_first_hop_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
 }
@@ -3119,6 +3147,10 @@ pub(crate) fn project_capability_fact(
             .witness_first_hop_operation_id
             .as_ref()
             .map(|w| stable_sub_id(w, map)),
+        witness_first_hop_event_id: f
+            .witness_first_hop_event_id
+            .as_ref()
+            .map(|e| stable_event_id(e, event_by_id)),
         extra: f.extra.as_ref().map(extra_to_json),
     }
 }
@@ -4278,6 +4310,7 @@ mod pd_uses_tests {
             witness_operation_id: Some("H/op1".to_string()),
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: None,
                 temp_state: Some(pd_ts_known(false)),
@@ -4394,6 +4427,75 @@ mod pd_uses_tests {
         assert_eq!(f.witness_first_hop_operation_id.as_deref(), Some("C/op2"));
         assert_eq!(f.witness_callsite_id, None);
         assert_eq!(f.via, "implicit-trigger");
+    }
+
+    /// #98 D1 (A1): `retag` sets `witness_first_hop_event_id` from the edge
+    /// for EVERY edge: an event-dispatch edge's event id, and `None` on any
+    /// other edge even when the representative carries a stale one.
+    #[test]
+    fn retag_sets_the_first_hop_event_from_the_edge() {
+        let mut rep = (*own_entry().rep).clone();
+        rep.witness_first_hop_event_id = Some("stale/event/e".to_string());
+        let call = TypedOutEdge::new(
+            "H".to_string(),
+            "direct-call".to_string(),
+            Some("cs1".to_string()),
+            None,
+            None,
+        );
+        assert_eq!(retag(&rep, "C", &call).witness_first_hop_event_id, None);
+        let ev = TypedOutEdge::new(
+            "H".to_string(),
+            "event-dispatch".to_string(),
+            None,
+            Some("app/Codeunit/1/event/onx".to_string()),
+            None,
+        );
+        let f = retag(&rep, "C", &ev);
+        assert_eq!(
+            f.witness_first_hop_event_id.as_deref(),
+            Some("app/Codeunit/1/event/onx")
+        );
+        assert_eq!(f.witness_callsite_id, None);
+        assert_eq!(f.witness_first_hop_operation_id, None);
+        assert_eq!(f.via, "event-dispatch");
+    }
+
+    /// #98 A4: the projection writes the first-hop event id in the stable
+    /// event form, the same form the fact's own event `resourceId` uses.
+    #[test]
+    fn projection_writes_the_first_hop_event_in_stable_form() {
+        let internal = "app/Codeunit/1/event/onx";
+        let sym = EventSymbol {
+            id: internal.to_string(),
+            publisher_object_id: "app/Codeunit/1".to_string(),
+            publisher_routine_id: None,
+            publisher_stable_routine_id: None,
+            event_name: "OnX".to_string(),
+            event_kind: "integration".to_string(),
+            element_name: None,
+            signature_hash: "h1".to_string(),
+            parameters: Vec::new(),
+            isolated: None,
+            provenance: Vec::new(),
+            publisher_ref: None,
+        };
+        let event_by_id: HashMap<String, &EventSymbol> = [(internal.to_string(), &sym)].into();
+        let mut f = (*own_entry().rep).clone();
+        f.witness_first_hop_event_id = Some(internal.to_string());
+        let p = project_capability_fact(&f, &HashMap::new(), &event_by_id);
+        assert_eq!(
+            p.witness_first_hop_event_id.as_deref(),
+            Some("app:Codeunit:1::OnX::h1")
+        );
+        f.witness_first_hop_event_id = None;
+        let p = project_capability_fact(&f, &HashMap::new(), &event_by_id);
+        assert_eq!(p.witness_first_hop_event_id, None);
+        assert!(
+            !serde_json::to_string(&p)
+                .unwrap()
+                .contains("witnessFirstHopEventId")
+        );
     }
 }
 

@@ -573,6 +573,7 @@ mod tests {
             witness_operation_id: Some(format!("{owner}/op1")),
             witness_callsite_id: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: None,
                 temp_state: Some(pd_ts_pd(0)),

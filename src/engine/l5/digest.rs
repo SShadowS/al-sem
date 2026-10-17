@@ -339,17 +339,47 @@ fn edge_callsite_id(e: &SnapshotGraphEdge) -> Option<&str> {
     e.edge_callsite_id()
 }
 
-/// Does `e` carry `fact`'s first hop? (#96 D5) By the firing operation when the
-/// fact's first hop is an implicit-trigger edge, else by the call site. `false`
-/// when the fact has neither.
+/// The identity of an inherited fact's first hop (#96 D5, #98 D2): the firing
+/// operation of an implicit-trigger edge, the INTERNAL event id of an
+/// event-dispatch edge, or the call site of a call-family edge. `retag` sets
+/// all three from the same edge, so at most one is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstHop<'a> {
+    Op(&'a str),
+    Event(&'a str),
+    Callsite(&'a str),
+}
+
+impl FirstHop<'_> {
+    /// The id itself (the `first-hop-not-found` detail).
+    fn id(self) -> String {
+        match self {
+            FirstHop::Op(s) | FirstHop::Event(s) | FirstHop::Callsite(s) => s.to_string(),
+        }
+    }
+}
+
+/// The ONE reader of a fact's first-hop ids (#98 D2), precedence op, then
+/// event, then call site. `None` when the fact has none (a direct fact).
+fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
+    if let Some(op) = &f.witness_first_hop_operation_id {
+        Some(FirstHop::Op(op))
+    } else if let Some(ev) = &f.witness_first_hop_event_id {
+        Some(FirstHop::Event(ev))
+    } else {
+        f.witness_callsite_id.as_deref().map(FirstHop::Callsite)
+    }
+}
+
+/// Does `e` carry `fact`'s first hop? (#96 D5, #98 D2) By the firing
+/// operation, the dispatched event, or the call site, per [`fact_first_hop`].
+/// `false` when the fact has none.
 fn is_first_hop(e: &SnapshotGraphEdge, fact: &Fact) -> bool {
-    match (
-        &fact.witness_first_hop_operation_id,
-        &fact.witness_callsite_id,
-    ) {
-        (Some(op), _) => e.edge_operation_id() == Some(op.as_str()),
-        (None, Some(cs)) => edge_callsite_id(e) == Some(cs.as_str()),
-        (None, None) => false,
+    match fact_first_hop(fact) {
+        Some(FirstHop::Op(op)) => e.edge_operation_id() == Some(op),
+        Some(FirstHop::Event(ev)) => e.edge_event_id() == Some(ev),
+        Some(FirstHop::Callsite(cs)) => edge_callsite_id(e) == Some(cs),
+        None => false,
     }
 }
 
@@ -853,7 +883,7 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
         len: usize,
     }
     let mut out = ProofOutcome::default();
-    if f.witness_first_hop_operation_id.is_none() && f.witness_callsite_id.is_none() {
+    if fact_first_hop(f).is_none() {
         return out;
     }
     let Some(root_states) = idx.pd.by_routine.get(root) else {
@@ -1160,13 +1190,8 @@ fn reconstruct_witness_paths<'i>(
 
     // --- Case C: inherited fact (BFS) ---
 
-    // The first hop's id: the firing operation of a trigger-first fact (#96 D5),
-    // else the call site.
-    let Some(first_hop_id) = fact
-        .witness_first_hop_operation_id
-        .as_ref()
-        .or(fact.witness_callsite_id.as_ref())
-    else {
+    // The first hop's identity (#96 D5, #98 D2): see `fact_first_hop`.
+    let Some(first_hop) = fact_first_hop(fact) else {
         // first-hop-not-found (no first-hop id) → detail = via (callsiteId absent).
         return WitnessOutcomeExt {
             paths: Vec::new(),
@@ -1197,10 +1222,7 @@ fn reconstruct_witness_paths<'i>(
             truncated: false,
             incomplete: true,
             limit_hit: false,
-            diagnostics: vec![(
-                "first-hop-not-found".to_string(),
-                Some(first_hop_id.clone()),
-            )],
+            diagnostics: vec![("first-hop-not-found".to_string(), Some(first_hop.id()))],
             projected: None,
         };
     }
@@ -2681,7 +2703,8 @@ fn detail_json(detail: &[(String, String)]) -> String {
 /// Fields, and why each is here (grepped every `fact.`/`fact_equivalent` use inside
 /// `digest_one_root`'s call tree — see witness-investigation.md §3 and the brief):
 ///   - `provenance`, `witness_operation_id`, `witness_callsite_id`,
-///     `witness_first_hop_operation_id` (#96 D5), `op`, `subject` —
+///     `witness_first_hop_operation_id` (#96 D5), `witness_first_hop_event_id`
+///     (#98 D1; defensive, a subject has one fact per key), `op`, `subject` —
 ///     `reconstruct_witness_paths`'s direct BFS-input fields (cases A/B/C dispatch).
 ///   - `resource_kind`, `resource_id` — read by `reconstruct_witness_paths` (Case-C
 ///     reachability seeding via `direct_facts_by_op_kind`) AND by `dedupe_key`.
@@ -2708,13 +2731,14 @@ fn detail_json(detail: &[(String, String)]) -> String {
 /// if they ever start mattering, never causes incorrect output.
 fn effect_fact_loop_identity(fact: &Fact, detail: &[(String, String)]) -> String {
     format!(
-        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
         fact.provenance,
         fact.op,
         fact.resource_kind,
         fact.resource_id.as_deref().unwrap_or(""),
         fact.witness_callsite_id.as_deref().unwrap_or(""),
         fact.witness_first_hop_operation_id.as_deref().unwrap_or(""),
+        fact.witness_first_hop_event_id.as_deref().unwrap_or(""),
         fact.witness_operation_id.as_deref().unwrap_or(""),
         fact.subject,
         serde_json::to_string(&fact.resource_arg_source).unwrap_or_default(),
@@ -4732,6 +4756,7 @@ mod tests {
             witness_callsite_id: witness_callsite_id.map(|s| s.to_string()),
             extra: None,
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
         }
     }
 
@@ -5748,6 +5773,82 @@ codeunit 50101 "T7b Temp Classes"
             },
             edge_id: format!("e-{cs}"),
         }
+    }
+
+    fn anchor(routine: &str) -> SnapshotSourceAnchor {
+        SnapshotSourceAnchor {
+            source_unit_id: "su".to_string(),
+            range: SnapshotRange {
+                start_line: 1,
+                start_column: 0,
+                end_line: 1,
+                end_column: 1,
+            },
+            enclosing_routine_id: routine.to_string(),
+            syntax_kind: "x".to_string(),
+        }
+    }
+
+    fn event_edge(from: &str, to: &str, ev: &str) -> SnapshotGraphEdge {
+        SnapshotGraphEdge::EventDispatch {
+            kind: "event-dispatch",
+            from: from.to_string(),
+            to: to.to_string(),
+            event_id: ev.to_string(),
+            publish_anchor: anchor(from),
+            subscriber_anchor: anchor(to),
+            edge_id: format!("e-{ev}-{to}"),
+        }
+    }
+
+    fn trigger_edge(from: &str, to: &str, op: &str) -> SnapshotGraphEdge {
+        SnapshotGraphEdge::ImplicitTrigger {
+            kind: "implicit-trigger",
+            from: from.to_string(),
+            to: to.to_string(),
+            operation_id: op.to_string(),
+            trigger_kind: "OnInsert".to_string(),
+            fires: crate::engine::l4::combined_graph::TriggerFires::Always,
+            anchor: None,
+            edge_id: format!("e-{op}"),
+        }
+    }
+
+    /// #98 A1b: `fact_first_hop` precedence, and `is_first_hop`'s Event arm
+    /// matches exactly the event-dispatch edge with the same event id. Call-site
+    /// and op facts never match an event edge.
+    #[test]
+    fn is_first_hop_matches_an_event_fact_to_its_event_edge_only() {
+        let ev = "app/Codeunit/1/event/onx";
+        let mut ev_fact = make_fact("insert", "table", Some("T"), "inherited", Some("op0"), None);
+        ev_fact.witness_first_hop_event_id = Some(ev.to_string());
+        assert_eq!(fact_first_hop(&ev_fact), Some(FirstHop::Event(ev)));
+
+        let same = event_edge("P", "S1", ev);
+        let same_other_sub = event_edge("P", "S2", ev);
+        let other = event_edge("P", "S1", "app/Codeunit/1/event/ony");
+        let call = call_edge("P", "S1", "cs1");
+        let trig = trigger_edge("P", "S1", "op9");
+        assert!(is_first_hop(&same, &ev_fact));
+        assert!(is_first_hop(&same_other_sub, &ev_fact), "id alone, no `to`");
+        assert!(!is_first_hop(&other, &ev_fact));
+        assert!(!is_first_hop(&call, &ev_fact));
+        assert!(!is_first_hop(&trig, &ev_fact));
+
+        let cs_fact = make_fact("insert", "table", Some("T"), "inherited", None, Some("cs1"));
+        assert_eq!(fact_first_hop(&cs_fact), Some(FirstHop::Callsite("cs1")));
+        assert!(is_first_hop(&call, &cs_fact));
+        assert!(!is_first_hop(&same, &cs_fact));
+
+        let mut op_fact = make_fact("insert", "table", Some("T"), "inherited", None, None);
+        op_fact.witness_first_hop_operation_id = Some("op9".to_string());
+        assert_eq!(fact_first_hop(&op_fact), Some(FirstHop::Op("op9")));
+        assert!(is_first_hop(&trig, &op_fact));
+        assert!(!is_first_hop(&same, &op_fact));
+
+        let direct = make_fact("insert", "table", Some("T"), "direct", Some("op0"), None);
+        assert_eq!(fact_first_hop(&direct), None);
+        assert!(!is_first_hop(&same, &direct));
     }
 
     /// An insert fact into table T, with a temp state.

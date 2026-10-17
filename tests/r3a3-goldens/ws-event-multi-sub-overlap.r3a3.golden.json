@@ -32,8 +32,8 @@
 					"resourceId": "22222222-2222-2222-2222-222222222222:Codeunit:50000::OnAfterPost::fa1eb97dcfb6bf28311db3073b9ba9c295461b40e7a33da0440f48a6df91c9e6",
 					"witnessCallsiteId": "22222222-2222-2222-2222-222222222222:Codeunit:50000#e54ec533bcdea415efc90d3782e512a0bf0411d5c665f03c8e28dbfa9be8300c/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -44,8 +44,8 @@
 					"via": "call",
 					"witnessCallsiteId": "22222222-2222-2222-2222-222222222222:Codeunit:50000#e54ec533bcdea415efc90d3782e512a0bf0411d5c665f03c8e28dbfa9be8300c/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -68,8 +68,8 @@
 					"via": "self",
 					"resourceId": "22222222-2222-2222-2222-222222222222:Codeunit:50000::OnAfterPost::fa1eb97dcfb6bf28311db3073b9ba9c295461b40e7a33da0440f48a6df91c9e6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -82,6 +82,7 @@
 					"via": "event-dispatch",
 					"resourceId": "22222222-2222-2222-2222-222222222222:Table:50100",
 					"witnessOperationId": "22222222-2222-2222-2222-222222222222:Codeunit:50001#8df06bda1ebc04b37b09e5e4ce5b4049e0133a67217b991a00f44783110486ab/op0",
+					"witnessFirstHopEventId": "22222222-2222-2222-2222-222222222222:Codeunit:50000::OnAfterPost::fa1eb97dcfb6bf28311db3073b9ba9c295461b40e7a33da0440f48a6df91c9e6",
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Modify",
@@ -98,9 +99,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "22222222-2222-2222-2222-222222222222:Codeunit:50000::OnAfterPost::fa1eb97dcfb6bf28311db3073b9ba9c295461b40e7a33da0440f48a6df91c9e6",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -140,8 +142,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -182,8 +184,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

@@ -32,8 +32,8 @@
 					"resourceId": "99999999-9999-9999-9999-999999999999:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"witnessCallsiteId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#0efd9bc38e09d5da5d41175fb6082001fddad16bc62ee82eddefdfd83bc5ef48/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -44,8 +44,8 @@
 					"via": "call",
 					"witnessCallsiteId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#0efd9bc38e09d5da5d41175fb6082001fddad16bc62ee82eddefdfd83bc5ef48/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -89,8 +89,8 @@
 					"resourceId": "99999999-9999-9999-9999-999999999999:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"witnessCallsiteId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#495ffedc239a0a859c0031d878edb93322347c10d3de040b55e4c6958a61da5b/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				},
 				{
@@ -101,8 +101,8 @@
 					"via": "call",
 					"witnessCallsiteId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#495ffedc239a0a859c0031d878edb93322347c10d3de040b55e4c6958a61da5b/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -125,8 +125,8 @@
 					"via": "self",
 					"resourceId": "99999999-9999-9999-9999-999999999999:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -137,9 +137,10 @@
 					"confidence": "static",
 					"provenance": "inherited",
 					"via": "event-dispatch",
+					"witnessFirstHopEventId": "99999999-9999-9999-9999-999999999999:Codeunit:50000::OnBeforePost::79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -161,8 +162,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

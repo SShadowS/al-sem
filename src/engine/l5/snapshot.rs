@@ -355,6 +355,10 @@ pub struct SnapshotCapabilityFact {
     /// `implicit-trigger` edge (`CapabilityFact::witness_first_hop_operation_id`),
     /// `None` otherwise. Serialized last, only when present.
     pub witness_first_hop_operation_id: Option<String>,
+    /// #98 D1: the INTERNAL event id of an inherited fact whose first hop is
+    /// an `event-dispatch` edge (`CapabilityFact::witness_first_hop_event_id`),
+    /// `None` otherwise. Serialized last, only when present.
+    pub witness_first_hop_event_id: Option<String>,
 }
 
 impl SnapshotCapabilityFact {
@@ -425,6 +429,9 @@ impl Serialize for SnapshotCapabilityFact {
         }
         if let Some(op) = &self.witness_first_hop_operation_id {
             map.serialize_entry("witnessFirstHopOperationId", op)?;
+        }
+        if let Some(ev) = &self.witness_first_hop_event_id {
+            map.serialize_entry("witnessFirstHopEventId", ev)?;
         }
         map.end()
     }
@@ -680,6 +687,12 @@ impl SnapshotGraphEdge {
             SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => Some(operation_id),
             _ => None,
         }
+    }
+
+    /// Public INTERNAL `eventId` accessor: digest's first-hop selector for an
+    /// event-dispatch edge (#98 D2). `None` on every other kind.
+    pub fn edge_event_id(&self) -> Option<&str> {
+        self.event_id()
     }
 
     /// Public `from` accessor (R4-F Stage-4 ordering: typedEdge `.from`).
@@ -1243,6 +1256,7 @@ fn snapshot_fact(f: &CapabilityFact, subject: &str) -> SnapshotCapabilityFact {
         witness_callsite_id: f.witness_callsite_id.clone(),
         extra: f.extra.as_ref().map(snap_capability_extra),
         witness_first_hop_operation_id: f.witness_first_hop_operation_id.clone(),
+        witness_first_hop_event_id: f.witness_first_hop_event_id.clone(),
     }
 }
 
@@ -2569,6 +2583,7 @@ mod capability_fact_serialize_tests {
                 temp_state: None,
             }),
             witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
         }
     }
 
