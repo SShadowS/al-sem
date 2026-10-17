@@ -12,6 +12,8 @@ from agentflow.tests.conftest import run_concurrently
 def test_paths_layout(ctx):
     p = ctx.paths
     assert p.lock == p.root / ".agent" / "lock.json"
+    assert p.locks_dir == p.root / ".agent" / "locks"
+    assert p.lease(8) == p.root / ".agent" / "locks" / "issue-8.json"
     assert p.halt == p.root / ".agent" / "HALT"
     assert p.run_dir("r1") == p.root / ".agent" / "runs" / "r1"
 

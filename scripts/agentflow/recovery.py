@@ -499,7 +499,7 @@ def recover_stale(ctx: Ctx, git: Git, gh: Gh, lk: lock.Lock, worktrees_parent: P
     # heartbeat is not carried back, so staleness still measures liveness.
     pr = gh.pr_for_branch_prefix(f"issue/{lk.issue}-", suffix=f"-a{lk.attempt}")
     if pr and pr.get("state") == "MERGED" and not _merged_before(pr, lk.started):
-        ctx.paths.lock.unlink(missing_ok=True)
+        lock.drop(ctx, lk.issue, lk.run_id)
         return {"action": "merged-needs-post-merge", "merge_sha": pr["mergeCommit"]["oid"], "pr": pr["number"],
                 "branch": pr["headRefName"]}
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(ctx.now()))
@@ -524,7 +524,9 @@ def recover_stale(ctx: Ctx, git: Git, gh: Gh, lk: lock.Lock, worktrees_parent: P
     finally:
         # A rename/prune/gh failure must still free the lock and notify, or a
         # stranded lock blocks every future tick with no forward progress.
-        ctx.paths.lock.unlink(missing_ok=True)
+        # Only THIS issue's lease, and only while it still names the stale
+        # run: a sibling's lease is never touched.
+        lock.drop(ctx, lk.issue, lk.run_id)
         notify(ctx, "crashed", f"#{lk.issue}: stale run {lk.run_id} recovered")
 
 

@@ -353,6 +353,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7 new tests in `scripts/agentflow/tests/test_{state,cli_flow}.py`; the suite is
   318 passed (was 311).
 
+- **agentflow: one lease per issue (`scripts/agentflow/{lock,state,cli,recovery}.py`).**
+  Step 5 of the parallel-issues design. A claim now writes
+  `.agent/locks/issue-<N>.json`, create-exclusive, so one issue can never have
+  two runs. `lock.acquire` runs under mutex `registry` and refuses
+  `run-holds-a-lock` (one run, one issue), `issue-held:<run>` (the issue has a
+  lease, live or stale) or `slots-full` (as many leases as `slots` in
+  `.agent/config.json`; stale leases count until `recover` frees them).
+  `claim` and `unblock` report that code as their `error`, before any gh call.
+  With the default `slots: 1`, a claim while another issue is held still fails,
+  as before, now as `slots-full`. New: `lock.all_locks`, `own`, `for_issue`,
+  `drop`; `lock.read` is a shim (the run's own lease, else the only lease).
+  `check_fence(ctx, issue=)` refuses a call that names another issue, and
+  `finish` uses it, so `finish --issue 9` under a lease for 8 no longer labels
+  issue 9. `claim` bumps `attempts.json` under mutex `registry`, re-read, so two
+  claims of two issues keep both bumps. `unblock` runs as `unblock-<6 hex>`,
+  takes no slot, and refuses `issue-held`. `recover_stale` removes only the
+  stale issue's lease, and only while it still names the stale run. A
+  `.agent/lock.json` written by the old code is read as one more lease: its
+  owner beats, fences and releases it in place, it holds its slot and its
+  issue, and nothing new is written there.
+
+  14 new tests in `scripts/agentflow/tests/test_{lock,cli_flow,cli_units}.py`
+  (three real-process claim races, the legacy lease, the issue cross-check);
+  the suite is 332 passed (was 318).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

@@ -592,7 +592,7 @@ def test_recover_stale_removes_lock_even_when_gh_comment_fails(repo_pair, tmp_pa
     with pytest.raises(GhError):
         recovery.recover_stale(stale_ctx, g, Gh(stale_ctx, REPO, run=r, sleep=lambda s: None),
                                lk, worktrees_parent=tmp_path)
-    assert not ctx.paths.lock.exists()
+    assert lock.for_issue(ctx, 8) is None
     assert (stale_ctx.run_dir / "notify.log").exists()
 
 

@@ -57,7 +57,15 @@ class Paths:
 
     @property
     def lock(self) -> Path:
+        """The LEGACY single lease; new leases live in `locks_dir`."""
         return self.agent / "lock.json"
+
+    @property
+    def locks_dir(self) -> Path:
+        return self.agent / "locks"
+
+    def lease(self, issue: int) -> Path:
+        return self.locks_dir / f"issue-{issue}.json"
 
     @property
     def halt(self) -> Path:

@@ -341,9 +341,13 @@ def cmd_recover(args, ctx, gh, git):
 def cmd_claim(args, ctx, gh, git):
     lock.require_not_halted(ctx)
     ctx.run_id = ctx.run_id or new_run_id(ctx.now())
-    attempts = read_json(ctx.paths.attempts, default={})
-    attempt = attempts.get(str(args.issue), 0) + 1
-    lk = lock.acquire(ctx, args.issue, args.session, attempt)
+    attempt = read_json(ctx.paths.attempts, default={}).get(str(args.issue), 0) + 1
+    try:
+        lk = lock.acquire(ctx, args.issue, args.session, attempt)
+    except lock.LockHeld as e:
+        # Nothing was created, labelled or counted. `issue-held` means "try
+        # the next ranked issue"; `slots-full` means "do not claim now".
+        raise Fail({"error": e.code, "detail": str(e)})
     try:
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
         budget.init(ctx, claimed_at=lk.started)
@@ -372,7 +376,11 @@ def cmd_claim(args, ctx, gh, git):
         # The attempt counter is only consumed once every fallible step above
         # has succeeded -- a rolled-back claim (nothing labelled, no branch
         # made) must not burn one of the three attempts.
-        write_json(ctx, ctx.paths.attempts, {**attempts, str(args.issue): attempt})
+        #
+        # Re-read under mutex `registry`, never written back from a snapshot:
+        # a sibling claim of another issue may have bumped its own count since.
+        update_json(ctx, ctx.paths.attempts, lambda a: {**a, str(args.issue): attempt},
+                    mutex_name="registry", default={})
         # Consumed (or voided) under the same rule: a rolled-back claim leaves
         # the handoff for the next one. Re-read under the mutex, not written
         # back from the snapshot above: another run's handoff may have landed
@@ -448,8 +456,14 @@ def cmd_incidents(args, ctx, gh, git):
 
 
 def cmd_unblock(args, ctx, gh, git):
-    ctx.run_id = "unblock"
-    lock.acquire(ctx, args.issue, "human", 0)
+    # A unique id: two unblocks at once must not share one. `count_slot=False`
+    # because an unblock does no work; it still refuses `issue-held`, so it
+    # never relabels an issue a run (or a stale lease) is holding.
+    ctx.run_id = f"unblock-{uuid.uuid4().hex[:6]}"
+    try:
+        lock.acquire(ctx, args.issue, "human", 0, count_slot=False)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     try:
         gh.remove_label(args.issue, "agent-blocked")
     finally:
@@ -1324,6 +1338,10 @@ def cmd_finish(args, ctx, gh, git):
     if args.substitute and args.outcome != "handoff":
         # A flag accepted and then ignored would be a silent no-op.
         raise Fail({"error": "--substitute applies only to --outcome handoff"}, 2)
+    # Before any label, comment or release: `--issue` must be the issue this
+    # run's lease is for. Without it, `finish --issue 9` under a lease for 8
+    # labelled the wrong issue.
+    lock.check_fence(ctx, issue=args.issue)
     reason = _reason(args)
     if args.outcome == "handoff":
         _scan_or_fail(reason or "")

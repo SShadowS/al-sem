@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -170,10 +171,34 @@ def test_sanitize_command(capsys, root, tmp_path, monkeypatch):
     assert code == 1 and out["violations"][str(f)][0]["kind"] == "cdo-path"
 
 
-def test_unblock_removes_label_without_prior_lock(capsys, root):
+def test_unblock_removes_label_without_prior_lock(capsys, root, monkeypatch):
+    """`unblock` runs under its own `unblock-<6 hex>` id (two unblocks must not
+    share one) and does not take a slot."""
+    ids, real = [], lock.acquire
+
+    def recording(ctx, *a, **kw):
+        ids.append((ctx.run_id, kw.get("count_slot", True)))
+        return real(ctx, *a, **kw)
+
+    monkeypatch.setattr(lock, "acquire", recording)
+    r = FakeRunner({"issue edit 8 --remove-label agent-blocked": ""})
+    for _ in range(2):
+        code, out = run_cli(capsys, root, "unblock", "8", gh_run=r, run_id=None)
+        assert code == 0 and out["unblocked"] == 8 and lock.read(cli_ctx(root)) is None
+    assert len(ids) == 2 and ids[0][0] != ids[1][0]
+    assert all(re.fullmatch(r"unblock-[0-9a-f]{6}", i) and not slot for i, slot in ids), ids
+
+
+def test_unblock_refuses_an_issue_another_run_holds(capsys, root):
+    """It used to lose to ANY live lock. Now it refuses `issue-held` for its
+    own issue, and no label is touched."""
+    from agentflow.state import Ctx, Paths
+    lock.acquire(Ctx(Paths(root), run_id="run-holder", now=lambda: 1_000_000.0), 8, "s", 1)
     r = FakeRunner({"issue edit 8 --remove-label agent-blocked": ""})
     code, out = run_cli(capsys, root, "unblock", "8", gh_run=r, run_id=None)
-    assert code == 0 and out["unblocked"] == 8 and lock.read(cli_ctx(root)) is None
+    assert code == 1 and out["error"] == "issue-held:run-holder", out
+    assert r.calls == []
+    assert lock.for_issue(cli_ctx(root), 8).run_id == "run-holder"
 
 
 def cli_ctx(root):

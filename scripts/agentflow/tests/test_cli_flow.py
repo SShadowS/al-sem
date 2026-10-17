@@ -211,6 +211,156 @@ def test_claim_then_finish_blocked_releases_lock_and_retains(capsys, root, tmp_p
     assert out["attempt"] == 2 and out["branch"].endswith("-a2")
 
 
+# ---- per-issue leases (parallel-issues design, commit 5) --------------------
+
+CLAIM_GH = {**READS, f"api repos/{REPO}/issues/9": json.dumps(json.loads(ISSUES)[0][1]),
+            "issue edit 8 --add-label agent-working": "", "issue comment 8 *": "",
+            "issue edit 9 --add-label agent-working": "", "issue comment 9 *": ""}
+
+
+def _claim(capsys, root, issue, gh, run_id):
+    return run(capsys, root, "claim", str(issue), "--session", "https://s", "--title-slug", "x",
+               gh_run=gh, run_id=run_id)
+
+
+def _slots(root, n):
+    (root / ".agent" / "config.json").write_text(json.dumps({"slots": n}), encoding="utf-8")
+
+
+def _attempts(root):
+    p = root / ".agent" / "attempts.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def test_a_second_claim_of_a_held_issue_is_issue_held_and_touches_nothing(capsys, root):
+    """Design test 8. Even with a free slot, the second claim of one issue
+    fails `issue-held:<run>` before any gh call and leaves `attempts.json`
+    as it was."""
+    _slots(root, 2)
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a")[0] == 0
+    before = _attempts(root)
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 8, gh, "run-b")
+    assert code == 1 and out["error"] == "issue-held:run-a", out
+    assert gh.calls == []
+    assert _attempts(root) == before == {"8": 1}
+    assert [lk.run_id for lk in lock.all_locks(Ctx(Paths(root)))] == ["run-a"]
+    assert not (root / ".agent" / "runs" / "run-b").exists()
+
+
+def test_slots_one_still_refuses_a_second_issue_as_slots_full(capsys, root):
+    """The default `slots: 1` keeps today's rule: one issue at a time."""
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a")[0] == 0
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 9, gh, "run-b")
+    assert code == 1 and out["error"] == "slots-full", out
+    assert gh.calls == [] and _attempts(root) == {"8": 1}
+
+
+CLAIM_CHILD = """
+import json
+from agentflow import cli
+from agentflow.tests.conftest import FakeRunner
+issue, responses = ARGS[0], json.loads(ARGS[1])
+if len(ARGS) > 2:
+    slow_reads(ARGS[2])
+gh = FakeRunner(responses)
+barrier()
+code = cli.main(["--root", str(ROOT), "--repo", "SShadowS/al-sem", "--run-id", f"run-{TAG}",
+                 "claim", issue, "--session", "s", "--title-slug", "x"], gh_run=gh)
+print("EXIT", code)
+"""
+
+
+def test_two_processes_claiming_one_issue_at_once_get_one_lease(root):
+    """Design test 9, two real processes released together. Exactly one wins;
+    the other is `issue-held`. One lease, one attempt bump.
+
+    `slots: 2`, so the loser cannot be refused for `slots-full` instead, and
+    the config read is slowed so the check-then-create window is wide."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    res = run_concurrently(root, CLAIM_CHILD, ["a", "b"], extra=["8", json.dumps(CLAIM_GH), "config.json"])
+    codes = sorted(int(o.split("EXIT")[-1]) for _, o, _ in res)
+    assert codes == [0, 1], res
+    loser = next(o for _, o, _ in res if o.strip().endswith("EXIT 1"))
+    assert '"issue-held:run-' in loser, loser
+    leases = lock.all_locks(Ctx(Paths(root)))
+    assert [lk.issue for lk in leases] == [8], leases
+    assert _attempts(root) == {"8": 1}
+
+
+def test_two_processes_claiming_two_issues_at_once_keep_both_attempt_bumps(root):
+    """Design test 10. Each claim bumps its own key in `attempts.json`. The
+    early read is slowed, so both read `{}`; a claim that writes back its own
+    snapshot then loses the other's bump."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    body = CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "attempts.json"])
+    assert all(o.strip().endswith("EXIT 0") for _, o, _ in res), res
+    assert _attempts(root) == {"8": 1, "9": 1}
+
+
+def test_two_processes_claiming_two_issues_with_one_slot_get_one_lease(root):
+    """The slot count is a check-then-act across DIFFERENT lease files, so
+    create-exclusive does not cover it; only mutex `registry` does. With
+    `slots: 1` and the config read slowed, two claims of two issues at once
+    must still end with one lease and one `slots-full`."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 1)
+    body = CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "config.json"])
+    outs = [o for _, o, _ in res]
+    assert sorted(o.strip()[-6:] for o in outs) == ["EXIT 0", "EXIT 1"], res
+    assert '"slots-full"' in next(o for o in outs if o.strip().endswith("EXIT 1")), res
+    assert len(lock.all_locks(Ctx(Paths(root)))) == 1
+
+
+def test_finish_naming_another_issue_than_the_lease_refuses_before_any_gh_call(
+        capsys, root, tmp_path, monkeypatch):
+    """Design test 12. `finish --issue 9` under a lease for 8 used to label
+    issue 9 and release 8's lease."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-test")[0] == 0
+    gh = FakeRunner({"issue edit 9 --add-label agent-blocked": "", "issue edit 9 --remove-label agent-working": "",
+                     "issue comment 9 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "9", "--outcome", "blocked", "--reason", "x", gh_run=gh)
+    assert code == 1 and "lock is for issue 8, call names 9" in out["error"], out
+    assert gh.calls == []
+    assert lock.own(Ctx(Paths(root), run_id="run-test")).issue == 8
+
+
+def test_a_legacy_lock_json_is_beaten_fenced_counted_and_released_by_new_code(
+        capsys, root, tmp_path, monkeypatch):
+    """Design test 13, through the CLI. A run that claimed under the old code
+    holds `.agent/lock.json` (no `recovering_by` key) when the new code lands.
+    Its next calls are new code: `beat` rewrites it in place, it holds its
+    slot and its issue, and its `finish` removes it and leaves no lease."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    legacy = root / ".agent" / "lock.json"
+    legacy.write_text(json.dumps({"issue": 8, "run_id": "run-legacy", "session": "s", "started": 999_000.0,
+                                  "heartbeat": 999_500.0, "attempt": 1}), encoding="utf-8")
+    code, out = run(capsys, root, "beat", gh_run=FakeRunner({}), run_id="run-legacy")
+    assert code == 0 and out["heartbeat"] == 1_000_000.0, out
+    assert json.loads(legacy.read_text(encoding="utf-8"))["heartbeat"] == 1_000_000.0
+    assert not (root / ".agent" / "locks").exists()
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 8, gh, "run-new")
+    assert code == 1 and out["error"] == "issue-held:run-legacy", out
+    code, out = _claim(capsys, root, 9, gh, "run-new")
+    assert code == 1 and out["error"] == "slots-full", out
+    assert gh.calls == []
+    fin = FakeRunner({"issue edit 8 --add-label agent-blocked": "", "issue edit 8 --remove-label agent-working": "",
+                      "issue comment 8 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "8", "--outcome", "blocked", "--reason", "x",
+                    gh_run=fin, run_id="run-legacy")
+    assert code == 0, out
+    assert not legacy.exists() and lock.all_locks(Ctx(Paths(root))) == []
+    assert list((root / ".agent").glob("locks/*")) == []
+
+
 def test_check_diff_and_freeze_via_cli(capsys, repo_pair):
     _, clone = repo_pair
     (clone / ".agent").mkdir()
