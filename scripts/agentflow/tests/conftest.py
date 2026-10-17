@@ -103,6 +103,18 @@ def barrier():
     (ROOT / f"ready-{TAG}").write_text("")
     while not (ROOT / "go").exists():
         time.sleep(0.005)
+
+def slow_reads(name, seconds=0.3):
+    # Widen a read-modify-write: every read of a file called `name` sleeps
+    # AFTER it has read, so a second process reads the same old value unless
+    # something makes it wait.
+    real = Path.read_text
+    def slow(self, *a, **kw):
+        text = real(self, *a, **kw)
+        if self.name == name:
+            time.sleep(seconds)
+        return text
+    Path.read_text = slow
 """
 
 

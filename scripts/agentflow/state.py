@@ -10,13 +10,23 @@ import json
 import os
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 class DryRunViolation(RuntimeError):
     """A write was attempted under --dry-run."""
+
+
+class MutexTimeout(RuntimeError):
+    """`mutex` could not take its lock within the timeout."""
 
 
 @dataclass(frozen=True)
@@ -62,6 +72,9 @@ class Paths:
     @property
     def incidents(self) -> Path:
         return self.agent / "incidents.json"
+
+    def mutex(self, name: str) -> Path:
+        return self.agent / "mutex" / f"{name}.lock"
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs / run_id
@@ -151,6 +164,77 @@ def write_json(ctx: Ctx, path: Path, data: Any) -> None:
         tmp.unlink(missing_ok=True)
 
 
+MUTEX_POLL_S = 0.05
+
+
+def _try_lock(f) -> None:
+    """Take the OS lock on `f` without waiting; `OSError` when it is held."""
+    if os.name == "nt":
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)   # byte 0, from position 0
+    else:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(f) -> None:
+    if os.name == "nt":
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def mutex(ctx: Ctx, name: str, timeout: float = 30.0) -> Iterator[None]:
+    """Hold the OS file lock `.agent/mutex/<name>.lock` for the `with` body.
+
+    An OS lock, not a lease: the OS drops it when the process dies, so it can
+    never go stale. It is for short critical sections only. It waits in
+    MUTEX_POLL_S steps and raises `MutexTimeout` after `timeout` seconds.
+
+    NOT RE-ENTRANT. Taking a mutex this process already holds waits for
+    itself until the timeout. The rule: only public entry points take a
+    mutex, and helpers assume it is held.
+
+    A no-op under `--dry-run`: it creates no lock file, and every write it
+    would protect is refused by `write_guard` anyway.
+    """
+    if ctx.dry_run:
+        yield
+        return
+    path = ctx.paths.mutex(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+b") as f:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                _try_lock(f)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise MutexTimeout(f"mutex {name!r} still held after {timeout} s") from None
+                time.sleep(MUTEX_POLL_S)
+        try:
+            yield
+        finally:
+            _unlock(f)
+
+
+def update_json(ctx: Ctx, path: Path, fn: Callable[[Any], Any], *, mutex_name: str,
+                default: Any = None) -> Any:
+    """The one read-modify-write of a shared JSON file.
+
+    Holds mutex `mutex_name`, reads `path` (`default` when missing), writes
+    what `fn` returns, and returns it. When `fn` raises, nothing is written.
+    Never call it while holding `mutex_name` (see `mutex`).
+    """
+    ctx.write_guard(f"update {path}")
+    with mutex(ctx, mutex_name):
+        data = fn(read_json(path, default))
+        write_json(ctx, path, data)
+    return data
+
+
 def append_audit(ctx: Ctx, record: dict) -> None:
     """Append one JSON line to `.agent/audit.jsonl`.
 
@@ -163,13 +247,15 @@ def append_audit(ctx: Ctx, record: dict) -> None:
     would then change what the flow DOES rather than only what it reports.
 
     Goes through `write_guard` like every other write, so `--dry-run` stays
-    provably write-free.
+    provably write-free. Written under mutex `audit`: `open(..., "a")` from
+    two processes is not an atomic append on Windows.
     """
     ctx.write_guard("append audit record")
     ctx.paths.agent.mkdir(parents=True, exist_ok=True)
     line = json.dumps({"at": ctx.now(), "run_id": ctx.run_id, **record}, sort_keys=True)
-    with open(ctx.paths.audit, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    with mutex(ctx, "audit"):
+        with open(ctx.paths.audit, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 
 def tree_snapshot(root: Path) -> dict[str, str]:

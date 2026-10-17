@@ -20,7 +20,7 @@ from . import (budget, discoveries, eligibility, incidents, lock, mergeops, prot
                sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, write_json
+from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, update_json, write_json
 
 # `agent-regressed` is no longer spelled here: it comes from
 # `recovery.INCIDENT_LABELS` along with the three two-axis names, so the
@@ -377,9 +377,13 @@ def cmd_claim(args, ctx, gh, git):
         # made) must not burn one of the three attempts.
         write_json(ctx, ctx.paths.attempts, {**attempts, str(args.issue): attempt})
         # Consumed (or voided) under the same rule: a rolled-back claim leaves
-        # the handoff for the next one.
+        # the handoff for the next one. Re-read under the mutex, not written
+        # back from the snapshot above: another run's handoff may have landed
+        # since.
         if handoff is not None:
-            write_json(ctx, ctx.paths.handoffs, {k: v for k, v in handoffs.items() if k != str(args.issue)})
+            update_json(ctx, ctx.paths.handoffs,
+                        lambda h: {k: v for k, v in h.items() if k != str(args.issue)},
+                        mutex_name="handoffs", default={})
     except Exception as e:
         try:
             gh.remove_label(args.issue, "agent-working")  # best-effort; may not have been set yet
@@ -1330,8 +1334,8 @@ def cmd_finish(args, ctx, gh, git):
         # Written BEFORE the label, so the label never names a handoff that
         # does not exist. The reverse (a record with no label) only costs the
         # mirror: `claim` reads the record, not the label.
-        write_json(ctx, ctx.paths.handoffs,
-                   {**read_json(ctx.paths.handoffs, default={}), str(args.issue): record})
+        update_json(ctx, ctx.paths.handoffs, lambda h: {**h, str(args.issue): record},
+                    mutex_name="handoffs", default={})
     if args.outcome in ("answered", "blocked"):
         # Both outcomes post this text as a comment on a PUBLIC issue, and a
         # spike's answer is free-form output from a probe that may have read

@@ -151,6 +151,20 @@ def test_clear_halt_writes_its_audit_line_before_removing_the_file(ctx, monkeypa
     assert op.paths.halt.exists()                    # ...and the switch really did survive
 
 
+def test_set_halt_lands_when_its_audit_mutex_times_out(ctx, monkeypatch):
+    """HALT must land even when its record cannot. The audit line now waits
+    for mutex `audit`, so a `MutexTimeout` there is one more way the record
+    can fail, and it must be swallowed like an `OSError`."""
+    from agentflow import state
+
+    def busy(c, name, **kw):
+        raise state.MutexTimeout(f"mutex {name!r} busy")
+
+    monkeypatch.setattr(state, "mutex", busy)
+    lock.set_halt(ctx, "regression on master")
+    assert lock.halted(ctx) == "regression on master"
+
+
 def test_require_operator_allows_a_stale_lock_but_not_a_live_one(ctx):
     """The deliberate ASYMMETRY in `require_operator`, which would silently
     vanish if someone "tightened" it to refuse any lock at all. `cmd_recover`

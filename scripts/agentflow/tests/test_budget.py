@@ -52,3 +52,26 @@ def test_loop_counter_is_durable_across_contexts(ctx):
     assert budget.loop_tick(again, max_issues=2) == 0
     with pytest.raises(budget.BudgetExceeded):
         budget.loop_tick(again, max_issues=2)
+
+
+def test_two_loop_ticks_at_once_spend_one_slot_each(root):
+    """Design test 14 (the `loop-tick` form). Two sessions at
+    `issues_done = 2` under `--max 3`: without a mutex both read 2 and both
+    write 3, and a 4th issue is claimed. Exactly one tick may succeed. Run
+    through the real CLI in two real processes; the reads are slowed so both
+    happen before either write."""
+    import json
+    from agentflow.tests.conftest import run_concurrently
+    loop = root / ".agent" / "runs" / "loop.json"
+    loop.parent.mkdir(parents=True)
+    loop.write_text(json.dumps({"issues_done": 2}), encoding="utf-8")
+    body = """
+    from agentflow import cli
+    slow_reads("loop.json")
+    barrier()
+    sys.exit(cli.main(["--root", str(ROOT), "--repo", "o/r", "--run-id", TAG, "loop-tick", "--max", "3"]))
+    """
+    results = run_concurrently(root, body, ["a", "b"])
+    assert sorted(r[0] for r in results) == [0, 1], results
+    assert sorted(json.loads(r[1]).get("exhausted", "ok") for r in results) == ["loop", "ok"]
+    assert json.loads(loop.read_text(encoding="utf-8")) == {"issues_done": 3}

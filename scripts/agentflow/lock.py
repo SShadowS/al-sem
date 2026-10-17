@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 
-from .state import Ctx, append_audit, read_json, write_json
+from .state import Ctx, MutexTimeout, append_audit, read_json, write_json
 
 STALE_SECONDS = 30 * 60
 
@@ -188,7 +188,7 @@ def set_halt(ctx: Ctx, reason: str) -> None:
     ctx.paths.halt.write_text(reason + "\n", encoding="utf-8")
     try:
         append_audit(ctx, {"action": "halt-set", "reason": reason})
-    except OSError:
+    except (OSError, MutexTimeout):
         pass
 
 

@@ -137,6 +137,81 @@ def test_read_json_retries_a_bad_read(ctx, monkeypatch, first):
     assert len(reads) == 1 + state.SHARING_RETRIES
 
 
+def test_a_nested_take_of_one_mutex_times_out_instead_of_hanging(ctx):
+    """Design risk (g)9. An OS file lock is not re-entrant, so code that takes
+    a mutex it already holds waits for itself. The rule is that only public
+    entry points take a mutex; this pins that breaking it is a loud
+    `MutexTimeout` after the timeout, not a hang."""
+    import time
+    with state.mutex(ctx, "registry"):
+        t0 = time.monotonic()
+        with pytest.raises(state.MutexTimeout):
+            with state.mutex(ctx, "registry", timeout=0.3):
+                pass
+        assert time.monotonic() - t0 < 5
+        with state.mutex(ctx, "audit", timeout=0.3):    # another name is a different lock
+            pass
+    with state.mutex(ctx, "registry", timeout=0.3):    # released on exit
+        pass
+
+
+def test_a_mutex_excludes_another_process(root, ctx):
+    """The lock is an OS lock, so it holds against a second PROCESS, which is
+    the case it exists for."""
+    body = """
+    from agentflow import state
+    from agentflow.state import Ctx, Paths
+    barrier()
+    try:
+        with state.mutex(Ctx(Paths(ROOT), run_id=TAG), "registry", timeout=0.5):
+            print("got it")
+    except state.MutexTimeout:
+        print("timed out")
+    """
+    with state.mutex(ctx, "registry"):
+        held = run_concurrently(root, body, ["a"])
+    free = run_concurrently(root, body, ["b"])
+    assert [(r[0], r[1].strip()) for r in held + free] == [(0, "timed out"), (0, "got it")], held + free
+
+
+def test_a_mutex_under_dry_run_writes_nothing(dry_ctx):
+    before = tree_snapshot(dry_ctx.paths.root)
+    with state.mutex(dry_ctx, "registry"):
+        pass
+    assert tree_snapshot(dry_ctx.paths.root) == before
+
+
+def test_update_json_writes_what_fn_returns_and_nothing_when_fn_raises(ctx, dry_ctx):
+    target = ctx.paths.agent / "x.json"
+    assert state.update_json(ctx, target, lambda d: {**d, "a": 1}, mutex_name="x", default={}) == {"a": 1}
+    assert state.update_json(ctx, target, lambda d: {**d, "b": 2}, mutex_name="x", default={}) == {"a": 1, "b": 2}
+
+    def refuse(d):
+        raise ValueError("no")
+
+    with pytest.raises(ValueError):
+        state.update_json(ctx, target, refuse, mutex_name="x", default={})
+    assert read_json(target) == {"a": 1, "b": 2}
+    with pytest.raises(DryRunViolation):
+        state.update_json(dry_ctx, dry_ctx.paths.agent / "y.json", lambda d: d, mutex_name="x")
+    assert not (dry_ctx.paths.agent / "y.json").exists()
+
+
+def test_append_audit_takes_the_audit_mutex(ctx, monkeypatch):
+    """`open(..., "a")` from two processes is not an atomic append on
+    Windows, so every audit line is written under mutex `audit`."""
+    real, taken = state.mutex, []
+
+    def recording(c, name, **kw):
+        taken.append(name)
+        return real(c, name, **kw)
+
+    monkeypatch.setattr(state, "mutex", recording)
+    state.append_audit(ctx, {"action": "x"})
+    assert taken == ["audit"]
+    assert json.loads(ctx.paths.audit.read_text(encoding="utf-8"))["action"] == "x"
+
+
 def test_run_id_is_time_prefixed_and_unique():
     a = new_run_id(1_700_000_000.0)
     b = new_run_id(1_700_000_000.0)

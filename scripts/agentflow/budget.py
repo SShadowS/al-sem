@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .state import Ctx, read_json, write_json
+from .state import Ctx, read_json, update_json, write_json
 
 CAPS: dict[str, int] = {
     "spec_rounds": 5,
@@ -89,14 +89,18 @@ def snapshot(ctx: Ctx) -> dict:
     return {"counts": data["counts"], "claimed_at": data["claimed_at"], "caps": CAPS}
 
 
+# `loop.json` is shared by every session, so its read-modify-write holds mutex
+# `registry`: two ticks at once must not both read 2 and both write 3.
 def loop_reset(ctx: Ctx) -> None:
-    write_json(ctx, ctx.paths.loop, {"issues_done": 0})
+    update_json(ctx, ctx.paths.loop, lambda _: {"issues_done": 0}, mutex_name="registry")
 
 
 def loop_tick(ctx: Ctx, max_issues: int) -> int:
-    data = read_json(ctx.paths.loop, default={"issues_done": 0})
-    done = data["issues_done"] + 1
-    if done > max_issues:
-        raise BudgetExceeded("loop")
-    write_json(ctx, ctx.paths.loop, {"issues_done": done})
-    return max_issues - done
+    def tick(data: dict) -> dict:
+        done = data["issues_done"] + 1
+        if done > max_issues:
+            raise BudgetExceeded("loop")
+        return {"issues_done": done}
+
+    data = update_json(ctx, ctx.paths.loop, tick, mutex_name="registry", default={"issues_done": 0})
+    return max_issues - data["issues_done"]

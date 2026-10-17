@@ -3350,3 +3350,66 @@ def test_a_handoff_record_without_reviewers_still_claims(capsys, repo_pair, fake
     assert code == 0, out
     assert out["handoff"] == old and "reviewers" not in out["handoff"]
     assert "8" not in handoffs(clone)
+
+
+def test_a_claim_consuming_its_handoff_keeps_a_record_written_meanwhile(
+        capsys, repo_pair, fake_home, monkeypatch):
+    """`claim` reads `handoffs.json` early and consumes its own record only
+    after its gh calls. A sibling run's `finish --outcome handoff` for ANOTHER
+    issue can land in between, and writing back the early snapshot dropped it.
+
+    PRECONDITION HAND-STATED: the sibling's record is written literally,
+    inside `reconcile_pending`, which `claim` calls between its read and its
+    consume."""
+    from agentflow import discoveries
+    _, clone = repo_pair
+    old = {"from_run": "run-old", "from_attempt": 1, "branch": BRANCH_A1, "sha": "a" * 40,
+           "body_hash": mergeops.body_hash("## Acceptance\nx"), "register_blob": "b" * 40, "files": []}
+    sibling = {**old, "from_run": "run-sibling", "sha": "c" * 40}
+    path = clone / ".agent" / "handoffs.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"8": old}))
+
+    def sibling_hands_off_issue_9(ctx, gh):
+        path.write_text(json.dumps({**json.loads(path.read_text()), "9": sibling}))
+        return []
+
+    monkeypatch.setattr(discoveries, "reconcile_pending", sibling_hands_off_issue_9)
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH))
+    assert code == 0, out
+    assert out["handoff"] == old
+    assert handoffs(clone) == {"9": sibling}
+
+
+def test_finish_writes_the_handoff_record_while_holding_the_handoffs_mutex(
+        capsys, repo_pair, fake_home, monkeypatch):
+    """`finish --outcome handoff` adds its record to `handoffs.json`, which
+    other runs also write. The write must happen INSIDE mutex `handoffs`, not
+    merely after taking it once."""
+    from contextlib import contextmanager
+    from agentflow import state
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    real_mutex, real_write, held, writes = state.mutex, state.write_json, set(), []
+
+    @contextmanager
+    def tracking(c, name, **kw):
+        with real_mutex(c, name, **kw):
+            held.add(name)
+            try:
+                yield
+            finally:
+                held.discard(name)
+
+    def recording(c, p, data):
+        writes.append((Path(p).name, "handoffs" in held))
+        return real_write(c, p, data)
+
+    monkeypatch.setattr(state, "mutex", tracking)
+    monkeypatch.setattr(state, "write_json", recording)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 0, out
+    assert [w for w in writes if w[0] == "handoffs.json"] == [("handoffs.json", True)]
+    assert handoffs(clone)["8"]["sha"] == sha

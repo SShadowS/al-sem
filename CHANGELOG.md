@@ -311,6 +311,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6 new tests in `scripts/agentflow/tests/test_{state,lock}.py`, one of them with
   two real processes; the suite is 300 passed (was 294).
 
+- **agentflow: shared records are read, changed and written under an OS lock
+  (`scripts/agentflow/{state,incidents,discoveries,budget,lock,cli}.py`).** Step
+  3 of the parallel-issues design. There is still one issue lock; this only
+  stops two processes from losing each other's updates.
+  - `state.mutex(ctx, name)` holds an OS file lock on
+    `.agent/mutex/<name>.lock` (`msvcrt.locking` on Windows, `fcntl.flock`
+    elsewhere). The OS drops it when the process dies, so it never goes stale.
+    It waits up to 30 s, then raises `MutexTimeout`. It is not re-entrant, so
+    only public entry points take one. It is a no-op under `--dry-run`.
+  - `state.update_json` is the one read-modify-write helper: it holds the
+    mutex, reads, applies a function and writes. When the function raises,
+    nothing is written.
+  - Moved onto it: `loop.json` (`loop-tick`, `loop-reset`; mutex `registry`),
+    `handoffs.json` (`claim`'s consume and `finish --outcome handoff`; mutex
+    `handoffs`), and `incidents.json` (open, outcome, verified, resolve; mutex
+    `incidents`). `claim` used to write back the copy it read before its gh
+    calls, which dropped a handoff another run wrote in between.
+  - `file-discoveries` holds mutex `discoveries` per discovery, from the index
+    check through search, create and save, and re-reads the index inside it;
+    `reconcile_pending` holds it too. Before, two runs filing one discovery at
+    once both searched, found nothing, and both created a public issue. This
+    mutex is held across gh calls, so its waiters allow 300 s.
+  - Every `audit.jsonl` line is appended under mutex `audit`. `set_halt` still
+    lands HALT when that mutex times out.
+
+  11 new tests, 4 of them with two real processes (two loop ticks at
+  `issues_done = 2` under `--max 3`, two incidents, one discovery filed twice, a
+  mutex held across processes); the suite is 311 passed (was 300).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.
