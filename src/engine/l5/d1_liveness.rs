@@ -51,6 +51,7 @@ use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
 use crate::engine::l5::d1_graph::{D1Edge, D1Graph};
 use crate::engine::l5::d1_temp::ParamTemp;
 use crate::engine::l5::detector_context::DetectorContext;
+use crate::engine::l5::path_temp_resolve::step_one_frame;
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// The single-parameter transfer an edge applies to ONE needed callee
@@ -102,7 +103,10 @@ enum EdgeParamOutcome {
 ///    seeding `proven_entries` before even checking `binding_ok`).
 /// 2. `!edge.binding_ok` (a non-allowlisted edge kind) -> `Unknown` — no
 ///    caller-frame binding semantics at all.
-/// 3. missing callsite / missing binding for `p` -> `Unknown`.
+/// 3. the binding for `p`, through `path_temp_resolve::step_one_frame` (the
+///    backward resolver's own per-hop step): a missing callsite or binding ->
+///    `Unknown`; on an `implicit-trigger` edge (#96 D3) the trigger's `Rec`
+///    binds to the firing record op's temp state.
 /// 4. `Known(true)` -> `Temp`; `Known(false)` -> `Physical`;
 ///    `ParameterDependent(j)` -> `Copy(j)`; `Unknown` source -> `Unknown`.
 fn classify_edge_param(
@@ -118,20 +122,11 @@ fn classify_edge_param(
     if !edge.binding_ok {
         return EdgeParamOutcome::Const(ParamTemp::Unknown);
     }
-    let Some(cs_id) = edge.callsite_id else {
-        return EdgeParamOutcome::Const(ParamTemp::Unknown);
-    };
-    let Some(cs) = caller.call_sites.iter().find(|c| c.id == cs_id) else {
-        return EdgeParamOutcome::Const(ParamTemp::Unknown);
-    };
-    match cs.source_temp_state_for(p) {
-        Some(ts) => match TempStateKind::from_p_temp_state(ts) {
-            TempStateKind::Known(true) => EdgeParamOutcome::Const(ParamTemp::Temp),
-            TempStateKind::Known(false) => EdgeParamOutcome::Const(ParamTemp::Physical),
-            TempStateKind::ParameterDependent(j) => EdgeParamOutcome::Copy(j),
-            TempStateKind::Unknown => EdgeParamOutcome::Const(ParamTemp::Unknown),
-        },
-        None => EdgeParamOutcome::Const(ParamTemp::Unknown),
+    match step_one_frame(Some(caller), edge.callsite_id, p, Some(edge.kind)) {
+        TempStateKind::Known(true) => EdgeParamOutcome::Const(ParamTemp::Temp),
+        TempStateKind::Known(false) => EdgeParamOutcome::Const(ParamTemp::Physical),
+        TempStateKind::ParameterDependent(j) => EdgeParamOutcome::Copy(j),
+        TempStateKind::Unknown => EdgeParamOutcome::Const(ParamTemp::Unknown),
     }
 }
 
@@ -604,7 +599,7 @@ mod tests {
             .iter()
             .map(|&j| lookup(&a_caller_state, j))
             .collect();
-        let a_oracle = cross_hop(&a_caller_state, a_routine, "A/cs0", "H", true, &cw);
+        let a_oracle = cross_hop(&a_caller_state, a_routine, "A/cs0", "H", "direct", &cw);
         let a_transfers = &liveness.edge_transfers[0][0];
         assert_eq!(a_transfers.len(), 5);
         for (slot, &p) in liveness.need[2].iter().enumerate() {
@@ -620,7 +615,7 @@ mod tests {
         // vector is empty — only Const transfers are legal here (never Copy).
         let b_caller_state: TempVec = TempVec::new();
         let b_slot_values: Vec<ParamTemp> = Vec::new();
-        let b_oracle = cross_hop(&b_caller_state, b_routine, "B/cs0", "H", false, &cw);
+        let b_oracle = cross_hop(&b_caller_state, b_routine, "B/cs0", "H", "dynamic", &cw);
         let b_transfers = &liveness.edge_transfers[1][0];
         assert_eq!(b_transfers.len(), 5);
         for (slot, &p) in liveness.need[2].iter().enumerate() {
@@ -631,5 +626,88 @@ mod tests {
                 "edge B->H, callee param {p}: transfer must equal cross_hop"
             );
         }
+    }
+
+    /// #96 D3: an `implicit-trigger` edge binds the trigger's `Rec`
+    /// (`PD(RECEIVER_PARAM_INDEX)`) to the firing record op's temp state, in
+    /// the transfer table exactly as in `cross_hop`. `R`'s op is a real record
+    /// (`Const(Physical)`), `F`'s op is its own by-var param 2 (`Copy`, so
+    /// `Need[F] = {2}`).
+    #[test]
+    fn trigger_edge_transfer_binds_the_firing_op() {
+        use crate::program::body::features::RECEIVER_PARAM_INDEX as REC;
+        let mut t = routine("T", "trigger");
+        let mut top0 = record_op("T/op0", "Modify", "Rec", Some("t/T"), vec![], false);
+        top0.temp_state = Some(ts_pd(REC));
+        t.record_operations = vec![top0];
+        let mut r = routine("R", "procedure");
+        let mut rop = record_op("R/op0", "Validate", "X", Some("t/T"), vec![], false);
+        rop.temp_state = Some(ts_known(false));
+        r.record_operations = vec![rop];
+        let mut f = routine("F", "procedure");
+        let mut fop = record_op("F/op0", "Validate", "P", Some("t/T"), vec![], false);
+        fop.temp_state = Some(ts_pd(2));
+        f.record_operations = vec![fop];
+
+        let routines = vec![r, f, t];
+        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let mut node_ix = HashMap::new();
+        for (i, id) in ["R", "F", "T"].iter().enumerate() {
+            node_ix.insert(*id, i as u32);
+        }
+        let trig = |op: &'static str| D1Edge {
+            to: 2,
+            kind: "implicit-trigger",
+            callsite_id: Some(op),
+            loop_depth: 0,
+            binding_ok: true,
+        };
+        let graph = D1Graph {
+            node_ids: vec!["R", "F", "T"],
+            node_ix,
+            edges: vec![vec![trig("R/op0")], vec![trig("F/op0")], vec![]],
+            terminals: vec![
+                vec![],
+                vec![],
+                vec![D1Terminal {
+                    op: &routines[2].record_operations[0],
+                    owner: &routines[2],
+                    local_depth: 0,
+                }],
+            ],
+        };
+        let cw = ClosedWorldTempParams::new();
+        let liveness = compute_liveness(&graph, &ctx, &cw);
+        assert_eq!(liveness.need[2], vec![REC]);
+        assert!(liveness.need[0].is_empty(), "R's op is a constant");
+        assert_eq!(liveness.need[1], vec![2], "F's op forwards its param 2");
+
+        let r_oracle = cross_hop(
+            &TempVec::new(),
+            &routines[0],
+            "R/op0",
+            "T",
+            "implicit-trigger",
+            &cw,
+        );
+        assert_eq!(lookup(&r_oracle, REC), ParamTemp::Physical);
+        assert!(matches!(
+            liveness.edge_transfers[0][0][0],
+            ParamTransfer::Const(ParamTemp::Physical)
+        ));
+        let f_state: TempVec = vec![(2, ParamTemp::Temp)].into_iter().collect();
+        let f_oracle = cross_hop(
+            &f_state,
+            &routines[1],
+            "F/op0",
+            "T",
+            "implicit-trigger",
+            &cw,
+        );
+        assert_eq!(lookup(&f_oracle, REC), ParamTemp::Temp);
+        assert!(matches!(
+            liveness.edge_transfers[1][0][0],
+            ParamTransfer::Copy { caller_slot: 0 }
+        ));
     }
 }

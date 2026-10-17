@@ -1246,8 +1246,8 @@
                 "sourceKind": "implicit-rec",
                 "sourceVariableName": "rec",
                 "sourceTempState": {
-                  "kind": "known",
-                  "value": false
+                  "kind": "parameter-dependent",
+                  "parameterIndex": 4294967295
                 },
                 "argumentAnchor": {
                   "sourceUnitId": "ws:src/Trigger.al",
@@ -1283,8 +1283,8 @@
             "id": "r0/456b5b5350c24fadcb8b82b3fbbadddec457383baa39260c3324023c3ef2a16b/rv/rec",
             "name": "Rec",
             "tempState": {
-              "kind": "known",
-              "value": false
+              "kind": "parameter-dependent",
+              "parameterIndex": 4294967295
             },
             "isParameter": false
           }

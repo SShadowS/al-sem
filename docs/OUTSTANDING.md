@@ -120,20 +120,24 @@ sizings marked pre-arc).
     `IsPrimarySetup = true` overloads create. CDO and DO never call them. A guard
     cannot express this; d35 Group 2 stays a false positive until it can.
   - **Recursive SCCs and table triggers.** Guards are kept only in a non-recursive
-    singleton's cone, and the implicit-trigger path carries none.
+    singleton's cone. Across an implicit-trigger edge only the CALLER's guard on the
+    firing record operation applies (#96); the trigger's own parameter guards are
+    dropped, since a trigger has no argument list to re-anchor them on.
   - **`case P of`** and guards on non-boolean parameters (`if Mode = Mode::X`).
 
-- [ ] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
-  S3.4, which moved the existing rule into the program resolver UNCHANGED —
-  `applicability::TriggerSiteRule`). Two open questions, both changing findings:
-  - `Insert(false)` is not read: the body pipeline (`ir_walk`'s `run_trigger`) and
-    `TriggerSiteRule` read the run-trigger literal for `Modify`/`Delete` only, so
-    `Insert(false)` still "may fire" `OnInsert`. AL's `Insert` has the same parameter.
-  - No argument means "may fire" on both engines (`Maybe`). AL's documented default for
-    `Insert`/`Modify`/`Delete` is `RunTrigger = false`, i.e. `Rec.Modify()` would NOT run
-    `OnModify`. If true, every argument-less write currently inherits its table
-    trigger's effects. MEASURE in BC (`bc-measure`) before changing it; then fix both
-    the body pipeline and `TriggerSiteRule` together and triage the finding delta.
+- [x] **Implicit-trigger `RunTrigger` semantics** (recorded 2026-10-06, engine-switch
+  S3.4; settled in #96). The two open questions were stale; measured on master, the
+  rules are:
+  - `Insert`, `Modify` and `Delete` with no argument, or with a literal `false`, fire
+    nothing: the resolver (`applicability::TriggerSiteRule`) makes no trigger edge
+    for them. This matches AL's default `RunTrigger = false`.
+  - A literal `true` fires the trigger every time the op runs (`fires: always`).
+  - A non-literal argument (`Insert(B)`) may fire it (`fires: maybe`).
+  - `ModifyAll` and `DeleteAll` are always `maybe`, even with `true`: they run the
+    trigger once per matching row, and the row set may be empty.
+  - `Validate` and `Rename` always fire.
+  Since #96 the body pipeline (`ir_walk`'s `run_trigger`) also captures `Insert`'s
+  literal, and the adapter decides `fires` once per trigger edge from it.
 
 - [ ] **Detector policy for dependency routes and multi-implementer sites** (recorded
   2026-10-06, engine-switch S3.6). Two detector decisions, both changing findings, kept

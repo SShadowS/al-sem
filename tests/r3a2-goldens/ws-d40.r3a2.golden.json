@@ -247,13 +247,13 @@
       "routineId": "11111111-0000-0000-0000-000000abc440:TableExtension:50411#41aa37e5d85bb65592c32bb70095a37f9b8bad7d26bc61acafe5340bf50bd73e",
       "dbEffects": [
         {
-          "effectKey": "Modify|unknown|11111111-0000-0000-0000-000000abc440:TableExtension:50411#6bd302e9c3fb7fd8e26d5de9f456184b0512cd30d4fe37e26acc862905234da8/op0|f",
+          "effectKey": "Modify|unknown|11111111-0000-0000-0000-000000abc440:TableExtension:50411#6bd302e9c3fb7fd8e26d5de9f456184b0512cd30d4fe37e26acc862905234da8/op0|p4294967295",
           "op": "Modify",
           "tableId": "unknown",
           "operationId": "11111111-0000-0000-0000-000000abc440:TableExtension:50411#6bd302e9c3fb7fd8e26d5de9f456184b0512cd30d4fe37e26acc862905234da8/op0",
           "tempState": {
-            "kind": "known",
-            "value": false
+            "kind": "parameter-dependent",
+            "parameterIndex": 4294967295
           },
           "via": "inherited"
         }

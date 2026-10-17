@@ -351,6 +351,10 @@ pub struct SnapshotCapabilityFact {
     pub witness_operation_id: Option<String>,
     pub witness_callsite_id: Option<String>,
     pub extra: Option<SnapCapabilityExtra>,
+    /// #96 D5: the firing operation of an inherited fact whose first hop is an
+    /// `implicit-trigger` edge (`CapabilityFact::witness_first_hop_operation_id`),
+    /// `None` otherwise. Serialized last, only when present.
+    pub witness_first_hop_operation_id: Option<String>,
 }
 
 impl SnapshotCapabilityFact {
@@ -418,6 +422,9 @@ impl Serialize for SnapshotCapabilityFact {
             if let Some(extra) = &self.extra {
                 map.serialize_entry("extra", extra)?;
             }
+        }
+        if let Some(op) = &self.witness_first_hop_operation_id {
+            map.serialize_entry("witnessFirstHopOperationId", op)?;
         }
         map.end()
     }
@@ -514,6 +521,26 @@ pub enum SnapshotGraphEdge {
         #[serde(rename = "edgeId")]
         edge_id: String,
     },
+    /// #96 D4: a record operation (`T.Validate`, `T.Insert(true)`, ...) firing a
+    /// table or field trigger. It has no call site (`callsite_id()` is `None`);
+    /// its identity is the firing operation. `anchor` is that operation's source
+    /// anchor, `None` when the operation is not in a workspace routine's body
+    /// (the edge is kept anyway, so the snapshot never lacks an edge the cone
+    /// follows).
+    ImplicitTrigger {
+        kind: &'static str,
+        from: String,
+        to: String,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(rename = "triggerKind")]
+        trigger_kind: String,
+        fires: crate::engine::l4::combined_graph::TriggerFires,
+        #[serde(rename = "sourceAnchor", skip_serializing_if = "Option::is_none")]
+        anchor: Option<SnapshotSourceAnchor>,
+        #[serde(rename = "edgeId")]
+        edge_id: String,
+    },
 }
 
 impl SnapshotGraphEdge {
@@ -554,6 +581,13 @@ impl SnapshotGraphEdge {
                 to,
                 edge_id,
                 ..
+            }
+            | SnapshotGraphEdge::ImplicitTrigger {
+                kind,
+                from,
+                to,
+                edge_id,
+                ..
             } => format!("{kind}|{from}|{to}|{edge_id}"),
             SnapshotGraphEdge::ObjectRunUnresolved {
                 kind,
@@ -571,7 +605,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { edge_id, .. }
             | SnapshotGraphEdge::ObjectRunResolved { edge_id, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { edge_id, .. }
-            | SnapshotGraphEdge::EventDispatch { edge_id, .. } => edge_id,
+            | SnapshotGraphEdge::EventDispatch { edge_id, .. }
+            | SnapshotGraphEdge::ImplicitTrigger { edge_id, .. } => edge_id,
         }
     }
 
@@ -582,11 +617,14 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { kind, .. }
             | SnapshotGraphEdge::ObjectRunResolved { kind, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { kind, .. }
-            | SnapshotGraphEdge::EventDispatch { kind, .. } => kind,
+            | SnapshotGraphEdge::EventDispatch { kind, .. }
+            | SnapshotGraphEdge::ImplicitTrigger { kind, .. } => kind,
         }
     }
 
     /// callsiteId of a call-family edge (for the resolution ledger lookup).
+    /// An implicit-trigger edge has none (#96 M1): its identity is its
+    /// operation ([`Self::edge_operation_id`]).
     fn callsite_id(&self) -> Option<&str> {
         match self {
             SnapshotGraphEdge::DirectCall { callsite_id, .. }
@@ -594,7 +632,9 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { callsite_id, .. }
             | SnapshotGraphEdge::ObjectRunResolved { callsite_id, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { callsite_id, .. } => Some(callsite_id),
-            SnapshotGraphEdge::EventDispatch { .. } => None,
+            SnapshotGraphEdge::EventDispatch { .. } | SnapshotGraphEdge::ImplicitTrigger { .. } => {
+                None
+            }
         }
     }
 
@@ -605,7 +645,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::VariableTypedCall { to, .. }
             | SnapshotGraphEdge::InterfaceDispatch { to, .. }
             | SnapshotGraphEdge::ObjectRunResolved { to, .. }
-            | SnapshotGraphEdge::EventDispatch { to, .. } => Some(to),
+            | SnapshotGraphEdge::EventDispatch { to, .. }
+            | SnapshotGraphEdge::ImplicitTrigger { to, .. } => Some(to),
             SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
         }
     }
@@ -618,7 +659,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { from, .. }
             | SnapshotGraphEdge::ObjectRunResolved { from, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { from, .. }
-            | SnapshotGraphEdge::EventDispatch { from, .. } => from,
+            | SnapshotGraphEdge::EventDispatch { from, .. }
+            | SnapshotGraphEdge::ImplicitTrigger { from, .. } => from,
         }
     }
 
@@ -626,6 +668,16 @@ impl SnapshotGraphEdge {
     fn event_id(&self) -> Option<&str> {
         match self {
             SnapshotGraphEdge::EventDispatch { event_id, .. } => Some(event_id),
+            _ => None,
+        }
+    }
+
+    /// The firing record operation of an implicit-trigger edge (#96 D2), the
+    /// `PdEdgeKey`'s last part and digest's first-hop selector (#96 D5). `None`
+    /// on every other kind.
+    pub fn edge_operation_id(&self) -> Option<&str> {
+        match self {
+            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => Some(operation_id),
             _ => None,
         }
     }
@@ -1190,6 +1242,7 @@ fn snapshot_fact(f: &CapabilityFact, subject: &str) -> SnapshotCapabilityFact {
         witness_operation_id: f.witness_operation_id.clone(),
         witness_callsite_id: f.witness_callsite_id.clone(),
         extra: f.extra.as_ref().map(snap_capability_extra),
+        witness_first_hop_operation_id: f.witness_first_hop_operation_id.clone(),
     }
 }
 
@@ -1270,6 +1323,14 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
     for r in &base.ws_routines {
         routine_anchor.insert(r.id.as_str(), &r.source_anchor);
     }
+    // record op id -> (anchor, owning-routine internal id) for implicit-trigger
+    // anchors (#96 D4).
+    let mut op_anchor: HashMap<&str, (&PAnchor, &str)> = HashMap::new();
+    for r in &base.ws_routines {
+        for ro in &r.record_operations {
+            op_anchor.insert(ro.id.as_str(), (&ro.source_anchor, r.id.as_str()));
+        }
+    }
 
     let map = &base.routine_to_stable;
 
@@ -1298,10 +1359,9 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
             event_id: event_id_internal.as_deref(),
             operation_id: e.operation_id.as_deref(),
             target_object: target_object_internal.as_deref(),
-            // implicit-trigger triggerKind / dependency-export targetAppGuid are not
-            // modelled on the Rust TypedEdge (no such typed edge in the source-only
-            // corpus; implicit-trigger is filtered from typedEdges anyway).
-            trigger_kind: None,
+            // Set on implicit-trigger edges only (#96 D1). dependency-export
+            // targetAppGuid is not modelled on the Rust TypedEdge.
+            trigger_kind: e.trigger_kind.as_deref(),
             target_app_guid: None,
             interface_name: e.interface_name.as_deref(),
         });
@@ -1408,8 +1468,27 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
                     edge_id: edge_id.clone(),
                 }
             }
-            // Unmodelled kind (implicit-trigger / dependency-export) - never reached
-            // for the source-only corpus; skip rather than emit a malformed edge.
+            // #96 D4: never dropped for a missing anchor (M2): the cone follows
+            // this edge, so the PD arena needs its twin. The anchor is the
+            // firing op's, absent when the op is not in a workspace body.
+            "implicit-trigger" => SnapshotGraphEdge::ImplicitTrigger {
+                kind: "implicit-trigger",
+                from: from_stable.clone(),
+                to: to_stable.clone().unwrap_or_default(),
+                operation_id: e.operation_id.clone().unwrap_or_default(),
+                trigger_kind: e.trigger_kind.clone().unwrap_or_default(),
+                fires: e
+                    .fires
+                    .unwrap_or(crate::engine::l4::combined_graph::TriggerFires::Maybe),
+                anchor: e
+                    .operation_id
+                    .as_deref()
+                    .and_then(|op| op_anchor.get(op))
+                    .map(|(a, rid)| anchor_from_panchor(a, rid)),
+                edge_id: edge_id.clone(),
+            },
+            // Unmodelled kind (dependency-export) - never built by the combined
+            // graph; skip rather than emit a malformed edge.
             _ => continue,
         };
         out.push(edge);
@@ -1426,8 +1505,10 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
 // ---------------------------------------------------------------------------
 
 /// Edge identity shared by a cone `TypedOutEdge` and a snapshot edge:
-/// `(kind, stable from, stable to, callsite, event)`.
-type PdEdgeKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str);
+/// `(kind, stable from, stable to, callsite, event, operation)`. `operation` is
+/// the firing record op of an `implicit-trigger` edge (#96 D2), `""` on every
+/// other kind, so two ops of one caller that fire one trigger never collide.
+type PdEdgeKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str, &'a str);
 
 fn derive_pd_arena(
     base: &R3a3SourceBase,
@@ -1452,6 +1533,7 @@ fn derive_pd_arena(
             to,
             e.callsite_id().unwrap_or(""),
             e.event_id().unwrap_or(""),
+            e.edge_operation_id().unwrap_or(""),
         );
         let prev = edge_ix.insert(key, ix);
         debug_assert!(
@@ -1489,6 +1571,7 @@ fn derive_pd_arena(
                 to.as_str(),
                 edge.callsite.as_deref().unwrap_or(""),
                 event,
+                edge.operation_id.as_deref().unwrap_or(""),
             );
             match edge_ix.get(&key) {
                 Some(&e) => out.links.push((l.callee_state, e)),
@@ -1590,6 +1673,13 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
                     referenced.insert(w.clone());
                 }
             }
+        }
+    }
+    // #96 D4: the firing op of every implicit-trigger edge, so a trigger hop's
+    // control context (digest conditionality) is in the index.
+    for e in &base.graph.typed_edges {
+        if let Some(op) = &e.operation_id {
+            referenced.insert(op.clone());
         }
     }
 
@@ -2478,6 +2568,7 @@ mod capability_fact_serialize_tests {
                 record_variable_id: None,
                 temp_state: None,
             }),
+            witness_first_hop_operation_id: None,
         }
     }
 

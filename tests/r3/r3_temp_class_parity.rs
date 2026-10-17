@@ -9,10 +9,11 @@
 //! and L4 unions terminal rows into every ancestor.
 //!
 //! **Matched graph.** L4 is rebuilt on the combined graph RESTRICTED to edges
-//! that have a typed twin (same from, to, call site and event), because the cone
-//! propagates over typed edges only. `implicit-trigger` and any other edge with
-//! no typed counterpart is dropped and listed by kind. The restriction is
-//! computed from the graphs, never from the cone result being tested.
+//! that have a typed twin (same from, to, call site and event; an
+//! `implicit-trigger` edge by its firing operation instead of a call site,
+//! #96 D7), because the cone propagates over typed edges only. Any edge with no
+//! typed counterpart is dropped and listed by kind. The restriction is computed
+//! from the graphs, never from the cone result being tested.
 //!
 //! **Supported ops.** The capability write verbs after D5: Insert→insert;
 //! Modify and ModifyAll→modify; Delete and DeleteAll→delete. Rename is excluded
@@ -112,10 +113,21 @@ fn projected_class(f: &PCapabilityFact) -> &'static str {
 
 /// L4 built on the matched graph: the model's combined graph restricted to the
 /// edges with a typed twin. Returns the bundle and the dropped edges by kind.
+///
+/// An `implicit-trigger` edge is twinned by its firing operation (#96 D7): the
+/// typed edge has no call site and carries the op in `operation_id`, while the
+/// combined edge carries the op in both `callsite_id` and `operation_id`.
 pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) {
     let ws = &resolved.workspace;
     let full = build_combined_graph(ws, &resolved.calls, &resolved.events.graph);
-    let twins: HashSet<(String, String, Option<String>, Option<String>)> = full
+    type TwinKey = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let twins: HashSet<TwinKey> = full
         .typed_edges
         .iter()
         .filter_map(|t| {
@@ -124,6 +136,7 @@ pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) 
                 t.to.clone()?,
                 t.callsite_id.clone(),
                 t.event_id.clone(),
+                t.operation_id.clone(),
             ))
         })
         .collect();
@@ -133,11 +146,17 @@ pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) 
         let kept: Vec<_> = list
             .iter()
             .filter(|e| {
+                let trigger = e.kind == "implicit-trigger";
                 let key = (
                     e.from.clone(),
                     e.to.clone(),
-                    e.callsite_id.clone(),
+                    if trigger { None } else { e.callsite_id.clone() },
                     e.event_id.clone(),
+                    if trigger {
+                        e.operation_id.clone()
+                    } else {
+                        None
+                    },
                 );
                 let keep = twins.contains(&key);
                 if !keep {
@@ -198,6 +217,12 @@ pub fn display_by_id(resolved: &Model) -> HashMap<String, String> {
 fn compare_reduced(label: &str, resolved: &Model, guarded: &[&str], f: &mut Vec<String>) {
     let (bundle, dropped) = matched_l4(resolved);
     eprintln!("[{label}] A5 matched graph: dropped edges by kind {dropped:?}");
+    // #96 D7: every trigger edge has its typed twin, so none is dropped.
+    if let Some(n) = dropped.get("implicit-trigger") {
+        f.push(format!(
+            "[{label}] matched graph dropped {n} implicit-trigger edges"
+        ));
+    }
     let names = display_by_id(resolved);
     type Key = (String, String); // (verb, table)
     let mut cone: BTreeMap<String, BTreeMap<Key, BTreeSet<&str>>> = BTreeMap::new();

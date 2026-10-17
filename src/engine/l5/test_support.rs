@@ -212,6 +212,7 @@ pub fn fact(
         via: "self",
         witness_operation_id: None,
         witness_callsite_id: None,
+        witness_first_hop_operation_id: None,
         extra: None,
     }
 }

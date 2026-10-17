@@ -66,6 +66,8 @@ use smallvec::SmallVec;
 
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
+use crate::engine::l5::d1_graph::edge_kind_binding_ok;
+use crate::engine::l5::path_temp_resolve::step_one_frame;
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// Concrete resolved temp-ness of one callee parameter, forward-composed.
@@ -121,14 +123,15 @@ pub(crate) fn root_state(routine_id: &str, cw: &ClosedWorldTempParams) -> TempVe
 }
 
 /// Cross one hop caller -> callee, producing the callee frame's [`TempVec`].
-/// `binding_ok=false` (non-allowlisted edge kind) yields all-Unknown-except-
-/// proven. See module docs for the exact check order this reproduces.
+/// A non-allowlisted `edge_kind` ([`edge_kind_binding_ok`]) yields
+/// all-Unknown-except-proven. See module docs for the exact check order this
+/// reproduces.
 pub(crate) fn cross_hop(
     caller_state: &TempVec,
     caller: &ModelRoutine,
     callsite_id: &str,
     callee_id: &str,
-    binding_ok: bool,
+    edge_kind: &str,
     cw: &ClosedWorldTempParams,
 ) -> TempVec {
     // proven(callee, p) checked FIRST, unconditionally — a fact about the
@@ -136,8 +139,27 @@ pub(crate) fn cross_hop(
     // table (module docs).
     let mut out = proven_entries(callee_id, cw);
 
-    if !binding_ok {
+    if !edge_kind_binding_ok(edge_kind) {
         // Non-allowlisted hop kind: no caller-frame binding semantics at all.
+        return out;
+    }
+
+    // An `implicit-trigger` hop's `callsite_id` is the firing record OPERATION's
+    // id (#96 D3). It binds only the trigger's `Rec`, to that op's temp state,
+    // through the same per-parameter step the backward resolver takes.
+    if edge_kind == "implicit-trigger" {
+        let p = crate::program::body::features::RECEIVER_PARAM_INDEX;
+        if out.binary_search_by_key(&p, |&(i, _)| i).is_err() {
+            let val = match step_one_frame(Some(caller), Some(callsite_id), p, Some(edge_kind)) {
+                TempStateKind::Known(true) => ParamTemp::Temp,
+                TempStateKind::Known(false) => ParamTemp::Physical,
+                TempStateKind::ParameterDependent(j) => lookup(caller_state, j),
+                TempStateKind::Unknown => ParamTemp::Unknown,
+            };
+            if val != ParamTemp::Unknown {
+                insert_sorted(&mut out, p, val);
+            }
+        }
         return out;
     }
 
@@ -403,13 +425,6 @@ mod tests {
         }
     }
 
-    /// `direct | method | implicit-trigger` — the same binding-carrying
-    /// allowlist `D1Edge.binding_ok` (`d1_graph.rs`) and
-    /// `resolve_temp_along_path_closed_world`'s guard both apply.
-    fn binding_ok_for_kind(kind: &str) -> bool {
-        matches!(kind, "direct" | "method" | "implicit-trigger")
-    }
-
     /// One directed edge in a hand-built fixture graph: `from` calls `to` via
     /// `callsite_id` (owned by `from`), with the given resolved edge `kind`.
     struct FixtureEdge {
@@ -527,7 +542,7 @@ mod tests {
                         routine_by_id[e.from],
                         e.callsite_id,
                         e.to,
-                        binding_ok_for_kind(e.kind),
+                        e.kind,
                         cw,
                     );
                 }
@@ -745,6 +760,79 @@ mod tests {
             let routines = vec![h];
             let edges: Vec<FixtureEdge> = vec![];
             assert_all_paths_agree(&routines, &edges, "NONE_H", "NONE_H/op0", &empty_cw);
+        }
+
+        // --- implicit-trigger hop (#96 D3): the hop's id is the firing record
+        // OP of the caller, and the trigger's `Rec` (PD(receiver)) binds to that
+        // op's temp state. Three callers: a real record, a temporary one, and a
+        // forwarded by-var parameter whose own caller passes a temporary. ---
+        {
+            let rec = crate::program::body::features::RECEIVER_PARAM_INDEX;
+            let mut real = routine("TR_REAL");
+            real.record_operations
+                .push(record_op("TR_REAL/op0", Some(ts_known(false))));
+            let mut temp = routine("TR_TEMP");
+            temp.record_operations
+                .push(record_op("TR_TEMP/op0", Some(ts_known(true))));
+            let mut fwd = routine("TR_FWD");
+            fwd.record_operations
+                .push(record_op("TR_FWD/op0", Some(ts_pd(0))));
+            let mut top = routine("TR_TOP");
+            top.call_sites
+                .push(call_site("TR_TOP/cs0", 0, Some(ts_known(true))));
+            let mut t = routine("TR_T");
+            t.record_operations
+                .push(record_op("TR_T/op0", Some(ts_pd(rec))));
+            let routines = vec![real, temp, fwd, top, t];
+            let trig = |from: &'static str, op: &'static str| FixtureEdge {
+                from,
+                callsite_id: op,
+                to: "TR_T",
+                kind: "implicit-trigger",
+            };
+            let edges = vec![
+                trig("TR_REAL", "TR_REAL/op0"),
+                trig("TR_TEMP", "TR_TEMP/op0"),
+                trig("TR_FWD", "TR_FWD/op0"),
+                FixtureEdge {
+                    from: "TR_TOP",
+                    callsite_id: "TR_TOP/cs0",
+                    to: "TR_FWD",
+                    kind: "direct",
+                },
+            ];
+            assert_all_paths_agree(&routines, &edges, "TR_T", "TR_T/op0", &empty_cw);
+            // Not vacuous: the three roots give three different answers.
+            let by_id: HashMap<&str, &ModelRoutine> =
+                routines.iter().map(|r| (r.id.as_str(), r)).collect();
+            let at_t = |from: &str, op: &str, state: &TempVec| {
+                let s = cross_hop(
+                    state,
+                    by_id[from],
+                    op,
+                    "TR_T",
+                    "implicit-trigger",
+                    &empty_cw,
+                );
+                lookup(&s, rec)
+            };
+            assert_eq!(
+                at_t("TR_REAL", "TR_REAL/op0", &TempVec::new()),
+                ParamTemp::Physical
+            );
+            assert_eq!(
+                at_t("TR_TEMP", "TR_TEMP/op0", &TempVec::new()),
+                ParamTemp::Temp
+            );
+            let fwd_state = cross_hop(
+                &TempVec::new(),
+                by_id["TR_TOP"],
+                "TR_TOP/cs0",
+                "TR_FWD",
+                "direct",
+                &empty_cw,
+            );
+            assert_eq!(at_t("TR_FWD", "TR_FWD/op0", &fwd_state), ParamTemp::Temp);
         }
     }
 }

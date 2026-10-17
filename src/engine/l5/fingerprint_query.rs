@@ -1415,6 +1415,16 @@ pub fn format_hop(hop: &HumanHop) -> String {
             if *candidate_count == 1 { "" } else { "s" },
             raw_anchor_suffix(source_file, *line, *column)
         ),
+        HumanHop::ImplicitTrigger {
+            routine_display,
+            trigger_kind,
+            source_file,
+            line,
+            column,
+        } => format!(
+            "{routine_display} (via trigger {trigger_kind}{})",
+            raw_anchor_suffix(source_file, *line, *column)
+        ),
     }
 }
 

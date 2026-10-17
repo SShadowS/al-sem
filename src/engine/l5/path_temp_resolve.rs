@@ -69,6 +69,7 @@
 use std::collections::HashMap;
 
 use crate::engine::l4::effect_lattice::TempStateKind;
+use crate::engine::l4::summary_runner::trigger_receiver_temp_state;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
 use crate::engine::l5::finding::EvidenceStep;
 use crate::program::model::workspace::ModelRoutine;
@@ -188,7 +189,7 @@ pub fn resolve_temp_along_path_closed_world(
         // caller (edge.from); `callsite_id` is the call site in that caller.
         let parent = routine_by_id.get(hop.routine_id.as_str()).copied();
         let cs_id = hop.callsite_id.as_deref();
-        state = step_one_frame(parent, cs_id, i);
+        state = step_one_frame(parent, cs_id, i, edge_kind);
         // A PD result of the substitution is re-anchored to the PARENT frame.
         frame_routine = Some(hop.routine_id.as_str());
     }
@@ -210,14 +211,25 @@ pub fn resolve_temp_along_path_closed_world(
 /// `Some(Known(v))` → `Known(v)`; `Some(PD(j))` → `ParameterDependent(j)` (re-anchored
 /// to the PARENT frame at L2 — the same UPWARD re-symbolization Task 8 does — which
 /// the next loop turn then chases through the parent's own caller hop).
-fn step_one_frame(
+///
+/// This is the ONE per-parameter hop binding d1 uses: the backward resolver
+/// here, `d1_liveness::classify_edge_param` and `d1_temp::cross_hop`'s
+/// `implicit-trigger` arm all call it, so the forward/backward equivalence
+/// holds on a trigger hop by construction.
+pub(crate) fn step_one_frame(
     parent: Option<&ModelRoutine>,
     callsite_id: Option<&str>,
     callee_param_index: u32,
+    edge_kind: Option<&str>,
 ) -> TempStateKind {
     let (Some(parent), Some(cs_id)) = (parent, callsite_id) else {
         return TempStateKind::Unknown;
     };
+    // An `implicit-trigger` hop's `callsite_id` is the firing record OPERATION's id,
+    // not a call site (#96 D3): the trigger's `Rec` binds to that op's temp state.
+    if edge_kind == Some("implicit-trigger") {
+        return trigger_receiver_temp_state(parent, cs_id, callee_param_index).to_kind();
+    }
     let Some(cs) = parent.call_sites.iter().find(|c| c.id == cs_id) else {
         return TempStateKind::Unknown;
     };

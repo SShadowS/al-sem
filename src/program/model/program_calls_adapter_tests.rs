@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::engine::deps::app_package_zip::test_apps;
+use crate::engine::l4::combined_graph::TriggerFires;
 
 const DEP_GUID: &str = "dddddddd-b3b3-0000-0000-000000000003";
 
@@ -1057,6 +1058,8 @@ fn implicit_trigger_to_workspace() {
         e.to = Some(to.id.clone());
         e.dispatch_kind = DispatchKind::ImplicitTrigger;
         e.resolution = res;
+        // `Insert(true)` and `Validate` both fire every time (#96 D1).
+        e.fires = Some(TriggerFires::Always);
         e
     };
     assert_eq!(
@@ -1080,12 +1083,15 @@ fn implicit_trigger_to_workspace() {
     );
 }
 
-/// A trigger edge for the op `op` of routine `caller`.
+/// A trigger edge for the op `op` of routine `caller`. Every op these tests
+/// build it for (`Rename`, `Insert(true)`, `Modify(true)`) fires its trigger
+/// every time (#96 D1).
 fn trigger_edge(caller: &ModelRoutine, op: &ModelRecordOperation, to: &ModelRoutine) -> CallEdge {
     let mut e = CallEdge::base(&caller.id, &op.id, &op.id);
     e.to = Some(to.id.clone());
     e.dispatch_kind = DispatchKind::ImplicitTrigger;
     e.resolution = Resolution::Maybe;
+    e.fires = Some(TriggerFires::Always);
     e
 }
 

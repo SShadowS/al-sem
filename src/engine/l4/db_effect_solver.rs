@@ -1861,7 +1861,7 @@ pub(crate) mod tests {
     /// One db-touching record operation with the given (always-PD-or-known)
     /// temp state; `record_variable_name` is always `"Rec"` — no fixture below
     /// needs `RecordRoleSummary` field precision.
-    fn pd_record_op(
+    pub(crate) fn pd_record_op(
         id: &str,
         op: &str,
         table_id: &str,

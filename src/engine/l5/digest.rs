@@ -40,6 +40,7 @@ use std::rc::Rc;
 use serde::Serialize;
 
 use crate::engine::ids::sha256_hex;
+use crate::engine::l4::combined_graph::TriggerFires;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, EdgeIx, PdArena, SnapCapabilityExtra, SnapTempState, SnapValueSource,
@@ -320,48 +321,35 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
 // ---------------------------------------------------------------------------
 
 fn edge_kind(e: &SnapshotGraphEdge) -> &str {
-    match e {
-        SnapshotGraphEdge::DirectCall { kind, .. }
-        | SnapshotGraphEdge::VariableTypedCall { kind, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { kind, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { kind, .. }
-        | SnapshotGraphEdge::ObjectRunUnresolved { kind, .. }
-        | SnapshotGraphEdge::EventDispatch { kind, .. } => kind,
-    }
+    e.edge_kind()
 }
 
 fn edge_from(e: &SnapshotGraphEdge) -> &str {
-    match e {
-        SnapshotGraphEdge::DirectCall { from, .. }
-        | SnapshotGraphEdge::VariableTypedCall { from, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { from, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { from, .. }
-        | SnapshotGraphEdge::ObjectRunUnresolved { from, .. }
-        | SnapshotGraphEdge::EventDispatch { from, .. } => from,
-    }
+    e.edge_from()
 }
 
 /// `to` endpoint. None only for object-run-unresolved (no `to`).
 fn edge_to(e: &SnapshotGraphEdge) -> Option<&str> {
-    match e {
-        SnapshotGraphEdge::DirectCall { to, .. }
-        | SnapshotGraphEdge::VariableTypedCall { to, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { to, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { to, .. }
-        | SnapshotGraphEdge::EventDispatch { to, .. } => Some(to),
-        SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
-    }
+    e.edge_to()
 }
 
-/// callsiteId for a call-family edge (event-dispatch has none → None).
+/// callsiteId for a call-family edge (event-dispatch and implicit-trigger have
+/// none → None).
 fn edge_callsite_id(e: &SnapshotGraphEdge) -> Option<&str> {
-    match e {
-        SnapshotGraphEdge::DirectCall { callsite_id, .. }
-        | SnapshotGraphEdge::VariableTypedCall { callsite_id, .. }
-        | SnapshotGraphEdge::InterfaceDispatch { callsite_id, .. }
-        | SnapshotGraphEdge::ObjectRunResolved { callsite_id, .. }
-        | SnapshotGraphEdge::ObjectRunUnresolved { callsite_id, .. } => Some(callsite_id),
-        SnapshotGraphEdge::EventDispatch { .. } => None,
+    e.edge_callsite_id()
+}
+
+/// Does `e` carry `fact`'s first hop? (#96 D5) By the firing operation when the
+/// fact's first hop is an implicit-trigger edge, else by the call site. `false`
+/// when the fact has neither.
+fn is_first_hop(e: &SnapshotGraphEdge, fact: &Fact) -> bool {
+    match (
+        &fact.witness_first_hop_operation_id,
+        &fact.witness_callsite_id,
+    ) {
+        (Some(op), _) => e.edge_operation_id() == Some(op.as_str()),
+        (None, Some(cs)) => edge_callsite_id(e) == Some(cs.as_str()),
+        (None, None) => false,
     }
 }
 
@@ -447,6 +435,19 @@ enum WitnessHop {
         line: Option<u32>,
         column: Option<u32>,
     },
+    /// #96 D5: a record operation firing a trigger. `operation_id` is internal:
+    /// the conditionality arm looks up its control context; the JSON hop does
+    /// not carry it (N5). The anchor is the operation's.
+    ImplicitTrigger {
+        routine_id: String,
+        routine_display: String,
+        operation_id: String,
+        trigger_kind: String,
+        fires: TriggerFires,
+        source_file: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
     Terminal {
         evidence_kind: TerminalKind,
         operation_id: Option<String>,
@@ -474,7 +475,8 @@ impl WitnessHop {
             | WitnessHop::ObjectRun { routine_id, .. }
             | WitnessHop::EventDispatch { routine_id, .. }
             | WitnessHop::VariableTypedCall { routine_id, .. }
-            | WitnessHop::InterfaceDispatch { routine_id, .. } => Some(routine_id),
+            | WitnessHop::InterfaceDispatch { routine_id, .. }
+            | WitnessHop::ImplicitTrigger { routine_id, .. } => Some(routine_id),
             WitnessHop::Terminal { .. } => None,
         }
     }
@@ -600,7 +602,8 @@ fn edge_has_hop(edge: &SnapshotGraphEdge) -> bool {
         | SnapshotGraphEdge::ObjectRunResolved { .. }
         | SnapshotGraphEdge::EventDispatch { .. }
         | SnapshotGraphEdge::VariableTypedCall { .. }
-        | SnapshotGraphEdge::InterfaceDispatch { .. } => true,
+        | SnapshotGraphEdge::InterfaceDispatch { .. }
+        | SnapshotGraphEdge::ImplicitTrigger { .. } => true,
     }
 }
 
@@ -716,6 +719,30 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 column: cs.map(|c| c.start_column),
             })
         }
+        SnapshotGraphEdge::ImplicitTrigger {
+            to,
+            operation_id,
+            trigger_kind,
+            fires,
+            anchor,
+            ..
+        } => {
+            let display = idx
+                .routine_display_by_id
+                .get(to)
+                .cloned()
+                .unwrap_or_else(|| to.clone());
+            Some(WitnessHop::ImplicitTrigger {
+                routine_id: to.clone(),
+                routine_display: display,
+                operation_id: operation_id.clone(),
+                trigger_kind: trigger_kind.clone(),
+                fires: *fires,
+                source_file: anchor.as_ref().map(|a| a.source_unit_id.clone()),
+                line: anchor.as_ref().map(|a| a.range.start_line),
+                column: anchor.as_ref().map(|a| a.range.start_column),
+            })
+        }
     }
 }
 
@@ -796,7 +823,8 @@ struct ProofOutcome {
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
 /// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
 /// whose class is `f`'s, every link path from that state down to the seed whose
-/// FIRST edge has `f`'s first-hop callsite (the witness's first-hop contract).
+/// FIRST edge is `f`'s first hop ([`is_first_hop`]: its firing operation for a
+/// trigger-first fact, else its callsite; the witness's first-hop contract).
 /// Each proof is a complete path from `root`, so it holds in `root`'s frame by
 /// construction. Breadth-first by length; a path never revisits a STATE (it may
 /// revisit a routine). Limits as the BFS: `MAX_DEPTH` edges, `MAX_STATES`
@@ -818,10 +846,10 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
         len: usize,
     }
     let mut out = ProofOutcome::default();
-    let (Some(first_cs), Some(root_states)) = (
-        f.witness_callsite_id.as_deref(),
-        idx.pd.by_routine.get(root),
-    ) else {
+    if f.witness_first_hop_operation_id.is_none() && f.witness_callsite_id.is_none() {
+        return out;
+    }
+    let Some(root_states) = idx.pd.by_routine.get(root) else {
         return out;
     };
     let kt = is_known_temp_snap(f);
@@ -883,7 +911,7 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
             continue;
         }
         for &(callee, e) in &idx.pd.links[st.links.clone()] {
-            if len == 0 && edge_callsite_id(&idx.typed_edges[e]) != Some(first_cs) {
+            if len == 0 && !is_first_hop(&idx.typed_edges[e], f) {
                 continue;
             }
             let mut cur = Some(ni);
@@ -1125,8 +1153,14 @@ fn reconstruct_witness_paths<'i>(
 
     // --- Case C: inherited fact (BFS) ---
 
-    let Some(witness_cs) = &fact.witness_callsite_id else {
-        // first-hop-not-found (no witnessCallsiteId) → detail = via (callsiteId absent).
+    // The first hop's id: the firing operation of a trigger-first fact (#96 D5),
+    // else the call site.
+    let Some(first_hop_id) = fact
+        .witness_first_hop_operation_id
+        .as_ref()
+        .or(fact.witness_callsite_id.as_ref())
+    else {
+        // first-hop-not-found (no first-hop id) → detail = via (callsiteId absent).
         return WitnessOutcomeExt {
             paths: Vec::new(),
             truncated: false,
@@ -1146,17 +1180,20 @@ fn reconstruct_witness_paths<'i>(
     let out_from_root = idx.outgoing_edges.get(root_id).unwrap_or(&empty);
     let first_edges: Vec<&SnapshotGraphEdge> = out_from_root
         .iter()
-        .filter(|e| edge_callsite_id(e) == Some(witness_cs.as_str()))
+        .filter(|e| is_first_hop(e, fact))
         .copied()
         .collect();
     if first_edges.is_empty() && proofs.paths.is_empty() {
-        // first-hop-not-found → detail = callsiteId (present here).
+        // first-hop-not-found → detail = the first-hop id (present here).
         return WitnessOutcomeExt {
             paths: Vec::new(),
             truncated: false,
             incomplete: true,
             limit_hit: false,
-            diagnostics: vec![("first-hop-not-found".to_string(), Some(witness_cs.clone()))],
+            diagnostics: vec![(
+                "first-hop-not-found".to_string(),
+                Some(first_hop_id.clone()),
+            )],
             projected: None,
         };
     }
@@ -1681,6 +1718,11 @@ pub struct QueryWitnessHop {
     pub receiver_type: Option<String>,
     pub interface_name: Option<String>,
     pub candidate_count: Option<usize>,
+    /// #96: the firing record operation of an `implicit-trigger` hop (else
+    /// `None`). Internal: neither serializer emits it (N5). The ordering
+    /// engine keys the hop's call link by it, and `build_canonical_key` uses
+    /// it in the hop's site slot, because a trigger hop has no call site.
+    pub operation_id: Option<String>,
 }
 
 /// One projected hop with its `query_hop_json`, built once and shared (`Rc`) by
@@ -1806,6 +1848,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::ObjectRun {
             routine_id,
@@ -1847,6 +1890,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::EventDispatch {
             routine_id,
@@ -1868,6 +1912,7 @@ fn project_hop(
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::VariableTypedCall {
             routine_id,
@@ -1893,6 +1938,7 @@ fn project_hop(
             receiver_type: Some(receiver_type.clone()),
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }),
         WitnessHop::InterfaceDispatch {
             routine_id,
@@ -1919,6 +1965,32 @@ fn project_hop(
             receiver_type: None,
             interface_name: Some(interface_name.clone()),
             candidate_count: Some(*candidate_count),
+            operation_id: None,
+        }),
+        WitnessHop::ImplicitTrigger {
+            routine_id,
+            routine_display,
+            operation_id,
+            source_file,
+            line,
+            column,
+            ..
+        } => Some(QueryWitnessHop {
+            kind: "implicit-trigger",
+            from_routine_id: from_id.to_string(),
+            from_display: from_display.to_string(),
+            to_routine_id: Some(routine_id.clone()),
+            to_display: Some(resolve_to_display(routine_id, routine_display)),
+            callee_display: None,
+            callsite_id: None,
+            event_id: None,
+            target_app_guid: None,
+            edge_kind: Some("implicit-trigger".to_string()),
+            anchor: hop_anchor(source_file, *line, *column),
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            operation_id: Some(operation_id.clone()),
         }),
     }
 }
@@ -2184,6 +2256,30 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             let _ = write!(s, "{candidate_count}");
             opt_str(&mut s, &mut w, "calleeDisplay", callee_display);
             req_str(&mut s, &mut w, "callsiteId", callsite_id);
+            opt_str(&mut s, &mut w, "sourceFile", source_file);
+            opt_num(&mut s, &mut w, "line", *line);
+            opt_num(&mut s, &mut w, "column", *column);
+        }
+        WitnessHop::ImplicitTrigger {
+            routine_id,
+            routine_display,
+            operation_id,
+            trigger_kind,
+            fires,
+            source_file,
+            line,
+            column,
+        } => {
+            req_str(&mut s, &mut w, "kind", "implicit-trigger");
+            req_str(&mut s, &mut w, "routineId", routine_id);
+            req_str(&mut s, &mut w, "routineDisplay", routine_display);
+            req_str(&mut s, &mut w, "triggerKind", trigger_kind);
+            req_str(&mut s, &mut w, "operationId", operation_id);
+            let f = match fires {
+                TriggerFires::Always => "always",
+                TriggerFires::Maybe => "maybe",
+            };
+            req_str(&mut s, &mut w, "fires", f);
             opt_str(&mut s, &mut w, "sourceFile", source_file);
             opt_num(&mut s, &mut w, "line", *line);
             opt_num(&mut s, &mut w, "column", *column);
@@ -2460,7 +2556,8 @@ fn detail_json(detail: &[(String, String)]) -> String {
 ///
 /// Fields, and why each is here (grepped every `fact.`/`fact_equivalent` use inside
 /// `digest_one_root`'s call tree — see witness-investigation.md §3 and the brief):
-///   - `provenance`, `witness_operation_id`, `witness_callsite_id`, `op`, `subject` —
+///   - `provenance`, `witness_operation_id`, `witness_callsite_id`,
+///     `witness_first_hop_operation_id` (#96 D5), `op`, `subject` —
 ///     `reconstruct_witness_paths`'s direct BFS-input fields (cases A/B/C dispatch).
 ///   - `resource_kind`, `resource_id` — read by `reconstruct_witness_paths` (Case-C
 ///     reachability seeding via `direct_facts_by_op_kind`) AND by `dedupe_key`.
@@ -2487,12 +2584,13 @@ fn detail_json(detail: &[(String, String)]) -> String {
 /// if they ever start mattering, never causes incorrect output.
 fn effect_fact_loop_identity(fact: &Fact, detail: &[(String, String)]) -> String {
     format!(
-        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
         fact.provenance,
         fact.op,
         fact.resource_kind,
         fact.resource_id.as_deref().unwrap_or(""),
         fact.witness_callsite_id.as_deref().unwrap_or(""),
+        fact.witness_first_hop_operation_id.as_deref().unwrap_or(""),
         fact.witness_operation_id.as_deref().unwrap_or(""),
         fact.subject,
         serde_json::to_string(&fact.resource_arg_source).unwrap_or_default(),
@@ -2517,11 +2615,17 @@ fn build_canonical_key(
             .iter()
             .map(|hop| {
                 // QueryWitnessHop has NO edgeId → "". Trailing slot also "".
+                // #96: an implicit-trigger hop has no call site; its firing
+                // operation fills the site slot, so two trigger-first effects
+                // that differ only in the op keep distinct occurrence keys.
                 format!(
                     "{}>{}@{}/{}//",
                     hop.from_routine_id,
-                    hop.to_routine_id.clone().unwrap_or_default(),
-                    hop.callsite_id.clone().unwrap_or_default(),
+                    hop.to_routine_id.as_deref().unwrap_or_default(),
+                    hop.callsite_id
+                        .as_deref()
+                        .or(hop.operation_id.as_deref())
+                        .unwrap_or_default(),
                     hop.kind
                 )
             })
@@ -2620,7 +2724,7 @@ fn hop_nonterminal_callsite_id(hop: &WitnessHop) -> Option<&str> {
         | WitnessHop::VariableTypedCall { callsite_id, .. }
         | WitnessHop::InterfaceDispatch { callsite_id, .. } => Some(callsite_id),
         WitnessHop::ObjectRun { callsite_id, .. } => callsite_id.as_deref(),
-        WitnessHop::EventDispatch { .. } => None,
+        WitnessHop::EventDispatch { .. } | WitnessHop::ImplicitTrigger { .. } => None,
         WitnessHop::Terminal { .. } => None,
     }
 }
@@ -2635,7 +2739,7 @@ fn compute_path_conditionality(
     op_ctx: &HashMap<&str, Option<&str>>,
 ) -> crate::engine::l5::conditionality::EffectConditionality {
     use crate::engine::l5::conditionality::{
-        UNKNOWN, context_to_conditionality, path_conditionality,
+        CONDITIONAL, UNKNOWN, context_to_conditionality, path_conditionality,
     };
     let mut hop_contexts: Vec<crate::engine::l5::conditionality::EffectConditionality> = Vec::new();
     let mut terminal_ctx = UNKNOWN;
@@ -2653,6 +2757,20 @@ fn compute_path_conditionality(
                 } else {
                     UNKNOWN
                 };
+            }
+            // #96 D5: the firing operation's own control context, plus the
+            // conditional floor when the trigger may not fire (`Maybe`).
+            WitnessHop::ImplicitTrigger {
+                operation_id,
+                fires,
+                ..
+            } => {
+                hop_contexts.push(context_to_conditionality(
+                    op_ctx.get(operation_id.as_str()).copied().flatten(),
+                ));
+                if *fires == TriggerFires::Maybe {
+                    hop_contexts.push(CONDITIONAL);
+                }
             }
             _ => {
                 if let Some(csid) = hop_nonterminal_callsite_id(hop) {
@@ -4035,6 +4153,15 @@ pub enum HumanHop {
         line: Option<u32>,
         column: Option<u32>,
     },
+    /// #96 D5: a record operation firing trigger `trigger_kind`, anchored at the
+    /// operation.
+    ImplicitTrigger {
+        routine_display: String,
+        trigger_kind: String,
+        source_file: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
 }
 
 /// Map a raw non-terminal `WitnessHop` → `HumanHop` (terminals → None; they are
@@ -4101,6 +4228,20 @@ fn raw_hop_to_human(hop: &WitnessHop) -> Option<HumanHop> {
             routine_display: routine_display.clone(),
             interface_name: interface_name.clone(),
             candidate_count: *candidate_count,
+            source_file: source_file.clone(),
+            line: *line,
+            column: *column,
+        }),
+        WitnessHop::ImplicitTrigger {
+            routine_display,
+            trigger_kind,
+            source_file,
+            line,
+            column,
+            ..
+        } => Some(HumanHop::ImplicitTrigger {
+            routine_display: routine_display.clone(),
+            trigger_kind: trigger_kind.clone(),
             source_file: source_file.clone(),
             line: *line,
             column: *column,
@@ -4408,9 +4549,39 @@ mod tests {
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         };
         let (_key, link) = build_canonical_key("R", &[vec![hop]], "callsite", "cs", "HTTP");
         assert_eq!(link, "A>B@/event-dispatch//");
+    }
+
+    /// #96: an implicit-trigger hop has no call site, so its firing op fills
+    /// the site slot. Two trigger-first effects that differ only in the op
+    /// must not share an occurrence key.
+    #[test]
+    fn link_signature_implicit_trigger_hop_is_keyed_by_its_op() {
+        let hop = |op: &str| QueryWitnessHop {
+            kind: "implicit-trigger",
+            from_routine_id: "A".to_string(),
+            from_display: "a".to_string(),
+            to_routine_id: Some("T".to_string()),
+            to_display: Some("t".to_string()),
+            callee_display: None,
+            callsite_id: None,
+            event_id: None,
+            target_app_guid: None,
+            edge_kind: Some("implicit-trigger".to_string()),
+            anchor: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            operation_id: Some(op.to_string()),
+        };
+        let (k1, link) =
+            build_canonical_key("R", &[vec![hop("op1")]], "operation", "w", "DB_INSERT");
+        assert_eq!(link, "A>T@op1/implicit-trigger//");
+        let (k2, _) = build_canonical_key("R", &[vec![hop("op2")]], "operation", "w", "DB_INSERT");
+        assert_ne!(k1, k2);
     }
 
     // -----------------------------------------------------------------------
@@ -4436,6 +4607,7 @@ mod tests {
             witness_operation_id: witness_operation_id.map(|s| s.to_string()),
             witness_callsite_id: witness_callsite_id.map(|s| s.to_string()),
             extra: None,
+            witness_first_hop_operation_id: None,
         }
     }
 
@@ -4909,6 +5081,7 @@ mod tests {
             receiver_type: None,
             interface_name: None,
             candidate_count: None,
+            operation_id: None,
         }
     }
 

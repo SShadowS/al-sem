@@ -169,6 +169,9 @@ pub(crate) fn capability_fact_heap_bytes(f: &CapabilityFact) -> u64 {
             .as_ref()
             .map_or(0, |s| s.len() as u64)
         + f.witness_callsite_id.as_ref().map_or(0, |s| s.len() as u64)
+        + f.witness_first_hop_operation_id
+            .as_ref()
+            .map_or(0, |s| s.len() as u64)
         + f.resource_arg_source
             .as_ref()
             .map_or(0, value_source_heap_bytes)

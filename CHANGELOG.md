@@ -262,6 +262,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Writes and other effects of implicit table and field triggers now reach their callers in the capability cone, the snapshot, digest, prove and fingerprint (#96). Before, `prove ValidateIt "writes-table:Log Row"` answered **no** for a routine whose `Validate` fires an `OnValidate` that inserts into Log Row, and digest showed no effect for it, although L4's `query effects` already listed the write. The typed edge graph skipped implicit-trigger edges, a byte-parity leftover from al-sem with no stated reason. What changed:
+  - **The typed graph** now carries `{kind: "implicit-trigger", operationId, triggerKind, fires}`. `fires` is `always` for Validate/Rename and literal-true RunTrigger, and `maybe` otherwise, including ModifyAll/DeleteAll.
+  - **The cone** keys trigger edges and PD links by the firing record operation.
+  - **The snapshot** has an `ImplicitTrigger` edge.
+  - **Digest** gives the trigger hop its op anchor and makes it conditional from the op's control context and `fires`.
+  - **A table or table-extension trigger's `Rec`** now takes the caller's record temp state: it is parameter-dependent on the receiver, bound from the firing operation in L4 and in the cone. So a trigger fired on a temporary record no longer counts as a physical write; before, L4 already reported it as one.
+  - **The model** no longer drops the program engine's `ModifyAll`/`DeleteAll` → `OnModify`/`OnDelete` edges.
+  - **The caller's guard** on the record operation that fires a trigger now applies to the trigger's facts in the cone, as a guard on a call site does: after `if not Skip then T.Validate(...)`, a caller passing `Skip = true` no longer inherits the trigger's writes. The trigger's own parameter guards are still dropped.
+  - **d1** binds a trigger's `Rec` the same way, in its production search as well as in its path resolver, so a loop that reaches a trigger body through a real record is a physical finding, not "(temp state uncertain)".
+  - **Digest's ordering** keeps the trigger hop in an effect's call chain, keyed by the firing operation, with that operation's order and `unordered-broadcast` sequencing. Before, the hop was dropped, so a trigger's effect looked root-local and its order inside the trigger was compared with orders in the root: `Noop(); DoCommit(); T.Validate(...)` with an HTTP call in `OnValidate` got a false `EXTERNAL_IO_BEFORE_COMMIT`. The occurrence key of a trigger-first effect now names the firing operation too. A path through a trigger is a `May` edge with its own reason `implicit-trigger-may`, so `EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN` still needs a real event on the path.
+
+  CDO's `--program-call-graph-stats` is unchanged. The goldens moved only by the predicted shapes, triaged line by line: r1a, ir-l2, r3a1, r3a2 and r3a3; the r3a1/r3a3 manifest matrices; the synthetic l4 collision fixture, rewritten to the real trigger shape. A trigger-first inherited fact now carries `witnessFirstHopOperationId`, in the JSON and the CBOR snapshot alike, and so does the `derivedFromCapability` of a permission row derived from one.
+
+  **Cost on CDO** (`release-fast`, cross-app, mean of 2 runs on the final code): `alsem analyze` wall time roughly doubles (24.5 → 49.8 s at `--scope all`, 23.0 → 47.0 s at `--scope primary`); a digest goes 32.3 → 80.2 s; fingerprint is unchanged (5.5 → 5.8 s, noise); peak memory is flat (about 2.84 GB). The cause is that the cone now follows Base Application trigger hubs (Gen. Journal Line `OnInsert` → approvals → workflow → posting), which grows the largest SCC from 126 to 479 routines. Every such path is a real may-execute path. d43 findings at `--scope all` grow from 841 to 4573 (real trigger paths, mostly from one Base Application site), and fall from 23 to 5 at `--scope primary`.
+
 - `alsem analyze --format sarif` now describes every detector in `tool.driver.rules`
   (#87). The list was written by hand and held only 21 of the 54 detectors, so a finding
   from any of the other 33 (for example `d19-unused-parameter` or `d34-commit-in-loop`)

@@ -81,6 +81,39 @@ pub struct TypedEdge {
     pub target_object: Option<String>,
     pub object_type: Option<String>,
     pub target_id_source: Option<ValueSource>,
+    /// `implicit-trigger` only: the trigger routine's name (`OnValidate`,
+    /// `OnInsert`, …). `None` on every other kind.
+    pub trigger_kind: Option<String>,
+    /// `implicit-trigger` only: whether the trigger fires every time its record
+    /// operation executes ([`trigger_fires`]). `None` on every other kind.
+    pub fires: Option<TriggerFires>,
+}
+
+/// Whether an `implicit-trigger` edge's trigger runs every time its record
+/// operation executes. The op's own control context applies on top of this.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, salsa::SalsaValue,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum TriggerFires {
+    /// `Validate`/`Rename`, or `Insert`/`Modify`/`Delete` with a literal-`true`
+    /// RunTrigger.
+    Always,
+    /// A non-literal RunTrigger, or a bulk `ModifyAll`/`DeleteAll` (once per
+    /// matching row, and the row set may be empty).
+    Maybe,
+}
+
+/// The `fires` of a trigger edge from record operation `op` (any case) with
+/// literal RunTrigger `run_trigger`. A literal `false` (or no argument) gives no
+/// edge at all; the resolver already omits it, so it is not decided here.
+#[must_use]
+pub fn trigger_fires(op: &str, run_trigger: Option<bool>) -> TriggerFires {
+    match op.to_ascii_lowercase().as_str() {
+        "validate" | "rename" => TriggerFires::Always,
+        "insert" | "modify" | "delete" if run_trigger == Some(true) => TriggerFires::Always,
+        _ => TriggerFires::Maybe,
+    }
 }
 
 /// A ValueSource (internal form — table-field tableId is INTERNAL until projected).
@@ -467,18 +500,20 @@ fn build_typed_edges(
     resolved: &ResolvedCalls,
     event_graph: &EventGraph,
 ) -> Vec<TypedEdge> {
-    // callsite id → &PCallSite (for callee details).
+    // One pass over the routines:
+    // - callsite id → &PCallSite (for callee details);
+    // - routine id → objectId (for resolved object-run target);
+    // - routine id → name (an `implicit-trigger` edge's `trigger_kind`).
     let mut call_site_by_id: HashMap<&str, &crate::program::body::features::PCallSite> =
         HashMap::new();
+    let mut object_id_by_routine: HashMap<&str, &str> = HashMap::new();
+    let mut routine_name_by_id: HashMap<&str, &str> = HashMap::new();
     for routine in &workspace.routines {
         for cs in &routine.call_sites {
             call_site_by_id.insert(cs.id.as_str(), cs);
         }
-    }
-    // routine id → objectId (for resolved object-run target).
-    let mut object_id_by_routine: HashMap<&str, &str> = HashMap::new();
-    for routine in &workspace.routines {
         object_id_by_routine.insert(routine.id.as_str(), routine.object_id.as_str());
+        routine_name_by_id.insert(routine.id.as_str(), routine.name.as_str());
     }
     // object type+number / type+name → objectId (for unresolved object-run target).
     let mut objects_by_type_number: HashMap<String, String> = HashMap::new();
@@ -521,8 +556,34 @@ fn build_typed_edges(
     let mut typed_edges: Vec<TypedEdge> = Vec::new();
 
     for ce in &resolved.edges {
+        // An implicit-trigger edge (#96) is keyed by its RECORD OPERATION
+        // (`callsite_id` = `operation_id` = `"{routine}/opN"`), never a
+        // `PCallSite` id, so it is built before the callsite lookup below, which
+        // would drop it. `callsite_id` stays `None`: the op id is not a call site
+        // (the snapshot's callsite-resolution pass reads `callsite_id`).
         if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
-            continue; // implicit-trigger edges not typed; event-dispatch never in the calls
+            let Some(to) = &ce.to else { continue };
+            typed_edges.push(TypedEdge {
+                kind: "implicit-trigger".to_string(),
+                from: ce.from.clone(),
+                to: Some(to.clone()),
+                callsite_id: None,
+                operation_id: Some(ce.operation_id.clone()),
+                event_id: None,
+                receiver_type: None,
+                interface_name: None,
+                candidate_count: None,
+                target_object: None,
+                object_type: None,
+                target_id_source: None,
+                trigger_kind: routine_name_by_id
+                    .get(to.as_str())
+                    .map(|n| (*n).to_string()),
+                // The adapter decides `fires` once, from the op (#96 D1). An
+                // edge without it reads as `Maybe`, the conservative answer.
+                fires: Some(ce.fires.unwrap_or(TriggerFires::Maybe)),
+            });
+            continue;
         }
         let Some(call_site) = call_site_by_id.get(ce.callsite_id.as_str()) else {
             continue; // opaque (dependency-only) callsite — skip
@@ -544,6 +605,8 @@ fn build_typed_edges(
                     target_object: None,
                     object_type: None,
                     target_id_source: None,
+                    trigger_kind: None,
+                    fires: None,
                 });
             } else if ce.dispatch_kind == DispatchKind::Method
                 && ce.resolution == Resolution::Resolved
@@ -561,6 +624,8 @@ fn build_typed_edges(
                     target_object: None,
                     object_type: None,
                     target_id_source: None,
+                    trigger_kind: None,
+                    fires: None,
                 });
             } else if ce.dispatch_kind == DispatchKind::Interface
                 && ce.resolution == Resolution::Maybe
@@ -601,6 +666,8 @@ fn build_typed_edges(
                         target_object: None,
                         object_type: None,
                         target_id_source: None,
+                        trigger_kind: None,
+                        fires: None,
                     });
                 }
             } else if is_object_run_kind(ce.dispatch_kind.as_str()) {
@@ -624,6 +691,8 @@ fn build_typed_edges(
                     target_object: Some((*target_object).to_string()),
                     object_type: Some(object_type.to_string()),
                     target_id_source: None,
+                    trigger_kind: None,
+                    fires: None,
                 });
             }
             // method unresolved / interface non-maybe etc. — skip
@@ -653,6 +722,8 @@ fn build_typed_edges(
                     target_object,
                     object_type: Some(object_type.to_string()),
                     target_id_source: Some(target_id_source),
+                    trigger_kind: None,
+                    fires: None,
                 });
             } else if ce.dispatch_kind == DispatchKind::Dynamic {
                 // Dynamic dispatch — objectType from the callee when it's object-run.
@@ -671,6 +742,8 @@ fn build_typed_edges(
                         target_object: None,
                         object_type: Some(object_kind.clone()),
                         target_id_source: Some(target_id_source),
+                        trigger_kind: None,
+                        fires: None,
                     });
                 }
                 // dynamic member call (method dispatch) — not object-run; skip
@@ -714,6 +787,8 @@ fn build_typed_edges(
                     target_object: None,
                     object_type: None,
                     target_id_source: None,
+                    trigger_kind: None,
+                    fires: None,
                 });
             }
         }
@@ -810,6 +885,10 @@ pub struct PTypedEdge {
     pub object_type: Option<String>,
     #[serde(rename = "targetIdSource", skip_serializing_if = "Option::is_none")]
     pub target_id_source: Option<PValueSource>,
+    #[serde(rename = "triggerKind", skip_serializing_if = "Option::is_none")]
+    pub trigger_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fires: Option<TriggerFires>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -957,6 +1036,8 @@ fn project_typed_edge(
         target_object: e.target_object.as_ref().map(|o| to_stable_object_id(o)),
         object_type: e.object_type.clone(),
         target_id_source: e.target_id_source.as_ref().map(project_value_source),
+        trigger_kind: e.trigger_kind.clone(),
+        fires: e.fires,
     }
 }
 
@@ -1050,5 +1131,50 @@ impl Model {
         });
 
         project_r3a1(&ws.routines, &self.events.graph, &graph, &scc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TriggerFires, trigger_fires};
+
+    /// #96 D1: `fires` per record operation. Validate/Rename always fire; a
+    /// literal-`true` RunTrigger fires always; a non-literal one maybe; the bulk
+    /// ops are always `Maybe` (the row set may be empty), even with `true`.
+    #[test]
+    fn trigger_fires_per_operation() {
+        use TriggerFires::{Always, Maybe};
+        let got: Vec<(&str, Option<bool>, TriggerFires)> = [
+            ("Validate", None),
+            ("Rename", None),
+            ("Insert", Some(true)),
+            ("Modify", Some(true)),
+            ("Delete", Some(true)),
+            ("Insert", None),
+            ("Modify", None),
+            ("Delete", None),
+            ("ModifyAll", Some(true)),
+            ("DeleteAll", Some(true)),
+            ("ModifyAll", None),
+        ]
+        .into_iter()
+        .map(|(op, rt)| (op, rt, trigger_fires(op, rt)))
+        .collect();
+        assert_eq!(
+            got,
+            [
+                ("Validate", None, Always),
+                ("Rename", None, Always),
+                ("Insert", Some(true), Always),
+                ("Modify", Some(true), Always),
+                ("Delete", Some(true), Always),
+                ("Insert", None, Maybe),
+                ("Modify", None, Maybe),
+                ("Delete", None, Maybe),
+                ("ModifyAll", Some(true), Maybe),
+                ("DeleteAll", Some(true), Maybe),
+                ("ModifyAll", None, Maybe),
+            ]
+        );
     }
 }

@@ -134,6 +134,11 @@ pub struct CapabilityFact {
     pub via: &'static str,
     pub witness_operation_id: Option<String>,
     pub witness_callsite_id: Option<String>,
+    /// An inherited fact whose first hop is an `implicit-trigger` edge: that
+    /// edge's record operation id (#96 D5). `None` on direct facts and on every
+    /// other first hop. `witness_callsite_id` keeps its meaning (a trigger edge
+    /// has no call site).
+    pub witness_first_hop_operation_id: Option<String>,
     pub extra: Option<CapabilityExtra>,
 }
 
@@ -618,6 +623,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: Some(op.id.clone()),
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: op.record_variable_id.clone(),
                 temp_state: op.temp_state.clone(),
@@ -641,6 +647,7 @@ pub(crate) fn direct_facts_for_routine(
                 via: "self",
                 witness_operation_id: Some(op.id.clone()),
                 witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
                 extra: None,
             });
         }
@@ -664,6 +671,7 @@ pub(crate) fn direct_facts_for_routine(
                     via: "self",
                     witness_operation_id: None,
                     witness_callsite_id: Some(cs.id.clone()),
+                    witness_first_hop_operation_id: None,
                     extra: Some(CapabilityExtra::Dispatch {
                         object_type,
                         modal: None,
@@ -690,6 +698,7 @@ pub(crate) fn direct_facts_for_routine(
                     via: "self",
                     witness_operation_id: None,
                     witness_callsite_id: Some(cs.id.clone()),
+                    witness_first_hop_operation_id: None,
                     extra: Some(CapabilityExtra::Dispatch {
                         object_type: object_type.to_string(),
                         modal,
@@ -737,6 +746,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Http {
                 method: http_method.to_string(),
                 body_arg_source,
@@ -773,6 +783,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -815,6 +826,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Storage {
                 key_arg_source: Some(key_source),
                 value_arg_source,
@@ -848,6 +860,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -882,6 +895,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -930,6 +944,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -957,6 +972,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -999,6 +1015,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
             extra: None,
         });
     }
@@ -1021,6 +1038,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Event {
                 event_class: "Integration".to_string(),
                 include_sender: None,
@@ -1043,6 +1061,7 @@ pub(crate) fn direct_facts_for_routine(
                 via: "self",
                 witness_operation_id: Some(op.id.clone()),
                 witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
                 extra: None,
             });
         }
@@ -1063,6 +1082,7 @@ pub(crate) fn direct_facts_for_routine(
             via: "self",
             witness_operation_id: None,
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Event {
                 event_class: map_event_kind_to_class(&evt.event_kind).to_string(),
                 include_sender: None,
@@ -1090,13 +1110,18 @@ pub struct TypedOutEdge {
     pub(crate) kind: String,
     pub(crate) callsite: Option<String>,
     pub(crate) event_id: Option<String>,
+    /// The record operation that fires an `implicit-trigger` edge (`"{routine}/opN"`,
+    /// #96 D2); `None` on every other kind. It is part of the edge's identity:
+    /// two ops of one caller that fire the same trigger are two edges, each
+    /// binding the trigger's `Rec` to its own op's receiver (`pd_solve::bound_site`).
+    pub(crate) operation_id: Option<String>,
     /// `edge_sort_key(self)`, computed ONCE at graph build.
     ///
     /// It is both the out-edge sort key and the first-hop tie-breaker in
     /// `inherited_facts_for_singleton`, which used to call `edge_sort_key` TWICE
     /// per comparison — each call a `format!` allocation — inside a loop that runs
     /// per cone entry per out-edge over 100,419 singleton routines. The value is a
-    /// pure function of the edge's four fields, none of which change after
+    /// pure function of the edge's identity fields, none of which change after
     /// construction, so computing it here is the same string, once.
     pub(crate) sort_key: String,
 }
@@ -1107,16 +1132,27 @@ impl TypedOutEdge {
         kind: String,
         callsite: Option<String>,
         event_id: Option<String>,
+        operation_id: Option<String>,
     ) -> Self {
         let mut out = TypedOutEdge {
             to,
             kind,
             callsite,
             event_id,
+            operation_id,
             sort_key: String::new(),
         };
         out.sort_key = edge_sort_key(&out);
         out
+    }
+
+    /// The caller-frame site this edge is made at: its call site, or, for an
+    /// `implicit-trigger` edge, the record operation that fires it. A caller's
+    /// guards (`FrameGuards::by_site`) are keyed by both kinds of id, so this is
+    /// the key for the requirements under which the caller takes this edge
+    /// (#96 review CR3).
+    pub(crate) fn site(&self) -> Option<&str> {
+        self.callsite.as_deref().or(self.operation_id.as_deref())
     }
 }
 
@@ -1128,15 +1164,23 @@ pub(crate) struct TypedEdgeGraph {
     pub(crate) unresolved_sources: BTreeSet<String>,
 }
 
-/// `edgeSortKey(e)` = `${kind}|${callsite ?? ""}|${eventId ?? ""}|${to}`.
+/// `edgeSortKey(e)` = `${kind}|${callsite ?? ""}|${eventId ?? ""}|${to}`, plus
+/// `|${operationId}` when the edge has one (only `implicit-trigger` edges do,
+/// #96 D2), so every other edge's key is unchanged. Op ids compare as strings
+/// (`…/op10` sorts before `…/op2`).
 fn edge_sort_key(e: &TypedOutEdge) -> String {
-    format!(
+    let mut key = format!(
         "{}|{}|{}|{}",
         e.kind,
         e.callsite.as_deref().unwrap_or(""),
         e.event_id.as_deref().unwrap_or(""),
         e.to
-    )
+    );
+    if let Some(op) = &e.operation_id {
+        key.push('|');
+        key.push_str(op);
+    }
+    key
 }
 
 /// Map a typed-edge kind to the inherited `via`. Mirrors
@@ -1187,6 +1231,7 @@ fn build_typed_edge_graph(graph: &CombinedGraph, nodes: &[String]) -> TypedEdgeG
                 edge.kind.clone(),
                 callsite_id_for_edge(edge),
                 edge.event_id.clone(),
+                edge.operation_id.clone(),
             ));
     }
     for list in outgoing.values_mut() {
@@ -1606,6 +1651,10 @@ fn retag(rep: &CapabilityFact, subject: &str, edge: &TypedOutEdge) -> Capability
         provenance: "inherited",
         via: capability_via_for_edge_kind(&edge.kind),
         witness_callsite_id: edge.callsite.clone(),
+        // Set for EVERY edge, never inherited from `rep` (#96 D5, N4): the op
+        // id of a trigger first hop, `None` otherwise, so a stale op id cannot
+        // leak through `..rep.clone()`.
+        witness_first_hop_operation_id: edge.operation_id.clone(),
         ..rep.clone()
     }
 }
@@ -2133,7 +2182,7 @@ fn fact_cone_for_scc(
             let Some(yc) = fact_cones.get(&yj) else {
                 continue;
             };
-            let edge_reqs: &[super::param_guard::Req] = match (frame, edge.callsite.as_deref()) {
+            let edge_reqs: &[super::param_guard::Req] = match (frame, edge.site()) {
                 (Some(fg), Some(cs)) => fg.by_site.get(cs).map_or(&[], Vec::as_slice),
                 _ => &[],
             };
@@ -2893,6 +2942,13 @@ pub struct PCapabilityFact {
     pub witness_operation_id: Option<String>,
     #[serde(rename = "witnessCallsiteId", skip_serializing_if = "Option::is_none")]
     pub witness_callsite_id: Option<String>,
+    /// Only on trigger-first inherited facts (#96 D5).
+    #[serde(
+        rename = "witnessFirstHopOperationId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub witness_first_hop_operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
 }
@@ -3057,6 +3113,10 @@ pub(crate) fn project_capability_fact(
             .map(|w| stable_sub_id(w, map)),
         witness_callsite_id: f
             .witness_callsite_id
+            .as_ref()
+            .map(|w| stable_sub_id(w, map)),
+        witness_first_hop_operation_id: f
+            .witness_first_hop_operation_id
             .as_ref()
             .map(|w| stable_sub_id(w, map)),
         extra: f.extra.as_ref().map(extra_to_json),
@@ -4217,6 +4277,7 @@ mod pd_uses_tests {
             via: "self",
             witness_operation_id: Some("H/op1".to_string()),
             witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: None,
                 temp_state: Some(pd_ts_known(false)),
@@ -4231,6 +4292,7 @@ mod pd_uses_tests {
                 "H".to_string(),
                 "direct-call".to_string(),
                 Some("cs1".to_string()),
+                None,
                 None,
             ))),
         }
@@ -4304,6 +4366,34 @@ mod pd_uses_tests {
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].0.witness_operation_id.as_deref(), Some("H/op1"));
         assert_eq!(picks[0].1.callsite.as_deref(), Some("cs1"));
+    }
+
+    /// #96 D5 (N4): `retag` sets `witness_first_hop_operation_id` from the
+    /// edge for EVERY edge: a trigger edge's op id, and `None` on any other
+    /// edge even when the representative carries a stale one.
+    #[test]
+    fn retag_sets_the_first_hop_op_from_the_edge() {
+        let mut rep = (*own_entry().rep).clone();
+        rep.witness_first_hop_operation_id = Some("stale/op7".to_string());
+        let call = TypedOutEdge::new(
+            "H".to_string(),
+            "direct-call".to_string(),
+            Some("cs1".to_string()),
+            None,
+            None,
+        );
+        assert_eq!(retag(&rep, "C", &call).witness_first_hop_operation_id, None);
+        let trig = TypedOutEdge::new(
+            "H".to_string(),
+            "implicit-trigger".to_string(),
+            None,
+            None,
+            Some("C/op2".to_string()),
+        );
+        let f = retag(&rep, "C", &trig);
+        assert_eq!(f.witness_first_hop_operation_id.as_deref(), Some("C/op2"));
+        assert_eq!(f.witness_callsite_id, None);
+        assert_eq!(f.via, "implicit-trigger");
     }
 }
 

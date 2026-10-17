@@ -23,13 +23,13 @@
         routine_id: "b",
         db_effects: [
             DbEffect {
-                effect_key: "Insert|t2|b_op1|p0",
+                effect_key: "Insert|t2|b_op1|p4294967295",
                 operation_id: "b_op1",
                 op: "Insert",
                 table_id: "t2",
                 record_variable_id: None,
                 temp_state: ParameterDependent(
-                    0,
+                    4294967295,
                 ),
                 via: "direct",
             },

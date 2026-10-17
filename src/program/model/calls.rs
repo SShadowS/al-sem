@@ -121,6 +121,11 @@ pub struct CallEdge {
     /// table procedures) `table-unresolved::<declType>::<method>` vs
     /// `proc-not-found::<declType>::<method>`. `None` on all other edges.
     pub receiver_shape: Option<String>,
+    /// `ImplicitTrigger` edges only: whether the trigger runs every time its
+    /// record operation executes. Decided ONCE, by the adapter that builds the
+    /// edge from the op (#96); the typed graph copies it. `None` on every other
+    /// edge.
+    pub fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
 }
 
 impl CallEdge {
@@ -138,6 +143,7 @@ impl CallEdge {
             dispatch_meta: None,
             unknown_method_name: None,
             receiver_shape: None,
+            fires: None,
         }
     }
 }

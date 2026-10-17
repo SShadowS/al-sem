@@ -783,7 +783,10 @@ fn compose_roles_only(
 ///   1. event-dispatch edge (no `callsite_id`) → `Unknown`.
 ///   2. edge kinds with no binding semantics modeled
 ///      (`interface | codeunit-run | report-run | page-run | dynamic`) → `Unknown`.
-///      Only `direct | method | implicit-trigger` carry usable bindings.
+///      Only `direct | method | implicit-trigger` carry usable bindings. An
+///      `implicit-trigger` edge binds only the trigger's receiver `Rec`
+///      (`RECEIVER_PARAM_INDEX`), to the firing record operation's own temp state
+///      ([`trigger_receiver_temp_state`], #96); steps 3-4 are for call sites.
 ///   3. no binding whose `parameter_index == callee_param_index` → `Unknown`.
 ///   4. apply the SUBSTITUTION TABLE on the binding's `source_temp_state`:
 ///
@@ -840,7 +843,58 @@ pub(crate) fn substitute_pd_temp_state(
     if !matches!(edge.kind.as_str(), "direct" | "method" | "implicit-trigger") {
         return TempState::Unknown;
     }
+    if edge.kind == "implicit-trigger" {
+        return trigger_receiver_temp_state(routine, cs_id, callee_param_index);
+    }
     pd_temp_state_at_callsite(routine, cs_id, callee_param_index)
+}
+
+/// The temp state an `implicit-trigger` edge hands to the trigger's parameter
+/// `callee_param_index` (#96). A table (extension) trigger's only bindable
+/// "parameter" is its implicit `Rec`, `ParameterDependent(RECEIVER_PARAM_INDEX)`,
+/// and the record it runs on is the receiver of the record operation that fires
+/// it: `op_id` (a trigger edge's `callsite_id` is that op's id). So the receiver
+/// binds to that op's own temp state in the caller's frame: `Known(b)` stays
+/// `Known(b)`, the caller's own `PD(j)` stays `PD(j)` (re-symbolized upward, as a
+/// call-site binding), anything else is `Unknown`. Any other index, or an op not
+/// found, is `Unknown` (sound = fires).
+pub(crate) fn trigger_receiver_temp_state(
+    routine: &ModelRoutine,
+    op_id: &str,
+    callee_param_index: u32,
+) -> TempState {
+    if callee_param_index != crate::program::body::features::RECEIVER_PARAM_INDEX {
+        return TempState::Unknown;
+    }
+    record_op_by_id(routine, op_id)
+        .and_then(|op| op.temp_state.as_ref())
+        .map_or(TempState::Unknown, TempState::from_p)
+}
+
+/// `routine`'s record operation `op_id`. It runs in the PD solve's hot loop
+/// through [`trigger_receiver_temp_state`], so it avoids a scan from the start.
+/// The body walk mints op ids `{routine}/op{N}` in walk order, and only a
+/// `Commit` or `Error` call advances `N` without adding a record operation, so
+/// op `N` sits at index `N` less the `Commit`/`Error` calls before it. The search
+/// starts at index `N` and walks down, so a hit costs one step per such call
+/// before the op, not a constant. An id that does not parse, or a miss, falls
+/// back to a full scan, so the answer never depends on that numbering. A real
+/// per-routine index would make it constant; not built, since the walk-back is
+/// short on real code and an index costs memory per routine.
+fn record_op_by_id<'r>(
+    routine: &'r ModelRoutine,
+    op_id: &str,
+) -> Option<&'r crate::program::model::workspace::ModelRecordOperation> {
+    let ops = &routine.record_operations;
+    let hi = op_id
+        .rsplit_once("/op")
+        .and_then(|(_, n)| n.parse::<usize>().ok())
+        .map_or(0, |n| ops.len().min(n.saturating_add(1)));
+    ops[..hi]
+        .iter()
+        .rev()
+        .find(|op| op.id == op_id)
+        .or_else(|| ops.iter().find(|op| op.id == op_id))
 }
 
 /// The temp state an event subscriber's parameter `sub_param` has in its
