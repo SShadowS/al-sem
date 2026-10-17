@@ -866,12 +866,32 @@ pub(crate) fn trigger_receiver_temp_state(
     if callee_param_index != crate::program::body::features::RECEIVER_PARAM_INDEX {
         return TempState::Unknown;
     }
-    routine
-        .record_operations
-        .iter()
-        .find(|op| op.id == op_id)
+    record_op_by_id(routine, op_id)
         .and_then(|op| op.temp_state.as_ref())
         .map_or(TempState::Unknown, TempState::from_p)
+}
+
+/// `routine`'s record operation `op_id`, in O(1) in practice: it runs in the PD
+/// solve's hot loop through [`trigger_receiver_temp_state`]. The body walk mints
+/// op ids `{routine}/op{N}` in walk order, and only a `Commit` or `Error` call
+/// advances `N` without adding a record operation, so op `N` sits at index `N`
+/// less the `Commit`/`Error` calls before it. The search starts at index `N` and
+/// walks down. An id that does not parse, or a miss, falls back to a full scan,
+/// so the answer never depends on that numbering.
+fn record_op_by_id<'r>(
+    routine: &'r ModelRoutine,
+    op_id: &str,
+) -> Option<&'r crate::program::model::workspace::ModelRecordOperation> {
+    let ops = &routine.record_operations;
+    let hi = op_id
+        .rsplit_once("/op")
+        .and_then(|(_, n)| n.parse::<usize>().ok())
+        .map_or(0, |n| ops.len().min(n.saturating_add(1)));
+    ops[..hi]
+        .iter()
+        .rev()
+        .find(|op| op.id == op_id)
+        .or_else(|| ops.iter().find(|op| op.id == op_id))
 }
 
 /// The temp state an event subscriber's parameter `sub_param` has in its

@@ -25,11 +25,14 @@ use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::combined_graph::build_combined_graph;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
 use al_sem::engine::l5::detector_context::build_detector_context;
+use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
 use al_sem::engine::l5::prove::run_prove_pipeline;
-use al_sem::engine::l5::registry::substrate;
+use al_sem::engine::l5::registry::{run_detectors, substrate};
 use al_sem::engine::l5::snapshot::compose_snapshot;
-use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+use al_sem::program::model::program_calls::{
+    assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
+};
 use al_sem::program::model::workspace::Model;
 use serde_json::Value;
 
@@ -1022,4 +1025,221 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
         },
     );
     assert!(f.is_empty(), "{}", f.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// The caller's guard on the firing op, and d1 across a trigger hop.
+// ---------------------------------------------------------------------------
+
+const INLINE_GUID: &str = "96969696-0000-0000-0000-0000000000a7";
+
+fn inline_model(src: &str) -> Model {
+    assemble_and_resolve_inline_program_default(
+        &[("src/T7.al".to_string(), src.to_string())],
+        INLINE_GUID,
+    )
+}
+
+/// `Guarded` fires `OnValidate` only `if not Skip`. `OnValidate` inserts
+/// "G Log" (a direct fact, the plain cone path) and modifies `Rec` (a PD fact
+/// bound to the firing op, the PD solve's path).
+const GUARD_SRC: &str = r#"table 50330 "G Log" { fields { field(1; Id; Integer) { } } keys { key(PK; Id) { Clustered = true; } } }
+table 50331 "G Trig"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; Decimal)
+        {
+            trigger OnValidate()
+            var L: Record "G Log";
+            begin L.Insert(); Rec.Modify(); end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 50332 "G Caller"
+{
+    procedure Guarded(Skip: Boolean)
+    var T: Record "G Trig";
+    begin
+        if not Skip then
+            T.Validate(Amount, 1);
+    end;
+
+    procedure CallSkip()
+    begin
+        Guarded(true);
+    end;
+
+    procedure CallRun()
+    begin
+        Guarded(false);
+    end;
+}
+"#;
+
+/// #96 review CR3: the CALLER's guard on the op that fires a trigger applies
+/// to everything the trigger does, on both cone paths: the plain path ("G Log",
+/// `fact_cone_for_scc`) and the PD solve ("G Trig" through the trigger's `Rec`,
+/// `pd_solve::solve`). `Guarded(true)` makes `if not Skip` false, so
+/// `CallSkip` inherits neither write; `CallRun` inherits both.
+#[test]
+fn caller_guard_on_the_firing_op_reaches_the_trigger_facts() {
+    let m = inline_model(GUARD_SRC);
+    let ctx = build_detector_context(&m, substrate::ALL);
+    let log = format!("{INLINE_GUID}/table/50330");
+    let trig = format!("{INLINE_GUID}/table/50331");
+    let writes = |name: &str| {
+        let mut w = ctx
+            .cone_derived
+            .writes_physical_tables_of(&rid(&m, "G Caller", name));
+        w.sort();
+        w
+    };
+    let mut both = vec![log, trig];
+    both.sort();
+    let mut f = Vec::new();
+    for (name, want) in [
+        ("Guarded", both.clone()),
+        ("CallRun", both.clone()),
+        ("CallSkip", Vec::new()),
+    ] {
+        let got = writes(name);
+        if got != want {
+            f.push(format!("{name}: physical writes {got:?}, want {want:?}"));
+        }
+    }
+    assert!(f.is_empty(), "{}", f.join("\n"));
+}
+
+/// d1-shaped: a loop calls a helper that fires `OnValidate`/`OnInsert`, whose
+/// body does `Rec.Modify()` on the trigger's own record. `Rec` binds to the
+/// helper's record op: real in `LoopReal`/`LoopInsert`, temporary in `LoopTemp`.
+/// The temporary path uses its own table, "D1 TempTrig", so d1 never merges it
+/// into a real path's finding (d1 reports one finding per terminal op).
+const D1_SRC: &str = r#"table 50340 "D1 Trig"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; Decimal)
+        {
+            trigger OnValidate()
+            begin Rec.Modify(); end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+
+    trigger OnInsert()
+    begin Rec.Modify(); end;
+}
+
+table 50342 "D1 TempTrig"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; Decimal)
+        {
+            trigger OnValidate()
+            begin Rec.Modify(); end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 50341 "D1 Loop"
+{
+    procedure LoopReal()
+    var I: Integer;
+    begin
+        for I := 1 to 10 do
+            ValidateReal();
+    end;
+
+    procedure LoopTemp()
+    var I: Integer;
+    begin
+        for I := 1 to 10 do
+            ValidateTemp();
+    end;
+
+    procedure LoopInsert()
+    var I: Integer;
+    begin
+        for I := 1 to 10 do
+            InsertReal();
+    end;
+
+    local procedure ValidateReal()
+    var T: Record "D1 Trig";
+    begin
+        T.Validate(Amount, 1);
+    end;
+
+    local procedure ValidateTemp()
+    var TempT: Record "D1 TempTrig" temporary;
+    begin
+        TempT.Validate(Amount, 1);
+    end;
+
+    local procedure InsertReal()
+    var T: Record "D1 Trig";
+    begin
+        T.Insert(true);
+    end;
+}
+"#;
+
+/// #96 review CR2: d1 itself (the production fast path, `d1_temp::cross_hop`
+/// and `d1_liveness`) binds a trigger's `Rec` to the firing op. A loop that
+/// reaches the trigger's `Rec.Modify()` through a REAL record is a physical
+/// finding with no "(temp state uncertain)"; through a TEMPORARY record it is
+/// downgraded to info with the temporary-record note.
+#[test]
+fn d1_binds_the_trigger_rec_to_the_firing_op() {
+    let m = inline_model(D1_SRC);
+    let d1: Vec<_> = registered_detectors()
+        .into_iter()
+        .filter(|d| d.name == "d1-db-op-in-loop")
+        .collect();
+    assert_eq!(d1.len(), 1, "d1 is registered once");
+    let findings = run_detectors(&m, &d1).findings;
+    // The finding for `loop` reaching the trigger's `Rec.Modify()` on `table`.
+    let modify_in = |lp: &str, table: &str, trigger: &str| -> Vec<(&str, &str)> {
+        let head = format!("A loop in {lp} reaches Modify on {table} in {trigger},");
+        findings
+            .iter()
+            .filter(|x| x.root_cause.starts_with(&head))
+            .map(|x| (x.severity.as_str(), x.root_cause.as_str()))
+            .collect()
+    };
+    let mut f = Vec::new();
+    for (lp, trigger) in [("LoopReal", "OnValidate"), ("LoopInsert", "OnInsert")] {
+        let got = modify_in(lp, "D1 Trig", trigger);
+        let [(severity, rc)] = got.as_slice() else {
+            f.push(format!("{lp}: want 1 Modify finding, got {got:?}"));
+            continue;
+        };
+        if rc.contains("(temp state uncertain)") || rc.contains("(temporary record") {
+            f.push(format!("{lp}: want a physical finding, got {rc:?}"));
+        }
+        if *severity == "info" {
+            f.push(format!("{lp}: a physical finding is not info: {rc:?}"));
+        }
+    }
+    let got = modify_in("LoopTemp", "D1 TempTrig", "OnValidate");
+    match got.as_slice() {
+        [("info", rc)] if rc.contains("(temporary record") => {}
+        _ => f.push(format!(
+            "LoopTemp: want one info temporary-record finding, got {got:?}"
+        )),
+    }
+    let all: Vec<(&str, &str)> = findings
+        .iter()
+        .map(|x| (x.severity.as_str(), x.root_cause.as_str()))
+        .collect();
+    assert!(f.is_empty(), "{}\nall d1 findings: {all:#?}", f.join("\n"));
 }

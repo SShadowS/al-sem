@@ -218,6 +218,14 @@ fn one_capability_fact_to_cbor(
             m.insert("extra".into(), to_cbor_value(extra));
         }
     }
+    // Last, present only on a trigger-first inherited fact, as in
+    // `SnapshotCapabilityFact`'s JSON `Serialize` (#96 D5).
+    if let Some(op) = &f.witness_first_hop_operation_id {
+        m.insert(
+            "witnessFirstHopOperationId".into(),
+            CborValue::Text(op.clone()),
+        );
+    }
     CborValue::Map(m)
 }
 
@@ -684,8 +692,7 @@ fn derive_permissions(
                     &stable_table,
                     "TableData",
                     right,
-                    f.op,
-                    f.witness_callsite_id.as_deref(),
+                    f,
                     &coverage,
                 ));
             } else if f.op == "execute"
@@ -708,8 +715,7 @@ fn derive_permissions(
                     &stable_obj,
                     target_kind,
                     "X",
-                    f.op,
-                    f.witness_callsite_id.as_deref(),
+                    f,
                     &coverage,
                 ));
             }
@@ -741,14 +747,13 @@ fn stable_table_from_internal(internal: &str) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// One required-permission row, derived from capability fact `f`.
 fn make_required_perm(
     subject: &str,
     target: &str,
     target_kind: &str,
     right: &str,
-    op: &str,
-    witness_callsite_id: Option<&str>,
+    f: &CapabilityFact,
     coverage: &str,
 ) -> (String, CborValue) {
     let perm_key = format!("R|{subject}|{target}|{target_kind}|{right}");
@@ -761,11 +766,19 @@ fn make_required_perm(
         "rights".into(),
         CborValue::Array(vec![CborValue::Text(right.into())]),
     );
-    // derivedFromCapability: { op, [witnessCallsiteId] }.
+    // derivedFromCapability: { op, [witnessCallsiteId], [witnessFirstHopOperationId] }.
+    // A fact inherited through an `implicit-trigger` first hop has no call site;
+    // its witness is the firing record op (#96 D5).
     let mut dfc: IndexMap<String, CborValue> = IndexMap::new();
-    dfc.insert("op".into(), CborValue::Text(op.into()));
-    if let Some(wc) = witness_callsite_id {
-        dfc.insert("witnessCallsiteId".into(), CborValue::Text(wc.into()));
+    dfc.insert("op".into(), CborValue::Text(f.op.into()));
+    if let Some(wc) = &f.witness_callsite_id {
+        dfc.insert("witnessCallsiteId".into(), CborValue::Text(wc.clone()));
+    }
+    if let Some(op) = &f.witness_first_hop_operation_id {
+        dfc.insert(
+            "witnessFirstHopOperationId".into(),
+            CborValue::Text(op.clone()),
+        );
     }
     m.insert("derivedFromCapability".into(), CborValue::Map(dfc));
     m.insert("coverage".into(), CborValue::Text(coverage.into()));
@@ -1950,5 +1963,66 @@ page 50818 "T5 I-3 Wizard Alpha"
             "tertiary originatingObject key must place the locale-lesser StableObjectId first"
         );
         assert_eq!(&originating_object_of(&rows[1]), expected_second);
+    }
+
+    /// #96 review CR4: a fact inherited through an `implicit-trigger` first hop
+    /// has no call site, and its witness is the firing op. The CBOR fact
+    /// carries `witnessFirstHopOperationId` last, as the JSON snapshot does, and
+    /// a permission row derived from it carries it in `derivedFromCapability`.
+    #[test]
+    fn trigger_first_fact_keeps_its_first_hop_op_in_cbor_and_permissions() {
+        let op = "app/caller/op3".to_string();
+        let snap = crate::engine::l5::snapshot::SnapshotCapabilityFact {
+            subject: "s".to_string(),
+            op: "insert".to_string(),
+            resource_kind: "table".to_string(),
+            resource_id: Some("app/table/1".to_string()),
+            resource_arg_source: None,
+            confidence: "high".to_string(),
+            provenance: "inherited".to_string(),
+            via: "OnValidate".to_string(),
+            witness_operation_id: Some("app/trigger/op0".to_string()),
+            witness_callsite_id: None,
+            extra: None,
+            witness_first_hop_operation_id: Some(op.clone()),
+        };
+        let CborValue::Map(m) = one_capability_fact_to_cbor(&snap) else {
+            panic!("a fact is a map");
+        };
+        assert!(
+            matches!(
+                m.last(),
+                Some((k, CborValue::Text(v))) if k == "witnessFirstHopOperationId" && *v == op
+            ),
+            "last key: {:?}",
+            m.last()
+        );
+
+        let fact = CapabilityFact {
+            subject: "s".to_string(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: Some("app/table/1".to_string()),
+            resource_arg_source: None,
+            confidence: "high",
+            provenance: "inherited",
+            via: "OnValidate",
+            witness_operation_id: Some("app/trigger/op0".to_string()),
+            witness_callsite_id: None,
+            witness_first_hop_operation_id: Some(op.clone()),
+            extra: None,
+        };
+        let (_, row) = make_required_perm("s", "t", "TableData", "I", &fact, "complete");
+        let CborValue::Map(row) = row else {
+            panic!("a row is a map");
+        };
+        let Some(CborValue::Map(dfc)) = row.get("derivedFromCapability") else {
+            panic!("derivedFromCapability is a map");
+        };
+        assert!(
+            matches!(dfc.get("witnessFirstHopOperationId"), Some(CborValue::Text(v)) if *v == op),
+            "derivedFromCapability: {dfc:?}"
+        );
+        assert!(!dfc.contains_key("witnessCallsiteId"));
     }
 }

@@ -1145,6 +1145,15 @@ impl TypedOutEdge {
         out.sort_key = edge_sort_key(&out);
         out
     }
+
+    /// The caller-frame site this edge is made at: its call site, or, for an
+    /// `implicit-trigger` edge, the record operation that fires it. A caller's
+    /// guards (`FrameGuards::by_site`) are keyed by both kinds of id, so this is
+    /// the key for the requirements under which the caller takes this edge
+    /// (#96 review CR3).
+    pub(crate) fn site(&self) -> Option<&str> {
+        self.callsite.as_deref().or(self.operation_id.as_deref())
+    }
 }
 
 /// The typed-edge graph: per-routine sorted out-edges + the unresolved sources.
@@ -2173,7 +2182,7 @@ fn fact_cone_for_scc(
             let Some(yc) = fact_cones.get(&yj) else {
                 continue;
             };
-            let edge_reqs: &[super::param_guard::Req] = match (frame, edge.callsite.as_deref()) {
+            let edge_reqs: &[super::param_guard::Req] = match (frame, edge.site()) {
                 (Some(fg), Some(cs)) => fg.by_site.get(cs).map_or(&[], Vec::as_slice),
                 _ => &[],
             };

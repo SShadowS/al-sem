@@ -348,8 +348,10 @@ pub(crate) fn solve<'g>(
         let callee = routines_by_id.get(&*c).copied();
         for &(r, e) in incoming.get(&*c).map_or(&[][..], Vec::as_slice) {
             let frame = frames.get(r);
-            let edge_reqs = match (frame, e.callsite.as_deref()) {
-                (Some(fg), Some(cs)) => fg.by_site.get(cs).map_or(&[][..], Vec::as_slice),
+            // The caller's own guard on the site it takes `e` at: a call site,
+            // or the record op that fires an `implicit-trigger` edge (CR3).
+            let edge_reqs = match (frame, e.site()) {
+                (Some(fg), Some(site)) => fg.by_site.get(site).map_or(&[][..], Vec::as_slice),
                 _ => &[],
             };
             let caller = routines_by_id.get(r).copied();
@@ -1001,6 +1003,30 @@ mod tests {
         assert_eq!(
             states_at(&arena, "D"),
             vec![(TempState::Known(true), vec![(0, true)])]
+        );
+    }
+
+    /// #96 review CR3: the CALLER's guard on the record op that fires a trigger
+    /// is conjoined into the caller's state, as for a call site. The op ids are
+    /// not positional (`C/op1` is a `Commit`), so the op lookup is pinned too.
+    #[test]
+    fn solve_conjoins_the_caller_guard_on_the_firing_op() {
+        let c = caller_with_ops(&[("C/op0", pd_ts_known(true)), ("C/op2", pd_ts_known(false))]);
+        let t = pd_routine("T");
+        let g = graph(vec![("C", trigger_edge("C/op2"))]);
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("T", &t)].into();
+        let mut p = producer("T");
+        Arc::make_mut(&mut p.fact).extra = Some(CapabilityExtra::Table {
+            record_variable_id: None,
+            temp_state: Some(pd_ts_pd(RECEIVER_PARAM_INDEX)),
+            op_subtype: None,
+        });
+        let frames: HashMap<String, FrameGuards> =
+            [frame("C", &[0], &[("C/op2", vec![(0, false)])])].into();
+        let (arena, _) = solve(vec![p], &g, &by_id, &frames);
+        assert_eq!(
+            states_at(&arena, "C"),
+            vec![(TempState::Known(false), vec![(0, false)])]
         );
     }
 }

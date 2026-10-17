@@ -85,7 +85,7 @@ use crate::engine::l5::d1_cohort::{
 };
 #[cfg(test)]
 use crate::engine::l5::d1_graph::D1Terminal;
-use crate::engine::l5::d1_graph::{D1Graph, D1Seed, NodeIx, edge_kind_binding_ok};
+use crate::engine::l5::d1_graph::{D1Graph, D1Seed, NodeIx};
 use crate::engine::l5::d1_liveness::{Liveness, ParamTransfer};
 use crate::engine::l5::d1_reach::{
     DirectOp, flowfield_verdict, node_has_uncertainty, selection_rank,
@@ -461,13 +461,12 @@ pub(crate) fn solve_group<'a>(
         let seed = &seeds[si];
         let entry = seed.entry;
         let entry_id = graph.node_ids[entry as usize];
-        let binding_ok = edge_kind_binding_ok(seed.entry_edge_kind);
         let entry_temp = cross_hop(
             &root,
             seed.loop_routine,
             seed.callsite.id.as_str(),
             entry_id,
-            binding_ok,
+            seed.entry_edge_kind,
             cw,
         );
         let depth = seed.seed_depth.min(2);
@@ -2001,13 +2000,12 @@ pub(crate) fn solve_batch<'a>(
             let seed = &seeds[si];
             let entry = seed.entry;
             let entry_id = graph.node_ids[entry as usize];
-            let binding_ok = edge_kind_binding_ok(seed.entry_edge_kind);
             let entry_temp = cross_hop(
                 &root,
                 seed.loop_routine,
                 seed.callsite.id.as_str(),
                 entry_id,
-                binding_ok,
+                seed.entry_edge_kind,
                 cw,
             );
             let depth = seed.seed_depth.min(2);
@@ -2935,13 +2933,12 @@ pub(crate) fn score_batch_to_sink<'a>(
             let seed = &seeds[si];
             let entry = seed.entry;
             let entry_id = graph.node_ids[entry as usize];
-            let binding_ok = edge_kind_binding_ok(seed.entry_edge_kind);
             let entry_temp = cross_hop(
                 &root,
                 seed.loop_routine,
                 seed.callsite.id.as_str(),
                 entry_id,
-                binding_ok,
+                seed.entry_edge_kind,
                 cw,
             );
             let depth = seed.seed_depth.min(2);
@@ -3384,13 +3381,12 @@ pub(crate) fn run_batch_fixpoint_for_test<'a>(
             let seed = &seeds[si];
             let entry = seed.entry;
             let entry_id = graph.node_ids[entry as usize];
-            let binding_ok = edge_kind_binding_ok(seed.entry_edge_kind);
             let entry_temp = cross_hop(
                 &root,
                 seed.loop_routine,
                 seed.callsite.id.as_str(),
                 entry_id,
-                binding_ok,
+                seed.entry_edge_kind,
                 cw,
             );
             let depth = seed.seed_depth.min(2);

@@ -1,6 +1,6 @@
 # Issue #96: implicit-trigger edges in the typed graph
 
-Status: revision 3 (after spec rounds 1-3: sol + opus). Evidence: `.agent/issue-96/investigation.md` on the issue branch (master `6b47f58d`). The register ids (S*, the round-1 findings) are in `.agent/issue-96/findings.json`.
+Status: revision 3b (spec rounds 1-4: sol + opus, plus the T0/T1 corrections marked below). The evidence lives in the issue's committed ledger `.agent/issue-96/ledger.md`: its `## Assumption probes` hold the measurements this spec cites, on master `6b47f58d`, including the argument-less Modify/Insert result. The register ids cited here (S*, N*, R3-*) are entries of the committed register `.agent/issue-96/findings.json`. The investigation's full file:line map was a working note and is not committed; every claim the spec relies on is restated in the ledger.
 
 ## Goal
 

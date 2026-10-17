@@ -500,18 +500,20 @@ fn build_typed_edges(
     resolved: &ResolvedCalls,
     event_graph: &EventGraph,
 ) -> Vec<TypedEdge> {
-    // callsite id → &PCallSite (for callee details).
+    // One pass over the routines:
+    // - callsite id → &PCallSite (for callee details);
+    // - routine id → objectId (for resolved object-run target);
+    // - routine id → name (an `implicit-trigger` edge's `trigger_kind`).
     let mut call_site_by_id: HashMap<&str, &crate::program::body::features::PCallSite> =
         HashMap::new();
+    let mut object_id_by_routine: HashMap<&str, &str> = HashMap::new();
+    let mut routine_name_by_id: HashMap<&str, &str> = HashMap::new();
     for routine in &workspace.routines {
         for cs in &routine.call_sites {
             call_site_by_id.insert(cs.id.as_str(), cs);
         }
-    }
-    // routine id → objectId (for resolved object-run target).
-    let mut object_id_by_routine: HashMap<&str, &str> = HashMap::new();
-    for routine in &workspace.routines {
         object_id_by_routine.insert(routine.id.as_str(), routine.object_id.as_str());
+        routine_name_by_id.insert(routine.id.as_str(), routine.name.as_str());
     }
     // object type+number / type+name → objectId (for unresolved object-run target).
     let mut objects_by_type_number: HashMap<String, String> = HashMap::new();
@@ -550,20 +552,6 @@ fn build_typed_edges(
         }
     }
 
-    // routine id → name (an `implicit-trigger` edge's `trigger_kind`), and record
-    // op id → op (its `fires`).
-    let mut routine_name_by_id: HashMap<&str, &str> = HashMap::new();
-    let mut record_op_by_id: HashMap<
-        &str,
-        &crate::program::model::workspace::ModelRecordOperation,
-    > = HashMap::new();
-    for routine in &workspace.routines {
-        routine_name_by_id.insert(routine.id.as_str(), routine.name.as_str());
-        for op in &routine.record_operations {
-            record_op_by_id.insert(op.id.as_str(), op);
-        }
-    }
-
     let mut interface_typed_emitted: HashSet<String> = HashSet::new();
     let mut typed_edges: Vec<TypedEdge> = Vec::new();
 
@@ -575,7 +563,6 @@ fn build_typed_edges(
         // (the snapshot's callsite-resolution pass reads `callsite_id`).
         if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
             let Some(to) = &ce.to else { continue };
-            let op = record_op_by_id.get(ce.operation_id.as_str());
             typed_edges.push(TypedEdge {
                 kind: "implicit-trigger".to_string(),
                 from: ce.from.clone(),
@@ -592,11 +579,9 @@ fn build_typed_edges(
                 trigger_kind: routine_name_by_id
                     .get(to.as_str())
                     .map(|n| (*n).to_string()),
-                // An op missing from the model reads as `Maybe`, the
-                // conservative answer (the adapter emits edges only for model ops).
-                fires: Some(op.map_or(TriggerFires::Maybe, |op| {
-                    trigger_fires(&op.op, op.run_trigger)
-                })),
+                // The adapter decides `fires` once, from the op (#96 D1). An
+                // edge without it reads as `Maybe`, the conservative answer.
+                fires: Some(ce.fires.unwrap_or(TriggerFires::Maybe)),
             });
             continue;
         }

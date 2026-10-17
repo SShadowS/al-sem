@@ -69,7 +69,6 @@
 use std::collections::HashMap;
 
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::summary::TempState;
 use crate::engine::l4::summary_runner::trigger_receiver_temp_state;
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
 use crate::engine::l5::finding::EvidenceStep;
@@ -212,7 +211,12 @@ pub fn resolve_temp_along_path_closed_world(
 /// `Some(Known(v))` → `Known(v)`; `Some(PD(j))` → `ParameterDependent(j)` (re-anchored
 /// to the PARENT frame at L2 — the same UPWARD re-symbolization Task 8 does — which
 /// the next loop turn then chases through the parent's own caller hop).
-fn step_one_frame(
+///
+/// This is the ONE per-parameter hop binding d1 uses: the backward resolver
+/// here, `d1_liveness::classify_edge_param` and `d1_temp::cross_hop`'s
+/// `implicit-trigger` arm all call it, so the forward/backward equivalence
+/// holds on a trigger hop by construction.
+pub(crate) fn step_one_frame(
     parent: Option<&ModelRoutine>,
     callsite_id: Option<&str>,
     callee_param_index: u32,
@@ -224,11 +228,7 @@ fn step_one_frame(
     // An `implicit-trigger` hop's `callsite_id` is the firing record OPERATION's id,
     // not a call site (#96 D3): the trigger's `Rec` binds to that op's temp state.
     if edge_kind == Some("implicit-trigger") {
-        return match trigger_receiver_temp_state(parent, cs_id, callee_param_index) {
-            TempState::Known(v) => TempStateKind::Known(v),
-            TempState::ParameterDependent(j) => TempStateKind::ParameterDependent(j),
-            TempState::Unknown => TempStateKind::Unknown,
-        };
+        return trigger_receiver_temp_state(parent, cs_id, callee_param_index).to_kind();
     }
     let Some(cs) = parent.call_sites.iter().find(|c| c.id == cs_id) else {
         return TempStateKind::Unknown;

@@ -29,7 +29,7 @@
 //!    deterministic witness tie-break). Cycle safety is label dedup ALONE — NO
 //!    node budget, NO depth cap.
 //! 3. Expansion: child `depth_bucket = min(2, depth + edge.loop_depth)`, child
-//!    temp via [`cross_hop`] (using `edge.binding_ok`), child
+//!    temp via [`cross_hop`] (using `edge.kind`), child
 //!    `unc = unc || !uncertainties_by_node[child].is_empty()`.
 //! 4. Scoring per (loop, terminal-op): each label at the terminal's node yields
 //!    a candidate — verdict = [`resolve_terminal`] + FlowField gate; the scoring
@@ -66,7 +66,7 @@ use crate::engine::l5::d1_dataflow::{
     BATCH_WIDTH, GroupSpec, build_terminal_plan, condense, score_batch_to_sink,
 };
 #[cfg(test)]
-use crate::engine::l5::d1_graph::{D1Edge, D1Terminal, NodeIx, edge_kind_binding_ok};
+use crate::engine::l5::d1_graph::{D1Edge, D1Terminal, NodeIx};
 use crate::engine::l5::d1_graph::{D1Graph, D1Seed};
 use crate::engine::l5::d1_liveness::compute_liveness;
 use crate::engine::l5::d1_temp::ParamTemp;
@@ -459,13 +459,12 @@ pub(crate) fn process_group<'g, 'a>(
     for &si in seed_indices {
         let seed = &seeds[si];
         let entry_id = graph.node_ids[seed.entry as usize];
-        let binding_ok = edge_kind_binding_ok(seed.entry_edge_kind);
         let temp = cross_hop(
             &root,
             seed.loop_routine,
             seed.callsite.id.as_str(),
             entry_id,
-            binding_ok,
+            seed.entry_edge_kind,
             cw,
         );
         let depth = seed.seed_depth.min(2);
@@ -508,7 +507,7 @@ pub(crate) fn process_group<'g, 'a>(
                 caller,
                 edge.callsite_id.unwrap_or(""),
                 to_id,
-                edge.binding_ok,
+                edge.kind,
                 cw,
             );
             let child_unc = parent_unc || node_has_uncertainty(ctx, to_id);

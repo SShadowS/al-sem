@@ -1784,11 +1784,17 @@ impl<'a> Converter<'a> {
         }
         tos.sort();
         tos.dedup();
+        // Whether the trigger runs every time the op does: decided ONCE, here,
+        // from the op and its literal RunTrigger (#96 D1); the typed graph
+        // copies it. `resolution` below is L4's older, coarser rule and stays
+        // as it is, so L4 does not move.
+        let fires = crate::engine::l4::combined_graph::trigger_fires(&op.op, op.run_trigger);
         tos.into_iter()
             .map(|to| {
                 let mut e = CallEdge::base(&r.id, &op.id, &op.id);
                 e.to = Some(to);
                 e.dispatch_kind = DispatchKind::ImplicitTrigger;
+                e.fires = Some(fires);
                 // Same rule as `implicit_edges::trigger_mapping`: Validate and
                 // Rename always fire their trigger (Rename takes no RunTrigger).
                 e.resolution = if is_validate || op.op.fold_identifier() == "rename" {
