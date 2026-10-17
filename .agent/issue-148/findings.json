@@ -1,0 +1,402 @@
+[
+ {
+  "id": "S1",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The confidence plan cannot work: the summary has no uncertainties and object-run-unresolved is not a valid cappedBy; the fallback left confidence identical to the yes arm.",
+  "disposition": "fixed",
+  "evidence": "D1 Confidence (decided): uncertainties from the context's UncertaintyView through to_confidence(&uncertainties, \"possible\") -> cappedBy e.g. [\"unresolved-call\"]; V1 asserts exact cappedBy; implementer STOPs if the view yields none; break 5. Revision 3 (re-raise): d35's declared substrate becomes SUMMARIES | CORE_SUMMARIES (the uncertainty view is empty without CORE_SUMMARIES, detector_context.rs:1283-1296/1502-1510); V1 asserts cappedBy with the default selection AND with --detector d35 alone; break 5b drops CORE_SUMMARIES and fails the d35-only assert; gap_detector_substrate_parity stays green.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The unknown arm kept the unconditional 'Remove the Commit' fix hint and an evidence note asserting 'transitively commits'.",
+  "disposition": "fixed",
+  "evidence": "D1: the evidence note now reads 'may commit (mayCommit(summary) == \"unknown\"; incomplete coverage: {reasons})'; the fix hint for the unknown arm is conditional ('Check the callees that could not be analysed ... if one commits ...'); yes/direct hints unchanged.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The variants did not exercise the no-summary behaviour nor assert unknown evidence content and id stability.",
+  "disposition": "fixed",
+  "evidence": "D2: V1 asserts title, root cause, evidence note, confidence incl. cappedBy, severity and id; a detector-level unit test pins the no-summary and coverage==None arms; break 6.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "coverage == None and partial-with-empty-reasons would render '()'.",
+  "disposition": "fixed",
+  "evidence": "D1 Root cause: fallbacks 'coverage unknown' (coverage None), 'incomplete coverage' (empty reasons), 'no effect summary' (no summary); unit test pins them.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The golden probe grepped notes only, missing goldens without evidencePath (cli-a, gate, sarif).",
+  "disposition": "fixed",
+  "evidence": "Measurement plan: also grep tests/ for the '(via callee)' title and triage each hit as a real-Commit fixture; check-goldens must stay green.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S6",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Nothing pinned yes beating unknown; the unknown arm's !is_direct condition was unstated.",
+  "disposition": "fixed",
+  "evidence": "D1: the unknown arm is '!is_direct && summary_commits == \"unknown\"', direct/yes always win; D2 V5 (Commit() plus RunModal on a page without OnOpenPage -> yes wording); break 4.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S7",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "d34 requires Yes (d34.rs:115) while d35 fires on unknown with no stated reason.",
+  "disposition": "fixed",
+  "evidence": "D1 Severity and default-on: rationale \u2014 d35's harm is irreversible (a subscriber commit cannot be rolled back by the publisher), so recall is preferred; honest wording plus cappedBy state it is unproven.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S8",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The byte-identical CDO comparison used nondeterministic output.",
+  "disposition": "fixed",
+  "evidence": "Measurement plan: analyze U:/Git/DO-cdo-baseline/Cloud --scope primary --detector d35 --with-evidence --format json --deterministic with master's and the branch's cdo-profile binaries, byte-compared.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S9",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The modal execute fact applies only to the keyword form (capability_cone.rs:~688-691).",
+  "disposition": "fixed",
+  "evidence": "Assumption probe row 2 corrected: keyword Page.RunModal(...) also yields the modal execute dispatch; the variable form does not.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N1",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "With CORE_SUMMARIES, a d35-only CDO run also runs summarize, which can add cap-hit diagnostics, so a byte-identical whole-output compare could fail with no finding moved; runtime grows.",
+  "disposition": "fixed",
+  "evidence": "Measurement plan: compare payload.findings byte-for-byte; list and explain any diagnostics difference; record both wall times. Revision 4 (re-raise): acceptance row A2 now also says CDO d35 payload.findings byte-identical with any diagnostics difference listed and explained, matching the measurement plan.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N2",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "D2 said four variants (five listed), and V1's evidence-note assert needs --with-evidence (default JSON omits evidencePath).",
+  "disposition": "fixed",
+  "evidence": "D2: 'five variants'; every run uses --format json --with-evidence.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N3",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "An unknown cone can be partial for reasons the summarize step records no uncertainty for, giving an empty cappedBy; D1 did not say whether that is acceptable.",
+  "disposition": "fixed",
+  "evidence": "D1: an empty uncertainty set is allowed for the unknown arm in general ({possible, []}); root cause and note still name the coverage reasons; the STOP rule applies only to the repro shape where unresolved-call is known present.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N4",
+  "source": "opus",
+  "round": 3,
+  "file": ".agent/issue-148/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Break 5b was only in D1, not the matrix's Discrimination row; the parity test D1 cites cannot catch a missing CORE_SUMMARIES because no parity fixture has an unknown d35.",
+  "disposition": "fixed",
+  "evidence": "Discrimination row lists (5b); D1 adds an inline d35-unknown workspace (the repro) to every_detector_parity_between_full_and_minimal_ctx (pattern at gap_detector_substrate_parity.rs:144-152), which 5b must also fail.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR1",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/program/model/program_calls.rs",
+  "line": 1215,
+  "severity": "important",
+  "text": "Root cause left unfixed: the adapter maps an empty workspace run to Opaque -> object-run-unresolved -> partial cone; only the d35 wording changes.",
+  "disposition": "refuted",
+  "evidence": "Spec D3a (both reviewers accepted at r4) defers it: making the empty run resolved-empty alone trades this false positive for a false negative because object runs reach only the entry trigger; the fix is the lifecycle expansion (feature-sized, many goldens) and is filed as a discovery.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR2",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 201,
+  "severity": "important",
+  "text": "The unknown arm stays severity high and default-on, so a --fail-on high gate still fails on an unproven commit.",
+  "disposition": "refuted",
+  "evidence": "Spec D1 'Severity and default-on' (accepted): a subscriber commit is irreversible for the publisher, so recall is preferred; the honest title, root cause and cappedBy state it is unproven; deliberate asymmetry with d34 recorded.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR3",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 157,
+  "severity": "important",
+  "text": "The unknown root cause blamed callees even when the gap is the subscriber itself (no summary, coverage None, own partial direct_status).",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: 'whose call coverage is incomplete ({reasons})' and fix hint 'Check what could not be analysed ({reasons})'; V1 and unit tests assert the exact strings.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR4",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 236,
+  "severity": "minor",
+  "text": "coverage_reasons ignored coverage.unknown_targets, so the message never names what could not be analysed.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: appends '; unanalysed: <up to 3 sorted displays>' then ', +N more'; unit test unknown_targets_show_three_then_more; for the repro unknown_targets is empty (unresolved_sources add only the reason, capability_cone.rs:2338-2351), so V1's text is unchanged; break C.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR5",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/mod.rs",
+  "line": 1406,
+  "severity": "minor",
+  "text": "d35 now always requires CORE_SUMMARIES, the most expensive substrate, for a rare arm.",
+  "disposition": "refuted",
+  "evidence": "Measured on CDO, d35-only: master 37.8/42.2 s vs branch 41.4/40.1 s, and 39 s after the CR fixes \u2014 within noise (t1.md, cr-fix.md); required so a d35-only run gets cappedBy (S1).",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR6",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "tests/cli/cli_d35_unknown_commit.rs",
+  "line": 262,
+  "severity": "minor",
+  "text": "V4's comment claimed 'RunModal is not a commit' while it only pins an entry-trigger page, locking in the entry-trigger-only blind spot as correct.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: V4's docs say it pins only that a page whose source declares an entry trigger yields a complete cone and no finding, and state the known limit (a Commit in OnQueryClosePage etc. is not seen; filed discovery).",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR7",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 117,
+  "severity": "minor",
+  "text": "Stale comments: the {:?} closed-set note and the module doc's '(via callee) whenever !isDirect'.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: the {:?} formatting and its comment are gone (each arm writes its literal, same bytes); the module doc lists the three arms.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR8",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 245,
+  "severity": "minor",
+  "text": "coverage_reasons' dedupe/sort and empty-reasons branches were untested.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: unit tests reasons_are_deduplicated_and_sorted and empty_reasons_is_incomplete_coverage through detect_d35; breaks A (Vec instead of BTreeSet) and B (drop empty branch) each fail only their test.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR9",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 148,
+  "severity": "minor",
+  "text": "Four separate branches on unknown_reasons duplicated the arm logic.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: one match over (direct_commit, summary_commits) builds title/root cause/evidence path/fix/confidence; yes/direct byte-identical (V2/V5, every golden finding unchanged, CDO byte-identical).",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "CR10",
+  "source": "code-review (high)",
+  "round": 1,
+  "file": "src/engine/l5/detectors/mod.rs",
+  "line": 1405,
+  "severity": "minor",
+  "text": "The d35 registry short_description (SARIF rule text) still read 'Commit reachable from an event subscriber'.",
+  "disposition": "fixed",
+  "evidence": "fb5a5613: 'Commit reachable, or not ruled out, from an event subscriber'; the 44 tests/gate-goldens SARIF files carrying it regenerated (receipt .agent/golden-triage.md; every changed golden line is exactly that string).",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "D1",
+  "source": "opus",
+  "round": 1,
+  "file": "src/engine/l5/detectors/d35.rs",
+  "line": 0,
+  "severity": "minor",
+  "text": "The '; unanalysed:' label overclaims: unknown_targets are cone members whose own direct coverage is partial, i.e. analysed incompletely.",
+  "disposition": "fixed",
+  "evidence": "54c458a6: label is now '; partly analysed: ' (code, doc comments, unit test string, CHANGELOG).",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "D2",
+  "source": "opus",
+  "round": 1,
+  "file": "tests/cli/cli_d35_unknown_commit.rs",
+  "line": 0,
+  "severity": "minor",
+  "text": "V4's test name 'v4_runmodal_is_not_a_commit' kept the claim CR6 narrowed in its doc.",
+  "disposition": "fixed",
+  "evidence": "54c458a6: Renamed to v4_page_with_entry_trigger_has_no_finding.",
+  "hash": "358e8c5033a0fa2d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]

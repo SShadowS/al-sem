@@ -181,7 +181,7 @@
               "id": "d35-commit-in-event-subscriber",
               "name": "CommitInEventSubscriber",
               "shortDescription": {
-                "text": "Commit reachable from an event subscriber"
+                "text": "Commit reachable, or not ruled out, from an event subscriber"
               }
             },
             {

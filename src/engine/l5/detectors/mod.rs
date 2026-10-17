@@ -1402,8 +1402,9 @@ pub fn default_detectors() -> Vec<Detector> {
             name: d35::DETECTOR.to_string(),
             run: d35::detect_d35,
             rule_name: "CommitInEventSubscriber",
-            short_description: "Commit reachable from an event subscriber",
-            requires: substrate::SUMMARIES,
+            short_description: "Commit reachable, or not ruled out, from an event subscriber",
+            // CORE_SUMMARIES: the unknown arm's `cappedBy` reads the uncertainty view (#148).
+            requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
         Detector {
             name: d36::DETECTOR.to_string(),

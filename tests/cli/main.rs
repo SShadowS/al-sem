@@ -64,6 +64,7 @@ mod cli_b_snapshot_differential;
 mod cli_c_cache_differential;
 mod cli_c_events_differential;
 mod cli_c_policy_differential;
+mod cli_d35_unknown_commit;
 mod cli_dependency_diagnostics;
 mod cli_diff_strict;
 mod cli_digest_changed_spans;
