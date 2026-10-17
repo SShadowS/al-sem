@@ -159,4 +159,4 @@ All root-set assertions compare `(objectDisplay, display, stableId)` tuples, not
     - N3's evidence is updated, and the timeline is reordered.
 
     NOT converged at the cap. The handoff rule is met: no `open` entry; every mark is `accepted` or `re-raised`; every entry is accepted by at least one reviewer (S6 by opus).
-- Handoff (spec-panel cap): the ledger and register are committed on the branch as a pre-ratified design for attempt 2.
+- Handoff (spec-panel cap): the ledger and register are committed on the branch as a pre-ratified design for attempt 2. Design commit: `71716c375c3c61973f4dc3da20b645c422954f67`.
