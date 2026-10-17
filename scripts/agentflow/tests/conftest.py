@@ -11,6 +11,20 @@ from agentflow.state import Ctx, Paths  # noqa: E402
 from agentflow.gitops import Git  # noqa: E402
 
 
+PLENTY_OF_DISK = 500 * 2**30
+
+
+@pytest.fixture(autouse=True)
+def plenty_of_disk(monkeypatch):
+    """`claim` and `preflight` refuse on low free disk, and free disk is a
+    fact about the machine running the suite (this one has had 31 GB free on
+    C:, under the 40 GB floor). Every test sees 500 GB unless it patches
+    `shutil.disk_usage` itself to state the number it is about."""
+    import shutil
+    from types import SimpleNamespace
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: SimpleNamespace(free=PLENTY_OF_DISK))
+
+
 @pytest.fixture
 def root(tmp_path):
     (tmp_path / ".agent").mkdir()

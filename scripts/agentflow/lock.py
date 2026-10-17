@@ -20,6 +20,7 @@ Only the public entry points here take it; helpers assume it is held.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -32,7 +33,8 @@ class LockHeld(RuntimeError):
     """`acquire` or `steal_for_recovery` refused. `.code` is the
     machine-readable reason: `issue-held:<run>` (the issue has a lease, live
     or stale), `slots-full` (as many leases as `slots`), `run-holds-a-lock`
-    (this run id already owns a lease: one run, one issue), `lock-live:<run>`
+    (this run id already owns a lease: one run, one issue),
+    `disk-low:<free>GB<<need>GB` (see `disk_required_gb`), `lock-live:<run>`
     (the lease to recover is live again: another session stole it first) or
     `lock-gone` (the lease to recover no longer names the stale run)."""
 
@@ -131,6 +133,21 @@ def _write(ctx: Ctx, path: Path, lk: Lock) -> None:
     write_json(ctx, path, asdict(lk))
 
 
+def disk_free_gb(ctx: Ctx) -> int:
+    """Free GB on the volume the issue and verify worktrees live on: the
+    root's PARENT, not the root (the same drive here, but the right question)."""
+    return shutil.disk_usage(ctx.paths.root.parent).free // 2**30
+
+
+def disk_required_gb(ctx: Ctx, live_runs: int) -> int:
+    """`min_free_gb` plus `reserve_gb_per_run` for each LIVE run: each may
+    still grow its worktree `target/` by ~30 GB, and post-merge builds in the
+    root's `target/`. A stale run builds nothing more, so it reserves nothing.
+    With the defaults: 40 GB for the first claim, 70 GB for the second."""
+    cfg = config(ctx)
+    return cfg["min_free_gb"] + cfg["reserve_gb_per_run"] * live_runs
+
+
 def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
             started: float | None = None, count_slot: bool = True) -> Lock:
     """Take the lease for `issue` under this run's id.
@@ -140,8 +157,9 @@ def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
     live OR stale (a stale lease belongs to `recover`, not to a new claim);
     refuse `slots-full` when `count_slot` and the lease count is at least
     `slots` from `.agent/config.json`. Stale leases count, so a crashed run
-    cannot be over-subscribed around: `recover` frees its slot. `unblock`
-    passes `count_slot=False`, because it does no work.
+    cannot be over-subscribed around: `recover` frees its slot. Then refuse
+    `disk-low:<free>GB<<need>GB` below `disk_required_gb`. `unblock` passes
+    `count_slot=False`, because it does no work, and skips both.
 
     `started` names WHEN THE WORK WAS CLAIMED, and it is a parameter because
     one caller is not claiming new work: `cli.cmd_recover` mints a
@@ -180,6 +198,10 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
     if count_slot and len(entries) >= config(ctx)["slots"]:
         raise LockHeld("slots-full", entries[0] if entries else None)
     now = ctx.now()
+    if count_slot:
+        free, need = disk_free_gb(ctx), disk_required_gb(ctx, sum(not is_stale(lk, now) for lk in entries))
+        if free < need:
+            raise LockHeld(f"disk-low:{free}GB<{need}GB")
     lk = Lock(issue=issue, run_id=ctx.run_id, session=session,
               started=now if started is None else started, heartbeat=now, attempt=attempt)
     path = ctx.paths.lease(issue)

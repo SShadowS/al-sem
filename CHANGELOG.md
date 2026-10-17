@@ -421,6 +421,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a live lease by issue, two sessions stealing at once in two real processes,
   no moment without a lease); the suite is 343 passed (was 339).
 
+- **agentflow: `claim` checks free disk (`scripts/agentflow/{lock,cli}.py`).**
+  Step 8 of the parallel-issues design. Required free disk is now
+  `min_free_gb` plus `reserve_gb_per_run` for each LIVE run (defaults 40 +
+  30: 40 GB for the first claim, 70 GB for the second), measured on the
+  worktrees' volume (the checkout's parent, not the checkout). `claim`
+  refuses `disk-low:<free>GB<<need>GB` under mutex `registry`, before any
+  lease, label or attempt; before, only `preflight` checked disk. `preflight`
+  uses the same rule, fails `disk-free:<n>GB` as before, and now reports
+  `disk_free_gb` and `disk_required_gb`. A stale lease reserves nothing,
+  and `unblock` and the recovery follow-through are not checked. With no
+  live run the floor is `min_free_gb`, as before.
+
+  1 new test in `scripts/agentflow/tests/test_cli_flow.py`. The test fixtures
+  now report 500 GB free unless a test states its own number, because the
+  machine's real free space must not decide a claim test (this machine had
+  31 GB free on `C:`). The suite is 344 passed (was 343).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

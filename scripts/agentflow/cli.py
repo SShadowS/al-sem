@@ -276,8 +276,12 @@ def cmd_preflight(args, ctx, gh, git):
         resolve_bash()
     except RuntimeError:
         fails.append("bash")
-    free_gb = shutil.disk_usage(ctx.paths.root).free // 2**30
-    if free_gb < config(ctx)["min_free_gb"]:
+    # The same rule `claim` refuses on (`lock.disk_required_gb`): the floor
+    # plus a reserve per live run. Failing while a sibling runs only means
+    # "do not claim now".
+    free_gb = lock.disk_free_gb(ctx)
+    need_gb = lock.disk_required_gb(ctx, sum(not r["stale"] for r in leases))
+    if free_gb < need_gb:
         fails.append(f"disk-free:{free_gb}GB")
     # Not failures. Risk (g)3 of the parallel-issues design: an inherited
     # CARGO_TARGET_DIR makes every issue worktree build into one directory,
@@ -290,6 +294,7 @@ def cmd_preflight(args, ctx, gh, git):
     stale_locks = [{k: v for k, v in r.items() if k != "stale"} for r in stale]
     out = {"ok": not fails, "failures": fails, "locks": leases, "stale_locks": stale_locks,
            "stale_lock": stale_locks[0] if stale_locks else None,
+           "disk_free_gb": free_gb, "disk_required_gb": need_gb,
            "warnings": warnings, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:

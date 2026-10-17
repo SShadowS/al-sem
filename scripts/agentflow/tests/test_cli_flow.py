@@ -303,9 +303,11 @@ def test_slots_one_still_refuses_a_second_issue_as_slots_full(capsys, root):
 
 
 CLAIM_CHILD = """
-import json
+import json, shutil, types
 from agentflow import cli
-from agentflow.tests.conftest import FakeRunner
+from agentflow.tests.conftest import FakeRunner, PLENTY_OF_DISK
+# The parent's `plenty_of_disk` patch does not reach a child process.
+shutil.disk_usage = lambda p: types.SimpleNamespace(free=PLENTY_OF_DISK)
 issue, responses = ARGS[0], json.loads(ARGS[1])
 if len(ARGS) > 2:
     slow_reads(ARGS[2])
@@ -404,6 +406,50 @@ def test_a_legacy_lock_json_is_beaten_fenced_counted_and_released_by_new_code(
     assert code == 0, out
     assert not legacy.exists() and lock.all_locks(Ctx(Paths(root))) == []
     assert list((root / ".agent").glob("locks/*")) == []
+
+
+def test_claim_and_preflight_need_the_floor_plus_a_reserve_per_live_run(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """Design test 30. Required free disk = `min_free_gb` + `reserve_gb_per_run`
+    x live leases, measured on the worktrees' volume (the root's PARENT). With
+    one live run and the defaults that is 40 + 30 = 70 GB: a claim at 60 GB
+    is `disk-low` and creates nothing; at 80 GB it claims. `preflight`
+    reports the same two numbers and fails on the same rule. A stale lease
+    does not count (it builds nothing more), and `unblock` takes no slot so
+    is not checked."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _slots(clone, 3)
+    lock.acquire(Ctx(Paths(clone), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(clone), run_id="run-dead", now=lambda: 1.0), 10, "s", 1)
+    asked = []
+
+    def disk(gb):
+        def usage(p):
+            asked.append(Path(p))
+            return SimpleNamespace(free=gb * 2**30)
+        monkeypatch.setattr(cli.shutil, "disk_usage", usage)
+
+    disk(60)
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, clone, 9, gh, "run-new")
+    assert code == 1 and out["error"] == "disk-low:60GB<70GB", out
+    assert gh.calls == [] and lock.for_issue(Ctx(Paths(clone)), 9) is None
+    assert asked and all(p == clone.parent for p in asked), asked
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert (out["disk_free_gb"], out["disk_required_gb"]) == (60, 70), out
+    assert "disk-free:60GB" in out["failures"], out["failures"]
+    code, out = run(capsys, clone, "unblock", "11", gh_run=FakeRunner(
+        {"issue edit 11 --remove-label agent-blocked": ""}), run_id=None)
+    assert code == 0, out
+    disk(80)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert (out["disk_free_gb"], out["disk_required_gb"]) == (80, 70), out
+    assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+    code, out = _claim(capsys, clone, 9, FakeRunner(CLAIM_GH), "run-new")
+    assert code == 0, out
 
 
 def test_fetch_excludes_an_issue_with_a_lease_even_without_its_label(capsys, root, monkeypatch):
