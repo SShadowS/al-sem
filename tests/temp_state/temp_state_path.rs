@@ -505,3 +505,70 @@ fn edge_kind_guard_dynamic_hop_resolves_unknown() {
         "PD chased down a hop with an unknown edge kind → Unknown"
     );
 }
+
+// --- (#96 D3) implicit-trigger hop binds the trigger's `Rec` to the firing op ---
+
+/// A record op `id` on a local record with the given temp state.
+fn record_op(
+    id: &str,
+    temp_state: PTempState,
+) -> al_sem::program::model::workspace::ModelRecordOperation {
+    al_sem::program::model::workspace::ModelRecordOperation {
+        id: id.to_string(),
+        op: "Insert".to_string(),
+        record_variable_name: "EMailLog".to_string(),
+        record_variable_id: None,
+        table_id: None,
+        temp_state: Some(temp_state),
+        field_arguments: None,
+        source_anchor: p_anchor(),
+        loop_stack: Vec::new(),
+        field_argument_infos: None,
+        in_until_condition: false,
+        run_trigger: Some(true),
+    }
+}
+
+/// d1-shaped path: `Caller` fires `OnInsert` via op `Caller/op0` (an
+/// `implicit-trigger` hop whose `callsite_id` is the OP id), and the trigger's
+/// terminal db op has `temp_state = PD(RECEIVER_PARAM_INDEX)` (its `Rec`).
+/// The firing op's own temp state must decide: physical → Known(false),
+/// temporary → Known(true). Before the fix the op id matched no call site → Unknown.
+fn implicit_trigger_resolution(op_state: PTempState) -> TempStateKind {
+    use al_sem::program::body::features::RECEIVER_PARAM_INDEX;
+    let mut caller = routine("Caller");
+    caller
+        .record_operations
+        .push(record_op("Caller/op0", op_state));
+    let trigger = routine("OnInsert");
+    let routines = [caller, trigger];
+    let map = routine_map(&routines);
+    let mut edge_kinds: HashMap<&str, &str> = HashMap::new();
+    edge_kinds.insert("Caller/op0", "implicit-trigger");
+    let path = vec![
+        hop("Caller", "Caller/op0"),
+        terminal("OnInsert", "OnInsert/op0"),
+    ];
+    resolve_temp_along_path(
+        &path,
+        TempStateKind::ParameterDependent(RECEIVER_PARAM_INDEX),
+        &map,
+        &edge_kinds,
+    )
+}
+
+#[test]
+fn implicit_trigger_hop_on_physical_record_is_known_false() {
+    assert_eq!(
+        implicit_trigger_resolution(ts_known(false)),
+        TempStateKind::Known(false)
+    );
+}
+
+#[test]
+fn implicit_trigger_hop_on_temporary_record_is_known_true() {
+    assert_eq!(
+        implicit_trigger_resolution(ts_known(true)),
+        TempStateKind::Known(true)
+    );
+}

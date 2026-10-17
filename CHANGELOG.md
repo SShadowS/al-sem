@@ -270,7 +270,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A table or table-extension trigger's `Rec`** now takes the caller's record temp state: it is parameter-dependent on the receiver, bound from the firing operation in L4 and in the cone. So a trigger fired on a temporary record no longer counts as a physical write; before, L4 already reported it as one.
   - **The model** no longer drops the program engine's `ModifyAll`/`DeleteAll` → `OnModify`/`OnDelete` edges.
 
-  CDO's `--program-call-graph-stats` is unchanged. The goldens moved only by the predicted shapes, triaged line by line: r1a, ir-l2, r3a1, r3a2 and r3a3; the r3a1/r3a3 manifest matrices; the synthetic l4 collision fixture, rewritten to the real trigger shape. A trigger-first inherited fact now carries `witnessFirstHopOperationId`.
+  CDO's `--program-call-graph-stats` is unchanged. The goldens moved only by the predicted shapes, triaged line by line: r1a, ir-l2, r3a1, r3a2 and r3a3; the r3a1/r3a3 manifest matrices; the synthetic l4 collision fixture, rewritten to the real trigger shape. A trigger-first inherited fact now carries `witnessFirstHopOperationId`. d1's path temp-state resolver binds a trigger's `Rec` the same way.
+
+  **Cost on CDO** (`release-fast`, cross-app): `alsem analyze` wall time roughly doubles (24 → 48 s); a digest goes 32 → 82 s; fingerprint is unchanged; peak memory is flat (about 2.83 GB). The cause is that the cone now follows Base Application trigger hubs (Gen. Journal Line `OnInsert` → approvals → workflow → posting), which grows the largest SCC from 126 to 479 routines. Every such path is a real may-execute path. d43 findings at `--scope all` grow from 841 to 4573 (real trigger paths, mostly from one Base Application site), and fall from 23 to 5 at `--scope primary`.
 
 - `alsem analyze --format sarif` now describes every detector in `tool.driver.rules`
   (#87). The list was written by hand and held only 21 of the 54 detectors, so a finding
