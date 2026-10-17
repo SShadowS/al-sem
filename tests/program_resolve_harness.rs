@@ -414,6 +414,17 @@ codeunit 50111 "EvtSubOverload"
         "only the sibling H(Text) subscribes OnB"
     );
 
+    // CR3: the name exists, but no declaration has this `sig_fp`. The route
+    // names no real declaration, so it is rejected, not waved through.
+    let wrong_fp = RoutineNodeId {
+        sig_fp: if_h.sig_fp ^ 1,
+        ..if_h.clone()
+    };
+    assert!(
+        !verify(&wrong_fp, "ona"),
+        "a route whose sig_fp matches no declaration of H is rejected"
+    );
+
     let missing = RoutineNodeId {
         name_lc: "nosuchroutine".into(),
         ..if_h.clone()

@@ -409,10 +409,13 @@ pub fn project_fresh_event_rows_on(
 /// - The subscriber's app is found in `apps` but has no corresponding `ParsedUnit`
 ///   (dep-boundary subscriber — source not in workspace; AbiSymbol routes are already
 ///   excluded before reaching the teeth so this path is for consistency only), OR
-/// - No declaration in that unit has the full id `sub_rid`.
+/// - No routine of that unit's object has the NAME `sub_rid.name_lc` (or the
+///   object itself is not there).
 ///
 /// Returns `false` (FAIL → `unverified_extra`) when:
 /// - `sub_rid.params_count` exceeds the Sender-tolerant bound above, OR
+/// - Routines named `sub_rid.name_lc` exist but none has the full id
+///   `sub_rid` (a route whose `sig_fp` names no real declaration), OR
 /// - The subscriber IS found in `parsed` but no freshly-parsed attribute of any of
 ///   its declarations names the expected `(publisher_object_type_lc,
 ///   publisher_name_lc, event_name_lc)` triple. Its declarations are those whose
@@ -462,7 +465,7 @@ pub fn verify_event_subscriber_route(
     // one id (issue #103), each with its own attributes: check them all. A
     // declaration is the subscriber only when its FULL id is `sub_rid` — a
     // same-name, same-arity overload has a different `sig_fp`.
-    let mut found = false;
+    let mut name_found = false;
     for pf in &unit.files {
         for obj in &pf.file.objects {
             if obj.kind != sub_rid.object.kind {
@@ -479,10 +482,10 @@ pub fn verify_event_subscriber_route(
                 if r.name.fold_identifier() != sub_rid.name_lc {
                     continue;
                 }
+                name_found = true;
                 if source_routine_node_id(sub_rid.object.clone(), r) != *sub_rid {
                     continue;
                 }
-                found = true;
                 // Routine found — re-parse its [EventSubscriber] attrs fresh
                 // (NOT from sub_rid or any cached RoutineNode field).
                 let has_match = r
@@ -508,9 +511,11 @@ pub fn verify_event_subscriber_route(
         }
     }
 
-    // No declaration subscribes. Routine not found in any parsed file of this
-    // app → fail-open.
-    !found
+    // No declaration with the full id subscribes, or none has the full id
+    // although the name exists (a route with a wrong `sig_fp`): reject. Only
+    // an object or routine name found in no parsed file of this app fails
+    // open.
+    !name_found
 }
 
 // ---------------------------------------------------------------------------

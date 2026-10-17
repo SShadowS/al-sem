@@ -1718,7 +1718,8 @@ fn if_dup_dependency_workspace(dir: &Path) {
 /// edges exactly once. Its first row does not map to a program node (a
 /// dependency's declaration surface keeps the LAST same-id declaration's span),
 /// so the edges come from the second row: a row only counts as processed once it
-/// maps.
+/// maps. The unmapped first row loses nothing, so it is not counted in
+/// `unmapped_subscribers` (CR5): that counter is for lost subscriptions.
 #[test]
 fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
@@ -1736,8 +1737,8 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         .count();
     assert_eq!(h_rows, 2, "precondition: two model rows for H");
     assert_eq!(
-        m.events.census.unmapped_subscribers, 1,
-        "precondition: one H row does not map: {:?}",
+        m.events.census.unmapped_subscribers, 0,
+        "the unmapped H row's id is covered by its mapped row: {:?}",
         m.events.census
     );
     let mut edges: Vec<(String, String, String)> = m

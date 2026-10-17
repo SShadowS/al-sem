@@ -763,58 +763,52 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         while j < routines.len() && routines[j].id == routines[i].id {
             j += 1;
         }
-        // Count raw entries per param-signature key within this run FIRST —
-        // a survivor is only markable once the true raw count sharing its
-        // key is known (needed for the ABI empty-key case above). The
-        // number of DISTINCT keys in the run (`sig_counts.len()`) is what
-        // the source-overload-alias marking below needs: >=2 distinct keys
+        // The number of DISTINCT param-signature keys in the run is what the
+        // source-overload-alias marking below needs: >=2 distinct keys
         // surviving under one id is a genuine aliased overload pair.
-        let mut sig_counts: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
-        for r in &routines[i..j] {
-            *sig_counts.entry(r.param_sig_key.as_str()).or_insert(0) += 1;
-        }
-        let distinct_key_count = sig_counts.len();
+        let distinct_key_count = routines[i..j]
+            .iter()
+            .map(|r| r.param_sig_key.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         // Preserve first-occurrence order for determinism; collapse every
         // later entry in the run that repeats an already-seen param signature.
         let mut seen_sigs: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for r in &routines[i..j] {
+        for (k, r) in routines[i..j].iter().enumerate() {
+            if !seen_sigs.insert(r.param_sig_key.as_str()) {
+                verdicts.push(Verdict::Drop);
+                contexts.push(None);
+                event_facts.push(None);
+                continue;
+            }
+            // `r` is the first entry of its key: every same-key copy, in
+            // document order, the survivor first. Everything below reads it.
+            let copies: Vec<&RoutineNode> = routines[i + k..j]
+                .iter()
+                .filter(|o| o.param_sig_key == r.param_sig_key)
+                .collect();
             // A collapsed duplicate (the same declaration in two `#if` arms)
             // exists under its own build conditions, so the survivor exists
             // under either: it keeps only the symbols every collapsed copy
             // decides alike (`RoutineNode::preproc_context`).
-            contexts.push((!seen_sigs.contains(r.param_sig_key.as_str())).then(|| {
+            contexts.push(Some(
                 r.preproc_context
                     .iter()
-                    .filter(|e| {
-                        routines[i..j]
-                            .iter()
-                            .filter(|o| o.param_sig_key == r.param_sig_key)
-                            .all(|o| o.preproc_context.contains(e))
-                    })
+                    .filter(|e| copies.iter().all(|o| o.preproc_context.contains(e)))
                     .cloned()
-                    .collect::<Box<[_]>>()
-            }));
+                    .collect::<Box<[_]>>(),
+            ));
             // Issue #103: the same declaration in two `#if` arms can subscribe
             // to, or publish, different events; the survivor stands for every
             // arm, so it carries the event facts of all of them. Only for the
             // SOURCE tier: an ABI run under one key groups genuinely different
             // overloads (see `KeepCollapsed`), whose facts must not mix.
-            event_facts.push(
-                (!seen_sigs.contains(r.param_sig_key.as_str())
-                    && r.tier != TrustTier::SymbolOnly
-                    && sig_counts[r.param_sig_key.as_str()] >= 2)
-                    .then(|| {
-                        EventFacts::union(
-                            routines[i..j]
-                                .iter()
-                                .filter(|o| o.param_sig_key == r.param_sig_key),
-                        )
-                    }),
-            );
-            verdicts.push(if !seen_sigs.insert(r.param_sig_key.as_str()) {
-                Verdict::Drop
-            } else if r.tier == TrustTier::SymbolOnly && sig_counts[r.param_sig_key.as_str()] >= 2 {
+            event_facts.push(if r.tier == TrustTier::SymbolOnly {
+                None
+            } else {
+                EventFacts::of_arms(&copies)
+            });
+            verdicts.push(if r.tier == TrustTier::SymbolOnly && copies.len() >= 2 {
                 Verdict::KeepCollapsed
             } else if r.tier != TrustTier::SymbolOnly && distinct_key_count >= 2 {
                 Verdict::KeepAliased
@@ -886,40 +880,88 @@ struct EventFacts {
 }
 
 impl EventFacts {
-    /// Merge `copies`, in document order, the survivor first.
+    /// The facts to give the survivor `copies[0]` of a same-key run (`copies`:
+    /// every same-key copy in document order, the survivor first), or `None`
+    /// to leave it as it is.
+    ///
+    /// Only the `#if` ARMS of ONE declaration site are merged: the leading
+    /// copies whose build conditions pairwise contradict
+    /// (`al_syntax::ir::preproc_contradicts`), so no build compiles two of
+    /// them. `RoutineNode` carries no source file, so this is the signal for
+    /// "same site": two arms of one `#if` always contradict, while the same
+    /// routine extracted from two FILES (`Al/` plus `.dependencies/`, a
+    /// sibling app read twice) repeats an arm's conditions, or has none, and
+    /// so cannot contradict. The copies of a run are file-contiguous (a
+    /// stable sort of per-file extraction), so the arm group ends at the
+    /// first copy that some earlier copy does not contradict; it and every
+    /// later copy keep today's first-wins behaviour, so a stale second copy's
+    /// subscriptions are never merged in.
+    // ponytail: two limits of the contradiction signal. Arms whose
+    // conditions the lowerer cannot decide (`#if A or B` decides nothing in
+    // its true arm) are not grouped, so they stay first-wins as before #103.
+    // Two files that each hold only ONE, opposite arm are grouped. A real
+    // per-copy source file in `RoutineNode` would remove both.
+    fn of_arms(copies: &[&RoutineNode]) -> Option<Self> {
+        let arms = copies
+            .iter()
+            .enumerate()
+            .take_while(|(n, c)| {
+                copies[..*n].iter().all(|p| {
+                    al_syntax::ir::preproc_contradicts(&p.preproc_context, &c.preproc_context)
+                })
+            })
+            .count();
+        let (survivor, others) = copies[..arms].split_first()?;
+        // The common re-parse duplicate: every arm already says the same.
+        if others.iter().all(|o| {
+            o.event_subscribers == survivor.event_subscribers
+                && o.publisher_kind == survivor.publisher_kind
+                && o.include_sender == survivor.include_sender
+        }) {
+            return None;
+        }
+        Some(Self::union(&copies[..arms]))
+    }
+
+    /// Merge `arms`, in document order, the survivor first.
     /// - `event_subscribers`: the survivor's own list as it is (so its
-    ///   subscription ordinals do not move), then each later copy's entries
+    ///   subscription ordinals do not move), then each later arm's entries
     ///   that the merged list does not hold yet (full `ParsedSubscriberArgs`
     ///   equality, skip flags included).
     /// - `publisher_kind`: the first `Some`. Any publisher arm makes the
     ///   routine a publisher.
-    /// - `include_sender`: the publisher copies' value when they all agree,
-    ///   else `None`, which fails closed: `subscriber_arity_bound` then refuses
-    ///   the `+1` Sender tolerance.
+    /// - `include_sender`: `Some(true)` when ANY publisher arm includes the
+    ///   Sender (some build passes it, so a Sender-capturing subscriber is
+    ///   valid); `Some(false)` when every publisher arm is known `false`;
+    ///   otherwise (no publisher arm, or an unreadable one and none `true`)
+    ///   `None`.
     ///
     /// The merged facts carry no per-arm build condition: like
     /// `preproc_context`, the possible-build over-approximation.
-    // ponytail: disagreeing `IncludeSender` arms fail closed to `None`; revisit
-    // if real code shows such arms.
-    fn union<'a>(copies: impl Iterator<Item = &'a RoutineNode> + Clone) -> Self {
+    fn union(arms: &[&RoutineNode]) -> Self {
         let mut event_subscribers = Vec::new();
-        for (n, copy) in copies.clone().enumerate() {
-            for s in &copy.event_subscribers {
+        for (n, arm) in arms.iter().enumerate() {
+            for s in &arm.event_subscribers {
                 if n == 0 || !event_subscribers.contains(s) {
                     event_subscribers.push(s.clone());
                 }
             }
         }
-        let mut publishers = copies.clone().filter(|c| c.publisher_kind.is_some());
-        let include_sender = publishers.next().and_then(|first| {
-            publishers
-                .all(|c| c.include_sender == first.include_sender)
-                .then_some(first.include_sender)
-                .flatten()
-        });
+        let senders = || {
+            arms.iter()
+                .filter(|c| c.publisher_kind.is_some())
+                .map(|c| c.include_sender)
+        };
+        let include_sender = if senders().any(|s| s == Some(true)) {
+            Some(true)
+        } else if senders().next().is_some() && senders().all(|s| s == Some(false)) {
+            Some(false)
+        } else {
+            None
+        };
         Self {
             event_subscribers,
-            publisher_kind: copies.clone().find_map(|c| c.publisher_kind),
+            publisher_kind: arms.iter().find_map(|c| c.publisher_kind),
             include_sender,
         }
     }
@@ -2465,10 +2507,13 @@ codeunit 50106 "Repro Pubness"
         );
     }
 
-    /// A3b: publisher arms that disagree on `IncludeSender` give `None`
-    /// (fail-closed); arms that agree keep their value.
+    /// A3b: publisher arms that disagree on `IncludeSender` give `Some(true)`
+    /// (some build passes the Sender); arms that agree keep their value. In
+    /// the disagreeing case a Sender-capturing subscriber (publisher arity
+    /// 0, subscriber arity 1) binds, and is not an unknown-`IncludeSender`
+    /// `+1` subscriber.
     #[test]
-    fn if_duplicate_publisher_include_sender_is_none_only_when_arms_disagree() {
+    fn if_duplicate_publisher_include_sender_is_true_when_any_arm_is() {
         let src = |first: bool, second: bool| {
             format!(
                 r#"
@@ -2485,17 +2530,22 @@ codeunit 50107 "Repro Sender"
     begin
     end;
 #endif
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Sender", 'OnA', '', false, false)]
+    local procedure H(Sender: Codeunit "Repro Sender")
+    begin
+    end;
 }}
 "#
             )
         };
         assert_eq!(
             dedup_survivor(&src(true, false), "ona").include_sender,
-            None
+            Some(true)
         );
         assert_eq!(
             dedup_survivor(&src(false, true), "ona").include_sender,
-            None
+            Some(true)
         );
         assert_eq!(
             dedup_survivor(&src(true, true), "ona").include_sender,
@@ -2505,18 +2555,57 @@ codeunit 50107 "Repro Sender"
             dedup_survivor(&src(false, false), "ona").include_sender,
             Some(false)
         );
+
+        // The disagreeing case, end to end: H(Sender) binds to OnA.
+        let ws_id = layer_split_app_id("ReproSender");
+        let snap = AppSetSnapshot {
+            apps: vec![layer_split_source_unit(
+                &ws_id,
+                TrustTier::Workspace,
+                vec![("Sender.al", &src(false, true))],
+            )],
+            workspace_app: ws_id.clone(),
+            world: World::Closed,
+        };
+        let g = build_program_graph(&snap, &AbiCache::new());
+        let index = crate::program::resolve::index::SubscriberIndex::build(&g);
+        let outcomes: Vec<(&str, bool)> = index
+            .subscriptions()
+            .iter()
+            .map(|s| {
+                (
+                    &*s.subscriber.name_lc,
+                    matches!(
+                        &s.outcome,
+                        crate::program::resolve::index::SubscriptionOutcome::Bound(p)
+                            if &*p.name_lc == "ona"
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(outcomes, [("h", true)], "H(Sender) binds to OnA");
+        assert_eq!(
+            crate::program::resolve::index::count_unknown_include_sender_plus1_subscribers(&g),
+            0
+        );
+    }
+
+    /// Give `r` the build condition of one `#if` arm: `sym` defined or not.
+    fn arm(mut r: RoutineNode, sym: &str, defined: bool) -> RoutineNode {
+        r.preproc_context = vec![(sym.to_string(), defined)].into_boxed_slice();
+        r
     }
 
     /// A4: the survivor's OWN list is kept as it is (its duplicate entry
-    /// included, so its ordinals do not move); a later copy only appends
+    /// included, so its ordinals do not move); a later arm only appends
     /// what the merged list does not hold yet. A routine with no duplicate
     /// is unchanged.
     #[test]
     fn dedup_keeps_the_survivors_own_subscriptions_and_single_copies_unchanged() {
         let obj = dep_obj_id(AppRef(0), 51210);
-        let mut first = source_routine(&obj, "h", 0, "", 0);
+        let mut first = arm(source_routine(&obj, "h", 0, "", 0), "X", true);
         first.event_subscribers = vec![subscription("ona", false), subscription("ona", false)];
-        let mut second = source_routine(&obj, "h", 0, "", 0);
+        let mut second = arm(source_routine(&obj, "h", 0, "", 0), "X", false);
         second.event_subscribers = vec![subscription("ona", false), subscription("onb", false)];
         let mut single = source_routine(&obj, "k", 0, "", 0);
         single.event_subscribers = vec![subscription("onc", false), subscription("onc", false)];
@@ -2538,9 +2627,17 @@ codeunit 50107 "Repro Sender"
     #[test]
     fn aliased_overloads_never_share_subscriptions() {
         let obj = dep_obj_id(AppRef(0), 51211);
-        let mut a = source_routine(&obj, "h", 1, "record customer", 999);
+        let mut a = arm(
+            source_routine(&obj, "h", 1, "record customer", 999),
+            "X",
+            true,
+        );
         a.event_subscribers = vec![subscription("ona", false)];
-        let mut b = source_routine(&obj, "h", 1, "record  customer", 999);
+        let mut b = arm(
+            source_routine(&obj, "h", 1, "record  customer", 999),
+            "X",
+            false,
+        );
         b.event_subscribers = vec![subscription("onb", false)];
         assert_eq!(a.id, b.id, "precondition: one id");
         assert_ne!(a.param_sig_key, b.param_sig_key, "precondition: two keys");
@@ -2558,9 +2655,9 @@ codeunit 50107 "Repro Sender"
     #[test]
     fn same_event_with_different_skip_flags_keeps_two_entries() {
         let obj = dep_obj_id(AppRef(0), 51212);
-        let mut a = source_routine(&obj, "h", 0, "", 0);
+        let mut a = arm(source_routine(&obj, "h", 0, "", 0), "X", true);
         a.event_subscribers = vec![subscription("ona", false)];
-        let mut b = source_routine(&obj, "h", 0, "", 0);
+        let mut b = arm(source_routine(&obj, "h", 0, "", 0), "X", false);
         b.event_subscribers = vec![subscription("ona", true)];
         let mut routines = vec![a, b];
         dedup_routines_preserving_genuine_overloads(&mut routines);
@@ -2570,6 +2667,43 @@ codeunit 50107 "Repro Sender"
             routines[0].event_subscribers,
             [subscription("ona", false), subscription("ona", true)]
         );
+    }
+
+    /// CR1 (#103): the union covers the `#if` arms of ONE declaration site
+    /// only. The same routine extracted from two FILES (here: the arms of
+    /// `Al/` and then a stale copy's arms from `.dependencies/`, one same-id
+    /// run in that order) keeps the first file's facts: the second file's
+    /// arms repeat the first's build conditions, so they never contradict
+    /// it, and its subscriptions are not merged in.
+    #[test]
+    fn copies_from_a_second_file_keep_the_first_files_subscriptions() {
+        let obj = dep_obj_id(AppRef(0), 51213);
+        let copy = |defined: bool, event: &str| {
+            let mut r = arm(source_routine(&obj, "h", 0, "", 0), "X", defined);
+            r.event_subscribers = vec![subscription(event, false)];
+            r
+        };
+        // File 1: `#if X` -> OnA, `#else` -> OnB. File 2 (stale):
+        // `#if X` -> OnOld, `#else` -> OnStale.
+        let mut routines = vec![
+            copy(true, "ona"),
+            copy(false, "onb"),
+            copy(true, "onold"),
+            copy(false, "onstale"),
+        ];
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(routines.len(), 1);
+        assert_eq!(subscribed_events(&routines[0]), ["ona", "onb"]);
+
+        // An unconditional copy in each file: nothing contradicts, so
+        // first-wins.
+        let mut plain = source_routine(&obj, "h", 0, "", 0);
+        plain.event_subscribers = vec![subscription("ona", false)];
+        let mut stale = plain.clone();
+        stale.event_subscribers = vec![subscription("onstale", false)];
+        let mut routines = vec![plain, stale];
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
     }
 
     /// A6c: an ABI `KeepCollapsed` run groups genuinely different overloads
