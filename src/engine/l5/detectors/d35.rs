@@ -14,8 +14,8 @@
 //!
 //! #148 — an UNKNOWN answer (no direct Commit, cone not proven commit-free) is
 //! not a found Commit. It keeps the id, severity and `possible` level, but says
-//! "may be reachable", names the coverage reasons (and up to three unanalysed
-//! routines) in the root cause, note and fix hint, and is capped by the
+//! "may be reachable", names the coverage reasons (and up to three partly
+//! analysed routines) in the root cause, note and fix hint, and is capped by the
 //! subscriber's uncertainty set (`CORE_SUMMARIES`). The yes and direct arms are
 //! unchanged.
 //!
@@ -223,12 +223,12 @@ pub fn detect_d35(
     Ok(DetectorOutput::no_diag(findings, stats))
 }
 
-/// How many unanalysed targets the message names before `+N more`.
+/// How many partly analysed targets the message names before `+N more`.
 const SHOWN_TARGETS: usize = 3;
 
 /// Why the commit answer is unknown, for the message: the subscriber's coverage
 /// reasons, deduplicated, sorted and joined (or a fallback naming what is
-/// missing), then `; unanalysed: …` naming up to [`SHOWN_TARGETS`] of the cone's
+/// missing), then `; partly analysed: …` naming up to [`SHOWN_TARGETS`] of the cone's
 /// partially analysed routines, sorted, with `+N more` for the rest.
 fn coverage_reasons(summary: Option<&FullRoutineSummary>, ctx: &DetectorContext) -> String {
     let Some(summary) = summary else {
@@ -258,7 +258,7 @@ fn coverage_reasons(summary: Option<&FullRoutineSummary>, ctx: &DetectorContext)
             .take(SHOWN_TARGETS)
             .map(String::as_str)
             .collect();
-        out.push_str("; unanalysed: ");
+        out.push_str("; partly analysed: ");
         out.push_str(&shown.join(", "));
         if targets.len() > SHOWN_TARGETS {
             out.push_str(&format!(", +{} more", targets.len() - SHOWN_TARGETS));
@@ -381,7 +381,7 @@ mod tests {
         assert_unknown_with(&f, "incomplete coverage");
     }
 
-    /// Up to three unanalysed targets, sorted by what is shown (a known
+    /// Up to three partly analysed targets, sorted by what is shown (a known
     /// routine's display, else its id), then `+N more`.
     #[test]
     fn unknown_targets_show_three_then_more() {
@@ -393,7 +393,7 @@ mod tests {
         let f = one_finding_with(&extra, HashMap::from([("sub".to_string(), s)]));
         assert_unknown_with(
             &f,
-            "opaque-call; unanalysed: aa-id, helper (Codeunit 1), mm-id, +2 more",
+            "opaque-call; partly analysed: aa-id, helper (Codeunit 1), mm-id, +2 more",
         );
     }
 

@@ -266,7 +266,7 @@ fn v3_no_runmodal_no_finding() {
 /// analysed: a page run reaches only the entry trigger, so a Commit in, say,
 /// `OnQueryClosePage` is not seen (a filed discovery, ledger D3a).
 #[test]
-fn v4_runmodal_is_not_a_commit() {
+fn v4_page_with_entry_trigger_has_no_finding() {
     let f = run_variant("v4", RUNMODAL, PAGE_WITH_TRIGGER, None);
     assert!(f.is_empty(), "V4: expected no d35 finding, got {f:#?}");
 }
