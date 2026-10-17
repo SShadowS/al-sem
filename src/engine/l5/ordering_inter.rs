@@ -633,6 +633,7 @@ fn derive_inter_edge_metadata(
     prefix_len: usize,
     coverage: &str,
     has_event_broadcast_on_path: bool,
+    has_trigger_broadcast_on_path: bool,
 ) -> (&'static str, &'static str, Vec<&'static str>) {
     let mut condition_reasons: Vec<&'static str> = Vec::new();
     let mut condition_kind: &'static str = "unconditional";
@@ -669,9 +670,16 @@ fn derive_inter_edge_metadata(
         }
     }
 
-    // Rule 5 §3: event-broadcast on path → push "event-subscriber-may".
+    // Rule 5 §3: event-broadcast on path → push "event-subscriber-may". An implicit
+    // trigger is also an unordered broadcast (May, never Must) but no event is
+    // involved, so it pushes "implicit-trigger-may" instead: HAZARD #4
+    // (EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN) keys on the event reason only.
+    // A path with both gets both reasons.
     if has_event_broadcast_on_path {
         condition_reasons.push("event-subscriber-may");
+    }
+    if has_trigger_broadcast_on_path {
+        condition_reasons.push("implicit-trigger-may");
     }
 
     let coverage_reason: &'static str = if coverage == "partial" {
@@ -811,18 +819,34 @@ pub fn inter_hb(
     // §C Rule 5 §3: unordered-broadcast handling.
     let ka_is_broadcast = ka.map(|k| k.dispatch_sequencing == "unordered-broadcast") == Some(true);
     let kb_is_broadcast = kb.map(|k| k.dispatch_sequencing == "unordered-broadcast") == Some(true);
+    // A TRIGGER broadcast (hop_kind "implicit-trigger") is tracked apart from an
+    // EVENT broadcast: both force May, but only an event pushes "event-subscriber-may".
     let mut has_event_broadcast_on_path = false;
-
-    if ka_is_broadcast && kb_is_broadcast {
-        if let (Some(ka_), Some(kb_)) = (ka, kb)
-            && ka_.event_id.is_some()
-            && ka_.event_id == kb_.event_id
-        {
-            return None;
+    let mut has_trigger_broadcast_on_path = false;
+    fn note_broadcast(k: &CallLink, event: &mut bool, trigger: &mut bool) {
+        if k.hop_kind == "implicit-trigger" {
+            *trigger = true;
+        } else {
+            *event = true;
         }
-        has_event_broadcast_on_path = true;
-    } else if ka_is_broadcast || kb_is_broadcast {
-        has_event_broadcast_on_path = true;
+    }
+
+    if ka_is_broadcast
+        && kb_is_broadcast
+        && let (Some(ka_), Some(kb_)) = (ka, kb)
+        && ka_.event_id.is_some()
+        && ka_.event_id == kb_.event_id
+    {
+        return None;
+    }
+    for k in [ka, kb].into_iter().flatten() {
+        if k.dispatch_sequencing == "unordered-broadcast" {
+            note_broadcast(
+                k,
+                &mut has_event_broadcast_on_path,
+                &mut has_trigger_broadcast_on_path,
+            );
+        }
     }
 
     let a_order_in_l = order_id_in_l(a, prefix_len)?;
@@ -854,7 +878,7 @@ pub fn inter_hb(
 
     // Determine quantifier (§J1 / §J4).
     let mut is_must = true;
-    if has_event_broadcast_on_path {
+    if has_event_broadcast_on_path || has_trigger_broadcast_on_path {
         is_must = false;
     }
     if a.chain.path_enumeration != "complete" || b.chain.path_enumeration != "complete" {
@@ -927,7 +951,11 @@ pub fn inter_hb(
                 return None;
             }
             if link.dispatch_sequencing == "unordered-broadcast" {
-                has_event_broadcast_on_path = true;
+                note_broadcast(
+                    link,
+                    &mut has_event_broadcast_on_path,
+                    &mut has_trigger_broadcast_on_path,
+                );
             }
         }
         if link.control_placement != "top-level"
@@ -951,7 +979,11 @@ pub fn inter_hb(
                 return None;
             }
             if link.dispatch_sequencing == "unordered-broadcast" {
-                has_event_broadcast_on_path = true;
+                note_broadcast(
+                    link,
+                    &mut has_event_broadcast_on_path,
+                    &mut has_trigger_broadcast_on_path,
+                );
             }
         }
         if link.control_placement != "top-level" {
@@ -971,7 +1003,16 @@ pub fn inter_hb(
     }
 
     let (_coverage_reason, edge_condition_kind, edge_condition_reasons) =
-        derive_inter_edge_metadata(a, b, ka, kb, prefix_len, cov, has_event_broadcast_on_path);
+        derive_inter_edge_metadata(
+            a,
+            b,
+            ka,
+            kb,
+            prefix_len,
+            cov,
+            has_event_broadcast_on_path,
+            has_trigger_broadcast_on_path,
+        );
 
     Some(InterHBEdge {
         from: a.occurrence_id.clone(),
@@ -1809,6 +1850,71 @@ mod tests {
             edge.edge_condition_reasons
                 .contains(&"event-subscriber-may"),
             "edge_condition_reasons must contain 'event-subscriber-may' (ordering-inter.ts line 251-254)"
+        );
+    }
+
+    // A trigger broadcast link: May, "implicit-trigger-may", never
+    // "event-subscriber-may". The twin through an event link keeps the event reason.
+    fn one_side_broadcast_edge(hop_kind: &str) -> InterHBEdge {
+        let snap = empty_snap();
+        let mut ka = call_link(
+            "root",
+            "sub1",
+            "cs1",
+            2,
+            true,
+            "unordered-broadcast",
+            "top-level",
+            "zero_or_one",
+            None,
+        );
+        ka.hop_kind = hop_kind.to_string();
+        let kb = call_link(
+            "root",
+            "callee2",
+            "cs2",
+            4,
+            true,
+            "sequential",
+            "top-level",
+            "exactly_once_on_success",
+            None,
+        );
+        let a_op = ordered_op("aOp", 1, true, vec![frame(0, -1, "root", None)]);
+        let b_op = ordered_op("bOp", 5, true, vec![frame(0, -1, "root", None)]);
+        let a = occ_one_hop("aOcc", "root", "sub1", ka, a_op);
+        let b = occ_one_hop("bOcc", "root", "callee2", kb, b_op);
+        inter_hb(&a, &b, "root", &snap).expect("one-side broadcast produces an edge")
+    }
+
+    #[test]
+    fn inter_hb_trigger_broadcast_is_may_without_event_subscriber_reason() {
+        let edge = one_side_broadcast_edge("implicit-trigger");
+        assert_eq!(edge.quantifier, Quantifier::MaySomePath);
+        assert!(
+            edge.edge_condition_reasons
+                .contains(&"implicit-trigger-may")
+        );
+        assert!(
+            !edge
+                .edge_condition_reasons
+                .contains(&"event-subscriber-may"),
+            "a trigger with no event on the path is not an event-subscriber hazard"
+        );
+    }
+
+    #[test]
+    fn inter_hb_event_broadcast_twin_keeps_event_subscriber_reason() {
+        let edge = one_side_broadcast_edge("event-dispatch");
+        assert_eq!(edge.quantifier, Quantifier::MaySomePath);
+        assert!(
+            edge.edge_condition_reasons
+                .contains(&"event-subscriber-may")
+        );
+        assert!(
+            !edge
+                .edge_condition_reasons
+                .contains(&"implicit-trigger-may")
         );
     }
 

@@ -871,13 +871,16 @@ pub(crate) fn trigger_receiver_temp_state(
         .map_or(TempState::Unknown, TempState::from_p)
 }
 
-/// `routine`'s record operation `op_id`, in O(1) in practice: it runs in the PD
-/// solve's hot loop through [`trigger_receiver_temp_state`]. The body walk mints
-/// op ids `{routine}/op{N}` in walk order, and only a `Commit` or `Error` call
-/// advances `N` without adding a record operation, so op `N` sits at index `N`
-/// less the `Commit`/`Error` calls before it. The search starts at index `N` and
-/// walks down. An id that does not parse, or a miss, falls back to a full scan,
-/// so the answer never depends on that numbering.
+/// `routine`'s record operation `op_id`. It runs in the PD solve's hot loop
+/// through [`trigger_receiver_temp_state`], so it avoids a scan from the start.
+/// The body walk mints op ids `{routine}/op{N}` in walk order, and only a
+/// `Commit` or `Error` call advances `N` without adding a record operation, so
+/// op `N` sits at index `N` less the `Commit`/`Error` calls before it. The search
+/// starts at index `N` and walks down, so a hit costs one step per such call
+/// before the op, not a constant. An id that does not parse, or a miss, falls
+/// back to a full scan, so the answer never depends on that numbering. A real
+/// per-routine index would make it constant; not built, since the walk-back is
+/// short on real code and an index costs memory per routine.
 fn record_op_by_id<'r>(
     routine: &'r ModelRoutine,
     op_id: &str,
