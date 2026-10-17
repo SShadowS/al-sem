@@ -16,7 +16,10 @@
 //!      `unresolved-call`, under the default selection AND `--detector d35` alone;
 //!   V2 `Commit()` instead of RunModal: the unchanged YES wording;
 //!   V3 RunModal removed: no finding;
-//!   V4 the page gets an empty `OnOpenPage`: no finding (RunModal is not a commit);
+//!   V4 the page's source declares an entry trigger (an empty `OnOpenPage`): the
+//!      cone is complete and d35 reports nothing. Known limit: a page run reaches
+//!      only the entry trigger, so a Commit in another page trigger (e.g.
+//!      `OnQueryClosePage`) is not seen — filed as a discovery (ledger D3a);
 //!   V5 `Commit()` AND the RunModal: one finding, YES wording (yes beats unknown).
 
 use std::path::{Path, PathBuf};
@@ -189,9 +192,9 @@ fn assert_unknown_finding(findings: &[Value], label: &str) {
     );
     assert_eq!(
         f["rootCause"],
-        "OnBeforeDeleteOrder is an event subscriber whose callees could not all be analysed \
-         (object-run-unresolved); a Commit among them cannot be ruled out \u{2014} the \
-         publisher could not roll back committed state if one exists.",
+        "OnBeforeDeleteOrder is an event subscriber whose call coverage is incomplete \
+         (object-run-unresolved); a Commit cannot be ruled out \u{2014} the publisher could \
+         not roll back committed state if one exists.",
         "{label}: rootCause"
     );
     assert_eq!(
@@ -211,8 +214,8 @@ fn assert_unknown_finding(findings: &[Value], label: &str) {
     );
     assert_eq!(
         f["fixHint"]["description"],
-        "Check the callees that could not be analysed (object-run-unresolved); if one \
-         commits, move the Commit out of the subscriber or defer it.",
+        "Check what could not be analysed (object-run-unresolved); if a Commit is \
+         reachable, move it out of the subscriber or defer it.",
         "{label}: fixHint"
     );
 }
@@ -258,6 +261,10 @@ fn v3_no_runmodal_no_finding() {
     assert!(f.is_empty(), "V3: expected no d35 finding, got {f:#?}");
 }
 
+/// Pins only this: a page whose source declares an entry trigger yields a
+/// complete cone and no d35 finding. It does NOT show that every page trigger is
+/// analysed: a page run reaches only the entry trigger, so a Commit in, say,
+/// `OnQueryClosePage` is not seen (a filed discovery, ledger D3a).
 #[test]
 fn v4_runmodal_is_not_a_commit() {
     let f = run_variant("v4", RUNMODAL, PAGE_WITH_TRIGGER, None);
