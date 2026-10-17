@@ -173,6 +173,11 @@ pub fn build_event_symbol(routine: &ModelRoutine) -> EventSymbol {
 
 /// How [`program_event_graph`] built its graph. `unmapped_subscribers` and
 /// `bound_model_missing` lose or degrade a subscription and are expected to be 0.
+/// `model_subscribers` and `unmapped_subscribers` count model ROWS; every other
+/// counter counts each subscriber routine id once (#103: the rows of an `#if`
+/// duplicate share one id). `unmapped_subscribers` counts only the rows of an
+/// id that NO row maps: when one row of an `#if` duplicate maps, its edges
+/// cover the others, so nothing is lost.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventCensus {
     /// Model routines of kind `event-subscriber`.
@@ -249,8 +254,9 @@ pub fn isolated_event_ids(routines: &[ModelRoutine]) -> std::collections::HashSe
 ///
 /// - Symbols for the model's publisher routines come first, exactly as L3's
 ///   `build_event_graph` made them.
-/// - Edges: for each model subscriber routine (model order), one edge per
-///   subscription of its program node (attribute order). Bound -> `resolved`;
+/// - Edges: for each model subscriber routine id (model order; the first row of
+///   that id that maps to a program node), one edge per subscription of its
+///   program node (attribute order). Bound -> `resolved`;
 ///   ambiguous overload -> `ambiguous`; publisher object found but no publisher
 ///   routine -> `maybe`; publisher object not found -> `unknown`. Only `resolved`
 ///   is a proven subscriber; every consumer tests `!= "resolved"`.
@@ -362,15 +368,29 @@ pub fn program_event_graph(
     }
 
     let mut edges: Vec<EventEdge> = Vec::new();
+    // A routine declared in several `#if` arms is several model rows with ONE
+    // id, all standing for one program node (issue #103): only its first row
+    // that maps emits edges. A row counts only once it maps, so an unmapped
+    // first row (a dependency's declaration surface keeps the LAST same-id
+    // span) does not hide a later row that maps. `model_subscribers` and
+    // `unmapped_subscribers` stay per row (the latter only for ids no row
+    // maps); every later counter is per id.
+    let mut processed: HashSet<&str> = HashSet::new();
+    // Unmapped rows, by id: counted after the loop, and only for an id no row
+    // mapped. An unmapped row of an id another row mapped loses nothing.
+    let mut unmapped: Vec<&str> = Vec::new();
     for r in &ws.routines {
         if r.kind != "event-subscriber" {
             continue;
         }
         c.model_subscribers += 1;
         let Some(node) = node_by_span.get(&super::census::anchor_key(&r.source_anchor)) else {
-            c.unmapped_subscribers += 1;
+            unmapped.push(r.id.as_str());
             continue;
         };
+        if !processed.insert(r.id.as_str()) {
+            continue;
+        }
         let subs = subs_by_node.get(node).map(Vec::as_slice).unwrap_or(&[]);
         if subs.is_empty() {
             c.subscribers_without_subscription += 1;
@@ -539,6 +559,10 @@ pub fn program_event_graph(
             });
         }
     }
+    c.unmapped_subscribers = unmapped
+        .iter()
+        .filter(|id| !processed.contains(*id))
+        .count();
     ProgramEvents {
         graph: EventGraph { events, edges },
         census: c,

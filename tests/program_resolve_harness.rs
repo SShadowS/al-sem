@@ -321,6 +321,120 @@ fn event_teeth_excess_params_fails() {
     );
 }
 
+/// A7 (#103): the verifier checks EVERY declaration whose full source routine id
+/// is the route's subscriber, so a route to either `#if` arm of a same-signature
+/// duplicate is accepted, and a sibling overload's subscription is never
+/// credited to the routine the route names.
+///
+/// `50110 "EvtSubIf"`: `H(X: Integer)` subscribes `OnA` under `XSYM`, `OnB`
+/// otherwise. `50111 "EvtSubOverload"`: `H(X: Integer)` subscribes `OnA`, the
+/// same-arity overload `H(X: Text)` subscribes `OnB`.
+#[test]
+fn event_teeth_checks_every_declaration_of_the_subscriber_id() {
+    use al_sem::program::sig_fp::source_routine_node_id;
+    let src = r#"codeunit 50110 "EvtSubIf"
+{
+#if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EvtPub", 'OnA', '', false, false)]
+    local procedure H(X: Integer)
+    begin
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EvtPub", 'OnB', '', false, false)]
+    local procedure H(X: Integer)
+    begin
+    end;
+#endif
+}
+
+codeunit 50111 "EvtSubOverload"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EvtPub", 'OnA', '', false, false)]
+    local procedure H(X: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EvtPub", 'OnB', '', false, false)]
+    local procedure H(X: Text)
+    begin
+    end;
+}"#;
+    let (app_id, unit) = make_teeth_unit("guid-teeth-if", "TeethIf", src);
+    let mut apps = AppRegistry::default();
+    let app = apps.intern(&app_id);
+    // The graph's real id of the first declaration of `obj_num` that takes
+    // `param_ty` (its `sig_fp` is the parameter-type fingerprint, never 0).
+    let real_id = |obj_num: i64, param_ty: &str| {
+        let obj = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(obj_num),
+        };
+        let decl = unit.files[0]
+            .file
+            .objects
+            .iter()
+            .find(|o| o.id == Some(obj_num))
+            .unwrap()
+            .routines
+            .iter()
+            .find(|r| r.params[0].ty.as_deref() == Some(param_ty))
+            .unwrap();
+        source_routine_node_id(obj, decl)
+    };
+    let verify = |sub_rid: &RoutineNodeId, event: &str| {
+        verify_event_subscriber_route(
+            sub_rid,
+            "codeunit",
+            "evtpub",
+            None,
+            event,
+            1,
+            Some(false),
+            &[&unit],
+            &apps,
+        )
+    };
+
+    let if_h = real_id(50110, "Integer");
+    assert_ne!(if_h.sig_fp, 0, "precondition: a real fingerprint");
+    assert!(verify(&if_h, "ona"), "OnA -> H (first arm) is accepted");
+    assert!(verify(&if_h, "onb"), "OnB -> H (second arm) is accepted");
+    assert!(!verify(&if_h, "onc"), "no arm subscribes OnC");
+
+    let overload_h = real_id(50111, "Integer");
+    assert_ne!(
+        overload_h,
+        real_id(50111, "Text"),
+        "precondition: two overload ids"
+    );
+    assert!(verify(&overload_h, "ona"), "H(Integer) subscribes OnA");
+    assert!(
+        !verify(&overload_h, "onb"),
+        "only the sibling H(Text) subscribes OnB"
+    );
+
+    // CR3: the name exists, but no declaration has this `sig_fp`. The route
+    // names no real declaration, so it is rejected, not waved through.
+    let wrong_fp = RoutineNodeId {
+        sig_fp: if_h.sig_fp ^ 1,
+        ..if_h.clone()
+    };
+    assert!(
+        !verify(&wrong_fp, "ona"),
+        "a route whose sig_fp matches no declaration of H is rejected"
+    );
+
+    let missing = RoutineNodeId {
+        name_lc: "nosuchroutine".into(),
+        ..if_h.clone()
+    };
+    assert!(
+        verify(&missing, "onc"),
+        "a routine the verifier cannot find stays accepted (fail-open)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests 12–16: ABI ingestion-integrity + Histogram taxonomy split
 // ---------------------------------------------------------------------------

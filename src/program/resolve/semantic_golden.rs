@@ -1608,6 +1608,7 @@ mod tests {
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }
@@ -2214,6 +2215,23 @@ mod tests {
             .clone()
     }
 
+    /// The graph's real id of routine `name_lc` on `object` — its `sig_fp` is
+    /// the parameter-type fingerprint, which the verifier matches in full
+    /// (#103), so a hand-built `sig_fp: 0` would name no declaration.
+    fn find_routine_id(
+        graph: &ProgramGraph,
+        object: &ObjectNodeId,
+        name_lc: &str,
+    ) -> RoutineNodeId {
+        graph
+            .routines
+            .iter()
+            .find(|r| r.id.object == *object && &*r.id.name_lc == name_lc)
+            .unwrap_or_else(|| panic!("routine {name_lc} not found"))
+            .id
+            .clone()
+    }
+
     #[test]
     fn event_route_passes_when_subscriber_attr_names_publisher() {
         let src: &'static str = r#"
@@ -2375,25 +2393,74 @@ codeunit 50806 "EvSub3"
     end;
 }
 "#;
+        assert_eq!(
+            arity_one_handle_route_violations(src, "EvPub3", "onbaz", "EvSub3"),
+            0,
+            "EvPub3 declares IncludeSender=true, so EvSub3's arity-1 Handle \
+             (capturing the implicit Sender) must be applicable"
+        );
+    }
+
+    /// (a') The twin of (a): the same arity-1 `Handle`, but its attribute names
+    /// a DIFFERENT event. The route carries the graph's real id, so the
+    /// verifier finds the declaration and rejects it. This proves (a) reaches
+    /// the attribute check rather than the fail-open for an id the verifier
+    /// cannot find (#103: the verifier matches the full id, `sig_fp` included).
+    #[test]
+    fn event_route_violation_with_include_sender_true_and_mismatching_attribute() {
+        let src: &'static str = r#"
+codeunit 50809 "EvPub5"
+{
+    [IntegrationEvent(true, false)]
+    procedure OnBaz()
+    begin
+    end;
+
+    [IntegrationEvent(true, false)]
+    procedure OnOther()
+    begin
+    end;
+}
+
+codeunit 50810 "EvSub5"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EvPub5", 'OnOther', '', false, false)]
+    local procedure Handle(Sender: Codeunit "EvPub5")
+    begin
+    end;
+}
+"#;
+        assert_eq!(
+            arity_one_handle_route_violations(src, "EvPub5", "onbaz", "EvSub5"),
+            1,
+            "EvSub5.Handle subscribes OnOther, not OnBaz"
+        );
+    }
+
+    /// The event violations of ONE route from the 0-arity publisher
+    /// `pub_obj.event_lc` to `sub_obj`'s arity-1 `Handle`, which carries the
+    /// graph's real id.
+    fn arity_one_handle_route_violations(
+        src: &'static str,
+        pub_obj: &str,
+        event_lc: &str,
+        sub_obj: &str,
+    ) -> usize {
         let (app_id, unit) = make_event_unit(src);
         let (graph, index) = build_event_graph(&app_id, &unit);
-        let pub_id = find_obj_id(&graph, "EvPub3");
-        let sub_id = find_obj_id(&graph, "EvSub3");
+        let pub_id = find_obj_id(&graph, pub_obj);
+        let sub_id = find_obj_id(&graph, sub_obj);
 
         let pub_rid = RoutineNodeId {
             object: pub_id,
-            name_lc: "onbaz".into(),
+            name_lc: event_lc.into(),
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
         };
-        let sub_rid = RoutineNodeId {
-            object: sub_id,
-            name_lc: "handle".into(),
-            enclosing_member_lc: None,
-            params_count: 1,
-            sig_fp: 0,
-        };
+        let sub_rid = find_routine_id(&graph, &sub_id, "handle");
+        assert_eq!(sub_rid.params_count, 1, "precondition: arity 1");
+        assert_ne!(sub_rid.sig_fp, 0, "precondition: a real fingerprint");
         let edge = Edge {
             from: pub_rid.clone(),
             site: SiteId {
@@ -2411,13 +2478,8 @@ codeunit 50806 "EvSub3"
 
         let raw_abi = empty_raw_abi();
         let units = [&unit];
-        let report =
-            route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
-        assert_eq!(
-            report.event_violations, 0,
-            "EvPub3 declares IncludeSender=true, so EvSub3's arity-1 Handle \
-             (capturing the implicit Sender) must be applicable"
-        );
+        route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units)
+            .event_violations
     }
 
     /// (b) NEGATIVE: `IncludeSender=false`, 0-arity publisher + 1-arity
@@ -2443,46 +2505,9 @@ codeunit 50808 "EvSub4"
     end;
 }
 "#;
-        let (app_id, unit) = make_event_unit(src);
-        let (graph, index) = build_event_graph(&app_id, &unit);
-        let pub_id = find_obj_id(&graph, "EvPub4");
-        let sub_id = find_obj_id(&graph, "EvSub4");
-
-        let pub_rid = RoutineNodeId {
-            object: pub_id,
-            name_lc: "onqux".into(),
-            enclosing_member_lc: None,
-            params_count: 0,
-            sig_fp: 0,
-        };
-        let sub_rid = RoutineNodeId {
-            object: sub_id,
-            name_lc: "handle".into(),
-            enclosing_member_lc: None,
-            params_count: 1,
-            sig_fp: 0,
-        };
-        let edge = Edge {
-            from: pub_rid.clone(),
-            site: SiteId {
-                caller: pub_rid,
-                span: test_span(1),
-                callee_fingerprint: 1,
-            },
-            kind: EdgeKind::EventFlow,
-            shape: DispatchShape::Multicast,
-            completeness: SetCompleteness::Partial {
-                reason: OpenWorldReason::ReverseDependentSubscribers,
-            },
-            routes: vec![source_route(sub_rid)],
-        };
-
-        let raw_abi = empty_raw_abi();
-        let units = [&unit];
-        let report =
-            route_applicability(&[edge], &raw_abi, &graph, &index, &HashMap::new(), &units);
         assert_eq!(
-            report.event_violations, 1,
+            arity_one_handle_route_violations(src, "EvPub4", "onqux", "EvSub4"),
+            1,
             "EvPub4 declares IncludeSender=false — an arity-1 subscriber must NOT \
              be tolerated; the +1 Sender bound is conditional, never blanket"
         );

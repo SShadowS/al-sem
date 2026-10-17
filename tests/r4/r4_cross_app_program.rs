@@ -1645,3 +1645,129 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
         ]
     );
 }
+
+/// #103: a source-bearing dependency whose subscriber `H` is declared in two
+/// `#if` arms with one signature, subscribing `OnA` in one and `OnB` in the
+/// other. The workspace raises both events through the dependency's `RaiseA`
+/// and `RaiseB`.
+fn if_dup_dependency_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        P: Codeunit \"Dep Pub\";\n    begin\n        P.RaiseA();\n        P.RaiseB();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Pub.al",
+            r#"codeunit 50171 "Dep Pub"
+{
+    procedure RaiseA()
+    begin
+        OnA();
+    end;
+
+    procedure RaiseB()
+    begin
+        OnB();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnA()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnB()
+    begin
+    end;
+
+#if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnB', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+#endif
+}
+"#,
+        )],
+        "",
+    );
+}
+
+/// A8 (#103): the dependency's `#if`-duplicated subscriber gets each of its
+/// edges exactly once. Its first row does not map to a program node (a
+/// dependency's declaration surface keeps the LAST same-id declaration's span),
+/// so the edges come from the second row: a row only counts as processed once it
+/// maps. The unmapped first row loses nothing, so it is not counted in
+/// `unmapped_subscribers` (CR5): that counter is for lost subscriptions.
+///
+/// Stated limit: "the first row does not map" is NOT asserted here (the span
+/// map is internal). It holds only while the dependency declaration surface
+/// keeps the LAST same-id span; this test guards "mark an id processed before
+/// it maps" (break 8, recorded failing in the issue ledger) only under that
+/// behaviour. If the surface ever keeps every span, both rows map and this
+/// test no longer discriminates break 8.
+#[test]
+fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    if_dup_dependency_workspace(dir.path());
+    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+        .expect("model")
+        .resolved;
+    let h_rows = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == "H" && r.kind == "event-subscriber")
+        .count();
+    assert_eq!(h_rows, 2, "precondition: two model rows for H");
+    assert_eq!(
+        m.events.census.unmapped_subscribers, 0,
+        "the unmapped H row's id is covered by its mapped row: {:?}",
+        m.events.census
+    );
+    let mut edges: Vec<(String, String, String)> = m
+        .events
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                routine_label(&m, &e.subscriber_routine_id),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    edges.sort();
+    let resolved = |event: &str| {
+        (
+            event.to_string(),
+            "50171.H".to_string(),
+            "resolved".to_string(),
+        )
+    };
+    assert_eq!(edges, [resolved("ona"), resolved("onb")]);
+}

@@ -94,7 +94,8 @@
 //! file), every ABI-only `RoutineNode` field (always absent for a source
 //! file), `abi_overload_collapsed`/`source_overload_aliased` (derived,
 //! redundant with `params`), and "enum values" (verified NOT a real resolver
-//! read — audit §2.3). Also excluded, not from the audit but by the same
+//! read — audit §2.3). `RoutineNode::source_unit` (issue #103) is excluded
+//! too: it is a per-build file index, always `None` out of `extract_nodes`. Also excluded, not from the audit but by the same
 //! reasoning: a parameter's declared NAME (only its `ty`/`by_ref` feed
 //! arg-type dispatch).
 //!

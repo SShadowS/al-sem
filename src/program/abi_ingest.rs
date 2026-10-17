@@ -658,6 +658,8 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // exclusive with `abi_overload_collapsed` by construction).
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                // An ABI row comes from no parsed file.
+                source_unit: None,
                 // Task 2 (roadmap-closure plan): retain the raw parameter
                 // metadata now instead of hard-discarding it — see
                 // `retain_abi_params`'s doc. `abi_overload_collapsed`'s later

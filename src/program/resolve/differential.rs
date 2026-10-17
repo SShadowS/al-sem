@@ -398,8 +398,9 @@ pub fn project_fresh_event_rows_on(
 ///    (Task 1, round-2: a blanket `+1` regardless of `IncludeSender` would be
 ///    SYNCHRONIZED WRONGNESS — see that function's doc). Sender param-TYPE
 ///    compatibility is NOT validated (arity-only check; documented residual).
-/// 2. At least one `[EventSubscriber]` attribute in the subscriber's raw IR freshly
-///    parses to match `(publisher_object_type_lc, publisher_name_lc, event_name_lc)`.
+/// 2. At least one `[EventSubscriber]` attribute in the raw IR of any of the
+///    subscriber's declarations freshly parses to match
+///    `(publisher_object_type_lc, publisher_name_lc, event_name_lc)`.
 ///    An attribute that names the publisher by number (S4.3b) matches on
 ///    `publisher_number` instead of the name.
 ///
@@ -407,12 +408,19 @@ pub fn project_fresh_event_rows_on(
 /// - The subscriber's app is not found in `apps`, OR
 /// - The subscriber's app is found in `apps` but has no corresponding `ParsedUnit`
 ///   (dep-boundary subscriber — source not in workspace; AbiSymbol routes are already
-///   excluded before reaching the teeth so this path is for consistency only).
+///   excluded before reaching the teeth so this path is for consistency only), OR
+/// - No routine of that unit's object has the NAME `sub_rid.name_lc` (or the
+///   object itself is not there).
 ///
 /// Returns `false` (FAIL → `unverified_extra`) when:
 /// - `sub_rid.params_count` exceeds the Sender-tolerant bound above, OR
-/// - The subscriber IS found in `parsed` but no freshly-parsed attribute names the
-///   expected `(publisher_object_type_lc, publisher_name_lc, event_name_lc)` triple.
+/// - Routines named `sub_rid.name_lc` exist but none has the full id
+///   `sub_rid` (a route whose `sig_fp` names no real declaration), OR
+/// - The subscriber IS found in `parsed` but no freshly-parsed attribute of any of
+///   its declarations names the expected `(publisher_object_type_lc,
+///   publisher_name_lc, event_name_lc)` triple. Its declarations are those whose
+///   full source routine id is `sub_rid` (several for a same-signature `#if`
+///   duplicate, #103).
 // Each param maps 1:1 to a piece of the canonical event-route identity (or, for
 // `publisher_include_sender`, Task 1's arity-tolerance input) — a struct wrapper
 // would only pay for itself by shrinking call sites, and most call sites here pass
@@ -432,6 +440,7 @@ pub fn verify_event_subscriber_route(
 ) -> bool {
     use crate::program::node::ObjKey;
     use crate::program::resolve::event::{parse_event_subscriber_ir, subscriber_arity_bound};
+    use crate::program::sig_fp::source_routine_node_id;
 
     // ── Parameter prefix check (Sender-tolerant, CONDITIONAL — Task 1) ──────
     let max_allowed_arity =
@@ -452,6 +461,11 @@ pub fn verify_event_subscriber_route(
     };
 
     // ── Scan files → object → routine → re-parse [EventSubscriber] attrs ────
+    // A routine declared in several `#if` arms is several declarations with
+    // one id (issue #103), each with its own attributes: check them all. A
+    // declaration is the subscriber only when its FULL id is `sub_rid` — a
+    // same-name, same-arity overload has a different `sig_fp`.
+    let mut name_found = false;
     for pf in &unit.files {
         for obj in &pf.file.objects {
             if obj.kind != sub_rid.object.kind {
@@ -468,7 +482,8 @@ pub fn verify_event_subscriber_route(
                 if r.name.fold_identifier() != sub_rid.name_lc {
                     continue;
                 }
-                if r.params.len() != sub_rid.params_count {
+                name_found = true;
+                if source_routine_node_id(sub_rid.object.clone(), r) != *sub_rid {
                     continue;
                 }
                 // Routine found — re-parse its [EventSubscriber] attrs fresh
@@ -489,13 +504,18 @@ pub fn verify_event_subscriber_route(
                             && names_publisher
                             && args.event_name == event_name_lc
                     });
-                return has_match;
+                if has_match {
+                    return true;
+                }
             }
         }
     }
 
-    // Routine not found in any parsed file of this app → fail-open.
-    true
+    // No declaration with the full id subscribes, or none has the full id
+    // although the name exists (a route with a wrong `sig_fp`): reject. Only
+    // an object or routine name found in no parsed file of this app fails
+    // open.
+    !name_found
 }
 
 // ---------------------------------------------------------------------------
