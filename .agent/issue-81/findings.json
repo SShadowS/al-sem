@@ -1,0 +1,258 @@
+[
+ {
+  "id": "S1",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 50,
+  "severity": "important",
+  "text": "D2 took a sole name/arity candidate without checking its signature, so IFoo.Baz(Integer) would select a lone Impl.Baz(Text); the raw stable-id hash also preserves quote/whitespace spelling, so a real implementation could be missed.",
+  "disposition": "fixed",
+  "evidence": "D2.0 adds a separate interface-match key (folded name, per-param var flag + normalized type, normalized return; case-fold, whitespace collapse, unquote) computed by one function for the declaration and every candidate; D2.3 requires the key match even for a single candidate; the stable-id hash is unchanged. Tests A3b (lone wrong signature -> diagnostic) and A3c (spelling difference matches). Revision 3: A3c is now a quote+whitespace difference with an overload (interface Qux(C: Record Customer) vs ImplA Qux(C: Record  \"Customer\") plus Qux(C: Record Vendor)), so dropping normalization yields a diagnostic, not the root; the key is token-aware (see N1).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 51,
+  "severity": "important",
+  "text": "#if duplicate declarations are several ModelRoutine rows with one stable id (workspace.rs ~1374); counting rows makes a real implementation 'several matches' and emits a diagnostic instead of a root.",
+  "disposition": "fixed",
+  "evidence": "D2.2 groups candidates by stable routine id before the pick; D2.4 pushes every span of the chosen id. Test A7 (#if CLEAN/#else Bar is one root with both anchors; an interface whose #if arms repeat Bar dedups viaInterface/diagnostics). Discrimination (5).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 51,
+  "severity": "important",
+  "text": "Visibility eligibility was undefined, unlike the resolver's filter (resolver.rs:437-443, 2953-2963).",
+  "disposition": "fixed",
+  "evidence": "D2.2 excludes local procedures (invisible to the other objects interface dispatch comes from), keeps internal/public (same app), notes codeunits have no protected; test A8 (only-local Bar -> diagnostic, candidates []); discrimination (6).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 56,
+  "severity": "important",
+  "text": "Human output could not show the new diagnostic: format_digest_human takes only the entries (digest_cli.rs ~1438).",
+  "disposition": "fixed",
+  "evidence": "D3: format_digest_human gains the changed-roots diagnostics and renders every kind one line each; A6 asserts the exact unmatched line in human output; discrimination (9).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 80,
+  "severity": "important",
+  "text": "A3 passes with 'take the first candidate' because the fixture declares Baz(Integer) first.",
+  "disposition": "fixed",
+  "evidence": "A3 now declares Baz(X: Text) BEFORE Baz(X: Integer) in ImplA; discrimination (2) 'take the first same-name candidate: A3 fails'.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S6",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 80,
+  "severity": "important",
+  "text": "The matrix did not guarantee the discrimination claims: missing dependency exclusion, duplicate declarations, multi-origin/mixed-input provenance, exact diagnostic sets, case-folded implements, trigger/local exclusion.",
+  "disposition": "fixed",
+  "evidence": "Matrix rows A3-A3c, A7 (#if), A8 (local/trigger), A4/A9 (enum; source-bearing dependency with its own IFoo -> no root, no diagnostic), A10 (mixed input; two interfaces), A6 exact diagnostic set; A1 uses 'implements ifoo' lowercase; root sets compared as (objectDisplay, display, stableId) tuples; 9 numbered discrimination breaks. Revision 3: A4 and A9 assert changedRootsDiagnostics == []; A9's dependency DepImpl implements its own IFoo with NO Bar, so dropping the primary-app filter yields a zero-candidate diagnostic (the ws: span filter alone would hide a matched dependency routine); counting enums yields a zero-candidate diagnostic, so A4 fails. Revision 6 (after the r5 cap, pending final-panel re-mark): sol's r5 re-raise (A3b became two candidates, so break (3) lost its test) is addressed by A3e, an unconditional CLI case where ImplD has ONLY Baz(X: Text) -> no root + diagnostic candidates [\"ImplD.Baz(Text)\"]; break (3) now points at A3e.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "re-raised",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S7",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 51,
+  "severity": "minor",
+  "text": "The new diagnostic's field types, identity representation, candidate semantics, ordering and dedup were unspecified; candidates as a number differs from selector-ambiguous's string array.",
+  "disposition": "fixed",
+  "evidence": "D2.3 gives the JSON: interface (stable id of the declaration), interfaceDisplay, implementer (object display), candidates (sorted string array of eligible same-name routine displays, empty when none); dedup per (declaration, implementer); sorted by (interface, implementer).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S8",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 44,
+  "severity": "minor",
+  "text": "The via-interface line needs the interface's original-case name, but D1 stored only the folded name and declaration-only entries have an empty objectDisplay.",
+  "disposition": "fixed",
+  "evidence": "D1 stores the logical object name and routine name in original case and folded; D3 plumbs the original-case display into viaInterface items ({stableId, display}) and the human line.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S9",
+  "source": "opus",
+  "round": 1,
+  "file": "tests/cli/cli_digest_changed_spans.rs",
+  "line": 110,
+  "severity": "minor",
+  "text": "roots() returns display names only, so an 'exact root set' cannot tell ImplA.Bar from ImplB.Bar.",
+  "disposition": "fixed",
+  "evidence": "Acceptance matrix preamble: all root-set assertions compare (objectDisplay, display, stableId) tuples.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S10",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 47,
+  "severity": "minor",
+  "text": "The #if union of implements is a possible-build over-approximation, not active-build membership; the spec should say so.",
+  "disposition": "fixed",
+  "evidence": "D2.1 states it is deliberately the possible-build over-approximation the resolver also uses (lower/mod.rs:382-405).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N1",
+  "source": "sol",
+  "round": 2,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 51,
+  "severity": "important",
+  "text": "The revision-2 key normalization (sig_fp::normalize_type_text + unquote) collapses whitespace inside quoted identifiers (sig_fp.rs:69-74), so Record \"A  B\" equals Record \"A B\" and a lone wrong-table candidate could be accepted.",
+  "disposition": "fixed",
+  "evidence": "D2.0 now builds on scope::canonicalize_type_text (scope.rs:54, collapses whitespace only outside quotes), case-folds, unescapes doubled quotes with the existing unescape_al_identifier (scope.rs:97), and drops quotes only around plain identifiers; sig_fp::normalize_type_text is explicitly not used. A3d negative (\"A B\" vs \"A  B\" -> diagnostic) and discrimination (4b).",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N2",
+  "source": "opus",
+  "round": 2,
+  "file": "tests/cli/cli_b_digest_differential.rs",
+  "line": 224,
+  "severity": "important",
+  "text": "D3 renders changed-roots diagnostics in human output, so every .human.txt digest golden whose run has a non-empty changedRootsDiagnostics moves (e.g. ws-txn-d47-neg-temp file-unmatched); the plan predicted only the schemaVersion line.",
+  "disposition": "fixed",
+  "evidence": "D3 records the decision to render every kind (a human reader cannot see file-unmatched today) and fixes the line format 'changed-roots: <kind> <field>=<value> ...'; the measurement plan predicts those human goldens move and the implementer enumerates the exact list before regen.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N3",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 62,
+  "severity": "minor",
+  "text": "candidates as plain routine displays cannot tell overloads apart, and dedup was unspecified.",
+  "disposition": "fixed",
+  "evidence": "D2.3: one item per stable routine id (deduplicated) with a signature display; D3 (revision 6): each parameter shown as '[var ]<raw type text>' joined with '; ' so var-only overloads stay distinct. A3b asserts candidates == [\"ImplC.Baz(Text)\", \"ImplC.Baz(Text; Integer)\"]; A3e asserts [\"ImplD.Baz(Text)\"].",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N4",
+  "source": "sol+opus",
+  "round": 3,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 82,
+  "severity": "minor",
+  "text": "The human diagnostic line said 'JSON key order' but the example used the D2.3 order; digest JSON is written by the canonical serializer, which sorts keys (format_json.rs:53-71), and human goldens are byte-compared.",
+  "disposition": "fixed",
+  "evidence": "D3 now says fields are sorted by key as the canonical serializer writes them, kind excluded; the example is in sorted order (candidates, implementer, interface, interfaceDisplay); A6 asserts the exact text.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N5",
+  "source": "opus",
+  "round": 3,
+  "file": "src/engine/l5/digest_cli.rs",
+  "line": 1438,
+  "severity": "minor",
+  "text": "format_digest_human returns 'digest: no changed roots resolved' early when there are no entries, so D3's 'before the entries' did not cover the exit-2 case where diagnostics matter most.",
+  "disposition": "fixed",
+  "evidence": "D3 'No entries' bullet: the changed-roots lines print in the no-entries branch too, before 'digest: no changed roots resolved'; A6 adds a file-unmatched-only run asserting that output.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "N6",
+  "source": "opus",
+  "round": 4,
+  "file": ".agent/issue-81/ledger.md",
+  "line": 83,
+  "severity": "minor",
+  "text": "The signature display's parameter separator was undefined, and joining array values with ',' makes a human line with multi-parameter or comma-bearing types unsplittable.",
+  "disposition": "fixed",
+  "evidence": "D3: parameter types in a signature display are separated by '; ' (as in AL source); human array values are joined with ' | ' (types like 'Dictionary of [Text, Integer]' contain commas). A3b has a two-parameter overload and asserts the exact human text. Revision 6 (opus r5 minor): the display shows 'var ' before a by-reference parameter's type.",
+  "hash": "630added785fde5b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
