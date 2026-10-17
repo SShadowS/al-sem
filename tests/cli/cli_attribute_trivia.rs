@@ -402,6 +402,53 @@ const IF_PUBNESS: &str = r##"codeunit 50103 "Repro Pub"
 }
 "##;
 
+/// The whole-object shape: ONE file declares the subscriber codeunit twice,
+/// under a top-level `#if XSYM` / `#else`. Its `H` subscribes `OnA` in the
+/// first declaration and `OnB` in the second.
+const IF_DUP_OBJECT: &str = r##"codeunit 50103 "Repro Pub"
+{
+    procedure FireA()
+    begin
+        OnA();
+    end;
+
+    procedure FireB()
+    begin
+        OnB();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnB()
+    begin
+    end;
+}
+
+#if XSYM
+codeunit 50104 "Repro Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+}
+#else
+codeunit 50104 "Repro Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Pub", 'OnB', '', false, false)]
+    local procedure H()
+    begin
+        Commit();
+    end;
+}
+#endif
+"##;
+
 /// The program engine's call graph of a workspace holding `al`: every edge, and
 /// the whole-program histogram.
 fn program_edges(
@@ -490,6 +537,18 @@ fn model_event_edges(
 #[test]
 fn digest_sees_both_arms_of_an_if_duplicated_subscriber() {
     let got = commit_by_routine(IF_DUP, &["FireA", "FireB"]);
+    let want: BTreeMap<String, bool> = [("FireA".to_string(), true), ("FireB".to_string(), true)]
+        .into_iter()
+        .collect();
+    assert_eq!(got, want, "routine -> has COMMIT");
+}
+
+/// The whole-object `#if` duplicate (#103 final panel): the two declarations
+/// of `H` share their file, so `FireB` reaches the second declaration's
+/// `Commit()` too.
+#[test]
+fn digest_sees_both_declarations_of_an_if_duplicated_object() {
+    let got = commit_by_routine(IF_DUP_OBJECT, &["FireA", "FireB"]);
     let want: BTreeMap<String, bool> = [("FireA".to_string(), true), ("FireB".to_string(), true)]
         .into_iter()
         .collect();

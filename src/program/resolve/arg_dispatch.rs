@@ -4001,6 +4001,7 @@ codeunit 50100 "C"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }];
 
@@ -4221,6 +4222,7 @@ codeunit 50700 "Caller"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params,
         }
     }

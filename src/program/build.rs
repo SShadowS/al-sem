@@ -227,8 +227,16 @@ fn build_dep_nodes(
     let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_total);
     let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::with_capacity(meta_total);
     let mut recovered: Vec<String> = Vec::new();
+    // Issue #103: every dependency file is its own source unit, numbered
+    // across all apps (one app read twice is two units), because the step 4
+    // dedup unions event facts per source file only.
+    let mut source_unit = 1u32..;
     for unit in summaries {
         for mut file in unit.files {
+            let file_unit = source_unit.next().and_then(std::num::NonZeroU32::new);
+            for r in &mut file.routines {
+                r.source_unit = file_unit;
+            }
             file.objects.share_strings(&mut pool);
             file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
@@ -342,7 +350,7 @@ pub fn assemble_program_graph(
     let mut routines: Vec<RoutineNode> = Vec::new();
     let mut workspace_rows = crate::program::physical::PhysicalIndex::default();
 
-    for pf in &ws_unit.files {
+    for (unit, pf) in (1u32..).zip(&ws_unit.files) {
         let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
             ws_app_ref,
@@ -351,6 +359,10 @@ pub fn assemble_program_graph(
             &mut objects,
             &mut routines,
         );
+        // Issue #103: the dedup unions event facts per source file only.
+        for r in &mut routines[r0..] {
+            r.source_unit = std::num::NonZeroU32::new(unit);
+        }
         // Before the sort + dedup below: one row per occurrence (S2b.3).
         workspace_rows.record_file(&pf.virtual_path, &pf.file, &objects[o0..], &routines[r0..]);
     }
@@ -638,6 +650,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                source_unit: None,
                 // Synthesized, not ingested from any `SymbolReference.json`
                 // — no ABI parameter metadata exists to retain.
                 abi_params: AbiParams::Missing,
@@ -884,43 +897,33 @@ impl EventFacts {
     /// every same-key copy in document order, the survivor first), or `None`
     /// to leave it as it is.
     ///
-    /// Only the `#if` ARMS of ONE declaration site are merged: the leading
-    /// copies whose build conditions pairwise contradict
-    /// (`al_syntax::ir::preproc_contradicts`), so no build compiles two of
-    /// them. `RoutineNode` carries no source file, so this is the signal for
-    /// "same site": two arms of one `#if` always contradict, while the same
-    /// routine extracted from two FILES (`Al/` plus `.dependencies/`, a
-    /// sibling app read twice) repeats an arm's conditions, or has none, and
-    /// so cannot contradict. The copies of a run are file-contiguous (a
-    /// stable sort of per-file extraction), so the arm group ends at the
-    /// first copy that some earlier copy does not contradict; it and every
-    /// later copy keep today's first-wins behaviour, so a stale second copy's
-    /// subscriptions are never merged in.
-    // ponytail: two limits of the contradiction signal. Arms whose
-    // conditions the lowerer cannot decide (`#if A or B` decides nothing in
-    // its true arm) are not grouped, so they stay first-wins as before #103.
-    // Two files that each hold only ONE, opposite arm are grouped. A real
-    // per-copy source file in `RoutineNode` would remove both.
+    /// Only the copies from the survivor's own source file
+    /// ([`RoutineNode::source_unit`]) are merged. One file can declare a
+    /// routine twice only under `#if` (two arms of one `#if`, or two whole
+    /// object declarations under a top-level `#if`), so those copies are
+    /// the arms. A copy from another file (`Al/` plus `.dependencies/`, a
+    /// sibling app read twice) is the same routine read again, possibly
+    /// stale, so it keeps today's first-wins behaviour. A copy with no
+    /// source unit (never stamped by a build) is merged with nothing.
     fn of_arms(copies: &[&RoutineNode]) -> Option<Self> {
-        let arms = copies
-            .iter()
-            .enumerate()
-            .take_while(|(n, c)| {
-                copies[..*n].iter().all(|p| {
-                    al_syntax::ir::preproc_contradicts(&p.preproc_context, &c.preproc_context)
-                })
-            })
-            .count();
-        let (survivor, others) = copies[..arms].split_first()?;
+        let (survivor, rest) = copies.split_first()?;
+        survivor.source_unit?;
+        let arms: Vec<&RoutineNode> = std::iter::once(*survivor)
+            .chain(
+                rest.iter()
+                    .copied()
+                    .filter(|c| c.source_unit == survivor.source_unit),
+            )
+            .collect();
         // The common re-parse duplicate: every arm already says the same.
-        if others.iter().all(|o| {
+        if arms[1..].iter().all(|o| {
             o.event_subscribers == survivor.event_subscribers
                 && o.publisher_kind == survivor.publisher_kind
                 && o.include_sender == survivor.include_sender
         }) {
             return None;
         }
-        Some(Self::union(&copies[..arms]))
+        Some(Self::union(&arms))
     }
 
     /// Merge `arms`, in document order, the survivor first.
@@ -1512,6 +1515,7 @@ codeunit 50100 "Ws2 Cu"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }
@@ -1554,6 +1558,7 @@ codeunit 50100 "Ws2 Cu"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }
@@ -1944,9 +1949,13 @@ codeunit 50301 "Preproc Dup Sig"
         let mut objects = Vec::new();
         let mut routines = Vec::new();
         let mut dep_meta = HashMap::new();
-        for f in units.iter().flat_map(|u| &u.files) {
+        for (unit, f) in (1u32..).zip(units.iter().flat_map(|u| &u.files)) {
             objects.extend(f.objects.iter().cloned());
-            routines.extend(f.routines.iter().cloned());
+            // Step 2 numbers every file across all apps as its source unit.
+            routines.extend(f.routines.iter().cloned().map(|mut r| {
+                r.source_unit = std::num::NonZeroU32::new(unit);
+                r
+            }));
             dep_meta.extend(f.routine_meta.iter().cloned());
         }
         let raw_routines = routines.len();
@@ -2309,8 +2318,9 @@ codeunit 50301 "Preproc Dup Sig"
 
     use crate::program::resolve::event::ParsedSubscriberArgs;
 
-    /// Parse `src`, extract its nodes, sort and dedup them exactly as the
-    /// workspace build does, and return the single survivor named `name_lc`.
+    /// Parse `src` as ONE file, extract its nodes, stamp their source unit,
+    /// sort and dedup them exactly as the workspace build does, and return
+    /// the single survivor named `name_lc`.
     fn dedup_survivor(src: &str, name_lc: &str) -> RoutineNode {
         let file = al_syntax::parse(src);
         let mut objects = Vec::new();
@@ -2322,6 +2332,10 @@ codeunit 50301 "Preproc Dup Sig"
             &mut objects,
             &mut routines,
         );
+        // One file: one source unit, as `assemble_program_graph` stamps it.
+        for r in &mut routines {
+            r.source_unit = std::num::NonZeroU32::new(1);
+        }
         let raw = routines
             .iter()
             .filter(|r| *r.id.name_lc == *name_lc)
@@ -2590,9 +2604,10 @@ codeunit 50107 "Repro Sender"
         );
     }
 
-    /// Give `r` the build condition of one `#if` arm: `sym` defined or not.
-    fn arm(mut r: RoutineNode, sym: &str, defined: bool) -> RoutineNode {
-        r.preproc_context = vec![(sym.to_string(), defined)].into_boxed_slice();
+    /// Stamp `r` as extracted from source unit (file) `unit` (0-based here;
+    /// the field is 1-based).
+    fn in_unit(mut r: RoutineNode, unit: u32) -> RoutineNode {
+        r.source_unit = std::num::NonZeroU32::new(unit + 1);
         r
     }
 
@@ -2603,9 +2618,9 @@ codeunit 50107 "Repro Sender"
     #[test]
     fn dedup_keeps_the_survivors_own_subscriptions_and_single_copies_unchanged() {
         let obj = dep_obj_id(AppRef(0), 51210);
-        let mut first = arm(source_routine(&obj, "h", 0, "", 0), "X", true);
+        let mut first = in_unit(source_routine(&obj, "h", 0, "", 0), 0);
         first.event_subscribers = vec![subscription("ona", false), subscription("ona", false)];
-        let mut second = arm(source_routine(&obj, "h", 0, "", 0), "X", false);
+        let mut second = in_unit(source_routine(&obj, "h", 0, "", 0), 0);
         second.event_subscribers = vec![subscription("ona", false), subscription("onb", false)];
         let mut single = source_routine(&obj, "k", 0, "", 0);
         single.event_subscribers = vec![subscription("onc", false), subscription("onc", false)];
@@ -2627,17 +2642,10 @@ codeunit 50107 "Repro Sender"
     #[test]
     fn aliased_overloads_never_share_subscriptions() {
         let obj = dep_obj_id(AppRef(0), 51211);
-        let mut a = arm(
-            source_routine(&obj, "h", 1, "record customer", 999),
-            "X",
-            true,
-        );
+        // One file, so only the key separates them.
+        let mut a = in_unit(source_routine(&obj, "h", 1, "record customer", 999), 0);
         a.event_subscribers = vec![subscription("ona", false)];
-        let mut b = arm(
-            source_routine(&obj, "h", 1, "record  customer", 999),
-            "X",
-            false,
-        );
+        let mut b = in_unit(source_routine(&obj, "h", 1, "record  customer", 999), 0);
         b.event_subscribers = vec![subscription("onb", false)];
         assert_eq!(a.id, b.id, "precondition: one id");
         assert_ne!(a.param_sig_key, b.param_sig_key, "precondition: two keys");
@@ -2655,9 +2663,9 @@ codeunit 50107 "Repro Sender"
     #[test]
     fn same_event_with_different_skip_flags_keeps_two_entries() {
         let obj = dep_obj_id(AppRef(0), 51212);
-        let mut a = arm(source_routine(&obj, "h", 0, "", 0), "X", true);
+        let mut a = in_unit(source_routine(&obj, "h", 0, "", 0), 0);
         a.event_subscribers = vec![subscription("ona", false)];
-        let mut b = arm(source_routine(&obj, "h", 0, "", 0), "X", false);
+        let mut b = in_unit(source_routine(&obj, "h", 0, "", 0), 0);
         b.event_subscribers = vec![subscription("ona", true)];
         let mut routines = vec![a, b];
         dedup_routines_preserving_genuine_overloads(&mut routines);
@@ -2669,53 +2677,167 @@ codeunit 50107 "Repro Sender"
         );
     }
 
-    /// CR1 (#103): the union covers the `#if` arms of ONE declaration site
-    /// only. The same routine extracted from two FILES (here: the arms of
-    /// `Al/` and then a stale copy's arms from `.dependencies/`, one same-id
-    /// run in that order) keeps the first file's facts: the second file's
-    /// arms repeat the first's build conditions, so they never contradict
-    /// it, and its subscriptions are not merged in.
+    /// A copy of `h` from source unit `unit`, under `#if X` (`Some(true)`),
+    /// its `#else` (`Some(false)`) or unconditional (`None`), subscribing
+    /// `event`.
+    fn h_copy(obj: &ObjectNodeId, unit: u32, x: Option<bool>, event: &str) -> RoutineNode {
+        let mut r = in_unit(source_routine(obj, "h", 0, "", 0), unit);
+        r.preproc_context = x
+            .map(|d| vec![("X".to_string(), d)])
+            .unwrap_or_default()
+            .into_boxed_slice();
+        r.event_subscribers = vec![subscription(event, false)];
+        r
+    }
+
+    /// The final panel's counterexample (#103 provenance fix, case b): file
+    /// 1 holds only the `#if X` arm, file 2 (stale) holds `#else` and then
+    /// `#if X` again. The conditions of file 1's arm and file 2's first copy
+    /// contradict, but they come from two files, so nothing of file 2 is
+    /// merged in. An unconditional copy in each of two files is first-wins
+    /// too, and so are copies with no source unit at all.
     #[test]
     fn copies_from_a_second_file_keep_the_first_files_subscriptions() {
         let obj = dep_obj_id(AppRef(0), 51213);
-        let copy = |defined: bool, event: &str| {
-            let mut r = arm(source_routine(&obj, "h", 0, "", 0), "X", defined);
-            r.event_subscribers = vec![subscription(event, false)];
-            r
-        };
-        // File 1: `#if X` -> OnA, `#else` -> OnB. File 2 (stale):
-        // `#if X` -> OnOld, `#else` -> OnStale.
         let mut routines = vec![
-            copy(true, "ona"),
-            copy(false, "onb"),
-            copy(true, "onold"),
-            copy(false, "onstale"),
+            h_copy(&obj, 0, Some(true), "ona"),
+            h_copy(&obj, 1, Some(false), "onstale"),
+            h_copy(&obj, 1, Some(true), "onold"),
         ];
         dedup_routines_preserving_genuine_overloads(&mut routines);
         assert_eq!(routines.len(), 1);
-        assert_eq!(subscribed_events(&routines[0]), ["ona", "onb"]);
+        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
 
-        // An unconditional copy in each file: nothing contradicts, so
-        // first-wins.
-        let mut plain = source_routine(&obj, "h", 0, "", 0);
-        plain.event_subscribers = vec![subscription("ona", false)];
-        let mut stale = plain.clone();
-        stale.event_subscribers = vec![subscription("onstale", false)];
-        let mut routines = vec![plain, stale];
+        let mut routines = vec![
+            h_copy(&obj, 0, None, "ona"),
+            h_copy(&obj, 1, None, "onstale"),
+        ];
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
+
+        // Copies no build stamped have no known file: merged with nothing.
+        let unstamped = |x: bool, event: &str| RoutineNode {
+            source_unit: None,
+            ..h_copy(&obj, 0, Some(x), event)
+        };
+        let mut routines = vec![unstamped(true, "ona"), unstamped(false, "onb")];
         dedup_routines_preserving_genuine_overloads(&mut routines);
         assert_eq!(subscribed_events(&routines[0]), ["ona"]);
     }
 
+    /// Case d: two files that each hold ONE arm, with opposite conditions,
+    /// are two reads of the routine, not one `#if`: first-wins. The same
+    /// two arms in one file are unioned, so only the unit tells them apart.
+    #[test]
+    fn opposite_arms_in_two_files_are_not_merged() {
+        let obj = dep_obj_id(AppRef(0), 51214);
+        let mut routines = vec![
+            h_copy(&obj, 0, Some(true), "ona"),
+            h_copy(&obj, 1, Some(false), "onb"),
+        ];
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
+
+        let mut routines = vec![
+            h_copy(&obj, 0, Some(true), "ona"),
+            h_copy(&obj, 0, Some(false), "onb"),
+        ];
+        dedup_routines_preserving_genuine_overloads(&mut routines);
+        assert_eq!(subscribed_events(&routines[0]), ["ona", "onb"]);
+    }
+
+    /// Case c: an arm whose condition the lowerer cannot decide
+    /// (`#if A or B`) is still an arm of the one file: unioned.
+    #[test]
+    fn undecidable_if_arm_is_unioned() {
+        let h = dedup_survivor(
+            r#"
+codeunit 50108 "Repro Or"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnB()
+    begin
+    end;
+
+#if A or B
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Or", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Or", 'OnB', '', false, false)]
+    local procedure H()
+    begin
+    end;
+#endif
+}
+"#,
+            "h",
+        );
+        assert_eq!(subscribed_events(&h), ["ona", "onb"]);
+    }
+
+    /// Case a: ONE file holds two complete declarations of the object under
+    /// a top-level `#if X` / `#else`, each with a different subscriber. The
+    /// lowerer gives the routines no build condition, but they share the
+    /// file, so the survivor carries both subscriptions.
+    #[test]
+    fn whole_object_if_duplicate_in_one_file_is_unioned() {
+        let h = dedup_survivor(
+            r#"
+codeunit 50109 "Repro Obj Pub"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnA()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnB()
+    begin
+    end;
+}
+
+#if X
+codeunit 50110 "Repro Obj Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Obj Pub", 'OnA', '', false, false)]
+    local procedure H()
+    begin
+    end;
+}
+#else
+codeunit 50110 "Repro Obj Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Repro Obj Pub", 'OnB', '', false, false)]
+    local procedure H()
+    begin
+    end;
+}
+#endif
+"#,
+            "h",
+        );
+        assert_eq!(subscribed_events(&h), ["ona", "onb"]);
+    }
+
     /// A6c: an ABI `KeepCollapsed` run groups genuinely different overloads
     /// under one empty key, so its survivor's event facts are NOT merged:
-    /// only the collapse marks change.
+    /// only the collapse marks change. Both rows are hand-stamped with ONE
+    /// source unit (an ABI row has none in a real build), so only the tier
+    /// guard keeps them apart.
     #[test]
     fn abi_collapsed_survivor_keeps_its_own_event_facts() {
         let obj = dep_obj_id(AppRef(0), 60210);
-        let mut a = abi_routine(&obj, "onx", 1, 777);
+        let mut a = in_unit(abi_routine(&obj, "onx", 1, 777), 0);
         a.publisher_kind = Some(PublisherKind::Integration);
         a.include_sender = Some(true);
-        let mut b = abi_routine(&obj, "onx", 1, 777);
+        let mut b = in_unit(abi_routine(&obj, "onx", 1, 777), 0);
         b.publisher_kind = Some(PublisherKind::Business);
         b.include_sender = Some(false);
         b.event_subscribers = vec![subscription("ona", false)];

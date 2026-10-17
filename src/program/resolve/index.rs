@@ -1233,6 +1233,7 @@ mod tests {
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }
@@ -1268,6 +1269,7 @@ mod tests {
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }
@@ -1303,6 +1305,7 @@ mod tests {
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }
     }

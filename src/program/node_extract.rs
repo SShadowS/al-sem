@@ -388,6 +388,27 @@ pub struct RoutineNode {
     /// (`resolver::resolve_in_object`) drops a candidate whose conditions
     /// contradict the call site's build. A boxed slice: almost always empty.
     pub preproc_context: Box<[(String, bool)]>,
+    /// The source unit (one parsed file) this copy was extracted from: its
+    /// 1-based index among the files of ONE build's dedup population (issue
+    /// #103). `NonZeroU32` so the `Option` fits the struct's existing tail
+    /// padding (measured 2026-10-17: `size_of::<RoutineNode>()` is 224 with
+    /// and without this field; a plain `Option<u32>` made it 232).
+    /// `build::assemble_program_graph` (workspace files) and
+    /// `build::build_dep_nodes` (every dependency file) stamp it right after
+    /// `extract_nodes`; `None` for an ABI routine, for a synthetic node, and
+    /// for any node no build has stamped (`extract_nodes` itself leaves it
+    /// `None`, so a per-file summary or pack stays build-independent).
+    ///
+    /// `build::dedup_routines_preserving_genuine_overloads` reads it: the
+    /// event facts of a same-signature duplicate are unioned only over the
+    /// copies of the survivor's own unit (one file can repeat a routine only
+    /// under `#if`), never across files.
+    ///
+    /// Not persisted (`serde(skip)`: an index means nothing outside the build
+    /// that assigned it, so `PACK_SCHEMA` does not move) and not part of any
+    /// fingerprint (the LSP def-surface hash lists its fields explicitly).
+    #[serde(skip)]
+    pub source_unit: Option<std::num::NonZeroU32>,
     /// Retained ABI parameter metadata (Task 2, roadmap-closure plan) — see
     /// [`AbiParams`]'s doc for the full structural-guard rationale. Always
     /// [`AbiParams::Missing`] for a SOURCE (non-`TrustTier::SymbolOnly`)
@@ -802,6 +823,8 @@ pub fn extract_nodes(
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
                 preproc_context: r.preproc_context.clone().into_boxed_slice(),
+                // Stamped by the build that owns the dedup population.
+                source_unit: None,
                 // SOURCE routine: parameter metadata for arg-type dispatch
                 // lives in `DeclSurface`/`RoutineMeta`, never here — see
                 // `RoutineNode::abi_params`'s doc.
@@ -876,6 +899,9 @@ pub(crate) mod test_fixtures {
             abi_overload_collapsed: false,
             source_overload_aliased: true,
             preproc_context: vec![("CLEAN27".to_string(), false)].into_boxed_slice(),
+            // `serde(skip)`: a round trip always gives `None`, so the probe
+            // carries `None` here.
+            source_unit: None,
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "Customer".into(),
                 type_text: "Record".into(),

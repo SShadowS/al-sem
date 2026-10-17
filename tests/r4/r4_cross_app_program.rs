@@ -1720,6 +1720,13 @@ fn if_dup_dependency_workspace(dir: &Path) {
 /// so the edges come from the second row: a row only counts as processed once it
 /// maps. The unmapped first row loses nothing, so it is not counted in
 /// `unmapped_subscribers` (CR5): that counter is for lost subscriptions.
+///
+/// Stated limit: "the first row does not map" is NOT asserted here (the span
+/// map is internal). It holds only while the dependency declaration surface
+/// keeps the LAST same-id span; this test guards "mark an id processed before
+/// it maps" (break 8, recorded failing in the issue ledger) only under that
+/// behaviour. If the surface ever keeps every span, both rows map and this
+/// test no longer discriminates break 8.
 #[test]
 fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;

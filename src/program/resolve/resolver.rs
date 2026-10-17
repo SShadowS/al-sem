@@ -4706,6 +4706,7 @@ pageextension 52911 "ExtA" extends BasePage
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }];
 
@@ -4877,6 +4878,7 @@ pageextension 52911 "ExtA" extends BasePage
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }];
 
@@ -5067,6 +5069,7 @@ pageextension 52911 "ExtA" extends BasePage
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params,
             }
         }
@@ -5224,6 +5227,7 @@ codeunit 50611 "MixedCU"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Complete(vec![AbiParamRetained {
                 name: "N".into(),
                 type_text: "Integer".into(),
@@ -5311,6 +5315,7 @@ codeunit 50612 "MixedCU2"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
@@ -5451,6 +5456,7 @@ codeunit 50612 "MixedCU2"
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }];
 
@@ -5665,6 +5671,7 @@ codeunit 50612 "MixedCU2"
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         }];
 
@@ -5830,6 +5837,7 @@ codeunit 50612 "MixedCU2"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         };
 
@@ -5865,6 +5873,7 @@ codeunit 50612 "MixedCU2"
             abi_overload_collapsed: collapsed,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         };
 
@@ -10971,6 +10980,7 @@ codeunit 50000 "Caller"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         });
 
@@ -10999,6 +11009,7 @@ codeunit 50000 "Caller"
             abi_overload_collapsed: false,
             source_overload_aliased: false,
             preproc_context: Box::default(),
+            source_unit: None,
             abi_params: AbiParams::Missing,
         });
 
@@ -13261,6 +13272,7 @@ codeunit 53971 "OverloadNCaller"
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params: AbiParams::Missing,
             }
         }
@@ -13647,6 +13659,7 @@ codeunit 53975 "Overload3Caller"
                 abi_overload_collapsed: true,
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13673,6 +13686,7 @@ codeunit 53975 "Overload3Caller"
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params: AbiParams::Missing,
             },
         ];
@@ -13853,6 +13867,7 @@ codeunit 60152 "AliasTarget"
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params: AbiParams::Missing,
             },
             RoutineNode {
@@ -13873,6 +13888,7 @@ codeunit 60152 "AliasTarget"
                 abi_overload_collapsed: false,
                 source_overload_aliased: true,
                 preproc_context: Box::default(),
+                source_unit: None,
                 abi_params: AbiParams::Missing,
             },
         ];
