@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "al-sem"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "al-syntax",
  "anyhow",

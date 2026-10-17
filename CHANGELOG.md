@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-10-17
+
 ### Added
 
 - `alsem events fanout`, `alsem events chains` and `alsem policy check` now load the
