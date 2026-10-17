@@ -149,4 +149,74 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
         CWT_APP_GUID,
     );
     assert_parity(&cwt, &detectors, "inline-closed-world-temp");
+
+    // #148 teeth: d35 on an UNKNOWN commit answer reads the subscriber's uncertainty
+    // set (CORE_SUMMARIES) for its `cappedBy`. No corpus fixture has an unknown d35,
+    // so without this workspace a d35 that under-declared CORE_SUMMARIES would pass.
+    let d35_unknown = assemble_and_resolve_inline_program_default(
+        &[
+            ("src/ReproOrder.al".to_string(), D35_TABLE.to_string()),
+            ("src/ReasonDialog.al".to_string(), D35_PAGE.to_string()),
+            (
+                "src/DeleteGovernor.al".to_string(),
+                D35_CODEUNIT.to_string(),
+            ),
+        ],
+        D35_APP_GUID,
+    );
+    let d35 = detectors
+        .iter()
+        .find(|d| d.name == "d35-commit-in-event-subscriber")
+        .expect("d35 registered");
+    let fired = (d35.run)(
+        &d35_unknown,
+        &build_detector_context(&d35_unknown, substrate::ALL),
+    )
+    .expect("d35 runs");
+    assert_eq!(
+        fired.findings.len(),
+        1,
+        "the inline d35-unknown workspace must fire d35 once, or its parity is vacuous"
+    );
+    assert_parity(&d35_unknown, &detectors, "inline-d35-unknown");
 }
+
+const D35_APP_GUID: &str = "14814814-0000-0000-0000-00000d35par";
+
+const D35_TABLE: &str = r#"
+table 50100 "Repro Order"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+}
+"#;
+
+/// No `OnOpenPage`: a run of this page reaches no routine, which the analyze path
+/// records as `object-run-unresolved`, so the subscriber's commit answer is UNKNOWN.
+const D35_PAGE: &str = r#"
+page 50100 "Reason Dialog"
+{
+    PageType = StandardDialog;
+    layout { area(Content) { } }
+}
+"#;
+
+const D35_CODEUNIT: &str = r#"
+codeunit 50100 "Delete Governor"
+{
+    [EventSubscriber(ObjectType::Table, Database::"Repro Order", 'OnBeforeDeleteEvent', '', false, false)]
+    local procedure OnBeforeDeleteOrder(var Rec: Record "Repro Order"; RunTrigger: Boolean)
+    begin
+        if GuiAllowed() then
+            PromptForReason();
+    end;
+
+    local procedure PromptForReason()
+    var
+        ReasonPage: Page "Reason Dialog";
+    begin
+        if ReasonPage.RunModal() <> Action::OK then
+            Error('Canceled.');
+    end;
+}
+"#;
