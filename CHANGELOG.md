@@ -378,6 +378,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (three real-process claim races, the legacy lease, the issue cross-check);
   the suite is 332 passed (was 318).
 
+- **agentflow: commands read the run's own lease (`scripts/agentflow/{cli,lock}.py`).**
+  Step 6 of the parallel-issues design. With slots, a sibling's lease always
+  exists, so "a lease that is not mine" no longer means "I lost mine".
+  - `run` is supervised when the run owns a lease, refused (`FenceError`) when
+    it owns none while any lease exists, and unsupervised only with no lease.
+    The gate heartbeat beats the run's own lease.
+  - `cleanup` of an issue worktree (`al-sem-issue-<N>-a<k>`) is fenced by issue
+    N's lease only; a sibling holding another issue no longer refuses it. A
+    verification worktree is still refused while any foreign lease is live.
+  - `preflight` lists every lease in `locks` (with `stale`). Its old
+    `lock-live:<run>` failure is now `slots-full`, counted on LIVE leases
+    only, so a stale lease never stops the tick before `recover`. A new
+    `warnings` list says `cargo-target-dir-set:<dir>` when `CARGO_TARGET_DIR`
+    is set (every worktree would build into one directory, #60).
+  - `status` adds `locks`.
+  - `clear-halt` and `resolve-incident` are refused while ANY lease is live.
+  - `fetch` excludes every issue with a lease, live or stale, as
+    `locked:<run>`, even when its `agent-working` label is missing.
+
+  7 new tests in `scripts/agentflow/tests/test_{cli_flow,cli_units}.py`; the
+  `post-merge` preflight test now expects `slots-full`. The suite is 339 passed
+  (was 332).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

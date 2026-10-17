@@ -150,6 +150,50 @@ def test_preflight_reads_its_free_disk_floor_from_the_config_file(capsys, repo_p
     assert code == 2 and "min_free_gb" in out["error"], out
 
 
+def test_preflight_lists_every_lease_and_fails_slots_full_only_on_live_ones(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """`locks` lists every lease with its staleness. `slots-full` counts LIVE
+    leases only: a stale one is listed for `recover`, and failing on it would
+    stop the tick before it reaches the recovery that frees the slot. The
+    `lock-live:` row is gone; with `slots: 1` one live lease is `slots-full`."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(clone), run_id="run-dead", now=lambda: 1.0), 9, "s", 1)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0, out["failures"]
+    assert [(lk["issue"], lk["run_id"], lk["stale"]) for lk in out["locks"]] == [
+        (8, "run-live", False), (9, "run-dead", True)]
+    assert out["stale_lock"]["run_id"] == "run-dead"
+    assert out["warnings"] == []
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 3}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-live2", now=lambda: 1_000_000.0), 10, "s", 1)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert "slots-full" not in out["failures"], out["failures"]      # 2 live < 3
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 1 and out["failures"] == ["slots-full"], out["failures"]
+
+
+def test_preflight_warns_when_cargo_target_dir_is_set(capsys, repo_pair, monkeypatch, tmp_path):
+    """Design risk (g)3. An inherited CARGO_TARGET_DIR makes every issue
+    worktree share one build dir, so two runs' gates contend (#60). A
+    warning, not a failure: one run at a time is still fine with it."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
+    monkeypatch.setenv("CARGO_TARGET_DIR", "U:/shared-target")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0, out["failures"]
+    assert out["warnings"] == ["cargo-target-dir-set:U:/shared-target"]
+
+
 def test_preflight_under_dry_run_never_refreshes_the_index(capsys, repo_pair, monkeypatch, tmp_path):
     """`tree_state(refresh=True)` runs `git update-index -q --refresh`, which
     WRITES `.git/index` (the stat cache). `preflight` is one of the two
@@ -359,6 +403,25 @@ def test_a_legacy_lock_json_is_beaten_fenced_counted_and_released_by_new_code(
     assert code == 0, out
     assert not legacy.exists() and lock.all_locks(Ctx(Paths(root))) == []
     assert list((root / ".agent").glob("locks/*")) == []
+
+
+def test_fetch_excludes_an_issue_with_a_lease_even_without_its_label(capsys, root, monkeypatch):
+    """Design test 11. The `agent-working` label is added AFTER the lease and
+    can lag, so `fetch` reads the leases: an issue with one (live or stale)
+    is `locked:<run>`, never offered to a second session."""
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _slots(root, 2)
+    mine = {"user": {"login": "SShadowS"}, "body": "## Acceptance\nx", "labels": [],
+            "created_at": "2026-09-12T00:00:00Z"}
+    issues = [[{**mine, "number": n, "title": f"t{n}"} for n in (8, 10, 11)]]
+    lock.acquire(Ctx(Paths(root), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(root), run_id="run-dead", now=lambda: 1.0), 10, "s", 1)
+    code, out = run(capsys, root, "fetch", gh_run=FakeRunner({**READS, READS_ISSUES_KEY: json.dumps(issues)}),
+                    run_id=None)
+    assert code == 0
+    assert [i["number"] for i in out["eligible"]] == [11], out
+    assert out["excluded"] == [{"number": 8, "reason": "locked:run-live"},
+                               {"number": 10, "reason": "locked:run-dead"}], out
 
 
 def test_check_diff_and_freeze_via_cli(capsys, repo_pair):
@@ -2098,11 +2161,12 @@ def test_a_post_merge_that_dies_mid_gates_leaves_a_recoverable_record(
     assert rec["gate_red"] is False
     # The consequence: the next tick can still get to `recover`. Asserted on
     # `incident_rows` rather than on `ok`, because the crashed run's own lock
-    # is still on disk and still live -- a second, unrelated, honest row.
+    # is still on disk and still live -- a second, unrelated, honest row:
+    # with the default `slots: 1`, that live lease fills the only slot.
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
     code, pre = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert incident_rows(pre) == [], pre["failures"]
-    assert pre["failures"] == ["lock-live:run-test"], pre["failures"]
+    assert pre["failures"] == ["slots-full"], pre["failures"]
     assert [i["merge_sha"] for i in pre["incidents"]] == [merge_sha]   # visible, not fatal
     assert list(clone.parent.glob("al-sem-verify-*")) == []            # teardown still ran
 
@@ -2594,6 +2658,26 @@ def test_cleanup_refuses_foreign_lock_and_keeps_worktree(capsys, repo_pair):
                      "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
     assert code == 1 and "FenceError" in out["error"]
     assert wt.exists()
+
+
+def test_cleanup_of_one_issue_is_not_fenced_by_a_siblings_lease_for_another(capsys, repo_pair):
+    """Design test 36. The fence for an issue worktree is that ISSUE's lease:
+    a sibling holding issue 9 does not stop the cleanup of issue 8's tree,
+    while another run holding issue 8 does (the test above)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    wt = clone.parent / recovery.worktree_name(8, 2)
+    g.worktree_add(wt, "issue/8-y-a1", "master")
+    commit_file(wt, "issue2.txt", "y\n", "issue work 2")
+    merge_sha = g.merge_squash("issue/8-y-a1", "squash issue/8-y-a1")
+    lock.acquire(Ctx(Paths(clone), run_id="sibling-run"), 9, "s", 1)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-y-a1",
+                    "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
+    assert code == 0, out
+    assert not wt.exists()
+    assert lock.for_issue(Ctx(Paths(clone)), 9).run_id == "sibling-run"
 
 
 def test_recover_of_a_merged_stale_run_claims_the_lock_for_the_recovering_run(capsys, repo_pair, monkeypatch):
@@ -3172,6 +3256,28 @@ def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):
     code, out = run(capsys, root, "run", "--name", "probe2", "--timeout", "1", "--",
                      sys.executable, "-c", "print('x')", gh_run=FakeRunner(), run_id="solo-run")
     assert code == 0 and out["supervised"] is False
+
+
+def test_run_with_sibling_leases_is_supervised_for_the_owner_and_fenced_for_anyone_else(
+        capsys, root, monkeypatch):
+    """With slots, a sibling's lease always exists. `run` is supervised for a
+    run that owns a lease, a FenceError for a run that owns none while ANY
+    lease exists (even when there are two, so the old single-lock `read`
+    found none and let it run unsupervised), and unsupervised only when no
+    lease exists at all."""
+    from agentflow import budget
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    (root / ".agent" / "config.json").write_text(json.dumps({"slots": 3}), encoding="utf-8")
+    owner = Ctx(Paths(root), run_id="run-a", now=lambda: 1_000_000.0)
+    lock.acquire(owner, 8, "s", 1)
+    budget.init(owner, claimed_at=1_000_000.0)
+    lock.acquire(Ctx(Paths(root), run_id="run-b", now=lambda: 1_000_000.0), 9, "s", 1)
+    lock.acquire(Ctx(Paths(root), run_id="run-c", now=lambda: 1_000_000.0), 10, "s", 1)
+    argv = ("run", "--name", "probe", "--timeout", "1", "--", sys.executable, "-c", "print('x')")
+    code, out = run(capsys, root, *argv, gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0 and out["supervised"] is True, out
+    code, out = run(capsys, root, *argv, gh_run=FakeRunner(), run_id="run-lost")
+    assert code == 1 and "FenceError" in out["error"], out
 
 
 def test_each_gate_invocation_gets_its_own_log(ctx):

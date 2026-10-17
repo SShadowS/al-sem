@@ -130,10 +130,15 @@ def _ctx(args) -> Ctx:
 
 
 def _beat_if_owner(ctx: Ctx):
-    lk = lock.read(ctx)
-    if ctx.dry_run or lk is None or lk.run_id != ctx.run_id:
+    if ctx.dry_run or lock.own(ctx) is None:
         return None
     return lock.beat
+
+
+def _lease_rows(ctx: Ctx) -> list[dict]:
+    """Every lease, with whether it is stale, for `preflight` and `status`."""
+    now = ctx.now()
+    return [{**asdict(lk), "stale": lock.is_stale(lk, now)} for lk in lock.all_locks(ctx)]
 
 
 def _docs_only(git: Git, base: str, head: str) -> bool:
@@ -251,10 +256,15 @@ def cmd_preflight(args, ctx, gh, git):
     # tick on `ok:false` before it ever reaches `recover`. Visible, not fatal.
     for inc in incidents.unresolved(ctx):
         fails.append(f"incident:{inc['merge_sha'][:12]}")
-    lk = lock.read(ctx)
-    stale = lk is not None and lock.is_stale(lk, ctx.now())
-    if lk is not None and not stale:
-        fails.append(f"lock-live:{lk.run_id}")
+    # LIVE leases only. A stale lease still holds its slot at `claim`, but
+    # failing here on it would stop the tick before it reaches the `recover`
+    # that frees the slot; it is listed in `locks` (and `stale_lock`) instead.
+    # With the default `slots: 1` one live lease is `slots-full`, which is
+    # the old `lock-live:<run>` row under the name the claim itself uses.
+    leases = _lease_rows(ctx)
+    if sum(not r["stale"] for r in leases) >= config(ctx)["slots"]:
+        fails.append("slots-full")
+    stale = [r for r in leases if r["stale"]]
     if not gh.auth_ok():
         fails.append("gh-auth")
     cdo = os.environ.get("CDO_WS")
@@ -269,8 +279,15 @@ def cmd_preflight(args, ctx, gh, git):
     free_gb = shutil.disk_usage(ctx.paths.root).free // 2**30
     if free_gb < config(ctx)["min_free_gb"]:
         fails.append(f"disk-free:{free_gb}GB")
-    out = {"ok": not fails, "failures": fails, "stale_lock": asdict(lk) if stale else None,
-           "incidents": incidents.visible(ctx),
+    # Not failures. Risk (g)3 of the parallel-issues design: an inherited
+    # CARGO_TARGET_DIR makes every issue worktree build into one directory,
+    # so two runs' gates contend for it (#60).
+    warnings = []
+    if os.environ.get("CARGO_TARGET_DIR"):
+        warnings.append(f"cargo-target-dir-set:{os.environ['CARGO_TARGET_DIR']}")
+    stale_lock = {k: v for k, v in stale[0].items() if k != "stale"} if stale else None
+    out = {"ok": not fails, "failures": fails, "locks": leases, "stale_lock": stale_lock,
+           "warnings": warnings, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:
         # Visible, never a verdict: this branch must not touch `fails`. The
@@ -286,6 +303,14 @@ def cmd_fetch(args, ctx, gh, git):
     issues = gh.list_open_issues()
     allowed = gh.collaborators() | {args.repo.split("/")[0]}
     ok, excluded = eligibility.eligible(issues, allowed)
+    # The lease, not the label, says an issue is taken: `agent-working` is
+    # added AFTER the lease and can lag. Live or stale alike (a stale lease
+    # belongs to `recover`). Eligibility still sees every open issue, so the
+    # dependency graph is unchanged.
+    held = {lk.issue: lk.run_id for lk in lock.all_locks(ctx)}
+    ok = [i for i in ok if i.number not in held]
+    excluded = ([eligibility.Excluded(i, f"locked:{held[i.number]}") for i in issues if i.number in held]
+                + [e for e in excluded if e.issue.number not in held])
     pick = eligibility.oldest(ok, 10)
     return _emit({
         "open_count": len(issues),
@@ -411,7 +436,7 @@ def cmd_claim(args, ctx, gh, git):
 
 def cmd_beat(args, ctx, gh, git):
     lock.beat(ctx)
-    return _emit({"heartbeat": lock.read(ctx).heartbeat})
+    return _emit({"heartbeat": lock.own(ctx).heartbeat})
 
 
 def cmd_halt_check(args, ctx, gh, git):
@@ -473,13 +498,17 @@ def cmd_unblock(args, ctx, gh, git):
 
 def cmd_run(args, ctx, gh, git):
     lock.require_not_halted(ctx)
-    lk = lock.read(ctx)
-    if lk is not None and lk.run_id != ctx.run_id:
-        # A run that has lost (or never held) the lock must not be allowed to
-        # drive an unsupervised, unfenced child process under someone else's
-        # claim -- refuse outright rather than silently running unsupervised.
-        raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
-    supervised = lk is not None  # lk.run_id == ctx.run_id, given the check above
+    mine = lock.own(ctx)
+    others = lock.all_locks(ctx)
+    if mine is None and others:
+        # A run that has lost (or never held) a lease must not be allowed to
+        # drive an unsupervised, unfenced child process while runs hold
+        # leases -- refuse outright rather than silently running unsupervised.
+        # With slots, a sibling's lease always exists, so "a lease that is
+        # not mine" no longer means "I lost mine"; owning none does.
+        raise lock.FenceError(f"no lease names run {ctx.run_id}; leases are held by "
+                              f"{', '.join(lk.run_id for lk in others)}")
+    supervised = mine is not None
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
@@ -1185,7 +1214,6 @@ def cmd_cleanup(args, ctx, gh, git):
     # refused. An absent lock is still accepted: the recovery follow-through's
     # own `finish` call comes AFTER cleanup and releases it only then, and a
     # standalone invocation may never have held one at all.
-    lk = lock.read(ctx)
     # A retained verification worktree is reached through a STALE foreign
     # lock by construction, so the fence below carves that case out.
     # `post-merge`'s `tree-dirty-after-gates` stop retains the tree and HALTs
@@ -1202,9 +1230,21 @@ def cmd_cleanup(args, ctx, gh, git):
     # cannot touch a branch or a merge SHA. This mirrors `lock.require_operator`
     # (lock.py:144-149) and `cmd_preflight`, both of which fail on a LIVE lock
     # and deliberately let a stale one through.
-    is_verify = Path(args.worktree).name.startswith(worktrees.VERIFY_PREFIX)
-    if lk is not None and lk.run_id != ctx.run_id and not (is_verify and lock.is_stale(lk, ctx.now())):
-        raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
+    #
+    # With several leases, the fence is per tree. An ISSUE worktree
+    # (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only: a sibling
+    # holding another issue is no reason to keep this tree. A VERIFY
+    # worktree has no issue in its name, so any live foreign lease still
+    # refuses it. (The merge lane, a later step, narrows that to the lane
+    # holder.) A name that is neither keeps the old rule: any foreign lease.
+    name = Path(args.worktree).name
+    is_verify = name.startswith(worktrees.VERIFY_PREFIX)
+    m = re.match(rf"{re.escape(recovery.WORKTREE_PREFIX)}(\d+)-a", name)
+    now = ctx.now()
+    blocking = [lk for lk in lock.all_locks(ctx) if lk.run_id != ctx.run_id
+                and (not lock.is_stale(lk, now) if is_verify else (m is None or lk.issue == int(m.group(1))))]
+    if blocking:
+        raise lock.FenceError(f"lock is {blocking[0].run_id}, context is {ctx.run_id}")
     # THE EXIT FOR A RETAINED VERIFICATION WORKTREE. `post-merge`'s
     # `tree-dirty-after-gates` stop keeps the tree the gates ran in, because
     # on that stop the dirt IS the evidence -- and a directory with no
@@ -1422,8 +1462,9 @@ def cmd_status(args, ctx, gh, git):
     # `visible`, not `unresolved`: the dashboard shows a verification still in
     # flight too. It is not an obligation the operator has to close, but a row
     # nobody can see is how one gets forgotten.
-    return _emit({"lock": asdict(lk) if lk else None, "halted": lock.halted(ctx), "budget": b,
-                  "incidents": incidents.visible(ctx)})
+    # `lock` is the run's own lease (or the only one); `locks` is every lease.
+    return _emit({"lock": asdict(lk) if lk else None, "locks": _lease_rows(ctx),
+                  "halted": lock.halted(ctx), "budget": b, "incidents": incidents.visible(ctx)})
 
 
 # ---- argument parsing ------------------------------------------------------
