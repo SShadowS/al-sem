@@ -2137,6 +2137,7 @@ pub fn build_program_with_coverage_profiled(
     workspace_root: &Path,
     profile: BuildProfile,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
+    pt::counter_delta("build.program", 1);
     let (snap, load) = {
         let _s = pt::span("preflight", "preflight.snapshot_build");
         (SnapshotBuilder {

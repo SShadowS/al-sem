@@ -216,6 +216,7 @@ pub fn to_source_anchor(
 /// 67 k effects over 1359 roots, while only roots with an ordering fact keep
 /// anything.
 pub fn compute_ordering_facts(resolved: &Model) -> HashMap<String, OrderingFacts> {
+    crate::engine::perf_trace::counter_delta("build.ordering_facts", 1);
     compute_digest_effects_for_ordering_with(resolved, |entry| ordering_facts_of_entry(&entry))
         .into_iter()
         .flatten()

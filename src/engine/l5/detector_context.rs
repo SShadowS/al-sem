@@ -902,6 +902,7 @@ pub(crate) fn build_detector_context_with<'a>(
     cross: Option<CrossAppInputs<'_>>,
 ) -> DetectorContext<'a> {
     use crate::engine::l5::registry::substrate;
+    pt::counter_delta("build.detector_context", 1);
     let ws = &resolved.workspace;
     let no_deps: BTreeSet<String> = BTreeSet::new();
     let no_leaves: HashMap<String, crate::engine::l4::summary::RoutineSummary> = HashMap::new();
@@ -1300,6 +1301,7 @@ pub(crate) fn build_detector_context_with<'a>(
             for (from, list) in &graph.edges_by_from {
                 scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
             }
+            pt::counter_delta("build.graph_scc", 1);
             tarjan_scc(&SccInputGraph {
                 nodes: &graph.nodes,
                 edges_by_from: &scc_adjacency,

@@ -256,6 +256,7 @@ pub(crate) fn solve<'g>(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, FrameGuards>,
 ) -> (ConeArena, ResolvedByRoutine<'g>) {
+    crate::engine::perf_trace::counter_delta("build.pd_solve", 1);
     let mut arena = ConeArena {
         producers,
         ..Default::default()

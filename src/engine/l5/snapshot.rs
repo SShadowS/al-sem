@@ -1159,6 +1159,7 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
 /// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
 /// runs the whole cone and the producer solve, so it is built once.
 pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> CapabilitySnapshot {
+    crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
     let identities = derive_identity_table(resolved);

@@ -234,6 +234,7 @@ pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, Su
     for (from, list) in &graph.edges_by_from {
         scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &graph.nodes,
         edges_by_from: &scc_adjacency,

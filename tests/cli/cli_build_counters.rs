@@ -1,0 +1,611 @@
+//! #160 step 0 (spec `2026-10-18-issue-160-steps-0-2-design.md` §4.1.2, §4.1.3):
+//! how many times each command builds each heavy artifact, read from the
+//! SHIPPED binary's own Chrome trace.
+//!
+//! Every counted builder emits `pt::counter_delta("build.<name>", 1)` at its
+//! entry (or, for `build.graph_scc`, on the line before each top-level
+//! `tarjan_scc` call, never inside it). The trace's `C` event carries the
+//! running total under `args.<name>`; the reader keeps the LAST value per
+//! name. One test per row of §4.1.3: the table is the literal expectation, and
+//! a step that moves a count edits the row in the same commit.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use serde_json::Value;
+
+/// Spawn `alsem <args>` with tracing on into a temp trace file, every other
+/// `ALSEM_TRACE_*` knob removed (pattern: `cli_envelope_detector_set.rs`).
+pub(crate) fn spawn_traced(
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+) -> (Output, BTreeMap<String, u64>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let trace = dir.path().join("trace.json");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
+    cmd.args(args)
+        .env_remove("ALSEM_TRACE_DETAIL")
+        .env_remove("ALSEM_TRACE_SAMPLE_EVERY")
+        .env_remove("ALSEM_TRACE_SCC_MIN")
+        .env_remove("ALSEM_TRACE_STDERR")
+        .env_remove("ALSEM_TRACE_EXIT_AFTER")
+        .env_remove("ALSEM_CONES_CENSUS")
+        .env_remove("ALSEM_RETAINED_CENSUS")
+        .env("ALSEM_TRACE", "1")
+        .env("ALSEM_TRACE_FILE", &trace);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn alsem");
+    let text = std::fs::read_to_string(&trace).unwrap_or_default();
+    let events: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
+    (out, last_counters(&events))
+}
+
+/// LAST `C` event value per counter name (spec §4.1.2). `perf_trace`'s
+/// `add_counter` writes the running total under `args.<name>`.
+fn last_counters(events: &[Value]) -> BTreeMap<String, u64> {
+    let mut m = BTreeMap::new();
+    for ev in events {
+        if ev.get("ph").and_then(Value::as_str) != Some("C") {
+            continue;
+        }
+        let Some(name) = ev.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(v) = ev
+            .get("args")
+            .and_then(|a| a.get(name))
+            .and_then(Value::as_u64)
+        {
+            m.insert(name.to_string(), v);
+        }
+    }
+    m
+}
+
+/// A counter's last value; an absent name is 0.
+pub(crate) fn count(m: &BTreeMap<String, u64>, name: &str) -> u64 {
+    m.get(name).copied().unwrap_or(0)
+}
+
+/// One row of spec §4.1.3 / §4.4.8, in the table's column order.
+pub(crate) struct Row {
+    pub program: u64,
+    pub bcg: u64,
+    pub cone: u64,
+    pub v2: u64,
+    pub scc: u64,
+    pub pd: u64,
+    pub ctx: u64,
+    pub snap: u64,
+}
+
+/// Every cell is checked and every mismatch reported, so a break that moves
+/// two counters (a second context build also builds a second graph) names
+/// both cells.
+pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
+    let want = [
+        ("build.program", r.program),
+        ("build.combined_graph", r.bcg),
+        ("build.cone", r.cone),
+        ("build.summaries_v2", r.v2),
+        ("build.graph_scc", r.scc),
+        ("build.pd_solve", r.pd),
+        ("build.detector_context", r.ctx),
+        ("build.snapshot", r.snap),
+    ];
+    let bad: Vec<String> = want
+        .iter()
+        .filter(|(name, w)| count(m, name) != *w)
+        .map(|(name, w)| format!("[{case}] {name}: got {}, want {w}", count(m, name)))
+        .collect();
+    assert!(bad.is_empty(), "{}\nall counters: {m:?}", bad.join("\n"));
+}
+
+pub(crate) fn r0(ws: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/r0-corpus")
+        .join(ws)
+}
+
+/// Workspace A: no dependency.
+pub(crate) fn ws_a() -> String {
+    r0("ws-d1-multi-caller").to_string_lossy().into_owned()
+}
+
+/// Workspace D: the dependency workspace, in a tempdir the caller keeps alive.
+fn ws_dep() -> (tempfile::TempDir, String) {
+    let d = tempfile::tempdir().expect("tempdir");
+    crate::cli_digest_query_dependencies::write_dependency_workspace(d.path());
+    let ws = d.path().to_string_lossy().into_owned();
+    (d, ws)
+}
+
+/// A one-line unified diff (shape of `cli_digest_changed_spans.rs`'s `one_line_diff`).
+fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String {
+    let p = dir.join("change.diff");
+    std::fs::write(
+        &p,
+        format!("--- a/{path}\n+++ b/{path}\n@@ -{n},1 +{n},1 @@\n-{text} \n+{text}\n"),
+    )
+    .unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+fn policy_yaml() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli-c-policy/ws-policy-custom/al-sem.policy.yaml")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Run and assert the process ran to an exit code (no signal / spawn failure)
+/// and built a program at all (a usage error builds nothing; show its stderr).
+fn run(args: &[&str]) -> BTreeMap<String, u64> {
+    let (out, m) = spawn_traced(args, &[]);
+    assert!(
+        out.status.code().is_some() && count(&m, "build.program") > 0,
+        "alsem {args:?} exited {:?} with no program build\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    m
+}
+
+// ---------------------------------------------------------------------------
+// §4.1.3 rows
+// ---------------------------------------------------------------------------
+
+#[test]
+fn analyze_cross_app_default() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["analyze", &ws, "--format", "json"]);
+    assert_row(
+        "analyze cross-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 3,
+            cone: 1,
+            v2: 1,
+            scc: 3,
+            pd: 1,
+            ctx: 1,
+            snap: 0,
+        },
+    );
+}
+
+#[test]
+fn analyze_cross_app_d47() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "analyze",
+        &ws,
+        "--format",
+        "json",
+        "--detector",
+        "d47-io-unsafe-txn",
+    ]);
+    // `build.ordering_facts` has no §4.1.3 column: d47 is the one row that
+    // folds the ordering cell, exactly once (`registry.rs`'s runner). Checked
+    // first: a second fold also builds a second snapshot, which the row reports.
+    assert_eq!(
+        count(&m, "build.ordering_facts"),
+        1,
+        "[analyze cross-app d47] build.ordering_facts\nall counters: {m:?}"
+    );
+    assert_row(
+        "analyze cross-app d47",
+        &m,
+        Row {
+            program: 1,
+            bcg: 4,
+            cone: 1,
+            v2: 1,
+            scc: 3,
+            pd: 1,
+            ctx: 1,
+            snap: 1,
+        },
+    );
+}
+
+#[test]
+fn analyze_single_app() {
+    let m = run(&["analyze", &ws_a(), "--single-app", "--format", "json"]);
+    assert_row(
+        "analyze single-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 1,
+            cone: 1,
+            v2: 1,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 0,
+        },
+    );
+}
+
+#[test]
+fn digest_cross_app() {
+    let (d, ws) = ws_dep();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
+    let m = run(&["digest", &ws, "--diff", &diff, "--deterministic"]);
+    assert_row(
+        "digest cross-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 5,
+            cone: 3,
+            v2: 4,
+            scc: 7,
+            pd: 3,
+            ctx: 2,
+            snap: 1,
+        },
+    );
+}
+
+#[test]
+fn digest_single_app() {
+    let d = tempfile::tempdir().unwrap();
+    let diff = write_diff(
+        d.path(),
+        "src/D1MultiCaller.al",
+        18,
+        "        Cust.Modify();",
+    );
+    let m = run(&[
+        "digest",
+        &ws_a(),
+        "--diff",
+        &diff,
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row(
+        "digest single-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 4,
+            cone: 3,
+            v2: 4,
+            scc: 7,
+            pd: 3,
+            ctx: 2,
+            snap: 1,
+        },
+    );
+}
+
+#[test]
+fn prove() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["prove", &ws, "CallLib", "may-commit", "--deterministic"]);
+    assert_row(
+        "prove",
+        &m,
+        Row {
+            program: 1,
+            bcg: 4,
+            cone: 3,
+            v2: 4,
+            scc: 7,
+            pd: 3,
+            ctx: 2,
+            snap: 1,
+        },
+    );
+}
+
+const FINGERPRINT_ROW: Row = Row {
+    program: 1,
+    bcg: 2,
+    cone: 2,
+    v2: 2,
+    scc: 4,
+    pd: 2,
+    ctx: 1,
+    snap: 1,
+};
+
+#[test]
+fn fingerprint_json() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["fingerprint", &ws, "--format", "json", "--deterministic"]);
+    assert_row("fingerprint json", &m, FINGERPRINT_ROW);
+}
+
+#[test]
+fn fingerprint_query() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--format",
+        "json",
+        "--routine",
+        "CallLib",
+        "--deterministic",
+    ]);
+    assert_row("fingerprint query", &m, FINGERPRINT_ROW);
+}
+
+#[test]
+fn fingerprint_inventory_only() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--inventory-only",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_row("fingerprint --inventory-only", &m, FINGERPRINT_ROW);
+}
+
+/// `diff ws ws`: the row is per side, so the process total is twice it.
+#[test]
+fn diff_ws_ws() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["diff", &ws, &ws, "--format", "json", "--deterministic"]);
+    assert_row(
+        "diff ws ws",
+        &m,
+        Row {
+            program: 2,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 0,
+            snap: 2,
+        },
+    );
+}
+
+/// `--strict` adds ctx 1, bcg 1, cone 1, v2 1, scc 2, pd 1 per side.
+#[test]
+fn diff_ws_ws_strict() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "diff",
+        &ws,
+        &ws,
+        "--format",
+        "json",
+        "--deterministic",
+        "--strict",
+    ]);
+    assert_row(
+        "diff ws ws --strict",
+        &m,
+        Row {
+            program: 2,
+            bcg: 4,
+            cone: 4,
+            v2: 4,
+            scc: 8,
+            pd: 4,
+            ctx: 2,
+            snap: 2,
+        },
+    );
+}
+
+const EVENTS_CROSS_ROW: Row = Row {
+    program: 1,
+    bcg: 4,
+    cone: 2,
+    v2: 2,
+    scc: 5,
+    pd: 2,
+    ctx: 2,
+    snap: 0,
+};
+
+#[test]
+fn events_fanout_cross_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "events",
+        "fanout",
+        &ws,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_row("events fanout cross-app", &m, EVENTS_CROSS_ROW);
+}
+
+#[test]
+fn events_chains_cross_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "events",
+        "chains",
+        &ws,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_row("events chains cross-app", &m, EVENTS_CROSS_ROW);
+}
+
+#[test]
+fn events_single_app() {
+    let m = run(&[
+        "events",
+        "fanout",
+        &ws_a(),
+        "--format",
+        "json",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row(
+        "events single-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 2,
+            snap: 0,
+        },
+    );
+}
+
+#[test]
+fn policy_check_cross_app() {
+    let (_d, ws) = ws_dep();
+    let policy = policy_yaml();
+    let m = run(&[
+        "policy",
+        "check",
+        &ws,
+        "--policy",
+        &policy,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_row(
+        "policy check cross-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 4,
+            cone: 2,
+            v2: 2,
+            scc: 5,
+            pd: 2,
+            ctx: 2,
+            snap: 0,
+        },
+    );
+}
+
+#[test]
+fn policy_check_single_app() {
+    let policy = policy_yaml();
+    let m = run(&[
+        "policy",
+        "check",
+        &ws_a(),
+        "--policy",
+        &policy,
+        "--format",
+        "json",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row(
+        "policy check single-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 2,
+            snap: 0,
+        },
+    );
+}
+
+const QUERY_CROSS_ROW: Row = Row {
+    program: 1,
+    bcg: 2,
+    cone: 0,
+    v2: 1,
+    scc: 1,
+    pd: 0,
+    ctx: 0,
+    snap: 0,
+};
+
+#[test]
+fn query_touches_cross_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["query", "touches", &ws, "--table", "18", "--format", "json"]);
+    assert_row("query touches cross-app", &m, QUERY_CROSS_ROW);
+}
+
+#[test]
+fn query_effects_cross_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "query",
+        "effects",
+        &ws,
+        "--routine",
+        "CallLib",
+        "--format",
+        "json",
+    ]);
+    assert_row("query effects cross-app", &m, QUERY_CROSS_ROW);
+}
+
+#[test]
+fn query_single_app() {
+    let m = run(&[
+        "query",
+        "touches",
+        &ws_a(),
+        "--table",
+        "MC Customer",
+        "--format",
+        "json",
+        "--single-app",
+    ]);
+    assert_row(
+        "query single-app",
+        &m,
+        Row {
+            program: 1,
+            bcg: 1,
+            cone: 0,
+            v2: 1,
+            scc: 1,
+            pd: 0,
+            ctx: 0,
+            snap: 0,
+        },
+    );
+}
+
+#[test]
+fn graph() {
+    let (_d, ws) = ws_dep();
+    let m = run(&["graph", &ws]);
+    assert_row(
+        "graph",
+        &m,
+        Row {
+            program: 1,
+            bcg: 0,
+            cone: 0,
+            v2: 0,
+            scc: 0,
+            pd: 0,
+            ctx: 0,
+            snap: 0,
+        },
+    );
+}

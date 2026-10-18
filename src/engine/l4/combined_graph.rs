@@ -249,6 +249,7 @@ pub fn build_combined_graph(
     resolved: &ResolvedCalls,
     event_graph: &EventGraph,
 ) -> CombinedGraph {
+    crate::engine::perf_trace::counter_delta("build.combined_graph", 1);
     let mut edges: Vec<CombinedEdge> = Vec::new();
     let mut uncertainty_edges: Vec<UncertaintyEdge> = Vec::new();
 
@@ -1125,6 +1126,7 @@ impl Model {
         for (from, list) in &graph.edges_by_from {
             adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
         }
+        crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
         let scc = tarjan_scc(&SccInputGraph {
             nodes: &graph.nodes,
             edges_by_from: &adjacency,

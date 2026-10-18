@@ -2769,6 +2769,7 @@ pub fn compose_cone_over_graph(
     routines: &[ModelRoutine],
     mode: ConeOutput,
 ) -> ConeOutcome {
+    crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let g = build_typed_edge_graph(graph, nodes);
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -2780,6 +2781,7 @@ pub fn compose_cone_over_graph(
         _t_graph,
     );
     let _t_scc = crate::engine::l5::detector_context::cones_census::start();
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &g.nodes,
         edges_by_from: &adjacency,
@@ -3195,6 +3197,7 @@ fn compute_uncertainty_coverage_reasons(
     for (from, list) in &graph.edges_by_from {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &graph.nodes,
         edges_by_from: &adjacency,
@@ -3474,6 +3477,7 @@ pub(crate) fn build_cross_app_base(
     for (from, list) in &graph.edges_by_from {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let combined_scc = tarjan_scc(&SccInputGraph {
         nodes: &graph.nodes,
         edges_by_from: &adjacency,
@@ -3821,6 +3825,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &g.nodes,
         edges_by_from: &adjacency,
