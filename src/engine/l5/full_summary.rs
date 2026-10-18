@@ -96,13 +96,19 @@ impl FullRoutineSummary {
         self.capability_facts_inherited.is_some()
     }
 
-    /// The raw inherited facts, empty when the cone did not keep them. For the
-    /// retained byte census only (#160 §4.1.5): it answers "how much is held",
-    /// never "was the bit demanded".
-    pub(crate) fn census_inherited_facts(&self) -> &[CapabilityFact] {
-        self.capability_facts_inherited
-            .as_deref()
-            .unwrap_or_default()
+    /// The census tally of both fact halves this summary holds: the direct facts
+    /// and, when the cone kept them, the raw inherited ones (#160 §4.1.5). It
+    /// returns a byte and allocation count, never the facts, so it is no door to
+    /// a silently empty inherited half (M-3 above).
+    pub(crate) fn census_facts_tally(&self) -> crate::engine::census::Tally {
+        use crate::engine::l4::cone_census::facts_tally;
+        let mut t = facts_tally(&self.capability_facts_direct);
+        if let Some(inherited) = &self.capability_facts_inherited {
+            let i = facts_tally(inherited);
+            t.bytes += i.bytes;
+            t.allocs += i.allocs;
+        }
+        t
     }
 
     /// The RAW inherited capability facts, in `sort_inherited` order.

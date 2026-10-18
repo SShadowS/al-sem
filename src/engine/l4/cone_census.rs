@@ -146,7 +146,7 @@ fn capability_extra_heap(t: &mut Tally, e: &CapabilityExtra) {
 
 /// Owned heap of one [`CapabilityFact`] (bytes and allocations): what
 /// [`capability_fact_heap_bytes`] reports the bytes of.
-fn capability_fact_heap(f: &CapabilityFact) -> Tally {
+pub(crate) fn capability_fact_heap(f: &CapabilityFact) -> Tally {
     let mut t = Tally::default();
     t.strs([&f.subject])
         .strs(&f.resource_id)
@@ -213,11 +213,9 @@ pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -
         .strs(summaries.keys());
     for s in summaries.values() {
         t.strs([&s.routine_id]);
-        for f in [&s.capability_facts_direct[..], s.census_inherited_facts()] {
-            let ft = facts_tally(f);
-            t.bytes += ft.bytes;
-            t.allocs += ft.allocs;
-        }
+        let ft = s.census_facts_tally();
+        t.bytes += ft.bytes;
+        t.allocs += ft.allocs;
         if let Some(cov) = &s.coverage {
             t.strs([&cov.subject, &cov.direct_status, &cov.inherited_status])
                 .buf::<String>(cov.reasons.len())

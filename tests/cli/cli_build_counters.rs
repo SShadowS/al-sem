@@ -726,8 +726,10 @@ fn aldump_starts_no_phase_sampler() {
     );
 }
 
-/// Code-review CR8: one snapshot base build opens `r3a3.calls_graph` once, as
-/// it opens `r3a3.direct_facts` once; a span count is a build count.
+/// Code-review CR8: one snapshot base build opens `r3a3.graph_build` and
+/// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts` once; a span
+/// count is a build count. Final panel F2-6: the narrowed graph span has a new
+/// name, so no `r3a3.calls_graph` (which covered the clones too) is left.
 #[test]
 fn r3a3_spans_open_once_per_base() {
     let (out, events) = spawn_trace_events(
@@ -754,7 +756,9 @@ fn r3a3_spans_open_once_per_base() {
     };
     let bases = opened("r3a3.direct_facts");
     assert!(bases > 0, "no snapshot base built");
-    assert_eq!(opened("r3a3.calls_graph"), bases);
+    assert_eq!(opened("r3a3.graph_build"), bases);
+    assert_eq!(opened("r3a3.clone_inputs"), bases);
+    assert_eq!(opened("r3a3.calls_graph"), 0, "the old span name is back");
 }
 
 /// Spec §4.1.5: d47 fills the ordering cell after the context is built, so its
@@ -817,6 +821,21 @@ fn retained_census_changes_no_output() {
     assert!(
         !err.contains("[C1_CONE_CENSUS]"),
         "old report still printed"
+    );
+    // Final panel F2-1: the cross-app base keeps the model's rows and events
+    // when it replaces the calls, so it charges them. They are the `model`
+    // bucket less its calls: nonzero, and below the whole model.
+    let bytes = |name: &str| -> u64 {
+        let tag = format!("bucket={name} bytes=");
+        err.lines()
+            .find_map(|l| l.split(&tag).nth(1))
+            .and_then(|r| r.split(' ').next()?.parse().ok())
+            .unwrap_or_else(|| panic!("missing {tag}:\n{err}"))
+    };
+    let rows = bytes("base.resolved.rows");
+    assert!(
+        rows > 0 && rows < bytes("model"),
+        "base.resolved.rows {rows}:\n{err}"
     );
 }
 

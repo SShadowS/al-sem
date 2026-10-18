@@ -20,8 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     counted all three), `PD_SOLVE_NANOS`/`PD_SOLVE_CALLS`, the signed `COMPOSE_REST_NANOS` remainder,
     and the pd-solve bytes split into arena and working set. New trace spans
     `digest.tx_context_map`, `prove.tx_context_map`, `b3.adapter.join`,
-    `b3.adapter.by_decl`, `b3.adapter.convert` and `r3a3.clone_inputs` (the
-    snapshot base's input clones, split out of `r3a3.calls_graph`).
+    `b3.adapter.by_decl`, `b3.adapter.convert`, `r3a3.clone_inputs` and
+    `r3a3.graph_build`. The last two replace `r3a3.calls_graph`, which covered both
+    the snapshot base's input clones and its graph build: old `r3a3.calls_graph` =
+    `r3a3.clone_inputs` + `r3a3.graph_build`.
   - The post-attach phase peak: `alsem` opens `pt::run("alsem")` and emits
     `peak.process_mb` and `peak.post_attach_mb` (Windows; 0 elsewhere), also when
     `ALSEM_TRACE_EXIT_AFTER` ends the run early. `peak.post_attach_mb` is the maximum
@@ -32,9 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     model, base, context, snapshot and arena structure, with `census_hook` marks so
     `census-probe retained <ws>` gives the live heap at each bucket point (its own mode,
     so `census-probe model`'s phase peaks are not skewed by the marks). d47's ordering
-    cell is counted when it is filled.
+    cell is counted when it is filled. The cross-app base charges the model it keeps
+    (`base.resolved.rows`) beside the replacement calls (`base.resolved.calls`).
   - `aldump --issue160-full-graph-timings <ws>`: the snapshot's cone, pd-solve and derive
-    cost over the cut graph and the full graph (measurement only; deleted at step 6).
+    cost, and its raw inherited facts (count and bytes), over the cut graph and the full
+    graph (measurement only; deleted at step 6).
   - The step 0 CDO numbers: `docs/measurements/2026-10-18-issue-160-step0.md`.
 
 ### Changed

@@ -3657,11 +3657,14 @@ pub(crate) fn build_cross_app_base(
 }
 
 /// #160 §4.1.5: one `base.<field>` bucket per field of [`R3a5CrossAppBase`],
-/// shallow. `resolved` is the `model` bucket's structure (moved in, its calls
-/// cut), so only its replaced `calls` are charged here.
+/// shallow. `resolved` is the model, moved in with its calls replaced by the
+/// cut set: its rows and events (`base.resolved.rows`, the part of the `model`
+/// bucket that survives) and the replacement calls (`base.resolved.calls`) are
+/// charged apart, so nothing the model still owns is missing from the base.
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
-    use crate::program::model::calls::{CallEdge, ResolvedCalls, UpgradedBinding};
+    use crate::program::model::calls::UpgradedBinding;
+    use crate::program::model::program_calls::{census_calls, census_model_rows};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
         "base.primary_app_guid",
@@ -3683,15 +3686,8 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
             .strs(b.friends.keys())
             .strs(b.friends.values().flatten()),
     );
-    emit(
-        "base.resolved.calls",
-        Tally::default()
-            .arc::<ResolvedCalls>()
-            .buf::<CallEdge>(b.resolved.calls.edges.len())
-            .buf::<(String, Vec<UpgradedBinding>)>(b.resolved.calls.upgraded_bindings.len())
-            .strs(b.resolved.calls.upgraded_bindings.keys())
-            .bufs(b.resolved.calls.upgraded_bindings.values()),
-    );
+    emit("base.resolved.rows", &mut census_model_rows(&b.resolved));
+    emit("base.resolved.calls", &mut census_calls(&b.resolved.calls));
     emit(
         "base.dep_routine_ids",
         Tally::default()
@@ -4212,7 +4208,9 @@ pub struct R3a3SourceBase {
 /// resolved workspace having zero routines.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
-    let _s0 = pt::span("r3a3", "r3a3.calls_graph");
+    // Not `r3a3.calls_graph`: that span also covered the input clones, now
+    // `r3a3.clone_inputs` (a changed span gets a new name, spec §4.1.1).
+    let _s0 = pt::span("r3a3", "r3a3.graph_build");
     let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
     drop(_s0);
     build_r3a3_source_only_base_over(resolved, graph)
@@ -4356,8 +4354,15 @@ pub fn issue160_full_graph_timings(
         let derive = t.elapsed().as_nanos() as u64;
         drop(snap);
         let inherited: usize = sb.cones.values().map(|c| c.inherited.len()).sum();
+        // §4.1.6's raw population in bytes, by the census rule (each cone's
+        // buffer plus every fact's owned heap).
+        let inherited_bytes: usize = sb
+            .cones
+            .values()
+            .map(|c| super::cone_census::facts_tally(&c.inherited).bytes)
+            .sum();
         out.push_str(&format!(
-            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n",
+            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n{side} inherited_bytes={inherited_bytes}\n",
             ms(cone1 - cone0),
             ms(pd1 - pd0),
             ms(derive),

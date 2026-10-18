@@ -116,6 +116,7 @@ fn issue160_full_graph_timings_prints_four_numbers() {
             "pd_solve_ms=",
             "snapshot_derive_ms=",
             "inherited_facts=",
+            "inherited_bytes=",
         ] {
             let line = format!("{side} {key}");
             assert!(
@@ -123,5 +124,20 @@ fn issue160_full_graph_timings_prints_four_numbers() {
                 "missing `{line}`:\n{stdout}"
             );
         }
+        // Final panel F2-3: the raw population carries its bytes, so a side
+        // with inherited facts has a nonzero byte count.
+        let value = |key: &str| -> u64 {
+            let line = format!("{side} {key}=");
+            stdout
+                .lines()
+                .find_map(|l| l.strip_prefix(&line))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| panic!("no number for `{line}`:\n{stdout}"))
+        };
+        assert_eq!(
+            value("inherited_facts") > 0,
+            value("inherited_bytes") > 0,
+            "{side}: facts and bytes disagree:\n{stdout}"
+        );
     }
 }

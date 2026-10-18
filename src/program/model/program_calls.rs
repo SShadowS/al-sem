@@ -742,7 +742,21 @@ fn census_program(ctx: &ProgramContext, report: &ProgramReport) {
 /// #160 §4.1.5: the `model` bucket, shallow: the rows' buffers, the calls and
 /// the event graph (each behind its own `Arc`).
 fn census_model(m: &crate::program::model::workspace::Model) {
-    use crate::engine::census::{Kind, Tally, event_graph};
+    use crate::engine::census::Kind;
+    let mut t = census_model_rows(m);
+    let c = census_calls(&m.calls);
+    t.bytes += c.bytes;
+    t.allocs += c.allocs;
+    t.emit("model", Kind::Shallow);
+}
+
+/// The `model` bucket without its calls: the rows' buffers and the events
+/// (shallow). The cross-app base keeps these when it replaces the calls, so it
+/// charges them as `base.resolved.rows` (final panel F2-1).
+pub(crate) fn census_model_rows(
+    m: &crate::program::model::workspace::Model,
+) -> crate::engine::census::Tally {
+    use crate::engine::census::{Tally, event_graph};
     use crate::program::model::workspace as w;
     let mut t = Tally::default();
     t.buf::<w::ModelObject>(m.workspace.objects.len())
@@ -751,20 +765,27 @@ fn census_model(m: &crate::program::model::workspace::Model) {
         .buf::<crate::engine::root_classification::RootClassification>(m.root_classifications.len())
         .buf::<crate::engine::root_classification::InfraDiagnostic>(m.infra_diagnostics.len())
         .buf::<crate::engine::l5::registry::Diagnostic>(m.dependency_diagnostics.len())
-        .arc::<ResolvedCalls>()
-        .buf::<crate::program::model::calls::CallEdge>(m.calls.edges.len())
-        .buf::<(String, Vec<crate::program::model::calls::UpgradedBinding>)>(
-            m.calls.upgraded_bindings.len(),
-        )
-        .strs(m.calls.upgraded_bindings.keys())
-        .bufs(m.calls.upgraded_bindings.values())
-        .buf::<crate::engine::l5::registry::Diagnostic>(m.calls.diagnostics.len())
-        .buf::<crate::program::model::calls::ExternalTargetRef>(m.calls.external_targets.len())
         .arc::<crate::program::model::events::ProgramEvents>();
     let eg = event_graph(&m.events.graph);
     t.bytes += eg.bytes;
     t.allocs += eg.allocs;
-    t.emit("model", Kind::Shallow);
+    t
+}
+
+/// One `ResolvedCalls` behind its `Arc` (shallow): the edges, the upgraded
+/// bindings, the diagnostics and the external targets.
+pub(crate) fn census_calls(c: &ResolvedCalls) -> crate::engine::census::Tally {
+    let mut t = crate::engine::census::Tally::default();
+    t.arc::<ResolvedCalls>()
+        .buf::<crate::program::model::calls::CallEdge>(c.edges.len())
+        .buf::<(String, Vec<crate::program::model::calls::UpgradedBinding>)>(
+            c.upgraded_bindings.len(),
+        )
+        .strs(c.upgraded_bindings.keys())
+        .bufs(c.upgraded_bindings.values())
+        .buf::<crate::engine::l5::registry::Diagnostic>(c.diagnostics.len())
+        .buf::<crate::program::model::calls::ExternalTargetRef>(c.external_targets.len());
+    t
 }
 
 /// [`assemble_and_resolve_workspace_program`] with the default model-instance id

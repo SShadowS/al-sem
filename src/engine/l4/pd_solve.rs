@@ -29,6 +29,7 @@ use super::summary::TempState;
 use super::summary_runner::{
     event_param_temp_state, pd_temp_state_at_callsite, trigger_receiver_temp_state,
 };
+use crate::engine::census::Tally;
 use crate::program::model::workspace::ModelRoutine;
 
 /// Index into `ConeArena::states`.
@@ -442,44 +443,14 @@ fn census(
     use crate::engine::l5::detector_context::cones_census as cc;
     if crate::engine::census::enabled() {
         // #160 §4.1.5: the two halves of §4.1.1, one bucket line each per solve.
-        // `allocs` counts the buffers and the per-element owned allocations.
+        // Bytes and allocations come from ONE walk each, so they describe the
+        // same allocations (final panel F2-2).
         use crate::engine::census::{Kind, bucket};
         crate::census_hook::mark("census.arena");
-        let nz = |cap: usize| usize::from(cap > 0);
-        let arena_allocs = nz(arena.producers.capacity())
-            + 3 * arena.producers.len()
-            + nz(arena.states.capacity())
-            + arena
-                .states
-                .iter()
-                .map(|s| nz(s.reqs.capacity()))
-                .sum::<usize>()
-            + nz(arena.links.capacity())
-            + nz(arena.edges.capacity())
-            + nz(arena.by_routine.capacity())
-            + arena
-                .by_routine
-                .values()
-                .map(|v| nz(v.capacity()))
-                .sum::<usize>();
-        bucket(
-            "arena.link_graph",
-            arena_bytes(arena) as usize,
-            arena_allocs,
-            Kind::Exact,
-        );
-        let working_allocs = names.len()
-            + nz(names.capacity())
-            + nz(resolved.capacity())
-            + resolved.values().map(|v| nz(v.capacity())).sum::<usize>()
-            + nz(reps.capacity())
-            + reps.len();
-        bucket(
-            "arena.working",
-            working_bytes(resolved, names, reps) as usize,
-            working_allocs,
-            Kind::Exact,
-        );
+        let a = arena_tally(arena);
+        bucket("arena.link_graph", a.bytes, a.allocs, Kind::Exact);
+        let w = working_tally(resolved, names, reps);
+        bucket("arena.working", w.bytes, w.allocs, Kind::Exact);
     }
     if !cc::enabled() {
         return;
@@ -492,76 +463,114 @@ fn census(
         resolved.values().map(Vec::len).sum::<usize>() as u64,
     );
     cc::add(&cc::PD_EDGES, arena.edges.len() as u64);
-    cc::add_gated(&cc::PD_SOLVE_BYTES_ARENA, arena_bytes(arena));
+    cc::add_gated(&cc::PD_SOLVE_BYTES_ARENA, arena_tally(arena).bytes as u64);
     cc::add_gated(
         &cc::PD_SOLVE_BYTES_WORKING,
-        working_bytes(resolved, names, reps),
+        working_tally(resolved, names, reps).bytes as u64,
     );
 }
 
+/// One heap block of `bytes` (nothing when empty).
+fn block(t: &mut Tally, bytes: usize) {
+    if bytes > 0 {
+        t.bytes += bytes;
+        t.allocs += 1;
+    }
+}
+
 /// `v`'s buffer at capacity.
-fn vec_bytes<T>(v: &Vec<T>) -> u64 {
-    (v.capacity() * std::mem::size_of::<T>()) as u64
+fn vec_block<T>(t: &mut Tally, v: &Vec<T>) {
+    block(t, v.capacity() * std::mem::size_of::<T>());
 }
 
 /// `m`'s table at capacity: `capacity × (key + value + 1 control byte)`.
-fn map_bytes<K, V>(m: &HashMap<K, V>) -> u64 {
-    (m.capacity() * (std::mem::size_of::<K>() + std::mem::size_of::<V>() + 1)) as u64
+fn map_block<K, V>(t: &mut Tally, m: &HashMap<K, V>) {
+    block(
+        t,
+        m.capacity() * (std::mem::size_of::<K>() + std::mem::size_of::<V>() + 1),
+    );
 }
 
 /// An `Arc` allocation's strong + weak counts.
 const ARC_HEADER: usize = 2 * std::mem::size_of::<usize>();
 
-/// One `Arc<CapabilityFact>` allocation plus the fact's heap.
-fn arc_fact_bytes(f: &CapabilityFact) -> u64 {
-    (ARC_HEADER + std::mem::size_of::<CapabilityFact>()) as u64
-        + super::cone_census::capability_fact_heap_bytes(f)
+/// One `Arc<CapabilityFact>` allocation plus every allocation the fact owns.
+fn arc_fact(t: &mut Tally, f: &CapabilityFact) {
+    block(t, ARC_HEADER + std::mem::size_of::<CapabilityFact>());
+    let h = super::cone_census::capability_fact_heap(f);
+    t.bytes += h.bytes;
+    t.allocs += h.allocs;
 }
 
-/// The arena half of one solve's bytes (spec §4.1.1 G-1): producers, states,
-/// links, edges and `by_routine`, the part step 6 may retain.
+/// The arena half of one solve (spec §4.1.1 G-1): producers, states, links,
+/// edges and `by_routine`, the part step 6 may retain. Bytes and allocations.
 ///
-/// Counting rules (shared with [`working_bytes`]): every `Vec` and hash table
+/// Counting rules (shared with [`working_tally`]): every `Vec` and hash table
 /// at its CAPACITY (hash tables as `capacity × (key + value + 1 control
-/// byte)`), plus string, `reqs` and fact heap. A shared allocation counts ONCE:
-/// each interned routine name, each rep, each edge in `ConeArena::edges`. A
-/// `ResolvedEntry`'s `first_hop` borrows the graph, which the solve does not
+/// byte)`), every owned string at its capacity, plus `reqs` and fact heap (a
+/// fact's strings by length, `cone_census`'s rule). A shared allocation counts
+/// ONCE: each interned routine name, each rep, each edge in `ConeArena::edges`.
+/// A `ResolvedEntry`'s `first_hop` borrows the graph, which the solve does not
 /// own. Allocator per-allocation overhead is not modeled.
-pub(crate) fn arena_bytes(arena: &ConeArena) -> u64 {
-    let mut bytes = vec_bytes(&arena.producers);
+pub(crate) fn arena_tally(arena: &ConeArena) -> Tally {
+    let mut t = Tally::default();
+    vec_block(&mut t, &arena.producers);
     for p in &arena.producers {
-        bytes += (ARC_HEADER + p.owner.len() + p.operation_id.capacity()) as u64
-            + arc_fact_bytes(&p.fact);
+        block(&mut t, ARC_HEADER + p.owner.len());
+        block(&mut t, p.operation_id.capacity());
+        arc_fact(&mut t, &p.fact);
     }
-    bytes += vec_bytes(&arena.states);
-    bytes += arena.states.iter().map(|s| vec_bytes(&s.reqs)).sum::<u64>();
-    bytes += vec_bytes(&arena.links);
-    bytes += vec_bytes(&arena.edges);
+    vec_block(&mut t, &arena.states);
+    for s in &arena.states {
+        vec_block(&mut t, &s.reqs);
+    }
+    vec_block(&mut t, &arena.links);
+    vec_block(&mut t, &arena.edges);
     for e in &arena.edges {
-        bytes += (e.to.capacity()
-            + e.kind.capacity()
-            + e.callsite.as_ref().map_or(0, String::capacity)
-            + e.event_id.as_ref().map_or(0, String::capacity)
-            + e.operation_id.as_ref().map_or(0, String::capacity)
-            + e.sort_key.capacity()) as u64;
+        for s in [Some(&e.to), Some(&e.kind), e.callsite.as_ref()]
+            .into_iter()
+            .chain([
+                e.event_id.as_ref(),
+                e.operation_id.as_ref(),
+                Some(&e.sort_key),
+            ])
+            .flatten()
+        {
+            block(&mut t, s.capacity());
+        }
     }
-    bytes += map_bytes(&arena.by_routine) + arena.by_routine.values().map(vec_bytes).sum::<u64>();
-    bytes
+    map_block(&mut t, &arena.by_routine);
+    for v in arena.by_routine.values() {
+        vec_block(&mut t, v);
+    }
+    t
 }
 
-/// The working-set half of one solve's bytes (spec §4.1.1 G-1): the resolved
-/// own entries, the interned routine names and the reps, the part step 6
-/// retains or re-solves. Same counting rules as [`arena_bytes`].
-pub(crate) fn working_bytes(
+/// The working-set half of one solve (spec §4.1.1 G-1): the resolved own
+/// entries, the interned routine names and the reps, the part step 6 retains
+/// or re-solves. Same counting rules as [`arena_tally`].
+pub(crate) fn working_tally(
     resolved: &ResolvedByRoutine,
     names: &HashSet<Arc<str>>,
     reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
-) -> u64 {
-    let mut bytes = (names.iter().map(|n| ARC_HEADER + n.len()).sum::<usize>()
-        + names.capacity() * (std::mem::size_of::<Arc<str>>() + 1)) as u64;
-    bytes += map_bytes(resolved) + resolved.values().map(vec_bytes).sum::<u64>();
-    bytes += map_bytes(reps) + reps.values().map(|r| arc_fact_bytes(r)).sum::<u64>();
-    bytes
+) -> Tally {
+    let mut t = Tally::default();
+    for n in names {
+        block(&mut t, ARC_HEADER + n.len());
+    }
+    block(
+        &mut t,
+        names.capacity() * (std::mem::size_of::<Arc<str>>() + 1),
+    );
+    map_block(&mut t, resolved);
+    for v in resolved.values() {
+        vec_block(&mut t, v);
+    }
+    map_block(&mut t, reps);
+    for r in reps.values() {
+        arc_fact(&mut t, r);
+    }
+    t
 }
 
 #[cfg(test)]
@@ -662,6 +671,29 @@ mod tests {
             outgoing,
             unresolved_sources: BTreeSet::new(),
         }
+    }
+
+    /// Final panel F2-2: both buckets print `kind=exact`, so their allocation
+    /// counts reach every allocation their bytes do: each producer's fact
+    /// strings, each edge's strings, each rep's fact strings.
+    #[test]
+    fn tallies_count_every_owned_allocation() {
+        let p = producer("A");
+        let fact = Arc::clone(&p.fact);
+        let arena = ConeArena {
+            producers: vec![p],
+            edges: vec![edge("direct-call", Some("cs1"), "B")],
+            ..Default::default()
+        };
+        // producers buffer; owner Arc; operation_id; fact Arc; the fact's
+        // subject, resource_id, witness_operation_id and temp-state kind;
+        // edges buffer; the edge's to, kind, callsite and sort_key.
+        assert_eq!(arena_tally(&arena).allocs, 13);
+        let names: HashSet<Arc<str>> = HashSet::from([Arc::from("A")]);
+        let reps = HashMap::from([((0, TempState::Unknown), fact)]);
+        // one name; the names table; the reps table; the rep Arc and its
+        // fact's four strings. `resolved` is empty and holds no table.
+        assert_eq!(working_tally(&HashMap::new(), &names, &reps).allocs, 8);
     }
 
     #[test]

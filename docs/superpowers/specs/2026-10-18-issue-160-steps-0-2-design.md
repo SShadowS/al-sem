@@ -76,7 +76,7 @@ numbers file and compared under §6.
 | A0.2 | Every build counter in §4.1.2 reads from the trace | `tests/cli/cli_build_counters.rs`: per command and universe, the counter table of §4.1.3 exactly | 0 |
 | A0.3 | A duplicate build fails A0.2 | one discrimination per counter (§8.1) | 0 |
 | A0.4 | Both peaks are reported (Windows only: `read_rss()` returns `None` elsewhere, `perf_trace.rs:173-176`, so both counters are 0 there) | the trace's last `peak.process_mb` and `peak.post_attach_mb` counters; the stderr mirror prints both; `phase_peak_is_reported` is `#[cfg(windows)]` (CI runs on `ubuntu-latest`, `.github/workflows/ci.yml:22`; every measurement in §6 runs on the Windows dev machine) | 0 |
-| A0.5 | The byte census covers §4.1.5's buckets and changes no output | CDO SARIF byte-identical census on vs off; the census prints a per-bucket line tagged `exact`/`shallow`; one `census-probe model` run on CDO records the live heap at each bucket mark, and the numbers file states per mark live, Σ buckets and the residual, with Σ ≤ live at every mark (§4.1.5) | 0 |
+| A0.5 | The byte census covers §4.1.5's buckets and changes no output | CDO SARIF byte-identical census on vs off; the census prints a per-bucket line tagged `exact`/`shallow`; one `census-probe retained` run on CDO records the live heap at each bucket mark, and the numbers file states per mark live, Σ buckets and the residual, with Σ ≤ live at every mark (§4.1.5) | 0 |
 | A0.6 | The full-graph timings exist | `aldump --issue160-full-graph-timings <ws>` prints the four numbers of §4.1.6 | 0 |
 | A0.7 | Medians and bands are recorded per timer | the numbers file §4.1.7, one row per timer, ≥ 3 interleaved runs | 0 |
 | A1.1 | `InputSet` is read once per workspace | the `inputs.read` counter (§4.1.2) is 1 per command in the trace (A0.2's reader), and 2 for `diff ws ws` (one `InputSet` per side, §4.2.6) | 1 |
@@ -282,10 +282,11 @@ the binary cannot compute a residual. So:
   fed by `census_hook::mark`, `src/census_hook.rs:11-19`; one atomic load per mark in
   production). Step 0 adds one `census_hook::mark` at each bucket point of the table
   below, taken BEFORE that point's walk (so the walk's own allocations are never in
-  the total), and extends the probe's `model` mode (`q6`, `:1066`) to drive the
+  the total), and adds a probe mode, `census-probe retained <ws>`, that drives the
   cross-app analyze path (`build_cross_app_base`, the context build, `compose_snapshot`)
-  with `ALSEM_RETAINED_CENSUS=1`. One probe run prints both the bucket lines and the
-  live heap at every mark. The probe counts requested bytes, so its total does not
+  with `ALSEM_RETAINED_CENSUS=1`. It is its own mode, apart from `model` (`q6`, `:1066`),
+  so the marks never skew `model`'s phase peaks (code-review CR1). One `retained` run
+  prints both the bucket lines and the live heap at every mark. The probe counts requested bytes, so its total does not
   depend on the allocator.
 - `program.parsed_ir` and `program.graph` have no walker: their sizes are the probe's
   live-heap deltas at the existing marks `2.parse`, `3.dep_layer` and `4.assemble_graph`
