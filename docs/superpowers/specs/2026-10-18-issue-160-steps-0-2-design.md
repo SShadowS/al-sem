@@ -6,8 +6,9 @@ the architecture, every Decision, the invariants (I1–I11) and the delivery ord
 document holds the exact types, functions, call sites, tests and measurements for the
 first four steps. Where the two disagree, this document is wrong.
 
-Base: master `1e54624a`, worktree `U:/Git/al-sem-issue-160-a1`. Every `file:line` is in
-that tree and was read before it was cited. Section numbers are the ones the epic cites
+Base: master `1e54624a`, worktree `U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`: no
+`src/`, `tests/` or `crates/` change since `1e54624a`; the first attempt's worktree,
+`…-a1`, is gone). Every `file:line` is in that tree and was read before it was cited. Section numbers are the ones the epic cites
 (§4.1 counters, §4.3 step 1b, §4.4 step 2, §6 bands, §8 discrimination proofs).
 
 Words: **cell** = one owned artifact of a `View`, filled once by the driver, released
@@ -38,11 +39,13 @@ max − min over its parent-commit runs (epic I6).
    and ONE context — except `policy check`, whose RAW-facts build stays a second,
    command-local `DetectorArtifacts` outside the `View` until step 6 deletes
    `RAW_INHERITED_FACTS` (epic I5, Decision 50; §4.4.4). digest's duplicate context
-   (`src/engine/l5/digest_cli.rs:534-560` against `:1655-1660`) and prove's
-   (`src/engine/l5/prove.rs:838-859` against `:902`) are deleted.
+   (`src/engine/l5/digest_cli.rs:534-560` against `:1655-1660`), prove's
+   (`src/engine/l5/prove.rs:838-859` against `:902`) and events' (`src/engine/gate/events.rs:422-426`,
+   `:567-571` against `:406`) are deleted.
 
 Steps 0, 1, 1b, 2 are byte-neutral (epic I2): no golden target moves, no `--lib` test
-outcome moves, the CDO `aldump` histogram SHA is unchanged. The stderr and exit-code
+outcome moves except the tests §7 names (each deleted or rewritten together with the
+code it pins), the CDO `aldump` histogram SHA is unchanged. The stderr and exit-code
 changes are listed in §7, by step.
 
 ## 2. Non-goals
@@ -54,8 +57,8 @@ changes are listed in §7, by step.
 - No witness scope, no `ViewTree`: digest, prove and fingerprint keep composing today's
   snapshot (`src/engine/l5/snapshot.rs:1150-1156`), only later in the command (§4.4.4).
 - No persistent cache; `InputSet` is a value, not a key (epic §2).
-- No change to the LSP binary's build path beyond the `SnapshotBuilder` signature it
-  shares (§4.2.6).
+- No change to the LSP binary's build path: `SnapshotBuilder`'s struct and its
+  existing `build*` methods keep their shape (§4.2.6).
 - No new output. The numbers file is documentation, not a product surface.
 - The `pd_solve` retain-or-re-solve choice (G-1's design half), the `ViewTree` retention
   shape (G-2's design half), the 7a bound (G-3's design half), the arena's step (G-4) and
@@ -69,34 +72,34 @@ numbers file and compared under §6.
 
 | # | Claim | Evidence | Step |
 |---|---|---|---|
-| A0.1 | Every timer in §4.1.1 exists and is zero-cost off | `cargo test -p al-sem --lib cones_census`: with the census off, `start()` returns `None` (existing contract, `detector_context.rs:454-456`); CDO SARIF byte-identical census on vs off (§6.2) | 0 |
+| A0.1 | Every timer in §4.1.1 exists and is zero-cost off | `cargo test -p al-sem --lib cones_census`: with the census off, `start()` returns `None` (existing contract, `detector_context.rs:454-456`); every new counter goes through `add_gated()` or a local fold, and the `COMPOSE_REST` snapshot is gated on `enabled()` (§4.1.1); the use-level check: CDO `context.capability_cones` wall, census OFF, head median ≤ parent median + band (§6.2); CDO SARIF byte-identical census on vs off (§6.2) | 0 |
 | A0.2 | Every build counter in §4.1.2 reads from the trace | `tests/cli/cli_build_counters.rs`: per command and universe, the counter table of §4.1.3 exactly | 0 |
 | A0.3 | A duplicate build fails A0.2 | one discrimination per counter (§8.1) | 0 |
-| A0.4 | Both peaks are reported | the trace's last `peak.process_mb` and `peak.post_attach_mb` counters; the stderr mirror prints both | 0 |
-| A0.5 | The byte census covers §4.1.5's buckets and changes no output | CDO SARIF byte-identical census on vs off; the census prints a per-bucket line and a residual | 0 |
+| A0.4 | Both peaks are reported (Windows only: `read_rss()` returns `None` elsewhere, `perf_trace.rs:173-176`, so both counters are 0 there) | the trace's last `peak.process_mb` and `peak.post_attach_mb` counters; the stderr mirror prints both; `phase_peak_is_reported` is `#[cfg(windows)]` (CI runs on `ubuntu-latest`, `.github/workflows/ci.yml:22`; every measurement in §6 runs on the Windows dev machine) | 0 |
+| A0.5 | The byte census covers §4.1.5's buckets and changes no output | CDO SARIF byte-identical census on vs off; the census prints a per-bucket line tagged `exact`/`shallow`; one `census-probe model` run on CDO records the live heap at each bucket mark, and the numbers file states per mark live, Σ buckets and the residual, with Σ ≤ live at every mark (§4.1.5) | 0 |
 | A0.6 | The full-graph timings exist | `aldump --issue160-full-graph-timings <ws>` prints the four numbers of §4.1.6 | 0 |
 | A0.7 | Medians and bands are recorded per timer | the numbers file §4.1.7, one row per timer, ≥ 3 interleaved runs | 0 |
-| A1.1 | `InputSet` is read once | the `inputs.read` counter (§4.1.2) is 1 per command in the trace (A0.2's reader) | 1 |
+| A1.1 | `InputSet` is read once per workspace | the `inputs.read` counter (§4.1.2) is 1 per command in the trace (A0.2's reader), and 2 for `diff ws ws` (one `InputSet` per side, §4.2.6) | 1 |
 | A1.2 | No reader touches the disk after the build | one disk-edit-after-read test per input class (§4.2.3, §8.2), including a `.al` file ADDED after the read (`inputs::al_file_added_after_read`: today `select_program_files` walks again and fails closed on it, `workspace.rs:1644`, `:1657`) | 1 |
 | A1.3 | The second parse is gone | `workspace_diagnostics.rs` no longer calls `al_syntax::parse` (the index rows come from the build's `files_without_object`, §4.2.4); `inputs::objectless_file_removed_after_read` (§8.2) is the executable pin: the row survives the file's deletion, so it came from the build, not from a walk. The one corner whose bytes move is stated in §7 | 1 |
 | A1.4 | One writer, one failure rule | closed-pipe test: `analyze` exits 2 with `al-sem: write error: stdout: <OS message>`; `digest --out` into an unwritable path exits 1 with the `<path>` line (§4.2.5, §8.2) | 1 |
 | A1.5 | Byte-neutral | 8 golden targets + `cargo test -p al-sem --lib`; CDO histogram SHA unchanged | 1 |
 | A1.6 | `--update-baseline` keeps today's output | `baseline::update_baseline_applies_the_set_just_written`: stdout and exit code equal today's (every current finding dropped); a malformed old file is overwritten, never read (§4.2.3, §8.2) | 1 |
-| A1.7 | A failed `.al` walk still fails closed | `inputs::walk_error_fails_the_build`: the build `Err` text, `model_instance_id == None` and the diagnostics equal today's (§4.2.1, §8.2) | 1 |
+| A1.7 | A failed `.al` walk still fails closed, with today's whole error text | `inputs::walk_error_fails_the_build`, two cases (a link loop; an unreadable subfolder, Unix only, §8 recipe): the build `Err` text equals the FULL literal today's code prints on the same input (the OS text twice in the subfolder case), `model_instance_id == None`, and the diagnostics equal today's (§4.2.1, §8.2) | 1 |
 | A1b.1 | `alsem graph` output unchanged | `tests/cli-query-goldens/graph.test-selection-graph.jsonl` byte golden (`tests/cli/cli_graph_export.rs:702-716`) | 1b |
 | A1b.2 | The body is released at today's point | the `b3.ctx_drop` span is still where it is (`program_calls.rs:674-676`) and A1b.4's post-attach peak is flat; no unit test (`body.take()` makes `is_none()` true by construction, see §8.3) | 1b |
-| A1b.3 | The two edge sets reach the projection in today's order | `project::add_keeps_first_via_on_conf_tie` + `resolved::all_edges_is_edges_then_dependency_bodies` (§8.3); dropping `dependency_body_edges` or `site_facts` from the projection input → `graph_export_covers_dependencies` fails (`cli_graph_export.rs:597-650`) | 1b |
+| A1b.3 | The two edge sets reach the projection in today's order | `project::add_keeps_first_via_on_conf_tie` + `resolved::all_edges_is_edges_then_dependency_bodies` (§8.3); dropping `dependency_body_edges`, or only the DEPENDENCY `site_facts` (the merge `full.rs:2177` does today), from the projection input → `graph_export_covers_dependencies` fails (`cli_graph_export.rs:597-650`; extended if needed, §8.3) | 1b |
 | A1b.4 | No new peak | both peaks ≤ parent + band on CDO analyze and digest (§6.3) | 1b |
 | A1b.5 | `InputSet` bytes are in the census | the `inputs` bucket prints a number (5.09 MB expected on CDO) | 1b |
 | A2.1 | One solve per command; one context per command (policy: two, its RAW build is the stated second, §4.4.4) | A0.2's table at its §4.4.8 values | 2 |
 | A2.2 | Byte-neutral | 8 golden targets + lib; CDO detector baseline identical (`cdo-measure`) | 2 |
 | A2.3 | digest is faster | CDO digest wall saving ≥ 21 s − band(digest wall) against the parent (§6.3) | 2 |
-| A2.4 | No new co-residency | both peaks ≤ parent + band on CDO analyze and digest | 2 |
+| A2.4 | No new peak | both peaks ≤ parent + band on CDO analyze and digest (cross-app), and on `fingerprint` and `digest --single-app` (single-app: the view builds and owns the graph, so a missed `release(Graph)` shows only there, §4.4.4) | 2 |
 | A2.5 | Output never depends on fill state | `RunKey` carries the mask; the superset-mask parity test compares the whole `DetectorOutput` (§4.4.6) | 2 |
-| A2.6 | prove's `Some(root)` moves nothing | cli-b prove goldens unchanged; wrong root set → "entry missing" (§8.4) | 2 |
-| A2.7 | The failure classification keeps one build | `build.program` count on the no-id and build-failed rows is 1; the no-id Err text is pinned (§4.4.5) | 2 |
+| A2.6 | prove's `Some(root)` moves nothing | cli-b prove goldens unchanged; they are the pin (§8.4) | 2 |
+| A2.7 | The failure classification keeps one build | `build.program` count on the no-id and build-failed rows is 1; the no-id `Err` text and the build-failed row's `ProgramBuildFailed` line are pinned (§4.4.5, §8.4) | 2 |
 | A2.8 | The cell census runs at the first detector run | `det` and `l4` buckets print under the census flag | 2 |
-| A2.9 | No lazy fill anywhere in `View` | `session::no_lazy_fill_in_this_file` (`--lib`): `include_str!("session.rs")` contains neither `OnceLock` nor `Mutex` (the needles are spelled `concat!("Once", "Lock")` so the test's own text does not match); `every_detector_alone_declares_what_it_reads` stays green (`registry.rs:998-1016`). Not a `scripts/ci-steps` grep: the issue flow may not edit `scripts/` (CLAUDE.md:873) | 2 |
+| A2.9 | No lazy fill anywhere in `View` | `session::no_lazy_fill_in_this_file` (`--lib`): over `include_str!("session.rs")` with every line whose trimmed text starts with `//` removed (so a doc comment that names a type, such as rule 4's own wording, does not fail it), no line contains `OnceLock`, `OnceCell`, `LazyLock`, `Lazy<`, `Cell<`, `Mutex`, `RwLock`, `Atomic`, `thread_local` or `static mut` (the needles are spelled with `concat!`, e.g. `concat!("Once", "Lock")`, so the test's own text does not match); stated limit in §4.4.3 rule 4 (a type from another module); `every_detector_alone_declares_what_it_reads` stays green (`registry.rs:998-1016`). Not a `scripts/ci-steps` grep: the issue flow may not edit `scripts/` (CLAUDE.md:873) | 2 |
 | A2.10 | What a post-run projection reads off `det` is in the plan | `session::after_run_bits_must_be_in_the_union`: `prepare` on a `Plan { after_run: TRANSACTION_SPANS }` whose union mask lacks the bit panics, naming the bit (§4.4.3, §4.4.4, §8.4); digest/prove declare `TRANSACTION_SPANS` (the tx map), events `SUMMARIES` (the fanout's coverage read) | 2 |
 
 ## 4. Design
@@ -111,16 +114,36 @@ deleted for the wrong reason.
 #### 4.1.1 Timers
 
 All in `cones_census` (`detector_context.rs:344-559`), gated by `ALSEM_CONES_CENSUS=1`,
-read through the existing `start()`/`add_since()`/`add()` helpers. A renamed counter is
+read through the existing `start()`/`add_since()`/`add_gated()` helpers. A renamed counter is
 a new counter: the old name is deleted, never left reading zero (perf-probe law 2).
+
+**The gating rule for every new counter.** `add()` (`detector_context.rs:431-433`) is
+UNGATED: it always does a `fetch_add`. `add_gated()` (`:439-443`) exists because an
+ungated per-entry `add` once inflated compose from about 11.0 s to 12.8 s. So:
+
+- A count inside a per-entry or per-pick loop (`SGL_CONE_ENTRIES`, `SGL_OWN_ENTRIES`,
+  `SGL_OPEN_ENTRIES`, `BFS_PICKS`) is folded into a local `usize` in the loop, the way
+  today's `c_entries` is (`capability_cone.rs:1882-1885`), and charged ONCE per routine
+  with `add_gated()`. No atomic is touched per entry.
+- Every new per-routine or per-call charge (`BFS_PICKS`, `PD_SOLVE_CALLS`, the three
+  `SGL_*_ENTRIES`) uses `add_gated()`, never `add()`. Timers use `start()`/`add_since()`,
+  which are already gated (`:454-463`).
+- `COMPOSE_REST_NANOS`' entry snapshot (eight atomic loads and an `Instant`) and its
+  exit charge run only under `if cones_census::enabled()`. With the census off,
+  `compose_inherited_cones` does one `OnceLock` read for it and nothing else.
+
+A0.1 checks this at the USE, not only at the helper: the step-0 head's CDO
+`context.capability_cones` wall with the census OFF is within the parent's band
+(§6.2). A probe that slows production would skew every later bound that reads step 0's
+medians (steps 7a, 7b, 10, 11).
 
 | Timer / counter | Where it is taken | What it answers |
 |---|---|---|
 | `BFS_WALK_NANOS`, `BFS_FOLD_NANOS`, `BFS_PICKS` (replace `BFS_NANOS`) | `capability_cone.rs:2552-2561`: walk = `inherited_facts_by_bfs` (`:2553-2560`), fold = `emit_picks` (`:2561`); `BFS_PICKS` += `picks.len()` before the fold | G-3: how much of the 10.0–10.5 s is the walk 7a removes and how much is the per-pick fold only `fold_row` (7b) removes |
 | `SGL_SCAN_CONE_NANOS`, `SGL_SCAN_OWN_NANOS`, `SGL_SUBST_NANOS` (replace `SGL_SCAN_NANOS`); `SGL_CONE_ENTRIES`, `SGL_OWN_ENTRIES`, `SGL_OPEN_ENTRIES` (replace `SGL_CONE_ENTRIES`) | `capability_cone.rs:1776-1798` (`subst`: the frame-bound entries carried per edge), `:1812-1852` (the cone scan; count closed entries and open entries from `edge_subst` apart), `:1856-1873` (the own-entry loop) | the singleton cost per entry class: closed cone entries (7b's memo target), open (frame-bound) entries (stay on `substitute_entry`), own entries (G-1's population) |
 | `PD_SOLVE_NANOS`, `PD_SOLVE_CALLS` | around `super::pd_solve::solve(..)` at `capability_cone.rs:2447` | G-1: the solve's share of the untimed 4.0–4.8 s compose remainder; a second solve is a second call |
-| `PD_SOLVE_BYTES_ARENA`, `PD_SOLVE_BYTES_WORKING` (replace `PD_SOLVE_BYTES`) | `pd_solve.rs:465-500`: `solve_bytes` splits into `arena_bytes(arena)` (producers, states, links, edges, `by_routine`: what step 6 may retain) and `working_bytes(resolved, names, reps)` (the resolved own entries, the interned names, the reps: what step 6 decides to retain or re-solve) | G-1: the two budgets step 6 chooses between |
-| `COMPOSE_REST_NANOS` | `compose_inherited_cones`, charged PER CALL: at entry read the eight component atomics (`FACTCONE`, `COVERAGE`, `BFS_WALK`, `BFS_FOLD`, `SINGLETON`, `DERIVED`, `EMIT`, `PD_SOLVE`) into locals; at exit add `elapsed − Σ(component now − component at entry)`. The atomics accumulate over the process (digest composes three times, §4.1.3), so a whole-process subtraction would be meaningless; the per-call delta is not | what is still unexplained after the split (the report prints it; a negative value is a timer overlap bug) |
+| `PD_SOLVE_BYTES_ARENA`, `PD_SOLVE_BYTES_WORKING` (replace `PD_SOLVE_BYTES`) | `pd_solve.rs:465-500`: `solve_bytes` splits into `arena_bytes(arena)` (producers, states, links, edges, `by_routine`: what step 6 may retain) and `working_bytes(resolved, names, reps)` (the resolved own entries, the interned names, the reps: what step 6 decides to retain or re-solve). Today `PD_SOLVE_BYTES` has a SECOND charge site: `derive_pd_arena` adds each snapshot `PdArena`'s bytes to it, next to `PD_SNAPSHOT_BYTES` (`src/engine/l5/snapshot.rs:1602-1606`; the counter's doc says so, `detector_context.rs:411-415`). After the split that site charges `PD_SNAPSHOT_BYTES` alone, never `_ARENA` (that would count the retained arena twice) or `_WORKING`. So today's `solve_bytes=` value is `arena + working + snapshot_bytes`; the report prints all three, and the numbers file states that sum next to the old figure, so the epic's 525 MiB figure (epic §3) keeps its meaning | G-1: the two budgets step 6 chooses between |
+| `COMPOSE_REST_NANOS` (an `AtomicI64`, the one SIGNED census counter; the others stay unsigned, `detector_context.rs:348-424`) | `compose_inherited_cones`, charged PER CALL: at entry read the eight component atomics (`FACTCONE`, `COVERAGE`, `BFS_WALK`, `BFS_FOLD`, `SINGLETON`, `DERIVED`, `EMIT`, `PD_SOLVE`) into locals; at exit add `elapsed as i64 − Σ(component now − component at entry) as i64`, computed in `i64` (no saturating or wrapping `u64` arithmetic), and `report()` prints it signed. The atomics accumulate over the process (digest composes three times, §4.1.3), so a whole-process subtraction would be meaningless; the per-call delta is not | what is still unexplained after the split (the report prints it; a negative value is a timer overlap bug) |
 | spans `b3.adapter.join`, `b3.adapter.by_decl`, `b3.adapter.convert` | inside `adapter` (`program_calls.rs:922-970`): `join(..)` (`:929`; the span join J1), the `by_decl` map (`:933-943`; J2), the conversion loop (`:972` onward) | steps 10 and 11 read `join` and `by_decl` (epic Decisions 45, 46) |
 
 The census report (`detector_context.rs:465-558`) prints the new lines in place of the
@@ -144,17 +167,19 @@ inside `tarjan_scc`, which the db-effect solver also calls, `src/engine/l4/db_ef
 | `build.graph_scc` | the top-level `tarjan_scc` call sites: `capability_cone.rs:2783` (cone), `:3198` (snapshot fold), `:3477` (base), `:3824` (`project_r3a3`, aldump), `detector_context.rs:1303`, `src/engine/l4/effect_query_cli.rs:237`, `src/engine/l4/summary.rs:859` (`project_r3a2`, aldump), `src/engine/l4/combined_graph.rs:1128` (`project_r3a1_combined_graph`, aldump). Not: `db_effect_solver.rs:99` (inside the solve), d7's own private Tarjan (`src/engine/l5/detectors/d7.rs:144`, the call; `:94` is its `fn`), the two test helpers (`effect_query.rs:424`, `reverse_index.rs:946`) |
 | `build.pd_solve` | `pd_solve::solve` entry (`pd_solve.rs:253`) |
 | `build.detector_context` | `build_detector_context_with` entry (`detector_context.rs:899`) |
-
-After step 2 two sites move with the code they count: `build.detector_context` sits at
-`build_detector_artifacts`' entry (§4.4.2; the test-only shim calls it, so a test counts
-it too, which is what A0.2's reader wants), and `detector_context.rs:1303`'s
-`build.graph_scc` sits at the single-app Tarjan call inside `build_l4` (§4.4.1; `build_l4`
-is never called from inside another counted thing, so Decision 21 holds). The deleted
-sites (`effect_query_cli.rs:237`, the context's own graph) are deleted with their code.
-A2.1's table is the check.
 | `build.snapshot` | `compose_snapshot_from_base` entry (`src/engine/l5/snapshot.rs:1161`) |
 | `build.ordering_facts` | `compute_ordering_facts` entry (`src/engine/l5/ordering_facts.rs:218`) |
 | `inputs.read` (step 1) | `InputSet::read` entry (§4.2.2) |
+
+After step 2 two sites move with the code they count: `build.detector_context` sits at
+`build_detector_artifacts`' entry (§4.4.2; the shim calls it, so a test or `aldump`
+counts it too, which is what A0.2's reader wants), and `detector_context.rs:1303`'s
+`build.graph_scc` sits at the single-app Tarjan call inside `build_l4` (§4.4.1). `build_l4`
+is called from inside `build_detector_artifacts` (§4.4.2), but that nesting counts no
+counter twice: `build.detector_context` counts the det build and `build.graph_scc`
+counts the one top-level Tarjan, never the solver's inner one, so Decision 21 holds. The deleted
+sites (`effect_query_cli.rs:237`, the context's own graph) are deleted with their code.
+A2.1's table is the check.
 
 The reader is `tests/cli/cli_build_counters.rs`, built on the pattern of
 `tests/cli/cli_envelope_detector_set.rs:35-76` (spawn `CARGO_BIN_EXE_alsem` with
@@ -176,7 +201,7 @@ Per command and universe. `scc` counts only the sites of §4.1.2. `ctx` =
 | Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap | Where the duplicates are |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|
 | analyze, cross-app, default set | 1 | 3 | 1 | 1 | 3 | 1 | 1 | 0 | base builds 2 graphs (`capability_cone.rs:3470`, `:3512`) and the context a third (`detector_context.rs:940`); base SCC (`:3477`) and context SCC (`:1303`) are the same graph |
-| analyze, cross-app, `--detector d47-…` | 1 | 4 | 2 | 2 | 5 | 2 | 1 | 1 | plus the ordering cell's own snapshot (`digest.rs:4016-4019`) |
+| analyze, cross-app, `--detector d47-…` | 1 | 4 | 1 | 1 | 3 | 1 | 1 | 1 | d47 requires `ORDERING_FACTS` alone (`detectors/mod.rs:1575`) and the runner folds exactly that (`registry.rs:454-461`), so the context builds its graph (`detector_context.rs:940`) but no cone (`need_summaries`, `:914`), no v2 solve and no Tarjan (`:1296`). The cone, v2, two of the three SCCs (`capability_cone.rs:2783`, `:3198`) and `pd_solve` are the ordering cell's own snapshot (`digest.rs:4016-4019`); the third SCC is the base's (`:3477`) |
 | analyze `--single-app` | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 | none |
 | digest, cross-app | 1 | 5 | 3 | 4 | 7 | 3 | 2 | 1 | snapshot (`digest_cli.rs:1580`), tx map's context (`:1616` → `:534-560`), bundle (`:1627`), diagnostics' context (`:1655-1660`) |
 | digest `--single-app` | 1 | 4 | 3 | 4 | 7 | 3 | 2 | 1 | the same, with `build_db_effect_bundle` (`effect_query_cli.rs:226-261`) |
@@ -212,6 +237,11 @@ sampled:
   two counters: `peak.process_mb` (the OS peak at exit) and `peak.post_attach_mb` (the
   sampler's maximum; 0 when attach never ran). `ALSEM_TRACE_STDERR=1` prints both on one
   line at exit.
+- Windows only. `read_rss()` is `None` on every other platform (`perf_trace.rs:173-176`,
+  `#[cfg(not(windows))]`), so there both counters are emitted as 0. No Linux reader is
+  added: CI (`ubuntu-latest`, `.github/workflows/ci.yml:22`) asserts no peak, and every
+  §6 measurement runs on the Windows dev machine. `phase_peak_is_reported` is
+  `#[cfg(windows)]` (§8.1).
 - A sample interval of 10 ms misses spikes shorter than that. The band absorbs what it
   misses; the instrument is the same on both sides of every comparison (§6.1).
 - A second `mark_phase_start` in the same process (diff attaches once per side,
@@ -230,17 +260,62 @@ below, which cover the same two structures per field. The per-fact byte accounti
 (`cone_census.rs:86-190`) is kept and called by the new walk. One flag, one report;
 the old report's name is gone, never left printing nothing (§7, step 0).
 Accounting follows `cone_census.rs:17-63` and the byte-census skill: heap bytes by
-`len`, shared allocations once, allocator overhead excluded, every bucket prints its
-share and the residual is named. One `census.rs` module under `src/engine/` with one
-`fn bucket(name, bytes, allocs)` printer; each site walks its own structure.
+`len`, shared allocations once, allocator overhead excluded. One `census.rs` module
+under `src/engine/` with one `fn bucket(name, bytes, allocs, kind)` printer; each site
+walks its own structure.
+
+**Buckets are lower bounds; the total comes from the counting allocator.** `alsem`
+runs on mimalloc (`src/bin/alsem.rs:28`), and no in-process live-heap total exists, so
+the binary cannot compute a residual. So:
+- Each bucket line carries `kind=exact` (the walk reaches every heap allocation of the
+  structure: the source texts, the per-fact cone accounting `cone_census.rs:86-190`, the
+  `pd_solve` byte functions) or `kind=shallow` (top-level containers by `len ×
+  size_of`, plus the `String`/`Vec` heap one level down, and nothing deeper). No new
+  heap-size trait is written for the IR or graph types.
+- The ground-truth totals come from the tool the repo already has, `tools/census-probe`
+  (a counting `GlobalAlloc` over `System`, `tools/census-probe/src/main.rs:42`, `:232`,
+  fed by `census_hook::mark`, `src/census_hook.rs:11-19`; one atomic load per mark in
+  production). Step 0 adds one `census_hook::mark` at each bucket point of the table
+  below, taken BEFORE that point's walk (so the walk's own allocations are never in
+  the total), and extends the probe's `model` mode (`q6`, `:1066`) to drive the
+  cross-app analyze path (`build_cross_app_base`, the context build, `compose_snapshot`)
+  with `ALSEM_RETAINED_CENSUS=1`. One probe run prints both the bucket lines and the
+  live heap at every mark. The probe counts requested bytes, so its total does not
+  depend on the allocator.
+- `program.parsed_ir` and `program.graph` have no walker: their sizes are the probe's
+  live-heap deltas at the existing marks `2.parse`, `3.dep_layer` and `4.assemble_graph`
+  (`full.rs:1810`, `:1831`, `:1850`, inside `build_context_from_snapshot_cached`, which
+  the analyze build reaches through `fresh_program_from_snapshot_with`, `:2108`). The
+  command path has no mark between the snapshot and the parse: `1.snapshot` is set only
+  in `build_context_with` (`full.rs:1738`), not in `build_program_with_coverage_profiled`
+  (`:2136-2152`). So step 0 adds `census_hook::mark("1.snapshot")` there, right after the
+  `preflight.snapshot_build` block (`:2140-2148`) and before
+  `fresh_program_from_snapshot_with` (`:2149`). `program.parsed_ir` is then the growth
+  from `1.snapshot` to `2.parse`. The snapshot (its texts and the dependency ABI,
+  `AppUnit.abi`, `snapshot.rs:51-52`) is all allocated before `1.snapshot`, so it is not
+  in the delta and nothing is subtracted.
+- **Who owns the workspace texts.** The snapshot's workspace `SourceFile.text` and
+  `InputSet.al_files[].text` are the SAME `Arc<str>` from step 1 on (`embedded.rs:19`,
+  §4.2.3 row 1). At step 0 there is no `InputSet`, and `program.snapshot_texts` walks
+  every unit. From step 1 on, the `inputs` bucket owns the workspace texts and
+  `program.snapshot_texts` walks the DEPENDENCY units only, so Σ never counts the
+  ~5 MB twice. The numbers file says which rule each step's line used.
+- The numbers file, not the binary, computes per mark: probe live heap, Σ of the buckets
+  alive there, and `residual = live − Σ`. Σ ≤ live at every mark is the check that can
+  fail (a double count, or a bucket that counts capacity it does not own).
+- `tools/` is outside the protected paths and outside the repo workspace and CI
+  (`tools/census-probe/Cargo.toml`, own `[workspace]`). Step 1 changes three signatures
+  `q6` calls (`build_program_with_coverage`, `compute_gate_model_instance_id`,
+  `assemble_and_resolve_workspace_program`, `:1071`, `:1076`, `:1082`); step 1 updates
+  `q6` in the same commit.
 
 | Bucket | Walked where | What it holds |
 |---|---|---|
-| `program.snapshot_texts` | just before `b3.report_drop` (`program_calls.rs:670`) | every `SourceFile.text` of every app in `ctx.snapshot()` (`src/snapshot/snapshot.rs:34-69`) |
-| `program.parsed_ir` | same point | the workspace unit's and the dependency units' `ParsedFile.file` (`src/snapshot/parse.rs:17-29`) |
-| `program.graph` | same point | `ctx.graph()` (`full.rs:1538-1540`) |
+| `program.snapshot_texts` | just before `b3.report_drop` (`program_calls.rs:670`) | step 0: every `SourceFile.text` of every app in `ctx.snapshot()` (`src/snapshot/snapshot.rs:34-69`); from step 1: the dependency apps' texts only (the workspace texts are the `inputs` bucket's, see above) |
+| `program.parsed_ir` | no walker: the probe's live-heap growth from the new mark `1.snapshot` to mark `2.parse` | the workspace unit's and the dependency units' `ParsedFile.file` (`src/snapshot/parse.rs:17-29`) |
+| `program.graph` | no walker: the probe's live-heap growth from mark `3.dep_layer` to mark `4.assemble_graph` | `ctx.graph()` (`full.rs:1538-1540`) |
 | `program.report` | same point | `report.edges`, `site_facts`, `parenless_calls`, the histograms |
-| `inputs` (step 1) | same point | the `InputSet` (§4.2.1); `al_files[].text` counted once even though the snapshot shares the `Arc` |
+| `inputs` (step 1) | same point | the `InputSet` (§4.2.1), including every `al_files[].text`: this bucket owns the workspace texts the snapshot shares by `Arc` |
 | `model` | end of `attach_program_calls_with` (`:689`) | `Model` (`src/program/model/workspace.rs:1890-1914`): rows, `calls`, `events` |
 | `base` | end of `build_cross_app_base` (`capability_cone.rs:3565-3585`) | per field of `R3a5CrossAppBase` (`:3329-3370`): `graph`, `direct_full`, `leaf_summaries`, `injected_typed_edges`, … |
 | `context.<field>` | end of `build_detector_context_with` (`detector_context.rs:1564-1616`), replacing `emit_full_census` (`:1161`) | one line per field of `DetectorContext` |
@@ -259,14 +334,39 @@ needs today's cost of the snapshot over the FULL graph, measured before any step
 exists. `aldump --issue160-full-graph-timings <ws>`:
 
 1. builds the cross-app base;
-2. runs `compose_cone_over_graph(&base.graph, &base.nodes, &base.direct_full,
-   &base.direct_coverage, base.ws_routines(), ConeOutput::RawOnly)` — the base's graph
-   already carries the injected dependency edges (`:3513-3515`), so this is the cone the
-   context walks, with raw output for every routine;
-3. assembles an `R3a3SourceBase` from those parts and runs `compose_snapshot_from_base`;
-4. prints: the cone's wall, `PD_SOLVE_NANOS` (G-1: the solve is inside the cone's wall,
-   and is printed on its own), the snapshot derivation's wall, and the raw population
-   (inherited facts summed, bytes by the census).
+2. builds the snapshot's base with ONE thing changed, the graph. Step 0 splits
+   `build_r3a3_source_only_base` (`capability_cone.rs:4015-4101`) into
+   `build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) ->
+   R3a3SourceBase`, which is today's body with the graph taken as a parameter (calls and
+   event graph still cloned from `resolved`, `:4019-4020`; the fold from `:4037` on),
+   and the old function, which builds its graph (`:4021`) and calls it, so every
+   existing caller and golden sees the same bytes. The aldump mode calls
+   `build_r3a3_source_only_base_over(&base.resolved, base.graph.clone())`: at step 0
+   `R3a5CrossAppBase.graph` is a plain `CombinedGraph` (`capability_cone.rs:3335`).
+   Step 2 makes it `Arc<CombinedGraph>` (§4.4.3), and the same commit changes this one
+   call to `(*base.graph).clone()`. So:
+   - **graph**: `base.graph`, the cut calls plus the injected dependency edges
+     (`:3470`, `:3513-3515`): the graph the context's cone walks, which is the relation
+     step 6 moves the snapshot onto (`Transfer::Cone`);
+   - **calls** (`R3a3SourceBase.calls`, the callsite ledger): `(*base.resolved.calls).clone()`,
+     the CUT set (`:3456-3467`, `:3564`), which is exactly what today's cross-app snapshot
+     reads, since it composes from `base.resolved`. The full set before the cut is not
+     in the base, and it is not needed: the injected edges are how the dependency
+     callers reach the graph;
+   - **direct facts and coverage**: computed by the snapshot's own code over that graph
+     and those calls: `direct_facts_for_routine` plus the uncertainty fold
+     (`compute_uncertainty_coverage_reasons`, `:4036-4055`). NOT `base.direct_coverage`,
+     which is unfolded (`:3540-3548`). So the snapshot's coverage rule is today's, only
+     the graph moves;
+   - **cone**: the `compose_cone_over_graph(.., ConeOutput::RawOnly)` call inside it
+     (`:4082`), now over `base.graph`;
+3. runs `compose_snapshot_from_base` on that base;
+4. prints: the cone's wall (the `r3a3.compose_cone` span), `PD_SOLVE_NANOS` (G-1: the
+   solve is inside the cone's wall, and is printed on its own), the snapshot
+   derivation's wall, and the raw population (inherited facts summed, bytes by the
+   census). The same four numbers over today's cut graph come from the same mode run
+   through the unsplit `build_r3a3_source_only_base(&base.resolved)`, so the numbers file
+   puts cut and full side by side from one binary.
 
 This is a measurement-only path: it ships behind the aldump flag, is not called by any
 command, and is deleted when step 6 lands.
@@ -287,7 +387,14 @@ sums two, and the difference is the deleted context's cone). The counters are ne
 reset (epic §5.9 rule 4, as amended: a reset would make the step 0 and step 2 lines
 measure different things). Both peaks per command;
 the census buckets; the §4.1.6 numbers; the existing ordering counters
-(`ordering.roots_all`, `ordering.roots_kept`, `digest.rs:4060-4062`) on a d47 run.
+(`ordering.roots_all`, `ordering.roots_kept`, `digest.rs:4060-4062`) on a d47 run; and
+the SCC distribution, read from the trace's existing `scc_stats` instant event
+(`detector_context.rs:1314-1355`: largest SCC, recursive SCC count and members, the
+largest SCC's intra-edge anatomy) on CDO analyze, cross-app. The epic's 7a row uses
+"step 0's SCC distribution" as its stop rule (epic §9), so it is recorded here. After
+step 2 the event moves into `build_l4` and fires on BOTH arms: on the SCC it computes
+(single-app) and on the base's `Arc` it is passed (cross-app), so the step-2 numbers
+file records the same event.
 Each later step's numbers file has the same layout, so a diff of two files is the
 comparison.
 
@@ -319,8 +426,14 @@ pub struct InputSet {
     pub coverage_yaml: Option<Vec<u8>>,
     /// The policy file the command asked for (`--policy`, or the auto-detected
     /// `al-sem.policy.yaml` / `.yml`, `src/engine/gate/policy/pipeline.rs:72`);
-    /// `None` when the command takes none. Read here, VALIDATED where it is today.
-    pub policy_file: Option<FileInput>,
+    /// `None` when the command takes none, under `--no-policy`, or when auto-detect
+    /// finds no file. Read here, VALIDATED where it is today. The rules are
+    /// `resolve_policy_check`'s (`pipeline.rs:47-80`), unchanged: `--policy p` reads
+    /// `absolutize(p)` (`:56-57`); auto-detect takes the FIRST of
+    /// `al-sem.policy.yaml`, `.yml` whose `workspace.join(name).exists()` and reads
+    /// `absolutize` of it (`:72-75`). An unreadable `.yaml` is stored as `Err`; it
+    /// does not fall through to `.yml`. `FileInput.path` is that ABSOLUTIZED path.
+    pub policy_file: Option<PolicyInput>,
     /// `--baseline <path>` (analyze): `None` = no flag; `Some(Err(NotFound))` is
     /// the "no baseline yet" case `load_baseline` treats as empty
     /// (`src/engine/gate/baseline.rs:40-43`).
@@ -336,13 +449,25 @@ pub struct InputSet {
     /// is work analyze never did; `fingerprint`, `digest`, `prove`, `diff` did).
     pub snapshot_inputs: Option<Vec<SnapshotInput>>,
     /// The `.al` walk itself (`discover_al_files`, `source_text.rs:66-103`):
-    /// `Err(os message)` on an unreadable folder or a link loop (`:63-65`, `:85`).
+    /// `Err` on an unreadable folder or a link loop (`:63-65`, `:85`).
     /// Then `al_files` is EMPTY and every reader fails closed as today: the build
-    /// `Err`s with `walking source <root>: <os>` (`provider.rs:34-35`),
+    /// `Err`s with `walking source <root>: <chain>` (`provider.rs:34-35`),
     /// `model_instance_id` is `None` (`model_instance_id.rs:83`, `.ok()?`), the
     /// diagnostics return the provider rows alone (`workspace_diagnostics.rs:93-95`).
     /// A partial list must never reach the build as if it were the whole app.
-    pub al_walk: Result<(), String>,
+    ///
+    /// The slot keeps the `io::Error` itself, not its text. `:85` turns the walkdir
+    /// error into a custom `io::Error` (walkdir-2.5.0 `error.rs:253-261`), whose
+    /// `source()` is the inner OS error for an I/O failure (`:212-217`; `None` for
+    /// a loop, `:215`), and `full.rs:2147` prints the whole chain with `{e:#}`. So
+    /// an unreadable subfolder prints today `… walking source R: IO error for
+    /// operation on P: <os>: <os>` (the OS text twice). A `String` from
+    /// `e.to_string()` would lose the last link. The `Arc` is there because the
+    /// set is shared (`Arc<InputSet>`) and `anyhow` needs an owned error: the build
+    /// does `Err(anyhow::Error::new(Arc::clone(e))).context(..)`, and std's
+    /// `impl Error for Arc<T>` forwards `Display` and `source()`, so the chain is
+    /// today's, link for link.
+    pub al_walk: Result<(), Arc<std::io::Error>>,
     /// Every `.al` file of the `NestedApps::Walk` list, sorted by `rel_posix`.
     pub al_files: Vec<WsFile>,
     /// `driver_version()` read once (`src/engine/gate/version.rs:37-39`).
@@ -350,6 +475,8 @@ pub struct InputSet {
     /// `compute_gate_model_instance_id`'s value (`src/engine/gate/model_instance_id.rs:75-96`),
     /// computed from the fields above with the same algorithm; `None` = fail-closed.
     pub model_instance_id: Option<String>,
+    /// `InputNeeds::build_only` as asked (see there).
+    pub build_only: bool,
 }
 pub struct FileInput { pub path: PathBuf, pub bytes: Result<Vec<u8>, std::io::Error> }
 impl FileInput {
@@ -357,12 +484,16 @@ impl FileInput {
     /// with the text `stream did not contain valid UTF-8` — the error
     /// `std::fs::read_to_string` returns, byte for byte (std's `INVALID_UTF8`
     /// const). Every reader that used `read_to_string` today (`app.json`,
-    /// `snapshot.rs:194`; the baseline, `baseline.rs:38`) reads through this, so
-    /// `read <path>: stream did not contain valid UTF-8` and `cannot read baseline
-    /// '<path>': stream did not contain valid UTF-8` keep their text and stay READ
+    /// `snapshot.rs:194`; the baseline, `baseline.rs:38`; the policy file,
+    /// `load_policy_from_file`, `src/engine/gate/policy/policy_loader.rs:323-331`)
+    /// reads through this, so `read <path>: stream did not contain valid UTF-8`,
+    /// `cannot read baseline '<path>': stream did not contain valid UTF-8` and
+    /// `failed to read <absolutized path>: <e>` keep their text and stay READ
     /// errors, never parse errors. The hash rows (`derive_inputs`) read `bytes`.
     pub fn text(&self) -> Result<&str, std::io::Error>;
 }
+pub enum PolicyOrigin { Explicit, Auto }   // the `explicit:` / `auto:` source label (`pipeline.rs:61`, `:79`)
+pub struct PolicyInput { pub origin: PolicyOrigin, pub file: FileInput }
 pub struct ClosureEntries { pub files: Vec<DiscoveredAppFile>, pub unreadable: Vec<(PathBuf, std::io::Error)> }
 pub struct WsFile {
     pub rel_posix: String, pub abs_path: PathBuf,
@@ -372,10 +503,24 @@ pub struct WsFile {
     /// `Err(os message)`: the slot stays so the diagnostics can warn from it.
     pub text: Result<Arc<str>, String>,
 }
-pub struct InputNeeds { pub fingerprint_rows: bool, pub policy: PolicyRequest, pub baseline: Option<PathBuf> }
+pub struct InputNeeds {
+    /// Only what the snapshot build itself reads today: `app.json`, the `.al` walk and
+    /// texts, the closure. Set by `SnapshotBuilder::build*` (the LSP, `aldump`, tests,
+    /// §4.2.6) and by no command. `read` then skips the `app.json` walk, the per-folder
+    /// `nested_app` checks (every `nested_app` is `false`), the model-instance id
+    /// (`None`), `roots.config.json`, the coverage yaml, policy, baseline and hash rows;
+    /// those slots hold their empty values. `InputSet.build_only` records it, and
+    /// `app_scoped_files()`, `roots_config_loaded()`, `compute_workspace_diagnostics`
+    /// and `select_program_files` assert `!build_only` (release builds too), so a
+    /// command can never read an empty slot as an answer.
+    pub build_only: bool,
+    pub fingerprint_rows: bool, pub policy: PolicyRequest, pub baseline: Option<PathBuf>,
+}
+impl Default for InputNeeds { /* build_only: false, fingerprint_rows: false, PolicyRequest::None, no baseline */ }
+impl InputNeeds { pub fn build_only() -> InputNeeds; } // `build_only: true`, the rest default
 pub enum PolicyRequest { None, AutoDetect, Path(PathBuf), Disabled }
 impl InputSet {
-    pub fn read(workspace: &Path, needs: &InputNeeds) -> InputSet;   // the ONE disk reader; charges counter `inputs.read` (§4.1.2)
+    pub fn read(workspace: &Path, needs: &InputNeeds) -> Arc<InputSet>; // the ONE disk reader; charges counter `inputs.read` (§4.1.2). Returns the `Arc` every holder shares (`SnapshotBuilder`'s build, `ProgramMeta`): commands hold the `Arc` and pass `&Arc<InputSet>`, never a bare `&InputSet` (an `Arc` cannot be recovered from one without cloning the set)
     pub fn file(&self, rel_posix: &str) -> Option<&WsFile>;          // index built in `read`
     pub fn app_scoped_files(&self) -> impl Iterator<Item = &WsFile>; // `!nested_app`: today's `NestedApps::Skip` list
     pub fn app_id(&self) -> Option<&str>;                            // `app_json_value` `Some(Ok)` with a non-empty string `id`, verbatim
@@ -388,7 +533,8 @@ The build decides what a missing or unreadable input means, exactly as today.
 
 #### 4.2.2 Reading
 
-`InputSet::read` does, in this order: `app.json` (one read), the `app.json` walk, the
+`InputSet::read` does, in this order (a `build_only` read skips the steps §4.2.1 names):
+`app.json` (one read), the `app.json` walk, the
 `.al` walk with `NestedApps::Walk` (one walk; `nested_app` is set per file by checking
 each ancestor directory below the root with `dir_has_app_json`, cached per directory,
 `source_text.rs:106-113`), one `read_al_source` per file (`:122-124`; the same lossy
@@ -415,18 +561,18 @@ build itself makes of a workspace file. Each becomes a read of `&InputSet`.
 
 | Today | File:line | After |
 |---|---|---|
-| `SnapshotBuilder::build_inner` reads and parses `app.json`; `WorkspaceProvider` walks and reads every `.al` | `src/snapshot/snapshot.rs:193-197`, `:236-239`; `src/snapshot/provider.rs:34-56` | `SnapshotBuilder { inputs: Arc<InputSet>, local_providers }`; `app_json.text()` `Err` (unreadable, or not UTF-8) fails with `read <path>: <io>`, `app_json_value` `Some(Err)` with `parse <path>: <serde>` (today's two texts, with today's split: invalid UTF-8 is a read error, `FileInput::text`); `al_walk` `Err` fails with `workspace source provider: walking source <root>: <os>`; the workspace `SourceRoot.files` are built from `al_files` with the SAME `Arc<str>` (no copy); a `WsFile.text` `Err` fails the build with today's message (`workspace source provider: reading source <abs>: <os>`), so an unreadable file still fails the program build |
+| `SnapshotBuilder::build_inner` reads and parses `app.json`; `WorkspaceProvider` walks and reads every `.al` | `src/snapshot/snapshot.rs:193-197`, `:236-239`; `src/snapshot/provider.rs:34-56` | `build_inner` takes `inputs: &Arc<InputSet>` (the struct is unchanged, §4.2.6); `app_json.text()` `Err` (unreadable, or not UTF-8) fails with `read <path>: <io>`, `app_json_value` `Some(Err)` with `parse <path>: <serde>` (today's two texts, with today's split: invalid UTF-8 is a read error, `FileInput::text`); `al_walk` `Err` fails with `workspace source provider: walking source <root>: <chain>`, the chain built from the stored `io::Error` as §4.2.1 says, so `{e:#}` prints today's text link for link; the workspace `SourceRoot.files` are built from `al_files` with the SAME `Arc<str>` (no copy), keeping `walk_al_source`'s rules exactly (`provider.rs:33-58`): every `al_files` entry in `rel_posix` order, nested ones included (the `NestedApps::Walk` list); NO `.al` file gives `Ok(None)`, so the unit's `source` is `None` and its tier `TrustTier::SymbolOnly` (`snapshot.rs:236-244`), never an empty `Some(SourceRoot)`; `content_hash` is blake3 over the texts in that order (`provider.rs:48-53`). The new function replaces `walk_al_source` for the workspace provider only; a `WsFile.text` `Err` fails the build with today's message (`workspace source provider: reading source <abs>: <os>`), so an unreadable file still fails the program build |
 | `compute_gate_model_instance_id(ws)` walks and reads | `model_instance_id.rs:75-96`; every command's first call | `inputs.model_instance_id`: `None` when `app_id()` is `None` or `al_walk` is `Err` (`:76`, `:83`) |
 | `finish_resolved` reads `roots.config.json` and `app.json` | `src/program/model/workspace.rs:1767` (→ `root_classification.rs:450-463`), `:1775` (→ `:1789-1800`) | `compute_root_classifications(&ws, inputs.roots_config.as_ref())` validates from the bytes; `primary_app` from `inputs.app_json` |
 | `compute_workspace_diagnostics(ws)` reads `app.json`, counts `app.json` files, walks, reads and PARSES every `.al` | `workspace_diagnostics.rs:44-47`, `:93-106`, `:119-129` | `compute_workspace_diagnostics(inputs, files_without_object: Option<&[String]>)`: the provider rows from `app_json_paths` / `app_id()` (readable = `app_json_value` is `Some(Ok)`, `:145-151`) / each `WsFile.text` `Err` (same texts, same order); `al_walk` `Err` returns after the provider rows (`:93-95`); the index rows from the bit (§4.2.4) |
-| `project_coverage_disk(ws)` walks with `NestedApps::Skip` | `src/program/model/coverage.rs:298-323`; `run.rs:432` | `project_coverage_inputs(inputs)`: `app_scoped_files()` in the same sorted order |
-| `select_program_files(ws, ctx)` reads the root `app.json` id and walks with `NestedApps::Skip` DURING model assembly, after the program build; a `.al` file added between the build's walk and this one is `ProgramFiles::Missing` and the model fails closed (`"program parse lacks"`) | `src/program/model/workspace.rs:1636-1661` (`:1643` `read_root_app_guid`, `:1644` `discover_al_files_app_scoped`, `:1657` `Missing`); called at `:1671` from `assemble_l3_workspace_from_program`, which `assemble_and_resolve_workspace_from_program` reaches | `select_program_files(inputs, ctx)`: `inputs.app_id()` and `inputs.app_scoped_files()`. The build parsed exactly that list (same `InputSet`), so `Missing` can no longer come from a disk change; the arm stays as the fail-closed guard against a parse that dropped a file. `inputs::al_file_added_after_read` (§8.2) pins it |
+| `project_coverage_disk(ws)` walks with `NestedApps::Skip` | `src/program/model/coverage.rs:298-323`; `run.rs:432` | `project_coverage_inputs(inputs)`: `app_scoped_files()` in the same sorted order. The source-grep guard `analyze_builds_through_the_dumped_functions` (`src/engine/switch_dump.rs:355-377`) bans `project_coverage_disk` in `run_analyze_with_exit`; after the rename that needle matches nothing, so the banned list gains `project_coverage_inputs` in the same commit (the old needle is replaced, never left guarding a deleted name) |
+| `select_program_files(ws, ctx)` reads the root `app.json` id and walks with `NestedApps::Skip` DURING model assembly, after the program build; a `.al` file added between the build's walk and this one is `ProgramFiles::Missing` and the model fails closed (`"program parse lacks"`) | `src/program/model/workspace.rs:1636-1661` (`:1643` `read_root_app_guid`, `:1644` `discover_al_files_app_scoped`, `:1657` `Missing`); called at `:1671` from `assemble_l3_workspace_from_program`, which `assemble_and_resolve_workspace_from_program` reaches | `select_program_files(inputs, ctx)`: `inputs.app_id()` and `inputs.app_scoped_files()`. The build parsed exactly that list (same `InputSet`), so `Missing` can no longer come from a disk change; the arm stays as the fail-closed guard against a parse that dropped a file. `inputs::al_file_added_after_read` (§8.2) pins it. The `&InputSet` reaches it by replacing the `workspace: &Path` parameter along the whole chain: `assemble_l3_workspace_from_program` (`workspace.rs:1663`), `finish_resolved` (it reads roots config and `app.json`, row above), `assemble_and_resolve_workspace_from_program` (`:1431`) and `assemble_and_resolve_cross_app_from_program` (`:1457`) take `inputs: &InputSet` (the path is `inputs.workspace`); the names stay, so `analysis_model_uses_the_program_parse`'s needle (`switch_dump.rs:437-451`) still matches. Their test callers (`workspace.rs:2840`, `:2853`, `:2900`, `:2920`; `program_calls.rs:1890`; `switch_dump.rs:424`, §4.2.6) gain one `InputSet::read` line each |
 | `build_analysis_model`'s single-app arm walks with `NestedApps::Skip` to tell `ProgramBuildFailed` from `AssemblyFailed` | `run.rs:312-313` | `inputs.app_scoped_files().next().is_some()`: the same rule, no walk. (The cross-app arm's rerun of this walk goes with the rerun, §4.4.5) |
 | `build_suppression_map(ws_path, unit_ids)` reads each `.al` again | `src/engine/gate/inline_suppression.rs:197-209` (→ `:37-38`); `run.rs:615` | parses suppressions from `inputs.file(rel).text`; a slot with `Err` yields no suppressions (today: a read error yields none) |
 | `read_workspace_apps(ws)` reads `app.json` for pr-summary | `run.rs:122-157`; `:648` | from `inputs.app_json` with the same defaults |
 | `derive_inputs(ws)` hashes `app.json`, every closure `.app`, `roots.config.json`, the coverage yaml | `snapshot_full.rs:815-887`; `:63`, `:74` | `inputs.snapshot_inputs.as_ref().expect("fingerprint rows were not requested")`: the command declares the need (`fingerprint`, `digest`, `prove`, `diff`). The `app-json` row hashes `app_json.bytes` whenever they are `Ok`, parse or no parse (`:819-827` hashes the file, never the JSON) |
 | `roots_config_was_loaded(ws)` re-reads and validates | `root_classification.rs:443-445`; `fingerprint_cli.rs:359`, `snapshot_full.rs:858` | `inputs.roots_config_loaded()` |
-| `resolve_policy_check(ws, path, no_policy)` reads the policy file | `pipeline.rs:47-80`; `:230` | takes `inputs.policy_file`; validation stays at `:230`, after the `--strict` check (`:219-226`), at step 1 AND at step 2 (the RAW build that needs the policy's presence is built after the run, where `:261` builds it today, §4.4.4), so no precedence changes. The reporting-order move is Decision 7, step 12 |
+| `resolve_policy_check(ws, path, no_policy)` reads the policy file | `pipeline.rs:47-80`; `:230` | takes `inputs.policy_file` (`PolicyInput`: the absolutized path, the origin for the `explicit:`/`auto:` label, the exists-first rule already applied by `read`, §4.2.1); check's two `load_policy_from_file` calls (`:58`, `:76`) become `load_policy_from_input(&FileInput)`, which reads `text()` and keeps the `failed to read <path>: <e>` text (`policy_loader.rs:323-331`); `load_policy_from_file` stays for `policy explain` (`pipeline.rs:341-369`), which runs no semantic build and is not rewired; validation stays at `:230`, after the `--strict` check (`:219-226`), at step 1 AND at step 2 (the RAW build that needs the policy's presence is built after the run, where `:261` builds it today, §4.4.4), so no precedence changes. The reporting-order move is Decision 7, step 12 |
 | `load_baseline(path)` reads after the run | `baseline.rs:37-60`; `run.rs:598` | without `--update-baseline`: `load_baseline_bytes(&inputs.baseline)` reads `FileInput::text()`, so a non-UTF-8 file is still `cannot read baseline '<path>': <io>` (`:44`), not `is not valid JSON` (`:47`); the NotFound → empty rule kept; validation stays at `:598` (a malformed baseline is still "analysis failure", exit 2). With `--update-baseline`: the set applied is the set `save_baseline` just wrote (`:584-591`, the current fingerprints), so every current finding is dropped, as today; `inputs.baseline` is NOT read or validated (today the old file is overwritten before the read, so a malformed old file never errors). A1.6 pins stdout and the exit code |
 | `driver_version()` reads the env per call | `version.rs:37-39`; each `run_*_cmd` in `alsem.rs`; `impact_graph/mod.rs:237` | `inputs.driver_version` |
 | `empty_output_result` reads workspace diagnostics from disk | `run.rs:787` | from `inputs` (§4.2.4) |
@@ -447,12 +593,34 @@ workspace files parsed to zero objects. Today that is a second full parse
   (`rel_posix`, sorted): computed in `reduce_fresh_coverage` (`:2285`) from
   `ctx.parsed()` (`:1545-1547`), the workspace unit. This is the bit the epic calls
   `has_object`; it lives in `FreshCoverage` from step 1 on, and `ProgramMeta` carries
-  `FreshCoverage` from step 1b on.
+  `FreshCoverage` from step 1b on. The new field breaks the `FreshCoverage` struct
+  literals that name every field (`grep "FreshCoverage {"`): the builder
+  (`full.rs:2315`, which sets it) and two test literals in
+  `src/engine/gate/preflight.rs`, `clean()` (`:133`) and the one in
+  `all_signals_retained_in_fixed_order` (`:210`). Both tests gain
+  `files_without_object: vec![]`, assertions unchanged. The other six literals there
+  end in `..clean()` and need no edit.
 - `Model` (`workspace.rs:1890-1914`) gains `workspace_diagnostics: Vec<Diagnostic>`,
-  built in `attach_program_calls_with` (`program_calls.rs:677-685`) from
-  `ctx.snapshot().inputs` and `coverage.files_without_object`, next to
-  `dependency_diagnostics` (the #91 precedent). `analyzer_diagnostics_of_run`
-  (`run.rs:1085-1117`) reads it as source (1) and loses its `ws_path` parameter.
+  built in `attach_program_calls_with` (`program_calls.rs:677-685`) from an
+  `inputs: &InputSet` PARAMETER and `coverage.files_without_object`, next to
+  `dependency_diagnostics` (the #91 precedent). The InputSet is a parameter, NOT a
+  field of `AppSetSnapshot`: that struct (`src/snapshot/snapshot.rs:61-68`: `apps`,
+  `workspace_app`, `world`) derives `Clone, Debug` and is the LSP's retained snapshot
+  (`src/lsp/snapshot.rs`), which would then hold an InputSet that goes stale across
+  incremental updates (§2, §5). So `attach_program_calls` (`program_calls.rs:641-648`)
+  and `attach_program_calls_with` (`:652-658`) each gain `inputs: &InputSet`. Their
+  callers are `run.rs:357` (single-app arm), `program_calls.rs:727`
+  (`assemble_and_resolve_workspace_program`) and the cross-app call at `:898`; each
+  already holds the command's `&Arc<InputSet>` from step 1 (§4.2.6). No `tests/` file
+  calls either (`grep attach_program_calls\(` over `tests/`: none). From step 1b the
+  value passed is `&program.meta.inputs`. `analyzer_diagnostics_of_run`
+  (`run.rs:1085-1117`) reads it as source (1) and loses its `ws_path` parameter. The
+  source-grep guard `run_analyze_with_exit_uses_the_shared_aggregation`
+  (`run.rs:1175-1210`) bans `compute_workspace_diagnostics(` inside
+  `run_analyze_with_exit`. After this change an inline copy of source (1) would read the
+  field, and that needle would not match it. So the same commit adds the needle
+  `.workspace_diagnostics` to its banned list (the replace-the-needle rule of the
+  `project_coverage_disk` row, §4.2.3). The old needle stays: the function still exists.
 - `empty_output_result` (`run.rs:776-898`) calls `compute_workspace_diagnostics(inputs,
   fresh.as_ref().ok().map(|f| f.files_without_object.as_slice()))`. With `fresh` `Err`
   the build parsed nothing and the function emits NO index rows: there is no
@@ -474,14 +642,37 @@ workspace files parsed to zero objects. Today that is a second full parse
   and counts one `app.json`. With no `.al` file at the root and an unreadable file
   inside the link, today prints `No object declaration found in <rel>` for the
   link's readable objectless files; after step 1 it prints the provider rows alone
-  (the `Could not read` warning included). That is the whole byte change: a
+  (the `Could not read` warning included). That is the whole `alsem` byte change: a
   symlinked nested app, an unreadable file inside it, and no root `.al` file, in
   either universe (cross-app reruns the single-app build today, `run.rs:387`). No
   fixture has the shape and no golden carries it.
+- The third caller is `aldump --switch-dump` (`src/engine/switch_dump.rs:47`, the
+  `diagnostics.workspace` rows), which calls the function with no build gating today.
+  After step 1 `dump_lines` reads one `InputSet`, runs the program build it already
+  runs (`:51`, `build_program_with_coverage`) FIRST, and passes that build's
+  `files_without_object` (`None` when it fails). On a failed build (an unreadable
+  `.al` is enough, no symlink needed) the dump loses its `No object declaration
+  found in <rel>` rows for the readable objectless files. No golden or test reads the
+  dump (`grep switch_dump\|switch-dump` over `tests/`: none); stated in §7 as an
+  `aldump` output change.
 
-The test `analyzer_diagnostics_of_run_keeps_every_source_in_order` (`run.rs:1129`)
-constructs its `Model` by hand; it sets `workspace_diagnostics` literally (a hand-stated
-precondition, CLAUDE.md).
+The new `Model` field breaks every `Model { .. }` struct literal (`grep
+"dependency_diagnostics:"` outside the builder at `program_calls.rs:682`, cross-checked
+with `grep "Model {"`): 12 literals in 8 files, one of them production. (The review that
+found this counted 14 in 10; the grep lists the 12 below.)
+- Production: `empty_output_result`'s `empty_resolved` (`run.rs:863`) sets
+  `workspace_diagnostics: vec![]`. Its rows already come from
+  `compute_workspace_diagnostics` in the same function (§4.2.4 bullet above); that empty
+  model feeds only `format_html` (`run.rs:867-872`), as its `dependency_diagnostics:
+  vec![]` does today. No output moves.
+- Tests, each `workspace_diagnostics: vec![]` (or `Vec::new()`), assertions unchanged:
+  `format_html.rs:1218`, `:1275`; `d1.rs:3194`, `:4277`; `d17.rs:526`; `d35.rs:289`;
+  `d50.rs:811`; `detector_context.rs:1711` (deleted at step 2 with its test, §4.4.2),
+  `:1752`; `registry.rs:1098`.
+- `analyzer_diagnostics_of_run_keeps_every_source_in_order` (`run.rs:1129`, literal at
+  `:1149`) sets `workspace_diagnostics` to a hand-stated row (a hand-stated
+  precondition, CLAUDE.md), since it is source (1) of that function.
+§7 step 1 lists them.
 
 #### 4.2.5 One stdout writer
 
@@ -519,7 +710,7 @@ exit-code table gains the row "write failure → 2" for analyze only
 #### 4.2.6 Signatures that change
 
 `InputSet::read` is called once per command in `alsem.rs`, before the pipeline, and
-passed down: `run_analyze_with_exit(inputs: &InputSet, args)`; `run_digest_pipeline(inputs, …)`;
+passed down as `&Arc<InputSet>` (§4.2.1): `run_analyze_with_exit(inputs: &Arc<InputSet>, args)`; `run_digest_pipeline(inputs, …)`;
 `run_prove_pipeline(inputs, …)`; `run_fingerprint_pipeline` (through `FingerprintOptions`);
 `run_diff`'s `load_snapshot_from_workspace` (`src/engine/gate/diff/cli.rs:88-118`, one
 `InputSet` per workspace side); `run_events_fanout`/`run_events_chains` (through their
@@ -530,13 +721,64 @@ options); `run_policy_check`; the two `QuerySubstrate::build` callers
 model builders `assemble_and_resolve_workspace_program` (`program_calls.rs:713-728`),
 `assemble_and_resolve_cross_app_program` (`:816-908`) and the program builders
 `build_program_with_coverage[_profiled]` / `build_cross_app_program` (`full.rs:2123-2180`)
-take `&Arc<InputSet>`; `SnapshotBuilder` keeps a `from_disk(root)` constructor that
-calls `InputSet::read` with `InputNeeds::default()` for the LSP and `aldump` paths
-(`src/lsp/snapshot.rs:599-604`).
+take `&Arc<InputSet>`.
+
+**Which `InputNeeds` the other callers use.** `InputNeeds::build_only()` is for
+`SnapshotBuilder::build*` alone (§4.2.1). Every other caller reads
+`InputSet::read(path, &InputNeeds::default())` on the line before its call, because the
+model path after the build asserts `!build_only` (`select_program_files`, §4.2.1). The
+callers of `build_program_with_coverage[_profiled]` outside the commands are:
+- `aldump --compiler-oracle` (`src/bin/aldump.rs:139`);
+- the `--lib` tests at `src/program/model/site_links.rs:110`,
+  `src/program/physical.rs:128`, `src/program/registry.rs:198` and `:261`,
+  `src/program/resolve/applicability.rs:955`, `src/program/dep_summary.rs:546`,
+  `src/program/resolve/full.rs:4436`, `src/program/model/workspace.rs:2838`, `:2885` and
+  `src/engine/switch_dump.rs:51`, `:414`;
+- `tests/cli/cli_attribute_trivia.rs:463` and `tools/census-probe` (`:1071`, §4.1.5).
+
+Each gains the one `InputSet::read` line. The path wrappers
+`assemble_and_resolve_workspace_with_program_calls`, `assemble_and_resolve_inline_program`
+and `assemble_and_resolve_inline_program_default` (`program_calls.rs:698-790`) keep their
+`&Path` / inline-files signatures and do that read inside, with
+`InputNeeds::default()`. So the 69 `tests/` files that call them (33 in `tests/gap`,
+12 `r3`, 10 `r4`, 8 `temp_state`, 3 `cli`, 3 top-level; `grep -rl` over `tests/`) do
+not change.
+
+`SnapshotBuilder { workspace_root, local_providers }` (`src/snapshot/snapshot.rs:130-135`)
+keeps its fields. It is built as a struct literal at 28 sites (`grep "SnapshotBuilder {"`:
+`full.rs:1711`, `:1748`, `:2142`, `:4071`, `:4516`; `dep_cache.rs:512`, `:591`, `:625`;
+`program/build.rs:1359`, `:1401`; `resolve/semantic_golden.rs:1407`; `snapshot/parse.rs:178`;
+ten in `snapshot.rs`'s own tests; `tests/lsp/program_graph.rs:16`,
+`tests/lsp/snapshot_robustness.rs:16`; four in `tests/program_resolve_harness.rs`), and
+none of them changes. One method is added: `build_with_inputs(&self, inputs:
+&Arc<InputSet>, ..)`, which asserts `inputs.workspace == self.workspace_root` and is
+what `build_program_with_coverage_profiled` (`full.rs:2142`) calls. The existing
+`build`, `build_with_diagnostics`, `build_with_options` and
+`build_deferring_dependency_text` (`snapshot.rs:142-180`) keep their signatures and
+become `build_with_inputs(&InputSet::read(&self.workspace_root, &InputNeeds::build_only()), ..)`:
+one fresh read per build, so the LSP (`src/lsp/snapshot.rs:599-604`), `aldump` and the
+test sites keep working unedited and still read the disk exactly once per build.
+`build_only` (§4.2.1) is what keeps that read at today's cost. A full read would add
+work the LSP never did: a second whole-tree walk (`count_app_json_paths`,
+`source_text.rs:145-169`), one `read_dir` per folder for `nested_app`, a SHA-256 over every
+unit id, and the `roots.config.json` / coverage-yaml reads. `build_context_with` can
+build twice per call (`full.rs:1718-1734`), so it would pay that twice, on every LSP
+rung-2 rebuild. With `build_only` each build reads what `walk_al_source` and
+`build_inner` read today, no more. The measurement: step 1's numbers file records
+`cargo bench --bench lsp_pipeline` `build_full` (100 and 1000 files) parent vs head;
+`perf_bounds`' 3× bound stays the gate. `InputNeeds::default()` is NOT the build-only
+set: a command states its needs, and `build_only` is `false` unless asked.
 
 `switch_dump.rs:437-451` greps `build_analysis_model`'s source body for exactly one
 `assemble_and_resolve_workspace_from_program(` call: the function keeps its name and
-that shape.
+that shape. Two more `switch_dump.rs` `--lib` tests move with step 1:
+`analyze_builds_through_the_dumped_functions` (`:355-377`) gets `project_coverage_inputs`
+in its banned list in place of the renamed `project_coverage_disk` (§4.2.3), and
+`analyze_model_selects_app_scoped_files_from_the_program_parse` (`:384-428`) writes its
+files, then calls `InputSet::read(&root, &InputNeeds::default())`, and passes that `Arc`
+to `build_program_with_coverage(&inputs)` and `select_program_files(&inputs, &ctx)`. Its
+assertions are unchanged: the nested file is in the parse and not in the selection
+(`app_scoped_files()` drops `nested_app` files).
 
 The in-process golden harnesses (`tests/cli/cli_b_*`, `cli_a_*`, `cli_c_*`, every file
 the grep in §8.2 lists) call the pipeline functions; each gains one `InputSet::read`
@@ -548,20 +790,22 @@ line. No golden moves.
 
 ```rust
 pub struct ResolvedProgram { pub meta: ProgramMeta, pub body: Option<ProgramBody> }
-pub struct ProgramMeta {
+pub struct ProgramMeta {           // only the fields a step 0-2 reader reads (§4.3.3)
     pub inputs: Arc<InputSet>,
-    pub profile: BuildProfile,
-    /// `AppSetSnapshot` minus its source texts: ids, provenance, tiers, `app_path`,
-    /// `declared_deps`, `internals_visible_to`, compilation context, ABI presence.
-    pub apps: Vec<AppMeta>, pub workspace_app: AppId,
     pub primary_app_ref: AppRef,
     pub recovered_files: Vec<String>,
     /// Carries `files_without_object` (§4.2.4).
     pub coverage: FreshCoverage,
     pub histogram: Histogram, pub primary_histogram: Histogram,   // over `edges` only (`full.rs:1403-1418`)
-    pub abi_integrity: AbiIntegrity, pub coverage_contract: Coverage, // `report.coverage` (`full.rs:262-263`)
+    pub coverage_contract: Coverage,                               // `report.coverage` (`full.rs:262-263`)
     pub loaded_apps: Vec<serde_json::Value>,                       // `full.rs:2190`
 }
+// Not in `ProgramMeta` before a step reads them: `profile`, the app set (`apps`,
+// `workspace_app`) and `abi_integrity`, which the epic's §5.2 lists. No step 0-2 reader
+// needs them (`graph` reads the app set through `body.ctx.snapshot()` while the body is
+// alive, §4.3.3), and an `AppMeta` type defined with no reader would be a guess. Each
+// joins at the first step whose reader needs it after the body is gone, with its type
+// defined there (epic §5.2, as annotated in round 10).
 pub struct ProgramBody {
     pub ctx: ProgramContext,            // graph, parsed units, dependency trees (per profile)
     /// `report.edges` as `resolve_full_program_with` returns them (`full.rs:1434-1445`):
@@ -577,6 +821,24 @@ pub struct ProgramBody {
 impl ProgramBody {
     /// Today's merged order (`full.rs:2176`): `edges`, then `dependency_body_edges`.
     pub fn all_edges(&self) -> impl Iterator<Item = &ClassifiedEdge> + Clone;
+    pub fn edge_view(&self, primary_app_ref: AppRef) -> EdgeView<'_>;
+}
+/// What the adapter family reads of a resolved program: the primary app, both edge
+/// sets and the merged site facts. Borrowed, `Copy`.
+#[derive(Clone, Copy)]
+pub struct EdgeView<'r> {
+    pub primary_app_ref: AppRef,
+    pub edges: &'r [ClassifiedEdge],
+    pub dependency_body_edges: &'r [ClassifiedEdge],
+    pub site_facts: &'r HashMap<ObligationId, SiteFacts>,
+}
+impl<'r> EdgeView<'r> {
+    pub fn all_edges(self) -> impl Iterator<Item = &'r ClassifiedEdge> + Clone; // same order as `ProgramBody::all_edges`
+}
+impl ProgramReport {
+    /// A report straight from the resolver (`fresh_program_from_snapshot*`, the tests'
+    /// `build_models`): `edges` = `report.edges`, `dependency_body_edges` = `&[]`.
+    pub fn edge_view(&self) -> EdgeView<'_>;
 }
 impl ResolvedProgram {
     pub fn build(inputs: &Arc<InputSet>, profile: BuildProfile) -> Result<ResolvedProgram, String>;
@@ -619,18 +881,52 @@ The epic's earlier justification "no caller sits in both sets" was false. What i
   it reads `body.ctx` (`graph()`, `all_units()`, `decl_surface()`, `snapshot()`),
   `body.all_edges()`, `body.site_facts`, `meta.coverage_contract.missing`,
   `meta.recovered_files`, `meta.primary_app_ref`, `meta.loaded_apps`, the histograms
-  and `inputs.driver_version`. The id check (`mod.rs:199-204`) reads `inputs.app_id()`.
+  and `inputs.driver_version`. The id check (`mod.rs:199-204`) reads `inputs.app_id()`
+  and stays AFTER the build, where it is today on purpose (`mod.rs:194-198`): a missing
+  or malformed `app.json` keeps the build's `read <path>: <io>` / `parse <path>: <serde>`
+  error, and the id message appears only when the build succeeded. With the build `Ok`
+  the JSON parsed, so `app_id()` is `None` exactly when the snapshot's `guid` is empty
+  today (`id` missing, not a string, or empty): the same rule, no stderr change.
   `alsem graph` builds `ResolvedProgram::build(inputs, FULL)` and exports; the
   private build at `mod.rs:192-193` is gone.
-- `assemble_and_resolve_cross_app_program` (`program_calls.rs:816-908`) takes a
-  `&mut ResolvedProgram`: demand (`:838-845`) reads `body.ctx.graph()` and
-  `body.all_edges()`; assembly (`:846-856`) reads `body.ctx` and `body.parenless_calls`;
-  `loaded_apps` (`:895`) is `meta.loaded_apps`; `attach_program_calls_with` takes
-  `program.body.take().expect("built once")` and `&program.meta.coverage`.
-- `assemble_and_resolve_workspace_program` (`:713-728`) and `build_analysis_model`'s
-  single-app arm (`run.rs:285-357`) the same way, with `Summary`.
+- **One form for steps 1b and 2: the model builders build the program INSIDE**, as
+  today (`program_calls.rs:822-823`). `assemble_and_resolve_cross_app_program(inputs:
+  &Arc<InputSet>, model_instance_id, skip_roots_config)` (the §4.2.6 signature) starts
+  with `let mut program = ResolvedProgram::build(inputs, FULL)` and owns that local:
+  demand (`:838-845`) reads `program.body.ctx.graph()` and `body.all_edges()`; assembly
+  (`:846-856`) reads `body.ctx` and `body.parenless_calls`; `loaded_apps` (`:895`) is
+  `meta.loaded_apps`; `attach_program_calls_with` takes
+  `program.body.take().expect("built once")` and `&program.meta.coverage`. Step 1b keeps
+  its return type (`Option<CrossAppProgram>`, the build `Err` mapped to `None` as `.ok()?`
+  does today); step 2 changes ONLY the return type to `Result<_, CrossAppFailure>`, the
+  build's `Err(e)` becoming `CrossAppFailure::Build(e)` at that same line (§4.4.5). No
+  caller builds or holds a `ResolvedProgram` for these builders; `build_cross_app_base`
+  (`capability_cone.rs:3433`) calls the builder with `inputs`, as it calls it with a path
+  today.
+- `assemble_and_resolve_workspace_program` (`:713-728`) the same way, with `Summary`:
+  it takes `inputs`, builds inside, keeps its return type. `build_analysis_model`'s
+  single-app arm (`run.rs:285-357`) builds inside itself as today (`:285-291`), now
+  `ResolvedProgram::build(inputs, Summary)`, and owns that local.
 - The adapter (`program_calls.rs:922-970`) reads `body.all_edges()` where it read
-  `report.edges` (through `SiteLinks::build`, `:429`) and `body.site_facts`.
+  `report.edges` (through `SiteLinks::build`, `:429`) and `body.site_facts`. The
+  signatures that change, every one from `&ProgramReport` (or a slice) to one
+  `EdgeView<'_>` (§4.3.1), in one commit:
+  - `SiteLinks::build(view: EdgeView<'r>)` (`site_links.rs:64`; it iterates
+    `view.all_edges()`); its tests at `:121`, `:133` pass `report.edge_view()`;
+  - `join(view, ctx, ws)`, `site_census(view, ctx, ws)` and `adapter(view, ctx, ws, ..)`
+    (`program_calls.rs:401`, `:386`, `:922`): they read `view.primary_app_ref`
+    (`:407`, `:952`, `:957-958`) and `view.site_facts` (`:967`);
+  - `resolved_calls_from_program(view, ctx, ws, ..)` (`:622`). Its callers that hold a
+    plain resolver report (`build_models`, `:1873`, `:2083`, `:2408`, `:2468`, `:2482`;
+    `program_calls_adapter_tests.rs:151`, `:1310`) pass `report.edge_view()`, so those
+    tests keep `ProgramReport` and see the edges they see today (no dependency bodies);
+    `build_models` itself (`:1876`) gains one `InputSet::read(workspace,
+    &InputNeeds::default())` line for its `assemble_and_resolve_workspace_from_program`
+    call (§4.2.3);
+  - `cross_app_demand(primary, graph, edges: impl IntoIterator<Item = &'a ClassifiedEdge>)`
+    (`demand.rs:29-33`; it walks the edges once, `:37`); the builder passes
+    `body.all_edges()`.
+  The production callers pass `program.body.edge_view(program.meta.primary_app_ref)`.
 - `AnalysisModel.fresh` (`run.rs:251-261`) stays a `Result<FreshCoverage, String>`; it
   is `program.meta.coverage.clone()` on success.
 
@@ -642,7 +938,7 @@ lives as long as its holder (the `AnalysisModel` / `AnalysisTarget` / the `View`
 step 2). Its size is NOT "a few KB": `inputs.al_files[].text` is the whole workspace
 source, 5.09 MB on CDO (582 files), and grows with the workspace. On CDO this is inside
 the 85 MB band; the census prints it (A1b.5) so a larger workspace is a number, not a
-surprise. Everything else in `ProgramMeta` is small (histograms, ledger rows, app ids).
+surprise. Everything else in `ProgramMeta` is small (histograms, ledger rows, the loaded-app rows).
 
 The parsed IR, the graph and the dependency trees are NOT retained; `graph` runs before
 the body is released (rule 3 item 1).
@@ -664,27 +960,51 @@ pub struct L4Analysis {                       // what outlives `det` in digest a
     /// The non-convergence line(s) the solver used to print (§4.4.7).
     pub warnings: Vec<String>,
 }
-pub struct L4Harvest {                        // the per-routine harvest (`:1454-1495`); moved INTO `det`
-    pub uncertainties: UncertaintyIndex,
-    pub uncertainties_by_node: HashMap<String, UncertaintySetId>,
-    pub parameter_roles_by_routine: HashMap<String, Vec<RecordRoleSummary>>,
-}
-pub fn build_l4(model: &Model, graph: &CombinedGraph, scc: Option<Arc<SccResult>>,
-                cross: Option<&CrossAppInputs<'_>>) -> (L4Analysis, L4Harvest);
+/// The solver's per-routine core summaries (the `HashMap<String, RoutineSummary>` that
+/// `compute_summaries_v2_bundle_with_leaves` returns, `summary_runner.rs:1079-1083`),
+/// UNHARVESTED. The `det` builder that called `build_l4` harvests it; a plan with no
+/// `det` fill drops it, as query's builders drop `_map` today (`effect_query_cli.rs:251`).
+pub struct CoreSummaries(pub HashMap<String, RoutineSummary>);
+/// What a caller asks `build_l4` for. `extra_diagnostics` is EMPTY in every production
+/// caller; only the `#[cfg(test)]` `View::prepare_with_diagnostics` (§8.4) sets it.
+/// `build_l4` appends it to `summarize_diagnostics` AFTER rendering `warnings`, so an
+/// injected row is never printed.
+pub struct L4Request { pub scc: Option<Arc<SccResult>>, pub extra_diagnostics: Vec<SummarizeDiagnostic> }
+pub fn build_l4(model: &Model, graph: &CombinedGraph, req: L4Request,
+                cross: Option<&CrossAppInputs<'_>>) -> (L4Analysis, CoreSummaries);
 ```
 
+**The solve runs after the cone, as today.** Today the context builds its cone first
+(`context.capability_cones`, `detector_context.rs:953-1155`: `compose_cone_over_graph`
+at `:1005`, the `pd_solve` arena dropped at `:1017`) and the SCC and v2 solve after it
+(`:1296-1396`); the harvest drains `core_summaries` last (`:1427-1495`). So the bundle
+and the core map (up to ~730 MiB on 8020, `:1440`) never exist while the cone's working
+set (the 525 MiB `pd_solve` arena and 15 M entries, epic §3) is alive. Step 2 keeps that
+order: when a `det` fill happens, `build_detector_artifacts` calls `build_l4` itself, at
+today's `:1296` position, after its cone (§4.4.2). Only a plan with no `det` fill (query)
+calls `build_l4` from `prepare` directly; it builds no cone.
+
 `build_l4` is today's inline block (`detector_context.rs:1296-1511`) lifted out: the
-SCC (`:1297-1307`, run when `scc` is `None`; a cross-app caller passes
+SCC (`:1297-1307`, run when `req.scc` is `None`; a cross-app caller passes
 `Arc::clone(&base.combined_scc)`, which is the same Tarjan over the same
 `edges_by_from`, `capability_cone.rs:3473-3480`; no third copy exists, the `View`
 holds no `scc` of its own), the field index
-(`:1365-1372`), `compute_summaries_v2_bundle_with_leaves` (`:1387-1396`) with the leaves
-and fixed roles from `cross`, and the harvest (`:1454-1495`). The harvest is NOT part of
-`L4Analysis`: the uncertainty union alone is up to ~730 MiB on 8020 (`:1440`), and
-today's digest and prove hold only the bundle during the query phase
-(`effect_query_cli.rs:219` returns `.0`; `prove.rs:964` discards graph and scc). The
-`View` holds `L4Harvest` only between the `l4` fill and the `det` fill, which takes it
-by value; a plan with no `det` run (query) drops it at once. It replaces
+(`:1365-1372`) and `compute_summaries_v2_bundle_with_leaves` (`:1387-1396`) with the
+leaves and fixed roles from `cross`. The harvest (`:1427-1495`) is NOT in `build_l4`:
+it drains the core summaries AND reads `uncertainty_edges_by_from` (`:1473`), a
+context field built at `:1257` from the model's calls, so it runs in
+`build_detector_artifacts`, which builds that field, exactly where it runs today. Its
+result (the uncertainty union, up to ~730 MiB on 8020, `:1440`) is never built on a
+plan with no `det` fill: query pays the solve and drops the core map, as its two
+builders do today (`:219` `.0`, `:251` `_map`), and no harvest. `L4Analysis` holds
+neither; today's digest drops graph and scc at the end of the statement
+(`build_db_effect_bundle(resolved).2`, `digest_cli.rs:1626`), and prove keeps both to
+the end of its scope (`let (_graph, _scc, bundle)`, `prove.rs:964`: a `_name`
+binding is not a drop). `CoreSummaries` is a LOCAL of the function that called
+`build_l4`, never a `View` field: inside `build_detector_artifacts` the harvest drains
+it when the mask has `CORE_SUMMARIES`, and it drops before that function returns in
+every other case; on query's plan it drops inside `prepare`. So the up to ~730 MiB map
+never outlives the call that built it. `build_l4` replaces
 `cross_app_db_effect_bundle` (`effect_query_cli.rs:207-220`) and `build_db_effect_bundle`
 (`:226-261`): both build the same inputs (same graph, same SCC, same field index, same
 upgraded bindings, same leaves), so the bundle is the same object. `QuerySubstrate`
@@ -711,9 +1031,9 @@ pub struct DetectorArtifacts {                 // owned; one per View, at the un
     pub transaction_spans: Vec<TransactionSpan>,
     pub resolved_call_edge_by_callsite: HashMap<String, CallEdge>,
     pub uncertainty_edges_by_from: HashMap<String, Vec<Uncertainty>>,
-    pub uncertainties: UncertaintyIndex,                                   // from `L4Harvest`, by value
-    pub uncertainties_by_node: HashMap<String, UncertaintySetId>,          // from `L4Harvest`
-    pub parameter_roles_by_routine: HashMap<String, Vec<RecordRoleSummary>>, // from `L4Harvest`
+    pub uncertainties: UncertaintyIndex,                                   // harvested here from `CoreSummaries` (`:1427-1495`)
+    pub uncertainties_by_node: HashMap<String, UncertaintySetId>,          // same harvest
+    pub parameter_roles_by_routine: HashMap<String, Vec<RecordRoleSummary>>, // same harvest
     pub summaries: HashMap<String, FullRoutineSummary>, pub cone_derived: ConeDerivedStore,
     pub event_flow_indexes: EventFlowIndexes, pub upgraded_bindings_by_callsite: …,
     pub reachable_roots: BTreeSet<String>, pub internal_reachable_externally: bool,
@@ -732,8 +1052,12 @@ pub struct DetectorContext<'v> {               // borrowed; built once per comma
     pub fingerprint_index: FingerprintIndex<'v>,
 }
 impl<'v> std::ops::Deref for DetectorContext<'v> { type Target = DetectorArtifacts; fn deref(&self) -> &DetectorArtifacts { self.art } }
+/// `l4: Some(req)` = build the `l4` cell here, after the cone (§4.4.1), and return it;
+/// `None` = no solve (a mask without `CORE_SUMMARIES` on a plan with no `need_l4`, and
+/// policy's RAW build).
 pub fn build_detector_artifacts(model: &Model, demanded: u32, graph: Arc<CombinedGraph>,
-                                l4: Option<(&L4Analysis, L4Harvest)>, cross: Option<CrossAppInputs<'_>>) -> DetectorArtifacts;
+                                l4: Option<L4Request>, cross: Option<CrossAppInputs<'_>>)
+                                -> (DetectorArtifacts, Option<L4Analysis>);
 impl<'v> DetectorContext<'v> {
     /// The borrowed maps over the rows given (`routine_by_id`, `call_site_by_id`,
     /// `objects_by_id`, `table_by_id` via `table_by_id_preferring_real`, the
@@ -746,7 +1070,7 @@ impl<'v> DetectorContext<'v> {
 pub fn detector_context<'v>(model: &'v Model, art: &'v DetectorArtifacts,
                             ordering: Option<&'v HashMap<String, OrderingFacts>>) -> DetectorContext<'v>;
                             // = `DetectorContext::new(&ws.routines, &ws.objects, &ws.tables, art, ordering)`
-/// Test-only owner for the shims below: a `DetectorContext` borrows its artifacts, so
+/// Owner for the shims below (tests and `aldump`; no `alsem` command): a `DetectorContext` borrows its artifacts, so
 /// a function that builds them cannot also return the context (no owner, no
 /// self-borrow). Call sites do `let owned = build_detector_context(..); let ctx = owned.ctx();`.
 pub struct OwnedContext<'m> { model: &'m Model, art: DetectorArtifacts, ordering: Option<HashMap<String, OrderingFacts>> }
@@ -763,9 +1087,18 @@ pub fn minimal_ctx<'a>(routines: &'a [ModelRoutine], graph_edges: HashMap<String
 ```
 
 - `Deref` keeps every `ctx.<field>` read in the 54 detectors compiling unchanged: the
-  owned fields keep their names AND types on `DetectorArtifacts` (the harvest moves in
-  by value, so no field becomes an `Arc` and no reader changes), the borrowed maps keep
-  theirs on `DetectorContext` (epic open question 9, closed).
+  owned fields keep their names on `DetectorArtifacts`, and their types too with ONE
+  exception: `graph` is `Arc<CombinedGraph>` where today it is `CombinedGraph`
+  (`detector_context.rs:610`), because the view's graph cell shares it (§4.4.3). The
+  harvest still runs inside this builder, so no other field becomes an `Arc`. Every
+  detector read of `graph` is a field read (`ctx.graph.edges_by_from`, `.nodes`, …) or
+  a borrow (`let graph = &ctx.graph;`, `d7.rs:143`, then `graph.nodes`), which compile
+  through auto-deref. A use that needs `&CombinedGraph` in a generic or by-value
+  position writes `&*ctx.graph`; the implementation fixes each such compile error that
+  way, and no reader takes the graph by value (it is borrowed today). The struct-literal
+  tests (`d17.rs:504`, `d50.rs:619`, `:784`, `minimal_ctx`) write `Arc::new(graph)`. The
+  borrowed maps keep their names and types on `DetectorContext` (epic open question 9,
+  closed).
 - `db_effect_bundle: Option<SummaryBundle>` (`:777`) leaves the context: no detector
   reads it (`grep ctx.db_effect_bundle` has no detector site); `reverse_effect_index`
   (`:1521-1526`) is built from `l4.bundle` when `DB_EFFECT_REVERSE_INDEX` is demanded.
@@ -778,17 +1111,60 @@ pub fn minimal_ctx<'a>(routines: &'a [ModelRoutine], graph_edges: HashMap<String
   panic into the same `Detector "<name>" threw` diagnostic under `panic = "unwind"`
   (`:693-703`), and under `abort` an undeclared read is a crash in debug AND release,
   which is the stated outcome of rule 1 (a read asserts only "filled").
+- Two more registry `--lib` tests read the deleted `OnceLock` or pin `run_each`'s
+  pre-loop fill, which step 2 moves into `View::prepare`. Each is stated here (a `--lib`
+  outcome change §7 lists):
+  - `declared_ordering_facts_are_filled_before_the_parallel_loop` (`registry.rs:926-951`,
+    with its probe `ordering_facts_probe`, `:892-903`, which reads
+    `c.ordering_facts.get()`) is DELETED: the thing it pins, the fill at
+    `registry.rs:613-621`, is deleted. Its invariant (the ordering facts exist before
+    the parallel loop starts, so no fill runs inside it, the `r4_differential` deadlock)
+    moves to `session::prepare_fills_ordering_before_the_runs` (§8.4): a `View` over
+    `empty_resolved()`, a plan with one probe detector that `requires:
+    ORDERING_FACTS` and reports `c.ordering.is_some()` from inside the loop as
+    `"filled"`/`"empty"`; the test expects `["filled"]`. Hand-stated precondition: the
+    probe only LOOKS at the slot. The placement it pins is the use (`prepare`'s order:
+    ordering, then runs), not a helper.
+  - `undeclared_ordering_facts_read_inside_the_loop_fails_loudly` (`:962-982`) is KEPT,
+    rewritten to the shim (`let owned = build_detector_context(&resolved, 0); let ctx =
+    owned.ctx();`): at mask 0 the shim fills no ordering, the reader calls
+    `get_ordering_facts`, the `expect` panics with a text containing
+    `substrate::ORDERING_FACTS`, and `run_each` turns that into the diagnostic the test
+    looks for. Its `#[cfg(debug_assertions)]` and the reader's are dropped: the `expect`
+    holds in release too. Its discrimination break changes from "delete the
+    `debug_assert!`" to "replace the `expect` with a fall-back to an empty map".
+- A third `--lib` test pins the deleted lazy fill: `ordering_facts_are_lazy_and_parity_with_direct_compute`
+  (`detector_context.rs:1700-1725`). It asserts `ctx.ordering_facts.get().is_none()`, then
+  calls `get_ordering_facts()` on an `ALL` context, which has no `ORDERING_FACTS` bit
+  (`registry.rs:141`). After step 2 the field is gone (no compile) and the call hits the
+  `expect`. It is DELETED: laziness is the thing step 2 removes, and its parity half
+  (ordering equals a direct `compute_ordering_facts`) is the definition of the fill, which
+  `session::prepare_fills_ordering_before_the_runs` and the parity test (§4.4.6, mask
+  `ALL | ORDERING_FACTS`) exercise. §7 step 2 lists it.
 - `build_detector_artifacts` is `build_detector_context_with` (`:899-1617`) minus the
-  graph build (`:938-946`: it takes the view's graph), minus the inline solve
-  (`:1296-1511`: it takes `l4`), minus the borrowed maps (`:1164-1172`, `:1529-1534`,
-  `:1557-1558`: they move to `detector_context`). `summarize_diagnostics` is
-  `l4.summarize_diagnostics.clone()` when `demanded & CORE_SUMMARIES != 0` and `l4` is
-  `Some`, else empty — the decision (a) rule of `registry.rs:40-44`, now per run (§4.4.3).
-- `build_detector_context` / `build_detector_context_with` stay as test-only shims that
-  return an `OwnedContext` (above): graph + Tarjan + `build_l4` when the mask has
-  `CORE_SUMMARIES` + `build_detector_artifacts`, **plus the ordering fill
-  (`compute_ordering_facts(model)`) whenever the mask has `ORDERING_FACTS`**. That last
-  clause is what keeps the two registry tests meaning what they mean today: the fill
+  graph build (`:938-946`: it takes the view's graph), with the inline SCC, field index
+  and solve (`:1296-1396`) replaced by ONE call `build_l4(model, &graph, req, cross)` at
+  the same place, after the cone (`:953-1155`), when `l4` is `Some`. The harvest
+  (`:1427-1495`) stays here and drains that call's `CoreSummaries`; minus the borrowed
+  maps (`:1164-1172`, `:1529-1534`, `:1557-1558`: they move to `detector_context`). It
+  returns the `L4Analysis` it built, which `prepare` stores as the `l4` cell.
+  `summarize_diagnostics` is `l4.summarize_diagnostics.clone()` when
+  `demanded & CORE_SUMMARIES != 0` and an `l4` was built, else empty — the decision (a)
+  rule of `registry.rs:40-44`, now per run (§4.4.3).
+- `build_detector_context` / `build_detector_context_with` stay as shims for the tests
+  and `aldump` (no `alsem` command calls them; not `#[cfg(test)]`, see below) that
+  return an `OwnedContext` (above): graph + `build_detector_artifacts` with
+  `l4: Some(L4Request { scc: None, extra_diagnostics: vec![] })` when the mask has
+  `CORE_SUMMARIES` (its `L4Analysis` is dropped on return), **plus the ordering fill whenever the
+  mask has `ORDERING_FACTS`**, done FIRST and through the same `fill_ordering(model)` helper
+  `View::prepare` calls (§4.4.3 rule 1), so it runs on `big_stack_pool().install` as
+  today's `run_each` fill does (`registry.rs:604-621`: it recurses over statement trees,
+  `compute_return_summaries`). `aldump`'s main is on no big stack (no `big_stack` use in
+  `src/bin/aldump.rs`), and neither is a test thread, so a fill on the caller's thread
+  could overflow on real Base Application source. The ordering
+  clause is what keeps `every_detector_alone_declares_what_it_reads` and
+  `undeclared_ordering_facts_read_inside_the_loop_fails_loudly` meaning what they mean
+  today (the third ordering test is replaced, see the bullet above): the fill
   leaves `run_each` (`registry.rs:613-621`), so `every_detector_alone_declares_what_it_reads`
   (`:1002`, a context at `detector.requires`) gets its ordering from the shim, and a
   detector that reads without declaring finds `None`, panics in `get_ordering_facts`
@@ -798,8 +1174,12 @@ pub fn minimal_ctx<'a>(routines: &'a [ModelRoutine], graph_edges: HashMap<String
   tests that write the context as a struct literal (`d17.rs:504`, `d50.rs:619`, `:784`)
   write a `DetectorArtifacts` literal and call `detector_context`; the 63
   `minimal_ctx` sites get `MinimalCtx` (above) (§7). No `alsem` command calls the
-  shims; `aldump` and the tests reach them through `run_detectors` /
-  `run_detectors_cross_app` (§4.4.3).
+  shims. The tests and `aldump` reach them through `run_detectors` /
+  `run_detectors_cross_app` (§4.4.3), and `aldump` ALSO calls one directly:
+  `switch_dump.rs:120` builds `build_detector_context(&resolved, 0)` for the event-graph
+  rows. So the shims are NOT `#[cfg(test)]`: they stay `pub` library functions, used by
+  tests and `aldump` only ("test-only" above means "no `alsem` command"). The switch
+  dump's call becomes the two-line `owned`/`ctx()` form like every other site.
 
 #### 4.4.3 `View`, `Plan`, `RunKey` (`src/engine/session.rs`)
 
@@ -807,8 +1187,9 @@ pub fn minimal_ctx<'a>(routines: &'a [ModelRoutine], graph_edges: HashMap<String
 pub struct View {
     pub target: AnalysisTarget,                 // `SingleApp(Model)` | `CrossApp(R3a5CrossAppBase)` (`run.rs:173-176`); `rel` at step 4
     graph: Option<Arc<CombinedGraph>>,          // one graph per view; cross-app: `Arc::clone(&base.graph)` (`:3470-3480`)
-    l4: Option<L4Analysis>, harvest: Option<L4Harvest>,            // `harvest` lives only until the `det` fill takes it
+    l4: Option<L4Analysis>,                     // no `core` field: `CoreSummaries` is a local of the builder that called `build_l4` (§4.4.1, rule 1)
     det: Option<DetectorArtifacts>,
+    released: u8,                               // one bit per `Cell` released; a released cell is never refilled (rule 1)
     ordering: Option<HashMap<String, OrderingFacts>>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
 }
@@ -825,17 +1206,19 @@ pub struct Plan { pub runs: Vec<Vec<Detector>>, pub scope_primary: bool, pub nee
 pub enum Cell { Det, L4, Ordering, Graph }
 impl View {
     pub fn new(target: AnalysisTarget) -> View;       // nothing else: no step-2 reader of `InputSet` or `ResolvedProgram` goes through the view
-    pub fn prepare(&mut self, plan: &Plan);           // fills every `None` cell the plan needs, in order: graph, l4, det, ordering, runs
+    pub fn prepare(&mut self, plan: &Plan);           // fills every `None` cell the plan needs, in order: ordering, graph, det (its cone, then `l4`, then its harvest), runs; a plan with no run (query): graph, then `l4` alone
+    #[cfg(test)]
+    pub(crate) fn prepare_with_diagnostics(&mut self, plan: &Plan, diags: Vec<SummarizeDiagnostic>); // `prepare` with `L4Request.extra_diagnostics = diags` (§8.4); both call one private `prepare_inner`
     pub fn release(&mut self, cell: Cell);
     pub fn model(&self) -> &Model;                    // `target.resolved()`
     pub fn graph(&self) -> &Arc<CombinedGraph>;
     pub fn l4(&self) -> &L4Analysis;  pub fn det(&self) -> &DetectorArtifacts;
     pub fn detector_context(&self) -> DetectorContext<'_>;
-    pub fn run(&self, key: &RunKey) -> &RunOutput;    // the stored output; panics if `prepare` did not run it
+    pub fn run(&self, key: &RunKey) -> Arc<RunOutput>; // a clone of the stored `Arc`; panics if `prepare` did not run it. An `Arc`, not `&RunOutput`: analyze calls `release(..)` (`&mut self`) while it still uses the output (§4.4.4), and a borrow of `self` cannot live across that
 }
 ```
 
-`View::new` takes the target alone. The commands hold `&InputSet` (passed down from
+`View::new` takes the target alone. The commands hold `&Arc<InputSet>` (passed down from
 `alsem.rs`, §4.2.6) and the program's `ProgramMeta` through `AnalysisModel.fresh`
 (§4.3.3) as they do after step 1b; nothing at step 2 reads either through the view,
 and `AnalysisTarget::build` returns no `ResolvedProgram` (the cross-app path builds
@@ -846,27 +1229,46 @@ as annotated). `Universe` is the target's variant, not a field.
 Rules (epic §5.9), as code:
 
 1. **Serial fills from built inputs.** `prepare` fills every cell the plan needs that
-   is still `None` (a second `prepare` after a `release` refills that cell at the new
-   plan's mask and keeps the others; nothing is refilled while it is filled), in
-   order: `graph` (single-app: `build_combined_graph` over `model.calls`/`events`,
+   is still `None`. **Each cell is filled at most once per `View`.** A second `prepare`
+   (no step-2 command makes one) obeys three asserts, release builds too, each naming
+   the cell: (a) a cell the plan needs whose `released` bit is set panics ("<cell>
+   released; a View fills each cell once"), since a refill after `release(Det)` would
+   find no `CoreSummaries` (the first `det` fill took them) and silently build `det`
+   without uncertainties or parameter roles; (b) a `det` that is already filled must
+   cover the new plan: `det.demanded & union == union`, else panic naming the missing
+   bits, so a wider plan never runs on a narrower `det` and output never depends on
+   fill state (A2.5); (c) a `det` fill at a `CORE_SUMMARIES` mask must build `l4` in
+   the SAME `build_detector_artifacts` call, since `CoreSummaries` is that call's local;
+   a `det` fill that needs `l4` while `l4` is already filled panics. Fills, in order: `ordering` FIRST, when any run demands `ORDERING_FACTS`
+   (`fill_ordering(model)`, the one helper the shim also calls, §4.4.2: it runs
+   `compute_ordering_facts(model)` on `big_stack_pool().install`, since the fill recurses
+   over statement trees, `registry.rs:604-609`). It reads the model alone, and it composes a
+   whole snapshot of its own (`digest.rs:4016-4019`) that dies when it returns; filling it
+   before `graph`, `l4` and `det` means only the small facts map is alive beside them,
+   where today the full context and that snapshot are alive together. Byte-neutral (a
+   function of the model); the deadlock rule holds (every fill is before the runs). Then
+   `graph` (single-app: `build_combined_graph` over `model.calls`/`events`,
    today's `detector_context.rs:938-946`; cross-app: `Arc::clone(&base.graph)` — the
    base's `graph` becomes `Arc<CombinedGraph>` at step 2 and STAYS on the base, since
    the r3a5 projections (`capability_cone.rs:3613`) and `QuerySubstrate::from_cross_app_base`
    (`effect_query_cli.rs:171`, until §4.4.1 replaces it) read it there; §10 item 3),
-   then — when `plan.need_l4 || any mask has CORE_SUMMARIES` — `l4`
-   (`build_l4(model, &graph, scc, cross)` → `l4`, `harvest`; single-app `scc` is `None`
-   and `build_l4` runs today's Tarjan `:1297-1307`, which today also runs only under
-   `CORE_SUMMARIES` at `:1296`, so a `--single-app --detector <non-core>` run pays no
-   extra Tarjan; cross-app `scc` is `Some(Arc::clone(&base.combined_scc))`; the
-   `l4.warnings` print happens here, §4.4.7), then `det` at `union(masks)` — never
-   with `RAW_INHERITED_FACTS` (epic I5, Decision 50; policy's RAW build is not a cell,
-   §4.4.4) — (`build_detector_artifacts(model, mask, Arc::clone(&graph), l4.zip(harvest.take()), cross)`;
-   `l4` is passed only when `mask & CORE_SUMMARIES != 0`, as `:1296` gates it today;
-   `prepare` asserts `mask & plan.after_run == plan.after_run` first, naming the
-   missing bit — for `TRANSACTION_SPANS` that is the bit that forces the summaries the
-   tx map is built from, `registry.rs:53-56`), then `ordering` when
-   any run demands `ORDERING_FACTS` (`compute_ordering_facts(model)` on
-   `big_stack_pool().install`), then each run, stored in `runs`. Every builder takes
+   then `det` at `union(masks)` — never with `RAW_INHERITED_FACTS` (epic I5, Decision 50;
+   policy's RAW build is not a cell, §4.4.4) — which also fills `l4`:
+   `let (det, l4) = build_detector_artifacts(model, mask, Arc::clone(&graph), req, cross)`
+   with `req = Some(L4Request { scc, extra_diagnostics })` when
+   `plan.need_l4 || mask has CORE_SUMMARIES`, else `None`; `self.det = Some(det)`,
+   `self.l4 = l4`. The builder runs its cone, THEN `build_l4`, THEN the harvest, which is
+   today's order (§4.4.1): the solve never runs while the cone's working set is alive.
+   Single-app `scc` is `None` and `build_l4` runs today's Tarjan `:1297-1307`, which today
+   also runs only under `CORE_SUMMARIES` at `:1296`, so a `--single-app --detector
+   <non-core>` run pays no extra Tarjan; cross-app `scc` is
+   `Some(Arc::clone(&base.combined_scc))`; `build_l4` prints its `warnings` before it
+   returns, §4.4.7. A plan with no run and `need_l4` (query) fills `l4` with
+   `build_l4(model, &graph, req, cross)` directly and drops its `CoreSummaries` there.
+   `prepare` asserts `mask & plan.after_run == plan.after_run` before the `det` fill,
+   naming the missing bit — for `TRANSACTION_SPANS` that is the bit that forces the
+   summaries the tx map is built from, `registry.rs:53-56`. Then each run, stored in
+   `runs`. Every builder takes
    `&T`; the one shared owner is the `Arc<CombinedGraph>` held by the view and `det`
    (its last holder is `det`, released before the view's own `Arc`).
 2. **No fill from inside a detector.** The types already forbid it: a detector is
@@ -886,8 +1288,16 @@ Rules (epic §5.9), as code:
    `l4.summarize_diagnostics` iff `key.demanded & CORE_SUMMARIES != 0` (rule 2,
    Decision 48's `RunKey`). The context that serves the run was built at a
    superset of `key.demanded`; §4.4.6 licenses that.
-4. **No `OnceLock`, `Mutex` or lazy fill** in `session.rs` (A2.9's `--lib` test reads
-   the file's own source for the two names).
+4. **No interior mutability or lazy fill** in `session.rs`: no `OnceLock`, `OnceCell`,
+   `LazyLock`, `Lazy`, `Cell`, `RefCell`, `UnsafeCell`, `Mutex`, `RwLock`, `Atomic*`
+   (an `AtomicU8` is the obvious shortcut for `View.released`), `thread_local!` or
+   `static mut` (A2.9's `--lib` test reads the file's own source, §8.4; its needle for the
+   `Cell` family is `Cell<`, which also matches `RefCell<`, `OnceCell<`,
+   `UnsafeCell<` and never the file's own `enum Cell` or a `Cell::Det`).
+   Every fill is on `prepare(&mut self)`; every reader takes `&self`. Stated limit: a
+   lazy fill hidden in a type defined in another module is not caught by A2.9; the
+   `&mut self`-only fill is the rule, and a `View` field of a type with interior
+   mutability is a review flag.
 5. **Census counters are never reset.** They stay process-cumulative, as today
    (§4.1.7: the numbers file quotes the process total, so step 0 and step 2 lines
    measure the same thing). The epic's §5.9 rule 4 ("reset at the start of each cell
@@ -906,22 +1316,47 @@ and those callers hold a `&Model`.
 #### 4.4.4 Per-command order
 
 The fixed order of epic rule 3, as it applies before steps 3–6 exist. `det ⊥ snapshot`
-means the two are never alive together, which is today's state for digest and prove
-(`digest_cli.rs:1646-1650` drops the snapshot before the diagnostics run; the tx map's
-context and the snapshot ARE alive together today, `:1580`–`:1650`, so step 2 holds
-less at that point, not more).
+means the two are never alive together after step 2. Today that holds only in part,
+so step 2 LOWERS what is held together; it never raises it:
+- digest: `digest_cli.rs:1646-1650` drops the snapshot before the diagnostics run, but
+  the tx map's context and the snapshot ARE alive together, `:1580`–`:1650`.
+- prove: it composes the snapshot (`prove.rs:897`), then builds the diagnostics context
+  (`:902`, inside `build_envelope_diagnostics_json`) and later the tx map's `ALL`
+  context (`:958`) while that snapshot is still alive. After step 2 neither context
+  overlaps the snapshot, so prove's peak bound (A2.4 via §6.3) is conservative.
+- Inside the `det` fill, the cone's working set and the solve's output are never alive
+  together, as today: `build_detector_artifacts` runs its cone, then `build_l4`, then
+  the harvest (§4.4.1, rule 1). A fill order that ran `l4` before `det` would keep the
+  bundle and the core map (up to ~730 MiB on 8020) alive through the cone on every plan
+  with `CORE_SUMMARIES`. That would raise the post-attach peak, and A2.4 would see it.
 
 | Command | Order on the `View` | Deleted |
 |---|---|---|
-| analyze | `prepare(Plan { runs: [selected], scope_primary: args.scope == Primary })`; `run(selected)`; `release(Det)`, `release(L4)`, `release(Ordering)` — today the context dies inside the runner, before any projection (`registry.rs:413-416`, `:526-529`), and the `View` must not hold it longer; `analyzer_diagnostics_of_run` over that run; projection, filter, baseline, suppression, coverage, format (`run.rs:522-700`, unchanged) | nothing (analyze had no duplicate); the failure path's second build (§4.4.5) |
-| digest | `prepare(Plan { runs: [default], scope_primary: true, need_l4: true, after_run: TRANSACTION_SPANS })`; `run(default)` → diagnostics JSON; `tx_context_map(&det.transaction_spans)` (the loop of `digest_cli.rs:546-558` as a pure function; today's map is built at `ALL`, `:543-544`, and the default set's union has `TRANSACTION_SPANS` because d9 is a default detector, `detectors/mod.rs:1294` — `prepare`'s `after_run` assertion keeps that true, A2.10); `release(Det)`; `compose_snapshot(model)`; `resolve_changed_roots`; `compute_digest_effects_cli(&snap, model, Some(&roots))`; `DbTempStates::new(model, &l4.bundle)`; `run_digest_query_full_from_entries`; drop snapshot, entries, temp states; `release(L4)`; project JSON (with the diagnostics computed first); serialize | the second context (`:534-560`), the separate bundle (`:1625-1628`) |
-| prove | the same plan; `run(default)` → diagnostics; `tx_context_map(&det.transaction_spans)` (today at `ALL`, `prove.rs:843`); `release(Det)`; `compose_snapshot`; roots; `compute_digest_effects_cli(&snap, model, Some(from_ref(root)))` (today `None`, `prove.rs:961`; each root's pass is independent, `digest.rs:4094-4112`); `DbTempStates::new(model, &l4.bundle)`; query; `unresolved_cone`; `release(L4)`; project | the second context (`prove.rs:838-859`), the separate bundle (`:964`) |
-| fingerprint | `prepare(Plan { runs: [default] })`; `run(default)` → `analyzer_diags_for` (`fingerprint_cli.rs:547-555`); `--strict` gate; `release(Det)`, `release(L4)`; `compose_full_snapshot` / `compose_snapshot` as today (`:403`, `:464`) | nothing |
-| diff | per side: a `View`; `--strict` → `run(default)`; release both; `compose_full_snapshot` (`diff/cli.rs:117`); the `View` dropped before the next side loads | nothing |
-| events fanout / chains | `prepare(Plan { runs: [default], after_run: SUMMARIES })`; `run(default)` → `analyzer_diagnostic_lines`; `--strict`; the report from `det.event_graph`, `det.event_flow_indexes`, `det.summaries` (`events.rs:427-429`, `:572`; today from an `ALL` context, `:422-426`; `event_graph` and `event_flow_indexes` are built under every mask, `detector_context.rs:939`, `:1245`, and `summaries` under `SUMMARIES \| TRANSACTION_SPANS`, `:914` — the plan says so instead of relying on d9); release | the second context (`:422-426`, `:567-571`) |
-| policy check | `prepare(Plan { runs: [default] })`; `run(default)` → diag lines; `--strict`; `resolve_policy_check` from `inputs.policy_file`, reported where `:230` reports it today (§4.2.3); `release(Det)`; then, with a policy loaded, the RAW build where `:261-266` builds it today: `let raw = build_detector_artifacts(model, SUMMARIES \| RAW_INHERITED_FACTS, Arc::clone(view.graph()), None, target.cross_app_inputs())` — a command LOCAL, not a cell, so no `det` ever carries `RAW_INHERITED_FACTS` (epic I5, Decisions 12 and 50) and the ~10.9 GB raw cone (`registry.rs:63-70`) is alive only after the detector loop, as today (`pipeline.rs:216` then `:261`); `PolicyModel::new(…, &raw.event_graph.events, …, &raw.summaries)` and `run_policy_engine` (`:281-289`); drop `raw`; release. The mask is `SUMMARIES \| RAW` and not today's `ALL \| RAW`: `PolicyModel` reads `event_graph` (built under every mask, `detector_context.rs:939`) and `summaries` (the `need_summaries` block, `:914`, `:1141-1146`, which `CORE_SUMMARIES` and `CLOSED_WORLD_TEMP` do not touch; `select_facts`, `policy_engine.rs:110-125`, reads the raw half), so the two maps are equal; `:926-930`'s assertion (`RAW` needs `SUMMARIES`) holds. The RAW build shares the view's graph (its own `build_combined_graph` and the v2 solve it ran under `ALL` are gone), so §4.4.8 counts it as `ctx` 2, `cone` 2, `pd_solve` 2, `v2` 1. It goes with step 6 (Decision 16) | the RAW context's own graph, Tarjan and solve (`:261-266` at `ALL`) |
-| query | `prepare(Plan { runs: [], need_l4: true })` (`l4.warnings` printed by the fill, §4.4.7); `DbEffectQuery::build(&l4.bundle, &l4.scc, &graph)` | the two bundle builders (`effect_query_cli.rs:207-261`) |
+| analyze | `prepare(Plan { runs: [selected], scope_primary: args.scope == Primary })`; `run(selected)`; `release(Det)`, `release(L4)`, `release(Ordering)`, `release(Graph)` — today the context dies inside the runner, before any projection (`registry.rs:413-416`, `:526-529`), and the `View` must not hold it longer; `analyzer_diagnostics_of_run` over that run; projection, filter, baseline, suppression, coverage, format (`run.rs:522-700`, unchanged) | nothing (analyze had no duplicate); the failure path's second build (§4.4.5) |
+| digest | the pipeline's no-input check (`digest_cli.rs:1590-1608`: empty `changedFiles`, `changedRoutines` and a blank `diffText`, reachable through `--diff <file>` on an empty or whitespace file, which passes the CLI check at `alsem.rs:1049-1058`) runs FIRST, right after `AnalysisTarget::build` and before `prepare`, so a bad input never pays the detector run or the solve. It keeps its place after the target build, so an id or build error still wins over it, as today. Then `prepare(Plan { runs: [default], scope_primary: true, need_l4: true, after_run: TRANSACTION_SPANS })`; `run(default)` → diagnostics JSON; `tx_context_map(&det.transaction_spans)` (the loop of `digest_cli.rs:546-558` as a pure function; today's map is built at `ALL`, `:543-544`, and the default set's union has `TRANSACTION_SPANS` because d9 is a default detector, `detectors/mod.rs:1294` — `prepare`'s `after_run` assertion keeps that true, A2.10); `release(Det)`, `release(Graph)`; `compose_snapshot(model)`; `resolve_changed_roots`; `compute_digest_effects_cli(&snap, model, Some(&roots))`; `DbTempStates::new(model, &l4.bundle)`; `run_digest_query_full_from_entries`; drop snapshot, entries, temp states; `release(L4)`; project JSON (with the diagnostics computed first); serialize | the second context (`:534-560`), the separate bundle (`:1625-1628`) |
+| prove | the same plan; `run(default)` → diagnostics; `tx_context_map(&det.transaction_spans)` (today at `ALL`, `prove.rs:843`); `release(Det)`, `release(Graph)`; `compose_snapshot`; roots; `compute_digest_effects_cli(&snap, model, Some(from_ref(root)))` (today `None`, `prove.rs:961`; each root's pass is independent, `digest.rs:4094-4112`); `DbTempStates::new(model, &l4.bundle)`; query; `unresolved_cone`; `release(L4)`; project | the second context (`prove.rs:838-859`), the separate bundle (`:964`) |
+| fingerprint | `prepare(Plan { runs: [default] })`; `run(default)` → `analyzer_diags_for` (`fingerprint_cli.rs:547-555`); `--strict` gate; `release(Det)`, `release(L4)`, `release(Graph)` (today the context, graph included, dies inside `analyzer_diags_for` at `fingerprint_cli.rs:364`, before `:403`); `compose_full_snapshot` / `compose_snapshot` as today (`:403`, `:464`) | nothing |
+| diff | per side: a `View`; `--strict` → `run(default)`; `release(Det)`, `release(L4)`, `release(Graph)`; `compose_full_snapshot` (`diff/cli.rs:117`); the `View` dropped before the next side loads | nothing |
+| events fanout / chains | `prepare(Plan { runs: [default], after_run: SUMMARIES })`; `run(default)` → `analyzer_diagnostic_lines`; `--strict`; the report from `det.event_graph`, `det.event_flow_indexes`, `det.summaries` (`events.rs:427-429`, `:572`; today from an `ALL` context, `:422-426`; `event_graph` and `event_flow_indexes` are built under every mask, `detector_context.rs:939`, `:1245`, and `summaries` under `SUMMARIES \| TRANSACTION_SPANS`, `:914` — the plan says so instead of relying on d9); `release(Det)`, `release(L4)`, `release(Graph)` | the second context (`:422-426`, `:567-571`) |
+| policy check | `prepare(Plan { runs: [default] })`; `run(default)` → diag lines; `--strict`; `resolve_policy_check` from `inputs.policy_file`, reported where `:230` reports it today (§4.2.3); `release(Det)`, then `release(L4)` (the RAW build below takes `l4: None`, so nothing after the run reads `l4`; holding it through the ~10.9 GB raw-cone phase would be waste); then, with a policy loaded, the RAW build where `:261-266` builds it today: `let raw = build_detector_artifacts(model, SUMMARIES \| RAW_INHERITED_FACTS, Arc::clone(view.graph()), None, target.cross_app_inputs())` — a command LOCAL, not a cell, so no `det` ever carries `RAW_INHERITED_FACTS` (epic I5, Decisions 12 and 50) and the ~10.9 GB raw cone (`registry.rs:63-70`) is alive only after the detector loop, as today (`pipeline.rs:216` then `:261`); `PolicyModel::new(…, &raw.event_graph.events, …, &raw.summaries)` and `run_policy_engine` (`:281-289`), i.e. the policy rule engine runs AFTER `det` is released, off this local, not as an epic item-8 projection off `det` (epic §5.9 rule 3 item 8 and Decision 47, amended for the steps before 6: round 9 of the epic's log); drop `raw`; `release(Graph)` (the RAW build is the graph's last reader). The mask is `SUMMARIES \| RAW` and not today's `ALL \| RAW`: `PolicyModel` reads `event_graph` (built under every mask, `detector_context.rs:939`) and `summaries` (the `need_summaries` block, `:914`, `:1141-1146`, which `CORE_SUMMARIES` and `CLOSED_WORLD_TEMP` do not touch; `select_facts`, `policy_engine.rs:110-125`, reads the raw half), so the two maps are equal; `:926-930`'s assertion (`RAW` needs `SUMMARIES`) holds. The RAW build shares the view's graph (its own `build_combined_graph` and the v2 solve it ran under `ALL` are gone), so §4.4.8 counts it as `ctx` 2, `cone` 2, `pd_solve` 2, `v2` 1. It goes with step 6 (Decision 16) | the RAW context's own graph, Tarjan and solve (`:261-266` at `ALL`) |
+| query | `prepare(Plan { runs: [], need_l4: true })` (`l4.warnings` printed by `build_l4`, §4.4.7); `DbEffectQuery::build(&l4.bundle, &l4.scc, &graph)` | the two bundle builders (`effect_query_cli.rs:207-261`) |
 | graph | no `View`: `export_from_program(&program)` | the private build (§4.3.3) |
+
+`release(Graph)` follows the graph's last reader in every row except query (whose
+`DbEffectQuery` reads it to the end). Single-app, the view builds and owns the graph,
+and today it dies with the context inside the runner (`registry.rs:413-416`) or inside
+`analyzer_diags_for`; without the release it would live on through snapshot
+composition (fingerprint, diff `--strict`, digest and prove `--single-app`, analyze
+`--single-app` through projection). Cross-app the release drops only the view's
+pointer; the base keeps its `Arc`, as today. `det` holds a second `Arc` to the same
+graph, so `release(Det)` comes first. What stays: `l4.scc` lives with `l4.bundle`
+through digest's and prove's snapshot composition. For prove that is today's state
+(`_scc` at `prove.rs:964`). For `digest --single-app` it is new: today the SCC dies at
+the end of `:1626`, after the snapshot was composed at `:1580`. Today graph, SCC and
+the finished snapshot are alive together during that statement; after step 2 the SCC
+alone (no graph) is alive during composition. The `l4` census bucket sizes it, and
+A2.4 measures `digest --single-app` and `fingerprint` so a single-app regression is
+seen.
 
 Byte-neutrality of the reorders: every artifact is a pure function of the model, so
 computing the diagnostics run before the snapshot changes no byte of stdout. What it
@@ -933,13 +1368,42 @@ Today `build_cross_app_analysis_model` (`run.rs:370-402`) classifies a failed cr
 build by RUNNING THE SINGLE-APP BUILD (`:387`), whose program build (`:285-291`) comes
 before its id check (`:296-307`); `fresh` is that second build's result and
 `empty_output_result` uses it as reason precedence 1 (`:884-890`). The second build is
-deleted. The rows, with `fresh` defined on each:
+deleted.
+
+Classifying without a rerun needs to know WHY the cross-app path failed, and today's
+API discards that: `build_cross_app_base` returns `Option<R3a5CrossAppBase>`
+(`capability_cone.rs:3433-3436`), and it is `None` in three cases: the program build
+failed (`build_cross_app_program(workspace).ok()?`, `program_calls.rs:822-823`, the
+error dropped), the model assembly failed (`)?`, `:856`), or the model has no
+`primary_app` (`.as_ref()?`, `capability_cone.rs:3442-3446`). Step 2 gives both
+functions a `Result` that carries the case:
+
+```rust
+pub enum CrossAppFailure {
+    /// The program build's own `Err` (row 2).
+    Build(String),
+    /// Build `Ok`, assembly `None`: the build's coverage (row 3).
+    Assembly { fresh: FreshCoverage },
+    /// Build and assembly `Ok`, `primary_app` `None` (row 4).
+    NoPrimaryApp { fresh: FreshCoverage },
+}
+pub fn assemble_and_resolve_cross_app_program(inputs: &Arc<InputSet>, model_instance_id: &str,
+    skip_roots_config: bool) -> Result<CrossAppProgram, CrossAppFailure>;   // `program_calls.rs:816-908`
+pub(crate) fn build_cross_app_base(inputs: &Arc<InputSet>, model_instance_id: &str)
+    -> Result<R3a5CrossAppBase, CrossAppFailure>;                          // `capability_cone.rs:3433`
+```
+
+Every other caller of the two (`grep` finds 19 call sites in 12 files: the r3a4/r3a5
+projections, `QuerySubstrate`, `finding.rs`, `registry.rs`, and the `tests/r3`, `r4`,
+`temp_state` suites) maps the `Err` back to today's `None` with `.ok()`, so none of
+them changes behaviour. The rows, with `fresh` defined on each:
 
 | Row | Today | After step 2 |
 |---|---|---|
 | `inputs.model_instance_id` is `None` (no readable `app.json` with a non-empty string `id`, or a failed walk) | no cross-app build; one single-app build; `NoModelInstanceId`; `fresh` = that build's `Result` | ONE build, under today's profile: `ResolvedProgram::build(inputs, Summary)` — the id is known before any build, so this row never pays `FULL`'s `resolve_dependency_bodies` for an empty output; `NoModelInstanceId`; `fresh` = its `Result`. The `Err` text of a snapshot failure is the same for both profiles (`full.rs:2140-2148`: the snapshot build fails before the profile matters); a test pins it on an id-less `app.json` plus an unreadable `.al` (A2.7) |
-| id present; the build returns `Err(e)` | single-app rerun (`:387`), which fails the same way; its arm walks (`:312-313`) and classifies `ProgramBuildFailed(why)` with `why` = the RERUN's own error (`:315`) if the `NestedApps::Skip` list is non-empty, else `AssemblyFailed`; `:392` passes that `Err` through; `fresh` = the rerun's `Err`. (The fixed `"the cross-app model could not be built"`, `:389-391`, appears only when the cross-app build fails but the rerun SUCCEEDS; then `fresh` is `Ok` today) | `ProgramBuildFailed(e)` if `inputs.app_scoped_files()` is non-empty, else `AssemblyFailed`; `fresh = Err(e)`. The `why` text is the cross-app build's own error: the same text as today when the rerun fails the same way (the usual case: one program build fails twice for one reason), and the real error instead of the fixed string in the cross-app-only failure, where `fresh` turns from `Ok` into `Err(e)`. The string reached the user only through `analysis failure — program engine build failed: <why>` (`:494-498`), exit 2; no test pins it (grep: none) |
-| build `Ok`, cross-app assembly returns `None` (empty model, `workspace.rs:1781-1784`) | single-app rerun also assembles to nothing; `AssemblyFailed`; `fresh = Ok(single-app coverage)` | `AssemblyFailed`; `fresh = Ok(cross-app coverage)`. `empty_output_result` reads `fresh` only as `Err` text (`:884-890`), so the coverage value never reaches output |
+| id present; `Err(CrossAppFailure::Build(e))` | single-app rerun (`:387`), which fails the same way; its arm walks (`:312-313`) and classifies `ProgramBuildFailed(why)` with `why` = the RERUN's own error (`:315`) if the `NestedApps::Skip` list is non-empty, else `AssemblyFailed`; `:392` passes that `Err` through; `fresh` = the rerun's `Err`. (The fixed `"the cross-app model could not be built"`, `:389-391`, appears only when the cross-app build fails but the rerun SUCCEEDS; then `fresh` is `Ok` today) | `ProgramBuildFailed(e)` if `inputs.app_scoped_files()` is non-empty, else `AssemblyFailed`; `fresh = Err(e)`. The `why` text is the cross-app build's own error: the same text as today when the rerun fails the same way (the usual case: one program build fails twice for one reason), and the real error instead of the fixed string in the cross-app-only failure, where `fresh` turns from `Ok` into `Err(e)`. The string reached the user only through `analysis failure — program engine build failed: <why>` (`:494-498`), exit 2; no test pins it (grep: none) |
+| build `Ok`, cross-app assembly returns `None` (empty model, `workspace.rs:1781-1784`): `Err(CrossAppFailure::Assembly { fresh })` | single-app rerun also assembles to nothing; `AssemblyFailed`; `fresh = Ok(single-app coverage)` | `AssemblyFailed`; `fresh = Ok(cross-app coverage)` (the variant's `fresh`). `empty_output_result` reads `fresh` only as `Err` text (`:884-890`), so the coverage value never reaches output |
+| build and assembly `Ok`, `primary_app` `None`: `Err(CrossAppFailure::NoPrimaryApp { fresh })` | `primary_app` comes from a second disk read of `app.json` (`read_primary_app_from_disk`, `workspace.rs:1774`, `:1790-1800`), so only a file changed between that read and the id read could reach this; the single-app rerun then succeeds and the row is `ProgramBuildFailed("the cross-app model could not be built")` with `fresh` `Ok` | unreachable from step 1: `primary_app` and the model-instance id both come from `inputs.app_json` (§4.2.3), and both need the same non-empty string `id`. Kept as a fail-closed arm with today's outcome: `ProgramBuildFailed("the cross-app model could not be built")`, `fresh = Ok(fresh)`. No test (no input reaches it) |
 
 `build.program` is 1 on every row (A2.7); today it is 1 on the first row and 2 on the
 others. `build_analysis_model`'s single-app arm (`:285-364`) keeps its rows; its own
@@ -977,13 +1441,17 @@ and makes the line a value:
 
 - `l4::render_warnings(&[SummarizeDiagnostic]) -> Vec<String>` renders today's text;
   `build_l4` stores the result as `warnings`.
-- ONE print site: `View::prepare` prints `l4.warnings` with `eprintln!` right after the
-  `l4` fill, so the line is printed iff the cell was filled (`plan.need_l4 || some run's
-  mask has CORE_SUMMARIES`) — the same place in the stream the solver printed from
-  (during the build, before any stdout write), and the same kind of site (a library
-  `eprintln!`, §5). One site, not one per command: with eight commands each printing
-  for itself, a command that forgot would lose the line with no test failing (no
-  fixture caps). "Filled", not "some run demands it": query's plan has no run
+- ONE print site: `build_l4` itself prints `warnings` with `eprintln!` just before it
+  returns. Every solve goes through it: `View::prepare`'s `l4` fill (so on `alsem` the
+  line is printed iff the cell was filled, `plan.need_l4 || some run's mask has
+  CORE_SUMMARIES`) and the `OwnedContext` shims (§4.4.2), so the `aldump` modes that
+  reach the shims through `run_detectors` / `run_detectors_cross_app`
+  (`switch_dump.rs:126`, `finding.rs:952`, `:1049`) print exactly as today, when the
+  context's own solve printed. It is the same place in the stream the solver printed
+  from (during the build, before any stdout write), and the same kind of site (a
+  library `eprintln!`, §5). One site, not one per command or per caller: with eight
+  commands each printing for itself, a command that forgot would lose the line with no
+  test failing (no fixture caps). "Filled", not "some run demands it": query's plan has no run
   (`runs: []`, `need_l4: true`) and today prints the line from its bundle builders
   (`effect_query_cli.rs:207-261` → `summary_runner.rs:1811-1814`); the line must not
   vanish there. Step 12 decides per-job emission from the stored value (epic §5.11).
@@ -1002,7 +1470,7 @@ Effect on a capped SCC: digest and prove print 2 lines instead of 4, events and 
 instead of 2, analyze, fingerprint and query 1, 2 and 1 as today (§7). No fixture caps (the
 corpus converges; `detector_context.rs:758-765`), so no golden carries the line; a unit
 test on `render_warnings` from a hand-stated `SummarizeDiagnostic` pins the text. Stated
-limit: the print site itself (`prepare`, `:3215`) is pinned by no executable test, since
+limit: the print site itself (`build_l4`, `:3215`) is pinned by no executable test, since
 no fixture produces a `SummarizeDiagnostic`; one site is the mitigation.
 
 #### 4.4.8 Counts after step 2 (what A2.1 pins)
@@ -1010,7 +1478,7 @@ no fixture produces a `SummarizeDiagnostic`; one site is the mitigation.
 | Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
 | analyze, cross-app, default | 1 | 2 | 1 | 1 | 2 | 1 | 1 | 0 |
-| analyze, cross-app, `--detector d47-…` | 1 | 3 | 2 | 2 | 4 | 2 | 1 | 1 |
+| analyze, cross-app, `--detector d47-…` (the context's graph is gone; no `l4` fill: `need_l4` is false and the mask has no `CORE_SUMMARIES`) | 1 | 3 | 1 | 1 | 3 | 1 | 1 | 1 |
 | analyze `--single-app` | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
 | digest, cross-app | 1 | 3 | 2 | 2 | 4 | 2 | 1 | 1 |
 | digest `--single-app` | 1 | 2 | 2 | 2 | 4 | 2 | 1 | 1 |
@@ -1033,7 +1501,10 @@ cone's Tarjan at `capability_cone.rs:2783`; step 6, Decision 16). `ctx` counts
 - **A probe that changes bytes.** The census and the counters run under flags; A0.5 and
   A1.5 compare SARIF with the flag on and off. A timer on a per-entry path must go
   through `start()`/`add_since()`; a bare `Instant::now()` there would distort the number
-  it reports (`detector_context.rs:435-443`).
+  it reports (`detector_context.rs:435-443`). A count goes through a local fold plus
+  `add_gated()`, never the ungated `add()` (§4.1.1). **A probe that costs time with
+  the flag off** is caught at the use by A0.1's census-off cone wall against the parent
+  (§6.2), not only by `start()`'s contract.
 - **A counter that counts a test helper.** `build.graph_scc` sits at named call sites;
   `tarjan_scc` itself is untouched, so the solver's inner Tarjan and d7's own never
   count.
@@ -1041,8 +1512,11 @@ cone's Tarjan at `capability_cone.rs:2783`; step 6, Decision 16). `ctx` counts
   class each. A new reader added later is caught by none of them; the rule is that
   every function taking `&Path` under `src/engine/` and `src/program/model/` is a
   review flag from step 1 on.
-- **A stale `InputSet`.** The LSP keeps its own file reading; `SnapshotBuilder::from_disk`
-  builds a fresh `InputSet` per build. Nothing caches an `InputSet` across builds.
+- **A stale `InputSet`.** The LSP keeps its own file reading; `SnapshotBuilder::build`
+  and its siblings read a fresh `build_only` `InputSet` per build (§4.2.6). Nothing caches an `InputSet` across builds.
+  No struct the LSP retains holds one: `AppSetSnapshot` gains no field, and the model's
+  `workspace_diagnostics` are built from an `&InputSet` parameter (§4.2.4). The holders
+  are `ProgramMeta` (step 1b) and the command's own `Arc`, both dropped at command end.
 - **A fail path that parses.** None: `compute_workspace_diagnostics` never parses
   after step 1 (§4.2.4); the one corner whose rows it drops is stated in §7.
 - **A policy RAW build that becomes a cell.** It is a local of `run_policy_check`
@@ -1073,11 +1547,21 @@ cone's Tarjan at `capability_cone.rs:2783`; step 6, Decision 16). `ctx` counts
   `CombinedGraph` derives `PartialEq` (`combined_graph.rs:140`), and §8.4's equality
   test is TRANSIENT: it lands in the commit that adds the view's graph cell beside the
   context's own build, and the commit that deletes the context's build deletes the
-  test (it would have nothing to compare). The commit history is the proof. The same
+  test (it would have nothing to compare). The same
   rule covers `l4::bundle_equals_the_old_builders` (§8.4): `build_l4` lands beside
   `build_db_effect_bundle` / `cross_app_db_effect_bundle`, the test runs, then the
   deletion commit removes builders and test together. Neither keeps a test-only copy:
-  a copy would pin the copy, not the code.
+  a copy would pin the copy, not the code. **The commit history is NOT the proof**: the
+  issue flow squash-merges after gating the branch HEAD (CLAUDE.md, autonomous-flow
+  exception), where these tests are already gone, so no gate ever runs them and the
+  intermediate commits do not reach `master`. So for each TRANSIENT test
+  (`bundle_equals_the_old_builders`, `base_graph_equals_context_graph`,
+  `bytes_split_sums_to_the_old_total`) the ledger records: the intermediate commit SHA it
+  ran at; the exact `cargo test` command and its pass line at that SHA; the discrimination
+  break, its failing assertion text and the green revert, at that same SHA. The final
+  review checks the three rows exist and that each SHA is an ancestor of the branch
+  HEAD, and the PR body quotes them, so the evidence survives the squash (no
+  `scripts/` change: the check is a review item, not a gate).
 - **A profile-dependent `Err` text on the no-id row.** A2.7's test pins the text on the
   one input that produces it.
 
@@ -1089,7 +1573,9 @@ CDO `U:/Git/DO-cdo-baseline/Cloud` at `bc3ccb18`, clean, pinned `.alpackages`;
 `release-fast` binaries copied out of `target/` (cdo-measure skill §1); the parent commit
 and the step's head built from the same `tree-sitter-al` commit; no concurrent cargo
 build. Commands: `analyze --format sarif`, `digest --diff c.diff` (the P5 diff, 48 roots),
-`fingerprint --format json --out f.json`, and for step 2 also `prove` on one P5 root.
+`fingerprint --format json --out f.json`, and for step 2 also `prove` on one P5 root and
+`digest --single-app --diff c.diff`. The peaks come from `read_rss()`, which exists on
+Windows only (§4.1.4, A0.4); the dev machine is Windows.
 Runs interleave parent and head, ≥ 3 each, `ALSEM_TRACE=1 ALSEM_TRACE_STDERR=1`, the
 process wall from the harness clock (`scratchpad/meas.py` pattern), both peaks from the
 trace (§4.1.4). `RAYON_NUM_THREADS` unset on both sides (Decision 36).
@@ -1100,7 +1586,10 @@ every run, not only the medians.
 
 ### 6.2 Step 0
 
-No bound. Records: §4.1.7's table, including whether each timer's median is ≥ 2 × its
+One bound, A0.1's use-level check: CDO `analyze` `context.capability_cones` wall with
+the census OFF, head median ≤ parent median + band. A miss means a new probe costs
+production time; the probe is fixed before any step-0 number is recorded. Records:
+§4.1.7's table, including whether each timer's median is ≥ 2 × its
 band (I6's rule). From the P5 numbers the expectation is: `context.capability_cones`
 (20.9 s) and digest's wall (63–67 s) comfortably; `b3.adapter` (4.8 s) likely;
 `b3.adapter.join` and `b3.adapter.by_decl` unknown until measured — if either's median
@@ -1111,9 +1600,9 @@ is < 2 × its band, step 10 / 11 is re-labelled non-speed before its spec is wri
 
 | Step | Bound | Expected |
 |---|---|---|
-| 1 | none; both peaks and `analyze.total` reported against the parent | peak +5 MB (the retained texts), inside the band |
+| 1 | none; both peaks and `analyze.total` reported against the parent; LSP `build_full` (Criterion, 100 and 1000 files) recorded parent vs head (§4.2.6) | peak +5 MB (the retained texts), inside the band; `build_full` flat (a `build_only` read does today's disk work) |
 | 1b | process peak and post-attach peak ≤ parent median + band(peak) for analyze and digest | flat within the band: `ProgramMeta` holds the workspace texts (5.09 MB on CDO, §4.3.4) and nothing else of size; the body drops where it did |
-| 2 | digest wall: parent median − head median ≥ 21 s − band(digest wall); both peaks ≤ parent + band for analyze and digest; cell census printed at the first run | ≈ −21 s on digest (the deleted context), ≈ −0.3 s on prove and events; analyze unchanged |
+| 2 | digest wall: parent median − head median ≥ 21 s − band(digest wall); both peaks ≤ parent + band for analyze and digest (cross-app) and for `fingerprint` and `digest --single-app` (A2.4); cell census printed at the first run | ≈ −21 s on digest (the deleted context); peaks flat or lower: inside the `det` fill the solve still follows the cone, so no new co-residency (§4.4.4); prove deletes the same two builds as digest (an `ALL` context, `prove.rs:843`, and a bundle, `:964`), events one `ALL` context (`events.rs:422-426`, cone plus v2 solve), so each saves the same order as digest's ~21 s on CDO, not fractions of a second. Not bounded: the §4.4.8 counters pin those deletions; the prove run of §6.1 records its wall; analyze unchanged |
 
 A miss on a peak walks the epic's fallback ladder (§5.12). A miss on the digest saving
 is a stop: the deleted context is the whole claim.
@@ -1121,14 +1610,15 @@ is a stop: the deleted context is the whole claim.
 ## 7. Golden families each step may move
 
 Byte-neutral means none of the 8 targets of `scripts/check-goldens` moves and no
-`--lib` outcome moves. Per step, what is allowed to change outside the goldens:
+`--lib` outcome moves except the tests named in the Goldens column below. Per step,
+what is allowed to change outside the goldens:
 
 | Step | Goldens | Stated non-golden changes |
 |---|---|---|
-| 0 | none | the `[cones-census]` stderr lines are renamed/split (a diagnostic, off by default); the `[C1_CONE_CENSUS]` report and its `C1_CONE_CENSUS=1` flag are replaced by the `context.<field>` buckets under `ALSEM_RETAINED_CENSUS=1` (§4.1.5; off by default); two new trace counter names |
-| 1 | none; the in-process harnesses gain an `InputSet::read` line each (`tests/cli/cli_a_*`, `cli_b_*`, `cli_c_*`, `cli_d35_unknown_commit`, `cli_digest_*`, `cli_p1_inventory`, `cli_s6_consumers`, `cli_workspace_source`, `cli_analyze_*`, `cli_attribute_trivia`, `cli_event_dispatch_first_hop`, `cli_implicit_trigger_cone`) | a stdout/file write failure: one text, `al-sem: write error: <stream\|path>: <OS message>`, on every command; analyze exits 2 (today: abort), every other command keeps its exit 1 (today: exit 1 with four different texts); one stdout corner (§4.2.4): a nested app reached through a directory symlink, with an unreadable file inside it and no root `.al` file, loses its `No object declaration found in <rel>` info rows (the build parsed nothing; no fixture, no golden); a `.al` file added after the read no longer fails the model closed (§4.2.3, `select_program_files`); the `inputs.read` counter |
-| 1b | `tests/cli-query-goldens/graph.test-selection-graph.jsonl` must NOT move (A1b.1) | none |
-| 2 | none; `tests/gap/gap_detector_substrate_parity.rs` widened; `--lib` tests that build a `DetectorContext` by hand (`d17.rs:504`, `d50.rs:619`, `:784`, `detector_context.rs` tests) and the 63 `minimal_ctx` sites (`test_support.rs:367`) are rewritten to the split, same assertions | on a capped SCC: fewer duplicate non-convergence lines on `alsem` (§4.4.7), and `aldump --r3a2` / `--r3a5-cross-app-summary` lose the line (their solves discard the diagnostics, `summary.rs:887`, `capability_cone.rs:3619`); analyze's build-failure message carries the real error where today's fixed string stood (§4.4.5, row 2: cross-app build fails, single-app rerun would have succeeded) |
+| 0 | none; `pd_solve::bytes_split_sums_to_the_old_total` is added and later deleted with `solve_bytes` (TRANSIENT, §8.1) | the `[cones-census]` stderr lines are renamed/split (a diagnostic, off by default); the `[C1_CONE_CENSUS]` report and its `C1_CONE_CENSUS=1` flag are replaced by the `context.<field>` buckets under `ALSEM_RETAINED_CENSUS=1` (§4.1.5; off by default); two new trace counter names. **Known stale references the issue flow may not fix** (`.claude/` is protected, CLAUDE.md): `.claude/skills/byte-census/SKILL.md:46` and `.claude/skills/perf-probe/SKILL.md:46` (main checkout) still name `C1_CONE_CENSUS`; the user updates them to `ALSEM_RETAINED_CENSUS` when step 0 merges. Historical docs and CHANGELOG entries that name the old flag describe past runs and stay |
+| 1 | none; the in-process harnesses gain an `InputSet::read` line each (`tests/cli/cli_a_*`, `cli_b_*`, `cli_c_*`, `cli_d35_unknown_commit`, `cli_digest_*`, `cli_p1_inventory`, `cli_s6_consumers`, `cli_workspace_source`, `cli_analyze_*`, `cli_attribute_trivia`, `cli_event_dispatch_first_hop`, `cli_implicit_trigger_cone`); in `src/engine/switch_dump.rs` (§4.2.6) `analyze_builds_through_the_dumped_functions` bans `project_coverage_inputs` in place of the renamed `project_coverage_disk`, and `analyze_model_selects_app_scoped_files_from_the_program_parse` builds through an `InputSet`, same assertions; the `workspace.rs` / `program_calls.rs` tests that call the `*_from_program` entries gain an `InputSet::read` line (§4.2.3); the 11 test `Model` literals (`format_html.rs:1218`, `:1275`; `d1.rs:3194`, `:4277`; `d17.rs:526`; `d35.rs:289`; `d50.rs:811`; `detector_context.rs:1711`, `:1752`; `registry.rs:1098`; `run.rs:1149`) gain `workspace_diagnostics`, same assertions, and the production literal at `run.rs:863` gains `vec![]` (§4.2.4); the two full `FreshCoverage` test literals (`preflight.rs:133`, `:210`) gain `files_without_object: vec![]`, same assertions; `run_analyze_with_exit_uses_the_shared_aggregation` (`run.rs:1175-1210`) gains the needle `.workspace_diagnostics` (§4.2.4); the `--lib` build tests and `aldump --compiler-oracle` that call `build_program_with_coverage` gain an `InputSet::read` line (§4.2.6); `tools/census-probe`'s `q6` follows the step-1 signatures (§4.1.5; not a CI target) | a stdout/file write failure: one text, `al-sem: write error: <stream\|path>: <OS message>`, on every command; analyze exits 2 (today: abort), every other command keeps its exit 1 (today: exit 1 with four different texts); one stdout corner (§4.2.4): a nested app reached through a directory symlink, with an unreadable file inside it and no root `.al` file, loses its `No object declaration found in <rel>` info rows (the build parsed nothing; no fixture, no golden); a `.al` file added after the read no longer fails the model closed (§4.2.3, `select_program_files`); `aldump --switch-dump` on a workspace whose program build fails loses its `No object declaration found in <rel>` rows (§4.2.4; no golden reads the dump); the `inputs.read` counter |
+| 1b | `tests/cli-query-goldens/graph.test-selection-graph.jsonl` must NOT move (A1b.1); the `--lib` tests that call `SiteLinks::build`, `site_census` or `resolved_calls_from_program` pass `report.edge_view()` (§4.3.3), same assertions | none |
+| 2 | none; `tests/gap/gap_detector_substrate_parity.rs` widened; `--lib` tests that build a `DetectorContext` by hand (`d17.rs:504`, `d50.rs:619`, `:784`, the other `detector_context.rs` tests) and the 63 `minimal_ctx` sites (`test_support.rs:367`) are rewritten to the split, same assertions; three `--lib` outcome changes (§4.4.2): in `registry.rs`, `declared_ordering_facts_are_filled_before_the_parallel_loop` is DELETED (the `run_each` fill it pins is gone) and replaced by `session::prepare_fills_ordering_before_the_runs`, and `undeclared_ordering_facts_read_inside_the_loop_fails_loudly` is rewritten to the shim and now runs in release too (its `#[cfg(debug_assertions)]` dropped); in `detector_context.rs`, `ordering_facts_are_lazy_and_parity_with_direct_compute` (`:1700-1725`) is DELETED (it pins the lazy `OnceLock` fill step 2 removes) | on a capped SCC: fewer duplicate non-convergence lines on `alsem` (§4.4.7), and `aldump --r3a2` / `--r3a5-cross-app-summary` lose the line (their solves discard the diagnostics, `summary.rs:887`, `capability_cone.rs:3619`); the `aldump` modes that reach the shims (`--switch-dump`, `switch_dump.rs:126`; the r4 findings projections, `finding.rs:952`, `:1049`, cross-app included) keep theirs, because `build_l4` prints (§4.4.7); on a capped SCC under a plan with d47/d49/d51, the ordering snapshot's line now comes BEFORE the `l4` line (ordering fills first, §4.4.3 rule 1; today it came after the context's); analyze's build-failure message carries the real error where today's fixed string stood (§4.4.5, row 2: cross-app build fails, single-app rerun would have succeeded); digest with no usable input (an empty `--diff` file) still exits with the pipeline's error, but its check now runs before any snapshot (§4.4.4), so on a capped SCC the snapshot's non-convergence line no longer comes before the error |
 
 The CDO `aldump --program-call-graph-stats` histogram SHA and the `cdo-measure` detector
 baseline are checked at every step (epic I10, E14).
@@ -1139,31 +1629,51 @@ Every new test lists its break, the failing assertion, and the revert (epic I9).
 are made with the Edit tool, run, then reverted with Edit; both outcomes go in the
 ledger. A scripted break is never used.
 
+**Recipe: an unreadable file or folder.** Bad bytes do not work: `decode_al_source` is
+lossy (`source_text.rs:116-124`), so a read never fails on content. The walker skips
+dangling links (`NotFound`, `:80-84`) and non-files (`:87-89`). The tests that need an unreadable
+`.al` (`no_id_row_runs_one_build_and_keeps_the_text`, `build_failed_row_runs_one_build`,
+the A1.3 / A1.7 cases) share ONE helper, `tests/common/unreadable.rs`, hoisted like
+`cdo.rs`/`regen.rs` by `#[path]` in each umbrella `main.rs` and, for the `--lib` tests,
+by `#[cfg(test)] #[path = "../tests/common/unreadable.rs"] mod unreadable;` in the
+module that uses it (one source, no copy). `fn unreadable(path) -> Option<Guard>`:
+- Unix: `chmod 000` on the file (or folder). Then it tries `std::fs::read` (a folder:
+  `read_dir`); if that still succeeds (running as root, or a file system that ignores
+  modes) it restores the mode and returns `None`. CI runs as a non-root user.
+- Windows, a file: opens it with `OpenOptionsExt::share_mode(0)` and keeps the handle in
+  the guard; every other open, in this process or a spawned `alsem`, fails with a sharing
+  violation. It checks that `std::fs::read` now fails, else returns `None`. A folder:
+  returns `None` (share mode does not stop a directory listing).
+- The guard restores the mode / closes the handle on drop, so the tempdir can be deleted.
+- `None` means skip: the test prints `skipped: cannot make <path> unreadable here` and
+  returns. A skip is never a pass in the ledger; every proof run of §8 is recorded on a
+  machine where the helper returned `Some`.
+
 ### 8.1 Step 0
 
 | Test | Break | Fails at | Revert |
 |---|---|---|---|
 | `cli_build_counters::<command>_<universe>` (one per §4.1.3 row) | per counter: add a second call of the counted builder at its site (e.g. a second `build_combined_graph` in `build_cross_app_base`); for `build.graph_scc`: add a `pt::counter_delta` to the solver's inner Tarjan | the table cell for that counter | remove the call / the counter |
-| `cli_build_counters::census_rest_is_never_negative` (spawned `alsem analyze` on `ws-d1-multi-caller` with `ALSEM_CONES_CENSUS=1`; parse the `[cones-census]` `rest` line from stderr). Spawned, not `--lib`: `cones_census::enabled()` is a `OnceLock` read once from the environment (`detector_context.rs:426-429`) and its counters are process-global atomics (`:348-424`), so another lib test in the same process can fix the flag off or add to the counters first | charge `SINGLETON_NANOS` (`:362`) twice. Not `BFS_FOLD_NANOS`: the fixture has no recursive SCC (`tests/r0-corpus/ws-d1-multi-caller/src/D1MultiCaller.al`: three callers of one helper, no cycle), so the `recursive` arm (`capability_cone.rs:2552-2561`) never runs there and a double charge of a counter that stays 0 changes nothing — the break would pass. Every routine of the fixture is a singleton (`:2563`), so a double `SINGLETON` charge makes `rest` negative | `rest >= 0` | once |
-| `pd_solve::bytes_split_sums_to_the_old_total` (unit, hand-stated small arena) | drop `reps` from `working_bytes` | the sum equals the pre-split `solve_bytes` value computed in the test | restore |
-| `cli_build_counters::phase_peak_is_reported` (spawned `alsem analyze` on `ws-d1-multi-caller` with `ALSEM_TRACE=1`; read both `peak.*` counters). Spawned for the same reason: the tracer is a `OnceLock` from the environment (`perf_trace.rs:402-407`). An absolute "≥ 64 MB" bound is not used — a shared test process may already sit above it | stop the sampler before attach runs | `0 < peak.post_attach_mb <= peak.process_mb` (the sampler never ran → 0) | restore |
+| `cli_build_counters::census_rest_is_never_negative` (spawned `alsem analyze` on `ws-d1-multi-caller` with `ALSEM_CONES_CENSUS=1`; parse the `[cones-census]` `rest` line from stderr). Spawned, not `--lib`: `cones_census::enabled()` is a `OnceLock` read once from the environment (`detector_context.rs:426-429`) and its counters are process-global atomics (`:348-424`), so another lib test in the same process can fix the flag off or add to the counters first | charge `SINGLETON_NANOS` (`:362`) twice. Not `BFS_FOLD_NANOS`: the fixture has no recursive SCC (`tests/r0-corpus/ws-d1-multi-caller/src/D1MultiCaller.al`: three callers of one helper, no cycle), so the `recursive` arm (`capability_cone.rs:2552-2561`) never runs there and a double charge of a counter that stays 0 changes nothing — the break would pass. Every routine of the fixture is a singleton (`:2563`), so the break exercises a live counter. The double charge alone lowers `rest` by one singleton time, which need not exceed the untimed remainder on a microsecond fixture, so the break also adds the call's whole `elapsed` to `SINGLETON_NANOS` at `compose_inherited_cones`' exit, before `rest` is taken: then `rest = −Σ(component deltas) < 0` whenever any component ran, which the singleton arm does on every routine. `rest` is `i64` and printed signed (§4.1.1), so the test can see a negative value at all | `rest >= 0` | once |
+| `pd_solve::bytes_split_sums_to_the_old_total` (unit, hand-stated small arena; TRANSIENT, like the two §5 oracle tests: it lands in the commit that adds `arena_bytes` and `working_bytes` BESIDE the unchanged `solve_bytes`, asserts `arena_bytes + working_bytes == solve_bytes` on that arena, and is deleted in the commit that deletes `solve_bytes`; the ledger records its run at a named intermediate SHA, §5. While both exist the oracle is the old code, not a copy; after the deletion nothing is left to compare, and a hand-stated byte literal would depend on `size_of` per platform) | drop `reps` from `working_bytes` | the sum equals `solve_bytes` | restore |
+| `cli_build_counters::phase_peak_is_reported` (`#[cfg(windows)]`: `read_rss()` is `None` elsewhere, §4.1.4, so on CI's Linux both peaks are 0 and the test could neither pass nor discriminate; spawned `alsem analyze` on `ws-d1-multi-caller` with `ALSEM_TRACE=1`; read both `peak.*` counters). Spawned for the same reason: the tracer is a `OnceLock` from the environment (`perf_trace.rs:402-407`). An absolute "≥ 64 MB" bound is not used — a shared test process may already sit above it | stop the sampler before attach runs | `0 < peak.post_attach_mb <= peak.process_mb` (the sampler never ran → 0) | restore |
 | A0.5 (measurement, not a test): SARIF census on == off on CDO | — | — | — |
 
 ### 8.2 Step 1
 
 | Test | Break | Fails at | Revert |
 |---|---|---|---|
-| `inputs::read_once` (`inputs.read` count 1 per command, via the trace reader) | call `InputSet::read` a second time in `AnalysisTarget::build` | count == 1 | remove |
+| `inputs::read_once` (`inputs.read` count 1 per command, 2 for `diff ws ws`, one per side; via the trace reader). A SPAWNED-process test in `tests/cli/cli_build_counters.rs` beside A0.2's rows, not a `--lib` test: the tracer is a `OnceLock` set once from the environment (`perf_trace.rs:402-407`) and the counters exist only in the trace file (B6's rule) | call `InputSet::read` a second time in `AnalysisTarget::build` | count == 1 | remove |
 | `inputs::app_json_edit_after_read` (`analyze --format pr-summary`: read, rewrite `app.json`'s `name`, run; output equals the untouched run) | restore `read_workspace_apps`'s disk read at `run.rs:122-157` | the pr-summary bytes | remove |
 | `inputs::roots_config_edit_after_read` (fingerprint json: read, delete `roots.config.json`, run; `inputs[]` rows and `rootClassifications` equal the untouched run) | restore the disk read in `load_roots_config` | the snapshot bytes | remove |
-| `inputs::al_text_edit_after_read` (analyze json on `ws-d14-dead-routine`: read, append `// al-sem-ignore` above the finding's line on disk, run; the finding is still reported) | restore `load_inline_suppressions`'s disk read | `findings.len()` | remove |
+| `inputs::al_text_edit_after_read` (analyze json on `ws-d14-dead-routine`: run once untouched and take the finding's `detector` and line L; then read, append ` // al-sem-ignore <detector>` (that detector id, in full) to the END of line L on disk, so no line shifts, run; the finding is still reported). The id is required: the parser needs `\s+([\w-]+)` after the keyword (`inline_suppression.rs:38-50`) and the match needs `s.detector_id == finding.detector` and `line == directive_line \|\| line == directive_line + 1` (`:242-244`); a bare `// al-sem-ignore` suppresses nothing, and the break below would stay green. The ledger records that the break run shows `findings.len()` one lower (the directive is live) | restore `load_inline_suppressions`'s disk read | `findings.len()` | remove |
 | `inputs::objectless_file_removed_after_read` (analyze json: a workspace with one objectless `.al`; read, delete that file, run; the `DIAG-index` line is still emitted) | restore the second parse / disk walk in `compute_workspace_diagnostics` | the diagnostic's presence | remove |
 | `inputs::al_file_added_after_read` (analyze json on `ws-d1-multi-caller` copied to a tempdir: read, write a new `src/Added.al` with one codeunit, run; the output equals the untouched run's). Today's `select_program_files` would walk again, list the new file, miss it in the parse and return `ProgramFiles::Missing` (`workspace.rs:1644`, `:1657`): no model | restore the `discover_al_files_app_scoped` walk at `workspace.rs:1644` | the output equality (the model fails closed) | remove |
 | `inputs::closure_app_replaced_after_read` (fingerprint json on the dependency workspace: read, overwrite the dependency `.app` bytes, run; `workspaceFingerprint` unchanged). Stated limit: it pins the HASH rows only; the loader still parses the `.app` after the hash (§4.2.2, Goal 2's exception), so a swap between the two reads gives a model from the new bytes under the old hash — today's race, unchanged | restore `hash_file` reads in `derive_inputs` | the fingerprint string | remove |
 | `inputs::policy_edit_after_read` (policy check json: read, rewrite the yaml on disk, run; findings unchanged) | restore the read in `resolve_policy_check` | the policy output | remove |
 | `inputs::baseline_edit_after_read` (analyze `--baseline`: read, rewrite the baseline file to suppress everything, run; findings unchanged) | restore `load_baseline`'s read | `findings.len()` | remove |
 | `baseline::update_baseline_applies_the_set_just_written` (A1.6; in-process, `ws-d8-commit-in-tx` like `update_baseline_round_trips_committed_file`, `tests/cli/gate_suppress_baseline_differential.rs:345-362`, which checks only the written file): `--baseline <tmp> --update-baseline` with (a) no file, (b) a malformed file; stdout has zero findings and the exit is clean in both, as today (`run.rs:584-598`: written, then read back) | apply `inputs.baseline` instead of the written set | (a) `findings.len()`; (b) the exit code (2, from the malformed read) | restore |
-| `inputs::walk_error_fails_the_build` (A1.7; a workspace whose root holds a directory symlink loop, built in a tempdir — skipped where the platform cannot create one): `al_walk` is `Err`; `ResolvedProgram::build` `Err`s with the `walking source` text, `inputs.model_instance_id` is `None`, `compute_workspace_diagnostics` returns the provider rows alone | make `read` store `Ok(())` and the partial list | the three assertions | restore |
+| `inputs::walk_error_fails_the_build` (A1.7; two cases in a tempdir: (a) a directory symlink loop at the root, skipped where the platform cannot create one; (b) an unreadable subfolder holding one `.al`, made by the §8 recipe, Unix only). In each: `al_walk` is `Err`; the `ResolvedProgram::build` `Err` text equals a FULL literal captured from today's code on the same input (for (b) it ends `IO error for operation on <P>: <os>: <os>`; the tempdir path is substituted into the literal); `inputs.model_instance_id` is `None`; `compute_workspace_diagnostics` returns the provider rows alone. A loop alone could not see a lost link: walkdir's loop error has no `source()` (`error.rs:215`) | (1) make `read` store `Ok(())` and the partial list; (2) store `e.to_string()` and rebuild the error from that text | (1) the three assertions; (2) case (b)'s literal (the last `: <os>` is gone) | restore |
 | `cli_write_failure::analyze_closed_pipe_exits_2` (spawn with piped stdout, drop the read end before the child writes, wait) | restore `println!("{out}")` | exit code 2 and the stderr line | remove |
 | `cli_write_failure::digest_out_unwritable_exits_1` (`--out` into a directory that is a file) | restore the `al-sem: digest: write error:` text | the `al-sem: write error: <path>:` line (exit stays 1) | remove |
 | A1.3: no test of its own. There is no fallback to pin (§4.2.4); `inputs::objectless_file_removed_after_read` above is the pin that the index rows come from the build | — | — | — |
@@ -1175,25 +1685,37 @@ ledger. A scripted break is never used.
 | `graph_export_golden` (existing, `cli_graph_export.rs:702-716`) | — (the fixture has no known `conf` tie, so an order swap passes it; the two rows below pin the order) | — | — |
 | `project::add_keeps_first_via_on_conf_tie` (unit in `project.rs`'s tests: two hand-built `E`s with the same `(from, to, kind)`, equal `conf`, different `via`, added in order) | change `new.conf < old.conf` to `<=` (`project.rs:287`) | the kept `via` is the first one's | restore |
 | `resolved::all_edges_is_edges_then_dependency_bodies` (unit: a `ProgramBody` with one hand-stated edge in each set) | swap the two sets in `all_edges` | the yielded order | restore |
-| `graph_export_covers_dependencies` (existing, `:597-650`; checks presence and `sourcePath`, not order) | feed `project` `edges` only (drop `dependency_body_edges`); separately, pass an empty `site_facts` | the dependency node's `sourcePath`/edges; the resolution-dependent fields | restore |
+| `graph_export_covers_dependencies` (existing, `:597-650`; checks presence and `sourcePath`, not order) | feed `project` `edges` only (drop `dependency_body_edges`); separately, delete only the dependency merge of site facts inside `ResolvedProgram::build` (today `report.site_facts.extend(dependency.site_facts)`, `full.rs:2177`), keeping the workspace's. Dropping ALL site facts would also fail on the workspace facts alone and prove nothing about the merge. The projection reads site facts for `run` edges and open bounds (`project.rs:383-406`); if the dependency fixture has no dependency call site with a run target or an open bound, the second break stays green, and the test gains a dependency-side `Codeunit.Run` plus an assertion on its `run` edge until it fails | the dependency node's `sourcePath`/edges; the dependency-side `run` edge | restore |
 | A1b.2: no unit test. `attach_program_calls_with` takes `program.body.take()`, so `body.is_none()` afterwards is true by construction and pins nothing; the break "keep a clone" does not compile (`ProgramContext` derives no `Clone`, `full.rs:1489`). The claim is that the body's memory is released at `b3.ctx_drop` (`program_calls.rs:674-676`); A1b.4's post-attach peak is the measurement of that | — | — | — |
 | `resolved::dependency_bodies_histogram_equals_merged_filter` (unit on the dependency workspace: the §4.3.2 claim, both computations) | add a `CallSite` filter bug (drop the `from.app` test) | the two histograms | restore |
 
 ### 8.4 Step 2
 
+The `session::` tests build their `View` over `empty_resolved()`. Today that fn is
+private to `registry.rs`'s test module (`registry.rs:1088`), and `test_support` is a
+private `#[cfg(test)] mod` of `l5` (`src/engine/l5/mod.rs:158-159`), which
+`src/engine/session.rs` cannot reach. Step 2 moves `empty_resolved` into
+`test_support` as a `pub fn` (the `Model` literal of §4.2.4's `registry.rs:1098` row
+moves with it) and makes the module `#[cfg(test)] pub(crate) mod test_support;`.
+`registry.rs`'s tests call the moved fn.
+
 | Test | Break | Fails at | Revert |
 |---|---|---|---|
 | `cli_build_counters` at the §4.4.8 values (existing test, table edited) | re-add `compute_tx_context_map`'s context build in digest | `ctx == 1` | remove |
-| `l4::bundle_equals_the_old_builders` (TRANSIENT, §5: unit on `ws-d8-commit-in-tx` and the dependency workspace: `build_l4` vs `build_db_effect_bundle` / `cross_app_db_effect_bundle` compared through a test-only `SummaryBundle::rows_for_test()` rendering every routine's `db_effects`; lands with `build_l4` beside the old builders, deleted in the commit that deletes them) | pass empty `leaf_summaries` to `build_l4` on the cross-app case | the rendered rows | restore |
-| `session::base_graph_equals_context_graph` (TRANSIENT, §5: unit, cross-app: `base.graph == build_combined_graph(..) + injected`, `PartialEq`; deleted with the context's own graph build) | drop the injected extend on one side | equality | restore |
+| `l4::bundle_equals_the_old_builders` (TRANSIENT, §5: unit on `ws-d8-commit-in-tx` and the dependency workspace: `build_l4` vs `build_db_effect_bundle` / `cross_app_db_effect_bundle` compared through a test-only `SummaryBundle::rows_for_test()` rendering every routine's `db_effects`; lands with `build_l4` beside the old builders, deleted in the commit that deletes them; pass and break recorded at a named intermediate SHA, §5) | pass empty `leaf_summaries` to `build_l4` on the cross-app case | the rendered rows | restore |
+| `session::base_graph_equals_context_graph` (TRANSIENT, §5: unit, cross-app: `base.graph == build_combined_graph(..) + injected`, `PartialEq`; deleted with the context's own graph build; pass and break recorded at a named intermediate SHA, §5) | drop the injected extend on one side | equality | restore |
 | `session::after_run_bits_must_be_in_the_union` (A2.10, unit: `prepare` on `Plan { runs: [[a detector with requires: 0]], after_run: TRANSACTION_SPANS }` over `View::new(AnalysisTarget::SingleApp(Box::new(empty_resolved())))`) | remove the assertion | the expected panic | restore |
-| `session::no_lazy_fill_in_this_file` (A2.9, unit: `include_str!("session.rs")`, needles built with `concat!`) | add an `OnceLock` field to `View` | the `contains` assertion | remove |
+| `session::no_lazy_fill_in_this_file` (A2.9, unit: `include_str!("session.rs")` minus `//` lines, needles built with `concat!`) | add an `OnceLock` field to `View`; separately, a `RefCell<Option<DetectorArtifacts>>` field (the second needle family); separately, make `released` an `AtomicU8` (the third) | the `contains` assertion | remove |
+| `session::prepare_fills_ordering_before_the_runs` (unit, replaces the deleted `declared_ordering_facts_are_filled_before_the_parallel_loop` and `ordering_facts_are_lazy_and_parity_with_direct_compute`, §4.4.2: a `View` over `empty_resolved()`, one probe detector with `requires: ORDERING_FACTS` that reports `c.ordering.is_some()` from inside the loop) | move the ordering fill in `prepare` after the runs | `["filled"]` (the probe reports `"empty"`) | restore |
+| `registry::undeclared_ordering_facts_read_inside_the_loop_fails_loudly` (existing, rewritten to the shim, §4.4.2) | replace `get_ordering_facts`' `expect` with a fall-back to an empty map | the `substrate::ORDERING_FACTS` diagnostic | restore |
+| `session::a_second_prepare_never_refills_or_widens` (unit, rule 1's asserts (a) and (b); two cases on `empty_resolved()`: `prepare` at a mask, `release(Det)`, `prepare` again → panics naming `Det`; `prepare` at a narrow mask, then a plan whose union adds a bit → panics naming the bit) | delete assert (a); separately, delete assert (b) | the expected panic of that case | restore |
 | (no `fill_inside_detector_loop_is_refused`: a detector cannot reach a fill, rule 2, so such a test could only call the fill helper directly, which pins the helper and not a use) | — | — | — |
-| `session::run_diagnostics_follow_the_run_mask` (unit: two runs on one view, masks with and without `CORE_SUMMARIES`, a hand-stated `l4.summarize_diagnostics`; the second run's `summarize_diagnostics` is empty) | take the diagnostics from `det.demanded` instead of the key | the empty assertion | restore |
-| `gap_detector_substrate_parity` widened (§4.4.6) | make d1 return `d1_cohort_index: None` when `RAW_INHERITED_FACTS` is set | the `DetectorOutput` equality on `ws-d1` | restore |
-| `prove::some_root_moves_nothing` (cli-b prove goldens, existing) + `prove::wrong_root_set_is_entry_missing` (pass `Some(&[other])`) | — / pass the full root list and assert the error | the `Err("…entry missing…")` | — |
-| `run::no_id_row_runs_one_build_and_keeps_the_text` (id-less `app.json` + unreadable `.al`; `build.program == 1` from the trace; `fresh` `Err` text equals the literal captured today) | restore the single-app rerun | the count; the text if it ever diverges | remove |
-| `l4::warning_text_is_rendered_once` (unit: a hand-stated `SummarizeDiagnostic` → `render_warnings(..) == ["warning: summarize: Summary fixed-point did not converge for SCC [a, b]"]`). Stated limit: it pins the rendering, not the print; the one print site in `prepare` and the one at `capability_cone.rs:3215` are pinned by nothing executable (no fixture caps, §4.4.7) | change the prefix | the literal | restore |
+| `session::run_diagnostics_follow_the_run_mask` (unit: one view over `empty_resolved()`, one plan with two runs, masks with and without `CORE_SUMMARIES`, filled by `View::prepare_with_diagnostics(&plan, vec![d])` with one hand-stated `SummarizeDiagnostic` `d`). The seam is needed: no fixture produces a `SummarizeDiagnostic` (§4.4.7), so a real solve gives an empty list and the test would pass vacuously; and a pre-filled `l4` would break rule 1(c). `prepare_with_diagnostics` is `#[cfg(test)]` and goes through the same private `prepare_inner` as `prepare`, which passes `d` as `L4Request.extra_diagnostics` into the one `build_l4` call inside `build_detector_artifacts` (§4.4.1), so the test drives the production fill and run path, not a helper. Assertions: the CORE run's `summarize_diagnostics == [d]` (the seam reached the run: the non-vacuity check), and the other run's is empty | take the diagnostics from `det.demanded` instead of the key | the empty assertion | restore |
+| `gap_detector_substrate_parity` widened (§4.4.6) | make d1 return `d1_cohort_index: None` when `ctx.demanded & TRANSACTION_SPANS != 0`. The bit must differ between the two contexts: the full one is `ALL \| ORDERING_FACTS` and carries `TRANSACTION_SPANS` (`registry.rs:141`), d1's minimal one is its `requires`, `SUMMARIES \| CORE_SUMMARIES \| CLOSED_WORLD_TEMP` (`detectors/mod.rs:1248-1250`), which does not. (A `RAW_INHERITED_FACTS` break never fires: no context of this test carries that bit) | the `DetectorOutput` equality on `ws-d1` | restore |
+| cli-b prove goldens (existing) are the pin for A2.6. No separate test: a test of how `compute_digest_effects_cli` filters roots (`digest.rs:4094-4112`) would pin the helper, not prove's call | pass `Some(from_ref(&other_root))` at prove's call (a root that is not the requested one) | the prove golden bytes (the requested root's entry is missing) | restore |
+| `run::no_id_row_runs_one_build_and_keeps_the_text` (id-less `app.json` + unreadable `.al`; `build.program == 1` from the trace; `fresh` `Err` text equals the literal captured today). This test and `run::build_failed_row_runs_one_build` below are SPAWNED-process tests in `tests/cli/cli_build_counters.rs` (the `run::` prefix names the code they pin, not their crate), for the reason `inputs::read_once` is (§8.2). Spawned, `fresh`'s `Err` text is visible only on stderr: `empty_output_result` puts it in the preflight message (`run.rs:884-897`) and `alsem` prints it as `al-sem: warning: <msg>` (`alsem.rs:1612`), so the text assertion reads that line. Today this row already runs ONE build (no id, so no cross-app base; `run.rs:370-376`, `:285-307`), so this test pins the text and the profile, not a deleted build | call `ResolvedProgram::build` a second time on the no-id row | the count | remove |
+| `run::build_failed_row_runs_one_build` (A2.7 row 2: cross-app analyze on an `app.json` WITH an id plus an unreadable `.al`, built as in the test above; `build.program == 1` from the trace (today 2: the cross-app build, then the single-app rerun at `run.rs:387`); exit 2; stderr is `analysis failure — program engine build failed: <why>` (`run.rs:494-498`) with `<why>` the build's own error, which contains `reading source <abs>` (`provider.rs:38-39`); the assertion is a `contains`, since the full text carries the OS message) | restore the single-app rerun | the count | remove |
+| `l4::warning_text_is_rendered_once` (unit: a hand-stated `SummarizeDiagnostic` → `render_warnings(..) == ["warning: summarize: Summary fixed-point did not converge for SCC [a, b]"]`). Stated limit: it pins the rendering, not the print; the one print site in `build_l4` and the one at `capability_cone.rs:3215` are pinned by nothing executable (no fixture caps, §4.4.7) | change the prefix | the literal | restore |
 | A2.3, A2.4 (measurements, §6.3) | — | — | — |
 
 ## 9. Carried findings: what this document resolves, what it hands on
@@ -1206,7 +1728,7 @@ ledger. A scripted break is never used.
 | G-5 | §6.1: per-timer band = max − min of the parent's interleaved runs; §6.2 records whether each median is ≥ 2 × its band | steps 7a, 7b, 10, 11 apply the rule before writing a bound |
 | G-6 | §4.3.4: `ProgramMeta` holds the workspace text (5.09 MB on CDO); the `inputs` census bucket | — |
 | R6-2 | §4.4.6: all four fields of `DetectorOutput`; `D1CohortIndex` and `LoopSetRegistry` derive `PartialEq` | — |
-| R6-3 | §4.4.5: the no-id row keeps one build (the cross-app one); `fresh` is its `Result`; the `Err` text is pinned by a test; the second build is gone and counted | — |
+| R6-3 | §4.4.5: the no-id row keeps one build, under today's single-app `Summary` profile (`ResolvedProgram::build(inputs, Summary)`, review B13; never `FULL`); `fresh` is its `Result`; the `Err` text is pinned by a test; the second build is gone and counted | — |
 | R6-5 | §4.3.2: the sets are named for what they hold; the order is kept because the projection's tie rule is order-sensitive; the `dependencyBodies` histogram equality is pinned | — |
 | G-4, R6-4 | not this document's | step 6 |
 
@@ -1220,9 +1742,10 @@ ledger. A scripted break is never used.
 3. `R3a5CrossAppBase.graph` and `combined_scc` are `Arc`s from step 2 (the view and
    `l4` clone the pointers, §4.4.3 rule 1, §4.4.1); step 4 decides whether the base
    survives at all or `rel` absorbs its fields.
-4. `build_detector_context[_with]` survive as test-only shims returning `OwnedContext`
-   (§4.4.2); step 4's spec says when the parity test moves to
-   `build_detector_artifacts` and they are deleted.
+4. `build_detector_context[_with]` survive as shims returning `OwnedContext`, used by
+   the tests and `aldump` (`switch_dump.rs:120`, `run_detectors*`) (§4.4.2); step 4's
+   spec says when the parity test and `aldump` move to `build_detector_artifacts` and
+   they are deleted.
 
 ## Review log
 
@@ -1233,7 +1756,7 @@ memory/speed/scheduling review.
 | # | Finding | Verified at | Outcome |
 |---|---|---|---|
 | A1 | Step 1 changed `--update-baseline`: the baseline is written (`run.rs:584-591`) and then read back (`:597`), so today every current finding is dropped and a malformed old file is overwritten before any read; reading the `InputSet` bytes would apply the old file | `run.rs:584-598`; `gate_suppress_baseline_differential.rs:345-362` checks only the written file | Fixed: §4.2.3 `load_baseline` row applies the set just written and never reads the slot under the flag; A1.6 + `baseline::update_baseline_applies_the_set_just_written` pin stdout and the exit code |
-| A2 / B4 | No slot for a failed `.al` walk; a partial list could reach the build | `source_text.rs:63-65`, `:85`; `model_instance_id.rs:83`; `provider.rs:34-35`; `workspace_diagnostics.rs:93-95` | Fixed: `al_walk: Result<(), String>` (§4.2.1); the three readers fail closed with today's texts (§4.2.3); `ClosureEntries` defined; A1.7 + `inputs::walk_error_fails_the_build` |
+| A2 / B4 | No slot for a failed `.al` walk; a partial list could reach the build | `source_text.rs:63-65`, `:85`; `model_instance_id.rs:83`; `provider.rs:34-35`; `workspace_diagnostics.rs:93-95` | Fixed: `al_walk: Result<(), String>` (§4.2.1); the three readers fail closed with today's texts (§4.2.3); `ClosureEntries` defined; A1.7 + `inputs::walk_error_fails_the_build`. **Superseded** by a2-r3 F1: the slot keeps the `io::Error` (`Arc<std::io::Error>`), since a `String` lost the error chain |
 | A3 | `app_json: Result<AppJson, String>` could not tell unreadable from malformed; readers differ | `snapshot.rs:193-197`; `snapshot_full.rs:819-827`; `workspace_diagnostics.rs:145-151`; the text reaches output at `run.rs:884-886`, `:494-497` | Fixed: `app_json: FileInput` + `app_json_value: Option<Result<Value, String>>`; each reader's message named (§4.2.1, §4.2.3) |
 | A4 | Exit 2 on every command collides with digest's "no roots" and prove's "unresolved routine"; the epic says "two sites exit 1" | `digest_cli.rs:1652`; `prove.rs:950`; `alsem.rs` write-failure sites: `:731`, `:755`, `:872`, `:910`, `:992`, `:1132`, `:1200`, `:1327-1339`, `:1404`, `:1477`, `:1496` (eleven, all exit 1); epic §5.10 `:318-320`, Decision 49 `:490`, step-1 row `:514` | Fixed: one text, exit = the command's failure code (analyze 2, others 1, as today) (§4.2.5, §7, A1.4); the epic's Decision 49, §5.10 and step-1 row amended to that rule and the real count — an epic-level decision changed on a verified miscount |
 | A5 | A2.9's grep gate needs `scripts/ci-steps`, which the issue flow may not edit | `CLAUDE.md:873` | Fixed: a `--lib` test over `include_str!("session.rs")` (A2.9, §8.4) |
@@ -1243,14 +1766,14 @@ memory/speed/scheduling review.
 | A9 | §4.2.4 named one `fresh` `Err` case; there are more, and most never parse | `snapshot.rs:193-197`; `provider.rs:34-39`; `run.rs:300-326`; `workspace_diagnostics.rs:49-95` | Fixed: the cases listed and the one that parses isolated; A1.3's fixtures named |
 | A10 | §4.2.3 kept policy validation at `:230` (move at step 12), §4.4.4 moved it above the build at step 2 | `pipeline.rs:196-241` | Fixed: at step 2 validation runs after the build and before `prepare`; the error is reported in today's order, so no precedence changes; Decision 7's move stays at step 12 (§4.2.3, §4.4.4) |
 | A11 | `write_stderr` used in §5 but never defined | spec §4.2.5 vs §5 | Fixed: defined in §4.2.5 (no message, the stream is gone; the command's failure code) |
-| A12 | The tx map moved from `ALL` to the plan's union mask with nothing pinning `TRANSACTION_SPANS` in it | `digest_cli.rs:543-544`; `prove.rs:843`; `detectors/mod.rs:1294` (d9 in the default set); `registry.rs:53-56` (the bit forces summaries) | Fixed: `Plan.tx_map`; `prepare` asserts the bit; A2.10 + `session::tx_map_plan_requires_transaction_spans` |
+| A12 | The tx map moved from `ALL` to the plan's union mask with nothing pinning `TRANSACTION_SPANS` in it | `digest_cli.rs:543-544`; `prove.rs:843`; `detectors/mod.rs:1294` (d9 in the default set); `registry.rs:53-56` (the bit forces summaries) | Fixed: `Plan.tx_map`; `prepare` asserts the bit; A2.10 + `session::tx_map_plan_requires_transaction_spans`. **Superseded** by D-M3: `Plan.after_run: u32` and the test `session::after_run_bits_must_be_in_the_union` |
 | B1 | The parity test calls `(det.run)` directly at `ALL` (no ordering bit) and `every_detector_alone_declares_what_it_reads` relied on `run_each`'s fill; both break once `get_ordering_facts` `expect`s | `gap_detector_substrate_parity.rs:114-121`; `registry.rs:141`, `:613-621`, `:1002-1007`; `d47.rs:379`, `d49.rs:123`, `d51.rs:167` | Fixed: the shims fill ordering for any mask with the bit; the parity masks gain `ORDERING_FACTS` (§4.4.2, §4.4.6) |
 | B2 | A thin function cannot return a `DetectorContext<'v>` that borrows artifacts it built | 47 call sites in 17 files; `d17.rs:504`, `d50.rs:619`, `:784` are struct literals | Fixed: the shims return `OwnedContext` with `ctx()` (§4.4.2) |
 | B3 | analyze kept `det`/`l4` alive through projection and formatting; today the context dies in the runner | `registry.rs:413-416`, `:526-529`; `detector_context.rs:1499-1505`; `run.rs:522-700` | Fixed: `release(Det)`, `release(L4)`, `release(Ordering)` right after `run(selected)` (§4.4.4) |
 | B5 | `IN_CELL_BUILD` contradicted itself; its test could pin only the helper; the types already forbid a fill from a detector | `registry.rs:318` (detector signature), `:540-566` | Fixed: the flag and the test are dropped; one `!in_detector_loop()` assertion at `prepare`'s entry (§4.4.3 rule 2, §5, §8.4) |
 | B6 | Two step-0 tests were `--lib` tests over process-wide `OnceLock` flags and global atomics; the 64 MB bound was absolute | `perf_trace.rs:402-407`; `detector_context.rs:348-429` | Fixed: both are spawned-process tests; the peak assertion is `0 < post_attach <= process` (§8.1) |
 | B7 | `COMPOSE_REST_NANOS` undefined over accumulating atomics and three compositions | spec §4.1.1, §4.1.3 | Fixed: charged per call from entry snapshots (§4.1.1) |
-| B8 | `L4Analysis` kept the ~730 MiB harvest alive through the query phase; today only the bundle survives | `detector_context.rs:1440`; `effect_query_cli.rs:219`; `prove.rs:964` | Fixed: `L4Harvest` moves into `det` by value; `L4Analysis` keeps scc, field index, bundle, diagnostics, warnings; no `Arc` fields (§4.4.1, §4.4.2) |
+| B8 | `L4Analysis` kept the ~730 MiB harvest alive through the query phase; today only the bundle survives | `detector_context.rs:1440`; `effect_query_cli.rs:219`; `prove.rs:964` | Fixed: `L4Harvest` moves into `det` by value; `L4Analysis` keeps scc, field index, bundle, diagnostics, warnings; no `Arc` fields (§4.4.1, §4.4.2). **Superseded:** `L4Harvest` by the unharvested `CoreSummaries` (a2-r1 2-8; a `prepare` local since a2-r2 R1-8, a local of the builder that calls `build_l4` since a2-r4 1), and "no `Arc` fields" by `scc: Arc<SccResult>` (D-M2) |
 | B9 | Single-app `prepare` always ran Tarjan; today it runs only under `CORE_SUMMARIES` | `detector_context.rs:1296` | Fixed: `scc` is filled with `l4` (§4.4.3 rule 1) |
 | B10 | `inputs.read` called a span in A1.1 and §4.2.1, a counter in §4.1.2 | spec | Fixed: a counter everywhere |
 | B11 | §6.3 said `ProgramMeta` is small; §4.3.4 says 5.09 MB | spec | Fixed: §6.3 matches §4.3.4 |
@@ -1285,3 +1808,104 @@ holds the fix and the D row points at it.
 | D-M4 | A 10 ms sampler can take no sample on the tiny fixture; `post_attach_mb == 0` fails `phase_peak_is_reported` intermittently | spec §4.1.4, §8.1 | Fixed: one synchronous sample at `mark_phase_start` and one at stop (§4.1.4) |
 | D-M6 | Rule 5's per-fill reset changed what the census numbers mean; `report()` prints cumulative atomics, so step 0 and step 2 lines would not compare | `detector_context.rs:465-558`, `:1150` | Fixed: no reset, counters stay process-cumulative, the numbers file quotes the process total (§4.1.7, rule 5); the EPIC's §5.9 rule 4 amended |
 | D-M7 | Rule 3 said `run(key)` "executes", but `run(&self) -> &RunOutput` cannot store a result without interior mutability (rule 4 forbids it) | spec §4.4.3 | Fixed: runs execute inside `prepare`; `run` returns the stored output (rule 3) |
+
+Round a2-r1 (2026-10-18): two reviews in `critiques-child-last.md` (first review =
+ids 1-1..1-5, second = 2-1..2-10). Every claim checked in source at
+`U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`, no `src/` or `tests/` change since
+`1e54624a`). None refuted.
+
+| Round | Id | Severity | Outcome | Evidence |
+|---|---|---|---|---|
+| a2-r1 | 1-1 | important | fixed: §4.1.3 d47 row 1/4/1/1/3/1/1/1, §4.4.8 1/3/1/1/3/1/1/1 | `detectors/mod.rs:1575` (`requires: ORDERING_FACTS`); `registry.rs:454-461`; `detector_context.rs:914` (`need_summaries`), `:1296` (CORE gate on Tarjan and v2); `digest.rs:4016-4019` (the ordering snapshot) |
+| a2-r1 | 1-2 | important | fixed: `release(Graph)` after the last graph reader in every §4.4.4 row but query; paragraph after the table; A2.4 and §6.1/§6.3 add `fingerprint` and `digest --single-app` peaks | `registry.rs:413-416` (context dies in the runner); `fingerprint_cli.rs:350`, `:364`, `:403` |
+| a2-r1 | 1-3 | minor | fixed: §6.3 expectation (prove and events each save about one context build, same order as digest); Goal 4 names events' deleted context | `src/engine/gate/events.rs:422-426` (`ALL` context); `prove.rs:843`, `:964` |
+| a2-r1 | 1-4 | minor | fixed: `InputSet::read` returns `Arc<InputSet>`; commands pass `&Arc<InputSet>` (§4.2.1, §4.2.6, §4.4.3) | spec §4.2.6 vs §4.3.1 (`ProgramMeta.inputs: Arc<InputSet>`) |
+| a2-r1 | 1-5 | minor | fixed differently: the struct and its four `build*` methods keep their shape; one `build_with_inputs` method is added, so none of the 28 literal sites changes (§4.2.6, §4.2.3 row 1, §2, §5) | `grep "SnapshotBuilder {"`: 22 in `src/` (10 in `snapshot.rs` tests, `#[cfg(test)]` at `:395`), 6 in `tests/`; `snapshot.rs:130-135`, `:142-182` |
+| a2-r1 | 2-1 | important | fixed: the parity break keys on `TRANSACTION_SPANS` (in `ALL`, not in d1's `requires`) | `registry.rs:141` (`ALL`); `detectors/mod.rs:1248-1250` (d1 requires); spec §4.4.6 (no RAW context) |
+| a2-r1 | 2-2 | important | fixed: `phase_peak_is_reported` is `#[cfg(windows)]`; A0.4, §4.1.4, §6.1 say the peaks are Windows-only; no Linux reader added | `perf_trace.rs:173-176` (`#[cfg(not(windows))] … None`); `.github/workflows/ci.yml:22` (`ubuntu-latest`) |
+| a2-r1 | 2-3 | important | fixed: `COMPOSE_REST_NANOS` is `AtomicI64`, computed in `i64`, printed signed; the break adds the call's whole `elapsed` to `SINGLETON_NANOS`, so `rest = −Σ < 0` | `detector_context.rs:348-424` (unsigned atomics) |
+| a2-r1 | 2-4 | important | fixed: new `run::build_failed_row_runs_one_build` (id + unreadable `.al`, count 1, today 2); the no-id test's break is now a second build, and its note says it pins text and profile | `run.rs:370-376` (no id → no base), `:285-307`, `:387` (rerun), `:494-498` |
+| a2-r1 | 2-5 | minor | fixed: §4.2.4 names `aldump --switch-dump` as the third caller (build first, pass its `files_without_object`); §7 step 1 states the dump change | `switch_dump.rs:47`, `:51`; `run.rs:788`, `:1092`; no `tests/` reader of the dump |
+| a2-r1 | 2-6 | minor | fixed: A1.1 and `inputs::read_once` expect 2 for `diff ws ws` | spec §4.2.6 (one `InputSet` per side) |
+| a2-r1 | 2-7 | minor | fixed: covered by 1-2's `release(Graph)`; the `l4.scc` co-residency in `digest --single-app` is stated and measured (A2.4); §4.4.1's prove claim corrected | `digest_cli.rs:1580`, `:1626` (`.2`); `prove.rs:964` (`let (_graph, _scc, bundle)` keeps both) |
+| a2-r1 | 2-8 | minor | fixed: `build_l4` returns the unharvested `CoreSummaries`; the harvest stays in `build_detector_artifacts`; query never harvests. Epic §5.8 amended (Round 8) | `detector_context.rs:1427-1495` (harvest), `:1257`, `:1473` (`uncertainty_edges_by_from`, a context field); `effect_query_cli.rs:251` (`_map`); `summary_runner.rs:1079-1083` |
+| a2-r1 | 2-9 | minor | fixed: the break drops only the dependency site-facts merge; the test gains a dependency `Codeunit.Run` assertion if that break stays green | `full.rs:2177`; `project.rs:383-406` (site facts feed `run` edges and open bounds) |
+| a2-r1 | 2-10 | minor | fixed: `prove::wrong_root_set_is_entry_missing` dropped; the cli-b prove goldens are the pin, with a break at prove's own call | `digest.rs:4094-4112` (the helper's filter) |
+
+Round a2-r2 (2026-10-18): two reviews (R1 = adversarial review, ids R1-1..R1-11; R2 =
+second review, ids R2-1..R2-12). Every claim checked in source at
+`U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`). None refuted. R1-2 = R2-5 and R1-4 =
+R2-1 (the R1 row holds the fix); R2's note on B8's stale wording is part of R1-11.
+
+| Round | Id | Severity | Outcome | Evidence |
+|---|---|---|---|---|
+| a2-r2 | R1-1 | important | fixed: §4.1.1 gating rule (per-entry counts folded locally, every new charge via `add_gated`, `COMPOSE_REST` snapshot under `enabled()`); A0.1 gains a use-level check (census-off CDO cone wall ≤ parent + band, §6.2); §5 | `detector_context.rs:431-433` (`add` ungated), `:439-443` (`add_gated`, the 11.0 → 12.8 s note), `:454-456`; `capability_cone.rs:1882-1885` (today's per-routine fold `c_entries`) |
+| a2-r2 | R1-2 | minor | fixed: §4.4.2 deletes `declared_ordering_facts_are_filled_before_the_parallel_loop` (+ its probe) and replaces it with `session::prepare_fills_ordering_before_the_runs`; `undeclared_…_fails_loudly` kept, rewritten to the shim, runs in release; §7 step 2 and §8.4 list both; §1 and §7 allow these named `--lib` changes | `registry.rs:613-621` (the fill), `:892-903` (`c.ordering_facts.get()`), `:926-951`, `:962-982`; `detector_context.rs:831-846` |
+| a2-r2 | R1-3 | minor | fixed: §4.2.3 / §4.2.6 / §7: the banned list gains `project_coverage_inputs`; the S2a selection test builds through an `InputSet` | `switch_dump.rs:355-377` (`project_coverage_disk` needle), `:384-428` (`build_program_with_coverage(&root)`, `select_program_files(&root, &ctx)`) |
+| a2-r2 | R1-4 | important | fixed: option (b), an `inputs: &InputSet` PARAMETER on `attach_program_calls[_with]` (3 callers, none in `tests/`); `AppSetSnapshot` gains no field, so the LSP holds no InputSet (§4.2.4, §5); the `*_from_program` chain takes `&InputSet` in place of `&Path` (§4.2.3) | `snapshot.rs:61-68` (`apps`, `workspace_app`, `world`; `Clone, Debug`); `program_calls.rs:641-658`, callers `run.rs:357`, `program_calls.rs:727`, `:898`; `workspace.rs:1431`, `:1457`, `:1636-1671` |
+| a2-r2 | R1-5 | minor | fixed: §4.4.2 states `graph` is the one field whose type changes (`Arc<CombinedGraph>`); detector reads are field reads or borrows (auto-deref); `&*ctx.graph` where needed; literals write `Arc::new` | `detector_context.rs:610` (`pub graph: CombinedGraph`); `d7.rs:143`; `d1_dataflow.rs:3812` |
+| a2-r2 | R1-6 | minor | fixed: `PolicyInput { origin, file }`; `read` applies today's resolution (absolutized path, exists-first, no fall-through on an unreadable `.yaml`); `load_policy_from_input` reads `text()` and keeps `failed to read <path>: <e>`; `policy explain` keeps the disk reader (§4.2.1, §4.2.3) | `policy_loader.rs:323-331`; `pipeline.rs:55-61`, `:72-79`, `:106-114` (`absolutize`), `:341-369` (explain) |
+| a2-r2 | R1-7 | minor | fixed: §4.3.3: graph's id check stays AFTER the build and reads `inputs.app_id()`; the same rule as today's empty `guid`; no stderr change | `impact_graph/mod.rs:191-204` (comment `:194-198`: after the build on purpose) |
+| a2-r2 | R1-8 | minor | fixed: rule 1: each cell filled at most once per `View` (`released` bits; a refill panics); `CoreSummaries` is a `prepare` local, never a field, so it cannot outlive the call; a CORE `det` fill must share the `l4` fill's `prepare`; test `session::a_second_prepare_never_refills_or_widens` | spec §4.4.3 (`l4.zip(core.take())`), §4.4.1; `detector_context.rs:1440` (~730 MiB) |
+| a2-r2 | R1-9 | minor | fixed in the EPIC: §5.9 rule 3 item (8) and Decision 47 run the policy engine at item 8 from step 6 only; before that after `release(Det)` off the RAW local (epic round 9) | epic `:313-314`, `:507`; spec §4.4.4 policy row; epic I5, Decision 50 |
+| a2-r2 | R1-10 | minor | fixed: §4.2.3 row 1 keeps `walk_al_source`'s rules: no `.al` → `Ok(None)` → `SymbolOnly`; blake3 over the texts in order; nested files included | `provider.rs:33-58`; `snapshot.rs:236-244` |
+| a2-r2 | R1-11 | minor | fixed: the step-2 paragraph moved below the §4.1.2 table (the three rows are back inside it); B8 and A12 point forward to their replacements | spec §4.1.2; rows B8, A12 vs a2-r1 2-8, D-M2, D-M3 |
+| a2-r2 | R2-1 | important | = R1-4 | — |
+| a2-r2 | R2-2 | important | fixed: §4.4.5 `CrossAppFailure { Build(String), Assembly { fresh }, NoPrimaryApp { fresh } }`; both builders return `Result<_, CrossAppFailure>`; the other 19 call sites use `.ok()`; a fourth row for no-primary-app (unreachable from step 1, today's fixed-string outcome kept fail-closed) | `capability_cone.rs:3433-3446` (`Option`, `.as_ref()?`); `program_calls.rs:822-823` (`.ok()?`), `:856` (`)?`); `run.rs:370-402`; `workspace.rs:1774`, `:1790-1800` |
+| a2-r2 | R2-3 | important | fixed: `derive_pd_arena` charges `PD_SNAPSHOT_BYTES` only; old `solve_bytes=` = arena + working + snapshot, printed and stated in the numbers file; `bytes_split_sums_to_the_old_total` is TRANSIENT against the still-present `solve_bytes` (no hand-stated literal) | `snapshot.rs:1602-1606`; `detector_context.rs:411-422`, `:545-557`; `pd_solve.rs:453-456`, `:465-500` |
+| a2-r2 | R2-4 | minor | fixed: `View::run` returns `Arc<RunOutput>` | spec §4.4.3 (`runs: BTreeMap<RunKey, Arc<RunOutput>>`), §4.4.4 analyze row (`release` after `run`) |
+| a2-r2 | R2-5 | minor | = R1-2 | — |
+| a2-r2 | R2-6 | minor | fixed: A2.9 strips `//` lines and checks `OnceLock`, `OnceCell`, `LazyLock`, `Lazy<`, `Cell<`, `Mutex`, `RwLock`, `static mut` (`Cell<` avoids the file's `enum Cell`); the cross-module limit is stated (rule 4) | spec A2.9, §4.4.3 rule 4, `pub enum Cell` |
+| a2-r2 | R2-7 | minor | fixed: rule 1 assert (b): a filled `det` must cover the new union, else panic naming the bits; same test as R1-8 | spec §4.4.3 rule 1; A2.5 |
+| a2-r2 | R2-8 | minor | fixed: policy row releases `L4` right after `Det`, before the RAW build (`l4: None`) | spec §4.4.4; `registry.rs:63-70` (raw cone) |
+| a2-r2 | R2-9 | minor | fixed: §4.1.7 records the `scc_stats` event; after step 2 `build_l4` emits it on both arms | `detector_context.rs:1314-1355`; epic §9 7a row ("step 0's SCC distribution") |
+| a2-r2 | R2-10 | minor | fixed: the shims are not `#[cfg(test)]`; `switch_dump.rs:120` is named as a direct `aldump` caller | `switch_dump.rs:120` (`build_detector_context(&resolved, 0)`) |
+| a2-r2 | R2-11 | minor | fixed: §7 step 0 lists the two protected stale references for the user (`byte-census/SKILL.md:46`, and also `perf-probe/SKILL.md:46`, found by the same grep) | `grep C1_CONE_CENSUS` over `.claude/` in the main checkout |
+| a2-r2 | R2-12 | minor | fixed: §4.4.4 preamble: today prove's snapshot overlaps both its contexts; step 2 lowers that, so the prove peak claim is conservative | `prove.rs:897`, `:902`, `:958` |
+
+Round a2-r3 (2026-10-18): two reviews (F = first review, F1..F5; S = second review,
+S1..S11). Every claim checked in source at `U:/Git/al-sem-issue-160-a2` (no `src/`,
+`tests/` or `crates/` change since `1e54624a`). None refuted. F2 = S5 (the F row holds
+the fix). One correction to a finding's count: S6 said 14 `Model` literals in 10 files;
+the grep finds 12 in 8, which is what §4.2.4 lists.
+
+| Round | Id | Severity | Outcome | Evidence |
+|---|---|---|---|---|
+| a2-r3 | F1 | important | fixed: `al_walk: Result<(), Arc<std::io::Error>>`; the build wraps `anyhow::Error::new(Arc::clone(e))`, so `{e:#}` keeps today's chain (the OS text twice); A1.7 gains an unreadable-subfolder case (Unix) and compares the FULL literal; second break "store `e.to_string()`" fails it (§4.2.1, §4.2.3, A1.7, §8.2) | `source_text.rs:85` (`e.into()`); walkdir-2.5.0 `error.rs:212-217` (`source()` = inner OS error), `:215` (loop: `None`), `:253-261` (custom `io::Error`); `provider.rs:34-35`; `full.rs:2147` (`{e:#}`); `run.rs:884-886` (reason = `fresh` `Err` text) |
+| a2-r3 | F2 | minor | fixed: `ordering_facts_are_lazy_and_parity_with_direct_compute` is DELETED, named in §4.4.2, §7 step 2 (three `--lib` changes) and §8.4 (covered by `prepare_fills_ordering_before_the_runs`) | `detector_context.rs:1700-1725` (`ordering_facts.get().is_none()`, `get_ordering_facts()` on `ALL`); `registry.rs:141` (`ALL` lacks the bit) |
+| a2-r3 | F3 | minor | fixed: the one print site is `build_l4` itself, which the shims also call, so `--switch-dump` and the r4 findings projections keep their line; §4.4.7, rule 1, §7 step 2 | `summary_runner.rs:1811-1814`; `switch_dump.rs:126`; `finding.rs:952`, `:1049` (`run_detectors`, `run_detectors_cross_app`) |
+| a2-r3 | F4 | minor | fixed: the edit appends ` // al-sem-ignore <detector>` (the finding's own id) to the END of line L, so no line shifts and the directive matches; the ledger records the break run lowering `findings.len()` | `inline_suppression.rs:38-50` (`\s+([\w-]+)` required), `:242-244` (id and line match) |
+| a2-r3 | F5 | minor | fixed: §9 R6-3 says the no-id row's one build is the single-app `Summary` build (B13) | spec §4.4.5 row 1; `run.rs:370-395` → `:285-307` |
+| a2-r3 | S1 | important | fixed: buckets are lower bounds tagged `exact`/`shallow`; no heap-size trait for the IR or graph (their sizes are probe deltas at the existing marks); step 0 adds a `census_hook::mark` per bucket point and extends `census-probe`'s `model` mode to the cross-app analyze path; the numbers file computes residual = live − Σ and checks Σ ≤ live; A0.5 rewritten (§4.1.5) | `src/bin/alsem.rs:28` (mimalloc); `tools/census-probe/src/main.rs:42`, `:232` (counting `GlobalAlloc`), `:1066` (`q6`); `src/census_hook.rs:11-19`; `full.rs:1810`, `:1831`, `:1850` (marks) |
+| a2-r3 | S2 | important | fixed: one form for both steps: the model builders take `inputs` and build `ResolvedProgram` INSIDE (as today); step 1b keeps `Option`, step 2 changes only the return type to `Result<_, CrossAppFailure>` (§4.3.3) | `program_calls.rs:816-823` (`build_cross_app_program(workspace).ok()?`); `capability_cone.rs:3432-3441` (the base calls the builder) |
+| a2-r3 | S3 | important | fixed: §4.1.6 splits `build_r3a3_source_only_base` into an `_over(resolved, graph)` form; the mode passes `base.graph`; calls = the cut `base.resolved.calls` (today's snapshot ledger input); coverage = the snapshot's own uncertainty fold over that graph, not `base.direct_coverage`; the cut-graph numbers come from the same mode | `capability_cone.rs:3456-3467`, `:3564` (cut), `:3540-3548` (unfolded), `:3993-4010` (`R3a3SourceBase`), `:4015-4101`, `:4021` (graph), `:4037` (fold), `:4082` (`RawOnly`) |
+| a2-r3 | S4 | important | fixed: one `fill_ordering(model)` helper on `big_stack_pool().install`, called by `View::prepare` and the shim (§4.4.2, §4.4.3 rule 1) | `registry.rs:600-621` (pool + the recursion note); no `big_stack` in `src/bin/aldump.rs` |
+| a2-r3 | S5 | minor | = F2 | — |
+| a2-r3 | S6 | minor | fixed: §4.2.4 lists all 12 literals (11 test, 1 production); `run.rs:863` gets `vec![]` (its rows come from `compute_workspace_diagnostics` in the same function; the empty model feeds only `format_html`); §7 step 1 lists them | `grep "dependency_diagnostics:"` and `grep "Model {"` over `src/`, `tests/`; `run.rs:854-872` |
+| a2-r3 | S7 | minor | fixed: `InputNeeds::build_only` (used by `SnapshotBuilder::build*` only) skips the `app.json` walk, `nested_app`, the id, roots/coverage/policy/baseline/hash rows; command readers assert `!build_only`; step 1 records the LSP `build_full` bench (§4.2.1, §4.2.6, §6.3) | `source_text.rs:145-169`; `full.rs:1718-1734` (two builds per call); `lsp/snapshot.rs:599-604` |
+| a2-r3 | S8 | minor | fixed: §5 says the history is not the proof under a squash merge; the ledger records each TRANSIENT test's pass and break at a named intermediate SHA, quoted in the PR body; review checks it (no `scripts/` change) | CLAUDE.md autonomous-flow exception (squash-merge after gating HEAD) |
+| a2-r3 | S9 | minor | fixed: `profile`, `apps`, `workspace_app`, `abi_integrity` dropped from the step-1b `ProgramMeta` until a reader exists; epic §5.2 annotated (epic round 10) | spec §4.3.3 (the only `meta.` readers); `AppMeta` undefined |
+| a2-r3 | S10 | minor | fixed: §8 recipe: one helper `tests/common/unreadable.rs` (`#[path]`-hoisted for umbrellas and `--lib`); Unix `chmod 000` with a read-back check (root → skip); Windows `share_mode(0)` handle for files, folders skip; a skip is never a ledger pass | `source_text.rs:116-124` (lossy decode), `:80-84` (`NotFound` skipped), `:87-89` (non-files) |
+| a2-r3 | S11 | minor | fixed: rule 1 fills `ordering` FIRST (model-only; its own snapshot dies before `graph`/`l4`/`det` exist); §7 step 2 states the stderr order change on a capped SCC | `digest.rs:4016-4019` (`compose_snapshot` inside the fill); `ordering_facts.rs:218-219` (model only) |
+
+Round a2-r4 (2026-10-18): two reviews in `critiques-child-a2-r3.md` (first review = ids
+1..6, item 3 split into 3a/3b; second = M1..M7). Every claim checked in source at
+`U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`). None refuted. M3 = 6 and M5 = 5 (the
+first-review row holds the fix). Epic amended for 1 and M4 (epic Round 11).
+
+| Round | Id | Severity | Outcome | Evidence |
+|---|---|---|---|---|
+| a2-r4 | 1 | important | fixed: `build_detector_artifacts` takes `l4: Option<L4Request>` and calls `build_l4` itself after its cone, at today's `:1296` spot, then harvests; it returns the `L4Analysis` for the cell. Rule 1, rule 1(c), §4.4.1, §4.4.2, the shim text, §4.4.4's preamble and §6.3 updated; "never raises" now holds. Epic §5.8 and §5.9 rule 3 item (7) amended | `detector_context.rs:953` (`context.capability_cones`), `:1005` (`compose_cone_over_graph`), `:1017` (`drop(outcome.pd_solution)`), `:1296-1396` (SCC + v2 solve after the cone), `:1387` (`core_summaries`), `:1427-1495` (harvest), `:1440` (~730 MiB) |
+| a2-r4 | 2 | important | fixed: `L4Request.extra_diagnostics` (empty in production) plus a `#[cfg(test)]` `View::prepare_with_diagnostics` over the same `prepare_inner`; the test also asserts the CORE run gets `[d]` (non-vacuous). `empty_resolved` moves to `test_support`, which becomes `pub(crate)` (§8.4) | `registry.rs:808-809` (`#[cfg(test)] mod tests`), `:1088` (`fn empty_resolved`, private); `src/engine/l5/mod.rs:158-159` (`#[cfg(test)] mod test_support;`, private); spec §4.4.7 (no fixture caps) |
+| a2-r4 | 3a | minor | fixed: step 0 adds `census_hook::mark("1.snapshot")` after the snapshot block of `build_program_with_coverage_profiled`; `program.parsed_ir` = `1.snapshot` → `2.parse`, nothing subtracted (§4.1.5) | `full.rs:1738` (`1.snapshot` only in `build_context_with`), `:2140-2149` (no mark on the command path), `:1810` (`2.parse`) |
+| a2-r4 | 3b | minor | fixed: from step 1 the `inputs` bucket owns the workspace texts and `program.snapshot_texts` walks dependency units only (§4.1.5 bullet and table) | `src/snapshot/embedded.rs:19` (`pub text: Arc<str>`); spec §4.2.3 row 1 (same `Arc`) |
+| a2-r4 | 4 | minor | fixed: one borrowed `EdgeView<'r>` (primary app, both edge sets, site facts) with `ProgramBody::edge_view` and `ProgramReport::edge_view`; `SiteLinks::build`, `join`, `site_census`, `adapter`, `resolved_calls_from_program` take it; `cross_app_demand` takes an iterator; tests keep `ProgramReport` (§4.3.1, §4.3.3, §7 step 1b) | `site_links.rs:64` (`build(&ProgramReport)`), `:121`, `:133`; `program_calls.rs:386`, `:401`, `:407`, `:622`, `:922`, `:952-967`, `:1873`, `:2083`, `:2408`, `:2468`, `:2482`; `program_calls_adapter_tests.rs:151`, `:1310` (all from `build_models`); `demand.rs:29-37` (one pass) |
+| a2-r4 | 5 | minor | fixed: §4.1.6 writes `base.graph.clone()` at step 0; step 2's commit changes it to `(*base.graph).clone()` | `capability_cone.rs:3335` (`pub graph: CombinedGraph`) |
+| a2-r4 | 6 | minor | fixed: digest row: the pipeline's no-input check runs right after `AnalysisTarget::build`, before `prepare`; §7 step 2 states the lost snapshot warning line on that error path | `digest_cli.rs:1572` (target build), `:1580` (snapshot), `:1590-1608` (check); `alsem.rs:1049-1058` (CLI check tests the `--diff` argument, not the file's text) |
+| a2-r4 | M1 | minor | fixed: §4.2.4 names the two full `FreshCoverage` literals; §4.2.6 lists the other `build_program_with_coverage[_profiled]` callers and says they use `InputNeeds::default()`; the three path wrappers read the `InputSet` inside, so the 69 `tests/` files that call them do not change; §7 step 1 | `preflight.rs:133`, `:210` (no `..`; the other six use `..clean()`); `aldump.rs:139`; `site_links.rs:110`, `physical.rs:128`, `registry.rs:198`, `:261`, `applicability.rs:955`, `dep_summary.rs:546`, `full.rs:4436`, `workspace.rs:2838`, `:2885`, `switch_dump.rs:51`, `:414`, `cli_attribute_trivia.rs:463`; `program_calls.rs:698-790`; `grep -rl` over `tests/` |
+| a2-r4 | M2 | minor | fixed: `run_analyze_with_exit_uses_the_shared_aggregation` gains the needle `.workspace_diagnostics` in the commit that adds the field (§4.2.4, §7 step 1) | `run.rs:1175-1210` (banned list `compute_workspace_diagnostics(` …) |
+| a2-r4 | M3 | minor | = 6 | — |
+| a2-r4 | M4 | minor | fixed: epic I2 gains the named-`--lib`-test exception; both documents name worktree `…-a2` as the base | epic I2 (`:438-440` before the edit); child line 9 and epic line 14 (`…-a1`) |
+| a2-r4 | M5 | minor | = 5 | — |
+| a2-r4 | M6 | minor | fixed: A2.9 and rule 4 add the needles `Atomic` and `thread_local`; §8.4 adds a third break (`released` as `AtomicU8`) | spec A2.9, §4.4.3 rule 4 (`released: u8`) |
+| a2-r4 | M7 | minor | fixed: `inputs::read_once`, `run::no_id_row_runs_one_build_and_keeps_the_text` and `run::build_failed_row_runs_one_build` are spawned-process tests in `tests/cli/cli_build_counters.rs`; the `fresh` text is read from the `al-sem: warning:` line (§8.2, §8.4) | `perf_trace.rs:402-407` (tracer `OnceLock`); `run.rs:884-897` (reason → preflight message); `alsem.rs:1612` (`eprintln!("al-sem: warning: {msg}")`) |

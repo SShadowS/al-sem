@@ -11,8 +11,9 @@ lives in child specs, one per delivery slice:
 - steps 3–4, 7a–7b, 10–11, 5–6, 8–9, 12, 13 — each written when its predecessor merges,
   against the code as it then is.
 
-Base: master `1e54624a`, worktree `U:/Git/al-sem-issue-160-a1`. Every code claim cites
-`file:line` in that tree. Sources: `.agent/runs-probe-160.md` (probe Pn), the cone-timing
+Base: master `1e54624a`, worktree `U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`: no
+`src/`, `tests/` or `crates/` change since `1e54624a`; the first attempt's worktree,
+`…-a1`, is gone). Every code claim cites `file:line` in that tree. Sources: `.agent/runs-probe-160.md` (probe Pn), the cone-timing
 census (`scratchpad/cone-timing/`), Astra's review (`scratchpad/astra-160.md`), verdicts
 `disc-digest` (bug #161), `disc-deprole`, `disc-mid`, critiques rounds 1–6
 (`scratchpad/critiques-160-r{1,3,5}.md`).
@@ -129,7 +130,10 @@ it lives for the process (step 1b census, finding G-6).**
 
 `ResolvedProgram { meta: ProgramMeta, body: Option<ProgramBody> }`. `ProgramMeta` (inputs,
 app set, `primary_app_ref`, `has_object`, `recovered_files`, `FreshCoverage`, both
-histograms, ABI integrity, loaded apps) lives as long as the view. `ProgramBody` (the
+histograms, ABI integrity, loaded apps) lives as long as the view. (Round 10: the app
+set, ABI integrity and the build profile join `ProgramMeta` at the first step whose
+reader needs them after the body is released; steps 0–2 have none, so the step-1b struct
+holds only the fields they read, child spec §4.3.1.) `ProgramBody` (the
 `ProgramContext` with its graph, parsed units and dependency bodies; the report's edges in
 **two sets kept apart**; `site_facts`; `parenless_calls`; obligation coverage) is released
 at today's drop point: right after the model, before any graph (§5.9 rule 3 item 2).
@@ -258,10 +262,14 @@ re-applies today's skip of anchorless rows (`snapshot.rs:1395-1501`), and the ru
 
 `L4Analysis { bundle, summarize diagnostics, warnings, scc (an `Arc`, shared with the
 cross-app base), field index }` over `Transfer::Primary` (at step 2: over the context's
-combined graph; step 4 swaps in `rel`), plus a transient `L4Harvest { uncertainties,
-parameter roles }` that the `det` fill takes by value: the harvest is up to ~730 MiB on
-8020 and only `det` reads it, so it must not outlive `det` in digest and prove (child
-spec §4.4.1, review B8; amended 2026-10-18). Replaces the context's inline solve
+combined graph; step 4 swaps in `rel`), plus the transient, UNHARVESTED core-summary
+map (`CoreSummaries`) that the `det` builder harvests into uncertainties and parameter
+roles. The `det` builder calls the `l4` builder itself, after its own cone, so the map is
+a local of that call (child spec §4.4.1, Round 11). The harvest is up to ~730 MiB on 8020, only `det`
+reads it, and it also reads the context's `uncertainty_edges_by_from`, so it runs in
+the `det` builder and never on a plan with no `det` fill (query). It must not outlive
+`det` in digest and prove (child spec §4.4.1, reviews B8 and a2-r1 2-8; amended
+2026-10-18). Replaces the context's inline solve
 (`detector_context.rs:1387-1396`), `cross_app_db_effect_bundle`
 (`effect_query_cli.rs:207-220`) and `build_db_effect_bundle` (`:226-262`).
 `compute_uncertainty_coverage_reasons` (`capability_cone.rs:3185-3247`) is deleted by §6.3.
@@ -307,8 +315,16 @@ impl View {
    plan:** (1) program build, then the `graph` job; (2) `model`, then `ProgramBody`
    released, then `rel`; (3) `caps` with one `pd_solve`; (4) `identities`; (5) the one
    witness pass at the union of subjects, each job's tree projected at once; (6) the
-   effects cells, then `pd` released; (7) `l4`, `det`, the runs; (8) small projections off
-   `det` (tx maps, fanout, the policy rule engine), then `det` released; (9) every job's
+   effects cells, then `pd` released; (7) `det` and `l4`, then the runs. While `det`
+   builds its own cone, the `det` builder runs that cone FIRST, then the `l4` solve, then
+   the harvest. That is today's order, so the solve's output (bundle and core map) is
+   never alive beside the cone's working set (Round 11; child a2-r4 1). A plan with no
+   `det` fills `l4` alone; (8) small projections off
+   `det` (tx maps, fanout, and from step 6 the policy rule engine), then `det` released.
+   Before step 6 the policy rule engine is NOT an item-8 projection: it reads raw
+   inherited facts, which no `det` may carry (I5, Decision 50), so it runs after `det`
+   is released, off policy's command-local RAW build (child spec §4.4.4; round 9);
+   (9) every job's
    `compute` (a `Doc` borrows nothing), then `caps`, `model`, `rel`, `l4`, `identities`
    released; (10) serialization, one job at a time. Before step 11 every cell keys routines
    by the model's string id (Decision 25). Before step 6, items 5–6 do not exist: digest's
@@ -426,8 +442,12 @@ Each child spec names which of these its step touches and how it proves them.
   Instrument: the step 0 build counters, read from the trace per command and universe
   (child spec §4.1); the table of expected counts is restated by every step that moves it.
 - **I2 Byte-neutral means byte-neutral.** A step labelled byte-neutral moves none of the 8
-  golden targets, no `--lib` test, and the CDO `aldump` histogram SHA; stderr changes are
-  stated, never hidden under "byte-identical".
+  golden targets, no `--lib` test outcome, and the CDO `aldump` histogram SHA; stderr
+  changes are stated, never hidden under "byte-identical". One exception: a `--lib` test
+  that pins the very code a step deletes or rewrites (a lazy fill, a pre-loop fill, a
+  `debug_assert!` that becomes an `expect`) is deleted or rewritten in the same commit as
+  that code. The child spec names each such test and its replacement, and lists it in
+  its §7 (Round 11; child a2-r4 M4).
 - **I3 Lifetimes are the driver's.** No `OnceLock`, `Mutex` or lazy fill in `View`; cells
   take `&T`; `prepare`/`release` through `&mut`; the fixed order of §5.9 rule 3.
 - **I4 Output never depends on fill state** (`RunKey` carries the mask) **or on which jobs
@@ -501,7 +521,7 @@ reopens them without new evidence. Numbers are stable across rounds.
 44. Every wall bound is a saving against a parent-commit sub-phase median; the one absolute line is `bfs` ≤ 1 s — **the bfs timer is split into walk and fold at step 0 (G-3); 7a's bound reads the walk half** (child spec of 7a).
 45. Step 10's bound reads the `b3.adapter.join` sub-span; step 11 carries `by_decl`.
 46. `analysisGaps` is its own key class (reachability, both directions).
-47. Policy's rule engine is an item 8 projection off `det`; `l4` released at item 9.
+47. Policy's rule engine is an item 8 projection off `det`; `l4` released at item 9. From step 6 on. Before step 6 it runs after `det` and `l4` are released, off the command-local `SUMMARIES | RAW_INHERITED_FACTS` build (Decision 50; child spec §4.4.4; round 9).
 48. The superset-mask parity test compares the whole `DetectorOutput` — **all four fields, `d1_cohort_index` included** (R6-2; `registry.rs:255-271`).
 49. One writer in the binary; a write failure prints one stderr line and exits with the command's own failure code (analyze 2; every other command 1, as today — 2 already means "no roots" on digest and "unresolved" on prove; child spec §4.2.5, review log A4).
 50. Before step 6 the shared union never carries `RAW_INHERITED_FACTS`; an early batch refuses `policy check`.
@@ -713,3 +733,40 @@ B8). Step-1b row: `body.is_none()` replaced by the drop span plus the peak (chil
 §5.9 rule 4: census counters never reset (child D-M6). §5.9's `View.program` annotated
 as joining at its first reader (child D-I3). Policy's RAW build before step 6 is a
 command-local, not a cell, which keeps I5 and Decision 50 as written (child C3).
+
+**Round 8** (child review log round a2-r1, 2026-10-18): 15 findings, all held in
+source, none refuted; one epic-level amendment. §5.8: the transient `L4Harvest` is
+replaced by the unharvested `CoreSummaries` map, and the harvest runs in the `det`
+builder (child a2-r1 2-8: query paid a harvest it never reads, and the harvest needs
+`uncertainty_edges_by_from`, which only the `det` builder has). The other fourteen
+are child-local (counts, tests, `release(Graph)`, ownership types).
+
+**Round 9** (child review log round a2-r2, 2026-10-18): two reviews, 23 findings (21
+distinct), all held in source, none refuted; one epic-level amendment. §5.9 rule 3
+item (8) and Decision 47: before step 6 the policy rule engine is not an item-8
+projection off `det`, since it reads raw inherited facts that no `det` may carry (I5,
+Decision 50); it runs after `det` and `l4` are released, off policy's command-local
+RAW build, and moves to item 8 when step 6 deletes `RAW_INHERITED_FACTS` (child a2-r2
+R1-9). The other findings are child-local (probe gating, the `InputSet` parameter
+path, the cross-app failure enum, cell fill-once asserts, tests).
+
+**Round 10** (child review log round a2-r3, 2026-10-18): two reviews, 16 findings (15
+distinct), all held in source, none refuted; one epic-level amendment. §5.2: the app set,
+ABI integrity and the build profile leave the step-1b `ProgramMeta` until a step reads
+them, since no step 0–2 reader does and `AppMeta` had no definition (child a2-r3 S9).
+The other findings are child-local (the walk error kept as an `io::Error`, the census
+residual taken from `tools/census-probe`, one builder form for steps 1b and 2, the
+full-graph timing inputs, the ordering fill first and on the big stack, `build_l4` as
+the one warning print site, a `build_only` read for the LSP, the transient-test ledger,
+the unreadable-file recipe, test lists).
+
+**Round 11** (child review log round a2-r4, 2026-10-18): two reviews, 13 findings (11
+distinct), all held in source, none refuted; three epic-level amendments. §5.9 rule 3
+item (7): the `det` builder runs its cone, then the `l4` solve, then the harvest, as
+today; an `l4`-before-`det` order would have kept the bundle and core map alive through
+the cone (child a2-r4 1). I2: a byte-neutral step may delete or rewrite a `--lib` test
+that pins the code it deletes, when the child names it (child a2-r4 M4). The base
+worktree is `…-a2` (child a2-r4 M4). The other findings are child-local (a test seam
+for injected diagnostics, a census mark and text ownership, the `EdgeView` signatures,
+the full-graph mode's step-0 expression, digest's no-input check order, signature
+fallout, guard needles, spawned-process tests).
