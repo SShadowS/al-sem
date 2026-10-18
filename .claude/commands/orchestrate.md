@@ -187,8 +187,10 @@ id or issue: a `FenceError` naming an issue this tick did not claim is a STOP.
    gates passed, `post-merge` closes the obligation without rebuilding. That
    needs all of: this run's attestation, all gates green; the squash on the
    attested base; the merge tree equal to `final_head`'s; only evidence files
-   after `H`; and the executor's own gate-run record for each gate, green and
-   clean on `H`'s tree, in the same `rustc`, grammar and CDO workspace. The
+   after `H`; no earlier post-merge stop on this merge; and the executor's own
+   gate-run record for each gate, green and clean on `H`'s tree, with the
+   command post-merge would run, in the same `rustc`, grammar and CDO workspace
+   (and none of those moved while the gate ran). The
    payload says which path ran: `verified_by` is `identity` or `gates`, and
    `identity_refused` lists every reason a skip was refused. A recovered
    merge never skips. `post-merge --full` forces the gates. Nothing else in

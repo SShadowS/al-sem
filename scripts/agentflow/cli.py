@@ -659,20 +659,34 @@ def cmd_run(args, ctx, gh, git):
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
-    # Probed BEFORE the child: the record's tree names the tested code only if
-    # the tree held nothing else (spec 2026-10-18, post-merge identity skip).
-    clean_before = identity.tree_clean(cwd)
+    # Probed BEFORE the child (and again after, in `record_gate_run`): the
+    # record names the tested code only if nothing moved while the gate ran
+    # (spec 2026-10-18, post-merge identity skip). Bookkeeping never costs a
+    # gate its verdict: a failed probe or record is reported, not raised.
+    child = _with_bash(args.child)
+    cdo = args.name == CDO_GATE_KEY
+    record_error = None
     try:
-        r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
+        before = identity.probe(ctx, cwd, cdo=cdo)
+    except Exception as e:  # noqa: BLE001
+        before, record_error = None, f"probe: {e}"
+    try:
+        r = _run_gate(ctx, args.name, child, args.timeout, cwd)
     except GateQueued as e:
         # Not a verdict: the child never started. `gate-queue-timeout` is
         # worth one more try; `halted-while-queued` is `blocked halted`.
         return _emit({"exit_code": None, "failure": e.failure, "queued_s": round(e.queued_s, 1),
                       "supervised": supervised}, 1)
-    identity.record_gate_run(ctx, args.name, r, cwd, supervised=supervised,
-                             clean_before=clean_before, cdo=args.name == CDO_GATE_KEY)
     out = {"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
            "seconds": round(r.seconds, 1), "queued_s": r.queued_s, "supervised": supervised}
+    if before is not None:
+        try:
+            identity.record_gate_run(ctx, args.name, r, cwd, argv=child, supervised=supervised,
+                                     before=before, cdo=cdo)
+        except Exception as e:  # noqa: BLE001
+            record_error = f"record: {e}"
+    if record_error is not None:
+        out["record_error"] = record_error
     if r.contended_build:
         # #60: another build held target/ -- environmental, not a gate verdict.
         out["failure"] = "contended-build"
@@ -1062,12 +1076,12 @@ def cmd_post_merge(args, ctx, gh, git):
     # THE IDENTITY PATH (spec 2026-10-18-gate-speedups). When the merge is
     # provably the tree the gates passed, built in the same environment, the
     # rebuild proves nothing new: close the obligation on that evidence.
-    # `identity_refusals` never raises; anything else here failing refuses too.
+    # Anything here raising refuses too: the gates run.
     try:
         pm_docs_only = _docs_only(git, f"{args.merge_sha}~1", args.merge_sha)
-        names = [g[0] for g in gates()] + ([] if pm_docs_only else [cdo_gate()[0]])
+        commands = {n: c for n, c, _ in gates() + ([] if pm_docs_only else [cdo_gate()])}
         refused = (["forced-full"] if args.full else
-                   identity.identity_refusals(ctx, git, args.issue, args.merge_sha, names, pm_docs_only))
+                   identity.identity_refusals(ctx, git, args.issue, args.merge_sha, commands, pm_docs_only))
     except Exception as e:  # noqa: BLE001 -- fail closed: run the gates
         refused = [f"error:identity:{type(e).__name__}"]
     if not refused:

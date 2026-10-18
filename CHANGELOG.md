@@ -49,8 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     workspace identity (path, commit, dirt, a hash of every dependency `.app`) for `cdo-gate`.
   - `agentflow post-merge` skips its gates when the merge is provably the gated tree: this
     run's merge (never a recovered one), a green attestation, the squash on the attested base,
-    the merge tree equal to `final_head`'s, only evidence files after `H`, and a green, clean
-    record for each gate on `H`'s tree in the same environment. Any doubt runs the gates as
+    the merge tree equal to `final_head`'s, only evidence files after `H`, no earlier
+    post-merge stop on the merge, and a green, clean record for each gate on `H`'s tree, with
+    post-merge's own command, in the same environment (a record whose tree or environment
+    moved while the gate ran names neither). Any doubt runs the gates as
     before. The payload carries `verified_by` (`identity` | `gates`) and `identity_refused`
     (every reason a skip was refused); `--full` forces the gates. It used to take 15–28 min
     per merge.

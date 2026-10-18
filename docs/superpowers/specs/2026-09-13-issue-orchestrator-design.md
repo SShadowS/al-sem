@@ -405,8 +405,10 @@ tree, clean before and after, `rustc`, grammar commit and dirt, CDO workspace
 identity for `cdo-gate`). After opening the `verifying` incident, `post-merge`
 asks `identity.identity_refusals`. If nothing refuses — this run merged (not
 `recover`), its attestation is green, the squash sits on the attested `B`, the
-merge tree equals `final_head`'s, `H..final_head` is evidence only, and each
-gate's latest record is green and clean on `H`'s tree in today's environment —
+merge tree equals `final_head`'s, `H..final_head` is evidence only, the incident
+carries no earlier stop, and each gate's latest record is green and clean on
+`H`'s tree, with post-merge's own command for that gate, in today's environment
+(a record whose tree or environment moved during the run names neither) —
 it resolves the incident with a note naming the trees, releases the lane, and
 builds nothing. Otherwise the gates run exactly as described below. The payload
 carries `verified_by` (`identity` | `gates`) and `identity_refused`; `--full`

@@ -126,6 +126,8 @@ def test_cdo_gate_record_carries_the_cdo_identity(capsys, repo_pair, monkeypatch
 # ---- the identity check -----------------------------------------------------
 
 GATES = ["ci-steps-all", "check-goldens", cli.CDO_GATE_KEY]
+CMDS = {"ci-steps-all": ["bash", "scripts/ci-steps", "all"], "check-goldens": ["bash", "scripts/check-goldens"],
+        cli.CDO_GATE_KEY: ["bash", "scripts/cdo-gate"]}
 GREEN = {"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0, cli.CDO_GATE_KEY: 0}
 
 
@@ -167,16 +169,18 @@ def gated(repo_pair, monkeypatch, tmp_path):
     write_json(ctx, ctx.run_dir / "merge.json", {"issue": 8, "pr": 12, "merge_sha": merge_sha,
                                                   "run_id": "run-test", "source": "merge"})
     tree = Git(clone).rev(f"{H}^{{tree}}")
-    recs = [{"name": n, "exit_code": 0, "timed_out": False, "supervised": True, "head": H, "tree": tree,
-             "clean_before": True, "clean_after": True,
+    recs = [{"name": n, "argv": CMDS[n], "exit_code": 0, "timed_out": False, "supervised": True, "head": H,
+             "tree": tree, "clean_before": True, "clean_after": True,
              "env": identity.environment(ctx, clone, cdo=n == cli.CDO_GATE_KEY)} for n in GATES]
     _write_records(ctx, recs)
+    from agentflow import incidents
+    incidents.open_incident(ctx, merge_sha=merge_sha, issue=8, gate_red=False, verifying=True)
     return SimpleNamespace(clone=clone, ctx=ctx, B=B, H=H, final_head=final_head, merge_sha=merge_sha,
                            records=recs)
 
 
 def _refusals(g):
-    return identity.identity_refusals(g.ctx, Git(g.clone), 8, g.merge_sha, GATES, False)
+    return identity.identity_refusals(g.ctx, Git(g.clone), 8, g.merge_sha, CMDS, False)
 
 
 def _att(g, **change):
@@ -251,7 +255,8 @@ def test_a_dirty_grammar_now_refuses_even_when_the_record_matches(gated, monkeyp
 
 def test_docs_only_needs_no_cdo_record(gated):
     _write_records(gated.ctx, gated.records[:2])
-    assert identity.identity_refusals(gated.ctx, Git(gated.clone), 8, gated.merge_sha, GATES[:2], True) == []
+    two = {n: CMDS[n] for n in GATES[:2]}
+    assert identity.identity_refusals(gated.ctx, Git(gated.clone), 8, gated.merge_sha, two, True) == []
 
 
 # ---- post-merge takes the identity path --------------------------------------
@@ -264,6 +269,8 @@ def _post_merge(capsys, g, monkeypatch, tmp_path, *extra):
     child = [sys.executable, "-c", f"open({str(marker)!r}, 'a').write('x')"]
     monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", child, 1), ("check-goldens", child, 1)])
     monkeypatch.setattr(cli, "cdo_gate", lambda: (cli.CDO_GATE_KEY, child, 1))
+    for n in GATES:                                      # the records name the command post-merge runs
+        _rec(g, n, argv=child)
     lock.acquire(g.ctx, 8, "s", 1)
     argv = ["--root", str(g.clone), "--repo", "SShadowS/al-sem", "--run-id", "run-test",
             "post-merge", "--issue", "8", "--merge-sha", g.merge_sha, *extra]
@@ -296,6 +303,74 @@ def test_post_merge_full_forces_the_gates(capsys, gated, monkeypatch, tmp_path):
     assert code == 0 and out["verified_by"] == "gates"
     assert out["identity_refused"] == ["forced-full"]
     assert marker.exists()
+
+
+# ---- final-review fixes -------------------------------------------------------
+
+def test_a_commit_during_the_run_leaves_no_tree_in_the_record(capsys, repo_pair):
+    """Critical 1: the record must name the tree the gate BUILT. A HEAD that
+    moved while the child ran names nothing."""
+    _, clone = repo_pair
+    child = ("import subprocess; open('moved.txt','w').write('x'); "
+             "subprocess.run(['git','add','moved.txt']); subprocess.run(['git','commit','-qm','m'])")
+    _run(capsys, clone, "g", sys.executable, "-c", child, run_id="solo-run")
+    rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
+    assert rec["tree"] is None and rec["head"] is None
+
+
+def test_an_environment_change_during_the_run_leaves_no_env(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    calls = iter(["rustc 1 (before)", "rustc 2 (after)"])
+    monkeypatch.setattr(identity, "_rustc", lambda cwd: next(calls))
+    _run(capsys, clone, "g", sys.executable, "-c", "pass", run_id="solo-run")
+    rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
+    assert rec["env"] is None
+
+
+def test_record_carries_the_command(capsys, repo_pair):
+    _, clone = repo_pair
+    _run(capsys, clone, "g", sys.executable, "-c", "pass", run_id="solo-run")
+    rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
+    assert rec["argv"] == [sys.executable, "-c", "pass"]
+
+
+def test_a_right_name_with_the_wrong_command_refuses(gated):
+    """Important 1: `--name ci-steps-all -- bash scripts/ci-steps task` is not the release bar."""
+    _rec(gated, "ci-steps-all", argv=["bash", "scripts/ci-steps", "task"])
+    assert "record-other-command:ci-steps-all" in _refusals(gated)
+
+
+def test_a_failing_record_never_loses_the_gate_verdict(capsys, repo_pair, monkeypatch):
+    """Important 2: bookkeeping failing must not turn a finished gate into a traceback."""
+    _, clone = repo_pair
+
+    def boom(*a, **k):
+        raise PermissionError("locked .app")
+    monkeypatch.setattr(identity, "record_gate_run", boom)
+    code, out = _run(capsys, clone, "g", sys.executable, "-c", "pass", run_id="solo-run")
+    assert code == 0 and out["exit_code"] == 0 and "locked .app" in out["record_error"]
+
+
+@pytest.mark.parametrize("history", [{"gate_red": True}, {"revert_landed": False}, {"state": "open"}])
+def test_a_merge_with_incident_history_refuses(gated, history):
+    """Important 3: a merge an earlier post-merge stopped on goes back through the gates."""
+    from agentflow import incidents
+    recs = incidents.all_records(gated.ctx)
+    recs[gated.merge_sha].update(history)
+    incidents._save(gated.ctx, recs)
+    assert "incident-history" in _refusals(gated)
+
+
+def test_no_incident_record_refuses(gated):
+    (gated.clone / ".agent" / "incidents.json").unlink()
+    assert "incident-history" in _refusals(gated)
+
+
+def test_identity_path_releases_the_lane(capsys, gated, monkeypatch, tmp_path):
+    from agentflow import lock
+    code, out, _ = _post_merge(capsys, gated, monkeypatch, tmp_path)
+    assert out["verified_by"] == "identity"
+    lock.take_lane(_ctx(gated.clone, "other-run"), 9, 13, "0" * 40)   # free again: no LockHeld
 
 
 def test_run_outside_a_git_tree_still_runs_and_records_no_tree(capsys, root):
