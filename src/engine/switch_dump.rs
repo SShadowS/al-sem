@@ -59,7 +59,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
                 .collect(),
         );
     }
-    let built = build_analysis_model(ws, true);
+    let built = build_analysis_model(&inputs, true);
     if let Ok(fc) = &built.fresh {
         d.insert("ledger".into(), rows(&fc.ledger));
     }
@@ -133,7 +133,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
         rows(&run.summarize_diagnostics),
     );
 
-    let coverage = analysis_coverage(&resolved, ws, &built.fresh);
+    let coverage = analysis_coverage(&resolved, &inputs, &built.fresh);
     d.insert(
         "coverage".into(),
         vec![serde_json::to_string(&coverage).expect("coverage serializes")],
@@ -368,7 +368,7 @@ mod tests {
             "assemble_and_resolve_workspace",
             "attach_program_calls",
             "build_program_with_coverage",
-            "project_coverage_disk",
+            "project_coverage_inputs",
         ] {
             assert!(
                 !body.contains(banned),
@@ -423,7 +423,7 @@ mod tests {
             program_paths.contains(&"nested/src/Inner.al"),
             "precondition: the program parse walks the nested app, got {program_paths:?}"
         );
-        let selected: Vec<String> = match select_program_files(&root, &ctx) {
+        let selected: Vec<String> = match select_program_files(&inputs, &ctx) {
             Some(ProgramFiles::Selected { files, .. }) => {
                 files.iter().map(|(p, _)| p.to_string()).collect()
             }

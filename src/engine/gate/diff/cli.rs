@@ -91,16 +91,26 @@ fn load_snapshot_from_workspace(
     deterministic: bool,
     strict: bool,
 ) -> Result<(CborValue, Vec<String>), String> {
-    use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
     use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
+    use crate::program::inputs::{InputNeeds, InputSet};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
     let ws = Path::new(dir);
-    let model_id = compute_gate_model_instance_id(ws)
+    // #160 §4.2.6: one read of this side's workspace.
+    let inputs = InputSet::read(
+        ws,
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
+    let model_id = inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| format!("could not compute modelInstanceId for workspace '{dir}'"))?;
     // Engine-switch S6.4: the program-backed model (program calls and events).
-    let resolved = assemble_and_resolve_workspace_program(ws, &model_id, false)
+    let resolved = assemble_and_resolve_workspace_program(&inputs, model_id, false)
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
     let target = AnalysisTarget::SingleApp(Box::new(resolved));
     let diag_lines = if strict {

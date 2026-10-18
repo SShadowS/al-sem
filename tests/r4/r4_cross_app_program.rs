@@ -20,6 +20,11 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// The command's one read of `ws` (#160).
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+}
+
 /// Workspace and dependency both declare a codeunit named "Shared Name" with a
 /// procedure `Foo`. The dependency's `Work` calls its own internal `Helper` and
 /// `Shared Name`.Foo through a variable.
@@ -269,7 +274,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
     for ws in cross_app_fixtures() {
         let ctx = build_context(&ws).expect("context");
         let (model, _) = assemble_and_resolve_cross_app_from_program(
-            &ws,
+            &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             MI,
             false,
             &ctx,
@@ -342,7 +347,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
-    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -403,7 +408,7 @@ fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
-    let m = assemble_and_resolve_cross_app_program(&ws, MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(&ws), MI, false)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -639,7 +644,7 @@ fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     friend_workspace(dir.path(), true);
-    let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false).expect("model");
     let apps: std::collections::BTreeSet<&str> = x
         .resolved
         .workspace
@@ -928,7 +933,7 @@ fn the_cross_app_model_holds_the_demanded_dependency_routines() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     demand_workspace(dir.path());
-    let x = assemble_and_resolve_cross_app_program(dir.path(), MI, false).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false).expect("model");
     let ws = &x.resolved.workspace;
     let mut dep: Vec<&str> = ws
         .routines
@@ -1616,7 +1621,7 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
         )],
         "",
     );
-    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -1733,7 +1738,7 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     if_dup_dependency_workspace(dir.path());
-    let m = assemble_and_resolve_cross_app_program(dir.path(), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
         .resolved;
     let h_rows = m

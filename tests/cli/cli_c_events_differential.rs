@@ -116,7 +116,7 @@ macro_rules! events_differential {
             // ── fanout human ─────────────────────────────────────────────
             {
                 let opts = EventsFanoutOptions {
-                    workspace: &ws,
+                    inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
                     format: "human",
                     scope: $scope,
                     coverage_policy: "warn",
@@ -135,7 +135,7 @@ macro_rules! events_differential {
             // ── fanout json ──────────────────────────────────────────────
             {
                 let opts = EventsFanoutOptions {
-                    workspace: &ws,
+                    inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
                     format: "json",
                     scope: $scope,
                     coverage_policy: "warn",
@@ -153,7 +153,7 @@ macro_rules! events_differential {
             // ── chains human ─────────────────────────────────────────────
             {
                 let opts = EventsChainsOptions {
-                    workspace: &ws,
+                    inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
                     format: "human",
                     scope: $scope,
                     max_depth: None,
@@ -174,7 +174,7 @@ macro_rules! events_differential {
             // ── chains json ──────────────────────────────────────────────
             {
                 let opts = EventsChainsOptions {
-                    workspace: &ws,
+                    inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
                     format: "json",
                     scope: $scope,
                     max_depth: None,
@@ -256,7 +256,7 @@ fn events_ws_event_fanout_scope_all() {
     // fanout human
     {
         let opts = EventsFanoutOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "human",
             scope: Scope::All,
             coverage_policy: "warn",
@@ -273,7 +273,7 @@ fn events_ws_event_fanout_scope_all() {
     // fanout json
     {
         let opts = EventsFanoutOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "json",
             scope: Scope::All,
             coverage_policy: "warn",
@@ -290,7 +290,7 @@ fn events_ws_event_fanout_scope_all() {
     // chains human
     {
         let opts = EventsChainsOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "human",
             scope: Scope::All,
             max_depth: None,
@@ -309,7 +309,7 @@ fn events_ws_event_fanout_scope_all() {
     // chains json
     {
         let opts = EventsChainsOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "json",
             scope: Scope::All,
             max_depth: None,
@@ -336,7 +336,7 @@ fn events_ws_event_d45_deep_max_depth_1() {
     // chains human (max-depth=1)
     {
         let opts = EventsChainsOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "human",
             scope: Scope::Primary,
             max_depth: Some(1),
@@ -358,7 +358,7 @@ fn events_ws_event_d45_deep_max_depth_1() {
     // chains json (max-depth=1)
     {
         let opts = EventsChainsOptions {
-            workspace: &ws,
+            inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             format: "json",
             scope: Scope::Primary,
             max_depth: Some(1),
@@ -397,7 +397,7 @@ fn run_partial_fanout(policy: &str, format: &str) -> al_sem::engine::gate::event
     let ws = corpus_dir().join("ws-event-partial-coverage");
     assert!(ws.is_dir(), "fixture missing: {}", ws.display());
     let opts = EventsFanoutOptions {
-        workspace: &ws,
+        inputs: &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
         format,
         scope: Scope::Primary,
         coverage_policy: policy,

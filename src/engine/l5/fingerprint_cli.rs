@@ -27,7 +27,6 @@
 //!   - `--format cbor` + query    → exit 1 (error).
 //!   - `--format cbor.gz` + query → exit 1 (error).
 
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
@@ -225,8 +224,9 @@ pub enum ShardMode {
 
 /// Options for `run_fingerprint_pipeline`.
 pub struct FingerprintOptions<'a> {
-    /// Workspace path.
-    pub workspace: &'a std::path::Path,
+    /// The command's one read of the workspace (#160); the path is
+    /// `inputs.workspace`.
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
     /// al-sem version string (e.g. `"cli-b-v1"`).
     pub driver_version: &'a str,
     /// Output format.
@@ -344,11 +344,15 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     }
 
     // Assemble workspace.
-    let model_id = compute_gate_model_instance_id(opts.workspace)
+    let workspace = opts.inputs.workspace.as_path();
+    let model_id = opts
+        .inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| "fingerprint: could not compute modelInstanceId".to_string())?;
     // Engine-switch S6.3: the program-backed model (program calls and events).
     let resolved =
-        assemble_and_resolve_workspace_program(opts.workspace, &model_id, opts.no_roots_config)
+        assemble_and_resolve_workspace_program(opts.inputs, model_id, opts.no_roots_config)
             .ok_or_else(|| "fingerprint: workspace did not resolve".to_string())?;
 
     // Honest `rootsConfigIgnored`: true only when a `roots.config.json` actually
@@ -356,12 +360,12 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // Passing --no-roots-config in a workspace with no such file is a no-op, not
     // a lie — it must report `false`, same as never having passed the flag.
     let roots_config_ignored = opts.no_roots_config
-        && crate::engine::root_classification::roots_config_was_loaded(opts.workspace);
+        && crate::engine::root_classification::roots_config_was_loaded(workspace);
 
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
     // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
     // exit 1, before any output / sharding.
-    let analyzer_diags = analyzer_diags_for(opts.workspace, &resolved);
+    let analyzer_diags = analyzer_diags_for(workspace, &resolved);
     if opts.strict {
         let fatal = analyzer_diags.iter().any(|(_, sev, _)| sev == "error");
         if fatal {
@@ -395,7 +399,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             .collect();
 
         let full_opts = FullSnapshotOptions {
-            workspace_dir: opts.workspace,
+            workspace_dir: workspace,
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
@@ -462,10 +466,8 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // Query path: json-with-query or human.
     // Compose the consumed-core snapshot (not the full CBOR tree).
     let snap = compose_snapshot(&resolved);
-    let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
-        opts.workspace,
-        opts.driver_version,
-    );
+    let workspace_fp =
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, opts.driver_version);
 
     // Witness limit: default to 3 (the golden capturePoint default).
     let witness_limit = opts.witness_limit.unwrap_or(WitnessLimit::Capped(3));
@@ -526,7 +528,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     let json_text = project_fingerprint_query_full(
         &result,
         &snap,
-        &opts.workspace.to_string_lossy(),
+        &workspace.to_string_lossy(),
         &filters,
         opts.deterministic,
         &analyzer_diags,

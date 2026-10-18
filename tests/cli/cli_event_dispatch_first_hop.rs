@@ -193,7 +193,7 @@ fn fixture_is_where_the_literals_say() {
 fn digest(publisher: &str, subscriber: &str, routine: &str) -> Value {
     let tmp = write_workspace(publisher, subscriber);
     let result = run_digest_pipeline(
-        tmp.path(),
+        &al_sem::program::inputs::InputSet::read(tmp.path(), &Default::default()),
         None,
         Some(vec![routine.to_string()]),
         None,
@@ -208,7 +208,7 @@ fn digest(publisher: &str, subscriber: &str, routine: &str) -> Value {
 
 fn fingerprint_witness(ws: &Path, routine: &str) -> Value {
     let opts = FingerprintOptions {
-        workspace: ws,
+        inputs: &al_sem::program::inputs::InputSet::read(ws, &Default::default()),
         driver_version: "cli-b-v1",
         format: FingerprintFormat::Json,
         out: None,

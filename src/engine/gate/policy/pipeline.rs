@@ -18,7 +18,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::policy::format_policy::{
     format_policy_human, format_policy_json, format_policy_sarif,
 };
@@ -162,7 +161,8 @@ pub struct PolicyCheckOutcome {
 
 /// Options for `run_policy_check`.
 pub struct PolicyCheckOptions<'a> {
-    pub workspace: &'a Path,
+    /// The command's one read of the workspace (#160).
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
     pub policy_path: Option<&'a str>,
     pub no_policy: bool,
     pub format: &'a str, // "human" | "json" | "sarif"
@@ -178,27 +178,12 @@ pub struct PolicyCheckOptions<'a> {
 /// invalid format / strict analyzer error / policy-load error / write failure.
 pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     // Build the model (assemble → resolve → detector context).
-    let model_id = match compute_gate_model_instance_id(opts.workspace) {
-        Some(id) => id,
-        None => {
-            return PolicyCheckOutcome {
-                text: None,
-                exit_code: 1,
-                stderr_lines: vec![
-                    "al-sem policy check: could not compute modelInstanceId".to_string(),
-                ],
-                out_path: None,
-            };
-        }
-    };
     // #70: the cross-app base by default (rules see a dependency's table names and
-    // the facts its code adds), the workspace alone under `--single-app`.
-    let target = match AnalysisTarget::build(
-        opts.workspace,
-        &model_id,
-        opts.single_app,
-        "al-sem policy check",
-    ) {
+    // the facts its code adds), the workspace alone under `--single-app`. No
+    // model-instance id is `al-sem policy check: could not compute
+    // modelInstanceId`, exit 1 (`AnalysisTarget::build`).
+    let workspace = opts.inputs.workspace.as_path();
+    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem policy check") {
         Ok(t) => t,
         Err(e) => {
             return PolicyCheckOutcome {
@@ -213,7 +198,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // analyzeWorkspace diagnostics (run the default detector set so detector-stage
     // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(workspace, &target);
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
@@ -227,7 +212,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // Resolve the effective policy.
     let (policy_opt, source): (Option<PolicyDoc>, String) =
-        match resolve_policy_check(opts.workspace, opts.policy_path, opts.no_policy) {
+        match resolve_policy_check(workspace, opts.policy_path, opts.no_policy) {
             ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
             ResolvedPolicy::Disabled => (None, "disabled".to_string()),
             ResolvedPolicy::Error(lines) => {

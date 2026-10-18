@@ -17,7 +17,6 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::{
     compute_analyzer_diagnostics, compute_analyzer_diagnostics_cross_app,
 };
@@ -1556,7 +1555,7 @@ pub struct DigestRunResult {
 /// from `payload.dependencies.mode` (a contract test).
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     changed_files: Option<Vec<String>>,
     changed_routines: Option<Vec<String>>,
     diff_text: Option<String>,
@@ -1566,10 +1565,10 @@ pub fn run_digest_pipeline(
     single_app: bool,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
-    // Assemble workspace
-    let model_id = compute_gate_model_instance_id(workspace)
-        .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    let target = AnalysisTarget::build(workspace, &model_id, single_app, "digest")?;
+    let workspace = inputs.workspace.as_path();
+    // Assemble workspace (no model-instance id: `digest: could not compute
+    // modelInstanceId`, `AnalysisTarget::build`).
+    let target = AnalysisTarget::build(inputs, single_app, "digest")?;
     let resolved = target.resolved();
     let dependencies = target.dependencies();
 

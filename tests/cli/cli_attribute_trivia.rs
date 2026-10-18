@@ -31,7 +31,7 @@ fn commit_by_routine(al: &str, fires: &[&str]) -> BTreeMap<String, bool> {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
     let r = run_digest_pipeline(
-        dir.path(),
+        &al_sem::program::inputs::InputSet::read(dir.path(), &Default::default()),
         None,
         Some(fires.iter().map(|s| s.to_string()).collect()),
         None,
@@ -505,7 +505,8 @@ fn model_event_edges(
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let m = assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
         .expect("model");
     let name_of = |id: &str| {
         m.workspace
@@ -738,7 +739,8 @@ fn model_event_ids(al: &str) -> Vec<(String, String, String)> {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let m = assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
         .expect("model");
     let name_of = |id: &str| {
         m.workspace

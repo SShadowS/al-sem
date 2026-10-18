@@ -102,8 +102,12 @@ fn resolve_fixture() -> Model {
         "fixture workspace {} is missing",
         dir.display()
     );
-    assemble_and_resolve_workspace_program(&dir, MODEL_INSTANCE_ID_DEFAULT, false)
-        .unwrap_or_else(|| panic!("workspace assembly returned None for {}", dir.display()))
+    assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::InputSet::read(&dir, &Default::default()),
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+    .unwrap_or_else(|| panic!("workspace assembly returned None for {}", dir.display()))
 }
 
 /// The assembled routine id for `name`, asserting the assembly actually produced

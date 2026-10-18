@@ -1027,7 +1027,10 @@ pub fn project_r4_findings_cross_app(
     let _total = crate::engine::perf_trace::span("crossapp", "crossapp.total");
     let base = {
         let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
-        crate::engine::l4::capability_cone::build_cross_app_base(workspace, model_instance_id)
+        crate::engine::l4::capability_cone::build_cross_app_base(
+            &crate::program::inputs::InputSet::read(workspace, &Default::default()),
+            model_instance_id,
+        )
     };
     let Some(base) = base else {
         return R4FindingsProjection {

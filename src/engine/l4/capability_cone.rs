@@ -3491,12 +3491,12 @@ impl R3a5CrossAppBase {
 ///   S8.2 the model holds only the DEMANDED dependency code, and S8.6 measured
 ///   +1 s and no memory on CDO/DO.
 pub(crate) fn build_cross_app_base(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
 ) -> Option<R3a5CrossAppBase> {
     use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
     let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        workspace,
+        inputs,
         model_instance_id,
         false,
     )?;
@@ -3794,7 +3794,8 @@ pub fn project_r3a5_cross_app(
         total_cross_app_inherited_facts: 0,
     };
 
-    let Some(base) = build_cross_app_base(workspace, model_instance_id) else {
+    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
+    let Some(base) = build_cross_app_base(&inputs, model_instance_id) else {
         return empty;
     };
     let ws_routines = base.ws_routines();
@@ -4319,7 +4320,7 @@ pub fn issue160_full_graph_timings(
         return Err("--issue160-full-graph-timings needs ALSEM_CONES_CENSUS=1");
     }
     let Some(base) = build_cross_app_base(
-        workspace,
+        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
     ) else {
         return Ok(None);
@@ -4921,7 +4922,8 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture(&ws);
-        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let publisher = routine_id(&base, "OnDepRec");
         let fwd = routine_id(&base, "Fwd");
         assert!(

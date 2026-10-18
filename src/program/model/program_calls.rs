@@ -798,7 +798,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
 ) -> Option<crate::program::model::workspace::Model> {
     assemble_and_resolve_workspace_program(
-        workspace,
+        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -808,17 +808,17 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 /// model projected from one program build (as `alsem analyze` builds it,
 /// `gate::run::build_analysis_model`), with the program engine's calls and event
 /// graph attached. `None` when the program build or the model assembly fails.
+/// Every workspace input comes from `inputs`, the command's one read (#160).
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
-    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_program_with_coverage(&inputs).ok()?;
+        crate::program::resolve::full::build_program_with_coverage(inputs).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-        workspace,
+        inputs,
         model_instance_id,
         skip_roots_config,
         &ctx,
@@ -869,8 +869,12 @@ pub fn assemble_and_resolve_inline_program(
         std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("write {name}: {e}"));
     }
-    assemble_and_resolve_workspace_program(dir.path(), model_instance_id, true)
-        .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+    assemble_and_resolve_workspace_program(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        model_instance_id,
+        true,
+    )
+    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
 }
 
 /// [`assemble_and_resolve_inline_program`] with the default model-instance id.
@@ -914,14 +918,13 @@ pub struct CrossAppProgram {
 /// them. `None` when the program build or the model assembly fails.
 #[must_use]
 pub fn assemble_and_resolve_cross_app_program(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
-    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_cross_app_program(&inputs).ok()?;
+        crate::program::resolve::full::build_cross_app_program(inputs).ok()?;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for u in &ctx.snapshot().apps {
@@ -947,7 +950,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let (rows, abi_rows) = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
-            workspace,
+            inputs,
             model_instance_id,
             skip_roots_config,
             &ctx,
@@ -1997,8 +2000,9 @@ pub(crate) fn build_models(
     let (ctx, report) = fresh_program_from_snapshot(build_snapshot_res(workspace)?)?;
     // The production model (`assemble_and_resolve_workspace_program`), built from
     // the same program parse and resolution.
+    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let l3 = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-        workspace,
+        &inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         &ctx,
@@ -2101,7 +2105,8 @@ mod tests {
                 || manifest.get("platform").is_some()
                 || manifest.get("application").is_some();
             let must_warn = declares && !ws.join(".alpackages").exists();
-            let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
+            let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+            let disk = assemble_and_resolve_workspace_program(&inputs, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
             let mut disk_text = model_text(&disk);
             let inline_text = model_text(&inline);

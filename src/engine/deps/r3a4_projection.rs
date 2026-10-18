@@ -418,7 +418,7 @@ fn project_consumed_effect(model: &ConsumerModel, stab: &DepIdStabilizer) -> PCo
 /// Engine-never-throws: a fail-closed workspace yields an empty projection.
 pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4Projection {
     let model = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        workspace,
+        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         R3A4_MODEL_INSTANCE_ID,
         false,
     );

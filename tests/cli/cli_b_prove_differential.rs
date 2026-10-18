@@ -240,7 +240,7 @@ fn run_one(fixture: &str, routine: &str, question: &str) -> Result<(String, Stri
     }
 
     match run_prove_pipeline(
-        &fixture_dir,
+        &al_sem::program::inputs::InputSet::read(&fixture_dir, &Default::default()),
         routine,
         question,
         VERSION_OVERRIDE,

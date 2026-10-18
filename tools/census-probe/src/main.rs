@@ -1076,9 +1076,8 @@ fn q6_retained_census(ws: &std::path::Path) {
     );
     MARKS.lock().unwrap().clear();
     let (b0, a0) = live();
-    let mi = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
-        .expect("model instance id");
-    let target = AnalysisTarget::build(ws, &mi, false, "census-probe").expect("cross-app base");
+    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let target = AnalysisTarget::build(&inputs, false, "census-probe").expect("cross-app base");
     on_mark("probe.base_returned");
     if let AnalysisTarget::CrossApp(base) = &target {
         // The default detector set, run by the cross-app runner: builds one
@@ -1129,7 +1128,11 @@ fn q6(ws: PathBuf) {
     // The production model (engine-switch S6/S9): one program build, the model
     // projected from its parse, the program engine's calls and events attached.
     let resolved = phase("assemble_and_resolve_workspace_program", || {
-        assemble_and_resolve_workspace_program(&ws, &id, false)
+        assemble_and_resolve_workspace_program(
+            &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
+            &id,
+            false,
+        )
     })
     .expect("assemble");
     settle();

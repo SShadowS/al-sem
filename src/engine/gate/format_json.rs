@@ -258,7 +258,7 @@ pub struct JsonFormatInputs<'a> {
     pub diagnostics: &'a [Diagnostic],
     /// Per-detector stats from `RunOutput`.
     pub detector_stats: &'a [DetectorStats],
-    /// Coverage from `resolved.project_coverage_disk`.
+    /// Coverage from `resolved.project_coverage_inputs`.
     pub coverage: &'a AnalysisCoverage,
     /// `--deterministic` flag (pins `generatedAt`).
     pub deterministic: bool,

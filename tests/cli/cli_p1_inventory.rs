@@ -27,10 +27,15 @@ fn corpus_dir() -> PathBuf {
 
 const FIXTURE: &str = "ws-d8-commit-in-tx";
 
+/// The command's one read of `ws` (#160).
+fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+}
+
 /// Build the base `FingerprintOptions` for the fixture.
-fn base_opts(ws: &std::path::Path) -> FingerprintOptions<'_> {
+fn base_opts(inputs: &std::sync::Arc<al_sem::program::inputs::InputSet>) -> FingerprintOptions<'_> {
     FingerprintOptions {
-        workspace: ws,
+        inputs,
         driver_version: "p1-test-v1",
         format: FingerprintFormat::Json,
         out: None,
@@ -58,7 +63,8 @@ fn inventory_only_projection_subset_self_consistency() {
     );
 
     // --- 1. Full capability-snapshot envelope ---
-    let full_opts = base_opts(&ws);
+    let inputs = read(&ws);
+    let full_opts = base_opts(&inputs);
     let full_result = run_fingerprint_pipeline(&full_opts)
         .unwrap_or_else(|e| panic!("full fingerprint pipeline error: {e}"));
     let full_json = match full_result.output {
@@ -67,7 +73,7 @@ fn inventory_only_projection_subset_self_consistency() {
     };
 
     // --- 2. Inventory-only envelope ---
-    let mut inv_opts = base_opts(&ws);
+    let mut inv_opts = base_opts(&inputs);
     inv_opts.inventory_only = true;
     let inv_result = run_fingerprint_pipeline(&inv_opts)
         .unwrap_or_else(|e| panic!("inventory-only fingerprint pipeline error: {e}"));
@@ -170,7 +176,7 @@ fn inventory_only_projection_subset_self_consistency() {
     }
 
     // (c) Determinism: running inventory-only twice yields identical output.
-    let mut inv_opts2 = base_opts(&ws);
+    let mut inv_opts2 = base_opts(&inputs);
     inv_opts2.inventory_only = true;
     let inv_result2 = run_fingerprint_pipeline(&inv_opts2)
         .unwrap_or_else(|e| panic!("second inventory-only run error: {e}"));
@@ -193,7 +199,8 @@ fn inventory_only_exit_code_zero() {
         "fixture {FIXTURE} not found at {}",
         ws.display()
     );
-    let mut opts = base_opts(&ws);
+    let inputs = read(&ws);
+    let mut opts = base_opts(&inputs);
     opts.inventory_only = true;
     let result = run_fingerprint_pipeline(&opts).expect("pipeline");
     assert_eq!(
@@ -220,7 +227,7 @@ fn inventory_only_cbor_rejected() {
     let ws = corpus_dir().join(FIXTURE);
     assert!(ws.is_dir());
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: "p1-test-v1",
         format: FingerprintFormat::Cbor,
         out: None,
@@ -276,7 +283,7 @@ fn inventory_doc_for(tag: &str, al_file: &str, al_source: &str) -> serde_json::V
     std::fs::write(ws.join("src").join(al_file), al_source).expect("write al source");
 
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: "p1-test-v1",
         format: FingerprintFormat::Json,
         out: None,
@@ -482,7 +489,7 @@ fn inventory_only_query_selector_rejected() {
         ws.display()
     );
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: "p1-test-v1",
         format: FingerprintFormat::Json,
         out: None,

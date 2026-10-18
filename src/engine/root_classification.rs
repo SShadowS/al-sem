@@ -647,20 +647,25 @@ fn overlay_config_roots(
 // Top-level entry — mirror src/index.ts ~lines 255-271.
 // ---------------------------------------------------------------------------
 
-/// Compute `model.rootClassifications`: classify the AST roots, load any
-/// `<workspace>/roots.config.json`, then overlay the config on the AST roots.
-/// `workspace_root` is `None` for the inline/cross-app paths that have no disk
-/// config (⇒ AST-only). Mirrors al-sem's index.ts wiring.
+/// Compute `model.rootClassifications`: classify the AST roots, validate the
+/// `<workspace>/roots.config.json` bytes, then overlay the config on the AST
+/// roots. `roots_config` is `None` when the config is skipped or absent
+/// (⇒ AST-only). Mirrors al-sem's index.ts wiring.
 ///
 /// Returns `(classifications, infra_diagnostics)`. Infrastructure diagnostics
 /// (e.g. `kinds-mismatch` warnings) are threaded up to the caller for inclusion
 /// in the JSON envelope.
 pub fn compute_root_classifications(
     workspace: &ModelEntities,
-    workspace_root: Option<&Path>,
+    roots_config: Option<&Result<Vec<u8>, String>>,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let ast_roots = classify_roots(workspace);
-    let config = workspace_root.and_then(load_roots_config);
+    // `roots_config` is the file's bytes as `InputSet::read` read them (#160):
+    // `None` = no file (or skipped), `Some(Err)` = unreadable, which loads no
+    // config, as a failed disk read did.
+    let config = roots_config
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|b| roots_config_from_bytes(b));
     overlay_config_roots(ast_roots, config.as_ref(), workspace)
 }
 
@@ -1257,7 +1262,8 @@ mod tests {
         )
         .expect("write roots.config.json");
 
-        let (roots, diags) = compute_root_classifications(&ws, Some(dir.path()));
+        let bytes = std::fs::read(dir.path().join("roots.config.json")).map_err(|e| e.to_string());
+        let (roots, diags) = compute_root_classifications(&ws, Some(&bytes));
         assert_eq!(roots.len(), 1, "one routine in, one classification out");
         assert_eq!(
             roots[0].source, "ast+config",

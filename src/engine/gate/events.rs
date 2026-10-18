@@ -32,7 +32,6 @@
 //! `--deterministic` pins `generated_at = "0"` and reads the version override from
 //! the caller rather than the live version. Used by every differential test.
 
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
 use crate::engine::l5::detector_context::build_detector_context_with;
 use crate::engine::l5::event_flow::{
@@ -349,7 +348,8 @@ pub struct EventsRunResult {
 
 /// Options for `run_events_fanout`.
 pub struct EventsFanoutOptions<'a> {
-    pub workspace: &'a std::path::Path,
+    /// The command's one read of the workspace (#160).
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -367,27 +367,11 @@ pub struct EventsFanoutOptions<'a> {
 /// Run the fanout pipeline: load the workspace, compute indexes, compute the
 /// report, format it, return the result. Mirrors `runEventsFanout` in al-sem.
 pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
-    let model_id = match compute_gate_model_instance_id(opts.workspace) {
-        Some(id) => id,
-        None => {
-            return EventsRunResult {
-                text: String::new(),
-                exit_code: 1,
-                stderr_lines: vec![
-                    "al-sem events fanout: could not compute modelInstanceId".to_string(),
-                ],
-            };
-        }
-    };
-
     // #70: the cross-app base by default (a workspace subscriber to a dependency
     // event is BC's main events case), the workspace alone under `--single-app`.
-    let target = match AnalysisTarget::build(
-        opts.workspace,
-        &model_id,
-        opts.single_app,
-        "al-sem events fanout",
-    ) {
+    // No model-instance id is `al-sem events fanout: could not compute
+    // modelInstanceId`, exit 1 (`AnalysisTarget::build`).
+    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem events fanout") {
         Ok(t) => t,
         Err(e) => {
             return EventsRunResult {
@@ -403,7 +387,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // events-fanout.ts emits these
     // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
     // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(&opts.inputs.workspace, &target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {
@@ -498,7 +482,8 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
 
 /// Options for `run_events_chains`.
 pub struct EventsChainsOptions<'a> {
-    pub workspace: &'a std::path::Path,
+    /// The command's one read of the workspace (#160).
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag
@@ -518,26 +503,9 @@ pub struct EventsChainsOptions<'a> {
 /// Run the chains pipeline: load the workspace, compute indexes, walk chains,
 /// format result, return. Mirrors `runEventsChains` in al-sem.
 pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
-    let model_id = match compute_gate_model_instance_id(opts.workspace) {
-        Some(id) => id,
-        None => {
-            return EventsRunResult {
-                text: String::new(),
-                exit_code: 1,
-                stderr_lines: vec![
-                    "al-sem events chains: could not compute modelInstanceId".to_string(),
-                ],
-            };
-        }
-    };
-
-    // #70: cross-app by default, as `run_events_fanout`.
-    let target = match AnalysisTarget::build(
-        opts.workspace,
-        &model_id,
-        opts.single_app,
-        "al-sem events chains",
-    ) {
+    // #70: cross-app by default, as `run_events_fanout` (and its message when
+    // there is no model-instance id).
+    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem events chains") {
         Ok(t) => t,
         Err(e) => {
             return EventsRunResult {
@@ -548,7 +516,7 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
         }
     };
 
-    let diag_lines = analyzer_diagnostic_lines(opts.workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(&opts.inputs.workspace, &target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {

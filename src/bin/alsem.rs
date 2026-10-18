@@ -80,6 +80,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     write_fingerprint_output,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
+use al_sem::program::inputs::{InputNeeds, InputSet, PolicyRequest};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -714,14 +715,14 @@ fn main() -> ExitCode {
 // ── graph command ────────────────────────────────────────────────────────────
 
 fn run_graph_cmd(g: GraphCli) -> ExitCode {
-    let graph =
-        match al_sem::program::impact_graph::export_workspace(std::path::Path::new(&g.workspace)) {
-            Ok(graph) => graph,
-            Err(msg) => {
-                eprintln!("al-sem graph: {msg}");
-                return ExitCode::from(1);
-            }
-        };
+    let inputs = InputSet::read(std::path::Path::new(&g.workspace), &InputNeeds::default());
+    let graph = match al_sem::program::impact_graph::export_workspace(&inputs) {
+        Ok(graph) => graph,
+        Err(msg) => {
+            eprintln!("al-sem graph: {msg}");
+            return ExitCode::from(1);
+        }
+    };
     let text = graph.to_jsonl();
     let written = match g.out {
         Some(path) => std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}")),
@@ -785,14 +786,13 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
     // covers it end to end (a second copy could drift and would test nothing).
-    let workspace = std::path::Path::new(&t.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&t.workspace), &InputNeeds::default());
     match run_query_touches_pipeline(
-        workspace,
+        &inputs,
         &t.table,
         t.from.as_deref(),
         direction,
-        &version,
+        &inputs.driver_version,
         t.deterministic,
         t.single_app,
     ) {
@@ -812,12 +812,11 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let workspace = std::path::Path::new(&e.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&e.workspace), &InputNeeds::default());
     match run_query_effects_pipeline(
-        workspace,
+        &inputs,
         &e.routine,
-        &version,
+        &inputs.driver_version,
         e.deterministic,
         e.single_app,
     ) {
@@ -841,17 +840,29 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&c.workspace);
-    let version = driver_version();
+    let policy = if c.no_policy {
+        PolicyRequest::Disabled
+    } else if let Some(p) = &c.policy {
+        PolicyRequest::Path(p.into())
+    } else {
+        PolicyRequest::AutoDetect
+    };
+    let inputs = InputSet::read(
+        std::path::Path::new(&c.workspace),
+        &InputNeeds {
+            policy,
+            ..InputNeeds::default()
+        },
+    );
     let opts = PolicyCheckOptions {
-        workspace,
+        inputs: &inputs,
         policy_path: c.policy.as_deref(),
         no_policy: c.no_policy,
         format: &c.format,
         out: c.out.as_deref(),
         deterministic: c.deterministic,
         strict: c.strict,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         single_app: c.single_app,
     };
 
@@ -1098,15 +1109,20 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         Some(routine_inputs)
     };
 
-    let workspace = std::path::Path::new(&d.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&d.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     match run_digest_pipeline(
-        workspace,
+        &inputs,
         changed_files,
         changed_routines,
         diff_text,
-        &version,
+        &inputs.driver_version,
         d.deterministic,
         d.max_paths,
         d.single_app,
@@ -1173,14 +1189,19 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&p.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&p.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     match run_prove_pipeline(
-        workspace,
+        &inputs,
         &p.routine,
         &p.question,
-        &version,
+        &inputs.driver_version,
         p.deterministic,
     ) {
         Err(msg) => {
@@ -1292,12 +1313,17 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
     };
 
     let is_query_requested = specified.is_query_requested();
-    let workspace = std::path::Path::new(&f.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&f.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     let opts = FingerprintOptions {
-        workspace,
-        driver_version: &version,
+        inputs: &inputs,
+        driver_version: &inputs.driver_version,
         format,
         out: f.out.as_deref(),
         shard: shard_mode,
@@ -1383,14 +1409,13 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         }
     };
 
-    let workspace = std::path::Path::new(&f.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&f.workspace), &InputNeeds::default());
     let opts = EventsFanoutOptions {
-        workspace,
+        inputs: &inputs,
         format: &f.format,
         scope,
         coverage_policy: &f.coverage_policy,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         deterministic: f.deterministic,
         strict: f.strict,
         single_app: f.single_app,
@@ -1454,16 +1479,15 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&c.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&c.workspace), &InputNeeds::default());
     let opts = EventsChainsOptions {
-        workspace,
+        inputs: &inputs,
         format: &c.format,
         scope,
         coverage_policy: &c.coverage_policy,
         max_depth: c.max_depth,
         max_nodes: c.max_nodes,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         deterministic: c.deterministic,
         strict: c.strict,
         single_app: c.single_app,
@@ -1611,7 +1635,8 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // `default_version` is the engine's default (unpinned) SARIF `driver.version`.
     // The differential always pins via `--sarif-version-override gate-sarif-v1`;
     // this is only the fallback for a real, unpinned invocation.
-    match run_analyze_with_exit(&args, &driver_version()) {
+    let inputs = args.read_inputs();
+    match run_analyze_with_exit(&inputs, &args, &inputs.driver_version) {
         Ok((out, exit_code, stderr_warning)) => {
             // F2: emit the preflight degraded warning to stderr (the "no silent clean"
             // contract). Matches al-sem index.ts:263-264:
@@ -1701,7 +1726,8 @@ mod tests {
                 with_evidence: false,
                 single_app: false,
             };
-            let result = run_analyze_with_exit(&args, "test");
+            let inputs = args.read_inputs();
+            let result = run_analyze_with_exit(&inputs, &args, "test");
             assert!(
                 result.is_ok(),
                 "Terminal format must succeed (Stage A3 implemented); got: {result:?}"
@@ -1728,7 +1754,8 @@ mod tests {
                 with_evidence: false,
                 single_app: false,
             };
-            let result = run_analyze_with_exit(&args, "test");
+            let inputs = args.read_inputs();
+            let result = run_analyze_with_exit(&inputs, &args, "test");
             assert!(
                 result.is_ok(),
                 "Html format must succeed (Stage A4 implemented); got: {result:?}"

@@ -8,6 +8,11 @@
 
 use std::path::Path;
 
+/// The command's one read of `ws` (#160), as `alsem` does it.
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+}
+
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -55,7 +60,7 @@ fn prove_follows_the_program_engines_calls() {
     let dir = tempfile::tempdir().unwrap();
     page_run_workspace(dir.path());
     let r = al_sem::engine::l5::prove::run_prove_pipeline(
-        dir.path(),
+        &read(dir.path()),
         "Run6",
         "writes-table:S6 Log",
         "s6",
@@ -76,7 +81,7 @@ fn digest_follows_the_program_engines_calls() {
     let dir = tempfile::tempdir().unwrap();
     page_run_workspace(dir.path());
     let r = al_sem::engine::l5::digest_cli::run_digest_pipeline(
-        dir.path(),
+        &read(dir.path()),
         None,
         Some(vec!["Run6".to_string()]),
         None,
@@ -98,8 +103,9 @@ fn fingerprint_follows_the_program_engines_calls() {
     use al_sem::engine::l5::fingerprint_query::WitnessLimit;
     let dir = tempfile::tempdir().unwrap();
     page_run_workspace(dir.path());
+    let inputs = read(dir.path());
     let opts = FingerprintOptions {
-        workspace: dir.path(),
+        inputs: &inputs,
         driver_version: "s6",
         format: FingerprintFormat::Json,
         out: None,
@@ -199,8 +205,9 @@ fn events_follow_the_program_engines_event_graph() {
     use al_sem::engine::l5::event_flow::Scope;
     let dir = tempfile::tempdir().unwrap();
     identifier_subscriber_workspace(dir.path());
+    let inputs = read(dir.path());
     let fanout = run_events_fanout(&EventsFanoutOptions {
-        workspace: dir.path(),
+        inputs: &inputs,
         format: "json",
         scope: Scope::All,
         coverage_policy: "warn",
@@ -220,7 +227,7 @@ fn events_follow_the_program_engines_event_graph() {
     assert_eq!(counts, vec![1], "{}", fanout.text);
 
     let chains = run_events_chains(&EventsChainsOptions {
-        workspace: dir.path(),
+        inputs: &inputs,
         format: "json",
         scope: Scope::All,
         coverage_policy: "warn",
@@ -279,8 +286,9 @@ codeunit 50622 "S6 Pol Sub"
 }
 "#,
     );
+    let inputs = read(ws);
     let out = run_policy_check(&PolicyCheckOptions {
-        workspace: ws,
+        inputs: &inputs,
         policy_path: None,
         no_policy: false,
         format: "json",
@@ -308,7 +316,7 @@ fn query_follows_the_program_engines_calls() {
     let dir = tempfile::tempdir().unwrap();
     page_run_workspace(dir.path());
     let r = al_sem::engine::l4::effect_query_cli::run_query_effects_pipeline(
-        dir.path(),
+        &read(dir.path()),
         "Run6",
         "s6",
         true,
@@ -350,7 +358,8 @@ fn html_report_draws_the_program_engines_event_graph() {
         with_evidence: false,
         single_app: false,
     };
-    let (html, _, _) = run_analyze_with_exit(&args, "s6").expect("analyze runs");
+    let (html, _, _) =
+        run_analyze_with_exit(&args.read_inputs(), &args, "s6").expect("analyze runs");
     assert!(
         html.contains("HandleX</title>"),
         "the subscriber node is drawn"

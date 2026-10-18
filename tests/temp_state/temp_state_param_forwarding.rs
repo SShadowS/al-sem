@@ -48,9 +48,12 @@ fn project(al_src: &str) -> R3a2Projection {
     std::fs::write(dir.path().join("app.json"), APP_JSON).expect("write app.json");
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir src");
     std::fs::write(dir.path().join("src").join("main.al"), al_src).expect("write al");
-    let resolved =
-        assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
-            .expect("assemble + resolve workspace");
+    let resolved = assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+    .expect("assemble + resolve workspace");
     project_r3a2(&resolved)
 }
 
@@ -61,8 +64,12 @@ fn resolve(al_src: &str) -> Model {
     std::fs::write(dir.path().join("app.json"), APP_JSON).expect("write app.json");
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir src");
     std::fs::write(dir.path().join("src").join("main.al"), al_src).expect("write al");
-    assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
-        .expect("assemble + resolve workspace")
+    assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+    .expect("assemble + resolve workspace")
 }
 
 /// Inherited (via != "direct") effects for a given op across all summaries.

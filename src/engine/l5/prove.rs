@@ -878,19 +878,20 @@ pub struct ProveRunResult {
 ///   Ok(result) with exit_code 0 (answered) or 2 (routine not resolved → dummy-doc).
 ///   Err(message) for workspace/pipeline errors → emit to stderr, exit 1.
 pub fn run_prove_pipeline(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
     deterministic: bool,
 ) -> Result<ProveRunResult, String> {
-    use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-
+    let workspace = inputs.workspace.as_path();
     // Assemble workspace
-    let model_id = compute_gate_model_instance_id(workspace)
+    let model_id = inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| "prove: could not compute modelInstanceId".to_string())?;
     // Engine-switch S6.1: the program-backed model (program calls and events).
-    let resolved = assemble_and_resolve_workspace_program(workspace, &model_id, false)
+    let resolved = assemble_and_resolve_workspace_program(inputs, model_id, false)
         .ok_or_else(|| "prove: workspace did not resolve".to_string())?;
 
     // Compose snapshot

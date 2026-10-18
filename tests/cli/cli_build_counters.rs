@@ -839,6 +839,60 @@ fn retained_census_changes_no_output() {
     );
 }
 
+/// Spec §8.2 `inputs::read_once`: every command reads the workspace ONCE
+/// (`inputs.read` 1), `diff ws ws` once per side. Spawned: the counter lives
+/// only in the trace file.
+#[test]
+fn inputs_read_once() {
+    let (_d, ws) = ws_dep();
+    let ws = ws.as_str();
+    for args in [
+        vec!["analyze", ws, "--format", "json"],
+        vec!["fingerprint", ws, "--format", "json"],
+        vec!["query", "touches", ws, "--table", "18", "--format", "json"],
+        // Builds through `AnalysisTarget::build` (as digest and policy check do).
+        vec!["events", "fanout", ws, "--format", "json"],
+    ] {
+        let m = run(&args);
+        assert_eq!(count(&m, "inputs.read"), 1, "{args:?}\n{m:?}");
+    }
+    let m = run(&["diff", ws, ws, "--format", "json", "--deterministic"]);
+    assert_eq!(count(&m, "inputs.read"), 2, "diff: one per side\n{m:?}");
+}
+
+/// Review focus 1: a relative workspace path runs as the absolute one does
+/// (`InputSet.workspace` is the path as spelled, and the build asserts it
+/// equals the builder's root).
+#[test]
+fn inputs_relative_workspace_path_runs() {
+    let rel = "tests/r0-corpus/ws-d1-multi-caller";
+    let analyze = |ws: &str| {
+        Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["analyze", ws, "--format", "json", "--single-app"])
+            .output()
+            .expect("spawn alsem")
+    };
+    let out = analyze(rel);
+    let abs = analyze(&ws_a());
+    assert_eq!(
+        out.status.code(),
+        abs.status.code(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let findings = |o: &Output| {
+        serde_json::from_slice::<Value>(&o.stdout).expect("json")["payload"]["findings"]
+            .as_array()
+            .map(Vec::len)
+    };
+    assert!(
+        findings(&abs).is_some_and(|n| n > 0),
+        "precondition: findings"
+    );
+    assert_eq!(findings(&out), findings(&abs));
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();
