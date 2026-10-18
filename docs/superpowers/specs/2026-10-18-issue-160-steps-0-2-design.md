@@ -265,7 +265,10 @@ below, which cover the same two structures per field. The per-fact byte accounti
 (`cone_census.rs:86-190`) is kept and called by the new walk. One flag, one report;
 the old report's name is gone, never left printing nothing (§7, step 0).
 Accounting follows `cone_census.rs:17-63` and the byte-census skill: heap bytes by
-`len`, shared allocations once, allocator overhead excluded. One `census.rs` module
+`len`, shared allocations once, allocator overhead excluded. The exception is the two
+`arena.*` buckets. They count `Vec`s and hash tables at capacity, with one control byte
+per slot, so that they match `pd_solve`'s own `arena_bytes`/`working_bytes` (final panel
+r2, F3-2). One `census.rs` module
 under `src/engine/` with one `fn bucket(name, bytes, allocs, kind)` printer; each site
 walks its own structure.
 

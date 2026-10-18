@@ -8,7 +8,10 @@
 //! heap bytes by `len` (allocator overhead excluded; a shared allocation once).
 //! `kind=exact` means the walk reaches and counts every heap allocation of the
 //! structure, each by `len` (hash-table control bytes and capacity slack are
-//! not modeled for any kind; see [`Tally`]);
+//! not modeled; see [`Tally`]). One exception: the two `arena.*` buckets
+//! (`pd_solve::arena_tally`) count every `Vec` and hash table at CAPACITY with
+//! one control byte per hash slot, because their byte totals must match
+//! `pd_solve`'s existing `arena_bytes` / `working_bytes` reports;
 //! `kind=shallow` means top-level buffers by `len × size_of`, plus the
 //! `String` / `Vec` heap one level down and nothing deeper. Every bucket is a
 //! LOWER bound; the ground-truth live heap comes from `tools/census-probe`,
