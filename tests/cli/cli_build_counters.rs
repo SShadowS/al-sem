@@ -142,7 +142,7 @@ fn ws_dep() -> (tempfile::TempDir, String) {
 }
 
 /// A one-line unified diff (shape of `cli_digest_changed_spans.rs`'s `one_line_diff`).
-fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String {
+pub(crate) fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String {
     let p = dir.join("change.diff");
     std::fs::write(
         &p,

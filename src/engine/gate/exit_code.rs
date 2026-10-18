@@ -3,7 +3,9 @@
 //! ```text
 //!   0  — clean (no policy-failing findings)
 //!   1  — policy-failing findings present (at/above --fail-on threshold)
-//!   2  — analysis failure (parser/graph crash or error-severity diagnostic)
+//!   2  — analysis failure (parser/graph crash or error-severity diagnostic), or a
+//!        failed write of analyze's report (analyze only; every other command exits
+//!        1 on a write failure)
 //!   3  — invalid config/usage (bad flags, unknown preset, mutual-exclusion)
 //!   4  — coverage/dependency preflight failed (--require-dependencies)
 //! ```

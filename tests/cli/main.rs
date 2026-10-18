@@ -95,6 +95,7 @@ mod cli_sarif_rule_catalog;
 mod cli_stderr_logger;
 mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;
+mod cli_write_failure;
 mod d1_downgraded_to_info_oracle;
 mod gate_prsummary_differential;
 mod gate_sarif_differential;

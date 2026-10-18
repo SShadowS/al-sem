@@ -77,7 +77,6 @@ use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintOptions, FingerprintOutput, ShardMode, SpecifiedFlags, default_format,
     normalize_witness, reject_illegal_combos, run_fingerprint_pipeline, validate_roots,
-    write_fingerprint_output,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
 use al_sem::program::inputs::{InputNeeds, InputSet};
@@ -712,6 +711,56 @@ fn main() -> ExitCode {
     code
 }
 
+// ── output writers (#160 spec §4.2.5) ────────────────────────────────────────
+//
+// One text and one rule for a failed write: `al-sem: write error: <stdout|path>:
+// <OS message>` on stderr, and the command's own failure code (`fail`: 2 for
+// analyze, 1 for every other command). A closed pipe never aborts the process.
+
+/// Write `bytes` to stdout and flush.
+fn write_stdout(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes)
+        .and_then(|()| out.flush())
+        .map_err(|e| {
+            eprintln!("al-sem: write error: stdout: {e}");
+            fail
+        })
+}
+
+/// Write `bytes` to the file at `path`.
+fn write_file(path: &str, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    std::fs::write(path, bytes).map_err(|e| {
+        eprintln!("al-sem: write error: {path}: {e}");
+        fail
+    })
+}
+
+/// Write `bytes` to stderr. No message on failure: the stream is gone.
+fn write_stderr(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    err.write_all(bytes)
+        .and_then(|()| err.flush())
+        .map_err(|_| fail)
+}
+
+/// Write `bytes` to `--out` when given, else stdout.
+fn write_out(out: Option<&str>, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    match out {
+        Some(path) => write_file(path, bytes, fail),
+        None => write_stdout(bytes, fail),
+    }
+}
+
+/// Write each line plus `\n` to stderr (the lines a command prints after its output).
+fn write_stderr_lines(lines: &[String], fail: ExitCode) -> Result<(), ExitCode> {
+    lines
+        .iter()
+        .try_for_each(|line| write_stderr(format!("{line}\n").as_bytes(), fail))
+}
+
 // ── graph command ────────────────────────────────────────────────────────────
 
 fn run_graph_cmd(g: GraphCli) -> ExitCode {
@@ -724,44 +773,23 @@ fn run_graph_cmd(g: GraphCli) -> ExitCode {
         }
     };
     let text = graph.to_jsonl();
-    let written = match g.out {
-        Some(path) => std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}")),
-        None => {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| e.to_string())
-        }
-    };
-    match written {
+    match write_out(g.out.as_deref(), text.as_bytes(), ExitCode::from(1)) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("al-sem graph: write error: {e}");
-            ExitCode::from(1)
-        }
+        Err(code) => code,
     }
 }
 
 // ── query commands ───────────────────────────────────────────────────────────
 
 /// Write a query result to `--out` or stdout, returning its exit code.
-fn emit_query(label: &str, result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCode {
+fn emit_query(result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCode {
     let output = if format == "json" {
         result.json_text
     } else {
         result.human_text
     };
-    let write_result = if let Some(out_path) = out {
-        std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-    } else {
-        use std::io::Write;
-        std::io::stdout()
-            .write_all(output.as_bytes())
-            .map_err(|e| format!("{e}"))
-    };
-    if let Err(e) = write_result {
-        eprintln!("al-sem: {label}: write error: {e}");
-        return ExitCode::from(1);
+    if let Err(code) = write_out(out, output.as_bytes(), ExitCode::from(1)) {
+        return code;
     }
     ExitCode::from(result.exit_code)
 }
@@ -800,7 +828,7 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
             eprintln!("{msg}");
             ExitCode::from(1)
         }
-        Ok(result) => emit_query("query touches", result, &t.format, t.out.as_deref()),
+        Ok(result) => emit_query(result, &t.format, t.out.as_deref()),
     }
 }
 
@@ -824,7 +852,7 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
             eprintln!("{msg}");
             ExitCode::from(1)
         }
-        Ok(result) => emit_query("query effects", result, &e.format, e.out.as_deref()),
+        Ok(result) => emit_query(result, &e.format, e.out.as_deref()),
     }
 }
 
@@ -871,25 +899,20 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(outcome.exit_code);
     }
 
-    if let Some(text) = &outcome.text {
-        let write_result = if let Some(ref out_path) = outcome.out_path {
-            std::fs::write(out_path, text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+    if let Some(text) = &outcome.text
+        && let Err(code) = write_out(
+            outcome.out_path.as_deref(),
+            text.as_bytes(),
+            ExitCode::from(1),
+        )
+    {
+        return code;
     }
 
     // Analyzer diagnostics go to stderr AFTER the output (al-sem's
     // `for (const d of diagnostics) process.stderr.write(...)` at the tail).
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
 
     ExitCode::from(outcome.exit_code)
@@ -916,15 +939,13 @@ fn run_policy_explain_cmd(e: PolicyExplainCli) -> ExitCode {
 
     let outcome = run_policy_explain(&opts);
 
-    if let Some(stdout) = &outcome.stdout {
-        use std::io::Write;
-        if std::io::stdout().write_all(stdout.as_bytes()).is_err() {
-            eprintln!("failed to write");
-            return ExitCode::from(1);
-        }
+    if let Some(stdout) = &outcome.stdout
+        && let Err(code) = write_stdout(stdout.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
     ExitCode::from(outcome.exit_code)
 }
@@ -991,23 +1012,14 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         return ExitCode::from(outcome.exit_code);
     }
 
-    if let Some(text) = outcome.output {
-        let write_result = if let Some(ref out_path) = d.out {
-            std::fs::write(out_path, &text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+    if let Some(text) = outcome.output
+        && let Err(code) = write_out(d.out.as_deref(), text.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
 
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
 
     ExitCode::from(outcome.exit_code)
@@ -1135,19 +1147,8 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
                 result.json_text
             };
 
-            // Write output
-            let write_result = if let Some(ref out_path) = d.out {
-                std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(output.as_bytes())
-                    .map_err(|e| format!("{e}"))
-            };
-
-            if let Err(e) = write_result {
-                eprintln!("al-sem: digest: write error: {e}");
-                return ExitCode::from(1);
+            if let Err(code) = write_out(d.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
@@ -1209,18 +1210,8 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
                 result.json_text
             };
 
-            let write_result = if let Some(ref out_path) = p.out {
-                std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(output.as_bytes())
-                    .map_err(|e| format!("{e}"))
-            };
-
-            if let Err(e) = write_result {
-                eprintln!("al-sem: prove: write error: {e}");
-                return ExitCode::from(1);
+            if let Err(code) = write_out(p.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
@@ -1360,18 +1351,46 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
                 _ => true,
             };
             if should_write
-                && let Err(e) = write_fingerprint_output(&result.output, f.out.as_deref())
+                && let Err(code) =
+                    write_fingerprint_output(&result.output, f.out.as_deref(), ExitCode::from(1))
             {
-                eprintln!("{e}");
-                return ExitCode::from(1);
+                return code;
             }
 
             // Per-mode stderr diagnostics AFTER writing output (human/base-json/cbor).
-            for line in &result.stderr_diagnostics {
-                eprintln!("{line}");
+            if let Err(code) = write_stderr_lines(&result.stderr_diagnostics, ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
+        }
+    }
+}
+
+/// Write the fingerprint output to `--out` or stdout; shards go into the `--out`
+/// directory (the current directory when absent).
+fn write_fingerprint_output(
+    output: &FingerprintOutput,
+    out: Option<&str>,
+    fail: ExitCode,
+) -> Result<(), ExitCode> {
+    match output {
+        FingerprintOutput::Text(text) => write_out(out, text.as_bytes(), fail),
+        FingerprintOutput::Binary(bytes) => write_out(out, bytes, fail),
+        FingerprintOutput::Shards(shards) => {
+            let dir = out.unwrap_or(".");
+            let dir_path = std::path::Path::new(dir);
+            if !dir_path.exists()
+                && let Err(e) = std::fs::create_dir_all(dir_path)
+            {
+                eprintln!("al-sem: write error: {dir}: {e}");
+                return Err(fail);
+            }
+            for (filename, content) in shards {
+                let file_path = dir_path.join(filename);
+                write_file(&file_path.to_string_lossy(), content, fail)?;
+            }
+            Ok(())
         }
     }
 }
@@ -1416,27 +1435,26 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
     };
 
     let result = run_events_fanout(&opts);
+    emit_events(
+        &result.text,
+        &result.stderr_lines,
+        result.exit_code,
+        f.out.as_deref(),
+    )
+}
 
-    if !result.text.is_empty() {
-        let write_result = if let Some(ref out_path) = f.out {
-            std::fs::write(out_path, &result.text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(result.text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+/// Write an events command's text (when non-empty) to `--out` or stdout, then its
+/// stderr lines, returning its exit code.
+fn emit_events(text: &str, stderr_lines: &[String], exit_code: u8, out: Option<&str>) -> ExitCode {
+    if !text.is_empty()
+        && let Err(code) = write_out(out, text.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
-
-    for line in &result.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(stderr_lines, ExitCode::from(1)) {
+        return code;
     }
-
-    ExitCode::from(result.exit_code)
+    ExitCode::from(exit_code)
 }
 
 // ── events chains command ───────────────────────────────────────────────────
@@ -1488,27 +1506,12 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
     };
 
     let result = run_events_chains(&opts);
-
-    if !result.text.is_empty() {
-        let write_result = if let Some(ref out_path) = c.out {
-            std::fs::write(out_path, &result.text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(result.text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
-    }
-
-    for line in &result.stderr_lines {
-        eprintln!("{line}");
-    }
-
-    ExitCode::from(result.exit_code)
+    emit_events(
+        &result.text,
+        &result.stderr_lines,
+        result.exit_code,
+        c.out.as_deref(),
+    )
 }
 
 // ── cache prune command ─────────────────────────────────────────────────────
@@ -1516,12 +1519,10 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
     let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
-    use std::io::Write;
-    if std::io::stdout().write_all(report.as_bytes()).is_err() {
-        eprintln!("al-sem: cache prune: write error");
-        return ExitCode::from(1);
+    match write_stdout(report.as_bytes(), ExitCode::from(1)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
     }
-    ExitCode::SUCCESS
 }
 
 /// Resolve `--format auto` (or omitted) to a concrete `OutputFormat`.
@@ -1638,9 +1639,15 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
             if let Some(msg) = stderr_warning {
                 eprintln!("al-sem: warning: {msg}");
             }
-            // al-sem appends a trailing newline to the formatted output.
-            println!("{out}");
-            ExitCode::from(exit_code)
+            // al-sem appends a trailing newline to the formatted output. A failed
+            // write is an analysis failure (exit 2), never an abort (#160 §4.2.5).
+            match write_stdout(
+                format!("{out}\n").as_bytes(),
+                ExitCode::from(exit::ANALYSIS_FAILURE),
+            ) {
+                Ok(()) => ExitCode::from(exit_code),
+                Err(code) => code,
+            }
         }
         Err(msg) => {
             // "analysis failure — …" is tagged by run.rs for errors that al-sem maps to
