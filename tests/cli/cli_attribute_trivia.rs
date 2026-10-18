@@ -609,3 +609,388 @@ fn the_model_has_one_edge_per_subscription_of_an_if_duplicate() {
         "{census:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #104: one routine can carry several READINGS of one attribute (one per build
+// path through an `#if` group inside the attribute's arguments, #80). Every
+// consumer must read them all, merged like #103's `#if` arms.
+// ---------------------------------------------------------------------------
+
+/// The publisher side: `OnFoo`'s `IncludeSender` is `{first}` under `X` and
+/// `{second}` otherwise; `H` captures the Sender. The `#pragma` group after the
+/// attribute gives the routine both build paths.
+fn sender_readings(first: &str, second: &str) -> String {
+    format!(
+        r##"codeunit 50100 "Pub"
+{{
+    [IntegrationEvent(
+#if X
+    {first},
+#else
+    {second},
+#endif
+    false)]
+#if X
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+    procedure OnFoo()
+    begin
+    end;
+
+    procedure Fire()
+    begin
+        OnFoo();
+    end;
+}}
+
+codeunit 50101 "Sub"
+{{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Pub", 'OnFoo', '', false, false)]
+    local procedure H(var Sender: Codeunit "Pub")
+    begin
+        Commit();
+    end;
+}}
+"##
+    )
+}
+
+/// Plain publishers `OnFoo` and `OnBar`, plus a subscriber `G` whose ONE
+/// `[EventSubscriber]` has the arguments `{args}` (an `#if Y` group inside).
+fn subscriber_readings(args: &str) -> String {
+    format!(
+        r##"codeunit 50100 "Pub"
+{{
+    [IntegrationEvent(false, false)]
+    procedure OnFoo()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnBar()
+    begin
+    end;
+
+    procedure Fire()
+    begin
+        OnFoo();
+        OnBar();
+    end;
+}}
+
+codeunit 50101 "Sub"
+{{
+    [EventSubscriber({args})]
+#if Y
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+    local procedure G()
+    begin
+        Commit();
+    end;
+}}
+"##
+    )
+}
+
+/// The `include_sender` of the program node named `name_lc`.
+fn include_sender_of(al: &str, name_lc: &str) -> Option<bool> {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), al);
+    let (ctx, _, _) =
+        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+    ctx.graph()
+        .routines
+        .iter()
+        .find(|r| &*r.id.name_lc == name_lc)
+        .unwrap_or_else(|| panic!("no routine {name_lc}"))
+        .include_sender
+}
+
+/// The event-flow routes of `publisher_lc`: one `(target name_lc, conditions)`
+/// per routine route, over every event-flow edge of that publisher.
+fn event_flow_routes(
+    edges: &[al_sem::program::resolve::full::ClassifiedEdge],
+    publisher_lc: &str,
+) -> Vec<(String, Vec<al_sem::program::resolve::edge::Condition>)> {
+    use al_sem::program::resolve::edge::{EdgeKind, RouteTarget};
+    edges
+        .iter()
+        .filter(|e| e.edge.kind == EdgeKind::EventFlow && &*e.edge.from.name_lc == publisher_lc)
+        .flat_map(|e| e.edge.routes.iter())
+        .filter_map(|r| match &r.target {
+            RouteTarget::Routine(t) => Some((t.name_lc.to_string(), r.conditions.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The model event graph's edges as `(event id after "/event/", subscriber,
+/// resolution)`, sorted. Unlike `model_event_edges` it keeps an element suffix.
+fn model_event_ids(al: &str) -> Vec<(String, String, String)> {
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), al);
+    let m = assemble_and_resolve_workspace_program(dir.path(), MODEL_INSTANCE_ID_DEFAULT, false)
+        .expect("model");
+    let name_of = |id: &str| {
+        m.workspace
+            .routines
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("no model routine {id}"))
+            .name
+            .clone()
+    };
+    let mut out: Vec<(String, String, String)> = m
+        .events
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            (
+                e.event_id
+                    .split_once("/event/")
+                    .map_or_else(|| e.event_id.clone(), |(_, t)| t.to_string()),
+                name_of(&e.subscriber_routine_id),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// A1 (#104): `IncludeSender` is `true` only in the SECOND reading. Some build
+/// passes the Sender, so `H(var Sender)` is valid there: `OnFoo` must be
+/// `include_sender == Some(true)`, its event flow must reach `h` from source,
+/// and the model edge must be `resolved` (on master: `Some(false)`, `H`
+/// orphaned).
+#[test]
+fn a1_sender_in_the_second_reading_binds_the_sender_subscriber() {
+    let al = sender_readings("false", "true");
+    assert_eq!(
+        include_sender_of(&al, "onfoo"),
+        Some(true),
+        "OnFoo include_sender"
+    );
+    let (edges, _) = program_edges(&al);
+    assert_eq!(
+        event_flow(&edges, "onfoo"),
+        [("Resolved".to_string(), vec![("h".to_string(), true)])],
+        "OnFoo's event flow"
+    );
+    let (model, _) = model_event_edges(&al);
+    assert_eq!(
+        model,
+        [("onfoo".to_string(), "H".to_string(), "resolved".to_string())]
+    );
+}
+
+/// A2 (#104): the same with the Sender reading FIRST. CONTROL: holds on master
+/// too (the first reading already wins there); it pins the other orientation.
+#[test]
+fn a2_control_sender_in_the_first_reading_binds_the_sender_subscriber() {
+    let al = sender_readings("true", "false");
+    assert_eq!(
+        include_sender_of(&al, "onfoo"),
+        Some(true),
+        "OnFoo include_sender"
+    );
+    let (edges, _) = program_edges(&al);
+    assert_eq!(
+        event_flow(&edges, "onfoo"),
+        [("Resolved".to_string(), vec![("h".to_string(), true)])],
+        "OnFoo's event flow"
+    );
+    let (model, _) = model_event_edges(&al);
+    assert_eq!(
+        model,
+        [("onfoo".to_string(), "H".to_string(), "resolved".to_string())]
+    );
+}
+
+/// The A3/A3b assertions: `G` is wired to `OnFoo` ONCE (one route, with no
+/// skip condition: a flag set in only some readings does not hold for the
+/// edge), one model edge, counted once in `bound_model`.
+fn assert_one_subscription_of_onfoo(al: &str) {
+    let (edges, _) = program_edges(al);
+    assert_eq!(
+        event_flow_routes(&edges, "onfoo"),
+        [("g".to_string(), vec![])],
+        "OnFoo's event-flow routes (target, conditions)"
+    );
+    let (model, census) = model_event_edges(al);
+    assert_eq!(
+        model,
+        [("onfoo".to_string(), "G".to_string(), "resolved".to_string())]
+    );
+    assert_eq!(census.bound_model, 1, "{census:?}");
+}
+
+/// A3 (#104): `SkipOnMissingLicense` is `true` under `Y` only. Both readings
+/// name the same event, so they are ONE subscription (on master: two routes to
+/// `g`, two model edges, `bound_model` 2).
+#[test]
+fn a3_two_readings_of_one_subscriber_are_one_subscription() {
+    let al = subscriber_readings(
+        "ObjectType::Codeunit, Codeunit::\"Pub\", 'OnFoo', '',\n#if Y\n    true,\n#else\n    false,\n#endif\n    false",
+    );
+    assert_one_subscription_of_onfoo(&al);
+}
+
+/// A3b (#104): one reading names the publisher by name, the other by number.
+#[test]
+fn a3b_readings_naming_the_publisher_by_name_and_by_number_are_one_subscription() {
+    let al = subscriber_readings(
+        "ObjectType::Codeunit,\n#if Y\n    Codeunit::\"Pub\",\n#else\n    50100,\n#endif\n    'OnFoo', '', false, false",
+    );
+    assert_one_subscription_of_onfoo(&al);
+}
+
+/// A3c (#104): readings naming two DIFFERENT events stay two subscriptions:
+/// both `OnFoo`'s and `OnBar`'s flows reach `g`. CONTROL: expected to hold on
+/// master as well.
+#[test]
+fn a3c_control_readings_naming_two_events_keep_both_subscriptions() {
+    let al = subscriber_readings(
+        "ObjectType::Codeunit, Codeunit::\"Pub\",\n#if Y\n    'OnFoo',\n#else\n    'OnBar',\n#endif\n    '', false, false",
+    );
+    let (edges, _) = program_edges(&al);
+    for event in ["onfoo", "onbar"] {
+        assert_eq!(
+            event_flow_routes(&edges, event),
+            [("g".to_string(), vec![])],
+            "{event}'s event-flow routes"
+        );
+    }
+}
+
+/// A table `T` and a subscriber `H` of its `OnAfterValidateEvent` whose element
+/// is 'a' under `Y` and 'b' otherwise. `publisher` is spliced into the table.
+fn table_element_readings(publisher: &str) -> String {
+    format!(
+        r##"table 50100 "T"
+{{
+    fields
+    {{
+        field(1; a; Integer) {{ }}
+        field(2; b; Integer) {{ }}
+    }}
+{publisher}
+}}
+
+codeunit 50101 "Sub"
+{{
+    [EventSubscriber(ObjectType::Table, Database::"T", 'OnAfterValidateEvent',
+#if Y
+    'a',
+#else
+    'b',
+#endif
+    false, false)]
+#if Y
+#pragma warning disable AA0001
+#else
+#pragma warning disable AA0002
+#endif
+    local procedure H(var Rec: Record "T"; var xRec: Record "T"; CurrFieldNo: Integer)
+    begin
+        Commit();
+    end;
+}}
+"##
+    )
+}
+
+/// A3e (#104), platform half. CONTROL: a PLATFORM field event fires per
+/// element, so the two readings are two subscriptions, one model edge each
+/// (ids `/a` and `/b`). Expected to hold on master; the fix must keep it.
+#[test]
+fn a3e_control_platform_table_event_readings_keep_one_subscription_per_element() {
+    let al = table_element_readings("");
+    let edge = |id: &str| (id.to_string(), "H".to_string(), "resolved".to_string());
+    assert_eq!(
+        model_event_ids(&al),
+        [
+            edge("onaftervalidateevent/a"),
+            edge("onaftervalidateevent/b")
+        ]
+    );
+}
+
+/// A3e (#104), codeunit half: a codeunit event never uses the element, so two
+/// readings differing only in the element are ONE subscription: one route, one
+/// model edge (on master: two of each).
+#[test]
+fn a3e_codeunit_event_readings_differing_only_in_element_are_one_subscription() {
+    let al = subscriber_readings(
+        "ObjectType::Codeunit, Codeunit::\"Pub\", 'OnFoo',\n#if Y\n    'a',\n#else\n    'b',\n#endif\n    false, false",
+    );
+    let (edges, _) = program_edges(&al);
+    assert_eq!(
+        event_flow_routes(&edges, "onfoo"),
+        [("g".to_string(), vec![])],
+        "OnFoo's event-flow routes"
+    );
+    assert_eq!(
+        model_event_ids(&al),
+        [("onfoo".to_string(), "G".to_string(), "resolved".to_string())]
+    );
+}
+
+/// A3e (#104), real-publisher half (S5-1): the table declares a REAL
+/// `[IntegrationEvent] OnAfterValidateEvent` whose arity admits `H`, so the
+/// injector adds no platform publisher and `H` binds to the source routine
+/// (not `Platform`). The model does not key that event by element: ONE
+/// `Bound` subscription, ONE `resolved` model edge (on master: two).
+#[test]
+fn a3e_real_table_publisher_readings_differing_only_in_element_are_one_subscription() {
+    use al_sem::program::resolve::event::PublisherKind;
+    use al_sem::program::resolve::index::{SubscriberIndex, SubscriptionOutcome};
+    let al = table_element_readings(
+        r#"
+    [IntegrationEvent(false, false)]
+    procedure OnAfterValidateEvent(var Rec: Record "T"; var xRec: Record "T"; CurrFieldNo: Integer)
+    begin
+    end;
+"#,
+    );
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), &al);
+    let (ctx, _, _) =
+        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+    let graph = ctx.graph();
+    let index = SubscriberIndex::build(graph);
+    let bound_kinds: Vec<Option<PublisherKind>> = index
+        .subscriptions()
+        .iter()
+        .filter(|s| &*s.subscriber.name_lc == "h")
+        .map(|s| match &s.outcome {
+            SubscriptionOutcome::Bound(rid) => graph
+                .routines
+                .iter()
+                .find(|r| &r.id == rid)
+                .and_then(|r| r.publisher_kind),
+            _ => panic!("H's subscription is not Bound"),
+        })
+        .collect();
+    assert_eq!(
+        bound_kinds,
+        [Some(PublisherKind::Integration)],
+        "H's subscriptions, by the bound publisher's kind"
+    );
+    assert_eq!(
+        model_event_ids(&al),
+        [(
+            "onaftervalidateevent".to_string(),
+            "H".to_string(),
+            "resolved".to_string()
+        )]
+    );
+}

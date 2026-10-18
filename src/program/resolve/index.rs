@@ -29,7 +29,7 @@ use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::{FieldNode, ObjectNode, ObjectRef};
 use crate::program::resolve::edge::Condition;
-use crate::program::resolve::event::{ParsedSubscriberArgs, subscriber_arity_bound};
+use crate::program::resolve::event::{ParsedSubscriberArgs, PublisherKind, subscriber_arity_bound};
 
 // ---------------------------------------------------------------------------
 // WorldMode
@@ -96,7 +96,11 @@ pub struct SubscriberEntry {
 /// One parsed `[EventSubscriber]` attribute and what it bound to (engine-switch
 /// S4, spec G7). [`SubscriberIndex`] keeps every one of them, bound or not: an
 /// unbound subscription still drives event fan-out coverage, so it must never
-/// vanish.
+/// vanish. Entries of one routine that name one event are ONE `Subscription`
+/// (#104), whether they are per-build readings, `#if` arms or duplicate
+/// attributes: the first entry's fields, with only the skip conditions every
+/// entry carries. Recorded in `graph.routines` order, then first-attribute
+/// order; `ordinal` values can therefore have gaps.
 pub struct Subscription {
     /// The subscriber routine carrying the attribute.
     pub subscriber: RoutineNodeId,
@@ -119,6 +123,9 @@ pub struct Subscription {
     /// Dispatch conditions (manual binding, skip-on-missing-license/permission).
     pub conditions: Vec<Condition>,
     pub outcome: SubscriptionOutcome,
+    /// The bound publisher routine is a synthetic platform publisher
+    /// (`PublisherKind::Platform`); false when unbound.
+    pub platform: bool,
 }
 
 /// What a [`Subscription`] bound to.
@@ -148,16 +155,37 @@ pub enum SubscriptionOutcome {
 impl Subscription {
     /// The publisher object, when one was resolved.
     pub fn publisher_object(&self) -> Option<&ObjectNodeId> {
-        match &self.outcome {
-            SubscriptionOutcome::Bound(id) => Some(&id.object),
-            SubscriptionOutcome::Ambiguous {
-                publisher_object, ..
-            }
-            | SubscriptionOutcome::Orphaned { publisher_object } => Some(publisher_object),
-            SubscriptionOutcome::ObjectUnresolved => None,
-        }
+        outcome_publisher_object(&self.outcome)
     }
 }
+
+/// The publisher object an outcome resolved, if any.
+fn outcome_publisher_object(outcome: &SubscriptionOutcome) -> Option<&ObjectNodeId> {
+    match outcome {
+        SubscriptionOutcome::Bound(id) => Some(&id.object),
+        SubscriptionOutcome::Ambiguous {
+            publisher_object, ..
+        }
+        | SubscriptionOutcome::Orphaned { publisher_object } => Some(publisher_object),
+        SubscriptionOutcome::ObjectUnresolved => None,
+    }
+}
+
+/// The publisher an `[EventSubscriber]` entry names, for merging one routine's
+/// entries in [`SubscriberIndex::build`] (#104): the resolved object when there
+/// is one, else the textual `(object type, name, number)` as parsed (already
+/// folded at parse time).
+#[derive(PartialEq)]
+enum PublisherKey<'a> {
+    Object(ObjectNodeId),
+    Text(&'a str, &'a str, Option<i64>),
+}
+
+/// The event an entry subscribes to: `(publisher, event name folded, element)`.
+/// The element is `Some` only for a bound PLATFORM publisher, the one case the
+/// model keys events per element; for every other outcome it never reaches an
+/// id, so two entries that differ only in element are one subscription.
+type EventKey<'a> = (PublisherKey<'a>, String, Option<&'a str>);
 
 // ---------------------------------------------------------------------------
 // ResolveIndex
@@ -223,13 +251,18 @@ pub struct ResolveIndex {
 pub struct SubscriberIndex {
     /// Publisher `RoutineNodeId` → ordered list of resolved subscribers.
     subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>>,
-    /// Every parsed subscription, in `graph.routines` order then attribute
-    /// order (engine-switch S4, G7).
+    /// Every subscription, in `graph.routines` order then first-attribute
+    /// order (engine-switch S4, G7); one routine's entries naming one event
+    /// are one subscription (#104).
     subscriptions: Vec<Subscription>,
 }
 
 impl SubscriberIndex {
     /// Resolve every `[EventSubscriber]` in `graph` to its publisher routine.
+    /// Entries of one routine that name one event (per-build readings, `#if`
+    /// arms or duplicate attributes) are ONE subscription (#104), recorded in
+    /// `graph.routines` order then first-attribute order, so ordinals can have
+    /// gaps.
     pub fn build(graph: &ProgramGraph) -> Self {
         // `routine_indices_by_obj_name` groups `graph.routines` INDICES (not
         // ids) by `(object, name_lc)`. Indices — not a `RoutineNodeId`-keyed
@@ -260,110 +293,184 @@ impl SubscriberIndex {
             let sub_app = sub_routine.id.object.app;
             let sub_params = sub_routine.id.params_count;
 
-            for (ordinal, args) in sub_routine.event_subscribers.iter().enumerate() {
-                let entry = build_entry(sub_routine, args);
-                let mut record = |outcome: SubscriptionOutcome| {
-                    subscriptions.push(Subscription {
-                        subscriber: sub_routine.id.clone(),
-                        ordinal,
-                        publisher_object_type: args.publisher_object_type.to_string(),
-                        publisher_name: args.publisher_name.to_string(),
-                        publisher_id: args.publisher_id,
-                        event_name_lc: args.event_name.fold_identifier(),
-                        element: entry.element.clone(),
-                        conditions: entry.conditions.clone(),
-                        outcome,
-                    });
+            // Pass 1 (#104): take every entry through object resolution and
+            // candidate selection WITHOUT recording, and key it by the event it
+            // names. Several entries of one routine can name one event: per-build
+            // readings of one attribute (#80) or `#if` arms of one routine
+            // (#103). They are possible builds of one declaration, so pass 2
+            // wires them as ONE subscription.
+            let mut outcomes: Vec<(SubscriptionOutcome, bool)> = Vec::new();
+            let mut keys: Vec<EventKey<'_>> = Vec::new();
+            for args in &sub_routine.event_subscribers {
+                let event_name_lc = args.event_name.fold_identifier();
+                // The outcome, and whether it bound a PLATFORM publisher.
+                let (outcome, platform) = 'outcome: {
+                    // (a) + (b) The publisher object, by name or number. An unknown
+                    // object type or an unresolvable object is recorded, not dropped.
+                    let Some(pub_obj) = resolve_subscription_publisher(graph, sub_app, args) else {
+                        break 'outcome (SubscriptionOutcome::ObjectUnresolved, false);
+                    };
+                    let pub_obj_id = pub_obj.id.clone();
+
+                    // (c) Candidates: PHYSICAL routines (by index, not id — see
+                    //     the comment on `routine_indices_by_obj_name` above) in
+                    //     that object matching name + publisher_kind.is_some() +
+                    //     params_count >= sub_params. Counts every matching
+                    //     routine even when two share a `RoutineNodeId`. Each
+                    //     carries whether it is a PLATFORM publisher, so the
+                    //     chosen one decides `Subscription::platform`.
+                    let candidates: Vec<(RoutineNodeId, bool)> = routine_indices_by_obj_name
+                        .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter_map(|&i| {
+                            let r = &graph.routines[i];
+                            // Sender-tolerant arity bound (Task 1, round-2: CONDITIONAL, never
+                            // blanket): an `[IntegrationEvent(IncludeSender: true, …)]` (also
+                            // Business/Internal — all three carry `IncludeSender` at arg
+                            // position 0) prepends an implicit `Sender` parameter that a
+                            // subscriber may capture, so a valid subscriber's arity is at most
+                            // the publisher's EXPLICIT arity + 1 — but ONLY when the publisher
+                            // actually declares `IncludeSender: true`. A blanket `+1`
+                            // regardless of the flag would be SYNCHRONIZED WRONGNESS (the extra
+                            // param is illegal AL otherwise). `r.include_sender` is the single
+                            // source of truth (populated at ingestion — see
+                            // `RoutineNode::include_sender`'s doc); `subscriber_arity_bound` is
+                            // the SAME shared helper `differential::verify_event_subscriber_
+                            // route`'s independent checker uses, so the two can never drift.
+                            // The pre-1B.3b-Task-1 `params_count >= sub_params` bound (no
+                            // tolerance at all) dropped every IncludeSender subscriber
+                            // (publisher explicit arity 0 vs subscriber arity 1) — a large
+                            // orphan class; the disambiguation below still prefers an
+                            // exact-arity match over a Sender-tolerant one.
+                            let max_arity =
+                                subscriber_arity_bound(r.id.params_count, r.include_sender);
+                            (sub_params <= max_arity && r.publisher_kind.is_some()).then(|| {
+                                (
+                                    r.id.clone(),
+                                    r.publisher_kind == Some(PublisherKind::Platform),
+                                )
+                            })
+                        })
+                        .collect();
+
+                    // (d) Dispatch on candidate count.
+                    let chosen: Option<(RoutineNodeId, bool)> = match candidates.len() {
+                        0 => {
+                            // H-1 fix: this used to be a bare `continue` — the
+                            // subscription vanished with no record at all (see
+                            // `SubscriptionOutcome::Orphaned`'s doc); resolution
+                            // behavior (no edge emitted) is unchanged.
+                            break 'outcome (
+                                SubscriptionOutcome::Orphaned {
+                                    publisher_object: pub_obj_id,
+                                },
+                                false,
+                            );
+                        }
+                        1 => Some(candidates[0].clone()),
+                        _ => {
+                            // MORE THAN ONE: prefer exactly one EXACT-arity match; else fall
+                            // back to exactly one Sender-arity (`+1`) match. Only genuine
+                            // ambiguity (0 or >1 at the chosen precision) is recorded.
+                            let exact: Vec<&(RoutineNodeId, bool)> = candidates
+                                .iter()
+                                .filter(|(rid, _)| rid.params_count == sub_params)
+                                .collect();
+                            let picked: Option<&(RoutineNodeId, bool)> = if exact.len() == 1 {
+                                Some(exact[0])
+                            } else if exact.is_empty() {
+                                let sender: Vec<&(RoutineNodeId, bool)> = candidates
+                                    .iter()
+                                    .filter(|(rid, _)| rid.params_count + 1 == sub_params)
+                                    .collect();
+                                (sender.len() == 1).then(|| sender[0])
+                            } else {
+                                None
+                            };
+                            picked.cloned()
+                        }
+                    };
+                    match chosen {
+                        // The chosen physical routine decides `platform`, read
+                        // by the element rule below and by the model
+                        // (`model/events.rs`), so the two never disagree.
+                        Some((rid, platform)) => (SubscriptionOutcome::Bound(rid), platform),
+                        None => (
+                            SubscriptionOutcome::Ambiguous {
+                                publisher_object: pub_obj_id,
+                                candidate_count: candidates.len(),
+                            },
+                            false,
+                        ),
+                    }
                 };
-                // (a) + (b) The publisher object, by name or number. An unknown
-                // object type or an unresolvable object is recorded, not dropped.
-                let Some(pub_obj) = resolve_subscription_publisher(graph, sub_app, args) else {
-                    record(SubscriptionOutcome::ObjectUnresolved);
+                // The publisher is the resolved object when there is one, so a
+                // name and a number for one object are one key.
+                let publisher = match outcome_publisher_object(&outcome) {
+                    Some(id) => PublisherKey::Object(id.clone()),
+                    None => PublisherKey::Text(
+                        &args.publisher_object_type,
+                        &args.publisher_name,
+                        args.publisher_id,
+                    ),
+                };
+                let element = if platform {
+                    args.element.as_deref()
+                } else {
+                    None
+                };
+                outcomes.push((outcome, platform));
+                keys.push((publisher, event_name_lc, element));
+            }
+
+            // Pass 2: group by key in first-ordinal order (a routine has a
+            // handful of entries, so a linear scan), then record each group
+            // once, with its first entry's ordinal, textual fields and element.
+            // Two entries with one key always have one outcome: the key fixes
+            // the publisher object and event, and the candidates depend only on
+            // those and the routine's own arity.
+            let mut groups: Vec<Vec<usize>> = Vec::new();
+            for i in 0..keys.len() {
+                match groups.iter_mut().find(|g| keys[g[0]] == keys[i]) {
+                    Some(g) => g.push(i),
+                    None => groups.push(vec![i]),
+                }
+            }
+            // Groups are in first-ordinal order, so walking the outcomes in order
+            // and keeping each group head's moves every outcome out exactly once.
+            for (ordinal, (outcome, platform)) in outcomes.into_iter().enumerate() {
+                let Some(group) = groups.iter().find(|g| g[0] == ordinal) else {
                     continue;
                 };
-                let pub_obj_id = pub_obj.id.clone();
-                let event_name_lc = args.event_name.fold_identifier();
-
-                // (c) Candidates: PHYSICAL routines (by index, not id — see
-                //     the comment on `routine_indices_by_obj_name` above) in
-                //     that object matching name + publisher_kind.is_some() +
-                //     params_count >= sub_params. Counts every matching
-                //     routine even when two share a `RoutineNodeId`.
-                let candidates: Vec<RoutineNodeId> = routine_indices_by_obj_name
-                    .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter_map(|&i| {
-                        let r = &graph.routines[i];
-                        // Sender-tolerant arity bound (Task 1, round-2: CONDITIONAL, never
-                        // blanket): an `[IntegrationEvent(IncludeSender: true, …)]` (also
-                        // Business/Internal — all three carry `IncludeSender` at arg
-                        // position 0) prepends an implicit `Sender` parameter that a
-                        // subscriber may capture, so a valid subscriber's arity is at most
-                        // the publisher's EXPLICIT arity + 1 — but ONLY when the publisher
-                        // actually declares `IncludeSender: true`. A blanket `+1`
-                        // regardless of the flag would be SYNCHRONIZED WRONGNESS (the extra
-                        // param is illegal AL otherwise). `r.include_sender` is the single
-                        // source of truth (populated at ingestion — see
-                        // `RoutineNode::include_sender`'s doc); `subscriber_arity_bound` is
-                        // the SAME shared helper `differential::verify_event_subscriber_
-                        // route`'s independent checker uses, so the two can never drift.
-                        // The pre-1B.3b-Task-1 `params_count >= sub_params` bound (no
-                        // tolerance at all) dropped every IncludeSender subscriber
-                        // (publisher explicit arity 0 vs subscriber arity 1) — a large
-                        // orphan class; the disambiguation below still prefers an
-                        // exact-arity match over a Sender-tolerant one.
-                        let max_arity = subscriber_arity_bound(r.id.params_count, r.include_sender);
-                        (sub_params <= max_arity && r.publisher_kind.is_some())
-                            .then(|| r.id.clone())
-                    })
-                    .collect();
-
-                // (d) Dispatch on candidate count.
-                let chosen: Option<RoutineNodeId> = match candidates.len() {
-                    0 => {
-                        // H-1 fix: this used to be a bare `continue` — the
-                        // subscription vanished with no record at all (see
-                        // `SubscriptionOutcome::Orphaned`'s doc); resolution
-                        // behavior (no edge emitted) is unchanged.
-                        record(SubscriptionOutcome::Orphaned {
-                            publisher_object: pub_obj_id,
-                        });
-                        continue;
-                    }
-                    1 => Some(candidates[0].clone()),
-                    _ => {
-                        // MORE THAN ONE: prefer exactly one EXACT-arity match; else fall
-                        // back to exactly one Sender-arity (`+1`) match. Only genuine
-                        // ambiguity (0 or >1 at the chosen precision) is recorded.
-                        let exact: Vec<&RoutineNodeId> = candidates
-                            .iter()
-                            .filter(|rid| rid.params_count == sub_params)
-                            .collect();
-                        let picked: Option<&RoutineNodeId> = if exact.len() == 1 {
-                            Some(exact[0])
-                        } else if exact.is_empty() {
-                            let sender: Vec<&RoutineNodeId> = candidates
-                                .iter()
-                                .filter(|rid| rid.params_count + 1 == sub_params)
-                                .collect();
-                            (sender.len() == 1).then(|| sender[0])
-                        } else {
-                            None
-                        };
-                        picked.cloned()
-                    }
+                let args = &sub_routine.event_subscribers[ordinal];
+                let mut entry = build_entry(sub_routine, args);
+                // AND the skip flags: a condition holds for the one edge only
+                // when every entry carries it. If some build does not skip, the
+                // edge may run without the license/permission.
+                for &other in &group[1..] {
+                    let other = build_entry(sub_routine, &sub_routine.event_subscribers[other]);
+                    entry.conditions.retain(|c| other.conditions.contains(c));
+                }
+                let bound = match &outcome {
+                    SubscriptionOutcome::Bound(rid) => Some(rid.clone()),
+                    _ => None,
                 };
-                match chosen {
-                    Some(rid) => {
-                        record(SubscriptionOutcome::Bound(rid.clone()));
-                        subscribers_map.entry(rid).or_default().push(entry);
-                    }
-                    None => record(SubscriptionOutcome::Ambiguous {
-                        publisher_object: pub_obj_id,
-                        candidate_count: candidates.len(),
-                    }),
+                subscriptions.push(Subscription {
+                    subscriber: sub_routine.id.clone(),
+                    ordinal,
+                    publisher_object_type: args.publisher_object_type.to_string(),
+                    publisher_name: args.publisher_name.to_string(),
+                    publisher_id: args.publisher_id,
+                    event_name_lc: keys[ordinal].1.clone(),
+                    element: entry.element.clone(),
+                    conditions: entry.conditions.clone(),
+                    outcome,
+                    platform,
+                });
+                if let Some(rid) = bound {
+                    subscribers_map.entry(rid).or_default().push(entry);
                 }
             }
         }
@@ -390,8 +497,10 @@ impl SubscriberIndex {
             .unwrap_or(&[])
     }
 
-    /// Every parsed subscription with its outcome, in `graph.routines` order
-    /// then attribute order (engine-switch S4, G7).
+    /// Every subscription with its outcome, in `graph.routines` order then
+    /// first-attribute order (engine-switch S4, G7). Entries of one routine
+    /// that name one event (per-build readings, `#if` arms or duplicate
+    /// attributes) are ONE subscription (#104), so ordinals can have gaps.
     pub fn subscriptions(&self) -> &[Subscription] {
         &self.subscriptions
     }
@@ -2534,6 +2643,159 @@ mod tests {
                 .contains(&Condition::SkipOnMissingLicense)
         );
         assert!(!subs[0].conditions.contains(&Condition::ManualBinding));
+    }
+
+    /// `SubscriberIndex` of Codeunit 1 `OnAfterX` (arity 0, Integration) and a
+    /// subscriber `Handler` carrying the hand-stated `subs` (several readings or
+    /// `#if` arms of one `[EventSubscriber]`, #104). Returns the publisher id.
+    fn index_of_readings(subs: Vec<ParsedSubscriberArgs>) -> (SubscriberIndex, RoutineNodeId) {
+        let app = AppRef(0);
+        let pub_id = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(1),
+        };
+        let sub_id = ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(2),
+        };
+        let publisher = RoutineNodeId {
+            object: pub_id.clone(),
+            name_lc: "onafterx".into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        let (graph, _, _) = build_event_fixture(
+            vec![make_publisher(
+                pub_id,
+                "OnAfterX",
+                0,
+                PublisherKind::Integration,
+                Some(false),
+            )],
+            vec![make_subscriber(sub_id, "Handler", 0, subs, false)],
+        );
+        (SubscriberIndex::build(&graph), publisher)
+    }
+
+    fn reading(license: bool, permission: bool) -> ParsedSubscriberArgs {
+        let mut a = sub_args("pub", "onafterx");
+        a.skip_on_missing_license = license;
+        a.skip_on_missing_permission = permission;
+        a
+    }
+
+    /// A3d (#104): a skip flag set in EVERY reading of one subscription is kept;
+    /// one set in only some readings is dropped (some build does not skip, so the
+    /// condition does not hold for the one edge). Both flags, both directions.
+    #[test]
+    fn subscriber_readings_keep_only_skip_flags_set_in_every_reading() {
+        for (readings, want) in [
+            (
+                vec![reading(true, true), reading(true, false)],
+                vec![Condition::SkipOnMissingLicense],
+            ),
+            (
+                vec![reading(true, true), reading(false, true)],
+                vec![Condition::SkipOnMissingPermission],
+            ),
+        ] {
+            let (idx, publisher) = index_of_readings(readings);
+            let subs = idx.subscribers_of(&publisher);
+            assert_eq!(subs.len(), 1, "one subscriber entry, want {want:?}");
+            assert_eq!(subs[0].conditions, want);
+            let all = idx.subscriptions();
+            assert_eq!(all.len(), 1, "one Subscription, want {want:?}");
+            assert_eq!(all[0].conditions, want, "Subscription.conditions");
+        }
+    }
+
+    /// A5 (#104): #103's arm case, two hand-stated entries of ONE event with
+    /// different flags, is one edge too: one entry in `subscribers_of`, one
+    /// `Subscription` at the first ordinal, carrying no skip condition.
+    #[test]
+    fn two_entries_of_one_event_are_one_subscription_at_the_first_ordinal() {
+        let (idx, publisher) = index_of_readings(vec![reading(true, false), reading(false, false)]);
+        let subs = idx.subscribers_of(&publisher);
+        assert_eq!(subs.len(), 1, "subscribers_of(OnAfterX)");
+        assert_eq!(subs[0].conditions, vec![]);
+        let all: Vec<(usize, Vec<Condition>)> = idx
+            .subscriptions()
+            .iter()
+            .map(|s| (s.ordinal, s.conditions.clone()))
+            .collect();
+        assert_eq!(all, [(0, vec![])], "(ordinal, conditions) per Subscription");
+    }
+
+    /// Fixture of publishers `OnAfterX`/`OnAfterY` (arity 0, Integration) and a
+    /// subscriber `Handler` carrying the hand-stated `subs`.
+    fn index_of_xy_readings(subs: Vec<ParsedSubscriberArgs>) -> SubscriberIndex {
+        let app = AppRef(0);
+        let obj = |n| ObjectNodeId {
+            app,
+            kind: ObjectKind::Codeunit,
+            key: ObjKey::Id(n),
+        };
+        let (graph, _, _) = build_event_fixture(
+            vec![
+                make_publisher(
+                    obj(1),
+                    "OnAfterX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(
+                    obj(1),
+                    "OnAfterY",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+            ],
+            vec![make_subscriber(obj(2), "Handler", 0, subs, false)],
+        );
+        SubscriberIndex::build(&graph)
+    }
+
+    /// A5b (#104): groups are recorded in first-ordinal order, each at its FIRST
+    /// member's ordinal, keeping that member's textual publisher fields and
+    /// element. Readings: `[event Y, event X (A), event X (B)]`.
+    #[test]
+    fn merged_subscription_sits_at_its_first_members_ordinal_with_its_fields() {
+        let mut y = sub_args("pub", "onaftery");
+        y.element = Some("Y".into());
+        let mut xa = sub_args("pub", "onafterx");
+        xa.element = Some("A".into());
+        let mut xb = sub_args("PUB", "onafterx");
+        xb.element = Some("B".into());
+        let idx = index_of_xy_readings(vec![y, xa, xb]);
+        let all = idx.subscriptions();
+        let got: Vec<(usize, &str)> = all
+            .iter()
+            .map(|s| (s.ordinal, s.event_name_lc.as_str()))
+            .collect();
+        assert_eq!(got, [(0, "onaftery"), (1, "onafterx")]);
+        assert_eq!(all[1].publisher_name, "pub", "reading A's publisher name");
+        assert_eq!(all[1].element.as_deref(), Some("A"), "reading A's element");
+    }
+
+    /// A5c (#104): two readings of one event on a publisher that does not
+    /// resolve merge on their TEXTUAL publisher: one `Subscription`.
+    #[test]
+    fn unresolved_publisher_readings_of_one_event_are_one_subscription() {
+        let idx = index_of_xy_readings(vec![
+            sub_args("no such codeunit", "onafterx"),
+            sub_args("no such codeunit", "onafterx"),
+        ]);
+        let all = idx.subscriptions();
+        assert_eq!(all.len(), 1, "one Subscription");
+        assert!(matches!(
+            all[0].outcome,
+            SubscriptionOutcome::ObjectUnresolved
+        ));
     }
 
     // (d) Ambiguous overloads — no strict arity match → AmbiguousSub --------

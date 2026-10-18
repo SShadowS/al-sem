@@ -110,33 +110,23 @@ fn publisher_event_kind(attrs: &[AttributeInfo]) -> &'static str {
 }
 
 /// Parse the `Isolated` boolean. `[IntegrationEvent(.,.,Isolated)]` (index 2) /
-/// `[BusinessEvent(.,Isolated)]` (index 1). Returns Some(true) only when isolated;
-/// None when absent / explicit-false; conservative Some(true) when present-but-
-/// unparseable (Rule 5: prefer exclusion over a false weave).
+/// `[BusinessEvent(.,Isolated)]` (index 1). EVERY reading of either kind is read
+/// (several per-build readings, #104): isolated in any build is an isolation
+/// barrier. Returns Some(true) when any reading is `true` or carries the arg as a
+/// non-literal (conservative, Rule 5: prefer exclusion over a false weave); None
+/// when every reading is absent / explicit-false. `InternalEvent` is not read.
 fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
-    if let Some(int_attr) = find_attribute(attrs, "IntegrationEvent") {
-        if let Some(v) = bool_arg(int_attr, 2) {
-            // explicit false → omit (None); true → Some(true).
-            return if v { Some(true) } else { None };
-        }
-        // arg present but not a boolean literal → conservative true; absent → None.
-        return if int_attr.args.get(2).is_some() {
-            Some(true)
-        } else {
-            None
+    let isolated = attrs.iter().any(|a| {
+        let index = match a.name.to_lowercase().as_str() {
+            "integrationevent" => 2,
+            "businessevent" => 1,
+            _ => return false,
         };
-    }
-    if let Some(biz_attr) = find_attribute(attrs, "BusinessEvent") {
-        if let Some(v) = bool_arg(biz_attr, 1) {
-            return if v { Some(true) } else { None };
-        }
-        return if biz_attr.args.get(1).is_some() {
-            Some(true)
-        } else {
-            None
-        };
-    }
-    None
+        // explicit false → not isolated; true → isolated; present non-literal →
+        // conservative isolated; absent → not isolated.
+        bool_arg(a, index).unwrap_or(a.args.get(index).is_some())
+    });
+    isolated.then_some(true)
 }
 
 /// `encodeEventId(publisherObjectId, eventName)` — lowercases the eventName.
@@ -399,8 +389,8 @@ pub fn program_event_graph(
             let (event_id, resolution) = match &s.outcome {
                 SubscriptionOutcome::Bound(pid) => {
                     let node = routine_by_id.get(pid);
-                    let platform =
-                        node.is_some_and(|n| n.publisher_kind == Some(PublisherKind::Platform));
+                    // Decided once, by the index, from the chosen publisher.
+                    let platform = s.platform;
                     let object_id = super::model_object_id(graph, &pid.object);
                     let mut id = encode_event_id(&object_id, &s.event_name_lc);
                     // A platform field or action event fires per element:
@@ -466,6 +456,11 @@ pub fn program_event_graph(
                                     "dependency publisher",
                                 )
                             };
+                            // `event_kind` (and `event_name`) stay first-wins from
+                            // `routine_by_id` on purpose: they can differ from
+                            // `s.platform` only if two physical routines share one
+                            // id, which the index's single platform decision (#104)
+                            // already treats as not occurring.
                             let event_kind = match node.and_then(|n| n.publisher_kind) {
                                 Some(PublisherKind::Integration) => "integration",
                                 Some(PublisherKind::Business) => "business",
@@ -735,4 +730,139 @@ pub fn project_event_graph(graph: &EventGraph) -> EventGraphProjection {
     });
 
     EventGraphProjection { events, edges }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::l4::db_effect_solver::tests::pd_routine;
+    use crate::program::attributes::AttributeArg;
+
+    /// One publisher-attribute READING `[name(bools…)]` (#104).
+    fn attr(name: &str, bools: &[bool]) -> AttributeInfo {
+        AttributeInfo {
+            name: name.to_string(),
+            args: bools
+                .iter()
+                .map(|b| AttributeArg {
+                    kind: "boolean".to_string(),
+                    text: b.to_string(),
+                    value: Some(b.to_string()),
+                    qualifier: None,
+                    member: None,
+                })
+                .collect(),
+            raw: String::new(),
+        }
+    }
+
+    /// An `event-publisher` model routine `OnFoo` carrying `readings`.
+    fn publisher(readings: Vec<AttributeInfo>) -> ModelRoutine {
+        let mut r = pd_routine("OnFoo");
+        r.kind = "event-publisher".to_string();
+        r.attributes_parsed = readings;
+        r
+    }
+
+    /// Whether `build_event_symbol` and `isolated_event_ids` both call the
+    /// publisher isolated.
+    fn isolated(readings: Vec<AttributeInfo>) -> (Option<bool>, bool) {
+        let r = publisher(readings);
+        let symbol = build_event_symbol(&r);
+        let ids = isolated_event_ids(std::slice::from_ref(&r));
+        (symbol.isolated, ids.contains(&symbol.id))
+    }
+
+    /// A6 (#104): `Isolated` in ANY reading makes the event isolated (an
+    /// isolation barrier in some build). Here only the SECOND reading is.
+    #[test]
+    fn isolated_in_the_second_reading_makes_the_event_isolated() {
+        assert_eq!(
+            isolated(vec![
+                attr("IntegrationEvent", &[false, false, false]),
+                attr("IntegrationEvent", &[false, false, true]),
+            ]),
+            (Some(true), true)
+        );
+    }
+
+    /// A6c (#104): readings of different publisher kinds are each read at their
+    /// own `Isolated` index (IntegrationEvent arg 2, BusinessEvent arg 1); and a
+    /// publisher isolated in every reading stays isolated.
+    #[test]
+    fn isolated_is_read_from_every_reading_of_every_kind() {
+        assert_eq!(
+            isolated(vec![
+                attr("IntegrationEvent", &[false, false, true]),
+                attr("IntegrationEvent", &[false, false, true]),
+            ]),
+            (Some(true), true),
+            "isolated in every reading"
+        );
+        assert_eq!(
+            isolated(vec![
+                attr("IntegrationEvent", &[false, false, false]),
+                attr("BusinessEvent", &[false, true]),
+            ]),
+            (Some(true), true),
+            "IntegrationEvent(false,false,false) + BusinessEvent(false,true)"
+        );
+        assert_eq!(
+            isolated(vec![
+                attr("BusinessEvent", &[false, false]),
+                attr("BusinessEvent", &[false, true]),
+            ]),
+            (Some(true), true),
+            "isolated reading is the second BusinessEvent"
+        );
+        assert_eq!(
+            isolated(vec![
+                attr("IntegrationEvent", &[false, false, false]),
+                attr("BusinessEvent", &[false, false]),
+                attr("IntegrationEvent", &[false, false, true]),
+            ]),
+            (Some(true), true),
+            "isolated reading is the second IntegrationEvent, a BusinessEvent between"
+        );
+        assert_eq!(
+            isolated(vec![attr("BusinessEvent", &[false, false, true])]),
+            (None, false),
+            "BusinessEvent is not read at index 2"
+        );
+    }
+
+    /// Single-attribute behaviour and the stated limit: a non-literal `Isolated`
+    /// arg is conservatively isolated; explicit false / absent are not;
+    /// `InternalEvent` is never read.
+    #[test]
+    fn isolated_single_attribute_table() {
+        let mut non_literal = attr("IntegrationEvent", &[false, false]);
+        non_literal.args.push(AttributeArg {
+            kind: "identifier".to_string(),
+            text: "SomeConst".to_string(),
+            value: None,
+            qualifier: None,
+            member: None,
+        });
+        assert_eq!(
+            isolated(vec![non_literal]),
+            (Some(true), true),
+            "non-literal"
+        );
+        assert_eq!(
+            isolated(vec![attr("IntegrationEvent", &[false, false, false])]),
+            (None, false),
+            "explicit false"
+        );
+        assert_eq!(
+            isolated(vec![attr("IntegrationEvent", &[false, false])]),
+            (None, false),
+            "absent"
+        );
+        assert_eq!(
+            isolated(vec![attr("InternalEvent", &[false, true])]),
+            (None, false),
+            "InternalEvent stays unread"
+        );
+    }
 }
