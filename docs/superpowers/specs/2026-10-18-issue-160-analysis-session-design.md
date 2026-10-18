@@ -107,6 +107,11 @@ the context appends (`capability_cone.rs:4019-4021` vs `detector_context.rs:940-
 the snapshot folds four uncertainty kinds into coverage (`:4047-4064`) while the context,
 the cross-app base and r3a5 do not (`detector_context.rs:983-988`; `:3550-3557`).
 
+The two issues have two causes. Lifetime explains #160's duplicate work. #161 comes from
+each consumer building its own relation and its own fold, so a longer-lived context
+alone would not fix it. The architecture fixes #161 through one relation with named
+transfer rules (§5.5, `Transfer::Cone`) and one fold policy (§6).
+
 The fix is structural: one relation with named transfer rules, owned by the view, and
 artifacts that live as long as the view, not as long as the call.
 
@@ -549,7 +554,7 @@ contract. Later steps are contract only.
 | **0** Measurement | timers (`pd_solve`; BFS walk/fold split; singleton cone/own/open entry split per class; `solve_bytes` link-graph/working-set split; `b3.adapter.*` sub-spans), build counters (`build_combined_graph`, `compose_cone_over_graph`, `compute_summaries_v2*`, top-level `graph_scc`, `pd_solve`, `detector_context`) readable from the trace, `peak.post_attach`, a byte census (program parts, `InputSet`, model, base, context parts, snapshot, arena), the full-graph snapshot timings for step 6's stop rule, per-timer medians AND noise bands, the ordering counters | numbers file under `docs/`; outputs byte-identical census on/off; a `tests/cli` counter test pins today's counts per command and universe | CDO SARIF compared census on/off; one discrimination per counter | none |
 | **1** Frozen inputs | `InputSet`; every post-build disk read takes it; `has_object` replaces the second parse; one stdout/file/stderr writer with one text on every command (analyze exits 2, the eleven other sites keep exit 1; Decision 49) | 8 golden targets + lib byte-identical; CDO histogram SHA unchanged; disk-edit-after-read tests, one per input class; closed-pipe test | one discrimination per restored disk read | none |
 | **1b** `ResolvedProgram` | retained program, two edge sets apart, `graph` reads it, `export_workspace`'s private build deleted; body released at today's point | `alsem graph` byte golden; the body dropped at today's `b3.ctx_drop` span (`program_calls.rs:674-676`; `body.is_none()` after a `take()` is true by construction and pins nothing, child spec A1b.2 / review A7) with the post-attach peak as the measurement; both peaks ≤ parent + band on CDO analyze and digest; `InputSet` bytes in the census | drop `dependency_body_edges` / `site_facts` from the projection input → `graph_export_covers_dependencies` fails | none |
-| **2** Owned artifacts, borrowed context, one context per command | `DetectorArtifacts` + `L4Analysis` + borrowed `DetectorContext<'v>`; driver-owned `View` with `prepare`/`release`, `!in_detector_loop()` at `prepare`; ordering cell; `det` at the union of masks (policy's RAW build a command-local, not a cell, until step 6: I5, Decision 50), parity test over the whole `DetectorOutput`; digest/prove/events/policy/query reuse; prove `Some(root)`; analyze's failure classification; the warning on `l4` | counters read the child spec's table exactly; goldens byte-identical; CDO digest saving ≥ 21 s − band; both peaks ≤ parent + band for analyze and digest; cell census at the first run | one discrimination per counter; `Some(root)` moves no cli-b prove golden | none |
+| **2** Owned artifacts, borrowed context, one context per command | `DetectorArtifacts` + `L4Analysis` + borrowed `DetectorContext<'v>`; driver-owned `View` with `prepare`/`release`, `!in_detector_loop()` at `prepare`; ordering cell; `det` at the union of masks (policy's RAW build a command-local, not a cell, until step 6: I5, Decision 50), parity test over the whole `DetectorOutput`; digest/prove/events/policy/query reuse; prove `Some(root)`; analyze's failure classification; the warning on `l4` | counters read the child spec's table exactly; goldens byte-identical; CDO digest saving ≥ parent median of the deleted context's span (`digest.tx_context_map`, step 0) − its band (I6; ≈ 21 s on P5, indicative only); both peaks ≤ parent + band for analyze, digest and prove; cell census at the first run | one discrimination per counter; `Some(root)` moves no cli-b prove golden | none |
 | **3** Fold from uncertainty edges | per-routine scan replaces the snapshot's fold solve; still only where the fold applies today, over the cut graph | r3a3, cli-b, r4f byte-identical on stdout; −1 `compute_summaries_v2*`, −1 `graph_scc` per snapshot; stderr: one non-convergence line fewer on a capped SCC, stated | oracle old == new on r0, gap, CDO with all four kinds in an SCC and a singleton; two discriminations (old kind list; new scan's kind list against hand-stated records) | none |
 | **4** `ExecRelation` | `Transfer::{Cone, Primary}`, two payloads, eager adjacency/SCC; base, context, r3a5, L4 read §5.5's table; snapshot on `LegacyCut`; dependency uncertainty edges kept | byte-identical everywhere; CDO detector baseline identical; counters: `build_combined_graph` 1, `graph_scc` 2 per view (+ snapshot's own until step 6) | dependency-publisher fixture (span, temp proof, reverse callers unchanged; discrimination "Primary callers only"); two-caller `from_order` fixture (reverse it; d17's sample flips) | none |
 | **7a** Membership: one inherited set per SCC | `DerivedOnly` reads one set per Cone-SCC; old path test-only until CDO passes | goldens unchanged; `bfs.walk` ≤ 1 s on CDO (absolute floor; expected ≈ 0) **and** cone saving ≥ parent `bfs.walk` median − 1 s − band(bfs.walk); retained ≤ 98 MB. The fold half (`bfs.fold`, G-3) is NOT in 7a's bound unless `fold_row` moves into 7a; the child spec states which | derived-row oracle on r0, gap, r4, CDO; scaling fixtures (chain, fan-out, 479-SCC, guard-heavy, producer blow-up); stop rule from step 0's SCC distribution | none |
@@ -581,7 +586,7 @@ contract. Later steps are contract only.
 | E12 | Memory within budget; no dependency subject materialized; `det` never carries a raw fact | both peaks every retention step; census | 1b, 2, 6, 9, 10, 12 |
 | E13 | Batch equals standalone | contract test | 12 |
 | E14 | CDO ratchets unchanged | `scripts/cdo-gate` | every non-docs step |
-| E15 | Measured speed is accepted, not reported | step 2 digest ≥ 21 s − band; 7a/7b/10/11 per I6; 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 11, 12 |
+| E15 | Measured speed is accepted, not reported | step 2 digest saving ≥ parent `digest.tx_context_map` median − its band; 7a/7b/10/11 per I6; 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 11, 12 |
 | E16 | Four workers fit the machine | summed peak ≤ RAM − 4 GB; throughput bounds | 12 |
 | E17 | Transfer rules reproduce today's adjacency per field | §5.5 table; publisher fixture | 4 |
 | E18 | One `pd` arena, never alive during a run; one write-failure exit code | step 6 census; closed-pipe test | 1, 6 |
@@ -640,6 +645,7 @@ complete.
 12. What does `resolve_changed_roots` read besides `snap.identities`? (step 6 byte check.)
 13. (round 6) Does `caps` retain the resolved own entries, or does the pass re-solve? (step 6, with step 0's numbers.)
 14. (round 6) Which `ViewTree` parts does a digest-only plan keep through the runs? (step 6.)
+15. (round 12) `InputSet` (§5.1) as specified for steps 0-2 also carries request inputs (policy, baseline, hash rows); a batch view keyed by workspace cannot share it across jobs with different `--policy`/`--baseline`. Step 12 splits request inputs from workspace inputs (child spec §10 item 5).
 
 ## 14. How this spec was chosen
 
@@ -770,3 +776,11 @@ worktree is `…-a2` (child a2-r4 M4). The other findings are child-local (a tes
 for injected diagnostics, a census mark and text ownership, the `EdgeView` signatures,
 the full-graph mode's step-0 expression, digest's no-input check order, signature
 fallout, guard needles, spawned-process tests).
+
+**Round 12** (child review log round panel-r1, 2026-10-18; reviewers sol and opus): 17
+findings, 15 distinct, all held in source, none refuted. Epic amendments: §4 names the
+two causes apart (lifetime for #160; per-consumer relation and fold for #161); the step-2
+row and E15 bound digest's saving on the parent median of the deleted context's span
+(`digest.tx_context_map`) minus its band, per I6, not on the P5 "21 s"; the step-2 peak
+bound adds prove (its `l4` now lives through snapshot composition); open question 15
+records that `InputSet` carries request inputs, for step 12. The rest is child-local.

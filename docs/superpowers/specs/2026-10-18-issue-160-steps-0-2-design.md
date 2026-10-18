@@ -85,22 +85,22 @@ numbers file and compared under §6.
 | A1.4 | One writer, one failure rule | closed-pipe test: `analyze` exits 2 with `al-sem: write error: stdout: <OS message>`; `digest --out` into an unwritable path exits 1 with the `<path>` line (§4.2.5, §8.2) | 1 |
 | A1.5 | Byte-neutral | 8 golden targets + `cargo test -p al-sem --lib`; CDO histogram SHA unchanged | 1 |
 | A1.6 | `--update-baseline` keeps today's output | `baseline::update_baseline_applies_the_set_just_written`: stdout and exit code equal today's (every current finding dropped); a malformed old file is overwritten, never read (§4.2.3, §8.2) | 1 |
-| A1.7 | A failed `.al` walk still fails closed, with today's whole error text | `inputs::walk_error_fails_the_build`, two cases (a link loop; an unreadable subfolder, Unix only, §8 recipe): the build `Err` text equals the FULL literal today's code prints on the same input (the OS text twice in the subfolder case), `model_instance_id == None`, and the diagnostics equal today's (§4.2.1, §8.2) | 1 |
+| A1.7 | A failed `.al` walk still fails closed, with today's whole error text | `inputs::walk_error_fails_the_build`, two cases (a link loop; an unreadable subfolder, by the §8 recipe: `chmod` on Unix, a deny ACE on Windows): the build `Err` text equals the FULL literal today's code prints on the same input (the OS text twice in the subfolder case), `model_instance_id == None`, and the diagnostics equal today's (§4.2.1, §8.2) | 1 |
 | A1b.1 | `alsem graph` output unchanged | `tests/cli-query-goldens/graph.test-selection-graph.jsonl` byte golden (`tests/cli/cli_graph_export.rs:702-716`) | 1b |
 | A1b.2 | The body is released at today's point | the `b3.ctx_drop` span is still where it is (`program_calls.rs:674-676`) and A1b.4's post-attach peak is flat; no unit test (`body.take()` makes `is_none()` true by construction, see §8.3) | 1b |
-| A1b.3 | The two edge sets reach the projection in today's order | `project::add_keeps_first_via_on_conf_tie` + `resolved::all_edges_is_edges_then_dependency_bodies` (§8.3); dropping `dependency_body_edges`, or only the DEPENDENCY `site_facts` (the merge `full.rs:2177` does today), from the projection input → `graph_export_covers_dependencies` fails (`cli_graph_export.rs:597-650`; extended if needed, §8.3) | 1b |
+| A1b.3 | The two edge sets reach the projection in today's order | `project::add_keeps_first_via_on_conf_tie` + `resolved::all_edges_is_edges_then_dependency_bodies` (the helpers) + `project::cross_set_tie_keeps_the_first_sets_via` (the use: a hand-stated tie across the two sets through `project`, which reads them only through `EdgeView::all_edges`, §8.3); dropping `dependency_body_edges`, or only the DEPENDENCY `site_facts` (the merge `full.rs:2177` does today), from the projection input → `graph_export_covers_dependencies` fails (`cli_graph_export.rs:597-650`; extended if needed, §8.3) | 1b |
 | A1b.4 | No new peak | both peaks ≤ parent + band on CDO analyze and digest (§6.3) | 1b |
 | A1b.5 | `InputSet` bytes are in the census | the `inputs` bucket prints a number (5.09 MB expected on CDO) | 1b |
 | A2.1 | One solve per command; one context per command (policy: two, its RAW build is the stated second, §4.4.4) | A0.2's table at its §4.4.8 values | 2 |
 | A2.2 | Byte-neutral | 8 golden targets + lib; CDO detector baseline identical (`cdo-measure`) | 2 |
-| A2.3 | digest is faster | CDO digest wall saving ≥ 21 s − band(digest wall) against the parent (§6.3) | 2 |
-| A2.4 | No new peak | both peaks ≤ parent + band on CDO analyze and digest (cross-app), and on `fingerprint` and `digest --single-app` (single-app: the view builds and owns the graph, so a missed `release(Graph)` shows only there, §4.4.4) | 2 |
+| A2.3 | digest is faster | CDO digest wall saving (parent median − head median) ≥ parent median of `digest.tx_context_map` − band(`digest.tx_context_map`) (§6.3; the span is added at step 0, §4.1.1; relative per epic I6, never the P5 "21 s") | 2 |
+| A2.4 | No new peak | both peaks ≤ parent + band on CDO analyze, digest (cross-app) and prove, and on `fingerprint` and `digest --single-app` (single-app: the view builds and owns the graph, so a missed `release(Graph)` shows only there; prove and digest: `l4` now lives through snapshot composition, §4.4.4) | 2 |
 | A2.5 | Output never depends on fill state | `RunKey` carries the mask; the superset-mask parity test compares the whole `DetectorOutput` (§4.4.6) | 2 |
 | A2.6 | prove's `Some(root)` moves nothing | cli-b prove goldens unchanged; they are the pin (§8.4) | 2 |
 | A2.7 | The failure classification keeps one build | `build.program` count on the no-id and build-failed rows is 1; the no-id `Err` text and the build-failed row's `ProgramBuildFailed` line are pinned (§4.4.5, §8.4) | 2 |
 | A2.8 | The cell census runs at the first detector run | `det` and `l4` buckets print under the census flag | 2 |
 | A2.9 | No lazy fill anywhere in `View` | `session::no_lazy_fill_in_this_file` (`--lib`): over `include_str!("session.rs")` with every line whose trimmed text starts with `//` removed (so a doc comment that names a type, such as rule 4's own wording, does not fail it), no line contains `OnceLock`, `OnceCell`, `LazyLock`, `Lazy<`, `Cell<`, `Mutex`, `RwLock`, `Atomic`, `thread_local` or `static mut` (the needles are spelled with `concat!`, e.g. `concat!("Once", "Lock")`, so the test's own text does not match); stated limit in §4.4.3 rule 4 (a type from another module); `every_detector_alone_declares_what_it_reads` stays green (`registry.rs:998-1016`). Not a `scripts/ci-steps` grep: the issue flow may not edit `scripts/` (CLAUDE.md:873) | 2 |
-| A2.10 | What a post-run projection reads off `det` is in the plan | `session::after_run_bits_must_be_in_the_union`: `prepare` on a `Plan { after_run: TRANSACTION_SPANS }` whose union mask lacks the bit panics, naming the bit (§4.4.3, §4.4.4, §8.4); digest/prove declare `TRANSACTION_SPANS` (the tx map), events `SUMMARIES` (the fanout's coverage read) | 2 |
+| A2.10 | What a post-run projection reads off `det` is in the plan | `session::after_run_bits_must_be_in_the_union`: `prepare` on a `Plan { after_run: TRANSACTION_SPANS }` whose union mask lacks the bit panics, naming the bit (§4.4.3, §8.4); AND the use: `session::command_plans_declare_after_run` calls the production `digest_plan` and `events_plan` (§4.4.4) with a detector set that lacks d9 and d1, and `prepare` panics naming `TRANSACTION_SPANS` / `SUMMARIES`. digest/prove declare `TRANSACTION_SPANS` (the tx map), events `SUMMARIES` (the fanout's coverage read) | 2 |
 
 ## 4. Design
 
@@ -144,6 +144,7 @@ medians (steps 7a, 7b, 10, 11).
 | `PD_SOLVE_NANOS`, `PD_SOLVE_CALLS` | around `super::pd_solve::solve(..)` at `capability_cone.rs:2447` | G-1: the solve's share of the untimed 4.0–4.8 s compose remainder; a second solve is a second call |
 | `PD_SOLVE_BYTES_ARENA`, `PD_SOLVE_BYTES_WORKING` (replace `PD_SOLVE_BYTES`) | `pd_solve.rs:465-500`: `solve_bytes` splits into `arena_bytes(arena)` (producers, states, links, edges, `by_routine`: what step 6 may retain) and `working_bytes(resolved, names, reps)` (the resolved own entries, the interned names, the reps: what step 6 decides to retain or re-solve). Today `PD_SOLVE_BYTES` has a SECOND charge site: `derive_pd_arena` adds each snapshot `PdArena`'s bytes to it, next to `PD_SNAPSHOT_BYTES` (`src/engine/l5/snapshot.rs:1602-1606`; the counter's doc says so, `detector_context.rs:411-415`). After the split that site charges `PD_SNAPSHOT_BYTES` alone, never `_ARENA` (that would count the retained arena twice) or `_WORKING`. So today's `solve_bytes=` value is `arena + working + snapshot_bytes`; the report prints all three, and the numbers file states that sum next to the old figure, so the epic's 525 MiB figure (epic §3) keeps its meaning | G-1: the two budgets step 6 chooses between |
 | `COMPOSE_REST_NANOS` (an `AtomicI64`, the one SIGNED census counter; the others stay unsigned, `detector_context.rs:348-424`) | `compose_inherited_cones`, charged PER CALL: at entry read the eight component atomics (`FACTCONE`, `COVERAGE`, `BFS_WALK`, `BFS_FOLD`, `SINGLETON`, `DERIVED`, `EMIT`, `PD_SOLVE`) into locals; at exit add `elapsed as i64 − Σ(component now − component at entry) as i64`, computed in `i64` (no saturating or wrapping `u64` arithmetic), and `report()` prints it signed. The atomics accumulate over the process (digest composes three times, §4.1.3), so a whole-process subtraction would be meaningless; the per-call delta is not | what is still unexplained after the split (the report prints it; a negative value is a timer overlap bug) |
+| span `digest.tx_context_map` (and `prove.tx_context_map`) | around the `compute_tx_context_map` call (`digest_cli.rs:1616`; `prove.rs:958`): the whole duplicate context build step 2 deletes | A2.3's bound: the saving is measured against the parent's median of this span, not an absolute figure (epic I6). Step 2 deletes the call, and the span with it |
 | spans `b3.adapter.join`, `b3.adapter.by_decl`, `b3.adapter.convert` | inside `adapter` (`program_calls.rs:922-970`): `join(..)` (`:929`; the span join J1), the `by_decl` map (`:933-943`; J2), the conversion loop (`:972` onward) | steps 10 and 11 read `join` and `by_decl` (epic Decisions 45, 46) |
 
 The census report (`detector_context.rs:465-558`) prints the new lines in place of the
@@ -379,11 +380,20 @@ command, and is deleted when step 6 lands.
 bounds read (`context.capability_cones`, `b3.adapter`, `b3.adapter.join`,
 `b3.adapter.by_decl`, `analyze.total`, digest's wall, `crossapp.attach_program_calls`)
 the median and the band over ≥ 3 interleaved runs (§6.1). A `cones_census` timer is a
-process-cumulative atomic (`detector_context.rs:348-424`) and `report()` (`:465-558`)
-prints the running totals at the end of every cone build, so the numbers file quotes
-the LAST report line of the process: the process total. That is the number a later
-step is compared on (digest's total today sums its three cone builds; after step 2 it
-sums two, and the difference is the deleted context's cone). The counters are never
+process-cumulative atomic (`detector_context.rs:348-424`). Today `report()` (`:465-558`)
+has ONE call site, at the end of the detector context's cone block
+(`detector_context.rs:1150`). The snapshot's cone (`compose_cone_over_graph`,
+`capability_cone.rs:2764-2906`; `build_r3a3_source_only_base`, `:4015-4101`) never
+prints. So today digest's last line covers all three cones only because its snapshot is
+composed first (`digest_cli.rs:1580`). After step 2 the snapshot is composed after `det`,
+and its cone and `pd_solve` would reach no printed line; `fingerprint` already loses its
+snapshot's cone today, and `diff` (ctx 0) prints nothing. **So step 0 moves the print to
+process exit:** the call at `detector_context.rs:1150` is deleted, and `alsem`'s `main`
+and `aldump`'s `main` each call `cones_census::report()` once, after the command returns
+(gated, so with the census off it is one `OnceLock` read). The numbers file quotes that
+one line: the process total. That is the number a later step is compared on (digest's
+total today sums its three cone builds; after step 2 it sums two, and the difference is
+the deleted context's cone). The counters are never
 reset (epic §5.9 rule 4, as amended: a reset would make the step 0 and step 2 lines
 measure different things). Both peaks per command;
 the census buckets; the §4.1.6 numbers; the existing ordering counters
@@ -926,6 +936,10 @@ The epic's earlier justification "no caller sits in both sets" was false. What i
   - `cross_app_demand(primary, graph, edges: impl IntoIterator<Item = &'a ClassifiedEdge>)`
     (`demand.rs:29-33`; it walks the edges once, `:37`); the builder passes
     `body.all_edges()`.
+  - the projection's `Inputs.edges` (`project.rs:32`) becomes an `EdgeView<'a>`, and
+    `engine_edges` (`:322-324`) iterates `inp.edges.all_edges()`. So no caller of
+    `project` chooses the order: `export_from_program` passes the view, and the test
+    builder (`:1351-1383`) builds one from its two lists.
   The production callers pass `program.body.edge_view(program.meta.primary_app_ref)`.
 - `AnalysisModel.fresh` (`run.rs:251-261`) stays a `Result<FreshCoverage, String>`; it
   is `program.meta.coverage.clone()` on success.
@@ -933,12 +947,19 @@ The epic's earlier justification "no caller sits in both sets" was false. What i
 #### 4.3.4 Release point and sizes (G-6)
 
 `attach_program_calls_with` drops the body at `program_calls.rs:669-676` (`b3.report_drop`,
-`b3.ctx_drop`) — unchanged, except that `ProgramBody` is what is dropped. `ProgramMeta`
-lives as long as its holder (the `AnalysisModel` / `AnalysisTarget` / the `View` at
-step 2). Its size is NOT "a few KB": `inputs.al_files[].text` is the whole workspace
-source, 5.09 MB on CDO (582 files), and grows with the workspace. On CDO this is inside
-the 85 MB band; the census prints it (A1b.5) so a larger workspace is a number, not a
-surprise. Everything else in `ProgramMeta` is small (histograms, ledger rows, the loaded-app rows).
+`b3.ctx_drop`) — unchanged, except that `ProgramBody` is what is dropped. **`ProgramMeta`
+is a local of the builder that built the program, at steps 1b and 2.** The builders keep
+their return shapes (§4.3.3): each reader's value is copied out before the builder
+returns (`AnalysisModel.fresh` = `meta.coverage.clone()`, `loaded_apps` into
+`CrossAppProgram`), and `ProgramMeta` drops when its builder returns (`graph`: when
+`export_from_program` returns). No command, `AnalysisTarget` or `View` holds it at these
+steps; it joins a holder at the first step whose reader needs it after the build (epic
+§5.2). What the process retains is the command's own `Arc<InputSet>` (§4.2.6), which
+`meta.inputs` shares. Its size is NOT "a few KB": `al_files[].text` is the whole
+workspace source, 5.09 MB on CDO (582 files), and grows with the workspace. On CDO this
+is inside the 85 MB band; the `inputs` census bucket prints it (A1b.5) so a larger
+workspace is a number, not a surprise. Everything else in `ProgramMeta` is small
+(histograms, ledger rows, the loaded-app rows).
 
 The parsed IR, the graph and the dependency trees are NOT retained; `graph` runs before
 the body is released (rule 3 item 1).
@@ -954,7 +975,10 @@ pub struct L4Analysis {                       // what outlives `det` in digest a
     /// base's `Arc` (`R3a5CrossAppBase.combined_scc: Arc<SccResult>` from step 2, the
     /// r3a5 projections read through the `Arc`), cloned by pointer, never by value.
     pub scc: Arc<SccResult>,
-    pub field_index: FieldIndex,
+    // No `field_index`: it is a solver INPUT only (`detector_context.rs:1365-1393`; the
+    // base's copy feeds its own summaries, `capability_cone.rs:3481-3488`, `:3545`), so it
+    // stays a local of `build_l4` and drops when the solve returns. Kept here it would
+    // live through digest's and prove's snapshot composition with no reader.
     pub bundle: SummaryBundle,                // the compact store (`effect_store.rs:709`)
     pub summarize_diagnostics: Vec<SummarizeDiagnostic>,
     /// The non-convergence line(s) the solver used to print (§4.4.7).
@@ -989,7 +1013,7 @@ SCC (`:1297-1307`, run when `req.scc` is `None`; a cross-app caller passes
 `Arc::clone(&base.combined_scc)`, which is the same Tarjan over the same
 `edges_by_from`, `capability_cone.rs:3473-3480`; no third copy exists, the `View`
 holds no `scc` of its own), the field index
-(`:1365-1372`) and `compute_summaries_v2_bundle_with_leaves` (`:1387-1396`) with the
+(`:1365-1372`, a local, not returned) and `compute_summaries_v2_bundle_with_leaves` (`:1387-1396`) with the
 leaves and fixed roles from `cross`. The harvest (`:1427-1495`) is NOT in `build_l4`:
 it drains the core summaries AND reads `uncertainty_edges_by_from` (`:1473`), a
 context field built at `:1257` from the model's calls, so it runs in
@@ -1219,8 +1243,9 @@ impl View {
 ```
 
 `View::new` takes the target alone. The commands hold `&Arc<InputSet>` (passed down from
-`alsem.rs`, §4.2.6) and the program's `ProgramMeta` through `AnalysisModel.fresh`
-(§4.3.3) as they do after step 1b; nothing at step 2 reads either through the view,
+`alsem.rs`, §4.2.6) and, through `AnalysisModel.fresh`, a copy of `meta.coverage`
+(§4.3.3); `ProgramMeta` itself stays a local of the builder (§4.3.4). Nothing at step 2
+reads either through the view,
 and `AnalysisTarget::build` returns no `ResolvedProgram` (the cross-app path builds
 and consumes it inside `build_cross_app_base`, `capability_cone.rs:3455-3585`). The
 epic's `View.program` joins at the first step that reads it from the view (epic §5.9,
@@ -1316,14 +1341,29 @@ and those callers hold a `&Model`.
 #### 4.4.4 Per-command order
 
 The fixed order of epic rule 3, as it applies before steps 3–6 exist. `det ⊥ snapshot`
-means the two are never alive together after step 2. Today that holds only in part,
-so step 2 LOWERS what is held together; it never raises it:
+means the two are never alive together after step 2. Today that holds only in part.
+Step 2 removes one overlap and ADDS a smaller one, so "never raises" is a measurement
+(A2.4), not a structural claim:
 - digest: `digest_cli.rs:1646-1650` drops the snapshot before the diagnostics run, but
-  the tx map's context and the snapshot ARE alive together, `:1580`–`:1650`.
+  the tx map's whole context (its cone working set, its v2 solve and core map) is built
+  while the finished snapshot is alive, `:1580`–`:1650`. After step 2 no context
+  overlaps the snapshot.
 - prove: it composes the snapshot (`prove.rs:897`), then builds the diagnostics context
   (`:902`, inside `build_envelope_diagnostics_json`) and later the tx map's `ALL`
   context (`:958`) while that snapshot is still alive. After step 2 neither context
-  overlaps the snapshot, so prove's peak bound (A2.4 via §6.3) is conservative.
+  overlaps the snapshot.
+- **The new overlap: `l4` lives through snapshot composition.** Today digest and prove
+  build their bundle AFTER the snapshot is composed (`digest_cli.rs:1580` then
+  `:1625-1628`; `prove.rs:897` then `:964`). After step 2 `l4` (`bundle` and `scc`; no
+  `field_index`, §4.4.1) is built inside the `det` fill, before `compose_snapshot`, and
+  lives until `release(L4)` after the query. It cannot be released before composition:
+  `DbTempStates` borrows the bundle (`digest_cli.rs:744-761`) and is read by the query,
+  which reads the snapshot. So `l4` is alive during composition's own working set: its
+  cone and `pd_solve` (`capability_cone.rs:4082-4090`) and its fold solve, which
+  materializes summaries (`:3215-3222`; `summary_runner.rs:1383-1389`). This holds in
+  both universes, for digest and for prove. The `l4` census bucket (A2.8) sizes it, and
+  A2.4 bounds both peaks on digest (both universes) AND prove, so a regression is seen.
+  On a miss the epic's fallback ladder applies (§6.3).
 - Inside the `det` fill, the cone's working set and the solve's output are never alive
   together, as today: `build_detector_artifacts` runs its cone, then `build_l4`, then
   the harvest (§4.4.1, rule 1). A fill order that ran `l4` before `det` would keep the
@@ -1342,6 +1382,14 @@ so step 2 LOWERS what is held together; it never raises it:
 | query | `prepare(Plan { runs: [], need_l4: true })` (`l4.warnings` printed by `build_l4`, §4.4.7); `DbEffectQuery::build(&l4.bundle, &l4.scc, &graph)` | the two bundle builders (`effect_query_cli.rs:207-261`) |
 | graph | no `View`: `export_from_program(&program)` | the private build (§4.3.3) |
 
+**Each command's `Plan` is built by one named production function** in `session.rs`,
+and the command calls it: `digest_plan(detectors: Vec<Detector>) -> Plan` (prove calls
+it too: the same plan), `events_plan(detectors)`, and one per other row. The function
+sets `after_run` (`TRANSACTION_SPANS` for digest and prove, `SUMMARIES` for events). The
+detector set is a parameter, so A2.10's test can call the function the command calls
+with a set that lacks d9 and d1 (§8.4). A literal `Plan { .. }` in a command is a
+review flag.
+
 `release(Graph)` follows the graph's last reader in every row except query (whose
 `DbEffectQuery` reads it to the end). Single-app, the view builds and owns the graph,
 and today it dies with the context inside the runner (`registry.rs:413-416`) or inside
@@ -1350,13 +1398,12 @@ composition (fingerprint, diff `--strict`, digest and prove `--single-app`, anal
 `--single-app` through projection). Cross-app the release drops only the view's
 pointer; the base keeps its `Arc`, as today. `det` holds a second `Arc` to the same
 graph, so `release(Det)` comes first. What stays: `l4.scc` lives with `l4.bundle`
-through digest's and prove's snapshot composition. For prove that is today's state
-(`_scc` at `prove.rs:964`). For `digest --single-app` it is new: today the SCC dies at
-the end of `:1626`, after the snapshot was composed at `:1580`. Today graph, SCC and
-the finished snapshot are alive together during that statement; after step 2 the SCC
-alone (no graph) is alive during composition. The `l4` census bucket sizes it, and
-A2.4 measures `digest --single-app` and `fingerprint` so a single-app regression is
-seen.
+through digest's and prove's snapshot composition (the new overlap above). It is new in
+every case: today prove's `_scc` (`prove.rs:964`) and digest's SCC (end of
+`digest_cli.rs:1626`) both come into being AFTER the snapshot was composed (`prove.rs:897`,
+`digest_cli.rs:1580`). After step 2 the SCC alone (no graph) is alive during
+composition. The `l4` census bucket sizes it, and A2.4 measures prove,
+`digest --single-app` and `fingerprint` so a regression in either universe is seen.
 
 Byte-neutrality of the reorders: every artifact is a pure function of the model, so
 computing the diagnostics run before the snapshot changes no byte of stdout. What it
@@ -1516,7 +1563,8 @@ cone's Tarjan at `capability_cone.rs:2783`; step 6, Decision 16). `ctx` counts
   and its siblings read a fresh `build_only` `InputSet` per build (§4.2.6). Nothing caches an `InputSet` across builds.
   No struct the LSP retains holds one: `AppSetSnapshot` gains no field, and the model's
   `workspace_diagnostics` are built from an `&InputSet` parameter (§4.2.4). The holders
-  are `ProgramMeta` (step 1b) and the command's own `Arc`, both dropped at command end.
+  are `ProgramMeta` (step 1b; a builder local, dropped when the builder returns, §4.3.4)
+  and the command's own `Arc`, dropped at command end.
 - **A fail path that parses.** None: `compute_workspace_diagnostics` never parses
   after step 1 (§4.2.4); the one corner whose rows it drops is stated in §7.
 - **A policy RAW build that becomes a cell.** It is a local of `run_policy_check`
@@ -1580,9 +1628,12 @@ Runs interleave parent and head, ≥ 3 each, `ALSEM_TRACE=1 ALSEM_TRACE_STDERR=1
 process wall from the harness clock (`scratchpad/meas.py` pattern), both peaks from the
 trace (§4.1.4). `RAYON_NUM_THREADS` unset on both sides (Decision 36).
 
-Per timer: median and band = max − min over the parent's runs (G-5, Decision 54). A
-bound is written as "head median ≤ / ≥ parent median ± band". The numbers file records
-every run, not only the medians.
+Per timer: median and band = max − min over the parent's runs (G-5, Decision 54). That
+observed band is for WALL times and timers only. **A peak's band is the epic's: 3 % of
+the parent median (epic §5.12, Decision 22; about 85 MB on CDO).** So `band(peak)` below
+always means 3 % of that peak's parent median; the observed max − min of the peaks is
+recorded in the numbers file but bounds nothing. A bound is written as "head median ≤ /
+≥ parent median ± band". The numbers file records every run, not only the medians.
 
 ### 6.2 Step 0
 
@@ -1591,7 +1642,8 @@ the census OFF, head median ≤ parent median + band. A miss means a new probe c
 production time; the probe is fixed before any step-0 number is recorded. Records:
 §4.1.7's table, including whether each timer's median is ≥ 2 × its
 band (I6's rule). From the P5 numbers the expectation is: `context.capability_cones`
-(20.9 s) and digest's wall (63–67 s) comfortably; `b3.adapter` (4.8 s) likely;
+(20.9 s), `digest.tx_context_map` (≈ 21 s, A2.3's baseline) and digest's wall
+(63–67 s) comfortably; `b3.adapter` (4.8 s) likely;
 `b3.adapter.join` and `b3.adapter.by_decl` unknown until measured — if either's median
 is < 2 × its band, step 10 / 11 is re-labelled non-speed before its spec is written
 (epic I6). Census on/off byte check on SARIF (A0.5).
@@ -1601,8 +1653,8 @@ is < 2 × its band, step 10 / 11 is re-labelled non-speed before its spec is wri
 | Step | Bound | Expected |
 |---|---|---|
 | 1 | none; both peaks and `analyze.total` reported against the parent; LSP `build_full` (Criterion, 100 and 1000 files) recorded parent vs head (§4.2.6) | peak +5 MB (the retained texts), inside the band; `build_full` flat (a `build_only` read does today's disk work) |
-| 1b | process peak and post-attach peak ≤ parent median + band(peak) for analyze and digest | flat within the band: `ProgramMeta` holds the workspace texts (5.09 MB on CDO, §4.3.4) and nothing else of size; the body drops where it did |
-| 2 | digest wall: parent median − head median ≥ 21 s − band(digest wall); both peaks ≤ parent + band for analyze and digest (cross-app) and for `fingerprint` and `digest --single-app` (A2.4); cell census printed at the first run | ≈ −21 s on digest (the deleted context); peaks flat or lower: inside the `det` fill the solve still follows the cone, so no new co-residency (§4.4.4); prove deletes the same two builds as digest (an `ALL` context, `prove.rs:843`, and a bundle, `:964`), events one `ALL` context (`events.rs:422-426`, cone plus v2 solve), so each saves the same order as digest's ~21 s on CDO, not fractions of a second. Not bounded: the §4.4.8 counters pin those deletions; the prove run of §6.1 records its wall; analyze unchanged |
+| 1b | process peak and post-attach peak ≤ parent median + band(peak) for analyze and digest | flat within the band: the retained `Arc<InputSet>` holds the workspace texts (5.09 MB on CDO, §4.3.4) and nothing else of size; the body drops where it did |
+| 2 | digest wall: parent median − head median ≥ parent median(`digest.tx_context_map`) − band(`digest.tx_context_map`) (A2.3); both peaks ≤ parent median + band(peak) for analyze, digest (cross-app) and prove, and for `fingerprint` and `digest --single-app` (A2.4); cell census printed at the first run | ≈ −21 s on digest on the P5 machine (the deleted context; indicative only, the bound is relative); peaks flat or lower: inside the `det` fill the solve still follows the cone (§4.4.4); the one new overlap is `l4` (bundle, SCC) alive during snapshot composition in digest and prove (§4.4.4), sized by the `l4` bucket and expected well below the deleted context's working set; prove deletes the same two builds as digest (an `ALL` context, `prove.rs:843`, and a bundle, `:964`), events one `ALL` context (`events.rs:422-426`, cone plus v2 solve), so each saves the same order as digest's ~21 s on CDO, not fractions of a second. Not bounded: the §4.4.8 counters pin those deletions; the prove run of §6.1 records its wall; analyze unchanged |
 
 A miss on a peak walks the epic's fallback ladder (§5.12). A miss on the digest saving
 is a stop: the deleted context is the whole claim.
@@ -1623,6 +1675,15 @@ what is allowed to change outside the goldens:
 The CDO `aldump --program-call-graph-stats` histogram SHA and the `cdo-measure` detector
 baseline are checked at every step (epic I10, E14).
 
+**Protected docs that go stale (user follow-ups, like the `.claude/skills` rows above).**
+No step needs to edit a protected path. But `CLAUDE.md` (protected, its own rule) will
+lag: its Key Modules list lacks `src/program/inputs.rs` (step 1),
+`src/program/resolved.rs` (1b), `src/engine/session.rs`, `src/engine/l4/analysis.rs`
+(2) and `src/engine/census.rs` (0); its Testing section's `tests/common/{cdo,regen}.rs`
+list lacks `unreadable.rs` (step 1). The PR of each step names these lines for the user
+to update when it merges. `scripts/check-goldens` needs no edit: no step adds a golden
+directory.
+
 ## 8. Discrimination-proof plan
 
 Every new test lists its break, the failing assertion, and the revert (epic I9). Breaks
@@ -1634,16 +1695,28 @@ lossy (`source_text.rs:116-124`), so a read never fails on content. The walker s
 dangling links (`NotFound`, `:80-84`) and non-files (`:87-89`). The tests that need an unreadable
 `.al` (`no_id_row_runs_one_build_and_keeps_the_text`, `build_failed_row_runs_one_build`,
 the A1.3 / A1.7 cases) share ONE helper, `tests/common/unreadable.rs`, hoisted like
-`cdo.rs`/`regen.rs` by `#[path]` in each umbrella `main.rs` and, for the `--lib` tests,
-by `#[cfg(test)] #[path = "../tests/common/unreadable.rs"] mod unreadable;` in the
-module that uses it (one source, no copy). `fn unreadable(path) -> Option<Guard>`:
+`cdo.rs`/`regen.rs` by `#[path = "../common/unreadable.rs"]` in each umbrella `main.rs`
+and, for the `--lib` tests, by a `#[cfg(test)] #[path = …] mod unreadable;` line in the
+module that uses it (one source, no copy). A `#[path]` is resolved from the declaring
+file's directory (and, inside an inline `mod tests { }` of a non-`mod.rs` file, from
+`<dir>/<file stem>/`; Rust Reference, "the `path` attribute"). So the line goes at the
+file's TOP level, never inside `mod tests`, and climbs one `../` per directory below the
+repo root: from `src/program/inputs.rs` it is
+`#[path = "../../tests/common/unreadable.rs"]`; from `src/engine/gate/run.rs`,
+`"../../../tests/common/unreadable.rs"`. `fn unreadable(path) -> Option<Guard>`:
 - Unix: `chmod 000` on the file (or folder). Then it tries `std::fs::read` (a folder:
   `read_dir`); if that still succeeds (running as root, or a file system that ignores
   modes) it restores the mode and returns `None`. CI runs as a non-root user.
 - Windows, a file: opens it with `OpenOptionsExt::share_mode(0)` and keeps the handle in
   the guard; every other open, in this process or a spawned `alsem`, fails with a sharing
-  violation. It checks that `std::fs::read` now fails, else returns `None`. A folder:
-  returns `None` (share mode does not stop a directory listing).
+  violation. It checks that `std::fs::read` now fails, else returns `None`.
+- Windows, a folder: share mode does not stop a directory listing, so it adds a DENY
+  ACE for list-directory: `icacls <dir> /deny *S-1-1-0:(RD)` (Everyone; `RD` = read
+  data / list directory), run with `std::process::Command`. The owner keeps the right
+  to change the ACL, so the guard restores it with `icacls <dir> /remove:d *S-1-1-0`.
+  It checks that `std::fs::read_dir` now fails (the walk's `read_dir` then fails with
+  an OS error, which is case (b) of A1.7), else restores and returns `None`. So case
+  (b) and its break (2) run on the Windows dev machine, and on CI's Linux by `chmod`.
 - The guard restores the mode / closes the handle on drop, so the tempdir can be deleted.
 - `None` means skip: the test prints `skipped: cannot make <path> unreadable here` and
   returns. A skip is never a pass in the ledger; every proof run of §8 is recorded on a
@@ -1664,7 +1737,9 @@ module that uses it (one source, no copy). `fn unreadable(path) -> Option<Guard>
 | Test | Break | Fails at | Revert |
 |---|---|---|---|
 | `inputs::read_once` (`inputs.read` count 1 per command, 2 for `diff ws ws`, one per side; via the trace reader). A SPAWNED-process test in `tests/cli/cli_build_counters.rs` beside A0.2's rows, not a `--lib` test: the tracer is a `OnceLock` set once from the environment (`perf_trace.rs:402-407`) and the counters exist only in the trace file (B6's rule) | call `InputSet::read` a second time in `AnalysisTarget::build` | count == 1 | remove |
-| `inputs::app_json_edit_after_read` (`analyze --format pr-summary`: read, rewrite `app.json`'s `name`, run; output equals the untouched run) | restore `read_workspace_apps`'s disk read at `run.rs:122-157` | the pr-summary bytes | remove |
+| `inputs::app_json_edit_after_read` (read, then rewrite `app.json` on disk to `{}`: no `id`, no `name`, `version` or `publisher`, and different bytes; run `analyze --format json`, `analyze --format pr-summary` and `fingerprint --format json`; each output equals its untouched run, whole bytes). One edit reaches every reader: each one restored to its own disk read sees a changed answer. A break that stays green gets that reader's output field added to the assertion until it fails; the ledger records one red run per reader | one break per reader, each separately: restore the disk read of (1) `read_workspace_apps` (`run.rs:122-157`); (2) `compute_gate_model_instance_id` (`model_instance_id.rs:75-96`); (3) `read_primary_app_from_disk` (`workspace.rs:1789-1800`); (4) `read_root_app_json_id` in the diagnostics (`workspace_diagnostics.rs:145-155`); (5) the `app-json` hash in `derive_inputs` (`snapshot_full.rs:819-827`) | (1) the pr-summary bytes; (2) the json bytes (no model id → fail-closed); (3) the json bytes; (4) the json diagnostics; (5) the fingerprint string | restore |
+| `inputs::app_json_paths_edit_after_read` (analyze json: read, then add `sub/app.json` on disk, run; the diagnostics equal the untouched run's: no multi-app error) | restore `count_app_json_paths(workspace)` in `compute_workspace_diagnostics` (`workspace_diagnostics.rs:44`) | the diagnostics | restore |
+| `inputs::coverage_yaml_edit_after_read` (fingerprint json on a workspace with an `al-sem.coverage.yaml`: read, rewrite the yaml's bytes, run; `workspaceFingerprint` and the `policy` row of `inputs[]` equal the untouched run's) | restore the yaml's disk read in `derive_inputs` (`snapshot_full.rs:868-878`) | the fingerprint string | restore |
 | `inputs::roots_config_edit_after_read` (fingerprint json: read, delete `roots.config.json`, run; `inputs[]` rows and `rootClassifications` equal the untouched run) | restore the disk read in `load_roots_config` | the snapshot bytes | remove |
 | `inputs::al_text_edit_after_read` (analyze json on `ws-d14-dead-routine`: run once untouched and take the finding's `detector` and line L; then read, append ` // al-sem-ignore <detector>` (that detector id, in full) to the END of line L on disk, so no line shifts, run; the finding is still reported). The id is required: the parser needs `\s+([\w-]+)` after the keyword (`inline_suppression.rs:38-50`) and the match needs `s.detector_id == finding.detector` and `line == directive_line \|\| line == directive_line + 1` (`:242-244`); a bare `// al-sem-ignore` suppresses nothing, and the break below would stay green. The ledger records that the break run shows `findings.len()` one lower (the directive is live) | restore `load_inline_suppressions`'s disk read | `findings.len()` | remove |
 | `inputs::objectless_file_removed_after_read` (analyze json: a workspace with one objectless `.al`; read, delete that file, run; the `DIAG-index` line is still emitted) | restore the second parse / disk walk in `compute_workspace_diagnostics` | the diagnostic's presence | remove |
@@ -1673,7 +1748,7 @@ module that uses it (one source, no copy). `fn unreadable(path) -> Option<Guard>
 | `inputs::policy_edit_after_read` (policy check json: read, rewrite the yaml on disk, run; findings unchanged) | restore the read in `resolve_policy_check` | the policy output | remove |
 | `inputs::baseline_edit_after_read` (analyze `--baseline`: read, rewrite the baseline file to suppress everything, run; findings unchanged) | restore `load_baseline`'s read | `findings.len()` | remove |
 | `baseline::update_baseline_applies_the_set_just_written` (A1.6; in-process, `ws-d8-commit-in-tx` like `update_baseline_round_trips_committed_file`, `tests/cli/gate_suppress_baseline_differential.rs:345-362`, which checks only the written file): `--baseline <tmp> --update-baseline` with (a) no file, (b) a malformed file; stdout has zero findings and the exit is clean in both, as today (`run.rs:584-598`: written, then read back) | apply `inputs.baseline` instead of the written set | (a) `findings.len()`; (b) the exit code (2, from the malformed read) | restore |
-| `inputs::walk_error_fails_the_build` (A1.7; two cases in a tempdir: (a) a directory symlink loop at the root, skipped where the platform cannot create one; (b) an unreadable subfolder holding one `.al`, made by the §8 recipe, Unix only). In each: `al_walk` is `Err`; the `ResolvedProgram::build` `Err` text equals a FULL literal captured from today's code on the same input (for (b) it ends `IO error for operation on <P>: <os>: <os>`; the tempdir path is substituted into the literal); `inputs.model_instance_id` is `None`; `compute_workspace_diagnostics` returns the provider rows alone. A loop alone could not see a lost link: walkdir's loop error has no `source()` (`error.rs:215`) | (1) make `read` store `Ok(())` and the partial list; (2) store `e.to_string()` and rebuild the error from that text | (1) the three assertions; (2) case (b)'s literal (the last `: <os>` is gone) | restore |
+| `inputs::walk_error_fails_the_build` (A1.7; two cases in a tempdir: (a) a directory symlink loop at the root, skipped where the platform cannot create one; (b) an unreadable subfolder holding one `.al`, made by the §8 recipe, on the Windows dev machine and on Linux). In each: `al_walk` is `Err`; the `build_program_with_coverage(&inputs)` `Err` text (the step-1 entry; step 1b's commit changes the call to `ResolvedProgram::build(&inputs, Summary)`, same assertion) equals a FULL literal captured from today's code on the same input (for (b) it ends `IO error for operation on <P>: <os>: <os>`; the tempdir path is substituted into the literal); `inputs.model_instance_id` is `None`; `compute_workspace_diagnostics` returns the provider rows alone. A loop alone could not see a lost link: walkdir's loop error has no `source()` (`error.rs:215`) | (1) make `read` store `Ok(())` and the partial list; (2) store `e.to_string()` and rebuild the error from that text | (1) the three assertions; (2) case (b)'s literal (the last `: <os>` is gone) | restore |
 | `cli_write_failure::analyze_closed_pipe_exits_2` (spawn with piped stdout, drop the read end before the child writes, wait) | restore `println!("{out}")` | exit code 2 and the stderr line | remove |
 | `cli_write_failure::digest_out_unwritable_exits_1` (`--out` into a directory that is a file) | restore the `al-sem: digest: write error:` text | the `al-sem: write error: <path>:` line (exit stays 1) | remove |
 | A1.3: no test of its own. There is no fallback to pin (§4.2.4); `inputs::objectless_file_removed_after_read` above is the pin that the index rows come from the build | — | — | — |
@@ -1684,10 +1759,11 @@ module that uses it (one source, no copy). `fn unreadable(path) -> Option<Guard>
 |---|---|---|---|
 | `graph_export_golden` (existing, `cli_graph_export.rs:702-716`) | — (the fixture has no known `conf` tie, so an order swap passes it; the two rows below pin the order) | — | — |
 | `project::add_keeps_first_via_on_conf_tie` (unit in `project.rs`'s tests: two hand-built `E`s with the same `(from, to, kind)`, equal `conf`, different `via`, added in order) | change `new.conf < old.conf` to `<=` (`project.rs:287`) | the kept `via` is the first one's | restore |
-| `resolved::all_edges_is_edges_then_dependency_bodies` (unit: a `ProgramBody` with one hand-stated edge in each set) | swap the two sets in `all_edges` | the yielded order | restore |
+| `resolved::all_edges_is_edges_then_dependency_bodies` (unit: a `ProgramBody` with one hand-stated edge in each set; asserts the order of `body.all_edges()` AND of `body.edge_view(p).all_edges()`) | swap the two sets in `all_edges`; separately, swap the two slice fields inside `ProgramBody::edge_view` | the yielded order | restore |
+| `project::cross_set_tie_keeps_the_first_sets_via` (unit on `project.rs`'s test builder, `:1351-1383`, which gains a `dependency_body_edges` list; it pins the USE: `project` itself iterates `inp.edges.all_edges()`, §4.3.3). Hand-stated tie across the two sets, from one dependency routine R: in `edges`, R's event-flow edge with an unresolved route (`project.rs:333-335` sets `unknown`; a `Publisher` has no bounds, `:406`, so `:444-452` adds `(R, Hub::Any, Direct, Open)` with via `"unresolved"`; `from` is `Key::Routine(e.from)` for both, `:325`); in `dependency_body_edges`, R's `DynamicOpen` call site with an `OpenBound::Any` site fact (via `"dynamic"`, `:408-409`, same key at `:432-441`). Assert the `Hub::Any` edge's via is `"unresolved"` | in `project`'s `engine_edges`, iterate `dependency_body_edges` before `edges` | the kept via (`"dynamic"`) | restore |
 | `graph_export_covers_dependencies` (existing, `:597-650`; checks presence and `sourcePath`, not order) | feed `project` `edges` only (drop `dependency_body_edges`); separately, delete only the dependency merge of site facts inside `ResolvedProgram::build` (today `report.site_facts.extend(dependency.site_facts)`, `full.rs:2177`), keeping the workspace's. Dropping ALL site facts would also fail on the workspace facts alone and prove nothing about the merge. The projection reads site facts for `run` edges and open bounds (`project.rs:383-406`); if the dependency fixture has no dependency call site with a run target or an open bound, the second break stays green, and the test gains a dependency-side `Codeunit.Run` plus an assertion on its `run` edge until it fails | the dependency node's `sourcePath`/edges; the dependency-side `run` edge | restore |
 | A1b.2: no unit test. `attach_program_calls_with` takes `program.body.take()`, so `body.is_none()` afterwards is true by construction and pins nothing; the break "keep a clone" does not compile (`ProgramContext` derives no `Clone`, `full.rs:1489`). The claim is that the body's memory is released at `b3.ctx_drop` (`program_calls.rs:674-676`); A1b.4's post-attach peak is the measurement of that | — | — | — |
-| `resolved::dependency_bodies_histogram_equals_merged_filter` (unit on the dependency workspace: the §4.3.2 claim, both computations) | add a `CallSite` filter bug (drop the `from.app` test) | the two histograms | restore |
+| `resolved::dependency_bodies_histogram_is_the_dependency_call_sites` (unit on the dependency workspace: `export_from_program`'s `meta` `dependencyBodies` histogram equals a HAND-STATED count, the number of call sites in the fixture's dependency source, counted in that source and written as a literal; the §4.3.2 claim is then pinned on the production output, not on two computations inside the test) | in the production filter (`impact_graph/mod.rs:222-230`, the `dependency_edges` filter over `all_edges`), drop the `from.app != primary` test | the histogram literal (workspace call sites are counted too) | restore |
 
 ### 8.4 Step 2
 
@@ -1705,6 +1781,7 @@ moves with it) and makes the module `#[cfg(test)] pub(crate) mod test_support;`.
 | `l4::bundle_equals_the_old_builders` (TRANSIENT, §5: unit on `ws-d8-commit-in-tx` and the dependency workspace: `build_l4` vs `build_db_effect_bundle` / `cross_app_db_effect_bundle` compared through a test-only `SummaryBundle::rows_for_test()` rendering every routine's `db_effects`; lands with `build_l4` beside the old builders, deleted in the commit that deletes them; pass and break recorded at a named intermediate SHA, §5) | pass empty `leaf_summaries` to `build_l4` on the cross-app case | the rendered rows | restore |
 | `session::base_graph_equals_context_graph` (TRANSIENT, §5: unit, cross-app: `base.graph == build_combined_graph(..) + injected`, `PartialEq`; deleted with the context's own graph build; pass and break recorded at a named intermediate SHA, §5) | drop the injected extend on one side | equality | restore |
 | `session::after_run_bits_must_be_in_the_union` (A2.10, unit: `prepare` on `Plan { runs: [[a detector with requires: 0]], after_run: TRANSACTION_SPANS }` over `View::new(AnalysisTarget::SingleApp(Box::new(empty_resolved())))`) | remove the assertion | the expected panic | restore |
+| `session::command_plans_declare_after_run` (A2.10, the use: for each of `digest_plan` and `events_plan`, the functions digest, prove and events call (§4.4.4), build the plan from one probe detector with `requires: 0`, over `empty_resolved()`; `prepare` panics naming the plan's bit). Without it, a command whose plan omits `after_run` stays green, because the default set's union already holds `TRANSACTION_SPANS` (d9) and `SUMMARIES` (d1) (`detectors/mod.rs:1242-1294`, `registry.rs:141`) | set `after_run: 0` in `digest_plan`; separately in `events_plan` | the expected panic of that case | restore |
 | `session::no_lazy_fill_in_this_file` (A2.9, unit: `include_str!("session.rs")` minus `//` lines, needles built with `concat!`) | add an `OnceLock` field to `View`; separately, a `RefCell<Option<DetectorArtifacts>>` field (the second needle family); separately, make `released` an `AtomicU8` (the third) | the `contains` assertion | remove |
 | `session::prepare_fills_ordering_before_the_runs` (unit, replaces the deleted `declared_ordering_facts_are_filled_before_the_parallel_loop` and `ordering_facts_are_lazy_and_parity_with_direct_compute`, §4.4.2: a `View` over `empty_resolved()`, one probe detector with `requires: ORDERING_FACTS` that reports `c.ordering.is_some()` from inside the loop) | move the ordering fill in `prepare` after the runs | `["filled"]` (the probe reports `"empty"`) | restore |
 | `registry::undeclared_ordering_facts_read_inside_the_loop_fails_loudly` (existing, rewritten to the shim, §4.4.2) | replace `get_ordering_facts`' `expect` with a fall-back to an empty map | the `substrate::ORDERING_FACTS` diagnostic | restore |
@@ -1726,7 +1803,7 @@ moves with it) and makes the module `#[cfg(test)] pub(crate) mod test_support;`.
 | G-2 (step-2 half) | §4.4.4: digest's and prove's snapshot is composed after `det` is released; the tx map is a small projection taken before the release (Decision 56); `snapshot.<field>` census buckets size the `ViewTree`-equivalent | step 6: which `ViewTree` parts a digest-only plan keeps, and the digest fallback rung |
 | G-3 (instrument half) | `BFS_WALK_NANOS` / `BFS_FOLD_NANOS` / `BFS_PICKS`; the numbers file names the command each is measured on (analyze cross-app, default set) | step 7a: its bound reads the walk half and names the command |
 | G-5 | §6.1: per-timer band = max − min of the parent's interleaved runs; §6.2 records whether each median is ≥ 2 × its band | steps 7a, 7b, 10, 11 apply the rule before writing a bound |
-| G-6 | §4.3.4: `ProgramMeta` holds the workspace text (5.09 MB on CDO); the `inputs` census bucket | — |
+| G-6 | §4.3.4: the command's `Arc<InputSet>` (shared by the builder-local `ProgramMeta`) holds the workspace text (5.09 MB on CDO); the `inputs` census bucket | — |
 | R6-2 | §4.4.6: all four fields of `DetectorOutput`; `D1CohortIndex` and `LoopSetRegistry` derive `PartialEq` | — |
 | R6-3 | §4.4.5: the no-id row keeps one build, under today's single-app `Summary` profile (`ResolvedProgram::build(inputs, Summary)`, review B13; never `FULL`); `fresh` is its `Result`; the `Err` text is pinned by a test; the second build is gone and counted | — |
 | R6-5 | §4.3.2: the sets are named for what they hold; the order is kept because the projection's tie rule is order-sensitive; the `dependencyBodies` histogram equality is pinned | — |
@@ -1746,6 +1823,14 @@ moves with it) and makes the module `#[cfg(test)] pub(crate) mod test_support;`.
    the tests and `aldump` (`switch_dump.rs:120`, `run_detectors*`) (§4.4.2); step 4's
    spec says when the parity test and `aldump` move to `build_detector_artifacts` and
    they are deleted.
+5. (For step 12, recorded now.) `InputSet` mixes WORKSPACE inputs (`app.json`, the
+   walk, the closure, roots config, coverage yaml) with REQUEST inputs (`policy_file`,
+   `baseline`, `snapshot_inputs`, `build_only`, §4.2.1). Two batch jobs on one workspace
+   with different `--policy` or `--baseline` cannot share one `InputSet`, yet the epic
+   keys a view by (workspace, universe, `--no-roots-config`) and calls the frozen set
+   the identity (epic §2, §5.1, step 12). Step 12's spec splits the request inputs out
+   (or keys on them). Steps 0-2 run one request per process, so nothing here depends on
+   it.
 
 ## Review log
 
@@ -1909,3 +1994,29 @@ first-review row holds the fix). Epic amended for 1 and M4 (epic Round 11).
 | a2-r4 | M5 | minor | = 5 | — |
 | a2-r4 | M6 | minor | fixed: A2.9 and rule 4 add the needles `Atomic` and `thread_local`; §8.4 adds a third break (`released` as `AtomicU8`) | spec A2.9, §4.4.3 rule 4 (`released: u8`) |
 | a2-r4 | M7 | minor | fixed: `inputs::read_once`, `run::no_id_row_runs_one_build_and_keeps_the_text` and `run::build_failed_row_runs_one_build` are spawned-process tests in `tests/cli/cli_build_counters.rs`; the `fresh` text is read from the `al-sem: warning:` line (§8.2, §8.4) | `perf_trace.rs:402-407` (tracer `OnceLock`); `run.rs:884-897` (reason → preflight message); `alsem.rs:1612` (`eprintln!("al-sem: warning: {msg}")`) |
+
+Round panel-r1 (2026-10-18): two-model panel, reviewer slots `sol` (S1..S5) and `opus`
+(O1..O12), outputs under `.agent/runs/20261018-125302-fa1912/spec-r1-*.md`. Every claim
+checked in source at `U:/Git/al-sem-issue-160-a2`. S1 = O3 and S2 ⊂ O5 (one fix each).
+None refuted; O4's tie example was corrected (a bound-less `DynamicOpen` site gets via
+`"unresolved"`, `project.rs:444-452`; the tie needs an `OpenBound::Any`), the finding
+holds. Epic amended for O2, O3, O10, O11 (epic Round 12). Register:
+`.agent/issue-160/findings.json` (P1-1 … P1-15).
+
+| Round | Id | Severity | Outcome | Evidence |
+|---|---|---|---|---|
+| panel-r1 | S1 = O3 | important | fixed: §4.4.4 states the new overlap (`l4` bundle + SCC alive during snapshot composition in digest and prove, both universes) instead of "never raises"; it cannot be released earlier (`DbTempStates` borrows the bundle); `field_index` leaves `L4Analysis` (a `build_l4` local); A2.4 and §6.3 add prove to the peak bound | `digest_cli.rs:1580` vs `:1625-1628`; `prove.rs:897` vs `:964`; `digest_cli.rs:744-761` (`DbTempStates<'a>` borrows `&'a SummaryBundle`); `detector_context.rs:1365-1393` (field index = solver input); `capability_cone.rs:3215-3222`, `:4082-4090` |
+| panel-r1 | S2 + O5 | important | fixed: `inputs::app_json_edit_after_read` rewrites `app.json` to `{}` and compares analyze json, pr-summary and fingerprint json bytes, one break per reader (5); new `inputs::app_json_paths_edit_after_read` and `inputs::coverage_yaml_edit_after_read` (§8.2) | `run.rs:122-157`; `model_instance_id.rs:75-96`; `workspace.rs:1774`, `:1789-1800`; `workspace_diagnostics.rs:44`, `:145-155`; `snapshot_full.rs:819-827`, `:868-878` |
+| panel-r1 | S3 | minor | fixed: §6.1: a peak's band is the epic's 3 % of the parent median; the observed max − min applies to walls and timers only | epic §5.12 (3 %), I6 ("Peak: both numbers of §5.12") |
+| panel-r1 | S4 | minor | fixed: §4.3.4: `ProgramMeta` is a builder local at steps 1b-2; readers' values are copied out; the process retains the command's `Arc<InputSet>`; §4.4.3, §5, §6.3, §9 G-6 follow | §4.3.3 (builders keep return shapes; `fresh` = `meta.coverage.clone()`); `run.rs:251-261` |
+| panel-r1 | S5 | minor | fixed: step 1's `inputs::walk_error_fails_the_build` calls `build_program_with_coverage(&inputs)`; step 1b's commit switches it to `ResolvedProgram::build` | `full.rs:2123-2153` (the step-1 entry) |
+| panel-r1 | O1 | important | fixed: §4.1.7: step 0 deletes the per-cone `report()` call and prints once at process exit from `alsem`'s and `aldump`'s `main` | `detector_context.rs:1150` (the only `cones_census::report()` call); `capability_cone.rs:2764-2906`, `:4015-4101` (none) |
+| panel-r1 | O2 | important | fixed: A2.3, §6.3 and the epic bound digest's saving on the parent median of a new step-0 span `digest.tx_context_map` minus its band (I6), not on the P5 "21 s" | `digest_cli.rs:1616`, `prove.rs:958` (the `compute_tx_context_map` calls); epic I6, Decisions 20, 44 |
+| panel-r1 | O4 | important | fixed: `project`'s `Inputs.edges` becomes an `EdgeView` read only through `all_edges`; new `project::cross_set_tie_keeps_the_first_sets_via` pins the use with a hand-stated cross-set tie; `all_edges_is_edges_then_dependency_bodies` also covers `edge_view` | `project.rs:32`, `:322-325`, `:333-335`, `:406-452` (keep-first at `:287`) ; test builder `:1351-1383` |
+| panel-r1 | O6 | important | fixed: §8 recipe gains a Windows folder recipe (deny ACE via `icacls … /deny *S-1-1-0:(RD)`, restored by `/remove:d`); A1.7 case (b) runs on Windows and Linux | spec §8 recipe (was "A folder: returns `None`"); §6.1 (Windows dev machine) |
+| panel-r1 | O7 | minor | fixed: each command's `Plan` comes from a named production function (`digest_plan`, `events_plan`, …) taking the detector set; new `session::command_plans_declare_after_run` calls them with a set lacking d9 and d1 | `detectors/mod.rs:1242-1251` (d1), `:1290-1295` (d9); `registry.rs:141` |
+| panel-r1 | O8 | minor | fixed: §8 recipe states the `#[path]` rule (top level only, one `../` per directory) with two worked paths | Rust Reference, `path` attribute |
+| panel-r1 | O9 | minor | fixed: the test compares `export_from_program`'s `dependencyBodies` histogram to a hand-stated count; the break is in the production filter | `impact_graph/mod.rs:222-230` |
+| panel-r1 | O10 | minor | fixed: §10 item 5 and epic open question 15 record the request-vs-workspace split for step 12 | spec §4.2.1 (`policy_file`, `baseline`, `snapshot_inputs`, `build_only`); epic §2, §5.1, step 12 |
+| panel-r1 | O11 | minor | fixed: epic §4 names the two causes apart | `capability_cone.rs:4019-4021`, `:4036-4055`; `detector_context.rs:935-946` |
+| panel-r1 | O12 | minor | fixed: §7 lists the `CLAUDE.md` lines that go stale (Key Modules, `tests/common` list) as user follow-ups; no protected path is edited | `CLAUDE.md` Key Modules and Testing sections |
