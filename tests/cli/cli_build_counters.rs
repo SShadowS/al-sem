@@ -620,6 +620,29 @@ fn census_rest_is_never_negative() {
     );
 }
 
+/// Spec §4.1.4 / §8.1: both peaks reach the trace. Windows only, because
+/// `read_rss()` is `None` elsewhere and both counters are then 0. Spawned,
+/// because the tracer is a process `OnceLock` read from the environment.
+#[cfg(windows)]
+#[test]
+fn phase_peak_is_reported() {
+    let (out, m) = spawn_traced(
+        &["analyze", &ws_a(), "--single-app", "--format", "json"],
+        &[],
+    );
+    assert!(
+        out.status.code().is_some(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let post = count(&m, "peak.post_attach_mb");
+    let proc_ = count(&m, "peak.process_mb");
+    assert!(
+        0 < post && post <= proc_,
+        "post_attach={post} process={proc_}"
+    );
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();

@@ -675,6 +675,9 @@ fn main() -> ExitCode {
     // thread-safe by contract, and this runs before the process starts any
     // thread of its own.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 0) };
+    // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
+    // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
+    let _run = al_sem::engine::perf_trace::run("alsem");
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();

@@ -31,8 +31,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -248,6 +249,48 @@ struct Tracer {
     pid: u32,
     writer: Mutex<TraceWriter>,
     counters: Mutex<HashMap<&'static str, u64>>,
+    /// The running phase-peak sampler ([`mark_phase_start`]), if any.
+    phase: Mutex<Option<PhaseSampler>>,
+}
+
+/// A background thread that samples the working set every 10 ms into `max`
+/// (bytes) until `stop` is set (#160 spec §4.1.4).
+struct PhaseSampler {
+    max: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+impl PhaseSampler {
+    fn start() -> PhaseSampler {
+        let max = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        // One synchronous sample, so a phase shorter than one interval is never 0.
+        sample_working_set(&max);
+        let (m, s) = (Arc::clone(&max), Arc::clone(&stop));
+        let handle = std::thread::spawn(move || {
+            while !s.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                sample_working_set(&m);
+            }
+        });
+        PhaseSampler { max, stop, handle }
+    }
+
+    /// Stop and join the thread, take one last synchronous sample, return the
+    /// phase maximum in bytes.
+    fn finish(self) -> u64 {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.handle.join();
+        sample_working_set(&self.max);
+        self.max.load(Ordering::Relaxed)
+    }
+}
+
+fn sample_working_set(max: &AtomicU64) {
+    if let Some(r) = read_rss() {
+        max.fetch_max(r.working_set, Ordering::Relaxed);
+    }
 }
 
 impl Tracer {
@@ -273,7 +316,14 @@ impl Tracer {
             pid,
             writer: Mutex::new(writer),
             counters: Mutex::new(HashMap::new()),
+            phase: Mutex::new(None),
         }
+    }
+
+    /// Stop the phase sampler (if one runs) and return its maximum in bytes.
+    fn finish_phase(&self) -> u64 {
+        let sampler = self.phase.lock().ok().and_then(|mut p| p.take());
+        sampler.map_or(0, PhaseSampler::finish)
     }
 
     fn ts(&self) -> u64 {
@@ -455,6 +505,17 @@ impl Drop for RunGuard {
         if let Some(s) = self.span.take()
             && let Some(t) = tracer()
         {
+            // #160 §4.1.4: the phase peak and the OS lifetime peak, before the
+            // run span closes. Both are 0 where `read_rss()` is `None`.
+            let post_attach = t.finish_phase() / MB;
+            let process = read_rss().map_or(0, |r| r.peak_working_set / MB);
+            t.set_counter("peak.process_mb", process);
+            t.set_counter("peak.post_attach_mb", post_attach);
+            if t.config.stderr {
+                eprintln!(
+                    "[perf-trace] peak.process_mb={process} peak.post_attach_mb={post_attach}"
+                );
+            }
             t.close(&s);
         }
     }
@@ -586,6 +647,23 @@ pub fn span(cat: &'static str, name: impl Into<TraceName>) -> SpanGuard {
     SpanGuard {
         span: Some(t.open(cat, name)),
     }
+}
+
+/// Start sampling a phase's working-set peak (#160 spec §4.1.4): one sample now,
+/// then one every 10 ms on a background thread until the [`run`] guard drops,
+/// which reports the maximum as `peak.post_attach_mb`. A second call restarts
+/// the sampler: the maximum is reset, so the last phase's maximum is reported.
+/// With tracing off it is one `OnceLock` read.
+pub fn mark_phase_start(name: &'static str) {
+    let Some(t) = tracer() else {
+        return;
+    };
+    t.finish_phase();
+    let sampler = PhaseSampler::start();
+    if let Ok(mut p) = t.phase.lock() {
+        *p = Some(sampler);
+    }
+    t.emit_instant("phase", "phase.start", json!({ "name": name }));
 }
 
 /// Emit an absolute counter value.

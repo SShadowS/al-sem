@@ -674,6 +674,8 @@ fn attach_program_calls_with(
         let _s = pt::span("b3", "b3.ctx_drop");
         drop(ctx);
     }
+    // #160 §4.1.4: everything retained from here on is post-attach.
+    pt::mark_phase_start("post_attach");
     let mut resolved = crate::program::model::workspace::Model {
         workspace: rows.workspace,
         root_classifications: rows.root_classifications,
