@@ -287,10 +287,15 @@ pub fn is_event_publisher(decl: &RoutineDecl) -> Option<PublisherKind> {
 /// parameter that subscriber signatures may (but need not) capture — see
 /// [`subscriber_arity_bound`] for the tolerance rule this feeds.
 ///
-/// Returns `None` (tri-state UNKNOWN) when the routine carries no publisher
-/// attribute at all, or the attribute's first arg is absent / not a boolean
-/// literal — defensive fail-closed, since [`subscriber_arity_bound`] treats
-/// `None` identically to `Some(false)` (no `+1` tolerance without positive
+/// A routine can carry several READINGS of its publisher attribute (one per
+/// `#if` build arm, #104). Each reading contributes its own arg-0 value and
+/// the result is their [`union_include_sender`].
+///
+/// Returns `None` (tri-state UNKNOWN) when the routine has no publisher
+/// attribute, or when no reading is `true` and at least one reading's first
+/// arg is absent or not a boolean literal — defensive fail-closed, since
+/// [`subscriber_arity_bound`] treats `None` identically to `Some(false)` (no
+/// `+1` tolerance without positive
 /// evidence). In practice a real publisher attribute always carries a
 /// literal boolean here: source-tier because the attribute is parsed
 /// directly from the call site's own text (this function); ABI-tier per
@@ -299,16 +304,39 @@ pub fn is_event_publisher(decl: &RoutineDecl) -> Option<PublisherKind> {
 /// coverage — every publisher attribute's `arg[0]` was present and
 /// parseable, zero `None`s).
 pub fn publisher_include_sender(decl: &RoutineDecl, ir: &Ir) -> Option<bool> {
-    let attr = decl.attributes_parsed.iter().find(|a| {
-        matches!(
-            a.name.to_ascii_lowercase().as_str(),
-            "integrationevent" | "businessevent" | "internalevent"
-        )
-    })?;
-    match attr.args.first().map(|&id| &ir.expr(id).kind) {
-        Some(ExprKind::Literal(Literal::Bool(b))) => Some(*b),
-        _ => None,
+    union_include_sender(
+        decl.attributes_parsed
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.name.to_ascii_lowercase().as_str(),
+                    "integrationevent" | "businessevent" | "internalevent"
+                )
+            })
+            .map(|a| match a.args.first().map(|&id| &ir.expr(id).kind) {
+                Some(ExprKind::Literal(Literal::Bool(b))) => Some(*b),
+                _ => None,
+            }),
+    )
+}
+
+/// The ONE rule for combining several `IncludeSender` readings of one
+/// publisher (per-build attribute readings, #104; `#if`-duplicate publisher
+/// arms, #103): `Some(true)` when ANY reading is `true` (some build passes
+/// the Sender, so a Sender-capturing subscriber is valid); `Some(false)` when
+/// there is at least one reading and every one is `false`; otherwise (no
+/// reading, or an unreadable one and none `true`) `None`.
+pub fn union_include_sender(readings: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let (mut any, mut all_false) = (false, true);
+    for r in readings {
+        match r {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => all_false = false,
+        }
+        any = true;
     }
+    (any && all_false).then_some(false)
 }
 
 /// The Sender-tolerant subscriber arity bound for a publisher: the
@@ -678,6 +706,82 @@ mod tests {
         let af = al_syntax::parse(src);
         let r = &af.objects[0].routines[0];
         assert_eq!(publisher_include_sender(r, &af.ir), None);
+    }
+
+    /// `publisher_include_sender` of one routine carrying the attributes
+    /// `attrs` (each one READING of the publisher attribute, #104).
+    fn include_sender_of_readings(attrs: &str) -> Option<bool> {
+        let src = format!(
+            "codeunit 50215 Pub\n{{\n    {attrs}\n    procedure OnAfterX()\n    begin\n    end;\n}}"
+        );
+        let af = al_syntax::parse(&src);
+        let r = &af.objects[0].routines[0];
+        publisher_include_sender(r, &af.ir)
+    }
+
+    /// A4 (#104): `IncludeSender` over several readings, hand-stated as
+    /// separate attributes. `Some(true)` if ANY reading is `true` (some build
+    /// passes the Sender); `Some(false)` only when every reading is `false`;
+    /// otherwise (an unreadable reading and no `true`) `None`.
+    #[test]
+    fn include_sender_is_the_union_of_every_reading() {
+        let rows = [
+            // (readings, want)
+            (
+                "[IntegrationEvent(false, false)] [IntegrationEvent(true, false)]",
+                Some(true),
+            ),
+            (
+                "[IntegrationEvent(true, false)] [IntegrationEvent(false, false)]",
+                Some(true),
+            ),
+            (
+                "[IntegrationEvent(false, false)] [IntegrationEvent(false, false)]",
+                Some(false),
+            ),
+            (
+                "[IntegrationEvent(false, false)] [IntegrationEvent(Foo, false)]",
+                None,
+            ),
+            (
+                "[IntegrationEvent(Foo, false)] [IntegrationEvent(true, false)]",
+                Some(true),
+            ),
+            ("[BusinessEvent(false)] [BusinessEvent(true)]", Some(true)),
+            ("[InternalEvent(false)] [InternalEvent(true)]", Some(true)),
+            ("[BusinessEvent(false)] [BusinessEvent(false)]", Some(false)),
+        ];
+        let got: Vec<(&str, Option<bool>)> = rows
+            .iter()
+            .map(|(attrs, _)| (*attrs, include_sender_of_readings(attrs)))
+            .collect();
+        let want: Vec<(&str, Option<bool>)> = rows.iter().map(|(a, w)| (*a, *w)).collect();
+        assert_eq!(got, want);
+    }
+
+    /// A4 (#104): the truth table of `union_include_sender` itself, over
+    /// hand-stated reading lists (order-sensitive rows included).
+    #[test]
+    fn union_include_sender_truth_table() {
+        let (t, f, u) = (Some(true), Some(false), None);
+        let rows: [(&[Option<bool>], Option<bool>); 10] = [
+            (&[u, t], t),
+            (&[t, u], t),
+            (&[], None),
+            (&[t], t),
+            (&[f], f),
+            (&[u], None),
+            (&[f, f], f),
+            (&[f, t], t),
+            (&[f, u], None),
+            (&[u, f], None),
+        ];
+        let got: Vec<_> = rows
+            .iter()
+            .map(|(r, _)| (*r, union_include_sender(r.iter().copied())))
+            .collect();
+        let want: Vec<_> = rows.iter().map(|(r, w)| (*r, *w)).collect();
+        assert_eq!(got, want);
     }
 
     // ── subscriber_arity_bound ───────────────────────────────────────────────

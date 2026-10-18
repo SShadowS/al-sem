@@ -950,18 +950,11 @@ impl EventFacts {
                 }
             }
         }
-        let senders = || {
+        let include_sender = crate::program::resolve::event::union_include_sender(
             arms.iter()
                 .filter(|c| c.publisher_kind.is_some())
-                .map(|c| c.include_sender)
-        };
-        let include_sender = if senders().any(|s| s == Some(true)) {
-            Some(true)
-        } else if senders().next().is_some() && senders().all(|s| s == Some(false)) {
-            Some(false)
-        } else {
-            None
-        };
+                .map(|c| c.include_sender),
+        );
         Self {
             event_subscribers,
             publisher_kind: arms.iter().find_map(|c| c.publisher_kind),
@@ -2659,7 +2652,8 @@ codeunit 50107 "Repro Sender"
     }
 
     /// A6b: two arms that subscribe the same event with different skip flags
-    /// are two different subscriptions, so both entries stay.
+    /// keep both entries on the node; `SubscriberIndex` wires them as one
+    /// subscription (#104).
     #[test]
     fn same_event_with_different_skip_flags_keeps_two_entries() {
         let obj = dep_obj_id(AppRef(0), 51212);
