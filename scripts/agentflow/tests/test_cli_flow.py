@@ -113,12 +113,14 @@ def test_preflight_does_not_call_a_byte_identical_crlf_checkout_dirty(
 
 
 def test_preflight_refuses_below_the_free_disk_floor(capsys, repo_pair, monkeypatch, tmp_path):
-    """One GB under MIN_FREE_GB fails preflight with `disk-free:`; exactly the
-    floor does not. Stated as numbers, not via the constant, so lowering the
-    floor back to 20 fails this test."""
+    """One GB under the default `min_free_gb` fails preflight with
+    `disk-free:`; exactly the floor does not. Stated as numbers, not via the
+    default, so lowering the floor back to 20 fails this test. No
+    `.agent/config.json` exists here, so this is the default."""
     _, clone = repo_pair
     monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
     preflight_ready(clone, monkeypatch, tmp_path)
+    assert not (clone / ".agent" / "config.json").exists()
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=39 * 2**30))
     code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert "disk-free:39GB" in out["failures"], out["failures"]
@@ -126,6 +128,71 @@ def test_preflight_refuses_below_the_free_disk_floor(capsys, repo_pair, monkeypa
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=40 * 2**30))
     code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+
+
+def test_preflight_reads_its_free_disk_floor_from_the_config_file(capsys, repo_pair, monkeypatch, tmp_path):
+    """`min_free_gb` in `.agent/config.json` moves the floor, in both
+    directions, and a broken config file is an error, not the default."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    config = clone / ".agent" / "config.json"
+    config.write_text(json.dumps({"min_free_gb": 100}), encoding="utf-8")
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=99 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert "disk-free:99GB" in out["failures"], out["failures"]
+    config.write_text(json.dumps({"min_free_gb": 10}), encoding="utf-8")
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=10 * 2**30))
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+    config.write_text(json.dumps({"min_free_gb": "lots"}), encoding="utf-8")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 2 and "min_free_gb" in out["error"], out
+
+
+def test_preflight_lists_every_lease_and_fails_slots_full_only_on_live_ones(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """`locks` lists every lease with its staleness. `slots-full` counts LIVE
+    leases only: a stale one is listed for `recover`, and failing on it would
+    stop the tick before it reaches the recovery that frees the slot. The
+    `lock-live:` row is gone; with `slots: 1` one live lease is `slots-full`."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(clone), run_id="run-dead", now=lambda: 1.0), 9, "s", 1)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0, out["failures"]
+    assert [(lk["issue"], lk["run_id"], lk["stale"]) for lk in out["locks"]] == [
+        (8, "run-live", False), (9, "run-dead", True)]
+    assert out["stale_lock"]["run_id"] == "run-dead"
+    assert [lk["run_id"] for lk in out["stale_locks"]] == ["run-dead"]      # the list `recover` reads
+    assert out["warnings"] == []
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 3}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-live2", now=lambda: 1_000_000.0), 10, "s", 1)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert "slots-full" not in out["failures"], out["failures"]      # 2 live < 3
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 1 and out["failures"] == ["slots-full"], out["failures"]
+
+
+def test_preflight_warns_when_cargo_target_dir_is_set(capsys, repo_pair, monkeypatch, tmp_path):
+    """Design risk (g)3. An inherited CARGO_TARGET_DIR makes every issue
+    worktree share one build dir, so two runs' gates contend (#60). A
+    warning, not a failure: one run at a time is still fine with it."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
+    monkeypatch.setenv("CARGO_TARGET_DIR", "U:/shared-target")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0, out["failures"]
+    assert out["warnings"] == ["cargo-target-dir-set:U:/shared-target"]
 
 
 def test_preflight_under_dry_run_never_refreshes_the_index(capsys, repo_pair, monkeypatch, tmp_path):
@@ -187,6 +254,375 @@ def test_claim_then_finish_blocked_releases_lock_and_retains(capsys, root, tmp_p
     assert (tmp_path / "home" / ".al-sem" / "agentflow" / "runs" / "run-test" / "claim.json").exists()
     code, out = run(capsys, root, "claim", "8", "--session", "https://s", "--title-slug", "c10-scope", gh_run=gh, run_id="run-2")
     assert out["attempt"] == 2 and out["branch"].endswith("-a2")
+
+
+# ---- per-issue leases (parallel-issues design, commit 5) --------------------
+
+CLAIM_GH = {**READS, f"api repos/{REPO}/issues/9": json.dumps(json.loads(ISSUES)[0][1]),
+            "issue edit 8 --add-label agent-working": "", "issue comment 8 *": "",
+            "issue edit 9 --add-label agent-working": "", "issue comment 9 *": ""}
+
+
+def _claim(capsys, root, issue, gh, run_id):
+    return run(capsys, root, "claim", str(issue), "--session", "https://s", "--title-slug", "x",
+               gh_run=gh, run_id=run_id)
+
+
+def _slots(root, n):
+    (root / ".agent").mkdir(exist_ok=True)
+    (root / ".agent" / "config.json").write_text(json.dumps({"slots": n}), encoding="utf-8")
+
+
+def _attempts(root):
+    p = root / ".agent" / "attempts.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def test_a_second_claim_of_a_held_issue_is_issue_held_and_touches_nothing(capsys, root):
+    """Design test 8. Even with a free slot, the second claim of one issue
+    fails `issue-held:<run>` before any gh call and leaves `attempts.json`
+    as it was."""
+    _slots(root, 2)
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a")[0] == 0
+    before = _attempts(root)
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 8, gh, "run-b")
+    assert code == 1 and out["error"] == "issue-held:run-a", out
+    assert gh.calls == []
+    assert _attempts(root) == before == {"8": 1}
+    assert [lk.run_id for lk in lock.all_locks(Ctx(Paths(root)))] == ["run-a"]
+    assert not (root / ".agent" / "runs" / "run-b").exists()
+
+
+def test_slots_one_still_refuses_a_second_issue_as_slots_full(capsys, root):
+    """The default `slots: 1` keeps today's rule: one issue at a time."""
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a")[0] == 0
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 9, gh, "run-b")
+    assert code == 1 and out["error"] == "slots-full", out
+    assert gh.calls == [] and _attempts(root) == {"8": 1}
+
+
+CLAIM_CHILD = """
+import json, shutil, types
+from agentflow import cli
+from agentflow.tests.conftest import FakeRunner, PLENTY_OF_DISK
+# The parent's `plenty_of_disk` patch does not reach a child process.
+shutil.disk_usage = lambda p: types.SimpleNamespace(free=PLENTY_OF_DISK)
+issue, responses = ARGS[0], json.loads(ARGS[1])
+if len(ARGS) > 2:
+    slow_reads(ARGS[2])
+gh = FakeRunner(responses)
+barrier()
+code = cli.main(["--root", str(ROOT), "--repo", "SShadowS/al-sem", "--run-id", f"run-{TAG}",
+                 "claim", issue, "--session", "s", "--title-slug", "x"], gh_run=gh)
+print("EXIT", code)
+"""
+
+
+def test_two_processes_claiming_one_issue_at_once_get_one_lease(root):
+    """Design test 9, two real processes released together. Exactly one wins;
+    the other is `issue-held`. One lease, one attempt bump.
+
+    `slots: 2`, so the loser cannot be refused for `slots-full` instead, and
+    the config read is slowed so the check-then-create window is wide."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    res = run_concurrently(root, CLAIM_CHILD, ["a", "b"], extra=["8", json.dumps(CLAIM_GH), "config.json"])
+    codes = sorted(int(o.split("EXIT")[-1]) for _, o, _ in res)
+    assert codes == [0, 1], res
+    loser = next(o for _, o, _ in res if o.strip().endswith("EXIT 1"))
+    assert '"issue-held:run-' in loser, loser
+    leases = lock.all_locks(Ctx(Paths(root)))
+    assert [lk.issue for lk in leases] == [8], leases
+    assert _attempts(root) == {"8": 1}
+
+
+def test_two_processes_claiming_two_issues_at_once_keep_both_attempt_bumps(root):
+    """Design test 10. Each claim bumps its own key in `attempts.json`. The
+    early read is slowed, so both read `{}`; a claim that writes back its own
+    snapshot then loses the other's bump."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    body = CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "attempts.json"])
+    assert all(o.strip().endswith("EXIT 0") for _, o, _ in res), res
+    assert _attempts(root) == {"8": 1, "9": 1}
+
+
+def test_two_processes_claiming_two_issues_with_one_slot_get_one_lease(root):
+    """The slot count is a check-then-act across DIFFERENT lease files, so
+    create-exclusive does not cover it; only mutex `registry` does. With
+    `slots: 1` and the config read slowed, two claims of two issues at once
+    must still end with one lease and one `slots-full`."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 1)
+    body = CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "config.json"])
+    outs = [o for _, o, _ in res]
+    assert sorted(o.strip()[-6:] for o in outs) == ["EXIT 0", "EXIT 1"], res
+    assert '"slots-full"' in next(o for o in outs if o.strip().endswith("EXIT 1")), res
+    assert len(lock.all_locks(Ctx(Paths(root)))) == 1
+
+
+# ---- claim --loop-max (parallel-issues design, commit 9) --------------------
+
+def _loop(root):
+    p = root / ".agent" / "runs" / "loop.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def _set_loop(root, n):
+    p = root / ".agent" / "runs" / "loop.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"issues_done": n}), encoding="utf-8")
+
+
+def _claim_max(capsys, root, issue, gh, run_id, loop_max):
+    return run(capsys, root, "claim", str(issue), "--session", "https://s", "--title-slug", "x",
+               "--loop-max", str(loop_max), gh_run=gh, run_id=run_id)
+
+
+def test_claim_with_loop_max_spends_the_loop_budget_only_on_a_claim_that_lands(capsys, root):
+    """`claim --loop-max M` charges `loop.json` inside the claim's own
+    registry critical section. A landed claim spends one; `issue-held` spends
+    nothing (the conductor tries its next pick); an exhausted budget is
+    `loop-exhausted` with no lease and no gh call. Without `--loop-max`,
+    `loop.json` is not touched (the old `loop-tick` + `claim` shape)."""
+    _slots(root, 3)
+    _set_loop(root, 2)
+    code, out = _claim_max(capsys, root, 8, FakeRunner(CLAIM_GH), "run-a", 3)
+    assert code == 0, out
+    assert _loop(root) == {"issues_done": 3}
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim_max(capsys, root, 8, gh, "run-b", 5)
+    assert code == 1 and out["error"] == "issue-held:run-a", out
+    assert _loop(root) == {"issues_done": 3} and gh.calls == []
+    code, out = _claim_max(capsys, root, 9, gh, "run-b", 3)
+    assert code == 1 and out["error"] == "loop-exhausted", out
+    assert gh.calls == [] and lock.for_issue(Ctx(Paths(root)), 9) is None
+    assert _loop(root) == {"issues_done": 3}
+    code, out = _claim(capsys, root, 9, FakeRunner(CLAIM_GH), "run-c")
+    assert code == 0, out
+    assert _loop(root) == {"issues_done": 3}
+
+
+def test_a_rolled_back_claim_gives_its_loop_budget_back(capsys, root):
+    """The budget counts issues actually claimed. A claim that rolls back
+    (a gh failure after the lease) returns the unit it spent."""
+    _set_loop(root, 1)
+    gh = FakeRunner({**CLAIM_GH, "issue edit 8 --add-label agent-working": (1, "", "HTTP 500: boom")})
+    code, out = _claim_max(capsys, root, 8, gh, "run-a", 3)
+    assert code == 1 and "claim rolled back" in out["error"], out
+    assert lock.for_issue(Ctx(Paths(root)), 8) is None
+    assert _loop(root) == {"issues_done": 1}
+
+
+def test_two_processes_claiming_with_one_loop_unit_left_get_one_claim(root):
+    """Design test 14, the `claim --loop-max` form. Two sessions claim two
+    different issues at `issues_done = 2` under `--loop-max 3` with two free
+    slots: exactly one claim lands; the other is `loop-exhausted`.
+
+    The window that matters is AFTER the lease, where the claim does its gh
+    calls: a budget checked in the critical section but charged there would
+    let the second session check 2 < 3 too. The claim's read of
+    `handoffs.json`, which sits in that window, is slowed to hold it open."""
+    from agentflow.tests.conftest import run_concurrently
+    _slots(root, 2)
+    _set_loop(root, 2)
+    (root / ".agent" / "handoffs.json").write_text("{}", encoding="utf-8")
+    body = (CLAIM_CHILD.replace('issue, responses = ARGS[0]', 'issue, responses = {"a": "8", "b": "9"}[TAG]')
+            .replace('"--title-slug", "x"]', '"--title-slug", "x", "--loop-max", "3"]'))
+    assert body.count('"--loop-max", "3"') == 1
+    res = run_concurrently(root, body, ["a", "b"], extra=["-", json.dumps(CLAIM_GH), "handoffs.json"])
+    outs = [o for _, o, _ in res]
+    assert sorted(o.strip()[-6:] for o in outs) == ["EXIT 0", "EXIT 1"], res
+    assert '"loop-exhausted"' in next(o for o in outs if o.strip().endswith("EXIT 1")), res
+    assert len(lock.all_locks(Ctx(Paths(root)))) == 1
+    assert _loop(root) == {"issues_done": 3}
+
+
+# ---- the root git mutex and make-worktree (commit 10) ------------------------
+
+def _merge_from_a_sibling(origin, tmp_path, name):
+    """Move `origin/master` from another clone, as a sibling session's merge
+    does. The root's local `master` is left behind."""
+    other = tmp_path / name
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
+    _git_raw(other, "config", "user.email", "o@x")
+    _git_raw(other, "config", "user.name", "o")
+    sha = commit_file(other, f"{name}.txt", "x\n", f"sibling merge {name}")
+    assert Git(other).push("origin", "master")
+    return sha
+
+
+def test_make_worktree_branches_the_claim_from_origin_master(capsys, repo_pair, tmp_path):
+    """Design test 37. `make-worktree` replaces the conductor's own
+    `git worktree add` in the root: it takes the worktree and branch from
+    THIS run's `claim.json`, fetches, and bases the branch on
+    `origin/master`, not local `master`, which lags while a sibling's merge
+    waits for its post-merge. It is fenced: a run with no lease gets nothing."""
+    origin, clone = repo_pair
+    code, claim = _claim(capsys, clone, 8, FakeRunner(CLAIM_GH), "run-test")
+    assert code == 0, claim
+    local_before = Git(clone).rev("master")
+    sibling = _merge_from_a_sibling(origin, tmp_path, "sib")
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True), run_id="run-other")
+    assert code == 1 and "FenceError" in out["error"], out
+    assert not Path(claim["worktree"]).exists()
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 0, out
+    assert out == {"worktree": claim["worktree"], "branch": claim["branch"], "base": sibling}
+    wt = Git(claim["worktree"])
+    assert wt.branch() == claim["branch"] and wt.rev("HEAD") == sibling
+    assert Git(clone).rev("master") == local_before          # the root's master is not moved
+
+
+def test_make_worktree_waits_for_the_root_git_mutex(capsys, repo_pair, monkeypatch):
+    """The CLI's root `Git` takes mutex `git` for its writes, so a sibling
+    session's `git worktree add`/`fetch` and this one never collide on
+    `.git/index.lock` or a ref lock. Held here by the test: the command waits
+    and then fails `MutexTimeout` with nothing created; released, it works."""
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    code, claim = _claim(capsys, clone, 8, FakeRunner(CLAIM_GH), "run-test")
+    assert code == 0, claim
+    monkeypatch.setattr(cli, "GIT_MUTEX_TIMEOUT", 0.3)
+    with mutex(Ctx(Paths(clone)), "git"):
+        code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 1 and "MutexTimeout" in out["error"], out
+    assert not Path(claim["worktree"]).exists()
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 0 and Path(claim["worktree"]).exists(), out
+
+
+def test_preflight_passes_a_master_behind_origin_and_fails_a_diverged_one(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """With two sessions, a sibling's merge moves `origin/master`, and only
+    that sibling's post-merge fast-forwards the root. A root `master` BEHIND
+    `origin/master` is reported (`master_behind_origin`) and fails nothing;
+    one that has DIVERGED (a commit `origin` lacks) still fails
+    `master-differs-from-origin`."""
+    origin, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0 and out["master_behind_origin"] is False, out
+    _merge_from_a_sibling(origin, tmp_path, "sib")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0 and out["failures"] == [], out["failures"]
+    assert out["master_behind_origin"] is True
+    commit_file(clone, "local.txt", "x\n", "a local commit origin does not have")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 1 and out["failures"] == ["master-differs-from-origin"], out["failures"]
+
+
+def test_finish_naming_another_issue_than_the_lease_refuses_before_any_gh_call(
+        capsys, root, tmp_path, monkeypatch):
+    """Design test 12. `finish --issue 9` under a lease for 8 used to label
+    issue 9 and release 8's lease."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    assert _claim(capsys, root, 8, FakeRunner(CLAIM_GH), "run-test")[0] == 0
+    gh = FakeRunner({"issue edit 9 --add-label agent-blocked": "", "issue edit 9 --remove-label agent-working": "",
+                     "issue comment 9 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "9", "--outcome", "blocked", "--reason", "x", gh_run=gh)
+    assert code == 1 and "lock is for issue 8, call names 9" in out["error"], out
+    assert gh.calls == []
+    assert lock.own(Ctx(Paths(root), run_id="run-test")).issue == 8
+
+
+def test_a_legacy_lock_json_is_beaten_fenced_counted_and_released_by_new_code(
+        capsys, root, tmp_path, monkeypatch):
+    """Design test 13, through the CLI. A run that claimed under the old code
+    holds `.agent/lock.json` (no `recovering_by` key) when the new code lands.
+    Its next calls are new code: `beat` rewrites it in place, it holds its
+    slot and its issue, and its `finish` removes it and leaves no lease."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    legacy = root / ".agent" / "lock.json"
+    legacy.write_text(json.dumps({"issue": 8, "run_id": "run-legacy", "session": "s", "started": 999_000.0,
+                                  "heartbeat": 999_500.0, "attempt": 1}), encoding="utf-8")
+    code, out = run(capsys, root, "beat", gh_run=FakeRunner({}), run_id="run-legacy")
+    assert code == 0 and out["heartbeat"] == 1_000_000.0, out
+    assert json.loads(legacy.read_text(encoding="utf-8"))["heartbeat"] == 1_000_000.0
+    assert not (root / ".agent" / "locks").exists()
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, root, 8, gh, "run-new")
+    assert code == 1 and out["error"] == "issue-held:run-legacy", out
+    code, out = _claim(capsys, root, 9, gh, "run-new")
+    assert code == 1 and out["error"] == "slots-full", out
+    assert gh.calls == []
+    fin = FakeRunner({"issue edit 8 --add-label agent-blocked": "", "issue edit 8 --remove-label agent-working": "",
+                      "issue comment 8 *": ""})
+    code, out = run(capsys, root, "finish", "--issue", "8", "--outcome", "blocked", "--reason", "x",
+                    gh_run=fin, run_id="run-legacy")
+    assert code == 0, out
+    assert not legacy.exists() and lock.all_locks(Ctx(Paths(root))) == []
+    assert list((root / ".agent").glob("locks/*")) == []
+
+
+def test_claim_and_preflight_need_the_floor_plus_a_reserve_per_live_run(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """Design test 30. Required free disk = `min_free_gb` + `reserve_gb_per_run`
+    x live leases, measured on the worktrees' volume (the root's PARENT). With
+    one live run and the defaults that is 40 + 30 = 70 GB: a claim at 60 GB
+    is `disk-low` and creates nothing; at 80 GB it claims. `preflight`
+    reports the same two numbers and fails on the same rule. A stale lease
+    does not count (it builds nothing more), and `unblock` takes no slot so
+    is not checked."""
+    _, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _slots(clone, 3)
+    lock.acquire(Ctx(Paths(clone), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(clone), run_id="run-dead", now=lambda: 1.0), 10, "s", 1)
+    asked = []
+
+    def disk(gb):
+        def usage(p):
+            asked.append(Path(p))
+            return SimpleNamespace(free=gb * 2**30)
+        monkeypatch.setattr(cli.shutil, "disk_usage", usage)
+
+    disk(60)
+    gh = FakeRunner(CLAIM_GH)
+    code, out = _claim(capsys, clone, 9, gh, "run-new")
+    assert code == 1 and out["error"] == "disk-low:60GB<70GB", out
+    assert gh.calls == [] and lock.for_issue(Ctx(Paths(clone)), 9) is None
+    assert asked and all(p == clone.parent for p in asked), asked
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert (out["disk_free_gb"], out["disk_required_gb"]) == (60, 70), out
+    assert "disk-free:60GB" in out["failures"], out["failures"]
+    code, out = run(capsys, clone, "unblock", "11", gh_run=FakeRunner(
+        {"issue edit 11 --remove-label agent-blocked": ""}), run_id=None)
+    assert code == 0, out
+    disk(80)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert (out["disk_free_gb"], out["disk_required_gb"]) == (80, 70), out
+    assert not any(f.startswith("disk-free:") for f in out["failures"]), out["failures"]
+    code, out = _claim(capsys, clone, 9, FakeRunner(CLAIM_GH), "run-new")
+    assert code == 0, out
+
+
+def test_fetch_excludes_an_issue_with_a_lease_even_without_its_label(capsys, root, monkeypatch):
+    """Design test 11. The `agent-working` label is added AFTER the lease and
+    can lag, so `fetch` reads the leases: an issue with one (live or stale)
+    is `locked:<run>`, never offered to a second session."""
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _slots(root, 2)
+    mine = {"user": {"login": "SShadowS"}, "body": "## Acceptance\nx", "labels": [],
+            "created_at": "2026-09-12T00:00:00Z"}
+    issues = [[{**mine, "number": n, "title": f"t{n}"} for n in (8, 10, 11)]]
+    lock.acquire(Ctx(Paths(root), run_id="run-live", now=lambda: 1_000_000.0), 8, "s", 1)
+    lock.acquire(Ctx(Paths(root), run_id="run-dead", now=lambda: 1.0), 10, "s", 1)
+    code, out = run(capsys, root, "fetch", gh_run=FakeRunner({**READS, READS_ISSUES_KEY: json.dumps(issues)}),
+                    run_id=None)
+    assert code == 0
+    assert [i["number"] for i in out["eligible"]] == [11], out
+    assert out["excluded"] == [{"number": 8, "reason": "locked:run-live"},
+                               {"number": 10, "reason": "locked:run-dead"}], out
 
 
 def test_check_diff_and_freeze_via_cli(capsys, repo_pair):
@@ -614,6 +1050,221 @@ def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair
     assert code == 0 and out["merge_sha"] == merged_oid
     assert json.loads((ctx.run_dir / "merge.json").read_text()) == {
         "issue": 8, "pr": 12, "merge_sha": merged_oid, "run_id": "run-test", "source": "merge"}
+
+
+# ---- the merge lane (parallel-issues design, commit 12) ---------------------
+
+def _attested_run(clone, run_id, issue, base, **lock_kw):
+    """A run holding `issue`'s lease with an attestation on `base`, stated by
+    assignment (no register path, so only base/head/body/CI are re-checked)."""
+    c = Ctx(Paths(clone), run_id=run_id, **lock_kw)
+    lock.acquire(c, issue, "s", 1)
+    body = json.loads(ISSUES)[0][issue - 8]["body"]
+    mergeops.write_attestation(c, mergeops.Attestation(
+        issue=issue, B=base, H=base, final_head=base, register_hash="r" * 40, gates={},
+        body_hash=mergeops.body_hash(body)))
+    return c
+
+
+def _lane_gh(prs, *, conclusion="SUCCESS"):
+    """gh fakes for `merge-gate`/`merge` of each `pr -> (head, merged oid)`."""
+    responses = dict(CLAIM_GH)
+    for pr, (head, oid) in prs.items():
+        responses[f"pr view {pr} --repo {REPO} --json headRefOid,statusCheckRollup"] = json.dumps(
+            {"headRefOid": head, "statusCheckRollup": rollup(conclusion=conclusion)})
+        responses[f"pr merge {pr} --squash --match-head-commit {head}"] = ""
+        responses[f"pr view {pr} --repo {REPO} --json mergeCommit"] = json.dumps({"mergeCommit": {"oid": oid}})
+    return FakeRunner(responses)
+
+
+def _lane(clone):
+    p = clone / ".agent" / "merge-lane.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def _noop_gates(monkeypatch):
+    monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+
+
+def test_a_second_merge_waits_for_the_first_post_merge_then_sees_the_base_move(
+        capsys, repo_pair, monkeypatch):
+    """Design tests 21 and 22. A and B both pass `merge-gate` on base B0. A
+    merges and so takes the merge lane: B's `merge-gate` now reports
+    `merge-lane-busy` and B's `merge` refuses it without ever calling `pr
+    merge` (today B would merge onto a base it never tested). A's clean
+    `post-merge` frees the lane; B's `merge` then sees `base-moved`, its real
+    reason, still without merging."""
+    _, clone = repo_pair
+    _noop_gates(monkeypatch)
+    write_ci_workflow(clone)
+    _slots(clone, 2)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    _attested_run(clone, "run-b", 9, base)
+    squash = commit_file(clone, "src/a.rs", "fn a() {}\n", "squash merge of #8")   # what GitHub will push
+    gh = _lane_gh({12: (base, squash), 13: (base, "b" * 40)})
+    for rid, pr in (("run-a", 12), ("run-b", 13)):
+        code, out = run(capsys, clone, "merge-gate", "--pr", str(pr), gh_run=gh, run_id=rid)
+        assert code == 0 and out["reasons"] == [], (rid, out)
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 0 and out["merge_sha"] == squash, out
+    assert _lane(clone)["run_id"] == "run-a" and _lane(clone)["merge_sha"] == squash
+    assert Git(clone).push("origin", "master")                                     # GitHub merged it
+    code, out = run(capsys, clone, "merge-gate", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and "merge-lane-busy" in out["reasons"], out
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-busy", out
+    assert not any(c.startswith("pr merge 13") for c in gh.calls)
+    code, out = run(capsys, clone, "status", gh_run=FakeRunner(), run_id="run-b")
+    assert out["merge_lane"]["run_id"] == "run-a" and out["merge_lane"]["state"] == "busy", out
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", squash,
+                    gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0 and out["ok"] is True, out
+    assert _lane(clone) is None
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["reasons"] == ["base-moved"], out
+    assert not any(c.startswith("pr merge 13") for c in gh.calls)
+    assert _lane(clone) is None                                       # a refused merge holds no lane
+
+
+def test_a_merge_refused_by_its_gate_releases_the_lane_and_merge_needs_a_lease(capsys, repo_pair):
+    """Design tests 23 and 25. A merge the gate refuses (`ci-not-green`)
+    takes the lane and gives it back, so a sibling is not blocked by a merge
+    that never happened. `merge` is now fenced: without a lease it is a
+    `FenceError` before any gh call, with no lane. (Before, `gh`'s own fence
+    on mutating calls refused only at `pr merge`, after the gate's reads.)"""
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    gh = _lane_gh({12: (base, "a" * 40)}, conclusion="FAILURE")
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 1 and out["reasons"] == ["ci-not-green"], out
+    assert _lane(clone) is None
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-lost"),
+                               mergeops.read_attestation(Ctx(Paths(clone), run_id="run-a")))
+    gh = _lane_gh({12: (base, "a" * 40)})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-lost")
+    assert code == 1 and "FenceError" in out["error"], out
+    assert _lane(clone) is None and gh.calls == [], gh.calls
+    # GitHub merged, then the merge commit could not be read: the merge DID
+    # happen, so the lane stays for the post-merge or the recovery.
+    gh = _lane_gh({12: (base, None)})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 1 and "merge-sha-unavailable" in out["error"], out
+    assert any(c.startswith("pr merge 12") for c in gh.calls)
+    assert _lane(clone)["run_id"] == "run-a"
+
+
+def test_a_post_merge_stop_keeps_the_lane_until_finish(capsys, repo_pair, monkeypatch, tmp_path):
+    """Design test 24. A post-merge that stops (here a gate killed at its
+    timeout: HALT only) keeps the lane: no second merge may land on a master
+    nothing verified. `finish --outcome regressed` releases it."""
+    _, clone = repo_pair
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(cli, "gates", lambda: [("slow", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    write_ci_workflow(clone)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    squash = commit_file(clone, "src/a.rs", "fn a() {}\n", "squash merge of #8")
+    gh = _lane_gh({12: (base, squash)})
+    assert run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")[0] == 0
+    assert Git(clone).push("origin", "master")
+
+    def killed(ctx_, cmd, *, cwd, log_path, timeout_s, beat=None, beat_every=60.0, env=None):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("")
+        return supervise.Result(exit_code=124, log_path=log_path, timed_out=True, seconds=0.0)
+
+    monkeypatch.setattr(cli.supervise, "run", killed)
+    stop_gh = FakeRunner({f"api repos/{REPO}/labels?per_page=100 --paginate --slurp":
+                              json.dumps([[{"name": n} for n in recovery.INCIDENT_LABELS]]),
+                          "issue edit 8 --add-label *": "", "issue edit 8 --remove-label agent-working": "",
+                          "issue comment 8 *": ""})
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", squash,
+                    gh_run=stop_gh, run_id="run-a")
+    assert code == 1 and out["halt"]["reason"] == "gate-timed-out", out
+    assert _lane(clone)["run_id"] == "run-a"
+    code, out = run(capsys, clone, "finish", "--issue", "8", "--outcome", "regressed",
+                    gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0, out
+    assert _lane(clone) is None
+
+
+def test_post_merge_refuses_while_another_live_run_holds_the_lane(capsys, repo_pair):
+    """`post-merge` must hold the lane. Another LIVE run holding it means
+    two verifications at once on one master: refused before any git call,
+    with no incident opened. A FREE lane is taken (a merge made before the
+    lane existed still verifies)."""
+    _, clone = repo_pair
+    _slots(clone, 2)
+    merge_sha = commit_file(clone, "src/b.rs", "fn b() {}\n", "squash merge of #9")
+    assert Git(clone).push("origin", "master")
+    _attested_run(clone, "run-a", 8, merge_sha)
+    _attested_run(clone, "run-b", 9, merge_sha)
+    record_merge(clone, merge_sha, issue=9, run_id="run-b")
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "run-a", "issue": 8, "pr": 12, "merge_sha": None, "acquired": 1.0})
+    code, out = run(capsys, clone, "post-merge", "--issue", "9", "--merge-sha", merge_sha,
+                    gh_run=FakeRunner(readonly=True), run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-busy", out
+    assert not (clone / ".agent" / "incidents.json").exists()
+
+
+def test_an_orphaned_lane_refuses_merges_and_recover_hands_it_to_the_follow_through(
+        capsys, repo_pair, monkeypatch):
+    """Design test 26. The lane's owner died after merging: its lease is
+    stale, so the lane is ORPHANED. A sibling's `merge` refuses
+    `merge-lane-orphaned` (its `merge-gate` says so too). `recover` of that
+    issue hands the lane to the follow-through with the lease, and the
+    follow-through's `post-merge` is accepted and frees it."""
+    _, clone = repo_pair
+    _noop_gates(monkeypatch)
+    write_ci_workflow(clone)
+    _slots(clone, 2)
+    merged = commit_file(clone, "src/thing.rs", "fn main() {}\n", "squash merge of #8")
+    assert Git(clone).push("origin", "master")
+    old = lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "old-run", "issue": 8, "pr": 3, "merge_sha": merged, "acquired": 1_000_000.0})
+    now = old.heartbeat + 4000
+    monkeypatch.setenv("AGENTFLOW_NOW", str(now))
+    _attested_run(clone, "run-b", 9, merged, now=lambda: now)
+    gh = _lane_gh({13: (merged, "b" * 40)})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and "merge-lane-orphaned" in out["reasons"], out
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-orphaned", out
+    assert not any(c.startswith("pr merge") for c in gh.calls)
+    rgh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a1",
+                                                "headRefOid": "h", "mergeCommit": {"oid": merged},
+                                                "mergedAt": "x"}])})
+    code, out = run(capsys, clone, "recover", "--issue", "8", gh_run=rgh, run_id="run-new")
+    assert code == 0 and out["action"] == "merged-needs-post-merge", out
+    assert _lane(clone)["run_id"] == "run-new" and _lane(clone)["issue"] == 8
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merged,
+                    gh_run=FakeRunner(), run_id="run-new")
+    assert code == 0 and out["ok"] is True, out
+    assert _lane(clone) is None
+
+
+def test_a_crashed_run_that_held_the_lane_frees_it_on_recovery(capsys, repo_pair, monkeypatch):
+    """`recover`'s `blocked-crashed` path: the dead run merged nothing (its PR
+    is open), so it has nothing to verify and the lane it named is freed."""
+    _, clone = repo_pair
+    old = lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "old-run", "issue": 8, "pr": 3, "merge_sha": None, "acquired": 1_000_000.0})
+    monkeypatch.setenv("AGENTFLOW_NOW", str(old.heartbeat + 4000))
+    gh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "OPEN", "headRefName": "issue/8-x-a1",
+                                               "headRefOid": "h", "mergeCommit": None, "mergedAt": None}]),
+                     "issue comment 8 *": "", "issue edit 8 --add-label agent-blocked": "",
+                     "issue edit 8 --remove-label agent-working": ""})
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
+    assert code == 0 and out["action"] == "blocked-crashed", out
+    assert _lane(clone) is None
 
 
 def _git_raw(cwd, *args):
@@ -1926,11 +2577,12 @@ def test_a_post_merge_that_dies_mid_gates_leaves_a_recoverable_record(
     assert rec["gate_red"] is False
     # The consequence: the next tick can still get to `recover`. Asserted on
     # `incident_rows` rather than on `ok`, because the crashed run's own lock
-    # is still on disk and still live -- a second, unrelated, honest row.
+    # is still on disk and still live -- a second, unrelated, honest row:
+    # with the default `slots: 1`, that live lease fills the only slot.
     monkeypatch.setattr(cli.shutil, "disk_usage", lambda p: SimpleNamespace(free=500 * 2**30))
     code, pre = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
     assert incident_rows(pre) == [], pre["failures"]
-    assert pre["failures"] == ["lock-live:run-test"], pre["failures"]
+    assert pre["failures"] == ["slots-full"], pre["failures"]
     assert [i["merge_sha"] for i in pre["incidents"]] == [merge_sha]   # visible, not fatal
     assert list(clone.parent.glob("al-sem-verify-*")) == []            # teardown still ran
 
@@ -2312,7 +2964,13 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     PRECONDITIONS HAND-STATED, not produced by driving post-merge: the tree
     is a real detached worktree made by the production helper that owns the
     name, and the lock is written directly with a heartbeat this test chooses
-    -- so neither depends on post-merge still being able to create them."""
+    -- so neither depends on post-merge still being able to create them.
+
+    Since the merge lane (parallel-issues commit 12) the "foreign lock" that
+    matters is the LANE holder's: only its post-merge makes verify trees.
+    The retaining run still holds the lane on that stop, so it is
+    hand-stated here too. A sibling's lease WITHOUT the lane no longer
+    refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
     kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
@@ -2320,6 +2978,8 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
     lk = lock.acquire(dead, 8, "s", 1)
+    write_json(dead, clone / ".agent" / "merge-lane.json",
+               {"run_id": "dead-run", "issue": 8, "pr": 12, "merge_sha": g.rev("master"), "acquired": 1.0})
 
     # ARM 1 -- the foreign lock is LIVE: refused, and the tree is kept.
     monkeypatch.setenv("AGENTFLOW_NOW", str(lk.heartbeat + 1))
@@ -2344,6 +3004,16 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
                     gh_run=FakeRunner(), run_id=None)
     assert code == 1 and "FenceError" in out["error"], out
     assert issue_wt.exists()
+
+    # ARM 4 -- a LIVE sibling that does NOT hold the lane is no reason to
+    # keep a verify tree it never made (before the lane: refused).
+    _slots(clone, 2)
+    later = lk.heartbeat + lock.STALE_SECONDS + 1
+    lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
+    again = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
+                    gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and not again.exists(), out
 
 
 def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
@@ -2422,6 +3092,26 @@ def test_cleanup_refuses_foreign_lock_and_keeps_worktree(capsys, repo_pair):
                      "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
     assert code == 1 and "FenceError" in out["error"]
     assert wt.exists()
+
+
+def test_cleanup_of_one_issue_is_not_fenced_by_a_siblings_lease_for_another(capsys, repo_pair):
+    """Design test 36. The fence for an issue worktree is that ISSUE's lease:
+    a sibling holding issue 9 does not stop the cleanup of issue 8's tree,
+    while another run holding issue 8 does (the test above)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    wt = clone.parent / recovery.worktree_name(8, 2)
+    g.worktree_add(wt, "issue/8-y-a1", "master")
+    commit_file(wt, "issue2.txt", "y\n", "issue work 2")
+    merge_sha = g.merge_squash("issue/8-y-a1", "squash issue/8-y-a1")
+    lock.acquire(Ctx(Paths(clone), run_id="sibling-run"), 9, "s", 1)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(wt), "--branch", "issue/8-y-a1",
+                    "--merge-sha", merge_sha, gh_run=FakeRunner(), run_id="other-run")
+    assert code == 0, out
+    assert not wt.exists()
+    assert lock.for_issue(Ctx(Paths(clone)), 9).run_id == "sibling-run"
 
 
 def test_recover_of_a_merged_stale_run_claims_the_lock_for_the_recovering_run(capsys, repo_pair, monkeypatch):
@@ -2601,6 +3291,115 @@ def test_a_recovery_follow_through_that_dies_mid_gates_is_recoverable_again(
     # fail on the OUTCOME above (an unrecoverable follow-through) rather than
     # on a field value, or the proof only shows that the field was read.
     assert follow.started == claimed, follow
+
+
+# ---- recovery per issue (parallel-issues design, commit 7) -----------------
+
+def _stale_pair(clone):
+    """Two stale leases, 8 and 9, with a worktree each. Written by acquiring
+    at time 1.0 under `slots: 2`, so both are stale at any later clock."""
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    for run_id, issue in (("dead-8", 8), ("dead-9", 9)):
+        lock.acquire(Ctx(Paths(clone), run_id=run_id, now=lambda: 1.0), issue, "s", 1)
+        (clone.parent / recovery.worktree_name(issue, 1)).mkdir()
+
+
+BLOCKED_9 = {"pr list *": "[]", "issue comment 9 *": "", "issue edit 9 --add-label agent-blocked": "",
+             "issue edit 9 --remove-label agent-working": ""}
+
+
+def test_recover_with_two_stale_leases_needs_an_issue_and_touches_only_that_one(
+        capsys, repo_pair, monkeypatch):
+    """Design test 27. With more than one stale lease, `recover` must be told
+    which (exit 2, listing them). `recover --issue 9` then moves only issue
+    9's worktree, labels only issue 9 and drops only its lease."""
+    _, clone = repo_pair
+    _stale_pair(clone)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    gh = FakeRunner(BLOCKED_9)
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-r")
+    assert code == 2, out
+    assert [lk["issue"] for lk in out["stale_locks"]] == [8, 9], out
+    assert gh.calls == [] and len(lock.all_locks(Ctx(Paths(clone)))) == 2
+    before_8 = lock.for_issue(Ctx(Paths(clone)), 8)
+    code, out = run(capsys, clone, "recover", "--issue", "9", gh_run=gh, run_id="run-r")
+    assert code == 0 and out["action"] == "blocked-crashed", out
+    assert all(" 9 " in f" {c} " or c.startswith("pr list") for c in gh.calls), gh.calls
+    assert lock.for_issue(Ctx(Paths(clone)), 9) is None
+    assert lock.for_issue(Ctx(Paths(clone)), 8) == before_8                 # untouched
+    assert (clone.parent / recovery.worktree_name(8, 1)).exists()
+    assert not (clone.parent / recovery.worktree_name(9, 1)).exists()
+    assert list(clone.parent.glob(f"{recovery.worktree_name(9, 1)}.crashed-*"))
+
+
+def test_recover_of_a_live_lease_by_issue_is_lock_live(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="alive", now=lambda: 1_000_000.0), 8, "s", 1)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    gh = FakeRunner({})
+    code, out = run(capsys, clone, "recover", "--issue", "8", gh_run=gh, run_id="run-r")
+    assert code == 1 and out["error"] == "lock-live:alive", out
+    assert gh.calls == []
+
+
+STEAL_CHILD = """
+from agentflow import lock
+from agentflow.state import Ctx, Paths
+ctx = Ctx(Paths(ROOT), run_id=f"rec-{TAG}", now=lambda: 1_000_000.0)
+stale = lock.for_issue(ctx, 8)          # both sessions see it stale, BEFORE the barrier
+assert lock.is_stale(stale, ctx.now())
+slow_reads("issue-8.json")
+barrier()
+try:
+    lock.steal_for_recovery(ctx, stale)
+    print("RESULT stolen")
+except lock.LockHeld as e:
+    print("RESULT", e.code)
+"""
+
+
+def test_two_sessions_recovering_one_stale_lease_at_once_one_proceeds(root):
+    """Design test 28, two real processes. Both saw the lease stale; exactly
+    one steals it. The steal makes it LIVE (heartbeat now), so the other gets
+    `lock-live` and leaves it alone. The lease keeps the stale run's id, so
+    `recover_stale`'s old-run gh fence still passes."""
+    from agentflow.tests.conftest import run_concurrently
+    lock.acquire(Ctx(Paths(root), run_id="dead-8", now=lambda: 1.0), 8, "s", 1)
+    res = run_concurrently(root, STEAL_CHILD, ["a", "b"])
+    results = sorted(o.split("RESULT")[-1].strip() for _, o, _ in res)
+    assert results == ["lock-live:dead-8", "stolen"], res
+    lk = lock.for_issue(Ctx(Paths(root)), 8)
+    assert lk.run_id == "dead-8" and lk.recovering_by in ("rec-a", "rec-b")
+    assert lk.heartbeat == 1_000_000.0
+
+
+def test_a_merged_path_recovery_never_leaves_the_issue_without_a_lease(capsys, repo_pair, monkeypatch):
+    """Design test 29. `recover_stale` used to unlink the stale lease and
+    return, and `cmd_recover` acquired the follow-through lease only after:
+    in between, issue 8 had no lease and a sibling could claim it. Checked
+    INSIDE a wrapped `recover_stale` (before and after the real one) and at
+    the end."""
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    monkeypatch.setenv("AGENTFLOW_NOW", str(1_000_000.0 + 4000))
+    real, seen = recovery.recover_stale, []
+
+    def watching(ctx, git, gh, lk, worktrees_parent):
+        seen.append(lock.for_issue(ctx, 8))
+        out = real(ctx, git, gh, lk, worktrees_parent=worktrees_parent)
+        seen.append(lock.for_issue(ctx, 8))
+        return out
+
+    monkeypatch.setattr(recovery, "recover_stale", watching)
+    gh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a1",
+                                               "headRefOid": "h", "mergeCommit": {"oid": "abc"}, "mergedAt": "x"}])})
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
+    assert code == 0 and out["action"] == "merged-needs-post-merge", out
+    assert len(seen) == 2 and all(lk is not None for lk in seen), seen
+    assert seen[0].recovering_by == "run-new" and seen[0].run_id == "old-run"   # stolen, not new
+    final = lock.for_issue(Ctx(Paths(clone)), 8)
+    assert (final.run_id, final.started, final.recovering_by) == ("run-new", 1_000_000.0, None)
 
 
 def test_a_recovery_lock_still_refuses_a_merge_that_predates_the_original_claim(
@@ -3002,6 +3801,226 @@ def test_run_fences_against_a_foreign_lock_and_flags_unsupervised(capsys, root):
     assert code == 0 and out["supervised"] is False
 
 
+def test_run_with_sibling_leases_is_supervised_for_the_owner_and_fenced_for_anyone_else(
+        capsys, root, monkeypatch):
+    """With slots, a sibling's lease always exists. `run` is supervised for a
+    run that owns a lease, a FenceError for a run that owns none while ANY
+    lease exists (even when there are two, so the old single-lock `read`
+    found none and let it run unsupervised), and unsupervised only when no
+    lease exists at all."""
+    from agentflow import budget
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    (root / ".agent" / "config.json").write_text(json.dumps({"slots": 3}), encoding="utf-8")
+    owner = Ctx(Paths(root), run_id="run-a", now=lambda: 1_000_000.0)
+    lock.acquire(owner, 8, "s", 1)
+    budget.init(owner, claimed_at=1_000_000.0)
+    lock.acquire(Ctx(Paths(root), run_id="run-b", now=lambda: 1_000_000.0), 9, "s", 1)
+    lock.acquire(Ctx(Paths(root), run_id="run-c", now=lambda: 1_000_000.0), 10, "s", 1)
+    argv = ("run", "--name", "probe", "--timeout", "1", "--", sys.executable, "-c", "print('x')")
+    code, out = run(capsys, root, *argv, gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0 and out["supervised"] is True, out
+    code, out = run(capsys, root, *argv, gh_run=FakeRunner(), run_id="run-lost")
+    assert code == 1 and "FenceError" in out["error"], out
+
+
+# ---- the gate semaphore (parallel-issues design, commit 11) -----------------
+
+GATE_CHILD = """
+import json
+from agentflow import cli
+cli.QUEUE_POLL_S = 0.05
+barrier()
+code = cli.main(["--root", str(ROOT), "--repo", "o/r", "--run-id", f"run-{TAG}", "run", "--name", ARGS[0],
+                 "--timeout", "1", "--", sys.executable, "-c",
+                 "import time; a = time.time(); time.sleep(2); print(a, time.time())"])
+print("EXIT", code)
+"""
+
+
+def _gate_window(out_text):
+    payload = json.loads(out_text.rsplit("EXIT", 1)[0])
+    start, end = map(float, Path(payload["log"]).read_text().split())
+    return payload, start, end
+
+
+def test_two_heavy_gates_do_not_overlap_and_the_second_reports_its_queue(root):
+    """Design test 15. Two processes run a heavy gate at once with
+    `heavy_gates: 1`: the children's time windows do not overlap, and the
+    one that waited says so in `queued_s`."""
+    from agentflow.tests.conftest import run_concurrently
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["check-goldens"])
+    assert all(o.strip().endswith("EXIT 0") for _, o, _ in res), res
+    (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
+    assert ea <= sb or eb <= sa, (sa, ea, sb, eb)
+    assert max(pa["queued_s"], pb["queued_s"]) > 1.0, (pa, pb)
+
+
+def test_with_two_heavy_gate_slots_two_heavy_gates_run_at_once(root):
+    """The other side of test 15: `heavy_gates: 2` lets both run together,
+    so the semaphore is the config number, not a fixed one."""
+    from agentflow.tests.conftest import run_concurrently
+    (root / ".agent" / "config.json").write_text(json.dumps({"heavy_gates": 2}), encoding="utf-8")
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["ci-steps-all"])
+    (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
+    assert sa < eb and sb < ea, (sa, ea, sb, eb)      # the windows overlap
+
+
+def test_a_light_gate_never_queues_and_a_queued_heavy_gate_times_out_without_running(
+        capsys, root, monkeypatch):
+    """Design tests 16 and 19. Held by a sibling (here, this test), the gate
+    semaphore leaves a light gate (`check-goldens-coverage`, `ci-wait`) alone.
+    A heavy one waits; past `gate_wait_minutes` it is `failure:
+    gate-queue-timeout` with `exit_code: null`, and its child never started.
+    The heavy set is the names the conductor and attest already use, plus
+    anything `-on-revert`."""
+    from agentflow.state import mutex
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    (root / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    marker = root / "child-ran"
+    child = ("--", sys.executable, "-c", f"open({str(marker)!r}, 'w').close()")
+    with mutex(Ctx(Paths(root)), "gate-0"):
+        for name in ("check-goldens-coverage", "ci-wait"):
+            code, out = run(capsys, root, "run", "--name", name, "--timeout", "1", *child, gh_run=FakeRunner())
+            assert code == 0 and out["queued_s"] == 0 and marker.exists(), out
+            marker.unlink()
+        for name in ("ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate", "x-on-revert"):
+            code, out = run(capsys, root, "run", "--name", name, "--timeout", "1", *child, gh_run=FakeRunner())
+            assert code == 1 and out["failure"] == "gate-queue-timeout" and out["exit_code"] is None, (name, out)
+            assert not marker.exists(), name
+
+
+def test_a_queued_gate_beats_and_stops_on_halt_unless_told_not_to(ctx, monkeypatch):
+    """Design tests 17 and 18, at the `_run_gate` level. While it waits, a
+    run that owns a lease keeps its heartbeat moving. HALT written while it
+    waits ends the wait as `halted-while-queued` with the child never
+    started; `post-merge` passes `halt_aborts=False`, and then HALT does not
+    end the wait (here it runs into `gate-wait` instead)."""
+    from agentflow import budget
+    from agentflow.state import mutex
+    clock = iter(range(1_000_000, 2_000_000, 10))
+    ticking = Ctx(paths=ctx.paths, run_id="run-test", now=lambda: float(next(clock)))
+    lock.acquire(ticking, 8, "s", 1)
+    budget.init(ticking, claimed_at=1_000_000.0)
+    before = lock.own(ticking).heartbeat
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "QUEUE_BEAT_S", 0)
+    ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    marker = ctx.paths.root / "child-ran"
+    cmd = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    with mutex(ctx, "gate-0"):
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root)
+        assert e.value.failure == "gate-queue-timeout"
+        assert lock.own(ticking).heartbeat > before
+        lock.set_halt(ctx, "operator")
+        ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 1}), encoding="utf-8")
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root)
+        assert e.value.failure == "halted-while-queued"
+        ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root, halt_aborts=False)
+        assert e.value.failure == "gate-queue-timeout"
+    assert not marker.exists()
+
+
+def test_a_killed_holder_frees_the_gate_semaphore(root):
+    """Design test 20. The semaphore is an OS lock, so a holder that dies
+    frees it: a gate started after the kill does not wait."""
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1])\n"
+        "from agentflow.state import Ctx, Paths, mutex\n"
+        "with mutex(Ctx(Paths(Path(sys.argv[2]))), 'gate-0'):\n"
+        "    (Path(sys.argv[2]) / 'held').write_text('')\n"
+        "    time.sleep(120)\n"), str(Path(cli.__file__).parents[1]), str(root)])
+    try:
+        for _ in range(600):
+            if (root / "held").exists():
+                break
+            import time
+            time.sleep(0.05)
+        assert (root / "held").exists()
+        (root / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+        ctx = Ctx(Paths(root), run_id="run-test")
+        with pytest.raises(cli.GateQueued):
+            cli._run_gate(ctx, "check-goldens", [sys.executable, "-c", "pass"], 1, root)
+    finally:
+        holder.kill()
+        holder.wait()
+    r = cli._run_gate(ctx, "check-goldens", [sys.executable, "-c", "pass"], 1, root)
+    assert r.exit_code == 0 and r.queued_s < 1.0
+
+
+def test_post_merge_routes_a_gate_queue_timeout_to_halt_only_even_under_halt(
+        capsys, repo_pair, monkeypatch):
+    """Design test 19, the post-merge half. `post-merge` runs under HALT, and
+    so does its queue (`halt_aborts=False`): a HALT already present does not
+    end the wait. A queue timeout is COULD NOT VERIFY, never PROVEN BAD: it
+    takes the `gate-timed-out` HALT-only route and never the revert path."""
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("cdo-gate", [sys.executable, "-c", "pass"], 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    record_merge(clone, merge_sha)
+    lock.set_halt(Ctx(Paths(clone)), "a sibling's post-merge stopped")
+
+    def no_revert(*a, **kw):
+        raise AssertionError("revert path reached on a gate that never ran")
+
+    monkeypatch.setattr(recovery, "post_merge_failure", no_revert)
+    gh = FakeRunner({
+        f"api repos/{REPO}/labels?per_page=100 --paginate --slurp":
+            json.dumps([[{"name": n} for n in recovery.INCIDENT_LABELS]]),
+        "issue edit 8 --add-label *": "", "issue edit 8 --remove-label agent-working": "",
+        "issue comment 8 *": "",
+    })
+    with mutex(Ctx(Paths(clone)), "gate-0"):
+        code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=gh)
+    assert code == 1 and out["ok"] is False and out["revert"] is None, out
+    assert out["halt"]["reason"] == "gate-timed-out", out["halt"]
+    assert out["timeouts"] == ["ci-steps-all"] and out["gates"] == {}, out
+
+
+def test_post_merge_under_halt_waits_for_the_gate_semaphore_and_verifies(capsys, repo_pair, monkeypatch):
+    """The test above cannot tell `halt_aborts=False` from a queue that gives
+    up on HALT: both end on the HALT-only route. Here the semaphore is held
+    for about a second under HALT and then released. A post-merge whose
+    queue ignored HALT waits, runs its gates and verifies the merge."""
+    import threading
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.05)
+    _noop_heavy = [sys.executable, "-c", "pass"]
+    monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", _noop_heavy, 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("cdo-gate", _noop_heavy, 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    record_merge(clone, merge_sha)
+    lock.set_halt(Ctx(Paths(clone)), "a sibling's post-merge stopped")
+    held, release = threading.Event(), threading.Event()
+
+    def sibling():
+        with mutex(Ctx(Paths(clone)), "gate-0"):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=sibling)
+    t.start()
+    held.wait(10)
+    threading.Timer(1.0, release.set).start()
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=FakeRunner())
+    t.join()
+    assert code == 0 and out["ok"] is True, out
+    assert out["gates"] == {"ci-steps-all": 0, "cdo-gate": 0} and out["timeouts"] == []
+
+
 def test_each_gate_invocation_gets_its_own_log(ctx):
     # #43: `logs/<name>.log` was shared by every run under one name, so a
     # replacement run truncated a killed run's log and their output interleaved.
@@ -3212,3 +4231,204 @@ def test_a_rolled_back_claim_does_not_consume_the_handoff(capsys, repo_pair, tmp
     assert code == 1 and "claim rolled back" in out["error"]
     assert handoffs(clone)["8"]["sha"] == sha
     assert "issue edit 8 --remove-label agent-design-ready" not in failing.calls
+
+
+# ---- #141: a handoff signed by declared stand-ins ---------------------------
+
+# #34's register with its marks recorded under the stand-ins the operator
+# named (sol for astra, opus for flash). Stated literally: the #141 reproducer
+# is the first entry, `sol: re-raised, opus: accepted`.
+STAND_IN_REGISTER = [
+    {"id": "A1", "severity": "important", "disposition": "fixed",
+     "reviews": {"sol": "re-raised", "opus": "accepted"}},
+    {"id": "A2", "severity": "minor", "disposition": "refuted",
+     "reviews": {"sol": "accepted", "opus": "accepted"}},
+    {"id": "A3", "severity": "minor", "disposition": "deferred",
+     "reviews": {"sol": "accepted", "opus": "accepted"}},
+]
+STAND_INS = ("--substitute", "astra=sol", "--substitute", "flash=opus")
+
+
+def finish_handoff_with(capsys, clone, sha, gh, extra, run_id="run-test"):
+    return run(capsys, clone, "finish", "--issue", "8", "--outcome", "handoff", "--handoff-ref", sha,
+               "--reason", "spec-panel-cap", *extra, gh_run=gh, run_id=run_id)
+
+
+def comment_bodies(gh):
+    return [Path(c.split(" --body-file ", 1)[1]).read_text(encoding="utf-8")
+            for c in gh.calls if c.startswith("issue comment 8 --body-file ")]
+
+
+def test_a_register_marked_by_stand_ins_is_handed_off_with_substitute(capsys, repo_pair, fake_home):
+    """#141. `attest` honours `--substitute`, but the handoff judged the rule
+    against the fixed astra/flash roster, so a register the operator's
+    stand-ins marked could never be handed off. With the same declaration
+    the stand-ins' marks fill the slots, and the record and the public
+    comment both say who signed."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff_with(capsys, clone, sha, gh, STAND_INS)
+    assert code == 0, out
+    rec = handoffs(clone)["8"]
+    assert rec["reviewers"] == {"astra": "sol", "flash": "opus"}
+    assert "issue edit 8 --add-label agent-design-ready" in gh.calls
+    [body] = [b for b in comment_bodies(gh) if "PRE-RATIFIED" in b]
+    assert "sol (astra slot)" in body and "opus (flash slot)" in body, body
+
+
+def test_a_register_marked_by_stand_ins_is_not_handed_off_without_substitute(capsys, repo_pair, fake_home):
+    """The #141 bug, kept as a pin: without the declaration the astra and
+    flash slots are empty for every entry, so a stand-in's marks never count
+    by accident."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 1 and out["error"] == "handoff-not-ready", out
+    assert out["entries"] == ["A1", "A2", "A3"]
+    assert out["reviewers"] == {"astra": "astra", "flash": "flash"}
+    assert gh.calls == [] and handoffs(clone) == {}
+
+
+@pytest.mark.parametrize("extra", [
+    ("--substitute", "bob=sol"),                                     # no such slot
+    ("--substitute", "astra=sol", "--substitute", "astra=x"),        # slot twice
+    ("--substitute", "astra=sol", "--substitute", "flash=sol"),      # one reviewer, both slots
+    ("--substitute", "sol"),                                         # malformed
+], ids=["unknown-slot", "slot-twice", "one-reviewer-both-slots", "malformed"])
+def test_a_handoff_with_a_bad_substitute_is_refused(capsys, repo_pair, fake_home, extra):
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = finish_handoff_with(capsys, clone, sha, gh, extra)
+    assert code == 1 and out["error"] == "bad-substitute", out
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+    assert handoffs(clone) == {}
+
+
+def test_substitute_is_refused_on_an_outcome_other_than_handoff(capsys, repo_pair, fake_home):
+    """A flag that is accepted and then ignored is a silent no-op: refuse it."""
+    _, clone = repo_pair
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    gh = FakeRunner(HANDOFF_GH)
+    code, out = run(capsys, clone, "finish", "--issue", "8", "--outcome", "blocked", "--reason", "x",
+                    *STAND_INS, gh_run=gh)
+    assert code == 2, out
+    assert "--substitute" in out["error"]
+    assert gh.calls == []
+    assert lock.read(Ctx(Paths(clone))).run_id == "run-test"
+
+
+def test_the_next_claim_carries_the_stand_ins_and_attest_fails_closed_without_them(
+        capsys, repo_pair, fake_home):
+    """The record's `reviewers` reach the next attempt through `claim`. Attest
+    does NOT apply them on its own: the same declaration converges, and an
+    attest without it is `register-not-converged`, never a silent pass."""
+    _, clone = repo_pair
+    sha = handoff_branch(clone, STAND_IN_REGISTER)
+    assert claim8(capsys, clone, FakeRunner(HANDOFF_GH))[0] == 0
+    assert finish_handoff_with(capsys, clone, sha, FakeRunner(HANDOFF_GH), STAND_INS)[0] == 0
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH), run_id="run-2")
+    assert code == 0, out
+    assert out["handoff"]["reviewers"] == {"astra": "sol", "flash": "opus"}
+    claim = json.loads((clone / ".agent" / "runs" / "run-2" / "claim.json").read_text())
+    assert claim["handoff"]["reviewers"] == {"astra": "sol", "flash": "opus"}
+
+    # The final panel re-marked every carried entry under the same stand-ins.
+    register = Path(claim["worktree"]) / ".agent" / "issue-8" / "findings.json"
+    register.parent.mkdir(parents=True)
+    register.write_text(json.dumps([{**e, "reviews": {"sol": "accepted", "opus": "accepted"}}
+                                    for e in STAND_IN_REGISTER]))
+
+    def attest2(*extra):
+        return run(capsys, clone, "attest", "--issue", "8", "--B", "b" * 40, "--H", "c" * 40,
+                   "--final-head", "f" * 40, "--register", str(register), "--gates", GREEN_GATES,
+                   "--body-hash", claim["body_hash"], *extra, gh_run=FakeRunner(), run_id="run-2")
+
+    code, out = attest2()
+    assert code == 1 and out["error"] == "register-not-converged", out
+    code, out = attest2(*STAND_INS)
+    assert code == 0, out
+    assert json.loads(Path(out["path"]).read_text())["reviewers"] == {"astra": "sol", "flash": "opus"}
+
+
+def test_a_handoff_record_without_reviewers_still_claims(capsys, repo_pair, fake_home):
+    """A record written before #141 has no `reviewers` key; it was signed by
+    the named roster, and the next claim carries it as before."""
+    _, clone = repo_pair
+    old = {"from_run": "run-old", "from_attempt": 1, "branch": BRANCH_A1, "sha": "a" * 40,
+           "body_hash": mergeops.body_hash("## Acceptance\nx"), "register_blob": "b" * 40, "files": []}
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "handoffs.json").write_text(json.dumps({"8": old}))
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH))
+    assert code == 0, out
+    assert out["handoff"] == old and "reviewers" not in out["handoff"]
+    assert "8" not in handoffs(clone)
+
+
+def test_a_claim_consuming_its_handoff_keeps_a_record_written_meanwhile(
+        capsys, repo_pair, fake_home, monkeypatch):
+    """`claim` reads `handoffs.json` early and consumes its own record only
+    after its gh calls. A sibling run's `finish --outcome handoff` for ANOTHER
+    issue can land in between, and writing back the early snapshot dropped it.
+
+    PRECONDITION HAND-STATED: the sibling's record is written literally,
+    inside `reconcile_pending`, which `claim` calls between its read and its
+    consume."""
+    from agentflow import discoveries
+    _, clone = repo_pair
+    old = {"from_run": "run-old", "from_attempt": 1, "branch": BRANCH_A1, "sha": "a" * 40,
+           "body_hash": mergeops.body_hash("## Acceptance\nx"), "register_blob": "b" * 40, "files": []}
+    sibling = {**old, "from_run": "run-sibling", "sha": "c" * 40}
+    path = clone / ".agent" / "handoffs.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"8": old}))
+
+    def sibling_hands_off_issue_9(ctx, gh):
+        path.write_text(json.dumps({**json.loads(path.read_text()), "9": sibling}))
+        return []
+
+    monkeypatch.setattr(discoveries, "reconcile_pending", sibling_hands_off_issue_9)
+    code, out = claim8(capsys, clone, FakeRunner(HANDOFF_GH))
+    assert code == 0, out
+    assert out["handoff"] == old
+    assert handoffs(clone) == {"9": sibling}
+
+
+def test_finish_writes_the_handoff_record_while_holding_the_handoffs_mutex(
+        capsys, repo_pair, fake_home, monkeypatch):
+    """`finish --outcome handoff` adds its record to `handoffs.json`, which
+    other runs also write. The write must happen INSIDE mutex `handoffs`, not
+    merely after taking it once."""
+    from contextlib import contextmanager
+    from agentflow import state
+    _, clone = repo_pair
+    sha = handoff_branch(clone, ISSUE34_REGISTER)
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    real_mutex, real_write, held, writes = state.mutex, state.write_json, set(), []
+
+    @contextmanager
+    def tracking(c, name, **kw):
+        with real_mutex(c, name, **kw):
+            held.add(name)
+            try:
+                yield
+            finally:
+                held.discard(name)
+
+    def recording(c, p, data):
+        writes.append((Path(p).name, "handoffs" in held))
+        return real_write(c, p, data)
+
+    monkeypatch.setattr(state, "mutex", tracking)
+    monkeypatch.setattr(state, "write_json", recording)
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 0, out
+    assert [w for w in writes if w[0] == "handoffs.json"] == [("handoffs.json", True)]
+    assert handoffs(clone)["8"]["sha"] == sha

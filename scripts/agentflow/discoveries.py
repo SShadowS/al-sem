@@ -8,6 +8,9 @@ and body -> write `pending` -> create -> charge the discovery budget only
 after a successful create -> write `filed`. A crash between create and the
 index write leaves `pending`; the next run retries it like a new discovery
 and the marker search resolves it without recreating.
+
+Each discovery is filed under mutex `discoveries`, and so is
+`reconcile_pending`, so two runs never file one discovery twice.
 """
 from __future__ import annotations
 
@@ -18,9 +21,12 @@ from dataclasses import dataclass
 
 from . import budget, sanitize
 from .gh import Gh
-from .state import Ctx, read_json, write_json
+from .state import Ctx, mutex, read_json, write_json
 
 MARKER_FMT = "<!-- agentflow-fp: {fp} -->"
+# Mutex `discoveries` is held across gh calls (a search, a create), so a
+# waiter allows for a few slow GitHub round trips, not the default 30 s.
+DISCOVERIES_MUTEX_TIMEOUT = 300.0
 _NUM = re.compile(r"\d+")
 _WS = re.compile(r"\s+")
 
@@ -78,27 +84,28 @@ def _search_marker(gh: Gh, fp: str) -> list:
 
 
 def reconcile_pending(ctx: Ctx, gh: Gh) -> list[dict]:
-    idx = _load_index(ctx)
-    report = []
-    changed = False
-    for fp, entry in idx.items():
-        if entry["status"] != "pending":
-            continue
-        try:
-            hits = _search_marker(gh, fp)
-        except Exception as e:  # gh failure: stay pending
-            report.append({"fp": fp, "status": "pending-search-failed", "error": str(e)})
-            continue
-        if not hits:
-            report.append({"fp": fp, "status": "pending-not-found"})
-        elif len(hits) == 1:
-            entry.update(status="filed", number=hits[0].number)
-            changed = True
-            report.append({"fp": fp, "status": "filed", "number": hits[0].number})
-        else:
-            report.append({"fp": fp, "status": "pending-ambiguous", "hits": [h.number for h in hits]})
-    if changed:
-        _save_index(ctx, idx)
+    with mutex(ctx, "discoveries", timeout=DISCOVERIES_MUTEX_TIMEOUT):
+        idx = _load_index(ctx)
+        report = []
+        changed = False
+        for fp, entry in idx.items():
+            if entry["status"] != "pending":
+                continue
+            try:
+                hits = _search_marker(gh, fp)
+            except Exception as e:  # gh failure: stay pending
+                report.append({"fp": fp, "status": "pending-search-failed", "error": str(e)})
+                continue
+            if not hits:
+                report.append({"fp": fp, "status": "pending-not-found"})
+            elif len(hits) == 1:
+                entry.update(status="filed", number=hits[0].number)
+                changed = True
+                report.append({"fp": fp, "status": "filed", "number": hits[0].number})
+            else:
+                report.append({"fp": fp, "status": "pending-ambiguous", "hits": [h.number for h in hits]})
+        if changed:
+            _save_index(ctx, idx)
     return report
 
 
@@ -116,54 +123,57 @@ def file_all(ctx: Ctx, gh: Gh, discoveries: list[Discovery], session_url: str) -
                  "error": f"kind {d.kind!r} is not one of {KINDS}" if d in bad
                  else "another discovery in this batch has a bad kind"}
                 for d in discoveries]
-    idx = _load_index(ctx)
     out = []
     for d in discoveries:
-        fp = fingerprint(d.subsystem, d.locator, d.symptom)
-        entry = idx.get(fp)
-        if entry is not None and entry["status"] == "filed":
-            out.append({"fp": fp, "status": "skipped-index", "number": entry.get("number"), "error": None})
-            continue
-        try:
-            hits = _search_marker(gh, fp)
-        except Exception as e:
-            out.append({"fp": fp, "status": "search-failed", "number": None, "error": str(e)})
-            continue
-        if len(hits) == 1:
-            idx[fp] = {"status": "filed", "number": hits[0].number, "origin": d.origin_issue}
-            _save_index(ctx, idx)
-            out.append({"fp": fp, "status": "skipped-remote", "number": hits[0].number, "error": None})
-            continue
-        if len(hits) > 1:
-            # Never silently resolve an ambiguous marker hit (reconcile_pending
-            # refuses to for the same reason): leave the index as-is.
-            out.append({"fp": fp, "status": "ambiguous", "number": None, "error": f"{len(hits)} hits"})
-            continue
-        # A filed discovery becomes a PUBLIC issue, and every field in it came
-        # from a conductor-written file (`locator` is by definition a path).
-        # Scan the exact text that would be published -- earlier than the
-        # `create_issue` call itself only so that a refusal leaves no `pending`
-        # index entry behind for `reconcile_pending` to chase forever.
-        head, body = title(d), render_body(d, session_url)
-        violations = sanitize.scan(f"{head}\n{body}", os.environ.get("CDO_WS"))
-        if violations:
-            kinds = sorted({v.kind for v in violations})
-            out.append({"fp": fp, "status": "sanitize-failed", "number": None,
-                        "error": f"{len(violations)} violation(s): {', '.join(kinds)}"})
-            continue
-        budget.check_deadline(ctx)
-        if budget.snapshot(ctx)["counts"].get("discoveries", 0) >= budget.CAPS["discoveries"]:
-            out.append({"fp": fp, "status": "over-cap", "number": None, "error": None})
-            continue
-        idx[fp] = {"status": "pending", "number": None, "origin": d.origin_issue}
-        _save_index(ctx, idx)
-        try:
-            number = gh.create_issue(head, body, ["agent-filed", d.kind])
-        except Exception as e:
-            out.append({"fp": fp, "status": "pending", "number": None, "error": str(e)})
-            continue
-        budget.charge(ctx, "discoveries")
-        idx[fp] = {"status": "filed", "number": number, "origin": d.origin_issue}
-        _save_index(ctx, idx)
-        out.append({"fp": fp, "status": "filed", "number": number, "error": None})
+        # Held across index check -> search -> create -> save, and the index
+        # is re-read inside it: search-then-create is not atomic, and a second
+        # run filing the same discovery at once would otherwise create a
+        # second PUBLIC issue.
+        with mutex(ctx, "discoveries", timeout=DISCOVERIES_MUTEX_TIMEOUT):
+            out.append(_file_one(ctx, gh, d, session_url))
     return out
+
+
+def _file_one(ctx: Ctx, gh: Gh, d: Discovery, session_url: str) -> dict:
+    """File one discovery. The caller holds mutex `discoveries`."""
+    idx = _load_index(ctx)
+    fp = fingerprint(d.subsystem, d.locator, d.symptom)
+    entry = idx.get(fp)
+    if entry is not None and entry["status"] == "filed":
+        return {"fp": fp, "status": "skipped-index", "number": entry.get("number"), "error": None}
+    try:
+        hits = _search_marker(gh, fp)
+    except Exception as e:
+        return {"fp": fp, "status": "search-failed", "number": None, "error": str(e)}
+    if len(hits) == 1:
+        idx[fp] = {"status": "filed", "number": hits[0].number, "origin": d.origin_issue}
+        _save_index(ctx, idx)
+        return {"fp": fp, "status": "skipped-remote", "number": hits[0].number, "error": None}
+    if len(hits) > 1:
+        # Never silently resolve an ambiguous marker hit (reconcile_pending
+        # refuses to for the same reason): leave the index as-is.
+        return {"fp": fp, "status": "ambiguous", "number": None, "error": f"{len(hits)} hits"}
+    # A filed discovery becomes a PUBLIC issue, and every field in it came
+    # from a conductor-written file (`locator` is by definition a path).
+    # Scan the exact text that would be published -- earlier than the
+    # `create_issue` call itself only so that a refusal leaves no `pending`
+    # index entry behind for `reconcile_pending` to chase forever.
+    head, body = title(d), render_body(d, session_url)
+    violations = sanitize.scan(f"{head}\n{body}", os.environ.get("CDO_WS"))
+    if violations:
+        kinds = sorted({v.kind for v in violations})
+        return {"fp": fp, "status": "sanitize-failed", "number": None,
+                "error": f"{len(violations)} violation(s): {', '.join(kinds)}"}
+    budget.check_deadline(ctx)
+    if budget.snapshot(ctx)["counts"].get("discoveries", 0) >= budget.CAPS["discoveries"]:
+        return {"fp": fp, "status": "over-cap", "number": None, "error": None}
+    idx[fp] = {"status": "pending", "number": None, "origin": d.origin_issue}
+    _save_index(ctx, idx)
+    try:
+        number = gh.create_issue(head, body, ["agent-filed", d.kind])
+    except Exception as e:
+        return {"fp": fp, "status": "pending", "number": None, "error": str(e)}
+    budget.charge(ctx, "discoveries")
+    idx[fp] = {"status": "filed", "number": number, "origin": d.origin_issue}
+    _save_index(ctx, idx)
+    return {"fp": fp, "status": "filed", "number": number, "error": None}

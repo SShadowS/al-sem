@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -157,6 +158,42 @@ def test_charge_and_status(capsys, root, ctx, monkeypatch):
     assert out["budget"]["counts"] == {"ci_fix": 1}
 
 
+def _two_leases(root, *, stale_issue=None):
+    from agentflow.state import Ctx, Paths
+    (root / ".agent" / "config.json").write_text(json.dumps({"slots": 2}), encoding="utf-8")
+    for run_id, issue in (("run-a", 8), ("run-b", 9)):
+        beat_at = 1.0 if issue == stale_issue else 1_000_000.0
+        lock.acquire(Ctx(Paths(root), run_id=run_id, now=lambda t=beat_at: t), issue, "s", 1)
+
+
+def test_status_lists_every_lease_and_the_runs_own(capsys, root, monkeypatch):
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _two_leases(root, stale_issue=9)
+    code, out = run_cli(capsys, root, "status", run_id="run-a")
+    assert code == 0
+    assert [(lk["issue"], lk["run_id"], lk["stale"]) for lk in out["locks"]] == [
+        (8, "run-a", False), (9, "run-b", True)]
+    assert out["lock"]["run_id"] == "run-a"
+    code, out = run_cli(capsys, root, "status", run_id=None)
+    assert out["lock"] is None and len(out["locks"]) == 2      # no single lease to show
+
+
+def test_operator_commands_are_refused_while_any_lease_is_live(capsys, root, monkeypatch):
+    """`require_operator` refuses while ANY run is acting, not only when the
+    one and only lease is live. With a stale lease and a live one, the old
+    single-lock read found no single lease and let a clear-halt through."""
+    from agentflow.state import Ctx, Paths
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    monkeypatch.setenv("AGENTFLOW_NOW", "1000000.0")
+    _two_leases(root, stale_issue=9)
+    halt_by_hand(root, "incident B")
+    code, out = run_cli(capsys, root, "clear-halt", "--reason", "incident B", "--by", "me", run_id=None)
+    assert code == 1 and out["refused"] == "operator-only" and "run-a" in out["detail"], out
+    lock.release(Ctx(Paths(root), run_id="run-a"))            # only the stale lease is left
+    code, out = run_cli(capsys, root, "clear-halt", "--reason", "incident B", "--by", "me", run_id=None)
+    assert code == 0 and out["cleared"] == "incident B", out
+
+
 def test_charge_unknown_key_yields_json_not_traceback(capsys, root):
     code, out = run_cli(capsys, root, "charge", "bogus_key")
     assert code == 2 and "KeyError" in out["error"]
@@ -170,10 +207,34 @@ def test_sanitize_command(capsys, root, tmp_path, monkeypatch):
     assert code == 1 and out["violations"][str(f)][0]["kind"] == "cdo-path"
 
 
-def test_unblock_removes_label_without_prior_lock(capsys, root):
+def test_unblock_removes_label_without_prior_lock(capsys, root, monkeypatch):
+    """`unblock` runs under its own `unblock-<6 hex>` id (two unblocks must not
+    share one) and does not take a slot."""
+    ids, real = [], lock.acquire
+
+    def recording(ctx, *a, **kw):
+        ids.append((ctx.run_id, kw.get("count_slot", True)))
+        return real(ctx, *a, **kw)
+
+    monkeypatch.setattr(lock, "acquire", recording)
+    r = FakeRunner({"issue edit 8 --remove-label agent-blocked": ""})
+    for _ in range(2):
+        code, out = run_cli(capsys, root, "unblock", "8", gh_run=r, run_id=None)
+        assert code == 0 and out["unblocked"] == 8 and lock.read(cli_ctx(root)) is None
+    assert len(ids) == 2 and ids[0][0] != ids[1][0]
+    assert all(re.fullmatch(r"unblock-[0-9a-f]{6}", i) and not slot for i, slot in ids), ids
+
+
+def test_unblock_refuses_an_issue_another_run_holds(capsys, root):
+    """It used to lose to ANY live lock. Now it refuses `issue-held` for its
+    own issue, and no label is touched."""
+    from agentflow.state import Ctx, Paths
+    lock.acquire(Ctx(Paths(root), run_id="run-holder", now=lambda: 1_000_000.0), 8, "s", 1)
     r = FakeRunner({"issue edit 8 --remove-label agent-blocked": ""})
     code, out = run_cli(capsys, root, "unblock", "8", gh_run=r, run_id=None)
-    assert code == 0 and out["unblocked"] == 8 and lock.read(cli_ctx(root)) is None
+    assert code == 1 and out["error"] == "issue-held:run-holder", out
+    assert r.calls == []
+    assert lock.for_issue(cli_ctx(root), 8).run_id == "run-holder"
 
 
 def cli_ctx(root):

@@ -302,3 +302,23 @@ def test_resolve_refuses_under_dry_run_before_it_reads_anything(dry_ctx):
     with pytest.raises(DryRunViolation):
         incidents.resolve(dry_ctx, SHA_A, by="operator", note="")
     assert not dry_ctx.paths.incidents.exists() and not dry_ctx.paths.audit.exists()
+
+
+def test_two_processes_opening_two_incidents_keep_both(root):
+    """Design test 34. Two post-merges of two merges open their incidents at
+    once. Each one reads `incidents.json`, adds its row and writes the file
+    back, so without a mutex the second write drops the first row. The reads
+    are slowed so both reads happen before either write."""
+    from agentflow.tests.conftest import run_concurrently
+    (root / ".agent" / "incidents.json").write_text("{}", encoding="utf-8")
+    body = """
+    from agentflow import incidents
+    from agentflow.state import Ctx, Paths
+    slow_reads("incidents.json")
+    barrier()
+    incidents.open_incident(Ctx(Paths(ROOT), run_id=TAG), merge_sha=TAG * 40, issue=8, gate_red=False)
+    """
+    results = run_concurrently(root, body, ["a", "b"])
+    assert [r[0] for r in results] == [0, 0], [r[2].strip().splitlines()[-1:] for r in results]
+    records = json.loads((root / ".agent" / "incidents.json").read_text(encoding="utf-8"))
+    assert sorted(records) == ["a" * 40, "b" * 40]

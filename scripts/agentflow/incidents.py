@@ -38,11 +38,14 @@ transition here keeps those three apart.
 Storage is a plain dict keyed by the FULL merge SHA (never a prefix -- the
 12-char form in preflight's failure rows is for human eyes), written through
 `state.write_json`, so it is atomic and key-sorted like every other record.
+Every read-modify-write of it holds mutex `incidents`: two post-merges must
+not each write back a file that lacks the other's row. `_save` assumes the
+caller holds it.
 """
 from __future__ import annotations
 
 from . import lock
-from .state import Ctx, append_audit, read_json, write_json
+from .state import Ctx, append_audit, mutex, read_json, write_json
 
 
 class IncidentRefused(RuntimeError):
@@ -139,25 +142,26 @@ def open_incident(ctx: Ctx, *, merge_sha: str, issue: int, gate_red: bool,
                   and if the second run also crashes that contradiction is the
                   entire forensic trail.
     """
-    records = all_records(ctx)
-    prev = records.get(merge_sha)
-    rec = dict(prev or {})
-    prev_state = rec.get("state")
-    state = "verifying" if verifying and prev_state != "open" else "open"
-    rec.update(merge_sha=merge_sha, issue=issue, state=state, run_id=ctx.run_id,
-               gate_red=bool(rec.get("gate_red")) or gate_red,
-               reason=rec.get("reason", reason) if rec.get("terminal") else reason)
-    rec.setdefault("revert_landed", None)
-    rec.setdefault("labels", [])
-    rec.setdefault("resolved_at", None)
-    rec.setdefault("resolved_by", None)
-    rec.setdefault("note", "")
-    if prev_state == "resolved":
-        rec.update(resolved_at=None, resolved_by=None, note="")
-    if prev is None:
-        rec["opened_at"] = ctx.now()
-    records[merge_sha] = rec
-    _save(ctx, records)
+    with mutex(ctx, "incidents"):
+        records = all_records(ctx)
+        prev = records.get(merge_sha)
+        rec = dict(prev or {})
+        prev_state = rec.get("state")
+        state = "verifying" if verifying and prev_state != "open" else "open"
+        rec.update(merge_sha=merge_sha, issue=issue, state=state, run_id=ctx.run_id,
+                   gate_red=bool(rec.get("gate_red")) or gate_red,
+                   reason=rec.get("reason", reason) if rec.get("terminal") else reason)
+        rec.setdefault("revert_landed", None)
+        rec.setdefault("labels", [])
+        rec.setdefault("resolved_at", None)
+        rec.setdefault("resolved_by", None)
+        rec.setdefault("note", "")
+        if prev_state == "resolved":
+            rec.update(resolved_at=None, resolved_by=None, note="")
+        if prev is None:
+            rec["opened_at"] = ctx.now()
+        records[merge_sha] = rec
+        _save(ctx, records)
     if prev is None:
         # `state` rides along because `.agent/audit.jsonl` is the trail that
         # survives a wiped `.agent/incidents.json`, and "an incident was
@@ -186,14 +190,15 @@ def record_outcome(ctx: Ctx, merge_sha: str, *, reason: str,
     is what stops a later in-progress `open_incident` overwriting the reason
     recorded here.
     """
-    records = all_records(ctx)
-    rec = records.get(merge_sha)
-    if rec is None:
-        raise IncidentRefused("unknown-merge-sha", f"no incident is open for {merge_sha}")
-    rec.update(reason=reason, revert_landed=revert_landed, labels=list(labels),
-               state="open", terminal=True)
-    records[merge_sha] = rec
-    _save(ctx, records)
+    with mutex(ctx, "incidents"):
+        records = all_records(ctx)
+        rec = records.get(merge_sha)
+        if rec is None:
+            raise IncidentRefused("unknown-merge-sha", f"no incident is open for {merge_sha}")
+        rec.update(reason=reason, revert_landed=revert_landed, labels=list(labels),
+                   state="open", terminal=True)
+        records[merge_sha] = rec
+        _save(ctx, records)
     return rec
 
 
@@ -212,21 +217,22 @@ def mark_verified(ctx: Ctx, merge_sha: str, run_id: str | None) -> dict:
     on it is the automation deciding what only an operator's `resolve` is
     allowed to decide -- the exact distinction this module exists to keep.
     """
-    records = all_records(ctx)
-    rec = records.get(merge_sha)
-    if rec is None:
-        raise IncidentRefused("unknown-merge-sha", f"no incident is open for {merge_sha}")
-    if rec.get("gate_red") or rec.get("revert_landed") is False:
-        raise IncidentRefused(
-            "evidence-against-close",
-            f"{merge_sha[:12]} records gate_red={rec.get('gate_red')!r}, "
-            f"revert_landed={rec.get('revert_landed')!r} -- only an operator's "
-            f"`resolve-incident` may close that")
-    rec.update(state="resolved", resolved_at=ctx.now(),
-               resolved_by=f"post-merge:{run_id}",
-               note="every gate returned 0 and the tree was clean")
-    records[merge_sha] = rec
-    _save(ctx, records)
+    with mutex(ctx, "incidents"):
+        records = all_records(ctx)
+        rec = records.get(merge_sha)
+        if rec is None:
+            raise IncidentRefused("unknown-merge-sha", f"no incident is open for {merge_sha}")
+        if rec.get("gate_red") or rec.get("revert_landed") is False:
+            raise IncidentRefused(
+                "evidence-against-close",
+                f"{merge_sha[:12]} records gate_red={rec.get('gate_red')!r}, "
+                f"revert_landed={rec.get('revert_landed')!r} -- only an operator's "
+                f"`resolve-incident` may close that")
+        rec.update(state="resolved", resolved_at=ctx.now(),
+                   resolved_by=f"post-merge:{run_id}",
+                   note="every gate returned 0 and the tree was clean")
+        records[merge_sha] = rec
+        _save(ctx, records)
     return rec
 
 
@@ -260,23 +266,24 @@ def resolve(ctx: Ctx, merge_sha: str, *, by: str, note: str) -> dict:
     """
     ctx.write_guard("resolve incident")
     lock.require_operator(ctx, "resolve incident")
-    records = all_records(ctx)
-    rec = records.get(merge_sha)
-    if rec is None:
-        raise IncidentRefused("unknown-merge-sha", f"no incident recorded for {merge_sha}")
-    state = rec.get("state")
-    if state == "resolved":
-        raise IncidentRefused("already-resolved",
-                              f"{merge_sha[:12]} was closed by {rec.get('resolved_by')!r}")
-    if state not in ("open", "verifying"):
-        # Only reachable through a hand-edited `incidents.json`. Say what was
-        # found; do not invent a closer for it.
-        raise IncidentRefused("unknown-state",
-                              f"{merge_sha[:12]} is in state {state!r}, which this command "
-                              f"does not know how to close")
-    append_audit(ctx, {"action": "incident-resolve", "merge_sha": merge_sha,
-                       "by": by, "note": note})
-    rec.update(state="resolved", resolved_at=ctx.now(), resolved_by=by, note=note)
-    records[merge_sha] = rec
-    _save(ctx, records)
+    with mutex(ctx, "incidents"):
+        records = all_records(ctx)
+        rec = records.get(merge_sha)
+        if rec is None:
+            raise IncidentRefused("unknown-merge-sha", f"no incident recorded for {merge_sha}")
+        state = rec.get("state")
+        if state == "resolved":
+            raise IncidentRefused("already-resolved",
+                                  f"{merge_sha[:12]} was closed by {rec.get('resolved_by')!r}")
+        if state not in ("open", "verifying"):
+            # Only reachable through a hand-edited `incidents.json`. Say what was
+            # found; do not invent a closer for it.
+            raise IncidentRefused("unknown-state",
+                                  f"{merge_sha[:12]} is in state {state!r}, which this command "
+                                  f"does not know how to close")
+        append_audit(ctx, {"action": "incident-resolve", "merge_sha": merge_sha,
+                           "by": by, "note": note})
+        rec.update(state="resolved", resolved_at=ctx.now(), resolved_by=by, note=note)
+        records[merge_sha] = rec
+        _save(ctx, records)
     return rec

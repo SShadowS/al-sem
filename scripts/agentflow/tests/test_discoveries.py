@@ -179,3 +179,42 @@ def test_a_bad_kind_refuses_the_whole_batch_before_filing(ctx):
     assert [o["status"] for o in out] == ["batch-refused", "bad-kind"]
     assert "('bug', 'enhancement')" in out[1]["error"]
     assert r.calls == []
+
+
+def test_two_processes_filing_one_discovery_create_one_issue(root):
+    """Design test 33. Two runs file the same discovery at once. Search, then
+    create, is not atomic: without a mutex both searches find nothing and
+    both create a PUBLIC issue. The fake GitHub here is a directory both
+    processes share, one file per created issue, and `create_issue` is slow
+    so both searches happen before either create."""
+    from agentflow.tests.conftest import run_concurrently
+    (root / "remote").mkdir()
+    body = """
+    from types import SimpleNamespace
+    from agentflow import budget, discoveries
+    from agentflow.state import Ctx, Paths
+    ctx = Ctx(Paths(ROOT), run_id=TAG)
+    budget.init(ctx, claimed_at=ctx.now())
+    remote = ROOT / "remote"
+
+    class SharedGh:
+        def list_labeled(self, label):
+            return [SimpleNamespace(number=int(p.stem), body=p.read_text(encoding="utf-8"))
+                    for p in remote.glob("*.issue")]
+
+        def create_issue(self, head, body, labels):
+            time.sleep(0.5)
+            number = 100 if TAG == "a" else 200
+            (remote / f"{number}.issue").write_text(body, encoding="utf-8")
+            return number
+
+    d = discoveries.Discovery(subsystem="resolve", locator="tests/gap/x.rs", symptom="x fails",
+                              kind="bug", origin_issue=8, reproducer="cargo test x",
+                              pre_existing=False, capability="x resolves", acceptance="x passes")
+    barrier()
+    print(discoveries.file_all(ctx, SharedGh(), [d], "https://s")[0]["status"])
+    """
+    results = run_concurrently(root, body, ["a", "b"])
+    assert [r[0] for r in results] == [0, 0], [r[2].strip().splitlines()[-1:] for r in results]
+    assert len(list((root / "remote").glob("*.issue"))) == 1
+    assert sorted(r[1].strip() for r in results) == ["filed", "skipped-index"]

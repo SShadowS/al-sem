@@ -11,6 +11,20 @@ from agentflow.state import Ctx, Paths  # noqa: E402
 from agentflow.gitops import Git  # noqa: E402
 
 
+PLENTY_OF_DISK = 500 * 2**30
+
+
+@pytest.fixture(autouse=True)
+def plenty_of_disk(monkeypatch):
+    """`claim` and `preflight` refuse on low free disk, and free disk is a
+    fact about the machine running the suite (this one has had 31 GB free on
+    C:, under the 40 GB floor). Every test sees 500 GB unless it patches
+    `shutil.disk_usage` itself to state the number it is about."""
+    import shutil
+    from types import SimpleNamespace
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: SimpleNamespace(free=PLENTY_OF_DISK))
+
+
 @pytest.fixture
 def root(tmp_path):
     (tmp_path / ".agent").mkdir()
@@ -89,6 +103,60 @@ def repo_pair(tmp_path):
     _git(clone, "commit", "-q", "-m", "init")
     _git(clone, "push", "-q", "-u", "origin", "master")
     return origin, clone
+
+
+CHILD_PROLOGUE = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+ROOT = Path(sys.argv[2])
+TAG = sys.argv[3]
+ARGS = sys.argv[4:]
+
+def barrier():
+    (ROOT / f"ready-{TAG}").write_text("")
+    while not (ROOT / "go").exists():
+        time.sleep(0.005)
+
+def slow_reads(name, seconds=0.3):
+    # Widen a read-modify-write: every read of a file called `name` sleeps
+    # AFTER it has read, so a second process reads the same old value unless
+    # something makes it wait.
+    real = Path.read_text
+    def slow(self, *a, **kw):
+        text = real(self, *a, **kw)
+        if self.name == name:
+            time.sleep(seconds)
+        return text
+    Path.read_text = slow
+"""
+
+
+def run_concurrently(root: Path, body: str, tags, extra=(), timeout: float = 180):
+    """Run `body` in one real `python` process per tag, released together.
+
+    Each child gets `ROOT`, `TAG`, `ARGS` and `barrier()` from
+    `CHILD_PROLOGUE`, and must call `barrier()` right before the racy part.
+    The parent starts every child, waits until all are at the barrier, then
+    releases them. Returns `[(returncode, stdout, stderr), ...]` in tag order.
+    """
+    import textwrap
+    import time
+    code = CHILD_PROLOGUE + textwrap.dedent(body)
+    procs = [subprocess.Popen([sys.executable, "-c", code, str(SCRIPTS), str(root), str(t), *extra],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for t in tags]
+    deadline = time.monotonic() + timeout
+    while not all((root / f"ready-{t}").exists() for t in tags):
+        if any(p.poll() is not None for p in procs) or time.monotonic() > deadline:
+            break  # a child died before the barrier; its output says why
+        time.sleep(0.01)
+    (root / "go").write_text("")
+    out = []
+    for p in procs:
+        o, e = p.communicate(timeout=timeout)
+        out.append((p.returncode, o, e))
+    return out
 
 
 def commit_file(repo: Path, name: str, text: str, msg: str) -> str:

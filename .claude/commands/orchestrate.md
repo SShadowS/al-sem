@@ -30,6 +30,15 @@ continuing to step 2, so this tick's OWN claim does not reuse (and overwrite)
 the recovered run's just-retained evidence directory — see step 1. Never set
 `AGENTFLOW_NOW` — it exists only to freeze the executor's clock for tests.
 
+**Two sessions at once.** Up to `slots` issues (`.agent/config.json`, default
+1) may run at once, one per `/orchestrate` session. Shell variables do not
+survive between calls, so keep this tick's id in
+`.agent/runs/session-<this session's id>.run-id` and read it back from there
+before every call. Never use a file another session could also use (such as a
+shared `.agent/current-run-id.txt`): two sessions on one id fence each other
+out, or one `finish`es the other's issue. Never act on another session's run
+id or issue: a `FenceError` naming an issue this tick did not claim is a STOP.
+
 ## Steps
 
 1. **Preflight.** `preflight` (per Invocation, include the tick's `--dry-run`
@@ -43,8 +52,20 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    `failures` row, because a row that stopped the tick here would gate the
    `recover` below that is the only autonomous way to discharge it. Only a
    `state: open` row reaches `failures`, as `incident:<sha12>`.
+   While another session runs, `failures` may say `slots-full` (as many LIVE
+   leases as slots) or `disk-free:<n>GB` (free disk below `disk_required_gb`:
+   `min_free_gb` plus `reserve_gb_per_run` per live run). Both mean "do not
+   claim now", not "something is broken": print them and stop this tick, and
+   under `/loop` reschedule rather than end the loop. Print `locks` (every
+   lease, with `stale`), `disk_free_gb`, `disk_required_gb`, `warnings` (e.g.
+   `cargo-target-dir-set:<dir>`) and `master_behind_origin`. A root `master`
+   only BEHIND `origin/master` is normal while a sibling's merge waits for its
+   post-merge and fails nothing; a DIVERGED one fails
+   `master-differs-from-origin`.
    Also call `mcp__pi__pi_models` (load it with ToolSearch) and confirm
-   both `gpt-6-astra` and `gemini-3.8-flash` are listed; if not, call the
+   both reviewers this loop will use are listed: `gpt-6-astra` and
+   `gemini-3.8-flash` by default, or the stand-ins the operator named for
+   this loop instead (since 2026-10-16, `gpt-6.1-sol` and Opus); if not, call the
    push-notification tool directly with kind `reviewer-unavailable` — if that
    tool does not load, append `NOTIFY: reviewer-unavailable: <models missing>`
    to `.agent/runs/$AGENTFLOW_RUN_ID/notify.log` yourself (create the
@@ -52,7 +73,14 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    for a conductor-side check, so nothing else will leave a record) — then
    STOP with reason `reviewer-unavailable`.
 
-   If `stale_lock` is non-null and this is not a dry run, run `recover`. If
+   If `stale_locks` is non-empty and this is not a dry run, run `recover
+   --issue <N>` for ONE of them (the first) per tick: the follow-through holds
+   this session's run id, and one run id holds one lease. (`stale_lock`, the
+   first element, is kept one release for older text; `recover` without
+   `--issue` still works when exactly one lease is stale and exits 2 listing
+   them when there are several.) A `recover` that fails with `lock-live:<run>`
+   means another session took that lease first: skip it and continue the
+   tick. A recovered run's merge lane moves to this run with its lease. If
    its `action` is `blocked-crashed`, report it and continue the tick — the
    crashed run's issue is now `agent-blocked` and its worktree preserved;
    nothing further to do here. If its `action` is `merged-needs-post-merge`,
@@ -114,18 +142,29 @@ the recovered run's just-retained evidence directory — see step 1. Never set
    dry run; print it instead). The pick is the first element.
 5. **Dry run stops here.** Print the ranking table and the pick with its
    classification. Confirm nothing was written: `git status --porcelain` is empty,
-   `.agent/lock.json` is absent, and `.agent/runs/` lists the same entries as step
+   no lease under `.agent/locks/` names this tick's run id, `.agent/lock.json`
+   is absent or unchanged, and `.agent/runs/` lists the same entries as step
    1's before-snapshot.
-6. **Loop budget.** `loop-tick --max N`. An `exhausted` result means this loop has
-   already claimed its `--max-issues` quota: print that and STOP the tick — under
-   `/loop`, that ends the loop — WITHOUT claiming this tick's pick. This call sits
-   after ranking and before claiming specifically so the budget counts issues
-   actually claimed, not ticks: a tick that stopped earlier (empty queue at step
-   3, dry run at step 5) never reaches this call and never burns a slot, and one
-   that reaches `claim` always does so with budget still available — no fourth
-   issue is ever claimed on a `--max 3` run.
-7. **Claim.** `claim <N> --session <this session's URL> --title-slug <slug>`
-   where slug is the issue title lowercased, non-alphanumerics collapsed to `-`,
+6. **Loop budget** — part of the claim now, not a separate call. The budget
+   is charged by step 7's `claim --loop-max N` in the same step that takes the
+   lease, so it counts issues actually claimed, never ticks: a tick that
+   stopped earlier (empty queue at step 3, dry run at step 5) burns nothing,
+   and a claim that is refused or rolled back spends nothing. The budget is
+   SHARED by every session: `--max-issues` is a total across sessions, not
+   per session. (`loop-tick --max N` still exists for one release; do not use
+   it together with `--loop-max`, which would charge twice.)
+7. **Claim.** `claim <N> --session <this session's URL> --title-slug <slug>
+   --loop-max <N from --max-issues>`. Work through the ranking in order:
+   - `issue-held:<run>`: another session holds that issue (its label may lag
+     the lease). Try the next ranked element; nothing was spent.
+   - `slots-full` or `disk-low:<free>GB<<need>GB`: do not claim now. STOP the
+     tick; under `/loop`, reschedule.
+   - `loop-exhausted`: this loop has claimed its `--max-issues` quota across
+     all sessions. Print that and STOP the tick — under `/loop`, that ends the
+     loop.
+   - `run-holds-a-lock`: this run id already holds a lease (one run, one
+     issue): a conductor error, STOP.
+   The slug is the issue title lowercased, non-alphanumerics collapsed to `-`,
    leading/trailing `-` stripped, at most 31 chars (the same rule `cli.slug`
    applies internally) — but treat this as a preview only: the authoritative
    `branch` and `worktree` names are whatever `claim`'s own JSON reply says, not
@@ -146,7 +185,8 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 
    Before it runs anything, it refuses an invocation it cannot vouch for: no
    merge record for this run, a record naming a different issue / SHA / run id,
-   or a `--merge-sha` that is not reachable from `origin/master`. Those
+   the merge lane held by another live session (`merge-lane-busy`), or a
+   `--merge-sha` that is not reachable from `origin/master`. Those
    refusals exit 1 with a top-level `error` and no `ok` field at all, and they
    deliberately set no HALT and open no incident — nothing was verified, and
    nothing claimed it had been. Print the `error` and STOP the tick; do NOT run
@@ -266,7 +306,8 @@ the recovered run's just-retained evidence directory — see step 1. Never set
 11. **Finish.** On `merged`, first `cleanup --worktree <path> --branch <branch>
     --merge-sha <sha>` — cleanup goes BEFORE finish because `finish` releases
     the lock, and once released another run could claim the issue; `cleanup`
-    refuses outright if the lock it finds names a different run, so running it
+    refuses outright if that ISSUE's lease names a different run (a sibling
+    session's lease for another issue does not matter), so running it
     first while this run still holds the lock is what keeps it safe, not (as it
     might look) anything about lock absence — then `finish --issue N --outcome
     merged`. `cleanup` also refuses, with `cleanup does not match this run's
@@ -291,11 +332,15 @@ the recovered run's just-retained evidence directory — see step 1. Never set
     `.alpackages/` path. On other `blocked` outcomes, just `finish --issue N
     --outcome blocked --reason R` and leave the worktree in place.
     On `handoff <sha>`, `finish --issue N --outcome handoff --handoff-ref <sha>
-    --reason spec-panel-cap` and leave the worktree in place. It labels
+    --reason spec-panel-cap`, plus the same `--substitute` flags `/issue`
+    reported the marks were made under (the operator's instruction; e.g.
+    `--substitute astra=sol --substitute flash=opus`), and leave the worktree
+    in place. The record keeps them as `reviewers`. It labels
     `agent-design-ready` instead of `agent-blocked`, so the issue stays
     eligible and a later tick's claim carries the design as `handoff`. If it
     refuses (`handoff-not-ready`, `handoff-not-on-branch`,
-    `handoff-evidence-missing`, `handoff-already-used`, `sha-not-full`), it
+    `handoff-evidence-missing`, `handoff-already-used`, `sha-not-full`,
+    `bad-substitute`), it
     has labelled and commented nothing and still holds the lock: run `finish
     --issue N --outcome blocked --reason spec-panel-cap` instead. That
     refusal is the fallback, not a stop.
@@ -311,6 +356,11 @@ the recovered run's just-retained evidence directory — see step 1. Never set
   STOP (`--issue` is required; without it the call is an argparse usage error
   that exits 2 without releasing the lock). Step 9 is deliberately absent from
   that list: `post-merge` always runs after a merge, HALT or not — see step 9.
+  HALT is global: another session's post-merge stop halts this tick too.
+- Never act on another session's run id or issue. Every executor call reads
+  this session's own run id (see "Two sessions at once"); a `FenceError`
+  naming an issue this tick did not claim is a STOP, never a retry under
+  another id.
 - Never `--force` on any branch. The one exception is `push-branch
   --force-with-lease` in `/issue` step 13, only on the issue branch, only right
   after a re-rebase. Never issue a `git push` yourself: `push-branch` is the

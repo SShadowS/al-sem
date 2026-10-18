@@ -264,6 +264,301 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **agentflow: a design marked by reviewer stand-ins can be handed off (#141,
+  `scripts/agentflow/cli.py`).** `attest` accepts `--substitute SLOT=REVIEWER`,
+  but `finish --outcome handoff` judged the handoff rule against the fixed
+  `astra`/`flash` roster and had no such flag. A register whose marks were
+  recorded under the stand-ins (`sol`/`opus`) had empty slots on every entry, so
+  it was always `handoff-not-ready`.
+  - `finish --outcome handoff` now takes the same `--substitute` flags, defined
+    once for both commands and validated by the same `_substituted_roster`
+    (`bad-substitute`: unknown slot, a slot twice, one reviewer in both slots, a
+    malformed spec). Refusals still label and comment nothing and keep the lock.
+  - `--substitute` on any other outcome exits 2; a flag accepted and then
+    ignored would be a silent no-op.
+  - The handoff record stores `reviewers`, and the public comment names the
+    stand-ins. The next claim carries `reviewers`; `attest` does not apply it on
+    its own, so a mismatched roster fails closed (`register-not-converged`). A
+    record without `reviewers` (older than this change) claims as before.
+  - `.claude/commands/{issue,orchestrate}.md` and the orchestrator spec say how
+    the flags travel from `/issue` to `finish` and to the next attempt's
+    `attest`, and the preflight reviewer check now checks the operator's
+    stand-ins when a loop uses them.
+
+  9 new tests in `scripts/agentflow/tests/test_cli_flow.py`; the suite is 294
+  passed (was 285).
+
+- **agentflow: two processes can write one JSON file safely
+  (`scripts/agentflow/{state,lock}.py`).** This is step 2 of the parallel-issues
+  design and changes no behaviour of a single run.
+  - `write_json` wrote every file through one fixed temp name (`x.json.tmp`). Two
+    writers of one file shared that temp file, and one `os.replace` moved away
+    the file the other was replacing. Two real processes writing one file 200
+    times each failed with `WinError 32` within the first writes. The temp name
+    is now unique per call (`<name>.<pid>.<uuid>.tmp`), and a failed write
+    removes its temp file.
+  - On Windows, `os.replace` onto a file another process has open raises
+    `PermissionError`, and so does opening a file while another process
+    replaces it. A write and a read now retry that error 40 times, 50 ms apart
+    (2 s), then raise. The design asked for 5 retries at 100 ms on the write
+    and one on the read; measured with two processes, that still failed about
+    1 run in 15, and 2 s failed 0 of 60.
+  - `read_json` retries a parse error once. A file that is still bad on the
+    retry raises as before.
+  - `lock.beat` rewrote `.agent/lock.json` in place, so a reader in another
+    process (the conductor, while the supervisor beats) could see half a file.
+    Lease rewrites now go through `write_json`. `acquire`'s first write stays
+    create-exclusive.
+
+  6 new tests in `scripts/agentflow/tests/test_{state,lock}.py`, one of them with
+  two real processes; the suite is 300 passed (was 294).
+
+- **agentflow: shared records are read, changed and written under an OS lock
+  (`scripts/agentflow/{state,incidents,discoveries,budget,lock,cli}.py`).** Step
+  3 of the parallel-issues design. There is still one issue lock; this only
+  stops two processes from losing each other's updates.
+  - `state.mutex(ctx, name)` holds an OS file lock on
+    `.agent/mutex/<name>.lock` (`msvcrt.locking` on Windows, `fcntl.flock`
+    elsewhere). The OS drops it when the process dies, so it never goes stale.
+    It waits up to 30 s, then raises `MutexTimeout`. It is not re-entrant, so
+    only public entry points take one. It is a no-op under `--dry-run`.
+  - `state.update_json` is the one read-modify-write helper: it holds the
+    mutex, reads, applies a function and writes. When the function raises,
+    nothing is written.
+  - Moved onto it: `loop.json` (`loop-tick`, `loop-reset`; mutex `registry`),
+    `handoffs.json` (`claim`'s consume and `finish --outcome handoff`; mutex
+    `handoffs`), and `incidents.json` (open, outcome, verified, resolve; mutex
+    `incidents`). `claim` used to write back the copy it read before its gh
+    calls, which dropped a handoff another run wrote in between.
+  - `file-discoveries` holds mutex `discoveries` per discovery, from the index
+    check through search, create and save, and re-reads the index inside it;
+    `reconcile_pending` holds it too. Before, two runs filing one discovery at
+    once both searched, found nothing, and both created a public issue. This
+    mutex is held across gh calls, so its waiters allow 300 s.
+  - Every `audit.jsonl` line is appended under mutex `audit`. `set_halt` still
+    lands HALT when that mutex times out.
+
+  11 new tests, 4 of them with two real processes (two loop ticks at
+  `issues_done = 2` under `--max 3`, two incidents, one discovery filed twice, a
+  mutex held across processes); the suite is 311 passed (was 300).
+
+- **agentflow: settings live in `.agent/config.json` (`scripts/agentflow/{state,cli}.py`).**
+  Step 4 of the parallel-issues design. `state.config(ctx)` reads the file over
+  the defaults `slots: 1`, `heavy_gates: 1`, `min_free_gb: 40`,
+  `reserve_gb_per_run: 30` and `gate_wait_minutes: 180`; a missing file or key
+  is the default, so nothing changes until the owner writes the file. It is a
+  file, not a flag or an env var, so two sessions cannot disagree. An unknown
+  key, a non-integer or a negative value is a `ConfigError`, not a quiet
+  default. `preflight`'s free-disk floor now reads `min_free_gb` from it
+  (`cli.MIN_FREE_GB` is gone). The other keys are read by later steps.
+
+  7 new tests in `scripts/agentflow/tests/test_{state,cli_flow}.py`; the suite is
+  318 passed (was 311).
+
+- **agentflow: one lease per issue (`scripts/agentflow/{lock,state,cli,recovery}.py`).**
+  Step 5 of the parallel-issues design. A claim now writes
+  `.agent/locks/issue-<N>.json`, create-exclusive, so one issue can never have
+  two runs. `lock.acquire` runs under mutex `registry` and refuses
+  `run-holds-a-lock` (one run, one issue), `issue-held:<run>` (the issue has a
+  lease, live or stale) or `slots-full` (as many leases as `slots` in
+  `.agent/config.json`; stale leases count until `recover` frees them).
+  `claim` and `unblock` report that code as their `error`, before any gh call.
+  With the default `slots: 1`, a claim while another issue is held still fails,
+  as before, now as `slots-full`. New: `lock.all_locks`, `own`, `for_issue`,
+  `drop`; `lock.read` is a shim (the run's own lease, else the only lease).
+  `check_fence(ctx, issue=)` refuses a call that names another issue, and
+  `finish` uses it, so `finish --issue 9` under a lease for 8 no longer labels
+  issue 9. `claim` bumps `attempts.json` under mutex `registry`, re-read, so two
+  claims of two issues keep both bumps. `unblock` runs as `unblock-<6 hex>`,
+  takes no slot, and refuses `issue-held`. `recover_stale` removes only the
+  stale issue's lease, and only while it still names the stale run. A
+  `.agent/lock.json` written by the old code is read as one more lease: its
+  owner beats, fences and releases it in place, it holds its slot and its
+  issue, and nothing new is written there.
+
+  14 new tests in `scripts/agentflow/tests/test_{lock,cli_flow,cli_units}.py`
+  (three real-process claim races, the legacy lease, the issue cross-check);
+  the suite is 332 passed (was 318).
+
+- **agentflow: commands read the run's own lease (`scripts/agentflow/{cli,lock}.py`).**
+  Step 6 of the parallel-issues design. With slots, a sibling's lease always
+  exists, so "a lease that is not mine" no longer means "I lost mine".
+  - `run` is supervised when the run owns a lease, refused (`FenceError`) when
+    it owns none while any lease exists, and unsupervised only with no lease.
+    The gate heartbeat beats the run's own lease.
+  - `cleanup` of an issue worktree (`al-sem-issue-<N>-a<k>`) is fenced by issue
+    N's lease only; a sibling holding another issue no longer refuses it. A
+    verification worktree is still refused while any foreign lease is live.
+  - `preflight` lists every lease in `locks` (with `stale`). Its old
+    `lock-live:<run>` failure is now `slots-full`, counted on LIVE leases
+    only, so a stale lease never stops the tick before `recover`. A new
+    `warnings` list says `cargo-target-dir-set:<dir>` when `CARGO_TARGET_DIR`
+    is set (every worktree would build into one directory, #60).
+  - `status` adds `locks`.
+  - `clear-halt` and `resolve-incident` are refused while ANY lease is live.
+  - `fetch` excludes every issue with a lease, live or stale, as
+    `locked:<run>`, even when its `agent-working` label is missing.
+
+  7 new tests in `scripts/agentflow/tests/test_{cli_flow,cli_units}.py`; the
+  `post-merge` preflight test now expects `slots-full`. The suite is 339 passed
+  (was 332).
+
+- **agentflow: recovery works on one issue's lease (`scripts/agentflow/{lock,cli,recovery}.py`).**
+  Step 7 of the parallel-issues design.
+  - `preflight` adds `stale_locks`, every stale lease; `stale_lock` stays (the
+    first, or null) for one release.
+  - `recover --issue N` recovers issue N's lease. Without `--issue` it still
+    works when exactly one lease is stale; with several it exits 2 and lists
+    them. A live lease is `lock-live:<run>`.
+  - `recover` first steals the lease (`lock.steal_for_recovery`): under mutex
+    `registry` it checks the lease is still stale, then makes it live with
+    `recovering_by` set and the stale run's id kept. A second session
+    recovering the same lease at once gets `lock-live` and leaves it alone.
+  - On a merged run, `lock.handover` replaces the stolen lease with the
+    follow-through's lease in one write. Before, `recover_stale` removed the
+    lease and `cmd_recover` took a new one afterwards, so the issue had no
+    lease in between and a sibling could claim it.
+
+  4 new tests in `scripts/agentflow/tests/test_cli_flow.py` (two stale leases,
+  a live lease by issue, two sessions stealing at once in two real processes,
+  no moment without a lease); the suite is 343 passed (was 339).
+
+- **agentflow: `claim` checks free disk (`scripts/agentflow/{lock,cli}.py`).**
+  Step 8 of the parallel-issues design. Required free disk is now
+  `min_free_gb` plus `reserve_gb_per_run` for each LIVE run (defaults 40 +
+  30: 40 GB for the first claim, 70 GB for the second), measured on the
+  worktrees' volume (the checkout's parent, not the checkout). `claim`
+  refuses `disk-low:<free>GB<<need>GB` under mutex `registry`, before any
+  lease, label or attempt; before, only `preflight` checked disk. `preflight`
+  uses the same rule, fails `disk-free:<n>GB` as before, and now reports
+  `disk_free_gb` and `disk_required_gb`. A stale lease reserves nothing,
+  and `unblock` and the recovery follow-through are not checked. With no
+  live run the floor is `min_free_gb`, as before.
+
+  1 new test in `scripts/agentflow/tests/test_cli_flow.py`. The test fixtures
+  now report 500 GB free unless a test states its own number, because the
+  machine's real free space must not decide a claim test (this machine had
+  31 GB free on `C:`). The suite is 344 passed (was 343).
+
+- **agentflow: `claim --loop-max` charges the loop budget with the lease
+  (`scripts/agentflow/{budget,lock,cli}.py`).** Step 9 of the parallel-issues
+  design. `claim N ... --loop-max M` checks `.agent/runs/loop.json` and
+  charges it in the same `registry` critical section that creates the lease,
+  and only once the lease file exists. Before, the budget was a separate
+  `loop-tick` call, so a claim that then failed had already spent a unit,
+  and two sessions at the last unit could both pass a check made before
+  either charged. Now an exhausted budget is `loop-exhausted` (no lease, no
+  gh call), `issue-held` and the other refusals spend nothing, and a claim
+  that rolls back gives its unit back. The budget is shared: `--max-issues`
+  is a total across sessions. `loop-tick` stays one release for old prompts;
+  without `--loop-max`, `claim` does not touch `loop.json`.
+
+  4 new tests (3 in `test_cli_flow.py`, among them two real processes at the
+  last unit; 1 in `test_lock.py`). The suite is 348 passed (was 344).
+
+- **agentflow: one git writer at a time in the shared checkout, and
+  `make-worktree` (`scripts/agentflow/{gitops,cli}.py`).** Step 10 of the
+  parallel-issues design. The CLI's root `Git` holds mutex `git` around each
+  subcommand that writes the shared `.git` (`fetch`, `checkout`, `merge`,
+  `update-index`, `worktree`, `branch`, `push`, `rebase`, `revert`,
+  `commit`, `add`), never around a read; `push-branch --cwd` shares it, since
+  a push from a worktree updates shared refs. A waiter gives up after 600 s
+  with `MutexTimeout`. `Git.ff` returned False on ANY error, so a sibling's
+  `index.lock` inside `post-merge` read as "master does not fast-forward";
+  it now returns False only for git's "Not possible to fast-forward" and
+  raises otherwise. New fenced `make-worktree` replaces the conductor's own
+  `git worktree add`: it takes the worktree and branch from this run's
+  `claim.json`, fetches, and bases the branch on `origin/master` (pinned to
+  its SHA, reported as `base`), because the root's `master` can lag a
+  sibling's merge. `preflight` no longer fails a root `master` that is only
+  BEHIND `origin/master` (it reports `master_behind_origin: true`); a
+  diverged one still fails `master-differs-from-origin`.
+
+  5 new tests (2 in `test_gitops.py`, 3 in `test_cli_flow.py`). The suite is
+  353 passed (was 348).
+
+- **agentflow: one heavy gate at a time across sessions
+  (`scripts/agentflow/{cli,supervise}.py`).** Step 11 of the parallel-issues
+  design. A heavy gate (`ci-steps-all`, `check-goldens`,
+  `check-goldens-regen`, `cdo-gate`, or any name ending `-on-revert`) runs
+  only while it holds one of `heavy_gates` (config, default 1) OS mutexes
+  `.agent/mutex/gate-<k>.lock`, so a dying holder frees it and nothing goes
+  stale. Light gates (`check-goldens-coverage`, `ci-wait`, anything else)
+  never wait. A waiting gate retries every 15 s, beats its run's lease every
+  60 s, and, under `run`, stops on HALT (`failure: halted-while-queued`) and
+  on the run's wall clock. After `gate_wait_minutes` (default 180) it is
+  `failure: gate-queue-timeout`, `exit_code: null`: not a verdict, and the
+  child never started. The wait does not count toward the gate's own
+  `--timeout`. `run` reports `queued_s`. `post-merge` waits under HALT and
+  routes a queue timeout like a gate killed at its timeout (HALT only, never
+  the revert); a revert re-run that never got the semaphore counts as not
+  validated, so the revert is not pushed. The holder writes
+  `.agent/mutex/gate-<k>.json` (run, gate, pid, since) for humans.
+
+  7 new tests in `test_cli_flow.py` (two real processes with 1 and with 2
+  heavy slots, light vs heavy names, beat and HALT while queued, a killed
+  holder, and post-merge under HALT both timing out and waiting through). The
+  suite is 360 passed (was 353).
+
+- **agentflow: one merge at a time, through a merge lane
+  (`scripts/agentflow/{lock,cli,mergeops,state}.py`).** Step 12 of the
+  parallel-issues design. Two runs that both passed `merge-gate` on base B0
+  could both merge, the second onto a base it never tested
+  (`--match-head-commit` pins the head, not the base). `merge` now takes
+  `.agent/merge-lane.json` (`{run_id, issue, pr, merge_sha, acquired}`) under
+  mutex `registry` BEFORE its gate re-check, and refuses `merge-lane-busy`
+  (another run with a live lease holds it) or `merge-lane-orphaned` (its
+  holder's lease is stale; `recover` moves it on). A gate refusal or a merge
+  that fails before GitHub merged gives the lane back; a merge whose commit
+  could not be read keeps it. `merge` is now fenced like every other write.
+  `merge-gate` reports the same two reasons, read-only. `post-merge` takes or
+  keeps the lane before any git call (a free lane is taken, so a merge made
+  before this change still verifies; another live holder is refused with no
+  HALT and no incident) and frees it only on a clean verdict; every stop keeps
+  it until `finish`, which frees it on any outcome. `recover` hands a dead
+  run's lane to the follow-through with the lease (`lock.handover`), and frees
+  it on `blocked-crashed`. The lane has no heartbeat: it is held while the
+  lease of its issue that names its run is live. `cleanup` of a verification
+  worktree is now refused only while ANOTHER run with a live lease holds the
+  lane (before: any live foreign lease). `status` shows `merge_lane` with its
+  state, and the heavy-gate holders' notes as `gates`.
+
+  6 new tests in `test_cli_flow.py` (design tests 21-26, plus post-merge
+  refused under a live holder and the crashed-run release); the retained
+  verification-worktree cleanup test now hand-states the lane and gains an
+  arm for a sibling without it. The suite is 366 passed (was 360).
+
+- **agentflow: prompts and spec for parallel issues
+  (`.claude/commands/{orchestrate,issue}.md`,
+  `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`).** Step 13
+  of the parallel-issues design, for steps 5-12. `orchestrate.md`: each session
+  keeps its run id in `.agent/runs/session-<id>.run-id` and never acts on
+  another session's; preflight's `slots-full` / `disk-free` mean "do not claim
+  now" (reschedule under `/loop`), and it prints `locks`, the disk numbers,
+  `warnings` and `master_behind_origin`; `recover --issue <N>` for ONE of
+  `stale_locks` per tick, skipping `lock-live`; the separate `loop-tick` step
+  is folded into `claim --loop-max`, with `issue-held` (try the next pick),
+  `slots-full` / `disk-low` (stop the tick) and `loop-exhausted` (end the
+  loop); the budget is shared across sessions. `issue.md`: the claim check
+  reads `locks`; step 1 uses `make-worktree` (from `origin/master`) instead of
+  `git worktree add`; heavy gates may queue (`queued_s`, `gate-queue-timeout`
+  retried once, `halted-while-queued` is `blocked halted`); a shared-ref
+  `git fetch` retries once on `cannot lock ref`; `merge-gate` and `merge`'s
+  `merge-lane-busy` is waited out with beats and no budget charge, and
+  `merge-lane-orphaned` is `blocked`. The spec's non-goal "parallel issues"
+  becomes "up to `slots`", and its Locking, Preflight, Claim, Fencing,
+  recovery and cleanup text describe per-issue leases, the mutexes, the gate
+  semaphore and the merge lane. The `rebase_regate` cap stays 1: raising it
+  (design C11) is the owner's decision.
+
+  The refusal codes the conductor branches on are now named constants
+  (`lock.ISSUE_HELD`, `SLOTS_FULL`, `DISK_LOW`, `LOOP_EXHAUSTED`,
+  `LANE_REFUSED`; `cli.QUEUE_TIMEOUT`, `HALTED_WHILE_QUEUED`).
+  `test_docs_drift.py` gains 6 tests (2 parametrised over the documents): each
+  document spells, as a token, the codes its steps branch on, read from those
+  constants; and every `merge-lane-<x>` a document names is one the executor
+  returns. The suite is 372 passed (was 366).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

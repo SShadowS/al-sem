@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,7 +21,8 @@ from . import (budget, discoveries, eligibility, incidents, lock, mergeops, prot
                sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import Ctx, DryRunViolation, Paths, new_run_id, read_json, write_json
+from .state import (Ctx, DryRunViolation, MutexTimeout, Paths, config, mutex, new_run_id, read_json,
+                    update_json, write_json)
 
 # `agent-regressed` is no longer spelled here: it comes from
 # `recovery.INCIDENT_LABELS` along with the three two-axis names, so the
@@ -47,12 +49,12 @@ CDO_GATE_KEY = "cdo-gate"
 # matches HEAD but whose porcelain disagrees. The list is CUT; the count beside
 # it never is -- see `recovery.HaltOutcome.dirty`.
 MAX_ANOMALY_LISTED = 50
-# `preflight` refuses a tick below this much free disk. One issue run builds a
-# worktree target (up to ~30 GB) and post-merge builds another, so 20 GB was not
-# enough: on 2026-10-14 a tick started above it, the drive hit 35 MB, and the
-# post-merge check failed at `gen-syntax` on a green merge (#68).
-MIN_FREE_GB = 40
+# The free-disk floor `preflight` refuses below is `min_free_gb` in
+# `.agent/config.json` (see `state.CONFIG_DEFAULTS` for why it is 40 GB).
 _REJECTED_BASH_DIRS = ("system32", "windowsapps")
+# How long a root git write waits for a sibling session's (mutex `git`). A
+# `git worktree add` of this repository and a fetch are the long holders.
+GIT_MUTEX_TIMEOUT = 600.0
 
 
 def _git_exec_path() -> str | None:
@@ -133,10 +135,15 @@ def _ctx(args) -> Ctx:
 
 
 def _beat_if_owner(ctx: Ctx):
-    lk = lock.read(ctx)
-    if ctx.dry_run or lk is None or lk.run_id != ctx.run_id:
+    if ctx.dry_run or lock.own(ctx) is None:
         return None
     return lock.beat
+
+
+def _lease_rows(ctx: Ctx) -> list[dict]:
+    """Every lease, with whether it is stale, for `preflight` and `status`."""
+    now = ctx.now()
+    return [{**asdict(lk), "stale": lock.is_stale(lk, now)} for lk in lock.all_locks(ctx)]
 
 
 def _docs_only(git: Git, base: str, head: str) -> bool:
@@ -185,9 +192,81 @@ def _with_bash(cmd: list[str]) -> list[str]:
     return [resolve_bash(), *cmd[1:]] if cmd and cmd[0] == "bash" else list(cmd)
 
 
+# The gate semaphore. A HEAVY gate (a full build or the goldens/CDO suites)
+# runs only while it holds one of `heavy_gates` OS mutexes `gate-<k>`, so two
+# sessions' gates never build at once. The NAME is the classifier: the
+# conductor already names gates with these strings and `attest` keys on them.
+# `check-goldens-coverage` (no build) and `ci-wait` stay light.
+HEAVY_GATES = frozenset({"ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate"})
+QUEUE_POLL_S = 15.0     # how often a queued gate retries the semaphore
+QUEUE_BEAT_S = 60.0     # how often a queued gate refreshes its run's lease
+QUEUE_TIMEOUT, HALTED_WHILE_QUEUED = "gate-queue-timeout", "halted-while-queued"
+
+
+class GateQueued(RuntimeError):
+    """A heavy gate never got the semaphore. `failure` is
+    `gate-queue-timeout` (waited `gate_wait_minutes`) or `halted-while-queued`.
+    Not a verdict: the child never started."""
+
+    def __init__(self, failure: str, queued_s: float):
+        super().__init__(f"{failure} after {queued_s:.0f} s")
+        self.failure, self.queued_s = failure, queued_s
+
+
+def _is_heavy(name: str) -> bool:
+    return name in HEAVY_GATES or name.endswith("-on-revert")
+
+
+def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> float:
+    """Take a free `gate-<k>` mutex into `stack`; return the seconds waited.
+
+    A mutex, not a lease: if this process dies, the OS frees it, so it never
+    goes stale. Taken ONLY here, and the merge lane never is, so nothing
+    takes gate then lane (no deadlock). While waiting: beat the run's own
+    lease every QUEUE_BEAT_S, and, when `halt_aborts`, stop on HALT and on
+    the run's wall clock. `post-merge` passes `halt_aborts=False`: it runs
+    under HALT and past the deadline, and so must its queue. The wait does
+    not count toward the gate's own `--timeout`."""
+    n = max(1, config(ctx)["heavy_gates"])
+    wait_s = config(ctx)["gate_wait_minutes"] * 60
+    start = last_beat = time.monotonic()
+    while True:
+        for k in range(n):
+            try:
+                stack.enter_context(mutex(ctx, f"gate-{k}", timeout=0))
+            except MutexTimeout:
+                continue
+            info = ctx.paths.agent / "mutex" / f"gate-{k}.json"
+            write_json(ctx, info, {"run_id": ctx.run_id, "name": name, "pid": os.getpid(), "since": ctx.now()})
+            stack.callback(info.unlink, missing_ok=True)
+            return time.monotonic() - start
+        waited = time.monotonic() - start
+        owner = not ctx.dry_run and lock.own(ctx) is not None
+        if owner and time.monotonic() - last_beat >= QUEUE_BEAT_S:
+            lock.beat(ctx)
+            last_beat = time.monotonic()
+        if halt_aborts:
+            if lock.halted(ctx) is not None:
+                raise GateQueued(HALTED_WHILE_QUEUED, waited)
+            if owner:
+                budget.check_deadline(ctx)
+        if waited >= wait_s:
+            raise GateQueued(QUEUE_TIMEOUT, waited)
+        time.sleep(QUEUE_POLL_S)
+
+
 def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path, *,
-              cargo_target_dir: str | None = None) -> supervise.Result:
+              cargo_target_dir: str | None = None, halt_aborts: bool = True) -> supervise.Result:
     ctx.write_guard("run gate")
+    with ExitStack() as stack:
+        queued = _gate_slot(ctx, name, halt_aborts, stack) if _is_heavy(name) else 0.0
+        r = _run_gate_now(ctx, name, cmd, minutes, cwd, cargo_target_dir)
+    r.queued_s = round(queued, 1)
+    return r
+
+
+def _run_gate_now(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path,
+                  cargo_target_dir: str | None) -> supervise.Result:
     # `_grammar` is derived from `ctx.paths.root`, NOT from `cwd`, and that is
     # load-bearing rather than incidental: it is what lets a gate run in a
     # worktree that has no grammar clone of its own. See `worktrees`.
@@ -235,8 +314,17 @@ def cmd_preflight(args, ctx, gh, git):
         git.fetch()
     except GitError:
         fails.append("fetch-failed")
-    if git.rev("master") != git.rev("origin/master"):
+    # BEHIND is not a failure, DIVERGED is. With several sessions a sibling's
+    # merge moves `origin/master`, and only that sibling's post-merge
+    # fast-forwards the root; issue worktrees branch from `origin/master`
+    # (`make-worktree`), so a lagging root `master` builds nothing wrong. A
+    # root `master` carrying a commit `origin` lacks still stops the tick.
+    # Fully qualified refs: `master` alone prefers a tag of that name.
+    behind = False
+    if not git.is_ancestor("refs/heads/master", "refs/remotes/origin/master"):
         fails.append("master-differs-from-origin")
+    else:
+        behind = git.rev("refs/heads/master") != git.rev("refs/remotes/origin/master")
     if (h := lock.halted(ctx)) is not None:
         fails.append(f"halt:{h}")
     # Computed INDEPENDENTLY of the halt row above, and that independence IS
@@ -254,10 +342,15 @@ def cmd_preflight(args, ctx, gh, git):
     # tick on `ok:false` before it ever reaches `recover`. Visible, not fatal.
     for inc in incidents.unresolved(ctx):
         fails.append(f"incident:{inc['merge_sha'][:12]}")
-    lk = lock.read(ctx)
-    stale = lk is not None and lock.is_stale(lk, ctx.now())
-    if lk is not None and not stale:
-        fails.append(f"lock-live:{lk.run_id}")
+    # LIVE leases only. A stale lease still holds its slot at `claim`, but
+    # failing here on it would stop the tick before it reaches the `recover`
+    # that frees the slot; it is listed in `locks` (and `stale_lock`) instead.
+    # With the default `slots: 1` one live lease is `slots-full`, which is
+    # the old `lock-live:<run>` row under the name the claim itself uses.
+    leases = _lease_rows(ctx)
+    if sum(not r["stale"] for r in leases) >= config(ctx)["slots"]:
+        fails.append("slots-full")
+    stale = [r for r in leases if r["stale"]]
     if not gh.auth_ok():
         fails.append("gh-auth")
     cdo = os.environ.get("CDO_WS")
@@ -269,11 +362,26 @@ def cmd_preflight(args, ctx, gh, git):
         resolve_bash()
     except RuntimeError:
         fails.append("bash")
-    free_gb = shutil.disk_usage(ctx.paths.root).free // 2**30
-    if free_gb < MIN_FREE_GB:
+    # The same rule `claim` refuses on (`lock.disk_required_gb`): the floor
+    # plus a reserve per live run. Failing while a sibling runs only means
+    # "do not claim now".
+    free_gb = lock.disk_free_gb(ctx)
+    need_gb = lock.disk_required_gb(ctx, sum(not r["stale"] for r in leases))
+    if free_gb < need_gb:
         fails.append(f"disk-free:{free_gb}GB")
-    out = {"ok": not fails, "failures": fails, "stale_lock": asdict(lk) if stale else None,
-           "incidents": incidents.visible(ctx),
+    # Not failures. Risk (g)3 of the parallel-issues design: an inherited
+    # CARGO_TARGET_DIR makes every issue worktree build into one directory,
+    # so two runs' gates contend for it (#60).
+    warnings = []
+    if os.environ.get("CARGO_TARGET_DIR"):
+        warnings.append(f"cargo-target-dir-set:{os.environ['CARGO_TARGET_DIR']}")
+    # `stale_locks` is what `recover --issue` works through. `stale_lock` (the
+    # first, or null) stays one release for the old prompt text.
+    stale_locks = [{k: v for k, v in r.items() if k != "stale"} for r in stale]
+    out = {"ok": not fails, "failures": fails, "locks": leases, "stale_locks": stale_locks,
+           "stale_lock": stale_locks[0] if stale_locks else None,
+           "disk_free_gb": free_gb, "disk_required_gb": need_gb,
+           "warnings": warnings, "master_behind_origin": behind, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:
         # Visible, never a verdict: this branch must not touch `fails`. The
@@ -289,6 +397,14 @@ def cmd_fetch(args, ctx, gh, git):
     issues = gh.list_open_issues()
     allowed = gh.collaborators() | {args.repo.split("/")[0]}
     ok, excluded = eligibility.eligible(issues, allowed)
+    # The lease, not the label, says an issue is taken: `agent-working` is
+    # added AFTER the lease and can lag. Live or stale alike (a stale lease
+    # belongs to `recover`). Eligibility still sees every open issue, so the
+    # dependency graph is unchanged.
+    held = {lk.issue: lk.run_id for lk in lock.all_locks(ctx)}
+    ok = [i for i in ok if i.number not in held]
+    excluded = ([eligibility.Excluded(i, f"locked:{held[i.number]}") for i in issues if i.number in held]
+                + [e for e in excluded if e.issue.number not in held])
     pick = eligibility.oldest(ok, 10)
     return _emit({
         "open_count": len(issues),
@@ -300,11 +416,36 @@ def cmd_fetch(args, ctx, gh, git):
 
 
 def cmd_recover(args, ctx, gh, git):
-    lk = lock.read(ctx)
-    if lk is None or not lock.is_stale(lk, ctx.now()):
-        raise Fail({"error": "no stale lock"})
-    ctx.run_id = ctx.run_id or new_run_id(ctx.now())
+    now = ctx.now()
+    if args.issue is not None:
+        lk = lock.for_issue(ctx, args.issue)
+        if lk is None:
+            raise Fail({"error": "no stale lock", "issue": args.issue})
+        if not lock.is_stale(lk, now):
+            raise Fail({"error": f"lock-live:{lk.run_id}", "issue": args.issue})
+    else:
+        # Today's call shape still works when there is one stale lease. With
+        # more, guessing would recover the wrong issue: name one.
+        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now)]
+        if not stale:
+            raise Fail({"error": "no stale lock"})
+        if len(stale) > 1:
+            raise Fail({"error": "several stale locks; name one with --issue",
+                        "stale_locks": [asdict(x) for x in stale]}, 2)
+        lk = stale[0]
+    ctx.run_id = ctx.run_id or new_run_id(now)
+    # Make the lease live under this run's name before acting on it, so a
+    # second session recovering at the same time gets `lock-live` and leaves
+    # it alone. It keeps the stale run's id (see `lock.steal_for_recovery`).
+    try:
+        lk = lock.steal_for_recovery(ctx, lk)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     out = recovery.recover_stale(ctx, git, gh, lk, worktrees_parent=ctx.paths.root.parent)
+    if out.get("action") == "blocked-crashed":
+        # A crashed run that merged nothing has nothing to verify: a merge
+        # lane it named (taken, then the merge never landed) is freed.
+        lock.release_lane(ctx, run_id=lk.run_id)
     if out.get("action") == "merged-needs-post-merge":
         # A merged stale run is not fully recovered until ITS follow-through
         # (post-merge, discoveries, finish, cleanup) runs -- under the
@@ -321,7 +462,10 @@ def cmd_recover(args, ctx, gh, git):
         # again, and master would keep an unverified merge behind a
         # `verifying` row. `heartbeat` deliberately stays `now` (see
         # `lock.acquire`) -- carrying it back would make this lock born stale.
-        lock.acquire(ctx, lk.issue, "recover", lk.attempt, started=lk.started)
+        #
+        # `handover`, not release-then-acquire: one write replaces the stolen
+        # lease, so the issue never has no lease (a sibling could claim it).
+        lock.handover(ctx, lk.issue, started=lk.started)
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
         budget.init(ctx, claimed_at=ctx.now())
         worktree = str(ctx.paths.root.parent / recovery.worktree_name(lk.issue, lk.attempt))
@@ -344,9 +488,14 @@ def cmd_recover(args, ctx, gh, git):
 def cmd_claim(args, ctx, gh, git):
     lock.require_not_halted(ctx)
     ctx.run_id = ctx.run_id or new_run_id(ctx.now())
-    attempts = read_json(ctx.paths.attempts, default={})
-    attempt = attempts.get(str(args.issue), 0) + 1
-    lk = lock.acquire(ctx, args.issue, args.session, attempt)
+    attempt = read_json(ctx.paths.attempts, default={}).get(str(args.issue), 0) + 1
+    try:
+        lk = lock.acquire(ctx, args.issue, args.session, attempt, loop_max=args.loop_max)
+    except lock.LockHeld as e:
+        # Nothing was created, labelled or counted. `issue-held` means "try
+        # the next ranked issue"; `slots-full` and `disk-low` mean "do not
+        # claim now"; `loop-exhausted` ends the loop.
+        raise Fail({"error": e.code, "detail": str(e)})
     try:
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
         budget.init(ctx, claimed_at=lk.started)
@@ -375,11 +524,19 @@ def cmd_claim(args, ctx, gh, git):
         # The attempt counter is only consumed once every fallible step above
         # has succeeded -- a rolled-back claim (nothing labelled, no branch
         # made) must not burn one of the three attempts.
-        write_json(ctx, ctx.paths.attempts, {**attempts, str(args.issue): attempt})
+        #
+        # Re-read under mutex `registry`, never written back from a snapshot:
+        # a sibling claim of another issue may have bumped its own count since.
+        update_json(ctx, ctx.paths.attempts, lambda a: {**a, str(args.issue): attempt},
+                    mutex_name="registry", default={})
         # Consumed (or voided) under the same rule: a rolled-back claim leaves
-        # the handoff for the next one.
+        # the handoff for the next one. Re-read under the mutex, not written
+        # back from the snapshot above: another run's handoff may have landed
+        # since.
         if handoff is not None:
-            write_json(ctx, ctx.paths.handoffs, {k: v for k, v in handoffs.items() if k != str(args.issue)})
+            update_json(ctx, ctx.paths.handoffs,
+                        lambda h: {k: v for k, v in h.items() if k != str(args.issue)},
+                        mutex_name="handoffs", default={})
     except Exception as e:
         try:
             gh.remove_label(args.issue, "agent-working")  # best-effort; may not have been set yet
@@ -389,6 +546,11 @@ def cmd_claim(args, ctx, gh, git):
             lock.release(ctx)
         except Exception:
             pass  # never let a release failure mask the original error
+        if args.loop_max is not None:
+            try:
+                budget.loop_refund(ctx)  # the budget counts claims that landed
+            except Exception:
+                pass
         raise Fail({"error": f"claim rolled back: {e}"})
     if handoff is not None:
         try:
@@ -400,9 +562,28 @@ def cmd_claim(args, ctx, gh, git):
     return _emit(info)
 
 
+def cmd_make_worktree(args, ctx, gh, git):
+    """The issue worktree, made by the executor instead of the conductor's
+    own `git worktree add` in the shared root (which raced a sibling
+    session's git writes). Fenced; the names come from THIS run's
+    `claim.json`, never argv. The base is `origin/master` after a fetch,
+    pinned to its SHA: the root's `master` can lag a sibling's merge until
+    that sibling's post-merge fast-forwards it."""
+    ctx.write_guard("make worktree")
+    lock.require_not_halted(ctx)
+    lk = lock.check_fence(ctx)
+    claim = read_json(ctx.run_dir / "claim.json")
+    if not isinstance(claim, dict) or claim.get("issue") != lk.issue or not claim.get("worktree"):
+        raise Fail({"error": "no claim.json for this run's lease"})
+    git.fetch()
+    base = git.rev("refs/remotes/origin/master")
+    git.worktree_add(Path(claim["worktree"]), claim["branch"], base)
+    return _emit({"worktree": claim["worktree"], "branch": claim["branch"], "base": base})
+
+
 def cmd_beat(args, ctx, gh, git):
     lock.beat(ctx)
-    return _emit({"heartbeat": lock.read(ctx).heartbeat})
+    return _emit({"heartbeat": lock.own(ctx).heartbeat})
 
 
 def cmd_halt_check(args, ctx, gh, git):
@@ -447,8 +628,14 @@ def cmd_incidents(args, ctx, gh, git):
 
 
 def cmd_unblock(args, ctx, gh, git):
-    ctx.run_id = "unblock"
-    lock.acquire(ctx, args.issue, "human", 0)
+    # A unique id: two unblocks at once must not share one. `count_slot=False`
+    # because an unblock does no work; it still refuses `issue-held`, so it
+    # never relabels an issue a run (or a stale lease) is holding.
+    ctx.run_id = f"unblock-{uuid.uuid4().hex[:6]}"
+    try:
+        lock.acquire(ctx, args.issue, "human", 0, count_slot=False)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     try:
         gh.remove_label(args.issue, "agent-blocked")
     finally:
@@ -458,19 +645,29 @@ def cmd_unblock(args, ctx, gh, git):
 
 def cmd_run(args, ctx, gh, git):
     lock.require_not_halted(ctx)
-    lk = lock.read(ctx)
-    if lk is not None and lk.run_id != ctx.run_id:
-        # A run that has lost (or never held) the lock must not be allowed to
-        # drive an unsupervised, unfenced child process under someone else's
-        # claim -- refuse outright rather than silently running unsupervised.
-        raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
-    supervised = lk is not None  # lk.run_id == ctx.run_id, given the check above
+    mine = lock.own(ctx)
+    others = lock.all_locks(ctx)
+    if mine is None and others:
+        # A run that has lost (or never held) a lease must not be allowed to
+        # drive an unsupervised, unfenced child process while runs hold
+        # leases -- refuse outright rather than silently running unsupervised.
+        # With slots, a sibling's lease always exists, so "a lease that is
+        # not mine" no longer means "I lost mine"; owning none does.
+        raise lock.FenceError(f"no lease names run {ctx.run_id}; leases are held by "
+                              f"{', '.join(lk.run_id for lk in others)}")
+    supervised = mine is not None
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
-    r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
+    try:
+        r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
+    except GateQueued as e:
+        # Not a verdict: the child never started. `gate-queue-timeout` is
+        # worth one more try; `halted-while-queued` is `blocked halted`.
+        return _emit({"exit_code": None, "failure": e.failure, "queued_s": round(e.queued_s, 1),
+                      "supervised": supervised}, 1)
     out = {"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
-           "seconds": round(r.seconds, 1), "supervised": supervised}
+           "seconds": round(r.seconds, 1), "queued_s": r.queued_s, "supervised": supervised}
     if r.contended_build:
         # #60: another build held target/ -- environmental, not a gate verdict.
         out["failure"] = "contended-build"
@@ -719,23 +916,42 @@ def _gate_reasons(ctx, gh, git, pr: int):
 
 def cmd_merge_gate(args, ctx, gh, git):
     _, reasons, green = _gate_reasons(ctx, gh, git, args.pr)
+    # Read-only. Another session's merge not yet verified (`busy`), or one
+    # whose run died (`orphaned`, until a `recover`): the base is about to
+    # move, so a rebase now would be spent for nothing.
+    _, lane = lock.lane_state(ctx)
+    if lane in lock.LANE_REFUSED:
+        reasons.append(f"merge-lane-{lane}")
     return _emit({"reasons": reasons, "ci_green": green}, 0 if not reasons else 1)
 
 
 def cmd_merge(args, ctx, gh, git):
     lock.require_not_halted(ctx)
+    # Fenced: with several leases, a run that lost its own must not merge.
+    lk = lock.check_fence(ctx)
+    # THE MERGE LANE, taken BEFORE the gate re-check and held through
+    # `post-merge`: two runs that both passed `merge-gate` on base B0 can no
+    # longer both merge (`--match-head-commit` pins the head, not the base),
+    # and no second merge lands while the first is unverified.
+    try:
+        lock.take_lane(ctx, lk.issue, args.pr)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     att, reasons, _ = _gate_reasons(ctx, gh, git, args.pr)
     if reasons:
+        lock.release_lane(ctx)
         return _emit({"reasons": reasons}, 1)
-    sha = mergeops.merge(ctx, gh, args.pr, att, reasons)
+    try:
+        sha = mergeops.merge(ctx, gh, args.pr, att, reasons)
+    except mergeops.MergeShaUnavailable:
+        raise          # GitHub merged: the lane stays for the post-merge/recovery
+    except Exception:
+        lock.release_lane(ctx)
+        raise
+    lock.take_lane(ctx, lk.issue, args.pr, sha)
     # The provenance record `post-merge` now demands. `issue` comes from the
     # ATTESTATION, not from argv: the attestation is what bound this merge to
     # an issue, and `merge` has no `--issue` of its own to be wrong about.
-    # `ctx.run_id` is provably non-None here -- `_gate_reasons` above called
-    # `mergeops.read_attestation(ctx)`, which touches `ctx.run_dir`, and that
-    # property raises RuntimeError("no run_id in context") when run_id is None.
-    # (`cmd_merge` itself calls only `lock.require_not_halted`, never
-    # `check_fence`, so the fence is NOT what guarantees this.)
     mergeops.write_merge_record(ctx, mergeops.MergeRecord(
         issue=att.issue, pr=args.pr, merge_sha=sha, run_id=ctx.run_id, source="merge"))
     return _emit({"merge_sha": sha})
@@ -774,6 +990,16 @@ def cmd_post_merge(args, ctx, gh, git):
                                  "run_id": rec.run_id},
                     "requested": {"issue": args.issue, "merge_sha": args.merge_sha,
                                   "run_id": ctx.run_id}})
+    # THE MERGE LANE, before any git call: this run's own `merge` took it, a
+    # recovery follow-through got it by `handover`, and a FREE lane is taken
+    # (a merge made before the lane existed still verifies). Another live
+    # run holding it means a second verification on one master: refused, no
+    # HALT, no incident (as the refusals above). Released only on a clean
+    # verdict below; on every stop it stays, with HALT set.
+    try:
+        lock.take_lane(ctx, rec.issue, rec.pr, rec.merge_sha)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     git.checkout("master")
     git.fetch()
     if not git.ff("origin/master"):
@@ -855,14 +1081,22 @@ def cmd_post_merge(args, ctx, gh, git):
             """Validate the revert IN THE TREE THE CALLER BUILT IT IN. This
             closure never chooses the tree, so it cannot re-run in a
             contaminated one."""
+            def green(gname, gcmd, gminutes) -> bool:
+                # Under HALT by construction (post_merge_failure set it), so
+                # the queue must not abort on it. A gate that never got the
+                # semaphore validated nothing: the revert is not pushed.
+                try:
+                    return _run_gate(ctx, gname, gcmd, gminutes, work, halt_aborts=False,
+                                     cargo_target_dir=_verify_target_dir(ctx)).exit_code == 0
+                except GateQueued:
+                    return False
+
             good = True
             for gname, gcmd, gminutes in gate_list:
-                if _run_gate(ctx, gname + "-on-revert", gcmd, gminutes, work,
-                             cargo_target_dir=_verify_target_dir(ctx)).exit_code != 0:
+                if not green(gname + "-on-revert", gcmd, gminutes):
                     good = False
             rerun_cmd = [resolve_bash(), "scripts/ci-steps", "test"]
-            if _run_gate(ctx, "ci-steps-test-on-revert", rerun_cmd, 45, work,
-                         cargo_target_dir=_verify_target_dir(ctx)).exit_code != 0:
+            if not green("ci-steps-test-on-revert", rerun_cmd, 45):
                 good = False
             return good
 
@@ -883,8 +1117,18 @@ def cmd_post_merge(args, ctx, gh, git):
             except GitError as e:
                 raise Fail({"error": f"verify-worktree-failed: {e}"})
             for name, cmd, minutes in gate_list:
-                r = _run_gate(ctx, name, cmd, minutes, verify_wt,
-                              cargo_target_dir=_verify_target_dir(ctx))
+                try:
+                    # `halt_aborts=False`: post-merge runs under HALT, so its
+                    # queue must too.
+                    r = _run_gate(ctx, name, cmd, minutes, verify_wt, halt_aborts=False,
+                                  cargo_target_dir=_verify_target_dir(ctx))
+                except GateQueued:
+                    # Never got the gate semaphore: COULD NOT VERIFY, the
+                    # same HALT-only route as a gate killed at its timeout,
+                    # never the revert. No exit code exists to record.
+                    timeouts.append(name)
+                    killed = name
+                    break
                 results[name] = r.exit_code
                 if r.timed_out:
                     # A gate the SUPERVISOR killed is not a gate that said no.
@@ -1021,6 +1265,11 @@ def cmd_post_merge(args, ctx, gh, git):
         return _emit(payload, 1)
     if original_exc is not None:
         raise original_exc
+    if ok:
+        # Verified, and the checkout is back on master: the next merge may
+        # land. Every other exit keeps the lane (HALT is set; `merge`
+        # refuses under HALT anyway) until `finish` or `recover`.
+        lock.release_lane(ctx)
     return _emit(payload, 0 if ok else 1)
 
 
@@ -1104,7 +1353,8 @@ def cmd_pr_comment(args, ctx, gh, git):
 
 def cmd_push_branch(args, ctx, gh, git):
     _guard_external_write(ctx, "push branch")
-    g = Git(args.cwd) if args.cwd else git
+    # A push from a worktree still updates the shared refs: same mutex.
+    g = Git(args.cwd, mutex=git.mutex) if args.cwd else git
     name = args.branch
     # Shape first, identity second: anything that is not a plain branch name is
     # refused before `master` is even considered, because a refspec argument can
@@ -1170,7 +1420,6 @@ def cmd_cleanup(args, ctx, gh, git):
     # refused. An absent lock is still accepted: the recovery follow-through's
     # own `finish` call comes AFTER cleanup and releases it only then, and a
     # standalone invocation may never have held one at all.
-    lk = lock.read(ctx)
     # A retained verification worktree is reached through a STALE foreign
     # lock by construction, so the fence below carves that case out.
     # `post-merge`'s `tree-dirty-after-gates` stop retains the tree and HALTs
@@ -1187,9 +1436,26 @@ def cmd_cleanup(args, ctx, gh, git):
     # cannot touch a branch or a merge SHA. This mirrors `lock.require_operator`
     # (lock.py:144-149) and `cmd_preflight`, both of which fail on a LIVE lock
     # and deliberately let a stale one through.
-    is_verify = Path(args.worktree).name.startswith(worktrees.VERIFY_PREFIX)
-    if lk is not None and lk.run_id != ctx.run_id and not (is_verify and lock.is_stale(lk, ctx.now())):
-        raise lock.FenceError(f"lock is {lk.run_id}, context is {ctx.run_id}")
+    #
+    # With several leases, the fence is per tree. An ISSUE worktree
+    # (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only: a sibling
+    # holding another issue is no reason to keep this tree. A VERIFY
+    # worktree is made only by the merge-lane holder's post-merge, so it is
+    # refused only while ANOTHER run holds the lane with a LIVE lease; a
+    # stale holder is the retained-evidence case above. A name that is
+    # neither keeps the old rule: any foreign lease.
+    name = Path(args.worktree).name
+    is_verify = name.startswith(worktrees.VERIFY_PREFIX)
+    m = re.match(rf"{re.escape(recovery.WORKTREE_PREFIX)}(\d+)-a", name)
+    if is_verify:
+        lane, state = lock.lane_state(ctx)
+        if state == "busy":
+            raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, context is {ctx.run_id}")
+    else:
+        blocking = [lk for lk in lock.all_locks(ctx) if lk.run_id != ctx.run_id
+                    and (m is None or lk.issue == int(m.group(1)))]
+        if blocking:
+            raise lock.FenceError(f"lock is {blocking[0].run_id}, context is {ctx.run_id}")
     # THE EXIT FOR A RETAINED VERIFICATION WORKTREE. `post-merge`'s
     # `tree-dirty-after-gates` stop keeps the tree the gates ran in, because
     # on that stop the dirt IS the evidence -- and a directory with no
@@ -1280,6 +1546,12 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
     sha = args.handoff_ref or ""
     if not _FULL_SHA.match(sha):
         raise Fail({"error": "sha-not-full", "values": {"handoff_ref": sha}})
+    # #141: the same declared stand-ins `attest` accepts, judged by the same
+    # validation. Without it a register marked by stand-ins could never be
+    # handed off, because the named roster's slots were empty on every entry.
+    reviewers, problem = _substituted_roster(args.substitute)
+    if problem:
+        raise Fail({"error": "bad-substitute", "detail": problem})
     claim = read_json(ctx.run_dir / "claim.json")
     if not isinstance(claim, dict):
         raise Fail({"error": "no claim.json for this run"})
@@ -1302,15 +1574,25 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
         entries = json.loads(register)
     except ValueError:
         entries = None
-    bad = _register_failures(entries, marks_ok=_handoff_marks)
+    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks)
     if bad:
-        raise Fail({"error": "handoff-not-ready", "entries": bad})
+        raise Fail({"error": "handoff-not-ready", "entries": bad, "reviewers": reviewers})
+    # `reviewers` reaches the next attempt through `claim`. A record without
+    # it (written before #141) was signed by the named roster.
     return {"from_run": ctx.run_id, "from_attempt": claim.get("attempt"), "branch": branch, "sha": sha,
             "body_hash": claim.get("body_hash"), "register_blob": register_blob,
-            "files": git.changed_files(git.out("merge-base", "master", sha), sha)}
+            "files": git.changed_files(git.out("merge-base", "master", sha), sha),
+            "reviewers": reviewers}
 
 
 def cmd_finish(args, ctx, gh, git):
+    if args.substitute and args.outcome != "handoff":
+        # A flag accepted and then ignored would be a silent no-op.
+        raise Fail({"error": "--substitute applies only to --outcome handoff"}, 2)
+    # Before any label, comment or release: `--issue` must be the issue this
+    # run's lease is for. Without it, `finish --issue 9` under a lease for 8
+    # labelled the wrong issue.
+    lock.check_fence(ctx, issue=args.issue)
     reason = _reason(args)
     if args.outcome == "handoff":
         _scan_or_fail(reason or "")
@@ -1318,8 +1600,8 @@ def cmd_finish(args, ctx, gh, git):
         # Written BEFORE the label, so the label never names a handoff that
         # does not exist. The reverse (a record with no label) only costs the
         # mirror: `claim` reads the record, not the label.
-        write_json(ctx, ctx.paths.handoffs,
-                   {**read_json(ctx.paths.handoffs, default={}), str(args.issue): record})
+        update_json(ctx, ctx.paths.handoffs, lambda h: {**h, str(args.issue): record},
+                    mutex_name="handoffs", default={})
     if args.outcome in ("answered", "blocked"):
         # Both outcomes post this text as a comment on a PUBLIC issue, and a
         # spike's answer is free-form output from a probe that may have read
@@ -1354,11 +1636,17 @@ def cmd_finish(args, ctx, gh, git):
                                f"Branch and worktree are left in place. See the ledger in the run's PR or comments.")
         recovery.notify(ctx, "halted" if reason == "halted" else "blocked", f"#{args.issue}: {reason}")
     if args.outcome == "handoff":
+        signers = record["reviewers"]
+        stand_ins = "" if all(s == r for s, r in signers.items()) else (
+            " Design marks recorded by " + ", ".join(f"{r} ({s} slot)" for s, r in signers.items()) + ".")
         gh.comment(args.issue, f"agentflow run `{ctx.run_id}` stopped at **{reason or 'spec-panel-cap'}** with a "
                                f"converged design, handed off as PRE-RATIFIED at `{record['sha'][:12]}` on "
-                               f"`{record['branch']}`. The next attempt starts at implementation; both reviewers "
-                               f"must still accept every carried finding before a merge.")
+                               f"`{record['branch']}`.{stand_ins} The next attempt starts at implementation; both "
+                               f"reviewers must still accept every carried finding before a merge.")
     dest = recovery.retain(ctx)
+    # Any outcome ends this run's hold on the merge lane (after a post-merge
+    # stop, HALT already keeps the next merge out).
+    lock.release_lane(ctx)
     lock.release(ctx)
     return _emit({"outcome": args.outcome, "retained": str(dest)})
 
@@ -1388,8 +1676,16 @@ def cmd_status(args, ctx, gh, git):
     # `visible`, not `unresolved`: the dashboard shows a verification still in
     # flight too. It is not an obligation the operator has to close, but a row
     # nobody can see is how one gets forgotten.
-    return _emit({"lock": asdict(lk) if lk else None, "halted": lock.halted(ctx), "budget": b,
-                  "incidents": incidents.visible(ctx)})
+    # `lock` is the run's own lease (or the only one); `locks` is every lease.
+    # `merge_lane` with its state; `gates` = the heavy-gate holders' own
+    # notes (informational: the OS lock is the truth, and a killed holder's
+    # note can outlive it).
+    lane, lane_state = lock.lane_state(ctx)
+    gate_notes = [read_json(p) for p in sorted((ctx.paths.agent / "mutex").glob("gate-*.json"))]
+    return _emit({"lock": asdict(lk) if lk else None, "locks": _lease_rows(ctx),
+                  "merge_lane": {**lane, "state": lane_state} if lane else None,
+                  "gates": [g for g in gate_notes if g],
+                  "halted": lock.halted(ctx), "budget": b, "incidents": incidents.visible(ctx)})
 
 
 # ---- argument parsing ------------------------------------------------------
@@ -1407,11 +1703,21 @@ def build_parser() -> argparse.ArgumentParser:
         s.set_defaults(fn=fn)
         return s
 
+    def add_substitute(s):
+        # One definition for `attest` and `finish --outcome handoff` (#141), so
+        # the two judgements of one register cannot drift apart.
+        s.add_argument("--substitute", action="append", default=[], metavar="SLOT=REVIEWER",
+                       help="fill a review slot with a named stand-in (e.g. astra=fable); recorded "
+                            "in the attestation or handoff record")
+
     add("preflight", cmd_preflight)
     add("fetch", cmd_fetch)
-    add("recover", cmd_recover)
+    s = add("recover", cmd_recover)
+    s.add_argument("--issue", type=int, help="the stale lease to recover; required when there are several")
     s = add("claim", cmd_claim); s.add_argument("issue", type=int); s.add_argument("--session", required=True); s.add_argument("--title-slug", required=True)
+    s.add_argument("--loop-max", type=int, help="charge the shared loop budget (`--max-issues`) in the same step as the lease")
     add("beat", cmd_beat)
+    add("make-worktree", cmd_make_worktree)
     s = add("halt-check", cmd_halt_check); s.add_argument("--terminal", action="store_true")
     s = add("set-halt", cmd_set_halt); s.add_argument("reason")
     # OPERATOR-ONLY (see `lock.require_operator`). They appear in `--help`
@@ -1430,8 +1736,7 @@ def build_parser() -> argparse.ArgumentParser:
     for a in ("--B", "--H", "--final-head", "--register", "--gates", "--body-hash"):
         s.add_argument(a, required=True)
     s.add_argument("--issue", type=int, required=True); s.add_argument("--docs-only", action="store_true")
-    s.add_argument("--substitute", action="append", default=[], metavar="SLOT=REVIEWER",
-                   help="fill a review slot with a named stand-in (e.g. astra=fable); recorded in the attestation")
+    add_substitute(s)
     s = add("body-hash", cmd_body_hash); s.add_argument("issue", type=int)
     s = add("merge-gate", cmd_merge_gate); s.add_argument("--pr", type=int, required=True)
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)
@@ -1450,6 +1755,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--outcome", choices=["merged", "blocked", "answered", "regressed", "handoff"], required=True)
     s.add_argument("--handoff-ref", help="full SHA of the commit carrying the handed-off design (--outcome handoff)")
     g = s.add_mutually_exclusive_group(); g.add_argument("--reason"); g.add_argument("--reason-file")
+    add_substitute(s)  # --outcome handoff only; cmd_finish refuses it elsewhere
     s = add("loop-tick", cmd_loop_tick); s.add_argument("--max", type=int, required=True)
     add("loop-reset", cmd_loop_reset)
     add("status", cmd_status)
@@ -1467,7 +1773,11 @@ def main(argv: list[str], gh_run=None, git_run=None) -> int:
         ctx = _ctx(args)
         gh_kw = {"run": gh_run} if gh_run else {}
         gh = Gh(ctx, args.repo, **gh_kw)
-        git = Git(ctx.paths.root, run=git_run) if git_run else Git(ctx.paths.root)
+        # Mutex `git` around every write to the shared root's `.git`, so two
+        # sessions' fetch / worktree add / checkout never collide on a lock.
+        # Looked up at call time, so a test can shorten the timeout.
+        git = Git(ctx.paths.root, run=git_run or subprocess.run,
+                  mutex=lambda: mutex(ctx, "git", timeout=GIT_MUTEX_TIMEOUT))
         return args.fn(args, ctx, gh, git)
     except Fail as f:
         return _emit(f.payload, f.code)
