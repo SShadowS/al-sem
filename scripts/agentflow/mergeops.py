@@ -158,8 +158,18 @@ def merge(ctx: Ctx, gh: Gh, pr: int, att: Attestation, gate_reasons: list[str]) 
     # `mergeCommit` yet, say so by name rather than raising a TypeError out of
     # a subscript: the caller needs a diagnosable state, because `master`
     # already carries the commit and the post-merge backstop still has to run.
-    merged = gh.pr_view(pr, "mergeCommit").get("mergeCommit") or {}
+    # Any failure from here on is `MergeShaUnavailable`: the caller must tell
+    # "GitHub merged, we lost the SHA" (keep the merge lane) from "nothing
+    # merged" (release it).
+    try:
+        merged = gh.pr_view(pr, "mergeCommit").get("mergeCommit") or {}
+    except Exception as e:
+        raise MergeShaUnavailable(f"merge-sha-unavailable: {e}") from e
     oid = merged.get("oid")
     if not oid:
-        raise RuntimeError("merge-sha-unavailable")
+        raise MergeShaUnavailable("merge-sha-unavailable")
     return oid
+
+
+class MergeShaUnavailable(RuntimeError):
+    """`gh pr merge` succeeded, then the merge commit could not be read."""

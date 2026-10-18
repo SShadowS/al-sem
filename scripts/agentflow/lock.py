@@ -332,7 +332,71 @@ def handover(ctx: Ctx, issue: int, *, started: float) -> Lock:
         _write(ctx, target, new)
         if path != target:
             path.unlink(missing_ok=True)
+        # The merge lane follows the lease: a lane the dead run took for this
+        # merge is the follow-through's to verify and release. Already under
+        # `registry`, so `_lane_write` takes no mutex.
+        lane = read_json(ctx.paths.merge_lane)
+        if lane and lane.get("run_id") == old.run_id:
+            _lane_write(ctx, {**lane, "run_id": ctx.run_id})
         return new
+
+
+# ---- the merge lane ---------------------------------------------------------
+# `.agent/merge-lane.json` = {run_id, issue, pr, merge_sha, acquired}: one
+# merge at a time, from `merge` until its `post-merge` verified it. A LEASE,
+# not a mutex, because it spans three CLI calls (`merge`, `post-merge`,
+# `finish`). It has no heartbeat of its own: it is held while its owner's
+# issue lease is live. The owner lease is found BY ISSUE and must still name
+# the lane's run: during a recovery the lease is live but names the dead run.
+
+def _lane_write(ctx: Ctx, lane: dict) -> None:
+    ctx.write_guard("write merge lane")
+    write_json(ctx, ctx.paths.merge_lane, lane)
+
+
+def _lane_state_held(ctx: Ctx) -> tuple[dict | None, str]:
+    lane = read_json(ctx.paths.merge_lane)
+    if not lane:
+        return None, "free"
+    owner = next((lk for lk in all_locks(ctx)
+                  if lk.issue == lane.get("issue") and lk.run_id == lane.get("run_id")), None)
+    if owner is None:
+        return lane, "free"          # the owner's lease is gone: nothing holds it
+    if lane["run_id"] == ctx.run_id:
+        return lane, "mine"
+    return lane, "orphaned" if is_stale(owner, ctx.now()) else "busy"
+
+
+def lane_state(ctx: Ctx) -> tuple[dict | None, str]:
+    """`(lane, state)`, state one of `free`, `mine`, `busy` (another run with
+    a live lease holds it) or `orphaned` (its owner's lease is stale: only
+    `recover` moves it on). A read; takes no mutex."""
+    return _lane_state_held(ctx)
+
+
+def take_lane(ctx: Ctx, issue: int, pr: int | None, merge_sha: str | None = None) -> dict:
+    """Hold the lane for this run, under `registry`. Free or already ours:
+    (re)written. Otherwise `LockHeld` `merge-lane-busy` / `merge-lane-orphaned`."""
+    ctx.write_guard("take merge lane")
+    with mutex(ctx, "registry"):
+        lane, state = _lane_state_held(ctx)
+        if state in ("busy", "orphaned"):
+            raise LockHeld(f"merge-lane-{state}")
+        new = {"run_id": ctx.run_id, "issue": issue, "pr": pr, "merge_sha": merge_sha,
+               "acquired": lane["acquired"] if state == "mine" else ctx.now()}
+        _lane_write(ctx, new)
+        return new
+
+
+def release_lane(ctx: Ctx, run_id: str | None = None) -> bool:
+    """Free the lane if it names `run_id` (default: this run). True if freed."""
+    ctx.write_guard("release merge lane")
+    with mutex(ctx, "registry"):
+        lane = read_json(ctx.paths.merge_lane)
+        if not lane or lane.get("run_id") != (run_id or ctx.run_id):
+            return False
+        ctx.paths.merge_lane.unlink(missing_ok=True)
+        return True
 
 
 def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:

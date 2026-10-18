@@ -99,6 +99,10 @@ class Paths:
     def incidents(self) -> Path:
         return self.agent / "incidents.json"
 
+    @property
+    def merge_lane(self) -> Path:
+        return self.agent / "merge-lane.json"
+
     def mutex(self, name: str) -> Path:
         return self.agent / "mutex" / f"{name}.lock"
 

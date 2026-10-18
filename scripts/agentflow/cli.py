@@ -441,6 +441,10 @@ def cmd_recover(args, ctx, gh, git):
     except lock.LockHeld as e:
         raise Fail({"error": e.code, "detail": str(e)})
     out = recovery.recover_stale(ctx, git, gh, lk, worktrees_parent=ctx.paths.root.parent)
+    if out.get("action") == "blocked-crashed":
+        # A crashed run that merged nothing has nothing to verify: a merge
+        # lane it named (taken, then the merge never landed) is freed.
+        lock.release_lane(ctx, run_id=lk.run_id)
     if out.get("action") == "merged-needs-post-merge":
         # A merged stale run is not fully recovered until ITS follow-through
         # (post-merge, discoveries, finish, cleanup) runs -- under the
@@ -911,23 +915,42 @@ def _gate_reasons(ctx, gh, git, pr: int):
 
 def cmd_merge_gate(args, ctx, gh, git):
     _, reasons, green = _gate_reasons(ctx, gh, git, args.pr)
+    # Read-only. Another session's merge not yet verified (`busy`), or one
+    # whose run died (`orphaned`, until a `recover`): the base is about to
+    # move, so a rebase now would be spent for nothing.
+    _, lane = lock.lane_state(ctx)
+    if lane in ("busy", "orphaned"):
+        reasons.append(f"merge-lane-{lane}")
     return _emit({"reasons": reasons, "ci_green": green}, 0 if not reasons else 1)
 
 
 def cmd_merge(args, ctx, gh, git):
     lock.require_not_halted(ctx)
+    # Fenced: with several leases, a run that lost its own must not merge.
+    lk = lock.check_fence(ctx)
+    # THE MERGE LANE, taken BEFORE the gate re-check and held through
+    # `post-merge`: two runs that both passed `merge-gate` on base B0 can no
+    # longer both merge (`--match-head-commit` pins the head, not the base),
+    # and no second merge lands while the first is unverified.
+    try:
+        lock.take_lane(ctx, lk.issue, args.pr)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     att, reasons, _ = _gate_reasons(ctx, gh, git, args.pr)
     if reasons:
+        lock.release_lane(ctx)
         return _emit({"reasons": reasons}, 1)
-    sha = mergeops.merge(ctx, gh, args.pr, att, reasons)
+    try:
+        sha = mergeops.merge(ctx, gh, args.pr, att, reasons)
+    except mergeops.MergeShaUnavailable:
+        raise          # GitHub merged: the lane stays for the post-merge/recovery
+    except Exception:
+        lock.release_lane(ctx)
+        raise
+    lock.take_lane(ctx, lk.issue, args.pr, sha)
     # The provenance record `post-merge` now demands. `issue` comes from the
     # ATTESTATION, not from argv: the attestation is what bound this merge to
     # an issue, and `merge` has no `--issue` of its own to be wrong about.
-    # `ctx.run_id` is provably non-None here -- `_gate_reasons` above called
-    # `mergeops.read_attestation(ctx)`, which touches `ctx.run_dir`, and that
-    # property raises RuntimeError("no run_id in context") when run_id is None.
-    # (`cmd_merge` itself calls only `lock.require_not_halted`, never
-    # `check_fence`, so the fence is NOT what guarantees this.)
     mergeops.write_merge_record(ctx, mergeops.MergeRecord(
         issue=att.issue, pr=args.pr, merge_sha=sha, run_id=ctx.run_id, source="merge"))
     return _emit({"merge_sha": sha})
@@ -966,6 +989,16 @@ def cmd_post_merge(args, ctx, gh, git):
                                  "run_id": rec.run_id},
                     "requested": {"issue": args.issue, "merge_sha": args.merge_sha,
                                   "run_id": ctx.run_id}})
+    # THE MERGE LANE, before any git call: this run's own `merge` took it, a
+    # recovery follow-through got it by `handover`, and a FREE lane is taken
+    # (a merge made before the lane existed still verifies). Another live
+    # run holding it means a second verification on one master: refused, no
+    # HALT, no incident (as the refusals above). Released only on a clean
+    # verdict below; on every stop it stays, with HALT set.
+    try:
+        lock.take_lane(ctx, rec.issue, rec.pr, rec.merge_sha)
+    except lock.LockHeld as e:
+        raise Fail({"error": e.code, "detail": str(e)})
     git.checkout("master")
     git.fetch()
     if not git.ff("origin/master"):
@@ -1231,6 +1264,11 @@ def cmd_post_merge(args, ctx, gh, git):
         return _emit(payload, 1)
     if original_exc is not None:
         raise original_exc
+    if ok:
+        # Verified, and the checkout is back on master: the next merge may
+        # land. Every other exit keeps the lane (HALT is set; `merge`
+        # refuses under HALT anyway) until `finish` or `recover`.
+        lock.release_lane(ctx)
     return _emit(payload, 0 if ok else 1)
 
 
@@ -1401,17 +1439,22 @@ def cmd_cleanup(args, ctx, gh, git):
     # With several leases, the fence is per tree. An ISSUE worktree
     # (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only: a sibling
     # holding another issue is no reason to keep this tree. A VERIFY
-    # worktree has no issue in its name, so any live foreign lease still
-    # refuses it. (The merge lane, a later step, narrows that to the lane
-    # holder.) A name that is neither keeps the old rule: any foreign lease.
+    # worktree is made only by the merge-lane holder's post-merge, so it is
+    # refused only while ANOTHER run holds the lane with a LIVE lease; a
+    # stale holder is the retained-evidence case above. A name that is
+    # neither keeps the old rule: any foreign lease.
     name = Path(args.worktree).name
     is_verify = name.startswith(worktrees.VERIFY_PREFIX)
     m = re.match(rf"{re.escape(recovery.WORKTREE_PREFIX)}(\d+)-a", name)
-    now = ctx.now()
-    blocking = [lk for lk in lock.all_locks(ctx) if lk.run_id != ctx.run_id
-                and (not lock.is_stale(lk, now) if is_verify else (m is None or lk.issue == int(m.group(1))))]
-    if blocking:
-        raise lock.FenceError(f"lock is {blocking[0].run_id}, context is {ctx.run_id}")
+    if is_verify:
+        lane, state = lock.lane_state(ctx)
+        if state == "busy":
+            raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, context is {ctx.run_id}")
+    else:
+        blocking = [lk for lk in lock.all_locks(ctx) if lk.run_id != ctx.run_id
+                    and (m is None or lk.issue == int(m.group(1)))]
+        if blocking:
+            raise lock.FenceError(f"lock is {blocking[0].run_id}, context is {ctx.run_id}")
     # THE EXIT FOR A RETAINED VERIFICATION WORKTREE. `post-merge`'s
     # `tree-dirty-after-gates` stop keeps the tree the gates ran in, because
     # on that stop the dirt IS the evidence -- and a directory with no
@@ -1600,6 +1643,9 @@ def cmd_finish(args, ctx, gh, git):
                                f"`{record['branch']}`.{stand_ins} The next attempt starts at implementation; both "
                                f"reviewers must still accept every carried finding before a merge.")
     dest = recovery.retain(ctx)
+    # Any outcome ends this run's hold on the merge lane (after a post-merge
+    # stop, HALT already keeps the next merge out).
+    lock.release_lane(ctx)
     lock.release(ctx)
     return _emit({"outcome": args.outcome, "retained": str(dest)})
 
@@ -1630,7 +1676,14 @@ def cmd_status(args, ctx, gh, git):
     # flight too. It is not an obligation the operator has to close, but a row
     # nobody can see is how one gets forgotten.
     # `lock` is the run's own lease (or the only one); `locks` is every lease.
+    # `merge_lane` with its state; `gates` = the heavy-gate holders' own
+    # notes (informational: the OS lock is the truth, and a killed holder's
+    # note can outlive it).
+    lane, lane_state = lock.lane_state(ctx)
+    gate_notes = [read_json(p) for p in sorted((ctx.paths.agent / "mutex").glob("gate-*.json"))]
     return _emit({"lock": asdict(lk) if lk else None, "locks": _lease_rows(ctx),
+                  "merge_lane": {**lane, "state": lane_state} if lane else None,
+                  "gates": [g for g in gate_notes if g],
                   "halted": lock.halted(ctx), "budget": b, "incidents": incidents.visible(ctx)})
 
 

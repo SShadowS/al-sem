@@ -498,6 +498,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holder, and post-merge under HALT both timing out and waiting through). The
   suite is 360 passed (was 353).
 
+- **agentflow: one merge at a time, through a merge lane
+  (`scripts/agentflow/{lock,cli,mergeops,state}.py`).** Step 12 of the
+  parallel-issues design. Two runs that both passed `merge-gate` on base B0
+  could both merge, the second onto a base it never tested
+  (`--match-head-commit` pins the head, not the base). `merge` now takes
+  `.agent/merge-lane.json` (`{run_id, issue, pr, merge_sha, acquired}`) under
+  mutex `registry` BEFORE its gate re-check, and refuses `merge-lane-busy`
+  (another run with a live lease holds it) or `merge-lane-orphaned` (its
+  holder's lease is stale; `recover` moves it on). A gate refusal or a merge
+  that fails before GitHub merged gives the lane back; a merge whose commit
+  could not be read keeps it. `merge` is now fenced like every other write.
+  `merge-gate` reports the same two reasons, read-only. `post-merge` takes or
+  keeps the lane before any git call (a free lane is taken, so a merge made
+  before this change still verifies; another live holder is refused with no
+  HALT and no incident) and frees it only on a clean verdict; every stop keeps
+  it until `finish`, which frees it on any outcome. `recover` hands a dead
+  run's lane to the follow-through with the lease (`lock.handover`), and frees
+  it on `blocked-crashed`. The lane has no heartbeat: it is held while the
+  lease of its issue that names its run is live. `cleanup` of a verification
+  worktree is now refused only while ANOTHER run with a live lease holds the
+  lane (before: any live foreign lease). `status` shows `merge_lane` with its
+  state, and the heavy-gate holders' notes as `gates`.
+
+  6 new tests in `test_cli_flow.py` (design tests 21-26, plus post-merge
+  refused under a live holder and the crashed-run release); the retained
+  verification-worktree cleanup test now hand-states the lane and gains an
+  arm for a sibling without it. The suite is 366 passed (was 360).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

@@ -269,6 +269,7 @@ def _claim(capsys, root, issue, gh, run_id):
 
 
 def _slots(root, n):
+    (root / ".agent").mkdir(exist_ok=True)
     (root / ".agent" / "config.json").write_text(json.dumps({"slots": n}), encoding="utf-8")
 
 
@@ -1049,6 +1050,221 @@ def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair
     assert code == 0 and out["merge_sha"] == merged_oid
     assert json.loads((ctx.run_dir / "merge.json").read_text()) == {
         "issue": 8, "pr": 12, "merge_sha": merged_oid, "run_id": "run-test", "source": "merge"}
+
+
+# ---- the merge lane (parallel-issues design, commit 12) ---------------------
+
+def _attested_run(clone, run_id, issue, base, **lock_kw):
+    """A run holding `issue`'s lease with an attestation on `base`, stated by
+    assignment (no register path, so only base/head/body/CI are re-checked)."""
+    c = Ctx(Paths(clone), run_id=run_id, **lock_kw)
+    lock.acquire(c, issue, "s", 1)
+    body = json.loads(ISSUES)[0][issue - 8]["body"]
+    mergeops.write_attestation(c, mergeops.Attestation(
+        issue=issue, B=base, H=base, final_head=base, register_hash="r" * 40, gates={},
+        body_hash=mergeops.body_hash(body)))
+    return c
+
+
+def _lane_gh(prs, *, conclusion="SUCCESS"):
+    """gh fakes for `merge-gate`/`merge` of each `pr -> (head, merged oid)`."""
+    responses = dict(CLAIM_GH)
+    for pr, (head, oid) in prs.items():
+        responses[f"pr view {pr} --repo {REPO} --json headRefOid,statusCheckRollup"] = json.dumps(
+            {"headRefOid": head, "statusCheckRollup": rollup(conclusion=conclusion)})
+        responses[f"pr merge {pr} --squash --match-head-commit {head}"] = ""
+        responses[f"pr view {pr} --repo {REPO} --json mergeCommit"] = json.dumps({"mergeCommit": {"oid": oid}})
+    return FakeRunner(responses)
+
+
+def _lane(clone):
+    p = clone / ".agent" / "merge-lane.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def _noop_gates(monkeypatch):
+    monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+
+
+def test_a_second_merge_waits_for_the_first_post_merge_then_sees_the_base_move(
+        capsys, repo_pair, monkeypatch):
+    """Design tests 21 and 22. A and B both pass `merge-gate` on base B0. A
+    merges and so takes the merge lane: B's `merge-gate` now reports
+    `merge-lane-busy` and B's `merge` refuses it without ever calling `pr
+    merge` (today B would merge onto a base it never tested). A's clean
+    `post-merge` frees the lane; B's `merge` then sees `base-moved`, its real
+    reason, still without merging."""
+    _, clone = repo_pair
+    _noop_gates(monkeypatch)
+    write_ci_workflow(clone)
+    _slots(clone, 2)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    _attested_run(clone, "run-b", 9, base)
+    squash = commit_file(clone, "src/a.rs", "fn a() {}\n", "squash merge of #8")   # what GitHub will push
+    gh = _lane_gh({12: (base, squash), 13: (base, "b" * 40)})
+    for rid, pr in (("run-a", 12), ("run-b", 13)):
+        code, out = run(capsys, clone, "merge-gate", "--pr", str(pr), gh_run=gh, run_id=rid)
+        assert code == 0 and out["reasons"] == [], (rid, out)
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 0 and out["merge_sha"] == squash, out
+    assert _lane(clone)["run_id"] == "run-a" and _lane(clone)["merge_sha"] == squash
+    assert Git(clone).push("origin", "master")                                     # GitHub merged it
+    code, out = run(capsys, clone, "merge-gate", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and "merge-lane-busy" in out["reasons"], out
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-busy", out
+    assert not any(c.startswith("pr merge 13") for c in gh.calls)
+    code, out = run(capsys, clone, "status", gh_run=FakeRunner(), run_id="run-b")
+    assert out["merge_lane"]["run_id"] == "run-a" and out["merge_lane"]["state"] == "busy", out
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", squash,
+                    gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0 and out["ok"] is True, out
+    assert _lane(clone) is None
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["reasons"] == ["base-moved"], out
+    assert not any(c.startswith("pr merge 13") for c in gh.calls)
+    assert _lane(clone) is None                                       # a refused merge holds no lane
+
+
+def test_a_merge_refused_by_its_gate_releases_the_lane_and_merge_needs_a_lease(capsys, repo_pair):
+    """Design tests 23 and 25. A merge the gate refuses (`ci-not-green`)
+    takes the lane and gives it back, so a sibling is not blocked by a merge
+    that never happened. `merge` is now fenced: without a lease it is a
+    `FenceError` before any gh call, with no lane. (Before, `gh`'s own fence
+    on mutating calls refused only at `pr merge`, after the gate's reads.)"""
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    gh = _lane_gh({12: (base, "a" * 40)}, conclusion="FAILURE")
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 1 and out["reasons"] == ["ci-not-green"], out
+    assert _lane(clone) is None
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-lost"),
+                               mergeops.read_attestation(Ctx(Paths(clone), run_id="run-a")))
+    gh = _lane_gh({12: (base, "a" * 40)})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-lost")
+    assert code == 1 and "FenceError" in out["error"], out
+    assert _lane(clone) is None and gh.calls == [], gh.calls
+    # GitHub merged, then the merge commit could not be read: the merge DID
+    # happen, so the lane stays for the post-merge or the recovery.
+    gh = _lane_gh({12: (base, None)})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")
+    assert code == 1 and "merge-sha-unavailable" in out["error"], out
+    assert any(c.startswith("pr merge 12") for c in gh.calls)
+    assert _lane(clone)["run_id"] == "run-a"
+
+
+def test_a_post_merge_stop_keeps_the_lane_until_finish(capsys, repo_pair, monkeypatch, tmp_path):
+    """Design test 24. A post-merge that stops (here a gate killed at its
+    timeout: HALT only) keeps the lane: no second merge may land on a master
+    nothing verified. `finish --outcome regressed` releases it."""
+    _, clone = repo_pair
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(cli, "gates", lambda: [("slow", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
+    write_ci_workflow(clone)
+    base = Git(clone).rev("origin/master")
+    _attested_run(clone, "run-a", 8, base)
+    squash = commit_file(clone, "src/a.rs", "fn a() {}\n", "squash merge of #8")
+    gh = _lane_gh({12: (base, squash)})
+    assert run(capsys, clone, "merge", "--pr", "12", gh_run=gh, run_id="run-a")[0] == 0
+    assert Git(clone).push("origin", "master")
+
+    def killed(ctx_, cmd, *, cwd, log_path, timeout_s, beat=None, beat_every=60.0, env=None):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("")
+        return supervise.Result(exit_code=124, log_path=log_path, timed_out=True, seconds=0.0)
+
+    monkeypatch.setattr(cli.supervise, "run", killed)
+    stop_gh = FakeRunner({f"api repos/{REPO}/labels?per_page=100 --paginate --slurp":
+                              json.dumps([[{"name": n} for n in recovery.INCIDENT_LABELS]]),
+                          "issue edit 8 --add-label *": "", "issue edit 8 --remove-label agent-working": "",
+                          "issue comment 8 *": ""})
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", squash,
+                    gh_run=stop_gh, run_id="run-a")
+    assert code == 1 and out["halt"]["reason"] == "gate-timed-out", out
+    assert _lane(clone)["run_id"] == "run-a"
+    code, out = run(capsys, clone, "finish", "--issue", "8", "--outcome", "regressed",
+                    gh_run=FakeRunner(), run_id="run-a")
+    assert code == 0, out
+    assert _lane(clone) is None
+
+
+def test_post_merge_refuses_while_another_live_run_holds_the_lane(capsys, repo_pair):
+    """`post-merge` must hold the lane. Another LIVE run holding it means
+    two verifications at once on one master: refused before any git call,
+    with no incident opened. A FREE lane is taken (a merge made before the
+    lane existed still verifies)."""
+    _, clone = repo_pair
+    _slots(clone, 2)
+    merge_sha = commit_file(clone, "src/b.rs", "fn b() {}\n", "squash merge of #9")
+    assert Git(clone).push("origin", "master")
+    _attested_run(clone, "run-a", 8, merge_sha)
+    _attested_run(clone, "run-b", 9, merge_sha)
+    record_merge(clone, merge_sha, issue=9, run_id="run-b")
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "run-a", "issue": 8, "pr": 12, "merge_sha": None, "acquired": 1.0})
+    code, out = run(capsys, clone, "post-merge", "--issue", "9", "--merge-sha", merge_sha,
+                    gh_run=FakeRunner(readonly=True), run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-busy", out
+    assert not (clone / ".agent" / "incidents.json").exists()
+
+
+def test_an_orphaned_lane_refuses_merges_and_recover_hands_it_to_the_follow_through(
+        capsys, repo_pair, monkeypatch):
+    """Design test 26. The lane's owner died after merging: its lease is
+    stale, so the lane is ORPHANED. A sibling's `merge` refuses
+    `merge-lane-orphaned` (its `merge-gate` says so too). `recover` of that
+    issue hands the lane to the follow-through with the lease, and the
+    follow-through's `post-merge` is accepted and frees it."""
+    _, clone = repo_pair
+    _noop_gates(monkeypatch)
+    write_ci_workflow(clone)
+    _slots(clone, 2)
+    merged = commit_file(clone, "src/thing.rs", "fn main() {}\n", "squash merge of #8")
+    assert Git(clone).push("origin", "master")
+    old = lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "old-run", "issue": 8, "pr": 3, "merge_sha": merged, "acquired": 1_000_000.0})
+    now = old.heartbeat + 4000
+    monkeypatch.setenv("AGENTFLOW_NOW", str(now))
+    _attested_run(clone, "run-b", 9, merged, now=lambda: now)
+    gh = _lane_gh({13: (merged, "b" * 40)})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and "merge-lane-orphaned" in out["reasons"], out
+    code, out = run(capsys, clone, "merge", "--pr", "13", gh_run=gh, run_id="run-b")
+    assert code == 1 and out["error"] == "merge-lane-orphaned", out
+    assert not any(c.startswith("pr merge") for c in gh.calls)
+    rgh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "MERGED", "headRefName": "issue/8-x-a1",
+                                                "headRefOid": "h", "mergeCommit": {"oid": merged},
+                                                "mergedAt": "x"}])})
+    code, out = run(capsys, clone, "recover", "--issue", "8", gh_run=rgh, run_id="run-new")
+    assert code == 0 and out["action"] == "merged-needs-post-merge", out
+    assert _lane(clone)["run_id"] == "run-new" and _lane(clone)["issue"] == 8
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merged,
+                    gh_run=FakeRunner(), run_id="run-new")
+    assert code == 0 and out["ok"] is True, out
+    assert _lane(clone) is None
+
+
+def test_a_crashed_run_that_held_the_lane_frees_it_on_recovery(capsys, repo_pair, monkeypatch):
+    """`recover`'s `blocked-crashed` path: the dead run merged nothing (its PR
+    is open), so it has nothing to verify and the lane it named is freed."""
+    _, clone = repo_pair
+    old = lock.acquire(Ctx(Paths(clone), run_id="old-run", now=lambda: 1_000_000.0), 8, "s", 1)
+    write_json(Ctx(Paths(clone)), clone / ".agent" / "merge-lane.json",
+               {"run_id": "old-run", "issue": 8, "pr": 3, "merge_sha": None, "acquired": 1_000_000.0})
+    monkeypatch.setenv("AGENTFLOW_NOW", str(old.heartbeat + 4000))
+    gh = FakeRunner({"pr list *": json.dumps([{"number": 3, "state": "OPEN", "headRefName": "issue/8-x-a1",
+                                               "headRefOid": "h", "mergeCommit": None, "mergedAt": None}]),
+                     "issue comment 8 *": "", "issue edit 8 --add-label agent-blocked": "",
+                     "issue edit 8 --remove-label agent-working": ""})
+    code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
+    assert code == 0 and out["action"] == "blocked-crashed", out
+    assert _lane(clone) is None
 
 
 def _git_raw(cwd, *args):
@@ -2748,7 +2964,13 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     PRECONDITIONS HAND-STATED, not produced by driving post-merge: the tree
     is a real detached worktree made by the production helper that owns the
     name, and the lock is written directly with a heartbeat this test chooses
-    -- so neither depends on post-merge still being able to create them."""
+    -- so neither depends on post-merge still being able to create them.
+
+    Since the merge lane (parallel-issues commit 12) the "foreign lock" that
+    matters is the LANE holder's: only its post-merge makes verify trees.
+    The retaining run still holds the lane on that stop, so it is
+    hand-stated here too. A sibling's lease WITHOUT the lane no longer
+    refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
     kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
@@ -2756,6 +2978,8 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
     lk = lock.acquire(dead, 8, "s", 1)
+    write_json(dead, clone / ".agent" / "merge-lane.json",
+               {"run_id": "dead-run", "issue": 8, "pr": 12, "merge_sha": g.rev("master"), "acquired": 1.0})
 
     # ARM 1 -- the foreign lock is LIVE: refused, and the tree is kept.
     monkeypatch.setenv("AGENTFLOW_NOW", str(lk.heartbeat + 1))
@@ -2780,6 +3004,16 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
                     gh_run=FakeRunner(), run_id=None)
     assert code == 1 and "FenceError" in out["error"], out
     assert issue_wt.exists()
+
+    # ARM 4 -- a LIVE sibling that does NOT hold the lane is no reason to
+    # keep a verify tree it never made (before the lane: refused).
+    _slots(clone, 2)
+    later = lk.heartbeat + lock.STALE_SECONDS + 1
+    lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
+    again = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
+                    gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and not again.exists(), out
 
 
 def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
