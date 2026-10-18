@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A routine can carry several readings of one event attribute, one per `#if` build path
+  that reads an `#if` group inside the attribute's arguments (since #80). The program
+  engine now uses every reading, not only the first (#104):
+  - **IncludeSender** is the union of the readings: `true` when any reading is `true`,
+    `false` only when every reading is `false`, otherwise unknown. A subscriber that
+    captures the extra `Sender` parameter now binds when only a later reading passes it
+    (it was orphaned before). One helper (`event::union_include_sender`) holds this rule
+    for both per-build readings and `#if`-duplicated publisher routines (#103).
+  - **Subscriptions**: readings of one `[EventSubscriber]` that name the same event are
+    one subscription and one event-flow edge (they were one per reading). The key is the
+    resolved publisher object, so a publisher named by name in one reading and by number
+    in another is one key; the element counts only for a platform field/action event,
+    where each element is its own event. A skip flag (`SkipOnMissingLicense` /
+    `SkipOnMissingPermission`) stays on the merged edge only when every reading sets it.
+    The merge happens where subscriptions are wired (`SubscriberIndex::build`), so it
+    also gives one edge for two `#if` arms of one routine that subscribe the same event
+    with different skip flags; the routine's own subscription list is unchanged.
+  - **Isolated** is read from every `IntegrationEvent` and `BusinessEvent` reading: an
+    event isolated in any build is an isolation barrier.
+  The `IncludeSender +1` preflight diagnostic
+  (`count_unknown_include_sender_plus1_subscribers`) can move either way on a publisher
+  with several readings; binding is unaffected where it rises. `InternalEvent`'s
+  `Isolated` argument is still not read.
+
 ## [1.7.2] - 2026-10-17
 
 ### Added
