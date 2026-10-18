@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cost, and its raw inherited facts (count and bytes), over the cut graph and the full
     graph (measurement only; deleted at step 6).
   - The step 0 CDO numbers: `docs/measurements/2026-10-18-issue-160-step0.md`.
+- #160 step 1, the frozen `InputSet` (`src/program/inputs.rs`): every `alsem` command
+  reads its workspace inputs once, at the start, and every later reader reads that one
+  set. It holds `app.json` and the `app.json` walk, the `.al` walk and texts (with the
+  nested-app flag), `roots.config.json`, the coverage yaml, the policy and baseline
+  files, the dependency closure, the snapshot hash rows when asked for, the driver
+  version and the model-instance id. `InputSet::read` charges the trace counter
+  `inputs.read` (1 per command; `diff ws ws` reads one set per side).
+  `tests/common/unreadable.rs` makes a file or folder unreadable for tests.
+  The step 1 CDO numbers: `docs/measurements/2026-10-19-issue-160-step1.md`.
 
 ### Changed
 
@@ -71,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     at ~0.3 GB more peak memory (1.5 vs 1.25 GB). `scripts/cdo-gate` stays on `cargo test`:
     nextest took 97–112 s against 72–84 s, because it runs one process per test and the
     harness rebuilds its shared CDO context in each.
+- A failed write of a command's output (stdout or an `--out` file) prints one text on
+  every command, `al-sem: write error: <stdout|path>: <OS message>`, through one writer
+  in `alsem.rs`. `analyze` now exits 2 on it (on a closed pipe it aborted before); every
+  other command keeps exit 1 (before, with four different texts).
 - `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`; the old
   `[C1_CONE_CENSUS]` report is gone (its structures are covered by the `context.*`
   buckets).
@@ -80,6 +93,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- #160 step 1: no `alsem` reader goes back to the disk after the program build. The
+  model id, roots config, program-file selection, coverage projection, inline
+  suppressions, pr-summary's app registry, the snapshot hash rows and
+  `workspaceFingerprint`, `policy check` and `--baseline` read the command's
+  `InputSet`, so a file edited, added or removed during a run can no longer give one
+  command two views of the workspace (pinned by `tests/cli/cli_inputs_frozen.rs`).
+  With `--update-baseline`, the baseline applied is the one just written.
+- #160 step 1: the workspace diagnostics (`No object declaration found in <rel>` and the
+  provider rows) read the program build's list of files that parsed to no object
+  (`FreshCoverage::files_without_object`) instead of walking and parsing the workspace a
+  second time. When the build fails, no fallback parse runs, so those rows are absent.
 - A routine can carry several readings of one event attribute, one per `#if` build path
   that reads an `#if` group inside the attribute's arguments (since #80). The program
   engine now uses every reading, not only the first (#104):
