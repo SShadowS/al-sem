@@ -506,6 +506,67 @@ pub(crate) fn solve_bytes(
     bytes
 }
 
+/// `v`'s buffer at capacity.
+fn vec_bytes<T>(v: &Vec<T>) -> u64 {
+    (v.capacity() * std::mem::size_of::<T>()) as u64
+}
+
+/// `m`'s table at capacity: `capacity × (key + value + 1 control byte)`.
+fn map_bytes<K, V>(m: &HashMap<K, V>) -> u64 {
+    (m.capacity() * (std::mem::size_of::<K>() + std::mem::size_of::<V>() + 1)) as u64
+}
+
+/// An `Arc` allocation's strong + weak counts.
+const ARC_HEADER: usize = 2 * std::mem::size_of::<usize>();
+
+/// One `Arc<CapabilityFact>` allocation plus the fact's heap.
+fn arc_fact_bytes(f: &CapabilityFact) -> u64 {
+    (ARC_HEADER + std::mem::size_of::<CapabilityFact>()) as u64
+        + super::cone_census::capability_fact_heap_bytes(f)
+}
+
+/// The arena half of [`solve_bytes`] (spec §4.1.1 G-1): producers, states,
+/// links, edges and `by_routine`, the part step 6 may retain. Same counting
+/// rules as `solve_bytes`.
+#[cfg_attr(not(test), allow(dead_code))] // #160 Task 4 wires it into `census`
+pub(crate) fn arena_bytes(arena: &ConeArena) -> u64 {
+    let mut bytes = vec_bytes(&arena.producers);
+    for p in &arena.producers {
+        bytes += (ARC_HEADER + p.owner.len() + p.operation_id.capacity()) as u64
+            + arc_fact_bytes(&p.fact);
+    }
+    bytes += vec_bytes(&arena.states);
+    bytes += arena.states.iter().map(|s| vec_bytes(&s.reqs)).sum::<u64>();
+    bytes += vec_bytes(&arena.links);
+    bytes += vec_bytes(&arena.edges);
+    for e in &arena.edges {
+        bytes += (e.to.capacity()
+            + e.kind.capacity()
+            + e.callsite.as_ref().map_or(0, String::capacity)
+            + e.event_id.as_ref().map_or(0, String::capacity)
+            + e.operation_id.as_ref().map_or(0, String::capacity)
+            + e.sort_key.capacity()) as u64;
+    }
+    bytes += map_bytes(&arena.by_routine) + arena.by_routine.values().map(vec_bytes).sum::<u64>();
+    bytes
+}
+
+/// The working-set half of [`solve_bytes`] (spec §4.1.1 G-1): the resolved
+/// own entries, the interned routine names and the reps, the part step 6
+/// retains or re-solves. Same counting rules as `solve_bytes`.
+#[cfg_attr(not(test), allow(dead_code))] // #160 Task 4 wires it into `census`
+pub(crate) fn working_bytes(
+    resolved: &ResolvedByRoutine,
+    names: &HashSet<Arc<str>>,
+    reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
+) -> u64 {
+    let mut bytes = (names.iter().map(|n| ARC_HEADER + n.len()).sum::<usize>()
+        + names.capacity() * (std::mem::size_of::<Arc<str>>() + 1)) as u64;
+    bytes += map_bytes(resolved) + resolved.values().map(vec_bytes).sum::<u64>();
+    bytes += map_bytes(reps) + reps.values().map(|r| arc_fact_bytes(r)).sum::<u64>();
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
@@ -1029,6 +1090,55 @@ mod tests {
         assert_eq!(
             states_at(&arena, "C"),
             vec![(TempState::Known(false), vec![(0, false)])]
+        );
+    }
+
+    /// TRANSIENT (spec §5, §8.1): deleted with `solve_bytes` in the next commit.
+    /// The oracle is the old code, not a byte literal (`size_of` differs per
+    /// platform). Hand-stated inputs: 2 routines (`H` owns the producer, `C`
+    /// calls it), 1 link, 1 edge, 1 rep.
+    #[test]
+    fn bytes_split_sums_to_the_old_total() {
+        let e = edge("direct-call", Some("cs1"), "H");
+        let h: Arc<str> = Arc::from("H");
+        let c: Arc<str> = Arc::from("C");
+        let p = producer("H");
+        let rep = Arc::new(rep_for(&p.fact, &TempState::Known(true)));
+        let state = |routine: &Arc<str>, seed: bool, dist: usize, links| ConeState {
+            producer: 0,
+            routine: Arc::clone(routine),
+            t: TempState::Known(true),
+            reqs: vec![(0, true)],
+            seed,
+            dist,
+            links,
+        };
+        let arena = ConeArena {
+            producers: vec![p],
+            states: vec![state(&h, true, 0, 0..0), state(&c, false, 1, 0..1)],
+            links: vec![ConeLink {
+                callee_state: 0,
+                edge: 0,
+            }],
+            edges: vec![e.clone()],
+            by_routine: [(Arc::clone(&h), vec![0]), (Arc::clone(&c), vec![1])].into(),
+        };
+        let resolved: ResolvedByRoutine = [(
+            Arc::clone(&c),
+            vec![ResolvedEntry {
+                state: 1,
+                rep: Arc::clone(&rep),
+                dist: 1,
+                first_hop: &e,
+            }],
+        )]
+        .into();
+        let names: HashSet<Arc<str>> = [h, c].into();
+        let reps: HashMap<(usize, TempState), Arc<CapabilityFact>> =
+            [((0, TempState::Known(true)), rep)].into();
+        assert_eq!(
+            arena_bytes(&arena) + working_bytes(&resolved, &names, &reps),
+            solve_bytes(&arena, &resolved, &names, &reps)
         );
     }
 }
