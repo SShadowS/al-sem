@@ -103,6 +103,61 @@ def record_gate_run(ctx: Ctx, name: str, result, cwd: Path, *, supervised: bool,
     return rec
 
 
+def identity_refusals(ctx: Ctx, git: Git, issue: int, merge_sha: str, gate_names: list[str],
+                      docs_only: bool) -> list[str]:
+    """Why `post-merge` may NOT skip its gates; empty means it may. Every
+    check runs (so a fallback names every reason), each guarded: a check that
+    raises is a refusal, `error:<check>:<type>`, never an exception out."""
+    from . import cli, mergeops  # cli imports this module
+    out: list[str] = []
+
+    def check(code: str, failed) -> None:
+        try:
+            if failed():
+                out.append(code)
+        except Exception as e:  # noqa: BLE001 -- fail closed, by design
+            out.append(f"error:{code}:{type(e).__name__}")
+
+    rec = mergeops.read_merge_record(ctx)
+    # `recover` mints its record without this run's attestation: never a skip.
+    if rec is None or rec.source != "merge" or rec.merge_sha != merge_sha:
+        out.append("not-merged-by-this-run")
+    try:
+        att = mergeops.read_attestation(ctx)
+    except Exception:  # noqa: BLE001
+        return [*out, "no-attestation"]
+    check("attestation-other-issue", lambda: att.issue != issue)
+    check("attested-gates-not-green", lambda: bool(cli._gate_failures(att.gates, docs_only)))
+    check("base-moved", lambda: git.rev(f"{merge_sha}^1") != att.B)
+    check("tree-differs", lambda: git.rev(f"{merge_sha}^{{tree}}") != git.rev(f"{att.final_head}^{{tree}}"))
+    check("non-evidence-after-H", lambda: bool(mergeops.freeze_violations(git, att.H, att.final_head, issue)))
+
+    records = latest_records(ctx)
+    try:
+        h_tree = git.rev(f"{att.H}^{{tree}}")
+    except Exception as e:  # noqa: BLE001
+        return [*out, f"error:H-tree:{type(e).__name__}"]
+    now = environment(ctx, ctx.paths.root, cdo=cli.CDO_GATE_KEY in gate_names)
+    grammar_now = now["grammar"]
+    for name in gate_names:
+        r = records.get(name)
+        if r is None:
+            out.append(f"no-record:{name}")
+            continue
+        env = r.get("env") or {}
+        check(f"record-red:{name}", lambda: r.get("exit_code") != 0 or r.get("timed_out") is not False
+              or r.get("supervised") is not True)
+        check(f"record-dirty:{name}", lambda: r.get("clean_before") is not True or r.get("clean_after") is not True)
+        check(f"record-other-tree:{name}", lambda: r.get("tree") != h_tree)
+        check(f"rustc-changed:{name}", lambda: now["rustc"] is None or env.get("rustc") != now["rustc"])
+        check(f"grammar-changed:{name}", lambda: grammar_now["commit"] is None or grammar_now["dirty"]
+              or env.get("grammar") != grammar_now)
+        if name == cli.CDO_GATE_KEY:
+            check(f"cdo-identity-changed:{name}", lambda: now["cdo"]["path"] is None
+                  or env.get("cdo") != now["cdo"])
+    return out
+
+
 def latest_records(ctx: Ctx) -> dict[str, dict]:
     """The last parseable record per gate name. A torn line (a run killed
     mid-write) is skipped: it is no evidence, and the record before it still is."""
