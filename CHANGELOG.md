@@ -526,6 +526,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verification-worktree cleanup test now hand-states the lane and gains an
   arm for a sibling without it. The suite is 366 passed (was 360).
 
+- **agentflow: prompts and spec for parallel issues
+  (`.claude/commands/{orchestrate,issue}.md`,
+  `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`).** Step 13
+  of the parallel-issues design, for steps 5-12. `orchestrate.md`: each session
+  keeps its run id in `.agent/runs/session-<id>.run-id` and never acts on
+  another session's; preflight's `slots-full` / `disk-free` mean "do not claim
+  now" (reschedule under `/loop`), and it prints `locks`, the disk numbers,
+  `warnings` and `master_behind_origin`; `recover --issue <N>` for ONE of
+  `stale_locks` per tick, skipping `lock-live`; the separate `loop-tick` step
+  is folded into `claim --loop-max`, with `issue-held` (try the next pick),
+  `slots-full` / `disk-low` (stop the tick) and `loop-exhausted` (end the
+  loop); the budget is shared across sessions. `issue.md`: the claim check
+  reads `locks`; step 1 uses `make-worktree` (from `origin/master`) instead of
+  `git worktree add`; heavy gates may queue (`queued_s`, `gate-queue-timeout`
+  retried once, `halted-while-queued` is `blocked halted`); a shared-ref
+  `git fetch` retries once on `cannot lock ref`; `merge-gate` and `merge`'s
+  `merge-lane-busy` is waited out with beats and no budget charge, and
+  `merge-lane-orphaned` is `blocked`. The spec's non-goal "parallel issues"
+  becomes "up to `slots`", and its Locking, Preflight, Claim, Fencing,
+  recovery and cleanup text describe per-issue leases, the mutexes, the gate
+  semaphore and the merge lane. The `rebase_regate` cap stays 1: raising it
+  (design C11) is the owner's decision.
+
+  The refusal codes the conductor branches on are now named constants
+  (`lock.ISSUE_HELD`, `SLOTS_FULL`, `DISK_LOW`, `LOOP_EXHAUSTED`,
+  `LANE_REFUSED`; `cli.QUEUE_TIMEOUT`, `HALTED_WHILE_QUEUED`).
+  `test_docs_drift.py` gains 6 tests (2 parametrised over the documents): each
+  document spells, as a token, the codes its steps branch on, read from those
+  constants; and every `merge-lane-<x>` a document names is one the executor
+  returns. The suite is 372 passed (was 366).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

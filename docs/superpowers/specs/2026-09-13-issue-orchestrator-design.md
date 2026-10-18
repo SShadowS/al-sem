@@ -24,8 +24,11 @@ must be green before a merge.
 
 ## Non-goals and stated limits
 
-- Parallel issues. One issue at a time on this machine (disk space, shared goldens
-  gate, shared `target/`).
+- Unbounded parallel issues. Up to `slots` issues at once (`.agent/config.json`,
+  default 1, so one at a time unless the owner raises it), one per
+  `/orchestrate` session, with one heavy gate at a time (`heavy_gates`, default
+  1) and one merge at a time (the merge lane). Disk, the shared goldens gate and
+  the root `target/` are why the defaults are 1. See "Locking".
 - Cloud or GitHub Actions runners. The flow depends on pi (Copilot billing), `CDO_WS`,
   and the local tree-sitter/goldens setup, none of which exist off this machine.
 - Closing issues by judgment. Issues close only through a merged PR carrying
@@ -192,9 +195,54 @@ instructions to the flow. Concretely:
 
 Labels are a mirror for humans, not a lock. The lock is local:
 
-- `.agent/lock.json` in the main checkout: `{issue, run_id, session, started,
-  heartbeat}`. Taken atomically (create-exclusive) at claim. Both `/orchestrate`
-  and a standalone `/issue N` take it; `/issue N` refuses to run without it.
+- **One lease per issue.** `.agent/locks/issue-<N>.json` in the main checkout:
+  `{issue, run_id, session, started, heartbeat, attempt, recovering_by}`.
+  Taken at claim by create-exclusive on that file, so "one run per issue" holds
+  by construction. Both `/orchestrate` and a standalone `/issue N` take it;
+  `/issue N` refuses to run without it. Every lease write after the first is
+  atomic (a temp file, then `os.replace`).
+- **Mutex `registry`** (an OS file lock under `.agent/mutex/`, freed by the OS
+  when its process dies, so it never goes stale) covers every check-then-act on
+  the lease set. Under it `claim` refuses, in this order: `run-holds-a-lock`
+  (one run, one issue); `loop-exhausted` (with `--loop-max`: the SHARED loop
+  budget is spent); `issue-held:<run>` (the issue has a lease, live or stale);
+  `slots-full` (as many leases as `slots`, stale ones included, because only
+  `recover` may free a crashed run's slot); `disk-low:<free>GB<<need>GB` (free
+  disk on the worktrees' volume below `min_free_gb` + `reserve_gb_per_run` per
+  live lease). Then it creates the lease and charges `loop.json`, so a refused
+  claim spends nothing; a claim that rolls back gives its unit back. Mutexes are
+  not re-entrant: only public entry points take one, helpers assume it is held.
+- **Legacy `.agent/lock.json`** (the single lock before 2026-10) is read as one
+  more lease and acted on in place when it names the caller, so a run claimed
+  under the old code finishes under the new. Nothing new is written there; the
+  reader is deleted one release after no such file is seen.
+- **Other mutexes.** `git` around every write the executor makes to the shared
+  root's `.git` (fetch, worktree, checkout, merge, push, ...), so sessions never
+  collide on `index.lock`; the issue worktree is made by `make-worktree`
+  (from `origin/master`), never by the conductor. `handoffs`, `incidents`,
+  `discoveries` and `audit` around those shared files.
+- **Gate semaphore.** A heavy gate (`ci-steps-all`, `check-goldens`,
+  `check-goldens-regen`, `cdo-gate`, any `-on-revert`) runs only while holding
+  one of `heavy_gates` mutexes `gate-<k>`. A waiting gate beats its lease, and
+  under `run` stops on HALT (`halted-while-queued`) and on the wall clock; past
+  `gate_wait_minutes` it is `gate-queue-timeout` with `exit_code: null`. Neither
+  is a verdict. `post-merge` queues under HALT and treats a queue timeout like
+  a gate killed at its timeout (HALT only, never a revert). Only `_run_gate`
+  takes a gate mutex and it never takes the lane, so there is no
+  gate-then-lane order and no deadlock.
+- **Merge lane.** `.agent/merge-lane.json` `{run_id, issue, pr, merge_sha,
+  acquired}`, a lease because it spans `merge`, `post-merge` and `finish`. It
+  is held while the lease of its issue that names its run is live; that lease
+  stale means `orphaned`, gone means free. `merge` takes it (under `registry`)
+  BEFORE its gate re-check, refusing `merge-lane-busy` or
+  `merge-lane-orphaned`; `merge-gate` reports the same reasons read-only. A
+  refused merge releases it; a merge GitHub made keeps it. `post-merge` takes or
+  keeps it before any git call and frees it only on a clean verdict; `finish`
+  frees it on any outcome; `recover` hands it to the follow-through or frees it
+  on `blocked-crashed`. Without it, two runs that passed `merge-gate` on one
+  base could both merge (`--match-head-commit` pins the head, not the base).
+- **Shared state stays global**: HALT, incidents, `audit.jsonl`, the loop
+  budget (`--max-issues` counts across sessions) and the discoveries index.
 - **Supervision.** Long-running work (every gate, every `cargo` invocation the
   pipeline runs) goes through `python scripts/agentflow run --timeout <min> -- <cmd>`, which
   refreshes the heartbeat every 60 s while the child runs, captures the exit code
@@ -204,15 +252,27 @@ Labels are a mirror for humans, not a lock. The lock is local:
   so a long model call cannot look like a death. Subagent dispatches are bounded by
   the harness; the conductor beats before and after each one.
 - **Fencing.** Every mutating executor command takes `--run-id` and refuses to act
-  if `lock.json` names a different run. A recovered or superseded run therefore
-  cannot label, push, merge, or file anything after losing the lock.
+  unless a lease names that run (`merge` included since the merge lane). A
+  command that names an issue (`finish --issue N`) also refuses when the run's
+  lease is for another issue (`check_fence(issue=)`). A recovered or superseded
+  run therefore cannot label, push, merge, or file anything after losing its
+  lease. With several leases, `run` is supervised for a run that owns one, a
+  `FenceError` for a run that owns none while any exists, and unsupervised only
+  when there is no lease at all. `cleanup` of an issue worktree
+  (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only; of a
+  verification worktree, by a LIVE merge-lane holder only.
 - **Deadline.** The executor computes elapsed time since claim on every call and
   refuses new phases past the 10-hour cap, so the wall-clock budget is enforced by
   code, not by the conductor remembering it.
 - **Stale** means heartbeat older than 30 minutes. There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence
-  with supervision in place means it is gone. Recovery (never under `--dry-run`):
-  reconcile with GitHub first (open PR for `issue/N-*`? merged? partially pushed?).
+  with supervision in place means it is gone. Recovery (never under `--dry-run`)
+  is per issue: `preflight` lists `stale_locks`, and `recover --issue N` takes ONE
+  (without `--issue` only when exactly one is stale). It first STEALS the lease
+  under `registry`: still stale, it is rewritten live with `recovering_by` set and
+  the stale `run_id` kept, so a second session's `recover` gets `lock-live` and
+  the stale run's bookkeeping fence still passes. Then it reconciles with GitHub
+  first (open PR for `issue/N-*`? merged? partially pushed?).
   If the PR was already merged, recovery finishes the run instead of blocking it,
   under a lock the recovering run re-acquires for the crashed issue: post-merge
   check on the merge SHA, discoveries filed from the crashed run's ledger, cleanup,
@@ -222,12 +282,15 @@ Labels are a mirror for humans, not a lock. The lock is local:
   lock stamped `now` is always later than the merge it just adopted. Its
   `heartbeat` is `now`: staleness is read from the heartbeat alone, so carrying
   that back would mint a lock that is born stale and let a concurrent tick steal
-  a follow-through that is still running.
+  a follow-through that is still running. The stolen lease becomes the
+  follow-through's in ONE write (`handover`), so the issue never has no lease
+  for a sibling to claim, and a merge lane the stale run held moves with it.
   If that follow-through fails partway, the issue is labeled
   `agent-blocked` with reason `recovery-followthrough-failed` and the tick stops.
   Otherwise: comment on the issue with what was found, rename the worktree to
   `../al-sem-issue-N.crashed-<ts>`, label `agent-blocked` with reason `crashed`,
-  remove the lock. The human decides what to do with the crashed tree.
+  remove the lease (only if it still names the stale run) and any merge lane it
+  held. The human decides what to do with the crashed tree.
 - **Attempts.** Every claim gets an attempt number. Branch and worktree are
   `issue/N-<slug>-a<attempt>` and `../al-sem-issue-N-a<attempt>`, so a re-attempt
   after `unblock` never collides with a preserved branch.
@@ -236,12 +299,20 @@ Labels are a mirror for humans, not a lock. The lock is local:
 
 ## `/orchestrate` — one tick
 
-1. **Preflight** (executor). Working tree clean on `master`; `master` equals
-   `origin/master`; no `.agent/HALT`; no live lock; `gh auth status` ok; `pi_models`
+1. **Preflight** (executor). Working tree clean on `master`; `master` not
+   diverged from `origin/master` (BEHIND is no failure, reported as
+   `master_behind_origin`, because a sibling's merge moves `origin` and only its
+   post-merge fast-forwards the root; diverged fails
+   `master-differs-from-origin`); no `.agent/HALT`; fewer LIVE leases than
+   `slots` (else `slots-full`; a stale lease is listed in `stale_locks` for
+   `recover` and fails nothing); `gh auth status` ok; `pi_models`
    lists both reviewer models; `CDO_WS` set and exists; `tree-sitter-al/src/node-types.json`
-   present in the main checkout; at least 40 GB free on the worktree drive (`cli.MIN_FREE_GB`; 20 GB until
-   2026-10-14, when a tick that started above 20 GB filled the drive and failed #68's
-   post-merge check on a green merge). Any failure
+   present in the main checkout; free disk on the worktrees' volume (the
+   checkout's parent) at least `min_free_gb` (40 GB; 20 GB until 2026-10-14,
+   when a tick that started above 20 GB filled the drive and failed #68's
+   post-merge check on a green merge) plus `reserve_gb_per_run` (30 GB) per live
+   lease, else `disk-free:<n>GB`. With a sibling running, `slots-full` and
+   `disk-free` mean "do not claim now". Any failure
    stops the tick with the reason printed. Nothing is created before preflight passes.
 2. **Fetch** (executor). Paginated list of open issues with number, title, body, labels,
    author, createdAt. Apply Eligibility. Detect the stale-lock case and recover as
@@ -253,11 +324,17 @@ Labels are a mirror for humans, not a lock. The lock is local:
    `.agent/runs/<run-id>/ranking.json`.
 4. **Dry run stops here** and prints the ranking and the pick. No labels, comments,
    locks, worktrees, files, or recovery under `--dry-run`.
-5. **Claim** (executor). `loop-tick` runs here — after ranking (step 3), before
-   claim — charging the per-loop `--max-issues` counter (`.agent/runs/loop.json`),
-   so an empty ranked queue burns no slot and exactly N issues are claimed per
-   loop. Take the lock; record the issue body hash; label `agent-working`; comment
-   with the session link, classification hint, run id, and attempt number.
+5. **Claim** (executor). `claim N --loop-max M` charges the per-loop
+   `--max-issues` counter (`.agent/runs/loop.json`, shared by every session)
+   inside the claim's own `registry` critical section, only once the lease
+   exists — so an empty ranked queue burns no slot, a refused or rolled-back
+   claim spends nothing, and two sessions at the last unit cannot both claim.
+   `issue-held` means try the next ranked issue; `slots-full` and `disk-low` mean
+   do not claim now; `loop-exhausted` ends the loop. (`loop-tick` remains one
+   release for older prompts.) Take the lease; record the issue body hash; label
+   `agent-working`; comment with the session link, classification hint, run id,
+   and attempt number. `fetch` already excludes every issue with a lease as
+   `locked:<run>`, because the label lags the lease.
 6. **Run `/issue N`.** Returns `merged`, `blocked`, `handoff <sha>`, or
    `spike-answered`. On `handoff`, finish runs `--outcome handoff
    --handoff-ref <sha>`; if the executor refuses it, `--outcome blocked`.
@@ -280,8 +357,8 @@ Labels are a mirror for humans, not a lock. The lock is local:
    `post-merge` has already made the issue's label transition, on whichever axes
    applied — and only retains the run directory and releases the lock.
 8. **Cleanup, then finish** (executor). File discoveries (see below). Cleanup runs
-   **before** finish: `cleanup` refuses to act if `lock.json` names a different
-   run (the same fencing as every mutating command). On `merged` it removes the
+   **before** finish: `cleanup` refuses to act if the worktree's issue lease
+   names a different run (see Fencing). On `merged` it removes the
    worktree after four independent proofs: the path is a direct child of the
    expected parent AND carries the `al-sem-issue-` name this flow hands out (the
    location check alone is "is a sibling of the checkout", and the checkout has

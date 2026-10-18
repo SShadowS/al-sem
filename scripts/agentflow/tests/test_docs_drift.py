@@ -26,12 +26,21 @@ from pathlib import Path
 
 import pytest
 
-from agentflow import cli, eligibility, recovery
+from agentflow import cli, eligibility, lock, recovery
 
 REPO = Path(__file__).resolve().parents[3]
 ORCHESTRATE = REPO / ".claude" / "commands" / "orchestrate.md"
+ISSUE = REPO / ".claude" / "commands" / "issue.md"
 SPEC = REPO / "docs" / "superpowers" / "specs" / "2026-09-13-issue-orchestrator-design.md"
 DOCS = (ORCHESTRATE, SPEC)
+
+# The parallel-issues refusal codes the conductor BRANCHES on, taken from the
+# executor's own constants, and which document's instructions branch on them:
+# `orchestrate.md` handles the claim, `issue.md` the gate queue and the merge
+# lane, and the spec states all of them.
+_CLAIM_CODES = (lock.ISSUE_HELD, lock.SLOTS_FULL, lock.DISK_LOW, lock.LOOP_EXHAUSTED)
+_RUN_CODES = (cli.QUEUE_TIMEOUT, cli.HALTED_WHILE_QUEUED, *(f"merge-lane-{s}" for s in lock.LANE_REFUSED))
+_PARALLEL_CODES = {ORCHESTRATE: _CLAIM_CODES, ISSUE: _RUN_CODES, SPEC: _CLAIM_CODES + _RUN_CODES}
 
 
 def _text(p: Path) -> str:
@@ -131,3 +140,28 @@ def test_the_incident_vocabulary_and_the_exclusion_list_are_the_same_strings():
     """
     missing = set(recovery.INCIDENT_LABELS) - set(eligibility.EXCLUDE_LABELS)
     assert not missing, f"incident labels the loop would re-pick: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("doc", list(_PARALLEL_CODES), ids=lambda p: p.name)
+def test_docs_spell_the_parallel_refusal_codes_as_the_code_does(doc):
+    """Every refusal code a conductor branches on since the parallel-issues
+    design (a claim that is `issue-held` tries the next pick, `slots-full`
+    stops the tick, a queued gate's `gate-queue-timeout` is retried once,
+    `merge-lane-busy` is waited out, ...) must appear VERBATIM, as a token,
+    in the document whose steps branch on it. Driven from the executor's
+    constants, so a rename fails here until the prompts follow; matched as a
+    token for the reason the halt-reason test above gives."""
+    text = _text(doc)
+    for code in _PARALLEL_CODES[doc]:
+        token = re.compile(rf"(?<![\w-]){re.escape(code)}(?![\w-])")
+        assert token.search(text), f"{doc.name} does not spell the refusal code {code!r}"
+
+
+@pytest.mark.parametrize("doc", (ORCHESTRATE, ISSUE, SPEC), ids=lambda p: p.name)
+def test_docs_name_only_merge_lane_codes_the_executor_has(doc):
+    """The other direction, for the one code family built from a state name:
+    every `merge-lane-<x>` a document names must be one `merge`/`merge-gate`
+    can return. Read from the DOC, asked of the CODE."""
+    named = set(re.findall(r"merge-lane-[a-z]+", _text(doc)))
+    known = {f"merge-lane-{s}" for s in lock.LANE_REFUSED}
+    assert named <= known, f"{doc.name} names merge-lane codes the executor does not have: {sorted(named - known)}"

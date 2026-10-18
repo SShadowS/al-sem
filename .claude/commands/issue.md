@@ -4,9 +4,11 @@ description: The per-issue pipeline — worktree, classify, probes, spec, two-mo
 
 Take GitHub issue `$ARGUMENTS` (a number) from claimed to merged, per
 `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md`. Requires an
-existing claim (`python scripts/agentflow status` shows a lock for this issue and
-`AGENTFLOW_RUN_ID` is set). Standalone use: run `claim` first, exactly as
-`/orchestrate` step 6 does. Never set `AGENTFLOW_NOW` — it exists only to freeze
+existing claim (`python scripts/agentflow status` lists, in `locks`, a lease
+for this issue naming your run id, and `AGENTFLOW_RUN_ID` is set). Standalone
+use: run `claim` first, exactly as `/orchestrate` step 7 does. Another session
+may be running another issue at the same time; never act on its run id or
+issue. Never set `AGENTFLOW_NOW` — it exists only to freeze
 the executor's clock for tests. An executor call that exits non-zero, or whose
 JSON has a TOP-LEVEL `error` key, stops this step: print it and return `blocked
 <error-or-reason>`. A per-item `error` field inside a list in an otherwise-ok
@@ -38,8 +40,13 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
 
 ## Steps
 
-1. **Worktree.** From the main checkout:
-   `git worktree add <worktree> -b <branch> master`. In every command run inside
+1. **Worktree.** `python scripts/agentflow make-worktree` (per Invocation;
+   never `git worktree add` yourself: the executor holds the shared checkout's
+   git mutex, so a sibling session's git writes cannot collide with it). It
+   takes the worktree and branch from this run's `claim.json`, fetches, and
+   branches from `origin/master`, NOT the main checkout's `master` (which lags
+   while another session's merge waits for its post-merge); it replies
+   `{worktree, branch, base}`. Record `base` in the ledger. In every command run inside
    the worktree, export `TREE_SITTER_AL_PATH=<main checkout>/tree-sitter-al`. Create
    `.agent/issue-N/` there and start the ledger with the claim JSON and a hash of
    the issue body (`body_hash` from the claim).
@@ -163,7 +170,18 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    cargo build held this worktree's `target/` (a link step got `permission
    denied`) — not a verdict on the code: wait until nothing else builds there
    (no subagent, reviewer or proof running cargo in it) and run the gate again;
-   do not diagnose it as a test failure. Each run writes its own log under
+   do not diagnose it as a test failure.
+   HEAVY gates (`ci-steps-all`, `check-goldens`, `check-goldens-regen`,
+   `cdo-gate`) take a gate semaphore shared by every session, so one may first
+   QUEUE behind another session's gate; `check-goldens-coverage` and `ci-wait`
+   never queue. Run each heavy `run` in the background, as its 45-minute
+   timeout already requires; the wait does not count toward that timeout, and
+   the result reports it as `queued_s`. A result with `"exit_code": null` is
+   not a verdict and its child never started: `"failure":
+   "gate-queue-timeout"` (it waited `gate_wait_minutes`) — run it again once,
+   then `blocked gate-queue-timeout`; `"failure": "halted-while-queued"` is
+   `blocked halted`.
+   Each run writes its own log under
    `logs/<name>/`; read the path the result names. A moved golden: dispatch `golden-diff-triager`; only when
    every line is explained run
    `python scripts/agentflow run --name check-goldens-regen --timeout 45 --cwd <worktree> -- bash scripts/check-goldens --regen`
@@ -192,7 +210,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     Source-verify every reviewer code claim before editing. Every fix returns to
     step 9's gates.
 11. **Rebase and re-gate.** `git fetch origin && git rebase origin/master` in the
-    worktree. Conflicts: resolve once (`charge rebase_regate`), else `blocked
+    worktree (the fetch updates refs every session shares: on `cannot lock
+    ref`, another session is fetching — retry the fetch once). Conflicts: resolve once (`charge rebase_regate`), else `blocked
     rebase-conflict`. After ANY rebase rerun step 9. If `git diff <the pre-rebase
     HEAD> HEAD` on non-evidence files is non-empty, run one more final-panel
     round. Record `B = origin/master` and `H = HEAD` in the ledger.
@@ -283,7 +302,13 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     Poll CI through the supervisor:
     `python scripts/agentflow run --name ci-wait --timeout 45 --cwd <worktree> -- gh pr checks <pr> --watch`.
     CI red: one fix (`charge ci_fix`), then steps 9–12 again with a new
-    attestation. Then `python scripts/agentflow merge-gate --pr <pr>`;
+    attestation. Then `python scripts/agentflow merge-gate --pr <pr>`.
+    `merge-lane-busy` means another session has merged and its post-merge has
+    not yet verified it: the base is about to move. Beat at least every 10
+    minutes and poll `merge-gate` until that reason is gone — no budget
+    charge — and only THEN handle `base-moved` (it will usually appear once
+    the lane frees). `merge-lane-orphaned` means the lane's holder died after
+    merging; only a `recover` moves it on: `blocked merge-lane-orphaned`.
     `base-moved` means one more step 11 (`charge rebase_regate`); any other
     reason is `blocked <reason>` — including `ci-workflow-unknown`, which means
     the executor could not read the required workflow's name from
@@ -300,7 +325,11 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     Finally `python scripts/agentflow merge --pr <pr>`, which returns
     `{"merge_sha": …}` only once the gate has passed a second time internally —
     a refused merge instead returns `{"reasons": […]}` with exit 1, which is
-    `blocked <reasons joined>`. On success, post the attestation JSON as a PR
+    `blocked <reasons joined>`. `merge` first takes the merge lane: an
+    `{"error": "merge-lane-busy"}` reply is handled exactly like the
+    `merge-gate` reason above (wait, then re-check), and `merge-lane-orphaned`
+    is `blocked merge-lane-orphaned`. The lane stays this run's until its
+    post-merge verifies the merge or its `finish` runs. On success, post the attestation JSON as a PR
     comment, using the `path` that `attest` replied with
     (`.agent/runs/$AGENTFLOW_RUN_ID/attestation.json`):
     `python scripts/agentflow pr-comment --pr <pr> --body-file <that path>`.

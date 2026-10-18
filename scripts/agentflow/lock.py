@@ -29,6 +29,13 @@ from .state import Ctx, MutexTimeout, append_audit, config, mutex, read_json, wr
 
 STALE_SECONDS = 30 * 60
 
+# The refusal codes the conductor BRANCHES on (`orchestrate.md`, `issue.md`).
+# Named once here so `tests/test_docs_drift.py` can ask the documents for
+# exactly these strings.
+ISSUE_HELD, SLOTS_FULL, DISK_LOW, LOOP_EXHAUSTED = "issue-held", "slots-full", "disk-low", "loop-exhausted"
+# Lane states that refuse a merge; the code is `merge-lane-<state>`.
+LANE_REFUSED = ("busy", "orphaned")
+
 
 class LockHeld(RuntimeError):
     """`acquire` or `steal_for_recovery` refused. `.code` is the
@@ -42,7 +49,7 @@ class LockHeld(RuntimeError):
 
     def __init__(self, reason: str, existing: "Lock | None" = None):
         self.reason, self.existing = reason, existing
-        named = reason in ("issue-held", "lock-live") and existing
+        named = reason in (ISSUE_HELD, "lock-live") and existing
         self.code = f"{reason}:{existing.run_id}" if named else reason
         held = f" (run {existing.run_id} holds issue {existing.issue})" if existing else ""
         super().__init__(f"{self.code}{held}")
@@ -206,17 +213,17 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         try:
             loop_after = budget.loop_next_held(ctx, loop_max)
         except budget.BudgetExceeded:
-            raise LockHeld("loop-exhausted") from None
+            raise LockHeld(LOOP_EXHAUSTED) from None
     held = next((lk for lk in entries if lk.issue == issue), None)
     if held is not None:
-        raise LockHeld("issue-held", held)
+        raise LockHeld(ISSUE_HELD, held)
     if count_slot and len(entries) >= config(ctx)["slots"]:
-        raise LockHeld("slots-full", entries[0] if entries else None)
+        raise LockHeld(SLOTS_FULL, entries[0] if entries else None)
     now = ctx.now()
     if count_slot:
         free, need = disk_free_gb(ctx), disk_required_gb(ctx, sum(not is_stale(lk, now) for lk in entries))
         if free < need:
-            raise LockHeld(f"disk-low:{free}GB<{need}GB")
+            raise LockHeld(f"{DISK_LOW}:{free}GB<{need}GB")
     lk = Lock(issue=issue, run_id=ctx.run_id, session=session,
               started=now if started is None else started, heartbeat=now, attempt=attempt)
     path = ctx.paths.lease(issue)
@@ -242,7 +249,7 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
             # the caller's `started` and never reverts to `now`.
             existing = _read_lease(path)
             if existing is not None or retried:
-                raise LockHeld("issue-held", existing)
+                raise LockHeld(ISSUE_HELD, existing)
     raise AssertionError("unreachable")
 
 
@@ -380,7 +387,7 @@ def take_lane(ctx: Ctx, issue: int, pr: int | None, merge_sha: str | None = None
     ctx.write_guard("take merge lane")
     with mutex(ctx, "registry"):
         lane, state = _lane_state_held(ctx)
-        if state in ("busy", "orphaned"):
+        if state in LANE_REFUSED:
             raise LockHeld(f"merge-lane-{state}")
         new = {"run_id": ctx.run_id, "issue": issue, "pr": pr, "merge_sha": merge_sha,
                "acquired": lane["acquired"] if state == "mine" else ctx.now()}

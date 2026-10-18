@@ -200,6 +200,7 @@ def _with_bash(cmd: list[str]) -> list[str]:
 HEAVY_GATES = frozenset({"ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate"})
 QUEUE_POLL_S = 15.0     # how often a queued gate retries the semaphore
 QUEUE_BEAT_S = 60.0     # how often a queued gate refreshes its run's lease
+QUEUE_TIMEOUT, HALTED_WHILE_QUEUED = "gate-queue-timeout", "halted-while-queued"
 
 
 class GateQueued(RuntimeError):
@@ -246,11 +247,11 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
             last_beat = time.monotonic()
         if halt_aborts:
             if lock.halted(ctx) is not None:
-                raise GateQueued("halted-while-queued", waited)
+                raise GateQueued(HALTED_WHILE_QUEUED, waited)
             if owner:
                 budget.check_deadline(ctx)
         if waited >= wait_s:
-            raise GateQueued("gate-queue-timeout", waited)
+            raise GateQueued(QUEUE_TIMEOUT, waited)
         time.sleep(QUEUE_POLL_S)
 
 
@@ -919,7 +920,7 @@ def cmd_merge_gate(args, ctx, gh, git):
     # whose run died (`orphaned`, until a `recover`): the base is about to
     # move, so a rebase now would be spent for nothing.
     _, lane = lock.lane_state(ctx)
-    if lane in ("busy", "orphaned"):
+    if lane in lock.LANE_REFUSED:
         reasons.append(f"merge-lane-{lane}")
     return _emit({"reasons": reasons, "ci_green": green}, 0 if not reasons else 1)
 
