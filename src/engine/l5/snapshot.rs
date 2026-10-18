@@ -1688,7 +1688,7 @@ fn derive_pd_arena(
     out
 }
 
-/// The bytes a `PdArena` retains, counted like `pd_solve::arena_bytes`: every
+/// The bytes a `PdArena` retains, counted like `pd_solve::arena_tally`: every
 /// `Vec` and hash table at its capacity, plus string heap.
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;
