@@ -422,9 +422,7 @@ pub(crate) mod cones_census {
     pub(crate) static MERGE_TIEBREAKS: AtomicU64 = AtomicU64::new(0);
     /// #69 D1.4: the producer solve (`l4::pd_solve::solve`), summed over every
     /// cone composition: producers, states, links, resolved (non-seed) entries,
-    /// the distinct edges the links cross, and the bytes the solve retains
-    /// (`pd_solve::solve_bytes`, plus every snapshot `PdArena` derived from a
-    /// solve, which `PD_SNAPSHOT_BYTES` also reports on its own).
+    /// the distinct edges the links cross.
     pub(crate) static PD_PRODUCERS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_STATES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_LINKS: AtomicU64 = AtomicU64::new(0);
@@ -433,7 +431,18 @@ pub(crate) mod cones_census {
     /// The solve's wall time and call count (a second solve is a second call).
     pub(crate) static PD_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_SOLVE_CALLS: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static PD_SOLVE_BYTES: AtomicU64 = AtomicU64::new(0);
+    /// #160 G-1: the bytes each solve retains, split in two (spec §4.1.1).
+    /// `_ARENA` (`pd_solve::arena_bytes`): producers, states, links, edges,
+    /// `by_routine`, the part step 6 may retain. `_WORKING`
+    /// (`pd_solve::working_bytes`): resolved own entries, interned names,
+    /// reps, the part step 6 retains or re-solves. Charged only by
+    /// `pd_solve::census`, never by a snapshot.
+    pub(crate) static PD_SOLVE_BYTES_ARENA: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_SOLVE_BYTES_WORKING: AtomicU64 = AtomicU64::new(0);
+    /// The bytes of every snapshot `PdArena` derived from a solve
+    /// (`snapshot::derive_pd_arena`). The pre-#160 `solve_bytes=` figure was
+    /// `_ARENA + _WORKING + PD_SNAPSHOT_BYTES`, printed as
+    /// `solve_bytes_old_equiv=`.
     pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
@@ -591,15 +600,20 @@ pub(crate) mod cones_census {
             MERGE_CALLS.load(Ordering::Relaxed),
             MERGE_TIEBREAKS.load(Ordering::Relaxed),
         );
+        let arena = PD_SOLVE_BYTES_ARENA.load(Ordering::Relaxed);
+        let working = PD_SOLVE_BYTES_WORKING.load(Ordering::Relaxed);
+        let snapshot = PD_SNAPSHOT_BYTES.load(Ordering::Relaxed);
         eprintln!(
-            "[cones-census]   pd_solve: producers={} states={} links={} entries={} edges={} solve_bytes={} snapshot_bytes={} edge_unmapped={}",
+            "[cones-census]   pd_solve: producers={} states={} links={} entries={} edges={} arena={} working={} snapshot={} solve_bytes_old_equiv={} edge_unmapped={}",
             PD_PRODUCERS.load(Ordering::Relaxed),
             PD_STATES.load(Ordering::Relaxed),
             PD_LINKS.load(Ordering::Relaxed),
             PD_ENTRIES.load(Ordering::Relaxed),
             PD_EDGES.load(Ordering::Relaxed),
-            PD_SOLVE_BYTES.load(Ordering::Relaxed),
-            PD_SNAPSHOT_BYTES.load(Ordering::Relaxed),
+            arena,
+            working,
+            snapshot,
+            arena + working + snapshot,
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
         );
     }

@@ -1601,14 +1601,14 @@ fn derive_pd_arena(
         });
     }
     if cones_census::enabled() {
-        let bytes = pd_arena_bytes(&out);
-        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, bytes);
-        cones_census::add(&cones_census::PD_SOLVE_BYTES, bytes);
+        // `PD_SNAPSHOT_BYTES` alone: charging `PD_SOLVE_BYTES_ARENA` here
+        // would count the retained arena twice (#160 spec §4.1.1).
+        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, pd_arena_bytes(&out));
     }
     out
 }
 
-/// The bytes a `PdArena` retains, counted like `pd_solve::solve_bytes`: every
+/// The bytes a `PdArena` retains, counted like `pd_solve::arena_bytes`: every
 /// `Vec` and hash table at its capacity, plus string heap.
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;
