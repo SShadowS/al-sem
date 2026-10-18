@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- #160 step 0, the measurement harness (diagnostic only; no output byte moves):
+  - Build counters in the trace (`build.program`, `build.combined_graph`, `build.cone`,
+    `build.summaries_v2`, `build.graph_scc`, `build.pd_solve`, `build.detector_context`,
+    `build.snapshot`, `build.ordering_facts`), pinned per command and universe by
+    `tests/cli/cli_build_counters.rs`.
+  - Cone-census timers under `ALSEM_CONES_CENSUS=1`: the BFS walk and fold apart
+    (`BFS_WALK_NANOS`, `BFS_FOLD_NANOS`, `BFS_PICKS`), the singleton scan split by entry
+    class, `PD_SOLVE_NANOS`/`PD_SOLVE_CALLS`, the signed `COMPOSE_REST_NANOS` remainder,
+    and the pd-solve bytes split into arena and working set. New trace spans
+    `digest.tx_context_map`, `prove.tx_context_map`, `b3.adapter.join`,
+    `b3.adapter.by_decl` and `b3.adapter.convert`.
+  - The post-attach phase peak: `alsem` opens `pt::run("alsem")` and emits
+    `peak.process_mb` and `peak.post_attach_mb` (Windows; 0 elsewhere).
+  - The retained byte census under `ALSEM_RETAINED_CENSUS=1` (`src/engine/census.rs`):
+    one `[retained-census] bucket=… bytes=… allocs=… kind=exact|shallow` line per program,
+    model, base, context, snapshot and arena structure, with `census_hook` marks so
+    `census-probe model` gives the live heap at each bucket point.
+  - `aldump --issue160-full-graph-timings <ws>`: the snapshot's cone, pd-solve and derive
+    cost over the cut graph and the full graph (measurement only; deleted at step 6).
+  - The step 0 CDO numbers: `docs/measurements/2026-10-18-issue-160-step0.md`.
+
+### Changed
+
+- `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`; the old
+  `[C1_CONE_CENSUS]` report is gone (its structures are covered by the `context.*`
+  buckets).
+- The cone census report (`[cones-census]`) prints once at process exit, with the
+  process total of every cone the command composed (the snapshot's included), instead
+  of at the end of the detector context's cone block.
+
 ### Fixed
 
 - A routine can carry several readings of one event attribute, one per `#if` build path
