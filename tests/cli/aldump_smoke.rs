@@ -88,3 +88,40 @@ fn ws_d2_identity_subset_matches_golden() {
         .expect("missing OnQuietEvent");
     assert_eq!(on_quiet.kind, "event-publisher");
 }
+
+/// #160 A0.6 (spec §4.1.6): the full-graph timings mode prints the four numbers
+/// for the cut graph and the full one. The mode reads the cone census, so the
+/// test turns it on, as a measuring caller does.
+#[test]
+fn issue160_full_graph_timings_prints_four_numbers() {
+    let d = tempfile::tempdir().unwrap();
+    crate::cli_digest_query_dependencies::write_dependency_workspace(d.path());
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_aldump"))
+        .arg("--issue160-full-graph-timings")
+        .arg(d.path())
+        .env("ALSEM_CONES_CENSUS", "1")
+        .env_remove("ALSEM_TRACE")
+        .output()
+        .expect("spawn aldump");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "aldump failed: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for side in ["cut", "full"] {
+        for key in [
+            "cone_wall_ms=",
+            "pd_solve_ms=",
+            "snapshot_derive_ms=",
+            "inherited_facts=",
+        ] {
+            let line = format!("{side} {key}");
+            assert!(
+                stdout.lines().any(|l| l.starts_with(&line)),
+                "missing `{line}`:\n{stdout}"
+            );
+        }
+    }
+}

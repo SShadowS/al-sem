@@ -47,10 +47,36 @@ fn usage() -> ExitCode {
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
          <workspace-or-.app>\n\
+         \x20      aldump --issue160-full-graph-timings <workspace>   (needs ALSEM_CONES_CENSUS=1)\n\
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]"
     );
     ExitCode::FAILURE
+}
+
+/// `--issue160-full-graph-timings <workspace>` (#160 §4.1.6, measurement only,
+/// deleted at step 6): the snapshot's cone wall, solve, derivation wall and
+/// inherited-fact count over the cut graph and the full one. Run it with
+/// `ALSEM_CONES_CENSUS=1`.
+fn issue160_full_graph_timings_cmd(args: &[String]) -> ExitCode {
+    let [ws] = args else {
+        return usage();
+    };
+    match al_sem::engine::l4::capability_cone::issue160_full_graph_timings(std::path::Path::new(ws))
+    {
+        Ok(Some(text)) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            eprintln!("aldump: error: {ws}: no cross-app base (no primary app or no program)");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `--switch-dump <workspace> <out-dir>`: write the engine-switch dump.
@@ -195,6 +221,7 @@ fn run_main() -> ExitCode {
         Some("--switch-dump") => return switch_dump_cmd(&raw[1..]),
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
+        Some("--issue160-full-graph-timings") => return issue160_full_graph_timings_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;

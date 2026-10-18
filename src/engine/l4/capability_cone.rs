@@ -4212,11 +4212,22 @@ pub struct R3a3SourceBase {
 /// resolved workspace having zero routines.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
+    let _s0 = pt::span("r3a3", "r3a3.calls_graph");
+    let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
+    drop(_s0);
+    build_r3a3_source_only_base_over(resolved, graph)
+}
+
+/// [`build_r3a3_source_only_base`] with the graph taken as a parameter (#160
+/// §4.1.6): calls and event graph still cloned from `resolved`, the direct facts,
+/// the uncertainty fold and the cone computed over `graph`. Only the full-graph
+/// timings mode passes a graph other than the one the wrapper builds.
+pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) -> R3a3SourceBase {
+    use crate::engine::perf_trace as pt;
     let ws: &ModelEntities = &resolved.workspace;
     let _s0 = pt::span("r3a3", "r3a3.calls_graph");
     let calls = (*resolved.calls).clone();
     let event_graph: EventGraph = resolved.events.graph.clone();
-    let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_s0);
     let _s1 = pt::span("r3a3", "r3a3.direct_facts");
 
@@ -4296,6 +4307,63 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
         routine_to_stable,
         pd_solution,
     }
+}
+
+/// `aldump --issue160-full-graph-timings` (#160 §4.1.6): the snapshot's cost over
+/// today's CUT graph and over the cross-app base's FULL graph, from one binary.
+/// Measurement only; deleted when step 6 lands. The cone wall and the solve are
+/// read off the cone census, so the caller runs it with `ALSEM_CONES_CENSUS=1`;
+/// without it this returns `Err` rather than print zeros. `Ok(None)`: the
+/// workspace has no cross-app base.
+#[doc(hidden)]
+pub fn issue160_full_graph_timings(
+    workspace: &std::path::Path,
+) -> Result<Option<String>, &'static str> {
+    use crate::engine::l5::detector_context::cones_census as cc;
+    use std::sync::atomic::Ordering;
+    if !cc::enabled() {
+        return Err("--issue160-full-graph-timings needs ALSEM_CONES_CENSUS=1");
+    }
+    let Some(base) = build_cross_app_base(
+        workspace,
+        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+    ) else {
+        return Ok(None);
+    };
+    let cone_nanos = || {
+        [
+            &cc::WALK_GRAPH_NANOS,
+            &cc::WALK_SCC_NANOS,
+            &cc::WALK_DEDUP_NANOS,
+            &cc::WALK_COMPOSE_NANOS,
+        ]
+        .iter()
+        .map(|c| c.load(Ordering::Relaxed))
+        .sum::<u64>()
+    };
+    let ms = |n: u64| n as f64 / 1e6;
+    let mut out = String::new();
+    for side in ["cut", "full"] {
+        let (cone0, pd0) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
+        let sb = if side == "cut" {
+            build_r3a3_source_only_base(&base.resolved)
+        } else {
+            build_r3a3_source_only_base_over(&base.resolved, base.graph.clone())
+        };
+        let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
+        let t = std::time::Instant::now();
+        let snap = crate::engine::l5::snapshot::compose_snapshot_from_base(&base.resolved, &sb);
+        let derive = t.elapsed().as_nanos() as u64;
+        drop(snap);
+        let inherited: usize = sb.cones.values().map(|c| c.inherited.len()).sum();
+        out.push_str(&format!(
+            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n",
+            ms(cone1 - cone0),
+            ms(pd1 - pd0),
+            ms(derive),
+        ));
+    }
+    Ok(Some(out))
 }
 
 // ===========================================================================
