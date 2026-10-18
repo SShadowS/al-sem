@@ -452,9 +452,9 @@ pub(crate) mod cones_census {
     pub(crate) static PD_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_SOLVE_CALLS: AtomicU64 = AtomicU64::new(0);
     /// #160 G-1: the bytes each solve retains, split in two (spec §4.1.1).
-    /// `_ARENA` (`pd_solve::arena_bytes`): producers, states, links, edges,
+    /// `_ARENA` (`pd_solve::arena_tally`): producers, states, links, edges,
     /// `by_routine`, the part step 6 may retain. `_WORKING`
-    /// (`pd_solve::working_bytes`): resolved own entries, interned names,
+    /// (`pd_solve::working_tally`): resolved own entries, interned names,
     /// reps, the part step 6 retains or re-solves. Charged only by
     /// `pd_solve::census`, never by a snapshot.
     pub(crate) static PD_SOLVE_BYTES_ARENA: AtomicU64 = AtomicU64::new(0);
