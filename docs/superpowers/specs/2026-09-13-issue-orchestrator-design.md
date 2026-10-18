@@ -311,7 +311,12 @@ Labels are a mirror for humans, not a lock. The lock is local:
    checkout's parent) at least `min_free_gb` (40 GB; 20 GB until 2026-10-14,
    when a tick that started above 20 GB filled the drive and failed #68's
    post-merge check on a green merge) plus `reserve_gb_per_run` (30 GB) per live
-   lease, else `disk-free:<n>GB`. With a sibling running, `slots-full` and
+   lease, else `disk-free:<n>GB`. With `target_root` set (2026-10-19), each
+   issue worktree's `target/` is a junction into `<target_root>/<worktree name>`
+   (one folder per worktree, made by `make-worktree`, deleted by `cleanup`); the
+   worktrees' drive then keeps only `min_free_gb`, and the per-run reserve is
+   asked of the target drive (`disk-free:targets:<n>GB`, claim
+   `disk-low:targets:<free>GB<<need>GB`). With a sibling running, `slots-full` and
    `disk-free` mean "do not claim now". Any failure
    stops the tick with the reason printed. Nothing is created before preflight passes.
 2. **Fetch** (executor). Paginated list of open issues with number, title, body, labels,

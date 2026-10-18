@@ -25,7 +25,7 @@ from typing import Callable
 from . import incidents, lock, worktrees
 from .gh import Gh
 from .gitops import Git, GitError
-from .state import Ctx
+from .state import Ctx, config
 
 # ---- the two-axis incident vocabulary --------------------------------------
 REGRESSED = "agent-regressed"
@@ -604,6 +604,14 @@ def _refuse_protected_branch(git: Git, branch: str) -> None:
         raise RuntimeError(f"refusing to delete branch {branch!r}: it is the checked-out branch")
 
 
+def _unlink_build(ctx: Ctx, path: Path) -> None:
+    """The worktree's build folder under `target_root`, if one is configured.
+    `rmtree` of the worktree removed only the junction to it."""
+    target_root = config(ctx)["target_root"]
+    if target_root:
+        worktrees.unlink_target(path, Path(target_root))
+
+
 def remove_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent: Path, merge_sha: str) -> None:
     ctx.write_guard("remove worktree")
     path = path.resolve()
@@ -618,6 +626,7 @@ def remove_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent
         # raise, or a bare OSError from `is_clean`'s `git status`) turns a
         # transient crash into a self-repeating tick that never makes progress
         # (review round 2, New Breakage 5): idempotent success instead.
+        _unlink_build(ctx, path)
         git.worktree_prune()
         if _branch_exists(git, branch):
             git.branch_delete(branch)
@@ -652,6 +661,7 @@ def remove_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_parent
             if attempt == 2:
                 raise
             time.sleep(2)
+    _unlink_build(ctx, path)
     git.worktree_prune()
     git.branch_delete(branch)
 
@@ -668,6 +678,7 @@ def remove_spike_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_
     if not path.exists():
         # See the matching comment in `remove_worktree`: already gone is
         # success, not a failure to route through HALT.
+        _unlink_build(ctx, path)
         git.worktree_prune()
         if _branch_exists(git, branch):
             git.branch_delete(branch)
@@ -699,6 +710,7 @@ def remove_spike_worktree(ctx: Ctx, git: Git, path: Path, branch: str, expected_
             if attempt == 2:
                 raise
             time.sleep(2)
+    _unlink_build(ctx, path)
     git.worktree_prune()
     git.branch_delete(branch)
 

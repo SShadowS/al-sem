@@ -365,10 +365,15 @@ def cmd_preflight(args, ctx, gh, git):
     # The same rule `claim` refuses on (`lock.disk_required_gb`): the floor
     # plus a reserve per live run. Failing while a sibling runs only means
     # "do not claim now".
+    live = sum(not r["stale"] for r in leases)
     free_gb = lock.disk_free_gb(ctx)
-    need_gb = lock.disk_required_gb(ctx, sum(not r["stale"] for r in leases))
+    need_gb = lock.disk_required_gb(ctx, live)
     if free_gb < need_gb:
         fails.append(f"disk-free:{free_gb}GB")
+    # With `target_root`, the builds' reserve is asked of their own drive.
+    target_free, target_need = lock.target_disk(ctx, live) or (None, None)
+    if target_free is not None and target_free < target_need:
+        fails.append(f"disk-free:targets:{target_free}GB")
     # Not failures. Risk (g)3 of the parallel-issues design: an inherited
     # CARGO_TARGET_DIR makes every issue worktree build into one directory,
     # so two runs' gates contend for it (#60).
@@ -381,6 +386,7 @@ def cmd_preflight(args, ctx, gh, git):
     out = {"ok": not fails, "failures": fails, "locks": leases, "stale_locks": stale_locks,
            "stale_lock": stale_locks[0] if stale_locks else None,
            "disk_free_gb": free_gb, "disk_required_gb": need_gb,
+           "target_free_gb": target_free, "target_required_gb": target_need,
            "warnings": warnings, "master_behind_origin": behind, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:
@@ -578,7 +584,10 @@ def cmd_make_worktree(args, ctx, gh, git):
     git.fetch()
     base = git.rev("refs/remotes/origin/master")
     git.worktree_add(Path(claim["worktree"]), claim["branch"], base)
-    return _emit({"worktree": claim["worktree"], "branch": claim["branch"], "base": base})
+    target_root = config(ctx)["target_root"]
+    built = worktrees.link_target(Path(claim["worktree"]), Path(target_root)) if target_root else None
+    return _emit({"worktree": claim["worktree"], "branch": claim["branch"], "base": base,
+                  "target": str(built) if built else None})
 
 
 def cmd_beat(args, ctx, gh, git):

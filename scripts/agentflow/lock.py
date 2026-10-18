@@ -152,9 +152,22 @@ def disk_required_gb(ctx: Ctx, live_runs: int) -> int:
     """`min_free_gb` plus `reserve_gb_per_run` for each LIVE run: each may
     still grow its worktree `target/` by ~30 GB, and post-merge builds in the
     root's `target/`. A stale run builds nothing more, so it reserves nothing.
-    With the defaults: 40 GB for the first claim, 70 GB for the second."""
+    With the defaults: 40 GB for the first claim, 70 GB for the second.
+    With a `target_root` the builds are not on this drive, so it keeps only
+    the floor and the reserve moves to `target_disk`."""
     cfg = config(ctx)
-    return cfg["min_free_gb"] + cfg["reserve_gb_per_run"] * live_runs
+    return cfg["min_free_gb"] + (0 if cfg["target_root"] else cfg["reserve_gb_per_run"] * live_runs)
+
+
+def target_disk(ctx: Ctx, live_runs: int) -> tuple[int, int] | None:
+    """(free GB, required GB) on the drive holding `target_root`, or None when
+    builds stay in the worktrees. Required is `reserve_gb_per_run` per LIVE run."""
+    cfg = config(ctx)
+    if not cfg["target_root"]:
+        return None
+    root = Path(cfg["target_root"])
+    probe = root if root.exists() else Path(root.anchor or ".")
+    return shutil.disk_usage(probe).free // 2**30, cfg["reserve_gb_per_run"] * live_runs
 
 
 def acquire(ctx: Ctx, issue: int, session: str, attempt: int, *,
@@ -221,9 +234,12 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         raise LockHeld(SLOTS_FULL, entries[0] if entries else None)
     now = ctx.now()
     if count_slot:
-        free, need = disk_free_gb(ctx), disk_required_gb(ctx, sum(not is_stale(lk, now) for lk in entries))
+        live = sum(not is_stale(lk, now) for lk in entries)
+        free, need = disk_free_gb(ctx), disk_required_gb(ctx, live)
         if free < need:
             raise LockHeld(f"{DISK_LOW}:{free}GB<{need}GB")
+        if (t := target_disk(ctx, live)) is not None and t[0] < t[1]:
+            raise LockHeld(f"{DISK_LOW}:targets:{t[0]}GB<{t[1]}GB")
     lk = Lock(issue=issue, run_id=ctx.run_id, session=session,
               started=now if started is None else started, heartbeat=now, attempt=attempt)
     path = ctx.paths.lease(issue)

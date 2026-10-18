@@ -219,14 +219,15 @@ def test_config_defaults_when_the_file_or_a_key_is_missing(ctx):
     `.agent/config.json` acts exactly as before. Stated as literals."""
     assert ctx.paths.config == ctx.paths.root / ".agent" / "config.json"
     defaults = {"slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-                "gate_wait_minutes": 180}
+                "gate_wait_minutes": 180, "target_root": ""}
     assert state.config(ctx) == defaults
     ctx.paths.config.write_text(json.dumps({"slots": 2}), encoding="utf-8")
     assert state.config(ctx) == {**defaults, "slots": 2}
 
 
-@pytest.mark.parametrize("bad", [{"slot": 2}, {"slots": "2"}, {"slots": True}, {"slots": -1}, [1]],
-                         ids=["unknown-key", "string", "bool", "negative", "not-an-object"])
+@pytest.mark.parametrize("bad", [{"slot": 2}, {"slots": "2"}, {"slots": True}, {"slots": -1}, [1],
+                                 {"target_root": 5}],
+                         ids=["unknown-key", "string", "bool", "negative", "not-an-object", "target-root-not-str"])
 def test_config_refuses_a_value_it_would_otherwise_ignore(ctx, bad):
     """A misspelt key or a wrong type would silently fall back to the
     default. Two sessions must agree on these numbers, so a file the owner

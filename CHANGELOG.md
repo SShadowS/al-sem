@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- agentflow can keep build output off the worktrees' drive: `target_root` in
+  `.agent/config.json` (default empty: unchanged). `make-worktree` then makes the issue
+  worktree's `target/` a junction into `<target_root>/<worktree name>` (still one build
+  folder per worktree, so two runs never share one, #60), and `cleanup` deletes that folder
+  with the worktree. The disk guard follows the builds: the worktrees' drive keeps only
+  `min_free_gb`, and `reserve_gb_per_run` per live run is asked of the target drive
+  (`disk-free:targets:<n>GB` in `preflight`, `disk-low:targets:…` on `claim`, and
+  `target_free_gb` / `target_required_gb` in the payload).
 - Gate speed-ups (spec `docs/superpowers/specs/2026-10-18-gate-speedups-design.md`):
   - `agentflow run` records every gate run in `<run dir>/gate-runs.jsonl`: gate, exit code,
     HEAD, tree, clean before and after, `rustc`, grammar commit and dirt, and the CDO

@@ -54,7 +54,10 @@ id or issue: a `FenceError` naming an issue this tick did not claim is a STOP.
    `state: open` row reaches `failures`, as `incident:<sha12>`.
    While another session runs, `failures` may say `slots-full` (as many LIVE
    leases as slots) or `disk-free:<n>GB` (free disk below `disk_required_gb`:
-   `min_free_gb` plus `reserve_gb_per_run` per live run). Both mean "do not
+   `min_free_gb` plus `reserve_gb_per_run` per live run; with a `target_root`
+   in `.agent/config.json` the reserve is asked of the builds' own drive
+   instead, as `disk-free:targets:<n>GB`, with `target_free_gb` /
+   `target_required_gb`). Both mean "do not
    claim now", not "something is broken": print them and stop this tick, and
    under `/loop` reschedule rather than end the loop. Print `locks` (every
    lease, with `stale`), `disk_free_gb`, `disk_required_gb`, `warnings` (e.g.

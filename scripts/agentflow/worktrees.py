@@ -27,6 +27,7 @@ own (it is gitignored), because `cli._run_gate` derives `TREE_SITTER_AL_PATH` fr
 """
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from pathlib import Path
@@ -36,6 +37,37 @@ from .gitops import Git, GitError
 # The name is the ownership proof. `destroy` below deletes a directory tree,
 # and the ONLY thing standing between it and an arbitrary path is this prefix.
 VERIFY_PREFIX = "al-sem-verify-"
+
+
+def link_target(worktree: Path, target_root: Path) -> Path:
+    """Make `<worktree>/target` a link into `<target_root>/<worktree name>`
+    and return that folder. One folder PER worktree, so two runs never build
+    into one directory (#60); only the drive moves. A folder left by an
+    earlier attempt of the same name is reused: it is cargo's own cache.
+
+    A junction on Windows (no admin right needed, unlike a symlink).
+    `shutil.rmtree` of the worktree removes the junction and leaves the
+    folder, which `unlink_target` deletes."""
+    built = Path(target_root) / worktree.name
+    built.mkdir(parents=True, exist_ok=True)
+    link = worktree / "target"
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(built), str(link))
+    else:
+        os.symlink(built, link, target_is_directory=True)
+    return built
+
+
+def unlink_target(worktree: Path, target_root: Path) -> None:
+    """Delete `<target_root>/<worktree name>`, the build folder `link_target`
+    made, and nothing else. Absent is fine (already cleaned, or never linked)."""
+    root = Path(target_root).resolve()
+    built = (root / worktree.name).resolve()
+    if built.parent != root or not worktree.name:
+        raise RuntimeError(f"{built} is not a build folder directly under {root}")
+    if built.exists():
+        shutil.rmtree(built)
 
 
 def _guard(path: Path) -> None:

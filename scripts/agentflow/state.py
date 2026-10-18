@@ -41,9 +41,13 @@ class ConfigError(ValueError):
 # the drive hit 35 MB, and the post-merge check failed at `gen-syntax` on a
 # green merge (#68). The other keys are read by later steps of the
 # parallel-issues design.
-CONFIG_DEFAULTS: dict[str, int] = {
+# `target_root`: when set (a directory), each issue worktree's `target/` is a
+# junction into `<target_root>/<worktree name>`, and `reserve_gb_per_run` is
+# asked of THAT drive while `min_free_gb` stays on the worktrees' drive. Empty
+# (the default) keeps builds inside the worktree.
+CONFIG_DEFAULTS: dict[str, int | str] = {
     "slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-    "gate_wait_minutes": 180,
+    "gate_wait_minutes": 180, "target_root": "",
 }
 
 
@@ -198,7 +202,7 @@ def write_json(ctx: Ctx, path: Path, data: Any) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def config(ctx: Ctx) -> dict[str, int]:
+def config(ctx: Ctx) -> dict[str, Any]:
     """`.agent/config.json` over CONFIG_DEFAULTS. A missing file or key is the
     default.
 
@@ -213,7 +217,10 @@ def config(ctx: Ctx) -> dict[str, int]:
     for key, value in data.items():
         if key not in CONFIG_DEFAULTS:
             raise ConfigError(f"{ctx.paths.config}: unknown key {key!r}")
-        if type(value) is not int or value < 0:
+        if isinstance(CONFIG_DEFAULTS[key], str):
+            if type(value) is not str:
+                raise ConfigError(f"{ctx.paths.config}: {key} must be a string, not {value!r}")
+        elif type(value) is not int or value < 0:
             raise ConfigError(f"{ctx.paths.config}: {key} must be a whole number >= 0, not {value!r}")
     return {**CONFIG_DEFAULTS, **data}
 
