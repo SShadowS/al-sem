@@ -1117,7 +1117,8 @@ fn q6(ws: PathBuf) {
     use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
-        al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
+        let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+        al_sem::program::resolve::full::build_program_with_coverage(&inputs).map(|(_, _, fc)| fc)
     });
     println!("    fresh_coverage ok: {}", fresh.is_ok());
     drop(fresh);
