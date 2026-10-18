@@ -42,6 +42,9 @@ echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1"
 # The `cdo` profile (no LTO, incremental) rebuilds the lib tests in ~46 s after an
 # edit, against ~133 s for `release-fast` (measured 2026-10-07).
 profile=(--profile cdo)
+# cargo test, not nextest: measured 2026-10-18, nextest took 97-112 s against
+# 72-84 s here (peak ~3.2 GB both). nextest runs one process per test, and
+# program_resolve_harness rebuilds its shared CDO context (`CDO_SHARED`) in each.
 
 status=0
 

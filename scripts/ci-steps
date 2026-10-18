@@ -52,6 +52,13 @@ require_grammar() {
     fi
 }
 
+# No silent fallback to `cargo test`: local and CI must run the same runner.
+require_nextest() {
+    cargo nextest --version >/dev/null 2>&1 && return 0
+    echo "ci-steps: cargo-nextest is required (cargo install cargo-nextest --locked)" >&2
+    return 1
+}
+
 run_fmt() { cargo fmt --check; }
 
 run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets --all-features -- -D warnings; }
@@ -92,11 +99,16 @@ run_gen_syntax() {
 #
 # The stamp is taken BEFORE the run and written only if the run is green AND the
 # tree did not change while it ran, so it always names a tree that was tested.
+#
+# nextest, then the doc-tests (nextest does not run them). Measured 2026-10-18,
+# warm tree, 3430 tests on both runners: 46-50 s against 81-104 s for `cargo test`.
 run_test() {
     require_grammar || return 1
+    require_nextest || return 1
     local stamp_before stamp_after stamp_file
     stamp_before="$("$(dirname "$0")/tree-stamp")" || return 1
-    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo test --workspace || return 1
+    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace || return 1
+    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo test --workspace --doc || return 1
     stamp_after="$("$(dirname "$0")/tree-stamp")" || return 0
     if [[ "$stamp_before" == "$stamp_after" ]]; then
         stamp_file="$("$(dirname "$0")/tree-stamp" --path)"

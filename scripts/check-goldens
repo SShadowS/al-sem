@@ -178,10 +178,19 @@ targets=(
 # ⟨task-3 fix wave, review I-3(2)⟩
 unset CDO_WS ENFORCE_CDO_WS
 
+# nextest (profile `goldens`: never fail fast, for the reason above). Measured
+# 2026-10-18, warm tree, 876 tests on both runners: 27-31 s against 64-80 s for
+# `cargo test`, at ~0.3 GB more peak memory (1.5 vs 1.25 GB) -- owner: speed wins.
+# No silent fallback to `cargo test`: local and CI must run the same runner.
+if ! cargo nextest --version >/dev/null 2>&1; then
+    echo "check-goldens: cargo-nextest is required (cargo install cargo-nextest --locked)" >&2
+    exit 1
+fi
+
 if [[ "${1:-}" == "--regen" ]]; then
     echo "check-goldens: regenerating (REGEN_TEMP_GOLDENS=1) — INSPECT the diff before committing"
-    REGEN_TEMP_GOLDENS=1 cargo test --no-fail-fast "${targets[@]}" || exit 1
+    REGEN_TEMP_GOLDENS=1 cargo nextest run --profile goldens "${targets[@]}" || exit 1
     echo "check-goldens: re-running WITHOUT regen to confirm green"
 fi
 
-env -u REGEN_TEMP_GOLDENS cargo test --no-fail-fast "${targets[@]}"
+env -u REGEN_TEMP_GOLDENS cargo nextest run --profile goldens "${targets[@]}"

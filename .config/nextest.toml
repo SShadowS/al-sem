@@ -6,8 +6,9 @@
 # construction (no shared address space) while giving much better parallelism
 # than libtest's per-binary threading.
 #
-# Note: nextest does NOT run doctests — run `cargo test --doc` separately if
-# doctests are ever added.
+# Note: nextest does NOT run doctests — `scripts/ci-steps test` runs
+# `cargo test --doc` after it. `scripts/check-goldens` uses the `goldens` profile;
+# `scripts/cdo-gate` stays on `cargo test` (measured slower here, 2026-10-18).
 
 [profile.default]
 # One slot per logical CPU; the CDO-gated tests skip by default so the suite is
@@ -17,6 +18,10 @@ test-threads = "num-cpus"
 fail-fast = true
 # Surface slow tests (parse-heavy differentials) without killing them.
 slow-timeout = { period = "60s" }
+
+# A golden gate reports every stale family in one pass (scripts/check-goldens).
+[profile.goldens]
+fail-fast = false
 
 [profile.ci]
 fail-fast = false
