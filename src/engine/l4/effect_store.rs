@@ -716,6 +716,25 @@ pub struct SummaryBundle {
 }
 
 impl SummaryBundle {
+    /// The retained census's shallow walk (#160 §4.1.5): the bundle's own
+    /// buffers and the effect store's set tables; the effect universe and the
+    /// routine interner are not walked.
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<(RoutineIx, CompactRoutineSummary)>(self.summaries.len())
+            .buf::<HybridEffectSet>(self.effects.sets.len())
+            .buf::<Box<[EffectId]>>(self.effects.ordered.len())
+            .buf::<ViaRank>(self.via_pool.len())
+            .buf::<EffectId>(self.delta_pool.len())
+            .buf::<(String, Option<String>)>(self.rvid_by_opid.len())
+            .strs(self.rvid_by_opid.keys())
+            .strs(self.rvid_by_opid.values().flatten());
+        for ids in &self.effects.ordered {
+            t.buf::<EffectId>(ids.len());
+        }
+        t
+    }
+
     /// Look up the [`RoutineIx`] for a routine id, if interned.
     pub fn routine_ix(&self, routine_id: &str) -> Option<RoutineIx> {
         self.interner.get(routine_id)

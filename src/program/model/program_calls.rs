@@ -666,6 +666,10 @@ fn attach_program_calls_with(
         let _s = pt::span("b3", "b3.events");
         crate::program::model::events::program_event_graph(&ctx, &rows.workspace)
     };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.program");
+        census_program(&ctx, &report);
+    }
     {
         let _s = pt::span("b3", "b3.report_drop");
         drop(report);
@@ -688,7 +692,79 @@ fn attach_program_calls_with(
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).
     crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.model");
+        census_model(&resolved);
+    }
     resolved
+}
+
+/// #160 §4.1.5: `program.snapshot_texts` (every source text of every app in
+/// the snapshot, each shared `Arc<str>` once: exact) and `program.report`
+/// (shallow). At step 0 the workspace texts are counted here too.
+fn census_program(ctx: &ProgramContext, report: &ProgramReport) {
+    use crate::engine::census::{Kind, Tally};
+    let mut seen = std::collections::HashSet::new();
+    let mut texts = Tally::default();
+    for app in &ctx.snapshot().apps {
+        for f in app.source.iter().flat_map(|s| s.files.iter()) {
+            if seen.insert(std::sync::Arc::as_ptr(&f.text).cast::<u8>()) {
+                // `ArcInner<str>`: strong + weak counts, then the bytes, padded
+                // to the counts' alignment — the requested allocation size.
+                texts.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
+                    .next_multiple_of(std::mem::align_of::<usize>());
+                texts.allocs += 1;
+            }
+        }
+    }
+    texts.emit("program.snapshot_texts", Kind::Exact);
+    let mut r = Tally::default();
+    r.buf::<crate::program::resolve::full::ClassifiedEdge>(report.edges.len())
+        .buf::<(
+            crate::program::resolve::full::ObligationId,
+            crate::program::resolve::full::SiteFacts,
+        )>(report.site_facts.len())
+        .buf::<(
+            (crate::program::node::AppRef, String),
+            std::collections::HashSet<al_syntax::ir::ExprId>,
+        )>(report.parenless_calls.len())
+        .strs(report.parenless_calls.keys().map(|(_, f)| f))
+        .buf::<crate::program::resolve::full::ObligationId>(report.coverage.missing.len())
+        .buf::<crate::program::resolve::full::ObligationId>(report.coverage.extra.len())
+        .buf::<String>(report.recovered_files.len())
+        .strs(&report.recovered_files);
+    for ids in report.parenless_calls.values() {
+        r.buf::<al_syntax::ir::ExprId>(ids.len());
+    }
+    r.emit("program.report", Kind::Shallow);
+}
+
+/// #160 §4.1.5: the `model` bucket, shallow: the rows' buffers, the calls and
+/// the event graph (each behind its own `Arc`).
+fn census_model(m: &crate::program::model::workspace::Model) {
+    use crate::engine::census::{Kind, Tally, event_graph};
+    use crate::program::model::workspace as w;
+    let mut t = Tally::default();
+    t.buf::<w::ModelObject>(m.workspace.objects.len())
+        .buf::<w::ModelTable>(m.workspace.tables.len())
+        .buf::<w::ModelRoutine>(m.workspace.routines.len())
+        .buf::<crate::engine::root_classification::RootClassification>(m.root_classifications.len())
+        .buf::<crate::engine::root_classification::InfraDiagnostic>(m.infra_diagnostics.len())
+        .buf::<crate::engine::l5::registry::Diagnostic>(m.dependency_diagnostics.len())
+        .arc::<ResolvedCalls>()
+        .buf::<crate::program::model::calls::CallEdge>(m.calls.edges.len())
+        .buf::<(String, Vec<crate::program::model::calls::UpgradedBinding>)>(
+            m.calls.upgraded_bindings.len(),
+        )
+        .strs(m.calls.upgraded_bindings.keys())
+        .bufs(m.calls.upgraded_bindings.values())
+        .buf::<crate::engine::l5::registry::Diagnostic>(m.calls.diagnostics.len())
+        .buf::<crate::program::model::calls::ExternalTargetRef>(m.calls.external_targets.len())
+        .arc::<crate::program::model::events::ProgramEvents>();
+    let eg = event_graph(&m.events.graph);
+    t.bytes += eg.bytes;
+    t.allocs += eg.allocs;
+    t.emit("model", Kind::Shallow);
 }
 
 /// [`assemble_and_resolve_workspace_program`] with the default model-instance id

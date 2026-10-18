@@ -350,7 +350,7 @@ impl ResInterner {
     /// BOTH copies: the canonical `strings` Vec (index → string) AND the
     /// `by_str` reverse-lookup `HashMap`'s own `String` keys. Each interned
     /// resource id's text is therefore stored TWICE; this reports the true
-    /// total, not an idealized single-copy count. `C1_CONE_CENSUS`-only —
+    /// total, not an idealized single-copy count. `ALSEM_RETAINED_CENSUS`-only —
     /// not read by any production code path.
     pub fn census_heap_bytes(&self) -> u64 {
         let strings_bytes: u64 = self.strings.iter().map(|s| s.len() as u64).sum();
@@ -607,7 +607,7 @@ impl ConeDerivedStore {
         out
     }
 
-    /// ⟨C1 census⟩ Pool/row sizes for the `C1_CONE_CENSUS` diagnostic (see
+    /// ⟨C1 census⟩ Pool/row sizes for the `ALSEM_RETAINED_CENSUS` diagnostic (see
     /// `cone_census.rs`'s module doc for the accounting convention). Every
     /// pool here stores plain `ResId`/`(ResId, u8)` values — no owned strings
     /// — so its `_bytes` fields are pure backing-buffer footprint
@@ -633,7 +633,7 @@ impl ConeDerivedStore {
 }
 
 /// ⟨C1 census⟩ Byte/row accounting for [`ConeDerivedStore::census`] — the
-/// `C1_CONE_CENSUS` diagnostic only, not used by any production query.
+/// `ALSEM_RETAINED_CENSUS` diagnostic only, not used by any production query.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConeDerivedCensus {
     pub rows: usize,

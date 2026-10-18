@@ -2147,6 +2147,9 @@ pub fn build_program_with_coverage_profiled(
         .build_with_diagnostics()
         .map_err(|e| format!("snapshot build failed: {e:#}"))?
     };
+    // #160 §4.1.5: the probe's `program.parsed_ir` is the growth from here to
+    // `2.parse` (the command path had no mark between the snapshot and the parse).
+    crate::census_hook::mark("1.snapshot");
     let (ctx, report) = fresh_program_from_snapshot_with(snap, profile)?;
     let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
     Ok((ctx, report, fc))

@@ -643,6 +643,38 @@ fn phase_peak_is_reported() {
     );
 }
 
+/// Spec §4.1.5 / A0.5 on the fixture: `ALSEM_RETAINED_CENSUS=1` changes no
+/// stdout byte, prints tagged bucket lines on stderr, and the old
+/// `[C1_CONE_CENSUS]` report it replaces is gone. Spawned, because
+/// `census::enabled()` is a process `OnceLock` read from the environment.
+#[test]
+fn retained_census_changes_no_output() {
+    let (_d, ws) = ws_dep();
+    let args = ["analyze", ws.as_str(), "--format", "sarif"];
+    let (off, _) = spawn_traced(&args, &[]);
+    let (on, _) = spawn_traced(&args, &[("ALSEM_RETAINED_CENSUS", "1")]);
+    assert!(
+        off.status.code().is_some() && !off.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&off.stderr)
+    );
+    assert_eq!(off.stdout, on.stdout, "census changed stdout");
+    let err = String::from_utf8_lossy(&on.stderr);
+    for b in ["bucket=model ", "bucket=program.report ", "bucket=context."] {
+        assert!(err.contains(b), "missing {b}:\n{err}");
+    }
+    assert!(
+        err.lines()
+            .filter(|l| l.contains("bucket="))
+            .all(|l| l.ends_with("kind=exact") || l.ends_with("kind=shallow")),
+        "an untagged bucket line:\n{err}"
+    );
+    assert!(
+        !err.contains("[C1_CONE_CENSUS]"),
+        "old report still printed"
+    );
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();

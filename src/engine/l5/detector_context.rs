@@ -235,6 +235,24 @@ impl UncertaintyIndex {
     pub fn set_count(&self) -> usize {
         self.set_span.len()
     }
+
+    /// The retained census's shallow walk (#160 §4.1.5): every buffer, the
+    /// precomputed keys and each interned set's boxed id slice.
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<Uncertainty>(self.values.len())
+            .buf::<Box<str>>(self.keys.len())
+            .strs(&self.keys)
+            .buf::<UncertaintyLite>(self.lites.len())
+            .buf::<(Uncertainty, UncertaintyId)>(self.by_value.len())
+            .buf::<UncertaintyId>(self.set_elems.len())
+            .buf::<(u32, u32)>(self.set_span.len())
+            .buf::<(Box<[UncertaintyId]>, UncertaintySetId)>(self.by_set.len());
+        for ids in self.by_set.keys() {
+            t.buf::<UncertaintyId>(ids.len());
+        }
+        t
+    }
 }
 
 impl UncertaintyIndex {
@@ -1225,12 +1243,6 @@ pub(crate) fn build_detector_context_with<'a>(
     };
     drop(_cones_span);
 
-    // ⟨C1 census⟩ `C1_CONE_CENSUS=1` — one-shot byte census of what the cone
-    // build just left resident (`summaries` + `cone_derived`), emitted after
-    // the span closes so the census's own (modest) bookkeeping never pollutes
-    // the span's own `rss_delta` measurement. No-op when the env var is unset.
-    crate::engine::l4::cone_census::emit_full_census(&summaries, &cone_derived);
-
     // --- Eager indexes -----------------------------------------------------
     let routine_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -1633,7 +1645,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);
 
-    DetectorContext {
+    let ctx = DetectorContext {
         graph,
         event_graph,
         routine_by_id,
@@ -1685,7 +1697,218 @@ pub(crate) fn build_detector_context_with<'a>(
         reverse_effect_index,
         fingerprint_index,
         cross_extension_subscribers,
+    };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.context");
+        census_context(&ctx);
     }
+    ctx
+}
+
+/// #160 §4.1.5: one `context.<field>` bucket per field of [`DetectorContext`]
+/// (it replaced the old `[C1_CONE_CENSUS]` report of `summaries` +
+/// `cone_derived`). `summaries` uses the per-fact accounting (exact); the
+/// rest is shallow. Borrowed fields (`ordering_source`, the `&str`-keyed
+/// indexes' targets) own nothing but their tables.
+fn census_context(c: &DetectorContext<'_>) {
+    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+    use crate::engine::l4::combined_graph::{CombinedEdge, Uncertainty};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit("context.graph", &mut combined_graph(&c.graph));
+    emit("context.event_graph", &mut event_graph(&c.event_graph));
+    emit(
+        "context.routine_by_id",
+        Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
+    );
+    emit(
+        "context.objects_by_id",
+        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
+    );
+    emit(
+        "context.table_by_id",
+        Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),
+    );
+    emit(
+        "context.reverse_call_graph",
+        Tally::default()
+            .buf::<(String, Vec<CombinedEdge>)>(c.reverse_call_graph.len())
+            .strs(c.reverse_call_graph.keys())
+            .bufs(c.reverse_call_graph.values()),
+    );
+    emit(
+        "context.entry_points",
+        Tally::default()
+            .buf::<String>(c.entry_points.len())
+            .strs(&c.entry_points),
+    );
+    emit(
+        "context.transaction_spans",
+        Tally::default().buf::<TransactionSpan>(c.transaction_spans.len()),
+    );
+    emit(
+        "context.resolved_call_edge_by_callsite",
+        Tally::default()
+            .buf::<(String, CallEdge)>(c.resolved_call_edge_by_callsite.len())
+            .strs(c.resolved_call_edge_by_callsite.keys()),
+    );
+    emit(
+        "context.uncertainty_edges_by_from",
+        Tally::default()
+            .buf::<(String, Vec<Uncertainty>)>(c.uncertainty_edges_by_from.len())
+            .strs(c.uncertainty_edges_by_from.keys())
+            .bufs(c.uncertainty_edges_by_from.values()),
+    );
+    emit(
+        "context.uncertainties_by_node",
+        Tally::default()
+            .buf::<(String, UncertaintySetId)>(c.uncertainties_by_node.len())
+            .strs(c.uncertainties_by_node.keys()),
+    );
+    emit("context.uncertainties", &mut c.uncertainties.census_tally());
+    emit(
+        "context.call_site_by_id",
+        Tally::default().buf::<(&str, &PCallSite)>(c.call_site_by_id.len()),
+    );
+    crate::engine::l4::cone_census::summaries_tally(&c.summaries)
+        .emit("context.summaries", Kind::Exact);
+    let cd = c.cone_derived.census();
+    emit(
+        "context.cone_derived",
+        &mut Tally {
+            bytes: (cd.rows_key_heap_bytes
+                + cd.rows_struct_bytes
+                + cd.interner_heap_bytes
+                + cd.writes_all_bytes
+                + cd.phys_writes_bytes
+                + cd.phys_reads_bytes
+                + cd.events_bytes) as usize,
+            allocs: cd.rows + cd.interner_strings,
+        },
+    );
+    let f = &c.event_flow_indexes;
+    let mut flow = Tally::default();
+    flow.buf::<(String, String)>(f.publisher_by_event.len())
+        .strs(f.publisher_by_event.iter().flat_map(|(k, v)| [k, v]))
+        .buf::<(String, String)>(f.event_name_by_event.len())
+        .strs(f.event_name_by_event.iter().flat_map(|(k, v)| [k, v]))
+        .buf::<String>(f.primary_routines.len())
+        .strs(&f.primary_routines);
+    for m in [
+        &f.events_by_publisher,
+        &f.subscribers_by_event,
+        &f.publishers_by_subscriber,
+    ] {
+        flow.buf::<(String, Vec<String>)>(m.len())
+            .strs(m.keys())
+            .bufs(m.values())
+            .strs(m.values().flatten());
+    }
+    emit("context.event_flow_indexes", &mut flow);
+    emit(
+        "context.parameter_roles_by_routine",
+        Tally::default()
+            .buf::<(String, Vec<RecordRoleSummary>)>(c.parameter_roles_by_routine.len())
+            .strs(c.parameter_roles_by_routine.keys())
+            .bufs(c.parameter_roles_by_routine.values()),
+    );
+    emit(
+        "context.upgraded_bindings_by_callsite",
+        Tally::default()
+            .buf::<(String, Vec<UpgradedBinding>)>(c.upgraded_bindings_by_callsite.len())
+            .strs(c.upgraded_bindings_by_callsite.keys())
+            .bufs(c.upgraded_bindings_by_callsite.values()),
+    );
+    emit(
+        "context.reachable_roots",
+        Tally::default()
+            .buf::<String>(c.reachable_roots.len())
+            .strs(&c.reachable_roots),
+    );
+    emit(
+        "context.internal_reachable_externally",
+        &mut Tally::default(),
+    );
+    emit(
+        "context.root_classifications_by_routine",
+        Tally::default()
+            .buf::<(
+                String,
+                crate::engine::root_classification::RootClassification,
+            )>(c.root_classifications_by_routine.len())
+            .strs(c.root_classifications_by_routine.keys()),
+    );
+    emit(
+        "context.dep_routine_ids",
+        Tally::default()
+            .buf::<String>(c.dep_routine_ids.len())
+            .strs(&c.dep_routine_ids),
+    );
+    emit(
+        "context.declared_dependencies",
+        Tally::default().buf::<DeclaredDep>(c.declared_dependencies.len()),
+    );
+    emit(
+        "context.app_versions",
+        Tally::default()
+            .buf::<(String, String)>(c.app_versions.len())
+            .strs(c.app_versions.iter().flat_map(|(k, v)| [k, v])),
+    );
+    emit(
+        "context.friends",
+        Tally::default()
+            .buf::<(String, BTreeSet<String>)>(c.friends.len())
+            .strs(c.friends.keys())
+            .strs(c.friends.values().flatten()),
+    );
+    emit(
+        "context.ordering_facts",
+        Tally::default()
+            .buf::<(String, crate::engine::l5::ordering_facts::OrderingFacts)>(
+                c.ordering_facts.get().map_or(0, HashMap::len),
+            )
+            .strs(c.ordering_facts.get().into_iter().flat_map(HashMap::keys)),
+    );
+    emit("context.ordering_source", &mut Tally::default());
+    emit(
+        "context.closed_world_temp_params",
+        Tally::default()
+            .buf::<(String, u32)>(c.closed_world_temp_params.len())
+            .strs(c.closed_world_temp_params.iter().map(|(s, _)| s)),
+    );
+    emit(
+        "context.summarize_diagnostics",
+        Tally::default().buf::<crate::engine::l4::summary_runner::SummarizeDiagnostic>(
+            c.summarize_diagnostics.len(),
+        ),
+    );
+    emit(
+        "context.db_effect_bundle",
+        &mut c
+            .db_effect_bundle
+            .as_ref()
+            .map(SummaryBundle::census_tally)
+            .unwrap_or_default(),
+    );
+    emit(
+        "context.reverse_effect_index",
+        &mut c
+            .reverse_effect_index
+            .as_ref()
+            .map(ReverseEffectIndex::census_tally)
+            .unwrap_or_default(),
+    );
+    emit(
+        "context.fingerprint_index",
+        &mut c.fingerprint_index.census_tally(),
+    );
+    emit(
+        "context.cross_extension_subscribers",
+        Tally::default()
+            .buf::<(String, Vec<String>)>(c.cross_extension_subscribers.len())
+            .strs(c.cross_extension_subscribers.keys())
+            .bufs(c.cross_extension_subscribers.values())
+            .strs(c.cross_extension_subscribers.values().flatten()),
+    );
 }
 
 /// `resolved_call_edge_by_callsite`: per call site, the FIRST edge that has a

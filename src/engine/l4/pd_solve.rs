@@ -440,6 +440,47 @@ fn census(
     reps: &HashMap<(usize, TempState), Arc<CapabilityFact>>,
 ) {
     use crate::engine::l5::detector_context::cones_census as cc;
+    if crate::engine::census::enabled() {
+        // #160 §4.1.5: the two halves of §4.1.1, one bucket line each per solve.
+        // `allocs` counts the buffers and the per-element owned allocations.
+        use crate::engine::census::{Kind, bucket};
+        crate::census_hook::mark("census.arena");
+        let nz = |cap: usize| usize::from(cap > 0);
+        let arena_allocs = nz(arena.producers.capacity())
+            + 3 * arena.producers.len()
+            + nz(arena.states.capacity())
+            + arena
+                .states
+                .iter()
+                .map(|s| nz(s.reqs.capacity()))
+                .sum::<usize>()
+            + nz(arena.links.capacity())
+            + nz(arena.edges.capacity())
+            + nz(arena.by_routine.capacity())
+            + arena
+                .by_routine
+                .values()
+                .map(|v| nz(v.capacity()))
+                .sum::<usize>();
+        bucket(
+            "arena.link_graph",
+            arena_bytes(arena) as usize,
+            arena_allocs,
+            Kind::Exact,
+        );
+        let working_allocs = names.len()
+            + nz(names.capacity())
+            + nz(resolved.capacity())
+            + resolved.values().map(|v| nz(v.capacity())).sum::<usize>()
+            + nz(reps.capacity())
+            + reps.len();
+        bucket(
+            "arena.working",
+            working_bytes(resolved, names, reps) as usize,
+            working_allocs,
+            Kind::Exact,
+        );
+    }
     if !cc::enabled() {
         return;
     }

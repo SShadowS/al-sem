@@ -96,6 +96,15 @@ impl FullRoutineSummary {
         self.capability_facts_inherited.is_some()
     }
 
+    /// The raw inherited facts' `(struct, heap)` bytes, `(0, 0)` when the cone
+    /// did not keep them. For the retained byte census only (#160 §4.1.5): it
+    /// answers "how much is held", never "was the bit demanded".
+    pub(crate) fn census_inherited_bytes(&self) -> (u64, u64) {
+        self.capability_facts_inherited
+            .as_deref()
+            .map_or((0, 0), crate::engine::l4::cone_census::facts_bytes)
+    }
+
     /// The RAW inherited capability facts, in `sort_inherited` order.
     ///
     /// # Panics

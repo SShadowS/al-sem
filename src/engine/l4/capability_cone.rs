@@ -2711,7 +2711,7 @@ fn compose_inherited_cones(
         cov_cones.len()
     );
 
-    // ⟨C1 census⟩ `C1_CONE_CENSUS=1` — report what's LEFT in `fact_cones`/
+    // ⟨C1 census⟩ `ALSEM_RETAINED_CENSUS=1` — report what's LEFT in `fact_cones`/
     // `cov_cones` at function exit. BEFORE Task 4 this measured the root-SCC
     // residual — an SCC with no caller (a true call-graph root: an entry point
     // / public API nothing else in the workspace calls) never had its refcount
@@ -2747,19 +2747,19 @@ fn compose_inherited_cones(
                 .map(|s| s.len() as u64)
                 .sum::<u64>();
         }
-        eprintln!("[C1_CONE_CENSUS] --------------------------------------------------");
+        eprintln!("[retained-census] --------------------------------------------------");
         eprintln!(
-            "[C1_CONE_CENSUS] section: fact_cones/cov_cones residual at compose_inherited_cones \
+            "[retained-census] section: fact_cones/cov_cones residual at compose_inherited_cones \
              exit (root SCCs only, never refcount-freed — NOT a peak sample, NOT part of any \
              grand_total_bytes)"
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   fact_cones_residual_sccs={} fact_cones_residual_entries={fc_entries} fact_cones_residual_bytes={fc_bytes} ({:.2} MB)",
+            "[retained-census]   fact_cones_residual_sccs={} fact_cones_residual_entries={fc_entries} fact_cones_residual_bytes={fc_bytes} ({:.2} MB)",
             fact_cones.len(),
             fc_bytes as f64 / 1_048_576.0
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   cov_cones_residual_sccs={} cov_cones_residual_reasons={cc_reasons} reasons_bytes={cc_reasons_bytes} cov_cones_residual_unknown_targets={cc_unknown} unknown_targets_bytes={cc_unknown_bytes} ({:.2} MB total)",
+            "[retained-census]   cov_cones_residual_sccs={} cov_cones_residual_reasons={cc_reasons} reasons_bytes={cc_reasons_bytes} cov_cones_residual_unknown_targets={cc_unknown} unknown_targets_bytes={cc_unknown_bytes} ({:.2} MB total)",
             cov_cones.len(),
             (cc_reasons_bytes + cc_unknown_bytes) as f64 / 1_048_576.0
         );
@@ -2927,18 +2927,18 @@ pub fn compose_cone_over_graph(
             }
         }
         let total = struct_bytes + heap_bytes + outer_key_bytes;
-        eprintln!("[C1_CONE_CENSUS] --------------------------------------------------");
+        eprintln!("[retained-census] --------------------------------------------------");
         eprintln!(
-            "[C1_CONE_CENSUS] section: `direct` dedup-keyed facts map (compose_cone_over_graph's \
+            "[retained-census] section: `direct` dedup-keyed facts map (compose_cone_over_graph's \
              own SCC-walk input — alive for the whole cone walk, a SECOND copy alongside the \
              final capability_facts_direct; NOT part of any grand_total_bytes)"
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   outer_entries={} inner_entries={inner_entries} outer_key_heap_bytes={outer_key_bytes} struct_bytes={struct_bytes} heap_bytes={heap_bytes}",
+            "[retained-census]   outer_entries={} inner_entries={inner_entries} outer_key_heap_bytes={outer_key_bytes} struct_bytes={struct_bytes} heap_bytes={heap_bytes}",
             direct.len()
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   direct_dedup_total_bytes={total} ({:.2} MB)  # BTreeMap node overhead NOT modeled (only key+value payload bytes) — a further under-count",
+            "[retained-census]   direct_dedup_total_bytes={total} ({:.2} MB)  # BTreeMap node overhead NOT modeled (only key+value payload bytes) — a further under-count",
             total as f64 / 1_048_576.0
         );
     }
@@ -3628,7 +3628,7 @@ pub(crate) fn build_cross_app_base(
     let loaded_apps = std::mem::take(&mut x.loaded_apps);
     let mut resolved = x.resolved;
     resolved.calls = std::sync::Arc::new(calls);
-    Some(R3a5CrossAppBase {
+    let base = R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
         friends: x.friends.clone(),
@@ -3648,7 +3648,138 @@ pub(crate) fn build_cross_app_base(
         declared_dependencies,
         resolved_app_versions,
         loaded_apps,
-    })
+    };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.base");
+        census_cross_app_base(&base);
+    }
+    Some(base)
+}
+
+/// #160 §4.1.5: one `base.<field>` bucket per field of [`R3a5CrossAppBase`],
+/// shallow. `resolved` is the `model` bucket's structure (moved in, its calls
+/// cut), so only its replaced `calls` are charged here.
+fn census_cross_app_base(b: &R3a5CrossAppBase) {
+    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+    use crate::program::model::calls::{CallEdge, ResolvedCalls, UpgradedBinding};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit(
+        "base.primary_app_guid",
+        Tally::default().strs([&b.primary_app_guid]),
+    );
+    emit(
+        "base.coverage",
+        Tally::default()
+            .buf::<String>(b.coverage.opaque_apps.len())
+            .strs(&b.coverage.opaque_apps)
+            .buf::<crate::program::resolve::full::LedgerEntry>(b.coverage.ledger.len())
+            .buf::<String>(b.coverage.unidentified_packages.len())
+            .strs(&b.coverage.unidentified_packages),
+    );
+    emit(
+        "base.friends",
+        Tally::default()
+            .buf::<(String, BTreeSet<String>)>(b.friends.len())
+            .strs(b.friends.keys())
+            .strs(b.friends.values().flatten()),
+    );
+    emit(
+        "base.resolved.calls",
+        Tally::default()
+            .arc::<ResolvedCalls>()
+            .buf::<CallEdge>(b.resolved.calls.edges.len())
+            .buf::<(String, Vec<UpgradedBinding>)>(b.resolved.calls.upgraded_bindings.len())
+            .strs(b.resolved.calls.upgraded_bindings.keys())
+            .bufs(b.resolved.calls.upgraded_bindings.values()),
+    );
+    emit(
+        "base.dep_routine_ids",
+        Tally::default()
+            .buf::<String>(b.dep_routine_ids.len())
+            .strs(&b.dep_routine_ids),
+    );
+    emit("base.graph", &mut combined_graph(&b.graph));
+    emit(
+        "base.combined_scc",
+        Tally::default()
+            .buf::<crate::engine::l4::scc::Scc>(b.combined_scc.sccs.len())
+            .buf::<(String, usize)>(b.combined_scc.scc_id_by_routine.len())
+            .strs(b.combined_scc.scc_id_by_routine.keys()),
+    );
+    emit(
+        "base.field_index",
+        Tally::default()
+            .buf::<((String, String), String)>(b.field_index.len())
+            .strs(
+                b.field_index
+                    .iter()
+                    .flat_map(|((t, f), id)| [t.as_str(), f.as_str(), id.as_str()]),
+            ),
+    );
+    emit(
+        "base.upgraded_bindings",
+        Tally::default()
+            .buf::<(String, Vec<UpgradedBinding>)>(b.upgraded_bindings.len())
+            .strs(b.upgraded_bindings.keys())
+            .bufs(b.upgraded_bindings.values()),
+    );
+    emit("base.event_graph", &mut event_graph(&b.event_graph));
+    emit(
+        "base.leaf_summaries",
+        Tally::default()
+            .buf::<(String, crate::engine::l4::summary::RoutineSummary)>(b.leaf_summaries.len())
+            .strs(b.leaf_summaries.keys()),
+    );
+    emit(
+        "base.fixed_roles",
+        Tally::default()
+            .buf::<String>(b.fixed_roles.len())
+            .strs(&b.fixed_roles),
+    );
+    emit(
+        "base.injected_typed_edges",
+        Tally::default().buf::<TypedEdge>(b.injected_typed_edges.len()),
+    );
+    let mut direct = Tally::default();
+    direct
+        .buf::<(String, Vec<CapabilityFact>)>(b.direct_full.len())
+        .strs(b.direct_full.keys());
+    for facts in b.direct_full.values() {
+        let (sb, hb) = cone_census::facts_bytes(facts);
+        direct.bytes += (sb + hb) as usize;
+        direct.allocs += usize::from(!facts.is_empty());
+    }
+    emit("base.direct_full", &mut direct);
+    emit(
+        "base.direct_coverage",
+        Tally::default()
+            .buf::<(String, (String, Vec<String>))>(b.direct_coverage.len())
+            .strs(b.direct_coverage.keys())
+            .strs(b.direct_coverage.values().map(|(s, _)| s))
+            .bufs(b.direct_coverage.values().map(|(_, r)| r))
+            .strs(b.direct_coverage.values().flat_map(|(_, r)| r)),
+    );
+    emit(
+        "base.nodes",
+        Tally::default().buf::<String>(b.nodes.len()).strs(&b.nodes),
+    );
+    emit(
+        "base.declared_dependencies",
+        Tally::default().buf::<crate::program::model::workspace::DeclaredDependencyDecl>(
+            b.declared_dependencies.len(),
+        ),
+    );
+    emit(
+        "base.resolved_app_versions",
+        Tally::default()
+            .buf::<(String, String)>(b.resolved_app_versions.len())
+            .strs(b.resolved_app_versions.keys())
+            .strs(b.resolved_app_versions.values()),
+    );
+    emit(
+        "base.loaded_apps",
+        Tally::default().buf::<serde_json::Value>(b.loaded_apps.len()),
+    );
 }
 
 /// Run the FULL cross-app L4 summary pipeline (merged model + dep hooks + cone)

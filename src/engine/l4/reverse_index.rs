@@ -283,6 +283,21 @@ pub struct ReverseEffectIndex {
 }
 
 impl ReverseEffectIndex {
+    /// The retained census's shallow walk (#160 §4.1.5): the index's buffers
+    /// and its table keys; the posting lists' own heap is not walked.
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<RoutineIx>(self.class_members_pool.len())
+            .buf::<Range<u32>>(self.class_members_ranges.len())
+            .buf::<PostingList>(self.effect_to_sccs.len())
+            .buf::<PostingList>(self.effect_to_delta_routines.len())
+            .buf::<(String, PostingList)>(self.table_to_sccs.len())
+            .strs(self.table_to_sccs.keys())
+            .buf::<(String, PostingList)>(self.table_to_delta_routines.len())
+            .strs(self.table_to_delta_routines.keys());
+        t
+    }
+
     /// Build the index: ONE transpose pass over each distinct class's shared
     /// base (not the collapsed-away per-routine memberships), plus one pass
     /// over each routine's own (small) delta.
