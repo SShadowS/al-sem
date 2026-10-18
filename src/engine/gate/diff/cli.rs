@@ -114,7 +114,12 @@ fn load_snapshot_from_workspace(
         deterministic,
         roots_config_ignored: false,
     };
-    Ok((compose_full_snapshot(target.resolved(), &opts), diag_lines))
+    let snapshot = compose_full_snapshot(target.resolved(), &opts);
+    drop(target);
+    // #160 §4.1.4: this side's model is gone, so the other side's build is
+    // not post-attach.
+    crate::engine::perf_trace::end_phase("post_attach");
+    Ok((snapshot, diag_lines))
 }
 
 /// Load one side: a workspace (reanalyzed, with its strict diagnostic lines) or

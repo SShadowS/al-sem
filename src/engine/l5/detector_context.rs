@@ -235,6 +235,24 @@ impl UncertaintyIndex {
     pub fn set_count(&self) -> usize {
         self.set_span.len()
     }
+
+    /// The retained census's shallow walk (#160 §4.1.5): every buffer, the
+    /// precomputed keys and each interned set's boxed id slice.
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<Uncertainty>(self.values.len())
+            .buf::<Box<str>>(self.keys.len())
+            .strs(&self.keys)
+            .buf::<UncertaintyLite>(self.lites.len())
+            .buf::<(Uncertainty, UncertaintyId)>(self.by_value.len())
+            .buf::<UncertaintyId>(self.set_elems.len())
+            .buf::<(u32, u32)>(self.set_span.len())
+            .buf::<(Box<[UncertaintyId]>, UncertaintySetId)>(self.by_set.len());
+        for ids in self.by_set.keys() {
+            t.buf::<UncertaintyId>(ids.len());
+        }
+        t
+    }
 }
 
 impl UncertaintyIndex {
@@ -343,7 +361,7 @@ impl UncertaintyIndex {
 /// once each — nothing per-routine, so the probe cannot distort what it measures.
 pub(crate) mod cones_census {
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
     pub(crate) static ROUTINES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static DIRECT_FACTS: AtomicU64 = AtomicU64::new(0);
@@ -356,19 +374,27 @@ pub(crate) mod cones_census {
     pub(crate) static WALK_SCC_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static WALK_DEDUP_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static WALK_COMPOSE_NANOS: AtomicU64 = AtomicU64::new(0);
-    // Inside compose: the two per-member inherited-fact walks.
-    pub(crate) static BFS_NANOS: AtomicU64 = AtomicU64::new(0);
+    // Inside compose: the two per-member inherited-fact walks. The recursive
+    // arm splits into the WALK (`inherited_facts_by_bfs`) and the per-pick
+    // FOLD (`emit_picks`), with the pick population beside them (#160 §4.1.1).
+    pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static BFS_PICKS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_CALLS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SINGLETON_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SINGLETON_CALLS: AtomicU64 = AtomicU64::new(0);
     /// Inside `inherited_facts_for_singleton`, which the first census round left
     /// at ONE number (4.8 s over 100,419 calls) with nothing saying what inside
     /// it costs — and where precomputing `edge_sort_key` then bought only 7 %,
-    /// proving the cost is elsewhere. Split three ways: the candidate SCAN over
-    /// every out-edge's callee cone, the derived FOLD over the surviving bests,
-    /// and the raw materialization (`retag` + `sort_inherited`, skipped under
+    /// proving the cost is elsewhere. Split: the per-edge SUBST of frame-bound
+    /// entries, the candidate scan over every out-edge's callee cone
+    /// (`SCAN_CONE`), the scan over the subject's own producer-solve entries
+    /// (`SCAN_OWN`), the derived FOLD over the surviving bests, and the raw
+    /// materialization (`retag` + `sort_inherited`, skipped under
     /// `ConeOutput::DerivedOnly`).
-    pub(crate) static SGL_SCAN_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SUBST_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SCAN_CONE_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SCAN_OWN_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_RAW_NANOS: AtomicU64 = AtomicU64::new(0);
     /// Populations the scan time is per. Accumulated in plain locals inside the
@@ -376,9 +402,15 @@ pub(crate) mod cones_census {
     /// millions of times and must not touch an atomic (the distortion this
     /// module's `add_gated` doc records).
     pub(crate) static SGL_EDGES: AtomicU64 = AtomicU64::new(0);
-    /// Every `(key, entry)` pair scanned — the REAL population of the walk, as
-    /// opposed to its call count.
-    pub(crate) static SGL_CONE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    /// The `(key, entry)` pairs scanned — the REAL population of the walk, as
+    /// opposed to its call count — by class: CLOSED cone entries (read from the
+    /// callee cone as-is), OPEN entries (frame-bound, carried per edge through
+    /// `substitute_entry`), and the subject's OWN producer-solve entries.
+    /// Until #160 one `cone_entries=` figure counted all three; it is now
+    /// `closed_entries + open_entries + own_entries`.
+    pub(crate) static SGL_CLOSED_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OPEN_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OWN_ENTRIES: AtomicU64 = AtomicU64::new(0);
     /// `best` insertions — each one a `String` key clone today.
     pub(crate) static SGL_WINS: AtomicU64 = AtomicU64::new(0);
     /// Surviving `best` entries summed over all calls (= `fold_fact` calls).
@@ -410,18 +442,50 @@ pub(crate) mod cones_census {
     pub(crate) static MERGE_TIEBREAKS: AtomicU64 = AtomicU64::new(0);
     /// #69 D1.4: the producer solve (`l4::pd_solve::solve`), summed over every
     /// cone composition: producers, states, links, resolved (non-seed) entries,
-    /// the distinct edges the links cross, and the bytes the solve retains
-    /// (`pd_solve::solve_bytes`, plus every snapshot `PdArena` derived from a
-    /// solve, which `PD_SNAPSHOT_BYTES` also reports on its own).
+    /// the distinct edges the links cross.
     pub(crate) static PD_PRODUCERS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_STATES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_LINKS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_EDGES: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static PD_SOLVE_BYTES: AtomicU64 = AtomicU64::new(0);
+    /// The solve's wall time and call count (a second solve is a second call).
+    pub(crate) static PD_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_SOLVE_CALLS: AtomicU64 = AtomicU64::new(0);
+    /// #160 G-1: the bytes each solve retains, split in two (spec §4.1.1).
+    /// `_ARENA` (`pd_solve::arena_tally`): producers, states, links, edges,
+    /// `by_routine`, the part step 6 may retain. `_WORKING`
+    /// (`pd_solve::working_tally`): resolved own entries, interned names,
+    /// reps, the part step 6 retains or re-solves. Charged only by
+    /// `pd_solve::census`, never by a snapshot.
+    pub(crate) static PD_SOLVE_BYTES_ARENA: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_SOLVE_BYTES_WORKING: AtomicU64 = AtomicU64::new(0);
+    /// The bytes of every snapshot `PdArena` derived from a solve
+    /// (`snapshot::derive_pd_arena`). The pre-#160 `solve_bytes=` figure was
+    /// `_ARENA + _WORKING + PD_SNAPSHOT_BYTES`, printed as
+    /// `solve_bytes_old_equiv=`.
     pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
+    /// What `compose_inherited_cones` spends outside every timed component,
+    /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
+    /// signed counter: a negative total means two component timers overlap.
+    pub(crate) static COMPOSE_REST_NANOS: AtomicI64 = AtomicI64::new(0);
+
+    /// The eight components of compose that [`COMPOSE_REST_NANOS`] subtracts.
+    /// Read only under [`enabled`].
+    pub(crate) fn component_snapshot() -> [u64; 8] {
+        [
+            &FACTCONE_NANOS,
+            &COVERAGE_NANOS,
+            &BFS_WALK_NANOS,
+            &BFS_FOLD_NANOS,
+            &SINGLETON_NANOS,
+            &DERIVED_NANOS,
+            &EMIT_NANOS,
+            &PD_SOLVE_NANOS,
+        ]
+        .map(|c| c.load(Ordering::Relaxed))
+    }
 
     pub(crate) fn enabled() -> bool {
         static E: OnceLock<bool> = OnceLock::new();
@@ -501,16 +565,20 @@ pub(crate) mod cones_census {
             ms(WALK_COMPOSE_NANOS.load(Ordering::Relaxed)),
         );
         eprintln!(
-            "[cones-census]   compose: bfs={:.1}ms x{} singleton={:.1}ms x{} max_scc_members={}",
-            ms(BFS_NANOS.load(Ordering::Relaxed)),
+            "[cones-census]   compose: bfs_walk={:.1}ms bfs_fold={:.1}ms x{} picks={} singleton={:.1}ms x{} max_scc_members={}",
+            ms(BFS_WALK_NANOS.load(Ordering::Relaxed)),
+            ms(BFS_FOLD_NANOS.load(Ordering::Relaxed)),
             BFS_CALLS.load(Ordering::Relaxed),
+            BFS_PICKS.load(Ordering::Relaxed),
             ms(SINGLETON_NANOS.load(Ordering::Relaxed)),
             SINGLETON_CALLS.load(Ordering::Relaxed),
             MAX_SCC_MEMBERS.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton: scan={:.1}ms fold={:.1}ms raw={:.1}ms",
-            ms(SGL_SCAN_NANOS.load(Ordering::Relaxed)),
+            "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",
+            ms(SGL_SUBST_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_SCAN_CONE_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_SCAN_OWN_NANOS.load(Ordering::Relaxed)),
             ms(SGL_FOLD_NANOS.load(Ordering::Relaxed)),
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
@@ -522,9 +590,11 @@ pub(crate) mod cones_census {
             SGL_ENTRIES_N_CONES.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton pop: edges={} cone_entries={} wins={} bests={}",
+            "[cones-census]   singleton pop: edges={} closed_entries={} open_entries={} own_entries={} wins={} bests={}",
             SGL_EDGES.load(Ordering::Relaxed),
-            SGL_CONE_ENTRIES.load(Ordering::Relaxed),
+            SGL_CLOSED_ENTRIES.load(Ordering::Relaxed),
+            SGL_OPEN_ENTRIES.load(Ordering::Relaxed),
+            SGL_OWN_ENTRIES.load(Ordering::Relaxed),
             SGL_WINS.load(Ordering::Relaxed),
             SGL_BESTS.load(Ordering::Relaxed),
         );
@@ -540,21 +610,42 @@ pub(crate) mod cones_census {
             FACTCONE_CALLS.load(Ordering::Relaxed),
         );
         eprintln!(
+            "[cones-census]   compose untimed: rest={:.3}ms pd_solve={:.1}ms x{}",
+            COMPOSE_REST_NANOS.load(Ordering::Relaxed) as f64 / 1e6,
+            ms(PD_SOLVE_NANOS.load(Ordering::Relaxed)),
+            PD_SOLVE_CALLS.load(Ordering::Relaxed),
+        );
+        eprintln!(
             "[cones-census]   merge_cone: calls={} tiebreaks={} (a tiebreak = 2x rep_key, each JSON-serializing)",
             MERGE_CALLS.load(Ordering::Relaxed),
             MERGE_TIEBREAKS.load(Ordering::Relaxed),
         );
+        let arena = PD_SOLVE_BYTES_ARENA.load(Ordering::Relaxed);
+        let working = PD_SOLVE_BYTES_WORKING.load(Ordering::Relaxed);
+        let snapshot = PD_SNAPSHOT_BYTES.load(Ordering::Relaxed);
         eprintln!(
-            "[cones-census]   pd_solve: producers={} states={} links={} entries={} edges={} solve_bytes={} snapshot_bytes={} edge_unmapped={}",
+            "[cones-census]   pd_solve: producers={} states={} links={} entries={} edges={} arena={} working={} snapshot={} solve_bytes_old_equiv={} edge_unmapped={}",
             PD_PRODUCERS.load(Ordering::Relaxed),
             PD_STATES.load(Ordering::Relaxed),
             PD_LINKS.load(Ordering::Relaxed),
             PD_ENTRIES.load(Ordering::Relaxed),
             PD_EDGES.load(Ordering::Relaxed),
-            PD_SOLVE_BYTES.load(Ordering::Relaxed),
-            PD_SNAPSHOT_BYTES.load(Ordering::Relaxed),
+            arena,
+            working,
+            snapshot,
+            arena + working + snapshot,
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
         );
+    }
+}
+
+/// Print the process-cumulative cone census once (spec #160 §4.1.7). One
+/// OnceLock read when off. Called by `alsem`'s and `aldump`'s `main` after the
+/// command returns, and by `perf_trace::maybe_exit_after` before its exit, so
+/// every cone the process composed (the snapshot's included) reaches the line.
+pub fn report_cones_census() {
+    if cones_census::enabled() {
+        cones_census::report();
     }
 }
 
@@ -836,13 +927,21 @@ impl DetectorContext<'_> {
             "a detector read ctx.get_ordering_facts() inside the parallel detector \
              loop without declaring substrate::ORDERING_FACTS in its `requires`"
         );
-        self.ordering_facts
-            .get_or_init(|| match self.ordering_source {
+        self.ordering_facts.get_or_init(|| {
+            let facts = match self.ordering_source {
                 Some(resolved) => {
                     crate::engine::l5::ordering_facts::compute_ordering_facts(resolved)
                 }
                 None => HashMap::new(),
-            })
+            };
+            // #160 §4.1.5: the cell is empty when the context is built, so
+            // its bucket is printed here, at the fill.
+            if crate::engine::census::enabled() {
+                crate::census_hook::mark("census.ordering_facts");
+                census_ordering_facts(&facts);
+            }
+            facts
+        })
     }
 }
 
@@ -902,6 +1001,7 @@ pub(crate) fn build_detector_context_with<'a>(
     cross: Option<CrossAppInputs<'_>>,
 ) -> DetectorContext<'a> {
     use crate::engine::l5::registry::substrate;
+    pt::counter_delta("build.detector_context", 1);
     let ws = &resolved.workspace;
     let no_deps: BTreeSet<String> = BTreeSet::new();
     let no_leaves: HashMap<String, crate::engine::l4::summary::RoutineSummary> = HashMap::new();
@@ -1147,18 +1247,11 @@ pub(crate) fn build_detector_context_with<'a>(
             );
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);
-        cones_census::report();
         summaries
     } else {
         HashMap::new()
     };
     drop(_cones_span);
-
-    // ⟨C1 census⟩ `C1_CONE_CENSUS=1` — one-shot byte census of what the cone
-    // build just left resident (`summaries` + `cone_derived`), emitted after
-    // the span closes so the census's own (modest) bookkeeping never pollutes
-    // the span's own `rss_delta` measurement. No-op when the env var is unset.
-    crate::engine::l4::cone_census::emit_full_census(&summaries, &cone_derived);
 
     // --- Eager indexes -----------------------------------------------------
     let routine_by_id: HashMap<&str, &ModelRoutine> =
@@ -1300,6 +1393,7 @@ pub(crate) fn build_detector_context_with<'a>(
             for (from, list) in &graph.edges_by_from {
                 scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
             }
+            pt::counter_delta("build.graph_scc", 1);
             tarjan_scc(&SccInputGraph {
                 nodes: &graph.nodes,
                 edges_by_from: &scc_adjacency,
@@ -1561,7 +1655,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);
 
-    DetectorContext {
+    let ctx = DetectorContext {
         graph,
         event_graph,
         routine_by_id,
@@ -1613,7 +1707,224 @@ pub(crate) fn build_detector_context_with<'a>(
         reverse_effect_index,
         fingerprint_index,
         cross_extension_subscribers,
+    };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.context");
+        census_context(&ctx);
     }
+    ctx
+}
+
+/// #160 §4.1.5: one `context.<field>` bucket per field of [`DetectorContext`]
+/// (it replaced the old `[C1_CONE_CENSUS]` report of `summaries` +
+/// `cone_derived`). `summaries` uses the per-fact accounting (exact); the
+/// rest is shallow. Borrowed fields (`ordering_source`, the `&str`-keyed
+/// indexes' targets) own nothing but their tables.
+fn census_context(c: &DetectorContext<'_>) {
+    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+    use crate::engine::l4::combined_graph::{CombinedEdge, Uncertainty};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit("context.graph", &mut combined_graph(&c.graph));
+    emit("context.event_graph", &mut event_graph(&c.event_graph));
+    emit(
+        "context.routine_by_id",
+        Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
+    );
+    emit(
+        "context.objects_by_id",
+        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
+    );
+    emit(
+        "context.table_by_id",
+        Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),
+    );
+    emit(
+        "context.reverse_call_graph",
+        Tally::default()
+            .buf::<(String, Vec<CombinedEdge>)>(c.reverse_call_graph.len())
+            .strs(c.reverse_call_graph.keys())
+            .bufs(c.reverse_call_graph.values()),
+    );
+    emit(
+        "context.entry_points",
+        Tally::default()
+            .buf::<String>(c.entry_points.len())
+            .strs(&c.entry_points),
+    );
+    emit(
+        "context.transaction_spans",
+        Tally::default().buf::<TransactionSpan>(c.transaction_spans.len()),
+    );
+    emit(
+        "context.resolved_call_edge_by_callsite",
+        Tally::default()
+            .buf::<(String, CallEdge)>(c.resolved_call_edge_by_callsite.len())
+            .strs(c.resolved_call_edge_by_callsite.keys()),
+    );
+    emit(
+        "context.uncertainty_edges_by_from",
+        Tally::default()
+            .buf::<(String, Vec<Uncertainty>)>(c.uncertainty_edges_by_from.len())
+            .strs(c.uncertainty_edges_by_from.keys())
+            .bufs(c.uncertainty_edges_by_from.values()),
+    );
+    emit(
+        "context.uncertainties_by_node",
+        Tally::default()
+            .buf::<(String, UncertaintySetId)>(c.uncertainties_by_node.len())
+            .strs(c.uncertainties_by_node.keys()),
+    );
+    emit("context.uncertainties", &mut c.uncertainties.census_tally());
+    emit(
+        "context.call_site_by_id",
+        Tally::default().buf::<(&str, &PCallSite)>(c.call_site_by_id.len()),
+    );
+    crate::engine::l4::cone_census::summaries_tally(&c.summaries)
+        .emit("context.summaries", Kind::Exact);
+    let cd = c.cone_derived.census();
+    emit(
+        "context.cone_derived",
+        &mut Tally {
+            bytes: (cd.rows_key_heap_bytes
+                + cd.rows_struct_bytes
+                + cd.interner_heap_bytes
+                + cd.writes_all_bytes
+                + cd.phys_writes_bytes
+                + cd.phys_reads_bytes
+                + cd.events_bytes) as usize,
+            allocs: cd.rows + cd.interner_strings,
+        },
+    );
+    let f = &c.event_flow_indexes;
+    let mut flow = Tally::default();
+    flow.buf::<(String, String)>(f.publisher_by_event.len())
+        .strs(f.publisher_by_event.iter().flat_map(|(k, v)| [k, v]))
+        .buf::<(String, String)>(f.event_name_by_event.len())
+        .strs(f.event_name_by_event.iter().flat_map(|(k, v)| [k, v]))
+        .buf::<String>(f.primary_routines.len())
+        .strs(&f.primary_routines);
+    for m in [
+        &f.events_by_publisher,
+        &f.subscribers_by_event,
+        &f.publishers_by_subscriber,
+    ] {
+        flow.buf::<(String, Vec<String>)>(m.len())
+            .strs(m.keys())
+            .bufs(m.values())
+            .strs(m.values().flatten());
+    }
+    emit("context.event_flow_indexes", &mut flow);
+    emit(
+        "context.parameter_roles_by_routine",
+        Tally::default()
+            .buf::<(String, Vec<RecordRoleSummary>)>(c.parameter_roles_by_routine.len())
+            .strs(c.parameter_roles_by_routine.keys())
+            .bufs(c.parameter_roles_by_routine.values()),
+    );
+    emit(
+        "context.upgraded_bindings_by_callsite",
+        Tally::default()
+            .buf::<(String, Vec<UpgradedBinding>)>(c.upgraded_bindings_by_callsite.len())
+            .strs(c.upgraded_bindings_by_callsite.keys())
+            .bufs(c.upgraded_bindings_by_callsite.values()),
+    );
+    emit(
+        "context.reachable_roots",
+        Tally::default()
+            .buf::<String>(c.reachable_roots.len())
+            .strs(&c.reachable_roots),
+    );
+    emit(
+        "context.internal_reachable_externally",
+        &mut Tally::default(),
+    );
+    emit(
+        "context.root_classifications_by_routine",
+        Tally::default()
+            .buf::<(
+                String,
+                crate::engine::root_classification::RootClassification,
+            )>(c.root_classifications_by_routine.len())
+            .strs(c.root_classifications_by_routine.keys()),
+    );
+    emit(
+        "context.dep_routine_ids",
+        Tally::default()
+            .buf::<String>(c.dep_routine_ids.len())
+            .strs(&c.dep_routine_ids),
+    );
+    emit(
+        "context.declared_dependencies",
+        Tally::default().buf::<DeclaredDep>(c.declared_dependencies.len()),
+    );
+    emit(
+        "context.app_versions",
+        Tally::default()
+            .buf::<(String, String)>(c.app_versions.len())
+            .strs(c.app_versions.iter().flat_map(|(k, v)| [k, v])),
+    );
+    emit(
+        "context.friends",
+        Tally::default()
+            .buf::<(String, BTreeSet<String>)>(c.friends.len())
+            .strs(c.friends.keys())
+            .strs(c.friends.values().flatten()),
+    );
+    // `context.ordering_facts` is printed when the cell is filled
+    // (`get_ordering_facts`); here it is always empty.
+    emit("context.ordering_source", &mut Tally::default());
+    emit(
+        "context.closed_world_temp_params",
+        Tally::default()
+            .buf::<(String, u32)>(c.closed_world_temp_params.len())
+            .strs(c.closed_world_temp_params.iter().map(|(s, _)| s)),
+    );
+    emit(
+        "context.summarize_diagnostics",
+        Tally::default().buf::<crate::engine::l4::summary_runner::SummarizeDiagnostic>(
+            c.summarize_diagnostics.len(),
+        ),
+    );
+    emit(
+        "context.db_effect_bundle",
+        &mut c
+            .db_effect_bundle
+            .as_ref()
+            .map(SummaryBundle::census_tally)
+            .unwrap_or_default(),
+    );
+    emit(
+        "context.reverse_effect_index",
+        &mut c
+            .reverse_effect_index
+            .as_ref()
+            .map(ReverseEffectIndex::census_tally)
+            .unwrap_or_default(),
+    );
+    emit(
+        "context.fingerprint_index",
+        &mut c.fingerprint_index.census_tally(),
+    );
+    emit(
+        "context.cross_extension_subscribers",
+        Tally::default()
+            .buf::<(String, Vec<String>)>(c.cross_extension_subscribers.len())
+            .strs(c.cross_extension_subscribers.keys())
+            .bufs(c.cross_extension_subscribers.values())
+            .strs(c.cross_extension_subscribers.values().flatten()),
+    );
+}
+
+/// The filled ordering cell's `context.ordering_facts` bucket, shallow.
+fn census_ordering_facts(m: &HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts>) {
+    use crate::engine::census::{Kind, Tally};
+    use crate::engine::l5::ordering_facts::OrderingFacts;
+    let mut t = Tally::default();
+    t.buf::<(String, OrderingFacts)>(m.len())
+        .strs(m.keys())
+        .strs(m.values().map(|f| &f.routine_id))
+        .bufs(m.values().map(|f| &f.facts));
+    t.emit("context.ordering_facts", Kind::Shallow);
 }
 
 /// `resolved_call_edge_by_callsite`: per call site, the FIRST edge that has a

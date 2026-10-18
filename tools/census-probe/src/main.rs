@@ -1063,6 +1063,55 @@ impl Acc {
     }
 }
 
+/// #160 §4.1.5: the cross-app analyze path (`build_cross_app_base`, the
+/// detector context, `compose_snapshot`) under `ALSEM_RETAINED_CENSUS=1`. The
+/// engine prints its bucket lines (stderr); this prints the live heap at every
+/// mark, each `census.*` mark taken just before that bucket's walk, so the
+/// numbers file can compute `residual = live − Σ buckets` per mark.
+fn q6_retained_census(ws: &std::path::Path) {
+    use al_sem::engine::gate::run::AnalysisTarget;
+    println!(
+        "==== Q6 retained census: cross-app analyze on {} ====",
+        ws.display()
+    );
+    MARKS.lock().unwrap().clear();
+    let (b0, a0) = live();
+    let mi = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
+        .expect("model instance id");
+    let target = AnalysisTarget::build(ws, &mi, false, "census-probe").expect("cross-app base");
+    on_mark("probe.base_returned");
+    if let AnalysisTarget::CrossApp(base) = &target {
+        // The default detector set, run by the cross-app runner: builds one
+        // detector context (its `census.context` mark fires inside).
+        let diags = al_sem::engine::gate::run::compute_analyzer_diagnostics_cross_app(ws, base);
+        println!("    analyzer diagnostics: {}", diags.len());
+    }
+    on_mark("probe.context_dropped");
+    let snap = al_sem::engine::l5::snapshot::compose_snapshot(target.resolved());
+    on_mark("probe.snapshot_returned");
+    println!(
+        "    snapshot: {} capability facts, {} typed edges",
+        snap.capability_facts.len(),
+        snap.typed_edges.len()
+    );
+    drop(snap);
+    drop(target);
+    println!(
+        "  {:<34} {:>12} {:>12} {:>10}",
+        "mark", "live B", "peak B", "allocs"
+    );
+    for m in MARKS.lock().unwrap().iter() {
+        println!(
+            "  {:<34} {:>12} {:>12} {:>10}",
+            m.name,
+            m.live - b0,
+            m.peak - b0,
+            m.allocs - a0
+        );
+    }
+    MARKS.lock().unwrap().clear();
+}
+
 fn q6(ws: PathBuf) {
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
     use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
@@ -1448,7 +1497,18 @@ fn main() {
             q6(PathBuf::from(args.next().expect("workspace")));
             return;
         }
-        _ => panic!("usage: census-probe <embedded|symbols> <root>..."),
+        // #160 §4.1.5, its own mode: the census flag and the mark hook are
+        // process `OnceLock`s, and `on_mark` resets PEAK, so either would skew
+        // `model`'s phase peaks and seconds.
+        Some("retained") => {
+            // Before the engine's first `census::enabled()` read (a OnceLock).
+            // SAFETY: still single-threaded; no other thread reads the environment.
+            unsafe { std::env::set_var("ALSEM_RETAINED_CENSUS", "1") };
+            al_sem::census_hook::HOOK.set(on_mark).unwrap();
+            q6_retained_census(&PathBuf::from(args.next().expect("workspace")));
+            return;
+        }
+        _ => panic!("usage: census-probe <embedded|symbols|model|retained> <root>..."),
     };
     let rest: Vec<String> = args.collect();
     let with_updaters = rest.iter().any(|a| a == "--with-updaters");

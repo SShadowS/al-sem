@@ -1773,6 +1773,7 @@ fn inherited_facts_for_singleton<'g>(
     // skips them in the cone and reads these instead. A guarded entry an
     // argument contradicts is dropped here. Rare: only sites under a
     // boolean-parameter guard are guarded.
+    let _subst_t = crate::engine::l5::detector_context::cones_census::start();
     let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
         .iter()
         .map(|edge| {
@@ -1796,6 +1797,10 @@ fn inherited_facts_for_singleton<'g>(
                 .collect()
         })
         .collect();
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::SGL_SUBST_NANOS,
+        _subst_t,
+    );
     // Keys BORROW from `cones` (and `subst`) instead of being cloned. The
     // census counted 10,522,793 `best` insertions per 8020 run against only
     // 136,952 out-edges — i.e. the walk is cone-ENTRY-bound, and every one of
@@ -1805,7 +1810,10 @@ fn inherited_facts_for_singleton<'g>(
     let mut best: BTreeMap<&str, Best<'_>> = BTreeMap::new();
     // Census populations: plain locals, folded into the atomics ONCE per call.
     let mut c_edges: u64 = 0;
-    let mut c_entries: u64 = 0;
+    // Scanned cone entries (closed + open), the open ones among them, and own.
+    let mut c_scanned: u64 = 0;
+    let mut c_open: u64 = 0;
+    let mut c_own: u64 = 0;
     let mut c_wins: u64 = 0;
     let mut c_cone_edges: u64 = 0;
     let _scan_t = crate::engine::l5::detector_context::cones_census::start();
@@ -1826,12 +1834,13 @@ fn inherited_facts_for_singleton<'g>(
             continue;
         };
         c_cone_edges += 1;
+        c_open += edge_subst.len() as u64;
         let entries = ycone
             .iter()
             .filter(|(_, e)| !frame_bound(e))
             .chain(edge_subst.iter().map(|(k, e)| (k, e)));
         for (key, entry) in entries {
-            c_entries += 1;
+            c_scanned += 1;
             // A guard does not matter at the subject: its own parameters are
             // unknown here, so a guarded fact is a possible one. One fact, one key.
             let key = base_key_of(key, entry);
@@ -1853,8 +1862,13 @@ fn inherited_facts_for_singleton<'g>(
     // #69 D1.3 use (a): the subject's own producer-solve entries compete under
     // the same rule. They are its COMPLETE parameter-dependent-origin output:
     // no cone carries a producer.
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_CONE_NANOS,
+        _scan_t,
+    );
+    let _own_t = crate::engine::l5::detector_context::cones_census::start();
     for (e, key) in own.iter().zip(&own_keys) {
-        c_entries += 1;
+        c_own += 1;
         if candidate_wins(
             e.dist,
             e.first_hop,
@@ -1872,16 +1886,25 @@ fn inherited_facts_for_singleton<'g>(
         }
     }
     crate::engine::l5::detector_context::cones_census::add_since(
-        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_NANOS,
-        _scan_t,
+        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_OWN_NANOS,
+        _own_t,
     );
+    let c_entries = c_scanned + c_own;
     crate::engine::l5::detector_context::cones_census::add(
         &crate::engine::l5::detector_context::cones_census::SGL_EDGES,
         c_edges,
     );
-    crate::engine::l5::detector_context::cones_census::add(
-        &crate::engine::l5::detector_context::cones_census::SGL_CONE_ENTRIES,
-        c_entries,
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::SGL_CLOSED_ENTRIES,
+        c_scanned - c_open,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::SGL_OPEN_ENTRIES,
+        c_open,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::SGL_OWN_ENTRIES,
+        c_own,
     );
     crate::engine::l5::detector_context::cones_census::add(
         &crate::engine::l5::detector_context::cones_census::SGL_WINS,
@@ -2409,6 +2432,14 @@ fn compose_inherited_cones(
     ConeDerivedStore,
     super::pd_solve::ConeArena,
 ) {
+    // #160 §4.1.1: the per-call untimed remainder. Entry snapshot only under
+    // the census (one OnceLock read otherwise); the function has one exit.
+    let rest_entry = crate::engine::l5::detector_context::cones_census::enabled().then(|| {
+        (
+            std::time::Instant::now(),
+            crate::engine::l5::detector_context::cones_census::component_snapshot(),
+        )
+    });
     let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
     let mut derived = ConeDerivedBuilder::default();
 
@@ -2444,7 +2475,16 @@ fn compose_inherited_cones(
             operation_id: op.to_string(),
         })
         .collect();
+    let _t_pd = crate::engine::l5::detector_context::cones_census::start();
     let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::PD_SOLVE_NANOS,
+        _t_pd,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::PD_SOLVE_CALLS,
+        1,
+    );
     let own_entries = |m: &str| resolved.get(m).map_or(&[][..], Vec::as_slice);
 
     let succ_sccs = build_succ_sccs(g, &scc.sccs, &scc.scc_id_by_routine);
@@ -2558,7 +2598,21 @@ fn compose_inherited_cones(
                     &fact_cones,
                     own_entries(m),
                 );
-                emit_picks(m, picks, mode, &mut derived)
+                crate::engine::l5::detector_context::cones_census::add_since(
+                    &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
+                    _t_walk,
+                );
+                crate::engine::l5::detector_context::cones_census::add_gated(
+                    &crate::engine::l5::detector_context::cones_census::BFS_PICKS,
+                    picks.len() as u64,
+                );
+                let _t_fold = crate::engine::l5::detector_context::cones_census::start();
+                let out = emit_picks(m, picks, mode, &mut derived);
+                crate::engine::l5::detector_context::cones_census::add_since(
+                    &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
+                    _t_fold,
+                );
+                out
             } else {
                 inherited_facts_for_singleton(
                     m,
@@ -2574,10 +2628,6 @@ fn compose_inherited_cones(
                 )
             };
             if recursive {
-                crate::engine::l5::detector_context::cones_census::add_since(
-                    &crate::engine::l5::detector_context::cones_census::BFS_NANOS,
-                    _t_walk,
-                );
                 crate::engine::l5::detector_context::cones_census::add(
                     &crate::engine::l5::detector_context::cones_census::BFS_CALLS,
                     1,
@@ -2661,7 +2711,7 @@ fn compose_inherited_cones(
         cov_cones.len()
     );
 
-    // ⟨C1 census⟩ `C1_CONE_CENSUS=1` — report what's LEFT in `fact_cones`/
+    // ⟨C1 census⟩ `ALSEM_RETAINED_CENSUS=1` — report what's LEFT in `fact_cones`/
     // `cov_cones` at function exit. BEFORE Task 4 this measured the root-SCC
     // residual — an SCC with no caller (a true call-graph root: an entry point
     // / public API nothing else in the workspace calls) never had its refcount
@@ -2697,24 +2747,36 @@ fn compose_inherited_cones(
                 .map(|s| s.len() as u64)
                 .sum::<u64>();
         }
-        eprintln!("[C1_CONE_CENSUS] --------------------------------------------------");
+        eprintln!("[retained-census] --------------------------------------------------");
         eprintln!(
-            "[C1_CONE_CENSUS] section: fact_cones/cov_cones residual at compose_inherited_cones \
+            "[retained-census] section: fact_cones/cov_cones residual at compose_inherited_cones \
              exit (root SCCs only, never refcount-freed — NOT a peak sample, NOT part of any \
              grand_total_bytes)"
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   fact_cones_residual_sccs={} fact_cones_residual_entries={fc_entries} fact_cones_residual_bytes={fc_bytes} ({:.2} MB)",
+            "[retained-census]   fact_cones_residual_sccs={} fact_cones_residual_entries={fc_entries} fact_cones_residual_bytes={fc_bytes} ({:.2} MB)",
             fact_cones.len(),
             fc_bytes as f64 / 1_048_576.0
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   cov_cones_residual_sccs={} cov_cones_residual_reasons={cc_reasons} reasons_bytes={cc_reasons_bytes} cov_cones_residual_unknown_targets={cc_unknown} unknown_targets_bytes={cc_unknown_bytes} ({:.2} MB total)",
+            "[retained-census]   cov_cones_residual_sccs={} cov_cones_residual_reasons={cc_reasons} reasons_bytes={cc_reasons_bytes} cov_cones_residual_unknown_targets={cc_unknown} unknown_targets_bytes={cc_unknown_bytes} ({:.2} MB total)",
             cov_cones.len(),
             (cc_reasons_bytes + cc_unknown_bytes) as f64 / 1_048_576.0
         );
     }
 
+    if let Some((t0, before)) = rest_entry {
+        let after = crate::engine::l5::detector_context::cones_census::component_snapshot();
+        let comp: i64 = after
+            .iter()
+            .zip(before.iter())
+            .map(|(a, b)| *a as i64 - *b as i64)
+            .sum();
+        crate::engine::l5::detector_context::cones_census::COMPOSE_REST_NANOS.fetch_add(
+            t0.elapsed().as_nanos() as i64 - comp,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
     (out, derived.finish(), arena)
 }
 
@@ -2769,6 +2831,7 @@ pub fn compose_cone_over_graph(
     routines: &[ModelRoutine],
     mode: ConeOutput,
 ) -> ConeOutcome {
+    crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let g = build_typed_edge_graph(graph, nodes);
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -2780,6 +2843,7 @@ pub fn compose_cone_over_graph(
         _t_graph,
     );
     let _t_scc = crate::engine::l5::detector_context::cones_census::start();
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &g.nodes,
         edges_by_from: &adjacency,
@@ -2863,18 +2927,18 @@ pub fn compose_cone_over_graph(
             }
         }
         let total = struct_bytes + heap_bytes + outer_key_bytes;
-        eprintln!("[C1_CONE_CENSUS] --------------------------------------------------");
+        eprintln!("[retained-census] --------------------------------------------------");
         eprintln!(
-            "[C1_CONE_CENSUS] section: `direct` dedup-keyed facts map (compose_cone_over_graph's \
+            "[retained-census] section: `direct` dedup-keyed facts map (compose_cone_over_graph's \
              own SCC-walk input — alive for the whole cone walk, a SECOND copy alongside the \
              final capability_facts_direct; NOT part of any grand_total_bytes)"
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   outer_entries={} inner_entries={inner_entries} outer_key_heap_bytes={outer_key_bytes} struct_bytes={struct_bytes} heap_bytes={heap_bytes}",
+            "[retained-census]   outer_entries={} inner_entries={inner_entries} outer_key_heap_bytes={outer_key_bytes} struct_bytes={struct_bytes} heap_bytes={heap_bytes}",
             direct.len()
         );
         eprintln!(
-            "[C1_CONE_CENSUS]   direct_dedup_total_bytes={total} ({:.2} MB)  # BTreeMap node overhead NOT modeled (only key+value payload bytes) — a further under-count",
+            "[retained-census]   direct_dedup_total_bytes={total} ({:.2} MB)  # BTreeMap node overhead NOT modeled (only key+value payload bytes) — a further under-count",
             total as f64 / 1_048_576.0
         );
     }
@@ -3195,6 +3259,7 @@ fn compute_uncertainty_coverage_reasons(
     for (from, list) in &graph.edges_by_from {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &graph.nodes,
         edges_by_from: &adjacency,
@@ -3474,6 +3539,7 @@ pub(crate) fn build_cross_app_base(
     for (from, list) in &graph.edges_by_from {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let combined_scc = tarjan_scc(&SccInputGraph {
         nodes: &graph.nodes,
         edges_by_from: &adjacency,
@@ -3562,7 +3628,7 @@ pub(crate) fn build_cross_app_base(
     let loaded_apps = std::mem::take(&mut x.loaded_apps);
     let mut resolved = x.resolved;
     resolved.calls = std::sync::Arc::new(calls);
-    Some(R3a5CrossAppBase {
+    let base = R3a5CrossAppBase {
         primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
         friends: x.friends.clone(),
@@ -3582,7 +3648,134 @@ pub(crate) fn build_cross_app_base(
         declared_dependencies,
         resolved_app_versions,
         loaded_apps,
-    })
+    };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.base");
+        census_cross_app_base(&base);
+    }
+    Some(base)
+}
+
+/// #160 §4.1.5: one `base.<field>` bucket per field of [`R3a5CrossAppBase`],
+/// shallow. `resolved` is the model, moved in with its calls replaced by the
+/// cut set: its rows and events (`base.resolved.rows`, the part of the `model`
+/// bucket that survives) and the replacement calls (`base.resolved.calls`) are
+/// charged apart, so nothing the model still owns is missing from the base.
+fn census_cross_app_base(b: &R3a5CrossAppBase) {
+    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+    use crate::program::model::calls::UpgradedBinding;
+    use crate::program::model::program_calls::{census_calls, census_model_rows};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit(
+        "base.primary_app_guid",
+        Tally::default().strs([&b.primary_app_guid]),
+    );
+    emit(
+        "base.coverage",
+        Tally::default()
+            .buf::<String>(b.coverage.opaque_apps.len())
+            .strs(&b.coverage.opaque_apps)
+            .buf::<crate::program::resolve::full::LedgerEntry>(b.coverage.ledger.len())
+            .buf::<String>(b.coverage.unidentified_packages.len())
+            .strs(&b.coverage.unidentified_packages),
+    );
+    emit(
+        "base.friends",
+        Tally::default()
+            .buf::<(String, BTreeSet<String>)>(b.friends.len())
+            .strs(b.friends.keys())
+            .strs(b.friends.values().flatten()),
+    );
+    emit("base.resolved.rows", &mut census_model_rows(&b.resolved));
+    emit("base.resolved.calls", &mut census_calls(&b.resolved.calls));
+    emit(
+        "base.dep_routine_ids",
+        Tally::default()
+            .buf::<String>(b.dep_routine_ids.len())
+            .strs(&b.dep_routine_ids),
+    );
+    emit("base.graph", &mut combined_graph(&b.graph));
+    emit(
+        "base.combined_scc",
+        Tally::default()
+            .buf::<crate::engine::l4::scc::Scc>(b.combined_scc.sccs.len())
+            .buf::<(String, usize)>(b.combined_scc.scc_id_by_routine.len())
+            .strs(b.combined_scc.scc_id_by_routine.keys()),
+    );
+    emit(
+        "base.field_index",
+        Tally::default()
+            .buf::<((String, String), String)>(b.field_index.len())
+            .strs(
+                b.field_index
+                    .iter()
+                    .flat_map(|((t, f), id)| [t.as_str(), f.as_str(), id.as_str()]),
+            ),
+    );
+    emit(
+        "base.upgraded_bindings",
+        Tally::default()
+            .buf::<(String, Vec<UpgradedBinding>)>(b.upgraded_bindings.len())
+            .strs(b.upgraded_bindings.keys())
+            .bufs(b.upgraded_bindings.values()),
+    );
+    emit("base.event_graph", &mut event_graph(&b.event_graph));
+    emit(
+        "base.leaf_summaries",
+        Tally::default()
+            .buf::<(String, crate::engine::l4::summary::RoutineSummary)>(b.leaf_summaries.len())
+            .strs(b.leaf_summaries.keys()),
+    );
+    emit(
+        "base.fixed_roles",
+        Tally::default()
+            .buf::<String>(b.fixed_roles.len())
+            .strs(&b.fixed_roles),
+    );
+    emit(
+        "base.injected_typed_edges",
+        Tally::default().buf::<TypedEdge>(b.injected_typed_edges.len()),
+    );
+    let mut direct = Tally::default();
+    direct
+        .buf::<(String, Vec<CapabilityFact>)>(b.direct_full.len())
+        .strs(b.direct_full.keys());
+    for facts in b.direct_full.values() {
+        let (sb, hb) = cone_census::facts_bytes(facts);
+        direct.bytes += (sb + hb) as usize;
+        direct.allocs += usize::from(!facts.is_empty());
+    }
+    emit("base.direct_full", &mut direct);
+    emit(
+        "base.direct_coverage",
+        Tally::default()
+            .buf::<(String, (String, Vec<String>))>(b.direct_coverage.len())
+            .strs(b.direct_coverage.keys())
+            .strs(b.direct_coverage.values().map(|(s, _)| s))
+            .bufs(b.direct_coverage.values().map(|(_, r)| r))
+            .strs(b.direct_coverage.values().flat_map(|(_, r)| r)),
+    );
+    emit(
+        "base.nodes",
+        Tally::default().buf::<String>(b.nodes.len()).strs(&b.nodes),
+    );
+    emit(
+        "base.declared_dependencies",
+        Tally::default().buf::<crate::program::model::workspace::DeclaredDependencyDecl>(
+            b.declared_dependencies.len(),
+        ),
+    );
+    emit(
+        "base.resolved_app_versions",
+        Tally::default()
+            .buf::<(String, String)>(b.resolved_app_versions.len())
+            .strs(b.resolved_app_versions.keys())
+            .strs(b.resolved_app_versions.values()),
+    );
+    emit(
+        "base.loaded_apps",
+        Tally::default().buf::<serde_json::Value>(b.loaded_apps.len()),
+    );
 }
 
 /// Run the FULL cross-app L4 summary pipeline (merged model + dep hooks + cone)
@@ -3821,6 +4014,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
     }
+    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &g.nodes,
         edges_by_from: &adjacency,
@@ -4014,11 +4208,24 @@ pub struct R3a3SourceBase {
 /// resolved workspace having zero routines.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
+    // Not `r3a3.calls_graph`: that span also covered the input clones, now
+    // `r3a3.clone_inputs` (a changed span gets a new name, spec §4.1.1).
+    let _s0 = pt::span("r3a3", "r3a3.graph_build");
+    let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
+    drop(_s0);
+    build_r3a3_source_only_base_over(resolved, graph)
+}
+
+/// [`build_r3a3_source_only_base`] with the graph taken as a parameter (#160
+/// §4.1.6): calls and event graph still cloned from `resolved`, the direct facts,
+/// the uncertainty fold and the cone computed over `graph`. Only the full-graph
+/// timings mode passes a graph other than the one the wrapper builds.
+pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) -> R3a3SourceBase {
+    use crate::engine::perf_trace as pt;
     let ws: &ModelEntities = &resolved.workspace;
-    let _s0 = pt::span("r3a3", "r3a3.calls_graph");
+    let _s0 = pt::span("r3a3", "r3a3.clone_inputs");
     let calls = (*resolved.calls).clone();
     let event_graph: EventGraph = resolved.events.graph.clone();
-    let graph = build_combined_graph(ws, &calls, &event_graph);
     drop(_s0);
     let _s1 = pt::span("r3a3", "r3a3.direct_facts");
 
@@ -4098,6 +4305,70 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
         routine_to_stable,
         pd_solution,
     }
+}
+
+/// `aldump --issue160-full-graph-timings` (#160 §4.1.6): the snapshot's cost over
+/// today's CUT graph and over the cross-app base's FULL graph, from one binary.
+/// Measurement only; deleted when step 6 lands. The cone wall and the solve are
+/// read off the cone census, so the caller runs it with `ALSEM_CONES_CENSUS=1`;
+/// without it this returns `Err` rather than print zeros. `Ok(None)`: the
+/// workspace has no cross-app base.
+#[doc(hidden)]
+pub fn issue160_full_graph_timings(
+    workspace: &std::path::Path,
+) -> Result<Option<String>, &'static str> {
+    use crate::engine::l5::detector_context::cones_census as cc;
+    use std::sync::atomic::Ordering;
+    if !cc::enabled() {
+        return Err("--issue160-full-graph-timings needs ALSEM_CONES_CENSUS=1");
+    }
+    let Some(base) = build_cross_app_base(
+        workspace,
+        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+    ) else {
+        return Ok(None);
+    };
+    let cone_nanos = || {
+        [
+            &cc::WALK_GRAPH_NANOS,
+            &cc::WALK_SCC_NANOS,
+            &cc::WALK_DEDUP_NANOS,
+            &cc::WALK_COMPOSE_NANOS,
+        ]
+        .iter()
+        .map(|c| c.load(Ordering::Relaxed))
+        .sum::<u64>()
+    };
+    let ms = |n: u64| n as f64 / 1e6;
+    let mut out = String::new();
+    for side in ["cut", "full"] {
+        let (cone0, pd0) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
+        let sb = if side == "cut" {
+            build_r3a3_source_only_base(&base.resolved)
+        } else {
+            build_r3a3_source_only_base_over(&base.resolved, base.graph.clone())
+        };
+        let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
+        let t = std::time::Instant::now();
+        let snap = crate::engine::l5::snapshot::compose_snapshot_from_base(&base.resolved, &sb);
+        let derive = t.elapsed().as_nanos() as u64;
+        drop(snap);
+        let inherited: usize = sb.cones.values().map(|c| c.inherited.len()).sum();
+        // §4.1.6's raw population in bytes, by the census rule (each cone's
+        // buffer plus every fact's owned heap).
+        let inherited_bytes: usize = sb
+            .cones
+            .values()
+            .map(|c| super::cone_census::facts_tally(&c.inherited).bytes)
+            .sum();
+        out.push_str(&format!(
+            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n{side} inherited_bytes={inherited_bytes}\n",
+            ms(cone1 - cone0),
+            ms(pd1 - pd0),
+            ms(derive),
+        ));
+    }
+    Ok(Some(out))
 }
 
 // ===========================================================================

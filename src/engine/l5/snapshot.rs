@@ -1159,6 +1159,7 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
 /// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
 /// runs the whole cone and the producer solve, so it is built once.
 pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> CapabilitySnapshot {
+    crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
     let identities = derive_identity_table(resolved);
@@ -1174,7 +1175,7 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
     let routine_order_frames = derive_routine_order_frames(base);
     let pd_solution = derive_pd_arena(base, &typed_edges, &capability_facts);
 
-    CapabilitySnapshot {
+    let snapshot = CapabilitySnapshot {
         identities,
         capability_facts,
         typed_edges,
@@ -1187,7 +1188,87 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
         root_classifications,
         routine_order_frames,
         pd_solution,
+    };
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.snapshot");
+        census_snapshot(&snapshot);
     }
+    snapshot
+}
+
+/// #160 §4.1.5: one `snapshot.<field>` bucket per field of
+/// [`CapabilitySnapshot`]. `pd_solution` is counted by [`pd_arena_bytes`]
+/// (exact, at capacity); the rest is shallow.
+fn census_snapshot(s: &CapabilitySnapshot) {
+    use crate::engine::census::{Kind, Tally};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit(
+        "snapshot.identities",
+        Tally::default()
+            .buf::<String>(s.identities.stable_ids.len())
+            .strs(&s.identities.stable_ids)
+            .buf::<String>(s.identities.display_names.len())
+            .strs(&s.identities.display_names),
+    );
+    emit(
+        "snapshot.capability_facts",
+        Tally::default().buf::<SnapshotCapabilityFact>(s.capability_facts.len()),
+    );
+    emit(
+        "snapshot.typed_edges",
+        Tally::default().buf::<SnapshotGraphEdge>(s.typed_edges.len()),
+    );
+    emit(
+        "snapshot.operation_index",
+        Tally::default().buf::<SnapshotOperationEvidence>(s.operation_index.len()),
+    );
+    emit(
+        "snapshot.callsite_index",
+        Tally::default().buf::<SnapshotCallsiteEvidence>(s.callsite_index.len()),
+    );
+    emit(
+        "snapshot.callsite_resolutions",
+        Tally::default().buf::<SnapshotCallsiteResolution>(s.callsite_resolutions.len()),
+    );
+    emit(
+        "snapshot.analysis_gaps",
+        Tally::default().buf::<SnapshotAnalysisGap>(s.analysis_gaps.len()),
+    );
+    emit(
+        "snapshot.coverage",
+        Tally::default().buf::<SnapshotCoverageRecord>(s.coverage.len()),
+    );
+    emit(
+        "snapshot.event_declarations",
+        Tally::default().buf::<SnapshotEventDeclaration>(s.event_declarations.len()),
+    );
+    emit(
+        "snapshot.root_classifications",
+        Tally::default().buf::<SnapshotRootClassificationSlot>(s.root_classifications.len()),
+    );
+    let mut frames = Tally::default();
+    if let Some(f) = &s.routine_order_frames {
+        frames
+            .buf::<(String, Vec<ScopeFrame>)>(f.entries.len())
+            .strs(f.entries.iter().map(|(k, _)| k))
+            .bufs(f.entries.iter().map(|(_, v)| v));
+    }
+    emit("snapshot.routine_order_frames", &mut frames);
+    let a = &s.pd_solution;
+    let mut allocs = Tally::default();
+    allocs
+        .buf::<StateNode>(a.states.capacity())
+        .strs(a.states.iter().map(|n| &n.routine))
+        .buf::<(StateIx, EdgeIx)>(a.links.capacity())
+        .buf::<(RoutineId, Vec<StateIx>)>(a.by_routine.capacity())
+        .strs(a.by_routine.keys())
+        .bufs(a.by_routine.values());
+    crate::engine::census::bucket(
+        "snapshot.pd_solution",
+        pd_arena_bytes(a) as usize,
+        allocs.allocs,
+        Kind::Exact,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1600,14 +1681,14 @@ fn derive_pd_arena(
         });
     }
     if cones_census::enabled() {
-        let bytes = pd_arena_bytes(&out);
-        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, bytes);
-        cones_census::add(&cones_census::PD_SOLVE_BYTES, bytes);
+        // `PD_SNAPSHOT_BYTES` alone: charging `PD_SOLVE_BYTES_ARENA` here
+        // would count the retained arena twice (#160 spec §4.1.1).
+        cones_census::add(&cones_census::PD_SNAPSHOT_BYTES, pd_arena_bytes(&out));
     }
     out
 }
 
-/// The bytes a `PdArena` retains, counted like `pd_solve::solve_bytes`: every
+/// The bytes a `PdArena` retains, counted like `pd_solve::arena_tally`: every
 /// `Vec` and hash table at its capacity, plus string heap.
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;

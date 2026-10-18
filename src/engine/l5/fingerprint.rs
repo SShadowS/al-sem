@@ -72,6 +72,20 @@ pub struct FingerprintIndex<'a> {
     model_instance_prefixes: Vec<String>,
 }
 
+impl FingerprintIndex<'_> {
+    /// The retained census's shallow walk (#160 §4.1.5).
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<(&str, &ModelRoutine)>(self.routines_by_id.len())
+            .buf::<(&str, &ModelObject)>(self.objects_by_id.len())
+            .buf::<(String, String)>(self.stable_by_id.len())
+            .strs(self.stable_by_id.iter().flat_map(|(k, v)| [k, v]))
+            .buf::<String>(self.model_instance_prefixes.len())
+            .strs(&self.model_instance_prefixes);
+        t
+    }
+}
+
 impl<'a> FingerprintIndex<'a> {
     /// Build the fingerprint index. Maps EVERY routine's internal id to its stable
     /// id (source AND dependency) so that all internal routine-id occurrences in a

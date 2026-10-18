@@ -4,6 +4,8 @@
 //! the differential harness. It must not depend on or alter the LSP method
 //! surface.
 
+/// The retained byte census under `ALSEM_RETAINED_CENSUS=1` (#160 §4.1.5).
+pub mod census;
 pub mod deps;
 pub mod gate;
 pub mod ids;

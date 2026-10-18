@@ -675,11 +675,14 @@ fn main() -> ExitCode {
     // thread-safe by contract, and this runs before the process starts any
     // thread of its own.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 0) };
+    // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
+    // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
+    let _run = al_sem::engine::perf_trace::run("alsem");
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
-    match cli.command {
+    let code = match cli.command {
         Commands::Analyze(a) => run_analyze_cmd(a),
         Commands::Digest(d) => run_digest_cmd(d),
         Commands::Prove(p) => run_prove_cmd(p),
@@ -701,7 +704,11 @@ fn main() -> ExitCode {
             QueryCommands::Effects(e) => run_query_effects_cmd(e),
         },
         Commands::Graph(g) => run_graph_cmd(g),
-    }
+    };
+    // The process-cumulative cone census, once, after every cone the command
+    // composed (#160 §4.1.7). One OnceLock read when off.
+    al_sem::engine::l5::detector_context::report_cones_census();
+    code
 }
 
 // ── graph command ────────────────────────────────────────────────────────────

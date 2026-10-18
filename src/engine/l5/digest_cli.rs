@@ -1613,7 +1613,10 @@ pub fn run_digest_pipeline(
 
     // Compute transaction context map (for COMMIT effects).
     // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
-    let tx_ctx_map = compute_tx_context_map(resolved, target.cross_app_inputs());
+    let tx_ctx_map = {
+        let _s = crate::engine::perf_trace::span("digest", "digest.tx_context_map");
+        compute_tx_context_map(resolved, target.cross_app_inputs())
+    };
 
     // Compute S4 ordering effects for the changed roots alone (each root's pass is
     // independent, so this equals computing every reportable root and filtering).

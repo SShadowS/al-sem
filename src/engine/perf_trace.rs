@@ -31,8 +31,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -248,6 +249,99 @@ struct Tracer {
     pid: u32,
     writer: Mutex<TraceWriter>,
     counters: Mutex<HashMap<&'static str, u64>>,
+    /// The phase peak ([`mark_phase_start`], [`end_phase`]). One lock guards
+    /// all of it, so starts, ends and the final read never interleave.
+    phase: Mutex<PhaseState>,
+}
+
+/// The post-attach phase peak (#160 spec §4.1.4): the maximum working set over
+/// every phase, a phase running from [`mark_phase_start`] to [`end_phase`], the
+/// next start, or the run's end.
+#[derive(Default)]
+struct PhaseState {
+    /// A [`run`] guard is open. Only it reports the peak, so only then does a
+    /// start spawn a sampler.
+    armed: bool,
+    running: Option<PhaseSampler>,
+    /// The largest maximum (bytes) of the phases already ended.
+    ended_max: u64,
+}
+
+impl PhaseState {
+    /// End the running phase, if any, and start a new one. False when unarmed.
+    fn start(&mut self) -> bool {
+        if !self.armed {
+            return false;
+        }
+        self.end();
+        self.running = Some(PhaseSampler::start());
+        true
+    }
+
+    /// Stop the running sampler and keep its maximum. False when none ran.
+    fn end(&mut self) -> bool {
+        let Some(s) = self.running.take() else {
+            return false;
+        };
+        self.ended_max = self.ended_max.max(s.finish());
+        true
+    }
+
+    /// Disarm; the maximum over every phase in bytes (0 when none ran), or
+    /// `None` when no run guard was open.
+    fn finish(&mut self) -> Option<u64> {
+        if !self.armed {
+            return None;
+        }
+        self.end();
+        self.armed = false;
+        Some(std::mem::take(&mut self.ended_max))
+    }
+}
+
+/// A background thread that samples the working set every 10 ms into `max`
+/// (bytes) until `stop` is set (#160 spec §4.1.4).
+struct PhaseSampler {
+    max: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+impl PhaseSampler {
+    fn start() -> PhaseSampler {
+        let max = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        // One synchronous sample, so a phase shorter than one interval is never 0.
+        sample_working_set(&max);
+        #[cfg(test)]
+        tests::STARTED_SAMPLERS
+            .lock()
+            .unwrap()
+            .push(Arc::clone(&stop));
+        let (m, s) = (Arc::clone(&max), Arc::clone(&stop));
+        let handle = std::thread::spawn(move || {
+            while !s.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                sample_working_set(&m);
+            }
+        });
+        PhaseSampler { max, stop, handle }
+    }
+
+    /// Stop and join the thread, take one last synchronous sample, return the
+    /// phase maximum in bytes.
+    fn finish(self) -> u64 {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.handle.join();
+        sample_working_set(&self.max);
+        self.max.load(Ordering::Relaxed)
+    }
+}
+
+fn sample_working_set(max: &AtomicU64) {
+    if let Some(r) = read_rss() {
+        max.fetch_max(r.working_set, Ordering::Relaxed);
+    }
 }
 
 impl Tracer {
@@ -273,6 +367,32 @@ impl Tracer {
             pid,
             writer: Mutex::new(writer),
             counters: Mutex::new(HashMap::new()),
+            phase: Mutex::new(PhaseState::default()),
+        }
+    }
+
+    fn with_phase<R>(&self, f: impl FnOnce(&mut PhaseState) -> R) -> Option<R> {
+        self.phase.lock().ok().map(|mut p| f(&mut p))
+    }
+
+    /// [`PhaseState::start`] under the phase lock.
+    fn start_phase(&self) -> bool {
+        self.with_phase(PhaseState::start) == Some(true)
+    }
+
+    /// #160 §4.1.4: emit `peak.process_mb` and `peak.post_attach_mb` once,
+    /// and only when a run guard is open. Both are 0 where `read_rss()` is
+    /// `None`.
+    fn report_peaks(&self) {
+        let Some(Some(post)) = self.with_phase(PhaseState::finish) else {
+            return;
+        };
+        let post_attach = post / MB;
+        let process = read_rss().map_or(0, |r| r.peak_working_set / MB);
+        self.set_counter("peak.process_mb", process);
+        self.set_counter("peak.post_attach_mb", post_attach);
+        if self.config.stderr {
+            eprintln!("[perf-trace] peak.process_mb={process} peak.post_attach_mb={post_attach}");
         }
     }
 
@@ -455,6 +575,8 @@ impl Drop for RunGuard {
         if let Some(s) = self.span.take()
             && let Some(t) = tracer()
         {
+            // Both peaks, before the run span closes.
+            t.report_peaks();
             t.close(&s);
         }
     }
@@ -571,6 +693,7 @@ pub fn run(name: &'static str) -> RunGuard {
         return RunGuard { span: None };
     };
     t.emit_process_meta(name);
+    t.with_phase(|p| p.armed = true);
     RunGuard {
         span: Some(t.open("process", name.to_string())),
     }
@@ -585,6 +708,32 @@ pub fn span(cat: &'static str, name: impl Into<TraceName>) -> SpanGuard {
     let name = name.into().into_string();
     SpanGuard {
         span: Some(t.open(cat, name)),
+    }
+}
+
+/// Start sampling a phase's working-set peak (#160 spec §4.1.4): one sample now,
+/// then one every 10 ms on a background thread until [`end_phase`], the next
+/// start or the [`run`] guard's drop. The guard reports the maximum over every
+/// phase as `peak.post_attach_mb`. Without an open run guard nothing would
+/// report it, so nothing starts. With tracing off it is one `OnceLock` read.
+pub fn mark_phase_start(name: &'static str) {
+    let Some(t) = tracer() else {
+        return;
+    };
+    if t.start_phase() {
+        t.emit_instant("phase", "phase.start", json!({ "name": name }));
+    }
+}
+
+/// End the running phase (#160 spec §4.1.4) and keep its maximum. A command
+/// that builds a second model calls it when the first model is dropped, so
+/// the second build is in no phase.
+pub fn end_phase(name: &'static str) {
+    let Some(t) = tracer() else {
+        return;
+    };
+    if t.with_phase(PhaseState::end) == Some(true) {
+        t.emit_instant("phase", "phase.end", json!({ "name": name }));
     }
 }
 
@@ -623,9 +772,13 @@ pub fn maybe_exit_after(span_name: &str) {
     if let Some(t) = tracer()
         && t.config.exit_after.as_deref() == Some(span_name)
     {
+        // This exit skips the run guard's drop, which reports the peaks.
+        t.report_peaks();
         if let Ok(mut w) = t.writer.lock() {
             w.flush();
         }
+        // This exit skips `main`'s own census print (#160 §4.1.7).
+        crate::engine::l5::detector_context::report_cones_census();
         std::process::exit(0);
     }
 }
@@ -920,5 +1073,81 @@ mod tests {
             .expect("peak_mb must be present");
         assert!(rss_mb > 0, "rss_mb must be nonzero: {e:?}");
         assert!(peak_mb >= rss_mb, "peak_mb must be >= rss_mb: {e:?}");
+    }
+
+    // --- Group (e): the phase peak (#160 §4.1.4) ----------------------------
+
+    /// The stop flag of every sampler started in this test binary.
+    pub(super) static STARTED_SAMPLERS: Mutex<Vec<Arc<AtomicBool>>> = Mutex::new(Vec::new());
+    /// Serializes the phase tests: they read `STARTED_SAMPLERS`.
+    static PHASE_TESTS: Mutex<()> = Mutex::new(());
+
+    fn armed_tracer(dir: &tempfile::TempDir) -> Tracer {
+        let t = Tracer::init(test_cfg(dir.path().join("p.json"), Detail::Stages));
+        t.with_phase(|p| p.armed = true);
+        t
+    }
+
+    /// Code-review CR2: a second phase must not throw away the first one's
+    /// maximum. The first phase's peak is stated by hand, far above any real
+    /// working set.
+    #[test]
+    fn phase_peak_is_the_max_over_every_phase() {
+        let _l = PHASE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let t = armed_tracer(&dir);
+        const FIRST: u64 = 1 << 50;
+        assert!(t.start_phase());
+        t.with_phase(|p| {
+            p.running
+                .as_ref()
+                .unwrap()
+                .max
+                .store(FIRST, Ordering::Relaxed)
+        });
+        assert_eq!(t.with_phase(PhaseState::end), Some(true));
+        assert!(t.start_phase());
+        assert_eq!(t.with_phase(PhaseState::finish), Some(Some(FIRST)));
+    }
+
+    /// Code-review CR10: with no run guard nothing reports the peak, so no
+    /// sampler starts.
+    #[test]
+    fn unarmed_phase_starts_no_sampler() {
+        let _l = PHASE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let t = Tracer::init(test_cfg(dir.path().join("p.json"), Detail::Stages));
+        assert!(!t.start_phase());
+        assert_eq!(t.with_phase(|p| p.running.is_some()), Some(false));
+        assert_eq!(t.with_phase(PhaseState::finish), Some(None));
+    }
+
+    /// Code-review CR5: racing starts must leave no sampler running once the
+    /// run finishes (an orphan is never stopped, and its maximum is lost).
+    #[test]
+    fn racing_phase_starts_orphan_no_sampler() {
+        let _l = PHASE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        STARTED_SAMPLERS.lock().unwrap().clear();
+        let dir = tempfile::tempdir().unwrap();
+        let t = armed_tracer(&dir);
+        let gate = std::sync::Barrier::new(8);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    gate.wait();
+                    for _ in 0..25 {
+                        t.start_phase();
+                    }
+                });
+            }
+        });
+        assert!(t.with_phase(PhaseState::finish).unwrap().is_some());
+        let started = STARTED_SAMPLERS.lock().unwrap();
+        assert_eq!(started.len(), 200);
+        let orphans = started
+            .iter()
+            .filter(|s| !s.load(Ordering::Relaxed))
+            .count();
+        assert_eq!(orphans, 0, "samplers never stopped");
     }
 }

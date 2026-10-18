@@ -1081,6 +1081,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     HashMap<String, RoutineSummary>,
     Vec<SummarizeDiagnostic>,
 ) {
+    pt::counter_delta("build.summaries_v2", 1);
     // --- Scaffolding: mirrors what the retired `compute_summaries_with_leaves`
     // built (in the pre-`b4181d8` tree). ---
     summaries_census::add(&summaries_census::ROUTINES, routines.len() as u64);

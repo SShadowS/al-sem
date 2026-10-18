@@ -292,7 +292,7 @@ struct SpanTemplate {
 /// printed to stderr at the end of [`compute_transaction_spans`]. Diagnostic
 /// only: no production path reads it, and with the env var unset it costs a
 /// handful of counter increments and allocates nothing. Mirrors the
-/// `C1_CONE_CENSUS` convention in [`crate::engine::l4::cone_census`].
+/// value-tested census-flag convention in [`crate::engine::l4::cone_census`].
 ///
 /// These are the figures that PRICE this module. `template_calls` is how many
 /// seed occurrences ask for a span; `templates` is how many of those actually

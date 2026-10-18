@@ -51,7 +51,7 @@ const DEP_TABLE_SYMBOL: &str = r#"{"Id":18,"Name":"Customer","Fields":[{"Id":1,"
 /// case, so a bare `DoWork` selector must stay on the workspace's. `CallLib`
 /// calls the dependency's `DoWork` too: the cross-app model holds only the
 /// dependency code the workspace reaches, so an uncalled one would never collide.
-fn workspace(dir: &Path, call_lib: bool) {
+pub(crate) fn workspace(dir: &Path, call_lib: bool) {
     write(
         &dir.join("app.json"),
         &format!(
@@ -86,7 +86,7 @@ fn symbol_only_dependency(dir: &Path) {
 
 /// The same dependency shipping source: table 18 and a codeunit whose
 /// `InsertCust` writes it, plus a `DoWork` of its own.
-fn embedded_dependency(dir: &Path) {
+pub(crate) fn embedded_dependency(dir: &Path) {
     crate::symbol_app::write_source_app(
         &dir.join(".alpackages/probe_XBase_1.0.0.0.app"),
         DEP_GUID,
@@ -107,6 +107,12 @@ fn embedded_dependency(dir: &Path) {
         ],
         "",
     );
+}
+
+/// The workspace + source-bearing dependency `.app` (spec §4.1.2 "the dependency workspace").
+pub(crate) fn write_dependency_workspace(dir: &Path) {
+    workspace(dir, true);
+    embedded_dependency(dir);
 }
 
 fn dep_table() -> String {
