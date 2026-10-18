@@ -1,0 +1,566 @@
+[
+ {
+  "id": "S1-1",
+  "source": "astra+flash",
+  "round": 1,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 38,
+  "severity": "important",
+  "text": "The textual event key (publisher_object_type, publisher_name, publisher_id, event, element) keeps two entries when one reading names the publisher by name and another by number; both resolve to the same publisher, so two edges remain.",
+  "disposition": "fixed",
+  "evidence": "Design revised: the merge moves to SubscriberIndex::build (index.rs), keyed by the RESOLVED publisher object id (resolve_subscription_publisher) when it resolves, textual otherwise. Acceptance row A3b (mixed name/number readings -> one edge).",
+  "hash": "4e1ceaed66b6d990",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-2",
+  "source": "astra",
+  "round": 1,
+  "file": "src/program/model/events.rs",
+  "line": 116,
+  "severity": "important",
+  "text": "parse_isolated reads Isolated from the FIRST publisher attribute (find_attribute), so a later isolated reading is lost and the isolation barrier is not raised.",
+  "disposition": "fixed",
+  "evidence": "Design item 3: parse_isolated reads every reading; any isolated (or unparseable) reading makes the event isolated. Acceptance row A6.",
+  "hash": "2af1fab05a709a95",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-3",
+  "source": "astra",
+  "round": 1,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 62,
+  "severity": "minor",
+  "text": "Normalising event_subscribers at extraction renumbers later subscriptions ([A,A,B] -> [A,B] moves B's ordinal).",
+  "disposition": "fixed",
+  "evidence": "Design revised: RoutineNode::event_subscribers is no longer changed; the index merge keeps each merged entry's FIRST ordinal. Only reader of Subscription::ordinal is a test (index.rs:2772). Acceptance row A5 asserts the first ordinal.",
+  "hash": "5e958419bf615e9d",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-4",
+  "source": "flash",
+  "round": 1,
+  "file": "src/program/resolve/event.rs",
+  "line": 301,
+  "severity": "important",
+  "text": "publisher_include_sender must consider only publisher attributes and readings with a valid boolean arg 0; union across different publisher kinds may be wrong.",
+  "disposition": "refuted",
+  "evidence": "The design filters to integrationevent/businessevent/internalevent exactly as today (event.rs:302-307). A reading whose arg 0 is not a bool literal contributes None, which the union treats as unknown (never true). All three kinds carry IncludeSender at arg 0 (event.rs:279-286 doc, Microsoft Learn), so a union across kinds reads the same parameter; publisher_kind for mixed kinds is a stated non-goal.",
+  "hash": "ea1db1bf23701fbf",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-5",
+  "source": "flash",
+  "round": 1,
+  "file": "src/program/build.rs",
+  "line": 2530,
+  "severity": "minor",
+  "text": "No end-to-end test of two whole-routine #if arms with conflicting IncludeSender.",
+  "disposition": "refuted",
+  "evidence": "#103's if_duplicate_publisher_include_sender_is_true_when_any_arm_is (build.rs:2530-2605) builds a graph from two #if arms with IncludeSender true/false and asserts H(Sender) binds; EventFacts::union will call the same union_include_sender helper this issue adds, so that test also covers the shared helper.",
+  "hash": "4a3a3c7b9bfdbf3e",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-6",
+  "source": "flash",
+  "round": 1,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 85,
+  "severity": "minor",
+  "text": "Acceptance matrix lacks BusinessEvent/InternalEvent readings and an end-to-end check that the AND-ed skip flag reaches the edge condition.",
+  "disposition": "fixed",
+  "evidence": "Acceptance rows A4 (publisher_include_sender over two BusinessEvent readings AND two InternalEvent readings), A3 (the emitted event-flow Route to g carries no SkipOnMissingLicense condition) and A3d (a flag set in every reading is kept). Round 2: astra re-raised for InternalEvent coverage and Route-level conditions; both added.",
+  "hash": "2d5ba6a9e1f9b00f",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-7",
+  "source": "astra",
+  "round": 1,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 88,
+  "severity": "minor",
+  "text": "Missing regression: two readings naming genuinely DIFFERENT events must both be retained end to end.",
+  "disposition": "fixed",
+  "evidence": "Acceptance row A3c.",
+  "hash": "4b5c09d5beb66a8c",
+  "astra_flash_marks_r2": {
+   "astra": "unreviewed",
+   "flash": "unreviewed"
+  },
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-1",
+  "source": "astra",
+  "round": 2,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 41,
+  "severity": "minor",
+  "text": "'Every subscription consumer reads SubscriberIndex::build' is inaccurate: inject_platform_event_publishers (build.rs:586-620) reads raw event_subscribers.",
+  "disposition": "fixed",
+  "evidence": "Ledger Design item 2 now says EDGE and subscription-INVENTORY consumers, and names both raw readers (the injector, whose seen set makes duplicates harmless, and the plus1 diagnostic).",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "5338b723aad6115c",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-2",
+  "source": "astra",
+  "round": 2,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 98,
+  "severity": "minor",
+  "text": "The revised matrix drops distinct-element coverage: same publisher/event with different elements are different platform events and must both survive.",
+  "disposition": "fixed",
+  "evidence": "Acceptance row A3e.",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "35e38b9d7e24a75b",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-3",
+  "source": "flash",
+  "round": 2,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 38,
+  "severity": "important",
+  "text": "The textual fallback key (object type, publisher name) is not case-folded, so casing variants of one unresolved publisher would not merge.",
+  "disposition": "refuted",
+  "evidence": "ParsedSubscriberArgs is folded at parse time: event.rs:60 to_ascii_lowercase on the object type; event.rs:129-141 resolve_publisher_name returns fold_identifier() on every path; the struct doc (event.rs:21) says all string fields are lowercased and unquoted. Ledger Design now states this.",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "0fe6ab0ee6a2651b",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-4",
+  "source": "flash",
+  "round": 2,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 38,
+  "severity": "minor",
+  "text": "The element in the event key is not case-folded.",
+  "disposition": "refuted",
+  "evidence": "element comes from name_arg_text (event.rs:112-119), which returns strip_al_string(s).fold_identifier().",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "b6f9f80fe891dfa1",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-1",
+  "source": "sol",
+  "round": 3,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 115,
+  "severity": "minor",
+  "text": "A3/A3d test only the license flag; the permission flag's merge is untested.",
+  "disposition": "fixed",
+  "evidence": "Acceptance row A3d now covers both flags: license-in-both + permission-in-one -> exactly [SkipOnMissingLicense], and the mirror -> exactly [SkipOnMissingPermission].",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "4e9922c01977f936",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-2",
+  "source": "opus",
+  "round": 3,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 78,
+  "severity": "minor",
+  "text": "The claim that the IncludeSender union 'only lowers' the plus1 diagnostic is false: [Some(false), unreadable] goes from Some(false) to None, which index.rs:1144 counts.",
+  "disposition": "fixed",
+  "evidence": "Ledger 'Not changed, deliberately' paragraph corrected: the diagnostic can move either way ([None, Some(true)] -> Some(true) lowers it; [Some(false), unreadable] -> None raises it); wiring is unchanged because subscriber_arity_bound treats None like Some(false) (event.rs:336). Round 4: sol re-raised the first example ([false,true] moves nothing); replaced with [None, Some(true)].",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "526321b882eef8db",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-3",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/build.rs",
+  "line": 2661,
+  "severity": "minor",
+  "text": "A6b's doc says two arms with different skip flags are 'two different subscriptions'; after the index merge they are one.",
+  "disposition": "fixed",
+  "evidence": "Design item 2: A6b's doc is reworded (the node keeps both entries; SubscriberIndex wires them as one). Done in implementation.",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "ecc2991776d0604c",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-4",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/model/events.rs",
+  "line": 117,
+  "severity": "minor",
+  "text": "Item 3 does not say whether 'every reading' spans publisher kinds; parse_isolated returns from the IntegrationEvent branch and never reads InternalEvent.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 now reads every IntegrationEvent (arg 2) and BusinessEvent (arg 1) reading, any isolated -> isolated; acceptance row A6c (mixed kinds). InternalEvent Isolated, never read today, is filed as a pre-existing discovery, not widened here.",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "fb2f7d389d82c467",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-5",
+  "source": "opus",
+  "round": 3,
+  "file": "src/program/model/events.rs",
+  "line": 411,
+  "severity": "minor",
+  "text": "Keying on element for a NON-platform publisher keeps two subscriptions that the model turns into two identical resolved edges (it drops the element for non-platform events).",
+  "disposition": "fixed",
+  "evidence": "Design item 2 (revised round 4): entries are resolved and bound first, then grouped; the element is in the key only when the outcome is Bound(rid) with publisher_kind == Some(PublisherKind::Platform), the model's own test (model/events.rs:402-411). No textual platform test. Acceptance A3e adds a table with a REAL OnAfterValidateEvent publisher (injection suppressed, build.rs:621-628): elements a/b -> one model edge. Round 4: sol re-raised the textual test; opus raised the same as S4-1.",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "e2ae53bc5e5c2d52",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-1",
+  "source": "opus",
+  "round": 4,
+  "file": "src/program/model/events.rs",
+  "line": 404,
+  "severity": "minor",
+  "text": "The index decides 'platform' from text while the model decides it from the bound node; they disagree when a table has a real source publisher with a platform event name (injection suppressed), leaving two identical model edges.",
+  "disposition": "fixed",
+  "evidence": "Same defect as S3-5; fixed by the same revision (key on Bound(rid) with PublisherKind::Platform; A3e real-publisher case).",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "6bd2afa2f8207651",
+  "a1_reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5-1",
+  "source": "opus",
+  "round": 5,
+  "file": ".agent/issue-104/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "A3e's real-publisher case passes without exercising Bound-to-non-Platform if the real OnAfterValidateEvent publisher's arity does not admit the subscriber (outcome Orphaned also gives one 'maybe' model edge).",
+  "disposition": "fixed",
+  "evidence": "Acceptance row A3e: the real publisher's arity admits the subscriber, and the test asserts outcome Bound to the non-Platform routine and one 'resolved' model edge. Not yet marked by either reviewer (spec_rounds cap reached).",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  },
+  "hash": "de3ddbc8897d3ba6",
+  "a1_reviews": {
+   "sol": "unreviewed",
+   "opus": "unreviewed"
+  }
+ },
+ {
+  "id": "T2-1",
+  "source": "opus",
+  "round": "a2-1",
+  "file": ".agent/issue-104/ledger.md",
+  "line": 50,
+  "severity": "minor",
+  "text": "Design item 2 should say merged groups are recorded in first-ordinal order and that the recorded Subscription carries the merged (AND-ed) conditions and the first reading's textual publisher fields, so subscriptions() keeps its documented order (index.rs:393-394) and Subscription.conditions equals the edge's conditions.",
+  "disposition": "fixed",
+  "evidence": "Design item 2 now states both (one paragraph after the AND-ed flags).",
+  "hash": "519032c6a84b3ce6",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-O1",
+  "source": "opus",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 384,
+  "severity": "minor",
+  "text": "The merge keys on (routine, event), so it also collapses two genuinely separate [EventSubscriber] attributes on one routine naming one event; the CHANGELOG and Subscription doc describe only per-build readings and #if arms.",
+  "disposition": "fixed",
+  "evidence": "Subscription doc, CHANGELOG bullet: 'any entries of one routine that name one event, including duplicate attributes'.",
+  "hash": "b274e7f42b7caf5d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-O2",
+  "source": "opus",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 495,
+  "severity": "minor",
+  "text": "subscriptions() doc ('every parsed subscription ... attribute order') and the build doc ('Resolve every [EventSubscriber]') still read as one record per parsed entry; ordinals can now have gaps.",
+  "disposition": "fixed",
+  "evidence": "Both docs say entries naming one event are merged (#104), first-attribute order, ordinals may have gaps.",
+  "hash": "086586018c4abbb8",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR1",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 459,
+  "severity": "important",
+  "text": "For a bound PLATFORM publisher two readings differing only in element stay two SubscriberEntry rows, and the resolver's event-flow fan-out (resolver.rs ~3303) ignores the element, so one EventFlow edge gets two routes to the same subscriber.",
+  "disposition": "refuted",
+  "evidence": "Intended and pre-existing. Each element of a platform field/action event is its own event (model/events.rs:395-403, the A3e control test; spec Design item 2), so they are two subscriptions by design, as two separate attributes on one routine were before #104. The duplicate-looking routes come from Route carrying no element (edge.rs:438-444), a pre-existing limitation filed as a discovery.",
+  "hash": "2920673644d94bf7",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR2",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 420,
+  "severity": "minor",
+  "text": "'Is the bound publisher Platform?' is decided twice: the index checks ANY physical routine with that id, program_event_graph the first in its routine_by_id map; if they ever disagree the grouping and the model's element keying diverge.",
+  "disposition": "fixed",
+  "evidence": "Decided once: Subscription gains `platform: bool`, set in SubscriberIndex::build from the chosen candidate; program_event_graph reads s.platform instead of re-deriving it. Covered by the A3e tests (platform control, real-table publisher) with a discrimination proof.",
+  "hash": "95808d9bd1b80f35",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR3",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 1236,
+  "severity": "minor",
+  "text": "count_unknown_include_sender_plus1_subscribers walks raw event_subscribers, counting per-build readings once each.",
+  "disposition": "refuted",
+  "evidence": "Spec decision accepted by both reviewers (ledger 'Not changed, deliberately'): the diagnostic's doc requires it to share no code path with the wiring it audits; the CHANGELOG states it can move.",
+  "hash": "eb8e8e229a97bff7",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR4",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/events.rs",
+  "line": 102,
+  "severity": "minor",
+  "text": "publisher_event_kind and is_event_publisher still take the first attribute; readings with different publisher kinds report only the first kind.",
+  "disposition": "refuted",
+  "evidence": "Stated non-goal in the converged spec (ledger 'Non-goals'), accepted by both reviewers; AL allows one publisher attribute per build, so mixed kinds arise only across builds.",
+  "hash": "f10813c3b7f8f9da",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR5",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/model/events.rs",
+  "line": 120,
+  "severity": "minor",
+  "text": "parse_isolated now marks an event isolated when any BusinessEvent reading is isolated even if an IntegrationEvent reading says false; the CHANGELOG does not call out the change.",
+  "disposition": "fixed",
+  "evidence": "Intended (A6c, spec item 3). CHANGELOG now says so explicitly and that it arises only across builds (one publisher attribute per build).",
+  "hash": "febfe31947b0cfb0",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR6",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 326,
+  "severity": "minor",
+  "text": "Pass 1 rescans routine_indices_by_obj_name to decide 'platform' for every bound entry.",
+  "disposition": "fixed",
+  "evidence": "Folded into F1-CR2: the flag comes from the chosen candidate, no rescan.",
+  "hash": "c54817ec5f9f5928",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR7",
+  "source": "code-review",
+  "round": "final-1",
+  "file": "src/program/resolve/index.rs",
+  "line": 474,
+  "severity": "minor",
+  "text": "Pass 2 grouping uses two quadratic linear scans; a single indexed pass would be simpler.",
+  "disposition": "deferred",
+  "evidence": "Readability only; n is a routine's handful of subscriber entries; the shape was reviewed and accepted in Task 2 review and both final reviewers. Not blocking.",
+  "hash": "1b4785b83c521b7a",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-N1",
+  "source": "opus",
+  "round": "final-2",
+  "file": "src/program/model/events.rs",
+  "line": 459,
+  "severity": "minor",
+  "text": "event_kind (and event_name) in program_event_graph are still read first-wins from routine_by_id, so they could disagree with s.platform if two physical routines shared one id.",
+  "disposition": "fixed",
+  "evidence": "One of opus's two proposed fixes: a comment at events.rs (before `let event_kind`) states that event_kind/event_name stay first-wins on purpose and can differ from s.platform only if two physical routines share one id, which the index's single platform decision already treats as not occurring. No behaviour change, so no test.",
+  "hash": "38b2ae2ded91fa2f",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
